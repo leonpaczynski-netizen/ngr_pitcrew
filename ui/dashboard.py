@@ -8311,6 +8311,25 @@ class MainWindow(TrackModellingMixin, QMainWindow):
         setups_layout.addWidget(self._garage_setups_table)
         right_layout.addWidget(setups_group)
 
+        history_group = QGroupBox("Track Setup History")
+        history_group.setStyleSheet(self._group_style())
+        history_layout = QVBoxLayout(history_group)
+        self._garage_track_combo = QComboBox()
+        self._garage_track_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; border-radius: 3px; padding: 2px 6px; }}"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._garage_track_combo.currentIndexChanged.connect(self._garage_on_track_selected)
+        history_layout.addWidget(self._garage_track_combo)
+        self._garage_history_text = QTextEdit()
+        self._garage_history_text.setReadOnly(True)
+        self._garage_history_text.setMinimumHeight(120)
+        self._garage_history_text.setStyleSheet(
+            f"QTextEdit {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; }}"
+        )
+        history_layout.addWidget(self._garage_history_text)
+        right_layout.addWidget(history_group)
+
         sessions_group = QGroupBox("Session History")
         sessions_group.setStyleSheet(self._group_style())
         sessions_layout = QVBoxLayout(sessions_group)
@@ -8386,19 +8405,29 @@ class MainWindow(TrackModellingMixin, QMainWindow):
             if hasattr(self, "_btn_garage_select_event"):
                 self._btn_garage_select_event.setVisible(bool(self._config.get("active_event_id")))
 
+            # Reset track combo and history before repopulating
+            self._garage_track_combo.blockSignals(True)
+            self._garage_track_combo.clear()
+            self._garage_track_combo.blockSignals(False)
+            self._garage_history_text.clear()
+
             setups = self._config.get("car_setup", {}).get("setups", [])
             car_setups = [s for s in setups if s.get("name", "") == car_name or s.get("car", "") == car_name]
             self._garage_setups_table.setRowCount(0)
             for setup in car_setups:
                 r = self._garage_setups_table.rowCount()
                 self._garage_setups_table.insertRow(r)
-                for col, val in enumerate([setup.get("setup_label", setup.get("name", "")), setup.get("track", ""), setup.get("captured_at", setup.get("date", ""))]):
+                name_item = QTableWidgetItem(str(setup.get("setup_label", setup.get("name", ""))))
+                name_item.setData(Qt.ItemDataRole.UserRole, setup.get("id"))
+                self._garage_setups_table.setItem(r, 0, name_item)
+                for col, val in enumerate([setup.get("track", ""), setup.get("captured_at", setup.get("date", ""))], start=1):
                     self._garage_setups_table.setItem(r, col, QTableWidgetItem(str(val)))
                 btn_load = QPushButton("Load")
                 btn_load.setStyleSheet(
                     "QPushButton { background: #1A3A5C; color: white; border-radius: 3px; padding: 2px 8px; }"
                     "QPushButton:hover { background: #2A5A8C; }"
                 )
+                btn_load.clicked.connect(self._garage_load_setup)
                 self._garage_setups_table.setCellWidget(r, 3, btn_load)
 
             self._garage_sessions_table.setRowCount(0)
@@ -8438,12 +8467,66 @@ class MainWindow(TrackModellingMixin, QMainWindow):
                             self._garage_setups_table.insertRow(r)
                             label = db_setup.get("name") or db_setup.get("ai_notes", "")[:40] or "DB Setup"
                             created = str(db_setup.get("created_at", ""))[:16]
-                            for col, val in enumerate([label, "", created]):
+                            name_item = QTableWidgetItem(str(label))
+                            name_item.setData(Qt.ItemDataRole.UserRole, db_setup.get("id"))
+                            self._garage_setups_table.setItem(r, 0, name_item)
+                            for col, val in enumerate(["", created], start=1):
                                 self._garage_setups_table.setItem(r, col, QTableWidgetItem(val))
+                            btn_load_db = QPushButton("Load")
+                            btn_load_db.setStyleSheet(
+                                "QPushButton { background: #1A3A5C; color: white; border-radius: 3px; padding: 2px 8px; }"
+                                "QPushButton:hover { background: #2A5A8C; }"
+                            )
+                            btn_load_db.clicked.connect(self._garage_load_setup)
+                            self._garage_setups_table.setCellWidget(r, 3, btn_load_db)
+                        # Populate track combo from setup_recommendations
+                        tracks = self._db.get_tracks_for_car_recommendations(_car_id_db)
+                        if tracks:
+                            self._garage_track_combo.addItems(tracks)
+                            self._garage_track_combo.setEnabled(True)
+                        else:
+                            self._garage_track_combo.addItem("No recommendations yet")
+                            self._garage_track_combo.setEnabled(False)
+                            self._garage_history_text.setPlainText("No recommendations yet.")
                 except Exception:
                     import traceback; traceback.print_exc()
         except Exception:
             import traceback; traceback.print_exc()
+
+    def _garage_load_setup(self) -> None:
+        selected = self._garage_setups_table.selectedItems()
+        if not selected:
+            return
+        row = self._garage_setups_table.currentRow()
+        item = self._garage_setups_table.item(row, 0)
+        if item is None:
+            return
+        setup_id = item.data(Qt.ItemDataRole.UserRole)
+        if not setup_id:
+            return
+        if self._db is None:
+            return
+        result = self._db.get_setup(setup_id)
+        if result is None:
+            QMessageBox.warning(self, "Load Failed", "Setup not found in database.")
+            return
+        self._fill_setup_fields(result["setup_dict"])
+        self._tabs.setCurrentIndex(3)
+
+    def _garage_on_track_selected(self, index: int) -> None:
+        track = self._garage_track_combo.currentText()
+        if not track or track == "No recommendations yet":
+            self._garage_history_text.clear()
+            return
+        if self._db is None:
+            return
+        car_name = self._garage_car_name_lbl.text()
+        car_id = self._db.get_car_id(car_name)
+        if not car_id:
+            self._garage_history_text.clear()
+            return
+        text = self._db.get_setup_history_for_car_track(car_id, track, limit=10)
+        self._garage_history_text.setPlainText(text if text else "No recommendations yet.")
 
     def _on_garage_select_for_event(self) -> None:
         try:

@@ -1022,6 +1022,16 @@ class SessionDB:
             return ""
         return "\n\n---\n\n".join(r[0] for r in rows)
 
+    def get_tracks_for_car_recommendations(self, car_id: int) -> list[str]:
+        """Return distinct tracks with setup recommendations for this car, sorted."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT track FROM setup_recommendations "
+                "WHERE car_id=? AND track != '' ORDER BY track",
+                (car_id,)
+            ).fetchall()
+        return [r["track"] for r in rows]
+
     def get_best_lap_for_session(self, session_id: int) -> int | None:
         with self._lock:
             row = self._conn.execute(
