@@ -1,0 +1,10 @@
+{
+  "schema": "track_metadata_v1",
+  "track_id": "daytona_international_speedway",
+  "display_name": "Daytona International Speedway",
+  "country": "US",
+  "gt7_track_code": "daytona",
+  "layouts": [
+    "daytona_international_speedway__road_course"
+  ]
+}

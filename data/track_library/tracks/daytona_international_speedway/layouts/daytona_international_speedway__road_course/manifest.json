@@ -1,0 +1,26 @@
+{
+  "schema": "track_layout_manifest_v1",
+  "track_id": "daytona_international_speedway",
+  "layout_id": "daytona_international_speedway__road_course",
+  "display_name": "Daytona Road Course",
+  "lap_length_m": 5729.0,
+  "reverse_layout": false,
+  "assets": {
+    "semantic_model": "semantic_model.json",
+    "seed_geometry": "geometry.seed_map.json",
+    "validation_rules": "validation_rules.json",
+    "source_manifest": "source_manifest.json"
+  },
+  "availability": {
+    "metadata": true,
+    "sectors": true,
+    "corner_windows": true,
+    "corner_complexes": true,
+    "seed_geometry": false,
+    "width_model": false,
+    "accepted_model": false,
+    "calibration_runs": false
+  },
+  "source": "estimated",
+  "confidence": "low"
+}

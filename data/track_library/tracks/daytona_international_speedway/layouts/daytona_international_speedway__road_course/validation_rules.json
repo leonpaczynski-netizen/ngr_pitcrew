@@ -1,0 +1,17 @@
+{
+  "schema": "validation_rules_v1",
+  "track_id": "daytona_international_speedway",
+  "layout_id": "daytona_international_speedway__road_course",
+  "acceptance": {
+    "max_lap_delta_pct": 5.0,
+    "max_mean_geometry_error_m": 15.0,
+    "max_corner_apex_delta_pct": 5.0,
+    "require_seed_geometry": false,
+    "require_corner_windows": true,
+    "require_sectors": true
+  },
+  "warnings": {
+    "lap_delta_pct": 2.0,
+    "geometry_error_m": 5.0
+  }
+}

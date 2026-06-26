@@ -1,0 +1,4056 @@
+{
+  "Dodge SRT Tomahawk X VGT": {
+    "category": "Road Car",
+    "pp_rating": 1381.58,
+    "power_hp": 2586,
+    "weight_kg": 749,
+    "aspiration": "NA"
+  },
+  "Dodge SRT Tomahawk GTS-R VGT": {
+    "category": "Road Car",
+    "pp_rating": 1196.75,
+    "power_hp": 1449,
+    "weight_kg": 663,
+    "aspiration": "NA"
+  },
+  "Chevrolet Chaparral 2X VGT": {
+    "category": "Road Car",
+    "pp_rating": 1088.74,
+    "power_hp": 905,
+    "weight_kg": 450
+  },
+  "Gran Turismo Red Bull X2014 Standard": {
+    "category": "Road Car",
+    "pp_rating": 1034.41,
+    "power_hp": 798,
+    "weight_kg": 650,
+    "aspiration": "TC"
+  },
+  "Jaguar VGT SV": {
+    "category": "Road Car",
+    "pp_rating": 995.97,
+    "power_hp": 1876,
+    "weight_kg": 1400,
+    "aspiration": "EV"
+  },
+  "Gran Turismo F3500-A": {
+    "category": "Road Car",
+    "pp_rating": 984.06,
+    "power_hp": 773,
+    "weight_kg": 505,
+    "aspiration": "NA"
+  },
+  "Dodge SRT Tomahawk S VGT": {
+    "category": "Road Car",
+    "pp_rating": 977.55,
+    "power_hp": 1006,
+    "weight_kg": 921,
+    "aspiration": "NA"
+  },
+  "Gran Turismo Red Bull X2019 25th Anniversary": {
+    "category": "Road Car",
+    "pp_rating": 966.31,
+    "power_hp": 804,
+    "weight_kg": 650,
+    "aspiration": "NA"
+  },
+  "Gran Turismo Red Bull X2019 Competition": {
+    "category": "Road Car",
+    "pp_rating": 966.31,
+    "power_hp": 804,
+    "weight_kg": 650,
+    "aspiration": "NA"
+  },
+  "Gran Turismo F3500-B": {
+    "category": "Road Car",
+    "pp_rating": 959.58,
+    "power_hp": 719,
+    "weight_kg": 505,
+    "aspiration": "NA"
+  },
+  "Super Formula SF19 Super Formula / Honda '19": {
+    "category": "Road Car",
+    "pp_rating": 942.86,
+    "power_hp": 639,
+    "weight_kg": 660,
+    "aspiration": "TC"
+  },
+  "Super Formula SF19 Super Formula / Toyota '19": {
+    "category": "Road Car",
+    "pp_rating": 942.86,
+    "power_hp": 639,
+    "weight_kg": 660,
+    "aspiration": "TC"
+  },
+  "Super Formula SF23 Super Formula / Toyota '23": {
+    "category": "Road Car",
+    "pp_rating": 941.19,
+    "power_hp": 625,
+    "weight_kg": 670,
+    "aspiration": "TC"
+  },
+  "Super Formula SF23 Super Formula / Honda '23": {
+    "category": "Road Car",
+    "pp_rating": 941.19,
+    "power_hp": 625,
+    "weight_kg": 670,
+    "aspiration": "TC"
+  },
+  "Ferrari VGT": {
+    "category": "Road Car",
+    "pp_rating": 938.42,
+    "power_hp": 1363,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "Gran Turismo F1500T-A": {
+    "category": "Road Car",
+    "pp_rating": 936.7,
+    "power_hp": 986,
+    "weight_kg": 540,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette CX.R VGT Concept": {
+    "category": "Road Car",
+    "pp_rating": 931.55,
+    "power_hp": 2038,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "HYUNDAI N 2025 VGT": {
+    "category": "Road Car",
+    "pp_rating": 926.55,
+    "power_hp": 870,
+    "weight_kg": 972,
+    "aspiration": "EV"
+  },
+  "Mazda LM55 VGT": {
+    "category": "Road Car",
+    "pp_rating": 917.39,
+    "aspiration": "NA"
+  },
+  "Bugatti VGT": {
+    "category": "Road Car",
+    "pp_rating": 914.41,
+    "power_hp": 1626,
+    "weight_kg": 1400,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette CX Concept '25": {
+    "category": "Road Car",
+    "pp_rating": 911.6,
+    "power_hp": 2145,
+    "weight_kg": 1400,
+    "aspiration": "EV"
+  },
+  "McLaren VGT": {
+    "category": "Road Car",
+    "pp_rating": 909.7,
+    "power_hp": 1134,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "McLaren MP4/4 '88": {
+    "category": "Road Car",
+    "pp_rating": 891.04,
+    "power_hp": 675,
+    "weight_kg": 540,
+    "aspiration": "TC"
+  },
+  "Dodge SRT Tomahawk VGT (Gr.1)": {
+    "category": "Gr.1",
+    "pp_rating": 887.62,
+    "power_hp": 693,
+    "weight_kg": 950,
+    "aspiration": "NA"
+  },
+  "Peugeot 908 HDi FAP '10": {
+    "category": "Gr.1",
+    "pp_rating": 887.54,
+    "power_hp": 700,
+    "weight_kg": 930,
+    "aspiration": "TC"
+  },
+  "Genesis X Gran Racer VGT Concept": {
+    "category": "Road Car",
+    "pp_rating": 885.87,
+    "power_hp": 869,
+    "weight_kg": 1089,
+    "aspiration": "TC"
+  },
+  "HYUNDAI N 2025 VGT (Gr.1)": {
+    "category": "Gr.1",
+    "pp_rating": 885.62,
+    "power_hp": 640,
+    "weight_kg": 972,
+    "aspiration": "NA"
+  },
+  "Mazda LM55 VGT (Gr.1)": {
+    "category": "Gr.1",
+    "pp_rating": 880.58,
+    "power_hp": 641,
+    "weight_kg": 880,
+    "aspiration": "NA"
+  },
+  "Toyota TS030 Hybrid '12": {
+    "category": "Gr.1",
+    "pp_rating": 877.92,
+    "power_hp": 529,
+    "weight_kg": 900,
+    "aspiration": "NA"
+  },
+  "Peugeot L750R HYbrid VGT 2017": {
+    "category": "Gr.1",
+    "pp_rating": 876.88,
+    "power_hp": 693,
+    "weight_kg": 825,
+    "aspiration": "TC"
+  },
+  "Nissan GT-R LM NISMO '15": {
+    "category": "Gr.1",
+    "pp_rating": 876.71,
+    "power_hp": 604,
+    "weight_kg": 880,
+    "aspiration": "TC"
+  },
+  "Bugatti VGT (Gr.1)": {
+    "category": "Gr.1",
+    "pp_rating": 876.09,
+    "power_hp": 641,
+    "weight_kg": 980,
+    "aspiration": "TC"
+  },
+  "McLaren VGT (Gr.1)": {
+    "category": "Gr.1",
+    "pp_rating": 876.0,
+    "power_hp": 813,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "Aston Martin Valkyrie '21": {
+    "category": "Road Car",
+    "pp_rating": 875.35,
+    "power_hp": 1139,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "Opel Corsa GSE VGT": {
+    "category": "Road Car",
+    "pp_rating": 871.44,
+    "power_hp": 788,
+    "weight_kg": 1170,
+    "aspiration": "EV"
+  },
+  "Porsche 919 Hybrid '16": {
+    "category": "Gr.1",
+    "pp_rating": 871.17,
+    "power_hp": 499,
+    "weight_kg": 875,
+    "aspiration": "TC"
+  },
+  "Audi VGT": {
+    "category": "Gr.1",
+    "pp_rating": 868.99,
+    "power_hp": 735,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "Honda NSX CONCEPT-GT '16": {
+    "category": "Gr.2",
+    "pp_rating": 867.13,
+    "power_hp": 603,
+    "weight_kg": 1049,
+    "aspiration": "TC"
+  },
+  "Toyota TS050 - Hybrid '16": {
+    "category": "Gr.1",
+    "pp_rating": 865.39,
+    "power_hp": 493,
+    "weight_kg": 875,
+    "aspiration": "TC"
+  },
+  "Porsche 963 '24": {
+    "category": "Gr.1",
+    "pp_rating": 865.08,
+    "power_hp": 670,
+    "weight_kg": 1030,
+    "aspiration": "TC"
+  },
+  "Nissan GT-R NISMO GT500 '16": {
+    "category": "Gr.2",
+    "pp_rating": 864.44,
+    "power_hp": 612,
+    "weight_kg": 1020,
+    "aspiration": "TC"
+  },
+  "Lexus RC F GT500 '16": {
+    "category": "Gr.2",
+    "pp_rating": 864.44,
+    "power_hp": 614,
+    "weight_kg": 1020,
+    "aspiration": "TC"
+  },
+  "Audi R18 '16": {
+    "category": "Gr.1",
+    "pp_rating": 864.22,
+    "power_hp": 506,
+    "weight_kg": 875,
+    "aspiration": "TC"
+  },
+  "Audi R18 TDI '11": {
+    "category": "Gr.1",
+    "pp_rating": 863.86,
+    "power_hp": 532,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "Jaguar XJR-9 '88": {
+    "category": "Gr.1",
+    "pp_rating": 862.26,
+    "power_hp": 749,
+    "weight_kg": 894,
+    "aspiration": "NA"
+  },
+  "Toyota GR010 HYBRID '21": {
+    "category": "Gr.1",
+    "pp_rating": 861.25,
+    "power_hp": 670,
+    "weight_kg": 1040,
+    "aspiration": "TC"
+  },
+  "Ferrari 499P '23": {
+    "category": "Gr.1",
+    "pp_rating": 861.24,
+    "power_hp": 670,
+    "weight_kg": 1030,
+    "aspiration": "TC"
+  },
+  "Alpine VGT '17": {
+    "category": "Gr.1",
+    "pp_rating": 860.45,
+    "power_hp": 594,
+    "weight_kg": 930,
+    "aspiration": "NA"
+  },
+  "Audi RS 5 Turbo DTM '19": {
+    "category": "Gr.2",
+    "pp_rating": 855.93,
+    "power_hp": 603,
+    "weight_kg": 986,
+    "aspiration": "TC"
+  },
+  "Volkswagen ID.R '19": {
+    "category": "Road Car",
+    "pp_rating": 855.36,
+    "power_hp": 670,
+    "weight_kg": 1030,
+    "aspiration": "EV"
+  },
+  "Peugeot 9X8 '25": {
+    "category": "Gr.1",
+    "pp_rating": 855.34,
+    "power_hp": 670,
+    "weight_kg": 1030,
+    "aspiration": "TC"
+  },
+  "BMW M Hybrid V8 '25": {
+    "category": "Gr.1",
+    "pp_rating": 853.52,
+    "power_hp": 641,
+    "weight_kg": 1030,
+    "aspiration": "TC"
+  },
+  "Audi e-tron VGT": {
+    "category": "Road Car",
+    "pp_rating": 853.42,
+    "power_hp": 803,
+    "weight_kg": 1450,
+    "aspiration": "EV"
+  },
+  "Mercedes-Benz Sauber Mercedes C9 '89": {
+    "category": "Gr.1",
+    "pp_rating": 852.41,
+    "power_hp": 710,
+    "weight_kg": 893,
+    "aspiration": "TC"
+  },
+  "Lexus LF-LC GT VGT": {
+    "category": "Road Car",
+    "pp_rating": 851.58,
+    "power_hp": 612,
+    "weight_kg": 1075,
+    "aspiration": "TC"
+  },
+  "Škoda VGT": {
+    "category": "Road Car",
+    "pp_rating": 850.71,
+    "power_hp": 1071,
+    "weight_kg": 1300,
+    "aspiration": "EV"
+  },
+  "Chaparral 2J '70": {
+    "category": "Road Car",
+    "pp_rating": 850.43,
+    "power_hp": 683,
+    "weight_kg": 821,
+    "aspiration": "NA"
+  },
+  "Nissan R92CP '92": {
+    "category": "Gr.1",
+    "pp_rating": 847.32,
+    "power_hp": 788,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "Porsche 962 C '88": {
+    "category": "Gr.1",
+    "pp_rating": 845.47,
+    "power_hp": 690,
+    "weight_kg": 850,
+    "aspiration": "TC"
+  },
+  "Mazda 787B '91": {
+    "category": "Gr.1",
+    "pp_rating": 839.74,
+    "power_hp": 690,
+    "weight_kg": 830,
+    "aspiration": "NA"
+  },
+  "Toyota GT-One (TS020) '99": {
+    "category": "Gr.2",
+    "pp_rating": 834.73,
+    "power_hp": 764,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "Porsche Mission X '23": {
+    "category": "Road Car",
+    "pp_rating": 815.22,
+    "power_hp": 1341,
+    "aspiration": "EV"
+  },
+  "Nissan GT-R GT500 '08": {
+    "category": "Gr.2",
+    "pp_rating": 810.34,
+    "power_hp": 527,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Honda NSX GT500 '08": {
+    "category": "Gr.2",
+    "pp_rating": 809.29,
+    "power_hp": 518,
+    "weight_kg": 1150,
+    "aspiration": "NA"
+  },
+  "Genesis X Gran Berlinetta VGT Concept": {
+    "category": "Road Car",
+    "pp_rating": 808.41,
+    "power_hp": 869,
+    "weight_kg": 1060,
+    "aspiration": "TC"
+  },
+  "Lexus SC430 GT500 '08": {
+    "category": "Gr.2",
+    "pp_rating": 807.39,
+    "power_hp": 516,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Lamborghini Lambo V12 VGT": {
+    "category": "Road Car",
+    "pp_rating": 806.39,
+    "power_hp": 774,
+    "weight_kg": 819,
+    "aspiration": "NA"
+  },
+  "Porsche 917 LIVING LEGEND": {
+    "category": "Road Car",
+    "pp_rating": 803.29,
+    "power_hp": 976,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "Mercedes-Benz CLK-LM '98": {
+    "category": "Gr.2",
+    "pp_rating": 795.73,
+    "power_hp": 599,
+    "weight_kg": 940,
+    "aspiration": "NA"
+  },
+  "Italdesign VGT Street Mode": {
+    "category": "Road Car",
+    "pp_rating": 795.55,
+    "power_hp": 1219,
+    "weight_kg": 1000,
+    "aspiration": "NA"
+  },
+  "Suzuki V6 Escudo Pikes Peak Special '98": {
+    "category": "Road Car",
+    "pp_rating": 793.58,
+    "power_hp": 981,
+    "weight_kg": 800,
+    "aspiration": "TC"
+  },
+  "Porsche VGT": {
+    "category": "Road Car",
+    "pp_rating": 792.26,
+    "power_hp": 1098,
+    "weight_kg": 1390,
+    "aspiration": "EV"
+  },
+  "Italdesign VGT Off-road Mode": {
+    "category": "Road Car",
+    "pp_rating": 792.16,
+    "power_hp": 1219,
+    "weight_kg": 1000,
+    "aspiration": "NA"
+  },
+  "McLaren P1 GTR '16": {
+    "category": "Road Car",
+    "pp_rating": 791.46,
+    "power_hp": 986,
+    "weight_kg": 1345,
+    "aspiration": "TC"
+  },
+  "Porsche VGT Spyder": {
+    "category": "Road Car",
+    "pp_rating": 787.97,
+    "power_hp": 1098,
+    "weight_kg": 1390,
+    "aspiration": "EV"
+  },
+  "BMW McLaren F1 GTR Race Car '97": {
+    "category": "Gr.2",
+    "pp_rating": 786.75,
+    "power_hp": 602,
+    "weight_kg": 950,
+    "aspiration": "NA"
+  },
+  "Ferrari FXX K '14": {
+    "category": "Road Car",
+    "pp_rating": 780.99,
+    "power_hp": 1034,
+    "weight_kg": 1165,
+    "aspiration": "NA"
+  },
+  "PEUGEOT VGT": {
+    "category": "Road Car",
+    "pp_rating": 773.11,
+    "power_hp": 873,
+    "weight_kg": 875,
+    "aspiration": "TC"
+  },
+  "Pagani Zonda R '09": {
+    "category": "Road Car",
+    "pp_rating": 772.24,
+    "power_hp": 737,
+    "weight_kg": 1070,
+    "aspiration": "NA"
+  },
+  "Toyota FT-1 VGT": {
+    "category": "Road Car",
+    "pp_rating": 767.15,
+    "aspiration": "TC"
+  },
+  "Aston Martin Vulcan '16": {
+    "category": "Road Car",
+    "pp_rating": 765.28,
+    "power_hp": 820,
+    "weight_kg": 1360,
+    "aspiration": "NA"
+  },
+  "Renault Espace F1 '95": {
+    "category": "Road Car",
+    "pp_rating": 758.58,
+    "power_hp": 799,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Jaguar VGT Coupé": {
+    "category": "Road Car",
+    "pp_rating": 754.71,
+    "power_hp": 1004,
+    "weight_kg": 1400,
+    "aspiration": "EV"
+  },
+  "Jaguar VGT Roadster": {
+    "category": "Road Car",
+    "pp_rating": 748.4,
+    "power_hp": 1004,
+    "weight_kg": 1400,
+    "aspiration": "EV"
+  },
+  "AMG Mercedes-AMG GT3 '20": {
+    "category": "Gr.3",
+    "pp_rating": 745.37,
+    "power_hp": 614,
+    "weight_kg": 1285,
+    "aspiration": "NA"
+  },
+  "Ferrari 296 GT3 '23": {
+    "category": "Gr.3",
+    "pp_rating": 743.47,
+    "power_hp": 599,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "Dodge Viper SRT GT3-R '15": {
+    "category": "Gr.3",
+    "pp_rating": 742.54,
+    "power_hp": 678,
+    "weight_kg": 1290,
+    "aspiration": "NA"
+  },
+  "Volkswagen Beetle Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 742.41,
+    "power_hp": 591,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "BMW M6 GT3 Sprint Model '16": {
+    "category": "Gr.3",
+    "pp_rating": 741.94,
+    "power_hp": 584,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "BMW M6 GT3 Endurance Model '16": {
+    "category": "Gr.3",
+    "pp_rating": 741.34,
+    "power_hp": 584,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Toyota GR Supra Racing Concept '18": {
+    "category": "Gr.3",
+    "pp_rating": 741.16,
+    "power_hp": 591,
+    "weight_kg": 1243,
+    "aspiration": "TC"
+  },
+  "Citroën GT by Citroën Race Car (Gr.3)": {
+    "category": "Gr.3",
+    "pp_rating": 741.06,
+    "power_hp": 599,
+    "weight_kg": 1200,
+    "aspiration": "NA"
+  },
+  "McLaren F1 GTR - BMW '95": {
+    "category": "Gr.3",
+    "pp_rating": 740.81,
+    "power_hp": 600,
+    "weight_kg": 1050,
+    "aspiration": "NA"
+  },
+  "Audi R8 LMS Evo '19": {
+    "category": "Gr.3",
+    "pp_rating": 739.68,
+    "power_hp": 576,
+    "weight_kg": 1235,
+    "aspiration": "NA"
+  },
+  "Mazda RX-VISION GT3 CONCEPT": {
+    "category": "Gr.3",
+    "pp_rating": 739.31,
+    "power_hp": 562,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "Mazda RX-VISION GT3 CONCEPT Stealth Model": {
+    "category": "Gr.3",
+    "pp_rating": 739.31,
+    "power_hp": 562,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "Audi R8 LMS '15": {
+    "category": "Gr.3",
+    "pp_rating": 739.23,
+    "power_hp": 585,
+    "weight_kg": 1225,
+    "aspiration": "NA"
+  },
+  "AMG Mercedes-AMG GT3 '16": {
+    "category": "Gr.3",
+    "pp_rating": 739.15,
+    "power_hp": 614,
+    "weight_kg": 1325,
+    "aspiration": "NA"
+  },
+  "Lamborghini Huracán GT3 '15": {
+    "category": "Gr.3",
+    "pp_rating": 738.66,
+    "power_hp": 576,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Alpine VGT Race": {
+    "category": "Road Car",
+    "pp_rating": 738.46,
+    "power_hp": 443,
+    "weight_kg": 900,
+    "aspiration": "NA"
+  },
+  "Ford Mustang 2015 American Racer": {
+    "category": "Road Car",
+    "pp_rating": 736.02,
+    "power_hp": 800,
+    "weight_kg": 1451,
+    "aspiration": "NA",
+    "torque_kgfm": 72.1,
+    "torque_rpm": 8500
+  },
+  "Ford GT LM Race Car Spec II": {
+    "category": "Gr.3",
+    "pp_rating": 735.62,
+    "power_hp": 606,
+    "weight_kg": 1130,
+    "aspiration": "SC"
+  },
+  "Porsche 911 GT3 R (992) '22": {
+    "category": "Gr.3",
+    "pp_rating": 735.54,
+    "power_hp": 557,
+    "weight_kg": 1250,
+    "aspiration": "NA",
+    "torque_kgfm": 51.0,
+    "torque_rpm": 9000
+  },
+  "AMG Mercedes-Benz AMG VGT Racing Series": {
+    "category": "Road Car",
+    "pp_rating": 732.83,
+    "power_hp": 590,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Renault R.S.01 '16": {
+    "category": "Road Car",
+    "pp_rating": 731.98,
+    "power_hp": 542,
+    "weight_kg": 1144,
+    "aspiration": "TC"
+  },
+  "Ferrari 458 Italia GT3 '13": {
+    "category": "Gr.3",
+    "pp_rating": 731.36,
+    "power_hp": 542,
+    "weight_kg": 1215,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R NISMO GT3 '18": {
+    "category": "Gr.3",
+    "pp_rating": 731.09,
+    "power_hp": 576,
+    "weight_kg": 1285,
+    "aspiration": "TC"
+  },
+  "Subaru BRZ GT300 '21": {
+    "category": "Gr.3",
+    "pp_rating": 730.7,
+    "power_hp": 478,
+    "weight_kg": 1150,
+    "aspiration": "TC"
+  },
+  "Porsche 917K '70": {
+    "category": "Road Car",
+    "pp_rating": 730.37,
+    "power_hp": 598,
+    "weight_kg": 800,
+    "aspiration": "NA"
+  },
+  "Mitsubishi Lancer Evolution Final Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 729.27,
+    "power_hp": 610,
+    "weight_kg": 1290,
+    "aspiration": "TC"
+  },
+  "Ford GT LM Spec II Test Car": {
+    "category": "Gr.3",
+    "pp_rating": 729.22,
+    "power_hp": 590,
+    "weight_kg": 1165,
+    "aspiration": "SC"
+  },
+  "Subaru WRX Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 727.65,
+    "power_hp": 591,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "Jaguar F-type Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 727.11,
+    "power_hp": 552,
+    "weight_kg": 1250,
+    "aspiration": "SC"
+  },
+  "Genesis X GR3": {
+    "category": "Gr.3",
+    "pp_rating": 726.09,
+    "power_hp": 547,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "Lexus RC F GT3 '17": {
+    "category": "Gr.3",
+    "pp_rating": 725.77,
+    "power_hp": 535,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Ferrari LaFerrari '13": {
+    "category": "Road Car",
+    "pp_rating": 725.64,
+    "power_hp": 949,
+    "weight_kg": 1255,
+    "aspiration": "NA"
+  },
+  "McLaren 650S GT3 '15": {
+    "category": "Gr.3",
+    "pp_rating": 725.53,
+    "power_hp": 542,
+    "weight_kg": 1240,
+    "aspiration": "TC"
+  },
+  "Hyundai Genesis Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 725.27,
+    "power_hp": 575,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "Ford GT Race Car '18": {
+    "category": "Gr.3",
+    "pp_rating": 723.02,
+    "power_hp": 527,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Mazda Atenza Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 722.21,
+    "power_hp": 567,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "Renault R.S.01 GT3 '16": {
+    "category": "Gr.3",
+    "pp_rating": 721.91,
+    "power_hp": 534,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "AMG SLS AMG GT3 '11": {
+    "category": "Gr.3",
+    "pp_rating": 721.39,
+    "power_hp": 614,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Porsche 911 RSR (991) '17": {
+    "category": "Gr.3",
+    "pp_rating": 720.74,
+    "power_hp": 509,
+    "weight_kg": 1243,
+    "aspiration": "NA"
+  },
+  "Aston Martin DBR9 GT1 '10": {
+    "category": "Gr.3",
+    "pp_rating": 720.71,
+    "power_hp": 599,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Lexus RC F GT3 prototype '16": {
+    "category": "Gr.3",
+    "pp_rating": 719.53,
+    "power_hp": 527,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Toyota FT-1 VGT (Gr.3)": {
+    "category": "Gr.3",
+    "pp_rating": 719.27,
+    "power_hp": 544,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "BMW VGT": {
+    "category": "Road Car",
+    "pp_rating": 719.18,
+    "power_hp": 541,
+    "weight_kg": 1180,
+    "aspiration": "TC"
+  },
+  "Honda NSX Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 718.94,
+    "power_hp": 568,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette C7 Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 718.34,
+    "power_hp": 571,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Ford Mustang Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 716.44,
+    "power_hp": 568,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Aston Martin V12 Vantage GT3 '12": {
+    "category": "Gr.3",
+    "pp_rating": 715.21,
+    "power_hp": 591,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "PEUGEOT VGT (Gr.3)": {
+    "category": "Gr.3",
+    "pp_rating": 714.61,
+    "power_hp": 542,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "Gran Turismo Red Bull X2014 Junior": {
+    "category": "Road Car",
+    "pp_rating": 714.0,
+    "power_hp": 246,
+    "weight_kg": 550,
+    "aspiration": "NA"
+  },
+  "Alfa Romeo 4C Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 713.68,
+    "power_hp": 528,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "BMW Z4 GT3 '11": {
+    "category": "Gr.3",
+    "pp_rating": 712.78,
+    "power_hp": 522,
+    "weight_kg": 1190,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R NISMO GT3 '13": {
+    "category": "Gr.3",
+    "pp_rating": 712.14,
+    "power_hp": 591,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Peugeot RCZ Gr.3": {
+    "category": "Gr.3",
+    "pp_rating": 710.5,
+    "power_hp": 520,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "SUZUKI VGT (Gr.3)": {
+    "category": "Gr.3",
+    "pp_rating": 710.3,
+    "power_hp": 577,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "Subaru VIZIV GT VGT": {
+    "category": "Road Car",
+    "pp_rating": 707.56,
+    "power_hp": 630,
+    "weight_kg": 1380,
+    "aspiration": "TC"
+  },
+  "Toyota Supra GT500 '97": {
+    "category": "Gr.3",
+    "pp_rating": 706.79,
+    "power_hp": 492,
+    "weight_kg": 1150,
+    "aspiration": "TC"
+  },
+  "Honda NSX GT500 '00": {
+    "category": "Gr.3",
+    "pp_rating": 706.71,
+    "power_hp": 481,
+    "weight_kg": 1150,
+    "aspiration": "NA"
+  },
+  "Volkswagen GTI Supersport VGT": {
+    "category": "Road Car",
+    "pp_rating": 704.76,
+    "power_hp": 551,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Xiaomi SU7 Ultra '25": {
+    "category": "Road Car",
+    "pp_rating": 703.82,
+    "power_hp": 1526,
+    "weight_kg": 2360,
+    "aspiration": "EV"
+  },
+  "Nissan GT-R GT500 '99": {
+    "category": "Gr.3",
+    "pp_rating": 703.18,
+    "power_hp": 498,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "BMW M3 GT '11": {
+    "category": "Gr.3",
+    "pp_rating": 702.88,
+    "power_hp": 500,
+    "weight_kg": 1245,
+    "aspiration": "NA"
+  },
+  "Volkswagen GTI Roadster VGT": {
+    "category": "Road Car",
+    "pp_rating": 702.61,
+    "power_hp": 551,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Aston Martin DP-100 VGT": {
+    "category": "Road Car",
+    "pp_rating": 699.31,
+    "power_hp": 799,
+    "weight_kg": 1375,
+    "aspiration": "TC"
+  },
+  "Nissan Skyline Super Silhouette '84": {
+    "category": "Gr.3",
+    "pp_rating": 698.48,
+    "power_hp": 561,
+    "weight_kg": 1005,
+    "aspiration": "TC"
+  },
+  "Lamborghini Veneno '14": {
+    "category": "Road Car",
+    "pp_rating": 697.99,
+    "power_hp": 739,
+    "weight_kg": 1450,
+    "aspiration": "NA"
+  },
+  "Bugatti Chiron '16": {
+    "category": "Road Car",
+    "pp_rating": 696.63,
+    "power_hp": 1479,
+    "weight_kg": 1995,
+    "aspiration": "TC"
+  },
+  "Ferrari 330 P4 '67": {
+    "category": "Road Car",
+    "pp_rating": 696.43,
+    "power_hp": 448,
+    "weight_kg": 792,
+    "aspiration": "NA"
+  },
+  "NISSAN CONCEPT 2020 VGT": {
+    "category": "Road Car",
+    "pp_rating": 695.23,
+    "aspiration": "TC"
+  },
+  "Volkswagen GTI VGT (Gr.3)": {
+    "category": "Gr.3",
+    "pp_rating": 695.04,
+    "power_hp": 551,
+    "weight_kg": 1260,
+    "aspiration": "TC"
+  },
+  "Porsche 918 Spyder '13": {
+    "category": "Road Car",
+    "pp_rating": 694.05,
+    "power_hp": 874,
+    "weight_kg": 1674,
+    "aspiration": "NA"
+  },
+  "Ferrari F8 Tributo '19": {
+    "category": "Road Car",
+    "pp_rating": 691.48,
+    "power_hp": 710,
+    "weight_kg": 1330,
+    "aspiration": "TC"
+  },
+  "Ferrari 812 Superfast '17": {
+    "category": "Road Car",
+    "pp_rating": 688.85,
+    "power_hp": 788,
+    "weight_kg": 1525,
+    "aspiration": "NA"
+  },
+  "Alpine VGT": {
+    "category": "Road Car",
+    "pp_rating": 688.5,
+    "power_hp": 443,
+    "weight_kg": 900,
+    "aspiration": "NA"
+  },
+  "Mitsubishi Concept XR-PHEV EVOLUTION VGT": {
+    "category": "Road Car",
+    "pp_rating": 685.4,
+    "power_hp": 502,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Yangwang U9 '24": {
+    "category": "Road Car",
+    "pp_rating": 685.13,
+    "power_hp": 252,
+    "weight_kg": 2380,
+    "aspiration": "EV"
+  },
+  "Ferrari 296 GTB '22": {
+    "category": "Road Car",
+    "pp_rating": 683.12,
+    "power_hp": 818,
+    "weight_kg": 1470,
+    "aspiration": "TC"
+  },
+  "Amuse S2000 GT1 Turbo": {
+    "category": "Road Car",
+    "pp_rating": 682.89,
+    "power_hp": 616,
+    "weight_kg": 1120,
+    "aspiration": "TC"
+  },
+  "Greening Auto Company GAC Maverick": {
+    "category": "Road Car",
+    "pp_rating": 681.15,
+    "power_hp": 1199,
+    "weight_kg": 1633,
+    "aspiration": "TC"
+  },
+  "Pagani Huayra '13": {
+    "category": "Road Car",
+    "pp_rating": 680.58,
+    "power_hp": 730,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Subaru WRX STI Isle of Man '16": {
+    "category": "Road Car",
+    "pp_rating": 680.25,
+    "power_hp": 578,
+    "weight_kg": 1140,
+    "aspiration": "TC"
+  },
+  "Audi Sport quattro S1 Pikes Peak '87": {
+    "category": "Gr.4",
+    "pp_rating": 678.85,
+    "power_hp": 588,
+    "weight_kg": 1000,
+    "aspiration": "TC"
+  },
+  "Zagato IsoRivolta Zagato VGT": {
+    "category": "Road Car",
+    "pp_rating": 676.87,
+    "power_hp": 559,
+    "weight_kg": 1150,
+    "aspiration": "NA"
+  },
+  "Ford Mark IV Race Car '67": {
+    "category": "Road Car",
+    "pp_rating": 674.71,
+    "power_hp": 503,
+    "weight_kg": 1000,
+    "aspiration": "NA"
+  },
+  "Jaguar XJ13 '66": {
+    "category": "Road Car",
+    "pp_rating": 673.36,
+    "power_hp": 510,
+    "weight_kg": 998,
+    "aspiration": "NA"
+  },
+  "Honda Sports VGT": {
+    "category": "Road Car",
+    "pp_rating": 673.35,
+    "power_hp": 403,
+    "weight_kg": 899,
+    "aspiration": "TC"
+  },
+  "Chevrolet Camaro 1969 Race-Mod": {
+    "category": "Road Car",
+    "pp_rating": 672.59,
+    "power_hp": 657,
+    "weight_kg": 1320,
+    "aspiration": "SC"
+  },
+  "Honda NSX Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 668.96,
+    "power_hp": 557,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "AMG Mercedes-AMG GT Black Series '20": {
+    "category": "Road Car",
+    "pp_rating": 667.83,
+    "power_hp": 719,
+    "weight_kg": 1540,
+    "aspiration": "TC"
+  },
+  "RUF CTR3 '07": {
+    "category": "Road Car",
+    "pp_rating": 667.19,
+    "power_hp": 690,
+    "weight_kg": 1400,
+    "aspiration": "TC"
+  },
+  "Roadster Shop Rampage": {
+    "category": "Road Car",
+    "pp_rating": 666.88,
+    "power_hp": 748,
+    "weight_kg": 1406,
+    "aspiration": "NA"
+  },
+  "Lamborghini Aventador LP 750-4 SV '15": {
+    "category": "Road Car",
+    "pp_rating": 665.86,
+    "power_hp": 739,
+    "weight_kg": 1525,
+    "aspiration": "NA"
+  },
+  "Toyota 86 Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 665.42,
+    "power_hp": 516,
+    "weight_kg": 1180,
+    "aspiration": "NA"
+  },
+  "Mercedes-Benz AMG VGT": {
+    "category": "Road Car",
+    "pp_rating": 663.39,
+    "power_hp": 576,
+    "weight_kg": 1385,
+    "aspiration": "TC"
+  },
+  "Alfa Romeo 155 2.5 V6 TI '93": {
+    "category": "Gr.4",
+    "pp_rating": 662.94,
+    "power_hp": 413,
+    "weight_kg": 1010,
+    "aspiration": "NA"
+  },
+  "Peugeot 205 Turbo 16 Evolution 2 '86": {
+    "category": "Gr.4",
+    "pp_rating": 660.97,
+    "power_hp": 448,
+    "weight_kg": 910,
+    "aspiration": "TC"
+  },
+  "Peugeot RCZ Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 660.77,
+    "power_hp": 516,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Ford Focus Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 660.04,
+    "power_hp": 538,
+    "weight_kg": 1260,
+    "aspiration": "TC"
+  },
+  "Lamborghini Huracán Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 658.59,
+    "power_hp": 404,
+    "weight_kg": 1365,
+    "aspiration": "NA"
+  },
+  "SUZUKI VGT": {
+    "category": "Road Car",
+    "pp_rating": 658.19,
+    "power_hp": 426,
+    "weight_kg": 970,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 658.04,
+    "power_hp": 542,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette C7 ZR1 '19": {
+    "category": "Road Car",
+    "pp_rating": 657.89,
+    "power_hp": 754,
+    "weight_kg": 1615,
+    "aspiration": "SC"
+  },
+  "Subaru WRX Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 656.42,
+    "power_hp": 521,
+    "weight_kg": 1280,
+    "aspiration": "TC"
+  },
+  "Renault Mégane Trophy '11": {
+    "category": "Gr.4",
+    "pp_rating": 656.18,
+    "power_hp": 359,
+    "weight_kg": 955,
+    "aspiration": "NA"
+  },
+  "Bugatti Veyron 16.4 '13": {
+    "category": "Road Car",
+    "pp_rating": 656.12,
+    "power_hp": 986,
+    "weight_kg": 1888,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution Final Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 655.83,
+    "power_hp": 521,
+    "weight_kg": 1290,
+    "aspiration": "TC"
+  },
+  "Hyundai Genesis Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 654.51,
+    "power_hp": 499,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "Ford Mustang Gr.B Rally Car": {
+    "category": "Gr.4",
+    "pp_rating": 653.9,
+    "power_hp": 549,
+    "weight_kg": 1380,
+    "aspiration": "NA"
+  },
+  "Citroën GT by Citroën Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 653.21,
+    "power_hp": 394,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "INFINITI CONCEPT VGT": {
+    "category": "Road Car",
+    "pp_rating": 653.19,
+    "power_hp": 535,
+    "weight_kg": 1680,
+    "aspiration": "NA"
+  },
+  "MINI Clubman VGT": {
+    "category": "Road Car",
+    "pp_rating": 652.75,
+    "power_hp": 388,
+    "weight_kg": 1050,
+    "aspiration": "TC"
+  },
+  "Ferrari Enzo Ferrari '02": {
+    "category": "Road Car",
+    "pp_rating": 652.2,
+    "power_hp": 658,
+    "weight_kg": 1255,
+    "aspiration": "NA"
+  },
+  "RUF RGT 4.2 '16": {
+    "category": "Road Car",
+    "pp_rating": 650.78,
+    "power_hp": 517,
+    "weight_kg": 1400,
+    "aspiration": "NA"
+  },
+  "Suzuki Swift Sport Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 648.19,
+    "power_hp": 345,
+    "weight_kg": 900,
+    "aspiration": "TC"
+  },
+  "Porsche 911 GT3 RS (991) '16": {
+    "category": "Road Car",
+    "pp_rating": 647.5,
+    "power_hp": 491,
+    "weight_kg": 1420,
+    "aspiration": "NA"
+  },
+  "Porsche 911 GT3 RS (992) '22": {
+    "category": "Road Car",
+    "pp_rating": 647.12,
+    "power_hp": 517,
+    "weight_kg": 1450,
+    "aspiration": "NA"
+  },
+  "Volkswagen Scirocco Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 645.23,
+    "power_hp": 358,
+    "weight_kg": 1050,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette C7 Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 645.21,
+    "power_hp": 414,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Dodge Viper Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 644.69,
+    "power_hp": 428,
+    "weight_kg": 1400,
+    "aspiration": "NA"
+  },
+  "Honda NSX Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 644.28,
+    "power_hp": 394,
+    "weight_kg": 1360,
+    "aspiration": "TC"
+  },
+  "BAC Mono '16": {
+    "category": "Road Car",
+    "pp_rating": 644.13,
+    "power_hp": 304,
+    "weight_kg": 580,
+    "aspiration": "NA"
+  },
+  "Ferrari F12berlinetta '12": {
+    "category": "Road Car",
+    "pp_rating": 644.11,
+    "power_hp": 730,
+    "weight_kg": 1525,
+    "aspiration": "NA"
+  },
+  "Mine's BNR34 GT-R N1 base": {
+    "category": "Road Car",
+    "pp_rating": 643.59,
+    "power_hp": 621,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Porsche Cayman GT4 Clubsport '16": {
+    "category": "Gr.4",
+    "pp_rating": 643.52,
+    "power_hp": 379,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "McLaren F1 '94": {
+    "category": "Road Car",
+    "pp_rating": 643.44,
+    "power_hp": 626,
+    "weight_kg": 1140,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 642.62,
+    "power_hp": 428,
+    "weight_kg": 1450,
+    "aspiration": "TC"
+  },
+  "Renault Mégane Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 642.45,
+    "power_hp": 350,
+    "weight_kg": 1100,
+    "aspiration": "TC"
+  },
+  "Subaru BRZ Drift Car '17": {
+    "category": "Road Car",
+    "pp_rating": 642.39,
+    "power_hp": 1037,
+    "weight_kg": 1433,
+    "aspiration": "TC"
+  },
+  "Toyota GR Supra Race Car '19": {
+    "category": "Gr.4",
+    "pp_rating": 641.68,
+    "power_hp": 394,
+    "weight_kg": 1380,
+    "aspiration": "TC"
+  },
+  "Genesis G70 GR4": {
+    "category": "Gr.4",
+    "pp_rating": 641.19,
+    "power_hp": 414,
+    "weight_kg": 1400,
+    "aspiration": "TC"
+  },
+  "Nissan Silvia spec-R Aero (S15) Touring Car": {
+    "category": "Gr.4",
+    "pp_rating": 640.61,
+    "power_hp": 355,
+    "weight_kg": 1000,
+    "aspiration": "TC"
+  },
+  "Peugeot L500R HYbrid VGT 2017": {
+    "category": "Road Car",
+    "pp_rating": 640.36,
+    "power_hp": 509,
+    "weight_kg": 1000,
+    "aspiration": "TC"
+  },
+  "Eckert's Rod & Custom Mach Forty": {
+    "category": "Road Car",
+    "pp_rating": 639.22,
+    "power_hp": 787,
+    "weight_kg": 1588,
+    "aspiration": "SC"
+  },
+  "AMG SLS AMG Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 639.19,
+    "power_hp": 419,
+    "weight_kg": 1415,
+    "aspiration": "NA"
+  },
+  "Aston Martin V8 Vantage Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 638.94,
+    "power_hp": 399,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Ferrari 458 Italia Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 638.06,
+    "power_hp": 374,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Chevrolet Camaro ZL1 1LE Package '18": {
+    "category": "Road Car",
+    "pp_rating": 637.78,
+    "power_hp": 649,
+    "weight_kg": 1732,
+    "aspiration": "SC"
+  },
+  "McLaren 650S '14": {
+    "category": "Road Car",
+    "pp_rating": 636.84,
+    "power_hp": 641,
+    "weight_kg": 1330,
+    "aspiration": "TC"
+  },
+  "MAZDA3 Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 636.81,
+    "power_hp": 380,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Jaguar F-type Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 636.58,
+    "power_hp": 399,
+    "weight_kg": 1350,
+    "aspiration": "SC"
+  },
+  "Porsche 911 GT1 Strassenversion '97": {
+    "category": "Road Car",
+    "pp_rating": 636.49,
+    "power_hp": 533,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Toyota 86 Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 635.55,
+    "power_hp": 358,
+    "weight_kg": 1200,
+    "aspiration": "NA"
+  },
+  "McLaren 650S Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 634.86,
+    "power_hp": 399,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Aston Martin One-77 '11": {
+    "category": "Road Car",
+    "pp_rating": 634.32,
+    "power_hp": 748,
+    "weight_kg": 1630,
+    "aspiration": "NA"
+  },
+  "Ford Mustang Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 632.77,
+    "power_hp": 395,
+    "weight_kg": 1400,
+    "aspiration": "NA"
+  },
+  "Honda RA272 '65": {
+    "category": "Road Car",
+    "pp_rating": 632.53,
+    "power_hp": 228,
+    "weight_kg": 498,
+    "aspiration": "NA"
+  },
+  "Lexus RC F Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 632.21,
+    "power_hp": 419,
+    "weight_kg": 1400,
+    "aspiration": "NA"
+  },
+  "BVLGARI Aluminium VGT": {
+    "category": "Road Car",
+    "pp_rating": 631.7,
+    "power_hp": 394,
+    "weight_kg": 1000,
+    "aspiration": "NA"
+  },
+  "Dodge Challenger SRT Demon '18": {
+    "category": "Road Car",
+    "pp_rating": 631.64,
+    "power_hp": 840,
+    "weight_kg": 1941,
+    "aspiration": "SC"
+  },
+  "Ford GT '17": {
+    "category": "Road Car",
+    "pp_rating": 630.61,
+    "power_hp": 646,
+    "weight_kg": 1385,
+    "aspiration": "TC"
+  },
+  "Mazda RX-VISION '15": {
+    "category": "Road Car",
+    "pp_rating": 629.67,
+    "power_hp": 517,
+    "weight_kg": 1290,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R NISMO '17": {
+    "category": "Road Car",
+    "pp_rating": 629.01,
+    "power_hp": 591,
+    "weight_kg": 1740,
+    "aspiration": "TC"
+  },
+  "Alfa Romeo 4C Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 628.56,
+    "power_hp": 295,
+    "weight_kg": 1020,
+    "aspiration": "TC"
+  },
+  "Hyundai Genesis Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 627.74,
+    "power_hp": 384,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Lamborghini Huracán LP 610-4 '15": {
+    "category": "Road Car",
+    "pp_rating": 627.52,
+    "power_hp": 601,
+    "weight_kg": 1422,
+    "aspiration": "NA"
+  },
+  "Subaru WRX Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 626.5,
+    "power_hp": 377,
+    "weight_kg": 1320,
+    "aspiration": "TC"
+  },
+  "McLaren MP4-12C '10": {
+    "category": "Road Car",
+    "pp_rating": 626.29,
+    "power_hp": 600,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Audi R8 Coupé V10 plus '16": {
+    "category": "Road Car",
+    "pp_rating": 626.1,
+    "power_hp": 601,
+    "weight_kg": 1454,
+    "aspiration": "NA"
+  },
+  "Maserati MC20 '20": {
+    "category": "Road Car",
+    "pp_rating": 625.77,
+    "power_hp": 621,
+    "weight_kg": 1500,
+    "aspiration": "TC"
+  },
+  "Audi TT Cup '16": {
+    "category": "Gr.4",
+    "pp_rating": 625.74,
+    "power_hp": 335,
+    "weight_kg": 1125,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution Final Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 625.15,
+    "power_hp": 389,
+    "weight_kg": 1330,
+    "aspiration": "TC"
+  },
+  "BMW M4 Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 624.17,
+    "power_hp": 394,
+    "weight_kg": 1365,
+    "aspiration": "TC"
+  },
+  "Bugatti Veyron Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 623.53,
+    "power_hp": 433,
+    "weight_kg": 1650,
+    "aspiration": "TC"
+  },
+  "Ferrari 458 Italia '09": {
+    "category": "Road Car",
+    "pp_rating": 623.15,
+    "power_hp": 563,
+    "weight_kg": 1485,
+    "aspiration": "NA"
+  },
+  "Lamborghini Aventador LP 700-4 '11": {
+    "category": "Road Car",
+    "pp_rating": 622.92,
+    "power_hp": 690,
+    "weight_kg": 1575,
+    "aspiration": "NA"
+  },
+  "Porsche 911 Turbo S (992) '20": {
+    "category": "Road Car",
+    "pp_rating": 621.4,
+    "power_hp": 641,
+    "weight_kg": 1640,
+    "aspiration": "TC"
+  },
+  "Peugeot RCZ Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 621.36,
+    "power_hp": 345,
+    "weight_kg": 1225,
+    "aspiration": "TC"
+  },
+  "Porsche Carrera GT '04": {
+    "category": "Road Car",
+    "pp_rating": 621.04,
+    "power_hp": 603,
+    "weight_kg": 1380,
+    "aspiration": "NA"
+  },
+  "Porsche 911 Turbo S Safety Car (992)": {
+    "category": "Road Car",
+    "pp_rating": 620.74,
+    "power_hp": 641,
+    "weight_kg": 1640,
+    "aspiration": "TC"
+  },
+  "Chris Holstrom Concepts CHC 1967 Chevy Nova": {
+    "category": "Road Car",
+    "pp_rating": 620.48,
+    "power_hp": 732,
+    "weight_kg": 1366,
+    "aspiration": "SC"
+  },
+  "Toyota Supra GT Road Car (JZA80)": {
+    "category": "Road Car",
+    "pp_rating": 619.52,
+    "power_hp": 493,
+    "weight_kg": 1510,
+    "aspiration": "TC",
+    "torque_kgfm": 74.6,
+    "torque_rpm": 6500
+  },
+  "Mazda Atenza Gr.4": {
+    "category": "Gr.4",
+    "pp_rating": 619.3,
+    "power_hp": 393,
+    "weight_kg": 1380,
+    "aspiration": "TC"
+  },
+  "Hyundai ELANTRA N TC '24": {
+    "category": "Gr.4",
+    "pp_rating": 618.97,
+    "power_hp": 350,
+    "weight_kg": 1265,
+    "aspiration": "TC",
+    "torque_kgfm": 45.9,
+    "torque_rpm": 7000
+  },
+  "Ferrari F50 '95": {
+    "category": "Road Car",
+    "pp_rating": 616.13,
+    "power_hp": 511,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Ferrari F40 '92": {
+    "category": "Road Car",
+    "pp_rating": 615.17,
+    "power_hp": 471,
+    "weight_kg": 1100,
+    "aspiration": "TC"
+  },
+  "Lamborghini Gallardo LP 560-4 '08": {
+    "category": "Road Car",
+    "pp_rating": 614.72,
+    "power_hp": 552,
+    "weight_kg": 1410,
+    "aspiration": "NA"
+  },
+  "Chevrolet Corvette ZR1 (C6) '09": {
+    "category": "Road Car",
+    "pp_rating": 612.43,
+    "power_hp": 639,
+    "weight_kg": 1508,
+    "aspiration": "SC"
+  },
+  "AMG Mercedes-AMG GT R '17": {
+    "category": "Road Car",
+    "pp_rating": 611.52,
+    "power_hp": 576,
+    "weight_kg": 1660,
+    "aspiration": "TC"
+  },
+  "Ferrari 430 Scuderia '07": {
+    "category": "Road Car",
+    "pp_rating": 609.42,
+    "power_hp": 502,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Garage RCR Civic": {
+    "category": "Road Car",
+    "pp_rating": 609.34,
+    "power_hp": 389,
+    "weight_kg": 1014,
+    "aspiration": "TC"
+  },
+  "Toyota FT-1": {
+    "category": "Road Car",
+    "pp_rating": 607.59,
+    "aspiration": "TC"
+  },
+  "Lancia Delta HF Integrale Rally Car '92": {
+    "category": "Road Car",
+    "pp_rating": 605.44,
+    "power_hp": 330,
+    "weight_kg": 1100,
+    "aspiration": "TC"
+  },
+  "Dodge Viper GTS '13": {
+    "category": "Road Car",
+    "pp_rating": 605.33,
+    "power_hp": 640,
+    "weight_kg": 1556,
+    "aspiration": "NA"
+  },
+  "Mercedes-Benz SLR McLaren '09": {
+    "category": "Road Car",
+    "pp_rating": 605.15,
+    "power_hp": 616,
+    "weight_kg": 1768,
+    "aspiration": "SC"
+  },
+  "Mercedes-Benz W 196 R '55": {
+    "category": "Road Car",
+    "pp_rating": 604.92,
+    "power_hp": 289,
+    "weight_kg": 835,
+    "aspiration": "NA"
+  },
+  "Lamborghini Murciélago LP 640 '09": {
+    "category": "Road Car",
+    "pp_rating": 604.63,
+    "power_hp": 631,
+    "weight_kg": 1665,
+    "aspiration": "NA"
+  },
+  "Porsche Taycan Turbo S '19": {
+    "category": "Road Car",
+    "pp_rating": 602.71,
+    "power_hp": 751,
+    "weight_kg": 2295,
+    "aspiration": "EV"
+  },
+  "Ford GT '06": {
+    "category": "Road Car",
+    "pp_rating": 601.47,
+    "power_hp": 550,
+    "weight_kg": 1451,
+    "aspiration": "SC"
+  },
+  "Alfa Romeo Giulia GTAm '20": {
+    "category": "Road Car",
+    "pp_rating": 600.47,
+    "power_hp": 532,
+    "weight_kg": 1580,
+    "aspiration": "TC"
+  },
+  "Lamborghini Diablo GT '00": {
+    "category": "Road Car",
+    "pp_rating": 600.42,
+    "power_hp": 571,
+    "weight_kg": 1490,
+    "aspiration": "NA"
+  },
+  "Citroën GT by Citroën Road Car": {
+    "category": "Road Car",
+    "pp_rating": 600.15,
+    "power_hp": 500,
+    "weight_kg": 1450,
+    "aspiration": "NA"
+  },
+  "Jaguar XJ220 '92": {
+    "category": "Road Car",
+    "pp_rating": 599.59,
+    "power_hp": 515,
+    "weight_kg": 1372,
+    "aspiration": "TC"
+  },
+  "Aston Martin DB11 '16": {
+    "category": "Road Car",
+    "pp_rating": 598.01,
+    "power_hp": 599,
+    "weight_kg": 1770,
+    "aspiration": "TC"
+  },
+  "Aston Martin Vantage '18": {
+    "category": "Road Car",
+    "pp_rating": 595.91,
+    "power_hp": 502,
+    "weight_kg": 1530,
+    "aspiration": "TC"
+  },
+  "KTM X-BOW R '12": {
+    "category": "Road Car",
+    "pp_rating": 595.86,
+    "power_hp": 298,
+    "weight_kg": 790,
+    "aspiration": "TC"
+  },
+  "Dodge Charger SRT Hellcat '15": {
+    "category": "Road Car",
+    "pp_rating": 595.81,
+    "power_hp": 707,
+    "weight_kg": 1980,
+    "aspiration": "SC"
+  },
+  "Lexus LFA '10": {
+    "category": "Road Car",
+    "pp_rating": 594.81,
+    "power_hp": 552,
+    "weight_kg": 1480,
+    "aspiration": "NA"
+  },
+  "AMG Mercedes-AMG GT Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 594.56,
+    "power_hp": 502,
+    "weight_kg": 1570,
+    "aspiration": "TC"
+  },
+  "Nissan GT-R Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 594.49,
+    "power_hp": 564,
+    "weight_kg": 1740,
+    "aspiration": "TC"
+  },
+  "Ferrari F430 '06": {
+    "category": "Road Car",
+    "pp_rating": 593.71,
+    "power_hp": 495,
+    "weight_kg": 1450,
+    "aspiration": "NA"
+  },
+  "Dodge Charger SRT Hellcat Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 591.71,
+    "power_hp": 707,
+    "weight_kg": 1980,
+    "aspiration": "SC"
+  },
+  "Nismo R34 GT-R Z-tune '05": {
+    "category": "Road Car",
+    "pp_rating": 591.24,
+    "power_hp": 493,
+    "weight_kg": 1600,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette C8 '20": {
+    "category": "Road Car",
+    "pp_rating": 589.7,
+    "power_hp": 494,
+    "weight_kg": 1530,
+    "aspiration": "NA"
+  },
+  "Nissan GT-R Premium edition T-spec '24": {
+    "category": "Road Car",
+    "pp_rating": 589.38,
+    "power_hp": 562,
+    "weight_kg": 1760,
+    "aspiration": "TC"
+  },
+  "Nissan GT-R '17": {
+    "category": "Road Car",
+    "pp_rating": 588.53,
+    "power_hp": 564,
+    "weight_kg": 1770,
+    "aspiration": "TC"
+  },
+  "AMG SLS AMG '10": {
+    "category": "Road Car",
+    "pp_rating": 588.16,
+    "power_hp": 570,
+    "weight_kg": 1620,
+    "aspiration": "NA"
+  },
+  "AMG Mercedes-AMG GT S '15": {
+    "category": "Road Car",
+    "pp_rating": 586.81,
+    "power_hp": 502,
+    "weight_kg": 1570,
+    "aspiration": "TC"
+  },
+  "Alpine A220 Race Car '68": {
+    "category": "Road Car",
+    "pp_rating": 585.75,
+    "power_hp": 319,
+    "weight_kg": 690,
+    "aspiration": "NA"
+  },
+  "Shelby Cobra 427 '66": {
+    "category": "Road Car",
+    "pp_rating": 584.01,
+    "power_hp": 484,
+    "weight_kg": 1068,
+    "aspiration": "NA"
+  },
+  "Jaguar F-type R '14": {
+    "category": "Road Car",
+    "pp_rating": 583.95,
+    "power_hp": 542,
+    "weight_kg": 1650,
+    "aspiration": "SC"
+  },
+  "Dodge Viper SRT10 Coupe '06": {
+    "category": "Road Car",
+    "pp_rating": 582.46,
+    "power_hp": 508,
+    "weight_kg": 1565,
+    "aspiration": "NA"
+  },
+  "Toyota Celica GT-FOUR Rally Car (ST205) '95": {
+    "category": "Gr.4",
+    "pp_rating": 582.35,
+    "power_hp": 298,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Tesla Model 3 Performance '23": {
+    "category": "Road Car",
+    "pp_rating": 581.29,
+    "power_hp": 531,
+    "weight_kg": 1836,
+    "aspiration": "EV"
+  },
+  "Subaru Impreza Rally Car '98": {
+    "category": "Road Car",
+    "pp_rating": 580.73,
+    "power_hp": 299,
+    "weight_kg": 1230,
+    "aspiration": "TC"
+  },
+  "Nissan Skyline GT-R GP-Tuned (KPGC10)": {
+    "category": "Road Car",
+    "pp_rating": 578.76,
+    "power_hp": 246,
+    "weight_kg": 935,
+    "aspiration": "NA",
+    "torque_kgfm": 24.0,
+    "torque_rpm": 8500
+  },
+  "Honda NSX '17": {
+    "category": "Road Car",
+    "pp_rating": 578.17,
+    "power_hp": 570,
+    "weight_kg": 1780,
+    "aspiration": "TC"
+  },
+  "Porsche Cayman GT4 '16": {
+    "category": "Road Car",
+    "pp_rating": 578.04,
+    "power_hp": 379,
+    "weight_kg": 1340,
+    "aspiration": "NA"
+  },
+  "Porsche 911 GT3 (997) '09": {
+    "category": "Road Car",
+    "pp_rating": 576.76,
+    "power_hp": 428,
+    "weight_kg": 1395,
+    "aspiration": "NA"
+  },
+  "Chevrolet Corvette C7 '14": {
+    "category": "Road Car",
+    "pp_rating": 576.48,
+    "power_hp": 453,
+    "weight_kg": 1500,
+    "aspiration": "NA"
+  },
+  "AMG Mercedes-AMG C 63 S '15": {
+    "category": "Road Car",
+    "pp_rating": 576.28,
+    "power_hp": 503,
+    "weight_kg": 1725,
+    "aspiration": "TC"
+  },
+  "Ford Shelby GT350R '16": {
+    "category": "Road Car",
+    "pp_rating": 575.47,
+    "power_hp": 525,
+    "weight_kg": 1658,
+    "aspiration": "NA"
+  },
+  "Honda 2&4 powered by RC213V": {
+    "category": "Road Car",
+    "pp_rating": 575.17,
+    "power_hp": 211,
+    "weight_kg": 405,
+    "aspiration": "NA"
+  },
+  "Subaru WRX Gr.B Road Car": {
+    "category": "Road Car",
+    "pp_rating": 574.81,
+    "power_hp": 473,
+    "weight_kg": 1425,
+    "aspiration": "TC"
+  },
+  "Mazda Atenza Gr.3 Road Car": {
+    "category": "Road Car",
+    "pp_rating": 574.69,
+    "power_hp": 483,
+    "weight_kg": 1450,
+    "aspiration": "TC"
+  },
+  "TVR Tuscan Speed 6 '00": {
+    "category": "Road Car",
+    "pp_rating": 574.3,
+    "power_hp": 360,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Alfa Romeo 4C Gr.3 Road Car": {
+    "category": "Road Car",
+    "pp_rating": 573.69,
+    "power_hp": 443,
+    "weight_kg": 1320,
+    "aspiration": "TC"
+  },
+  "Polestar 5 Performance '26": {
+    "category": "Road Car",
+    "pp_rating": 573.07,
+    "power_hp": 871,
+    "weight_kg": 2503,
+    "aspiration": "EV"
+  },
+  "Chevrolet Corvette C7 Gr.3 Road Car": {
+    "category": "Road Car",
+    "pp_rating": 572.96,
+    "power_hp": 493,
+    "weight_kg": 1480,
+    "aspiration": "NA"
+  },
+  "Amuse NISMO 380RS Super Leggera": {
+    "category": "Road Car",
+    "pp_rating": 572.93,
+    "power_hp": 380,
+    "weight_kg": 1370,
+    "aspiration": "NA"
+  },
+  "Ford Mustang Gr.3 Road Car": {
+    "category": "Road Car",
+    "pp_rating": 572.51,
+    "power_hp": 502,
+    "weight_kg": 1500,
+    "aspiration": "NA"
+  },
+  "RE Amemiya FD3S RX-7": {
+    "category": "Road Car",
+    "pp_rating": 571.68,
+    "power_hp": 366,
+    "weight_kg": 1240,
+    "aspiration": "TC"
+  },
+  "BMW M4 Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 570.13,
+    "power_hp": 425,
+    "weight_kg": 1497,
+    "aspiration": "TC"
+  },
+  "BMW M4 '14": {
+    "category": "Road Car",
+    "pp_rating": 570.02,
+    "power_hp": 425,
+    "weight_kg": 1497,
+    "aspiration": "TC"
+  },
+  "Toyota S-FR Racing Concept '16": {
+    "category": "Road Car",
+    "pp_rating": 569.47,
+    "power_hp": 349,
+    "weight_kg": 1150,
+    "aspiration": "TC"
+  },
+  "Porsche 959 '87": {
+    "category": "Road Car",
+    "pp_rating": 569.17,
+    "power_hp": 443,
+    "weight_kg": 1450,
+    "aspiration": "TC"
+  },
+  "Hyundai IONIQ 5 N '24": {
+    "category": "Road Car",
+    "pp_rating": 568.72,
+    "power_hp": 641,
+    "weight_kg": 2210,
+    "aspiration": "EV"
+  },
+  "Porsche 911 Turbo S Leichtbau (964) '93": {
+    "category": "Road Car",
+    "pp_rating": 567.75,
+    "power_hp": 375,
+    "weight_kg": 1290,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution Final Gr.B Road Car": {
+    "category": "Road Car",
+    "pp_rating": 564.87,
+    "power_hp": 473,
+    "weight_kg": 1425,
+    "aspiration": "TC"
+  },
+  "Chevrolet Camaro SS '16": {
+    "category": "Road Car",
+    "pp_rating": 564.68,
+    "power_hp": 453,
+    "weight_kg": 1672,
+    "aspiration": "NA"
+  },
+  "Lamborghini Urus '18": {
+    "category": "Road Car",
+    "pp_rating": 563.64,
+    "power_hp": 641,
+    "weight_kg": 2197,
+    "aspiration": "TC"
+  },
+  "Lamborghini Miura P400 Bertone Prototype '67": {
+    "category": "Road Car",
+    "pp_rating": 563.03,
+    "power_hp": 349,
+    "weight_kg": 980,
+    "aspiration": "NA"
+  },
+  "Chevrolet Corvette Z06 (C5) '01": {
+    "category": "Road Car",
+    "pp_rating": 562.97,
+    "power_hp": 384,
+    "weight_kg": 1409,
+    "aspiration": "NA"
+  },
+  "Peugeot RCZ Gr.3 Road Car": {
+    "category": "Road Car",
+    "pp_rating": 562.41,
+    "power_hp": 468,
+    "weight_kg": 1400,
+    "aspiration": "TC"
+  },
+  "Gran Turismo Racing Kart 125 Shifter": {
+    "category": "Road Car",
+    "pp_rating": 561.31,
+    "power_hp": 49,
+    "weight_kg": 105,
+    "aspiration": "NA"
+  },
+  "Dodge Viper GTS '02": {
+    "category": "Road Car",
+    "pp_rating": 561.26,
+    "power_hp": 448,
+    "weight_kg": 1569,
+    "aspiration": "NA"
+  },
+  "Alfa Romeo 8C Competizione '08": {
+    "category": "Road Car",
+    "pp_rating": 561.09,
+    "power_hp": 442,
+    "weight_kg": 1585,
+    "aspiration": "NA"
+  },
+  "Aston Martin V8 Vantage S '15": {
+    "category": "Road Car",
+    "pp_rating": 557.39,
+    "power_hp": 429,
+    "weight_kg": 1610,
+    "aspiration": "NA"
+  },
+  "Lexus RC F '14": {
+    "category": "Road Car",
+    "pp_rating": 557.38,
+    "power_hp": 469,
+    "weight_kg": 1790,
+    "aspiration": "NA"
+  },
+  "Ferrari GTO '84": {
+    "category": "Road Car",
+    "pp_rating": 556.4,
+    "power_hp": 393,
+    "weight_kg": 1160,
+    "aspiration": "TC"
+  },
+  "Lamborghini Countach LP400 '74": {
+    "category": "Road Car",
+    "pp_rating": 556.09,
+    "power_hp": 373,
+    "weight_kg": 1065,
+    "aspiration": "NA"
+  },
+  "Toyota GR Supra RZ '20": {
+    "category": "Road Car",
+    "pp_rating": 554.92,
+    "power_hp": 382,
+    "weight_kg": 1530,
+    "aspiration": "TC"
+  },
+  "Ford GT40 Mark I '66": {
+    "category": "Road Car",
+    "pp_rating": 554.43,
+    "power_hp": 354,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Porsche 911 GT3 (996) '01": {
+    "category": "Road Car",
+    "pp_rating": 554.27,
+    "power_hp": 354,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Audi R8 4.2 '07": {
+    "category": "Road Car",
+    "pp_rating": 553.66,
+    "power_hp": 414,
+    "weight_kg": 1560,
+    "aspiration": "NA"
+  },
+  "BMW M2 Competition '18": {
+    "category": "Road Car",
+    "pp_rating": 552.38,
+    "power_hp": 405,
+    "weight_kg": 1575,
+    "aspiration": "TC"
+  },
+  "Lexus LC500 '17": {
+    "category": "Road Car",
+    "pp_rating": 552.09,
+    "power_hp": 469,
+    "weight_kg": 1940,
+    "aspiration": "NA"
+  },
+  "GReddy Fugu Z": {
+    "category": "Road Car",
+    "pp_rating": 548.81,
+    "power_hp": 294,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Shelby Cobra Daytona Coupe '64": {
+    "category": "Road Car",
+    "pp_rating": 548.78,
+    "power_hp": 384,
+    "weight_kg": 1043,
+    "aspiration": "NA"
+  },
+  "Ford Mustang GT '15": {
+    "category": "Road Car",
+    "pp_rating": 548.25,
+    "power_hp": 434,
+    "weight_kg": 1681,
+    "aspiration": "NA"
+  },
+  "Nissan Z Performance '23": {
+    "category": "Road Car",
+    "pp_rating": 547.11,
+    "power_hp": 399,
+    "weight_kg": 1543,
+    "aspiration": "TC"
+  },
+  "Toyota GR Supra RZ '19": {
+    "category": "Road Car",
+    "pp_rating": 545.87,
+    "power_hp": 335,
+    "weight_kg": 1520,
+    "aspiration": "TC"
+  },
+  "Nismo 400R '95": {
+    "category": "Road Car",
+    "pp_rating": 545.74,
+    "power_hp": 394,
+    "weight_kg": 1550,
+    "aspiration": "TC"
+  },
+  "BMW M3 '07": {
+    "category": "Road Car",
+    "pp_rating": 545.74,
+    "power_hp": 415,
+    "weight_kg": 1655,
+    "aspiration": "NA"
+  },
+  "Honda Civic Type R (EK) Touring Car": {
+    "category": "Road Car",
+    "pp_rating": 545.45,
+    "power_hp": 247,
+    "weight_kg": 845,
+    "aspiration": "NA"
+  },
+  "Radical SR3 SL '13": {
+    "category": "Road Car",
+    "pp_rating": 545.44,
+    "power_hp": 239,
+    "weight_kg": 775,
+    "aspiration": "TC"
+  },
+  "BMW Z8 '01": {
+    "category": "Road Car",
+    "pp_rating": 544.3,
+    "power_hp": 395,
+    "weight_kg": 1610,
+    "aspiration": "NA"
+  },
+  "Maserati GranTurismo S '08": {
+    "category": "Road Car",
+    "pp_rating": 543.25,
+    "power_hp": 439,
+    "weight_kg": 1780,
+    "aspiration": "NA"
+  },
+  "Lamborghini Countach 25th Anniversary '88": {
+    "category": "Road Car",
+    "pp_rating": 543.09,
+    "power_hp": 449,
+    "weight_kg": 1490,
+    "aspiration": "NA"
+  },
+  "Ferrari 250 GTO '62": {
+    "category": "Road Car",
+    "pp_rating": 541.72,
+    "power_hp": 295,
+    "weight_kg": 880,
+    "aspiration": "NA"
+  },
+  "Mazda Roadster Touring Car": {
+    "category": "Road Car",
+    "pp_rating": 540.67,
+    "power_hp": 205,
+    "weight_kg": 795,
+    "aspiration": "NA"
+  },
+  "Ferrari 365 GTB4 '71": {
+    "category": "Road Car",
+    "pp_rating": 539.01,
+    "power_hp": 347,
+    "weight_kg": 1200,
+    "aspiration": "NA"
+  },
+  "AFEELA Prototype 2024": {
+    "category": "Road Car",
+    "pp_rating": 536.43,
+    "aspiration": "EV"
+  },
+  "Honda NSX Type R '02": {
+    "category": "Road Car",
+    "pp_rating": 536.0,
+    "power_hp": 290,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "Tesla Model S Signature Performance '12": {
+    "category": "Road Car",
+    "pp_rating": 534.74,
+    "power_hp": 410,
+    "weight_kg": 2018,
+    "aspiration": "EV"
+  },
+  "Honda Civic Type R (FL5) '22": {
+    "category": "Road Car",
+    "pp_rating": 534.28,
+    "power_hp": 325,
+    "weight_kg": 1430,
+    "aspiration": "TC"
+  },
+  "Alfa Romeo 4C '14": {
+    "category": "Road Car",
+    "pp_rating": 534.25,
+    "power_hp": 235,
+    "weight_kg": 950,
+    "aspiration": "TC"
+  },
+  "Alpine A110 '17": {
+    "category": "Road Car",
+    "pp_rating": 532.32,
+    "power_hp": 248,
+    "weight_kg": 1103,
+    "aspiration": "TC"
+  },
+  "Porsche 911 Carrera RS CS (993) '95": {
+    "category": "Road Car",
+    "pp_rating": 531.08,
+    "power_hp": 295,
+    "weight_kg": 1235,
+    "aspiration": "NA"
+  },
+  "Audi TTS Coupé '14": {
+    "category": "Road Car",
+    "pp_rating": 530.93,
+    "power_hp": 305,
+    "weight_kg": 1385,
+    "aspiration": "TC"
+  },
+  "Honda NSX Type R '92": {
+    "category": "Road Car",
+    "pp_rating": 530.58,
+    "power_hp": 284,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Porsche 911 Carrera RS (993) '95": {
+    "category": "Road Car",
+    "pp_rating": 530.52,
+    "power_hp": 295,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "AFEELA 1 '26": {
+    "category": "Road Car",
+    "pp_rating": 530.28,
+    "aspiration": "EV"
+  },
+  "Honda Civic Type R Limited Edition (FK8) '20": {
+    "category": "Road Car",
+    "pp_rating": 529.69,
+    "power_hp": 315,
+    "weight_kg": 1370,
+    "aspiration": "TC"
+  },
+  "Mazda RX-7 Spirit R Type A (FD) '02": {
+    "category": "Road Car",
+    "pp_rating": 529.12,
+    "power_hp": 292,
+    "weight_kg": 1270,
+    "aspiration": "TC"
+  },
+  "Ferrari 512 BB '76": {
+    "category": "Road Car",
+    "pp_rating": 528.32,
+    "power_hp": 354,
+    "weight_kg": 1400,
+    "aspiration": "NA"
+  },
+  "Wicked Fabrication GT 51": {
+    "category": "Road Car",
+    "pp_rating": 528.03,
+    "power_hp": 372,
+    "weight_kg": 1338,
+    "aspiration": "NA"
+  },
+  "Nissan Fairlady Z (Z34) '08": {
+    "category": "Road Car",
+    "pp_rating": 526.66,
+    "power_hp": 331,
+    "weight_kg": 1530,
+    "aspiration": "NA"
+  },
+  "Hyundai Genesis Coupe 3.8 '13": {
+    "category": "Road Car",
+    "pp_rating": 525.16,
+    "power_hp": 343,
+    "weight_kg": 1557,
+    "aspiration": "NA"
+  },
+  "Toyota Supra RZ '97": {
+    "category": "Road Car",
+    "pp_rating": 525.02,
+    "power_hp": 325,
+    "weight_kg": 1510,
+    "aspiration": "TC"
+  },
+  "Ferrari Testarossa '91": {
+    "category": "Road Car",
+    "pp_rating": 524.78,
+    "power_hp": 384,
+    "weight_kg": 1506,
+    "aspiration": "NA"
+  },
+  "BMW M3 '03": {
+    "category": "Road Car",
+    "pp_rating": 524.2,
+    "power_hp": 339,
+    "weight_kg": 1560,
+    "aspiration": "NA"
+  },
+  "Ford Focus RS '18": {
+    "category": "Road Car",
+    "pp_rating": 523.61,
+    "power_hp": 350,
+    "weight_kg": 1557,
+    "aspiration": "TC"
+  },
+  "Nissan R34 GT-R V･spec II Nür '02": {
+    "category": "Road Car",
+    "pp_rating": 523.47,
+    "power_hp": 336,
+    "weight_kg": 1560,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution VI GSR T.M. SCP '99": {
+    "category": "Road Car",
+    "pp_rating": 523.14,
+    "power_hp": 311,
+    "weight_kg": 1360,
+    "aspiration": "TC"
+  },
+  "Nissan Fairlady Z Version S (Z33) '07": {
+    "category": "Road Car",
+    "pp_rating": 522.86,
+    "power_hp": 310,
+    "weight_kg": 1480,
+    "aspiration": "NA"
+  },
+  "Toyota GR Corolla MORIZO Edition '22": {
+    "category": "Road Car",
+    "pp_rating": 522.78,
+    "power_hp": 299,
+    "weight_kg": 1445,
+    "aspiration": "TC"
+  },
+  "AMG A 45 AMG '13": {
+    "category": "Road Car",
+    "pp_rating": 522.33,
+    "power_hp": 355,
+    "weight_kg": 1555,
+    "aspiration": "TC"
+  },
+  "Toyota GR Yaris RZ \"High performance\" '20": {
+    "category": "Road Car",
+    "pp_rating": 522.22,
+    "power_hp": 268,
+    "weight_kg": 1290,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette ZR-1 (C4) '89": {
+    "category": "Road Car",
+    "pp_rating": 521.7,
+    "power_hp": 375,
+    "weight_kg": 1572,
+    "aspiration": "NA"
+  },
+  "Honda Civic Type R (FK2) '15": {
+    "category": "Road Car",
+    "pp_rating": 521.2,
+    "power_hp": 305,
+    "weight_kg": 1380,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette Stingray Racer Concept '59": {
+    "category": "Road Car",
+    "pp_rating": 519.2,
+    "power_hp": 314,
+    "weight_kg": 1150,
+    "aspiration": "NA"
+  },
+  "Nissan R32 GT-R NISMO '90": {
+    "category": "Road Car",
+    "pp_rating": 519.03,
+    "power_hp": 306,
+    "weight_kg": 1400,
+    "aspiration": "TC"
+  },
+  "Nissan R33 GT-R V･spec '97": {
+    "category": "Road Car",
+    "pp_rating": 518.18,
+    "power_hp": 319,
+    "weight_kg": 1540,
+    "aspiration": "TC"
+  },
+  "AMG 300 SEL 6.8 AMG '71": {
+    "category": "Road Car",
+    "pp_rating": 517.12,
+    "power_hp": 422,
+    "weight_kg": 1635,
+    "aspiration": "NA"
+  },
+  "Toyota AE86 Levin D-Tuned": {
+    "category": "Road Car",
+    "pp_rating": 516.68,
+    "power_hp": 216,
+    "weight_kg": 810,
+    "aspiration": "NA",
+    "torque_kgfm": 22.4,
+    "torque_rpm": 7500
+  },
+  "Nissan R32 GT-R V･spec II '94": {
+    "category": "Road Car",
+    "pp_rating": 515.54,
+    "power_hp": 306,
+    "weight_kg": 1500,
+    "aspiration": "TC"
+  },
+  "Porsche 911 Carrera RS (964) '92": {
+    "category": "Road Car",
+    "pp_rating": 514.89,
+    "power_hp": 255,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Toyota Sprinter Trueno 1600GT APEX (S.Shigeno Version)": {
+    "category": "Road Car",
+    "pp_rating": 514.66,
+    "power_hp": 207,
+    "weight_kg": 825,
+    "aspiration": "NA"
+  },
+  "Subaru Impreza 22B-STi '98": {
+    "category": "Road Car",
+    "pp_rating": 513.82,
+    "power_hp": 289,
+    "weight_kg": 1270,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette (C2) '63": {
+    "category": "Road Car",
+    "pp_rating": 512.87,
+    "power_hp": 359,
+    "weight_kg": 1380,
+    "aspiration": "NA"
+  },
+  "Mitsubishi Lancer Evolution Final '15": {
+    "category": "Road Car",
+    "pp_rating": 510.64,
+    "power_hp": 309,
+    "weight_kg": 1530,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution VIII MR GSR '04": {
+    "category": "Road Car",
+    "pp_rating": 510.28,
+    "power_hp": 276,
+    "weight_kg": 1400,
+    "aspiration": "TC",
+    "torque_kgfm": 40.0
+  },
+  "Audi TTS Coupé '09": {
+    "category": "Road Car",
+    "pp_rating": 509.55,
+    "power_hp": 268,
+    "weight_kg": 1415,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution IX MR GSR '06": {
+    "category": "Road Car",
+    "pp_rating": 509.32,
+    "power_hp": 277,
+    "weight_kg": 1420,
+    "aspiration": "TC"
+  },
+  "Volkswagen Scirocco R '10": {
+    "category": "Road Car",
+    "pp_rating": 508.54,
+    "power_hp": 252,
+    "weight_kg": 1410,
+    "aspiration": "TC"
+  },
+  "Porsche Carrera GTS (904) '64": {
+    "category": "Road Car",
+    "pp_rating": 508.18,
+    "power_hp": 179,
+    "weight_kg": 650,
+    "aspiration": "NA"
+  },
+  "Porsche 911 Turbo (930) '81": {
+    "category": "Road Car",
+    "pp_rating": 506.68,
+    "power_hp": 295,
+    "weight_kg": 1300,
+    "aspiration": "TC"
+  },
+  "Chevrolet Corvette Stingray (C3) '69": {
+    "category": "Road Car",
+    "pp_rating": 506.19,
+    "power_hp": 350,
+    "weight_kg": 1490,
+    "aspiration": "NA"
+  },
+  "Genesis G70 3.3T AWD P.Package '22": {
+    "category": "Road Car",
+    "pp_rating": 504.29,
+    "power_hp": 366,
+    "weight_kg": 1815,
+    "aspiration": "TC"
+  },
+  "Subaru WRX STI Type S '14": {
+    "category": "Road Car",
+    "pp_rating": 504.25,
+    "power_hp": 302,
+    "weight_kg": 1490,
+    "aspiration": "TC"
+  },
+  "Mitsubishi Lancer Evolution V GSR '98": {
+    "category": "Road Car",
+    "pp_rating": 504.15,
+    "power_hp": 306,
+    "weight_kg": 1360,
+    "aspiration": "TC"
+  },
+  "Subaru Impreza Sedan WRX STi '04": {
+    "category": "Road Car",
+    "pp_rating": 503.31,
+    "power_hp": 286,
+    "weight_kg": 1460,
+    "aspiration": "TC"
+  },
+  "Nissan Silvia spec-R Aero (S15) '02": {
+    "category": "Road Car",
+    "pp_rating": 502.35,
+    "power_hp": 246,
+    "weight_kg": 1240,
+    "aspiration": "TC"
+  },
+  "Renault Mégane R.S. Trophy '11": {
+    "category": "Road Car",
+    "pp_rating": 501.68,
+    "power_hp": 261,
+    "weight_kg": 1387,
+    "aspiration": "TC"
+  },
+  "Hyundai ELANTRA N '23": {
+    "category": "Road Car",
+    "pp_rating": 500.55,
+    "power_hp": 276,
+    "weight_kg": 1450,
+    "aspiration": "TC"
+  },
+  "Toyota GR86 RZ '21": {
+    "category": "Road Car",
+    "pp_rating": 500.51,
+    "power_hp": 231,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "Ford Mustang Boss 429 '69": {
+    "category": "Road Car",
+    "pp_rating": 500.42,
+    "power_hp": 374,
+    "weight_kg": 1614,
+    "aspiration": "NA"
+  },
+  "Renault Mégane R.S. Trophy Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 500.06,
+    "power_hp": 261,
+    "weight_kg": 1387,
+    "aspiration": "TC"
+  },
+  "Subaru BRZ S '21": {
+    "category": "Road Car",
+    "pp_rating": 499.8,
+    "power_hp": 231,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "BMW M3 '97": {
+    "category": "Road Car",
+    "pp_rating": 498.18,
+    "power_hp": 316,
+    "weight_kg": 1460,
+    "aspiration": "NA"
+  },
+  "Maserati A6GCS/53 Spyder '54": {
+    "category": "Road Car",
+    "pp_rating": 497.34,
+    "power_hp": 166,
+    "weight_kg": 740,
+    "aspiration": "NA"
+  },
+  "Ford Focus ST '15": {
+    "category": "Road Car",
+    "pp_rating": 495.12,
+    "power_hp": 250,
+    "weight_kg": 1462,
+    "aspiration": "TC"
+  },
+  "Mazda RX-8 Spirit R '12": {
+    "category": "Road Car",
+    "pp_rating": 494.76,
+    "power_hp": 230,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Mazda ɛ̃fini RX-7 Type R (FD) '91": {
+    "category": "Road Car",
+    "pp_rating": 493.78,
+    "power_hp": 251,
+    "weight_kg": 1260,
+    "aspiration": "TC"
+  },
+  "Jaguar D-type '54": {
+    "category": "Road Car",
+    "pp_rating": 492.83,
+    "power_hp": 249,
+    "weight_kg": 850,
+    "aspiration": "NA"
+  },
+  "Ferrari 500 Mondial Pinin Farina Coupe '54": {
+    "category": "Road Car",
+    "pp_rating": 492.51,
+    "power_hp": 168,
+    "weight_kg": 720,
+    "aspiration": "NA"
+  },
+  "Nissan Silvia K's Type S (S14) '94": {
+    "category": "Road Car",
+    "pp_rating": 491.61,
+    "power_hp": 216,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "Daihatsu COPEN RJ VGT": {
+    "category": "Road Car",
+    "pp_rating": 489.76,
+    "power_hp": 146,
+    "weight_kg": 600,
+    "aspiration": "TC"
+  },
+  "Alfa Romeo GIULIA TZ2 carrozzata da ZAGATO '65": {
+    "category": "Road Car",
+    "pp_rating": 489.47,
+    "power_hp": 168,
+    "weight_kg": 620,
+    "aspiration": "NA"
+  },
+  "Dodge Challenger R/T '70": {
+    "category": "Road Car",
+    "pp_rating": 489.3,
+    "power_hp": 425,
+    "weight_kg": 1724,
+    "aspiration": "NA"
+  },
+  "Toyota Crown Athlete G '13": {
+    "category": "Road Car",
+    "pp_rating": 489.27,
+    "power_hp": 309,
+    "weight_kg": 1650,
+    "aspiration": "NA"
+  },
+  "Dodge Charger R/T 426 Hemi '68": {
+    "category": "Road Car",
+    "pp_rating": 488.45,
+    "power_hp": 425,
+    "weight_kg": 1805,
+    "aspiration": "NA"
+  },
+  "Subaru Impreza Coupe WRX Type R STi Ver.VI '99": {
+    "category": "Road Car",
+    "pp_rating": 487.1,
+    "power_hp": 276,
+    "weight_kg": 1260,
+    "aspiration": "TC"
+  },
+  "Toyota MR2 GT-S '97": {
+    "category": "Road Car",
+    "pp_rating": 487.1,
+    "power_hp": 241,
+    "weight_kg": 1270,
+    "aspiration": "TC"
+  },
+  "Aston Martin DB3S '53": {
+    "category": "Road Car",
+    "pp_rating": 487.06,
+    "power_hp": 224,
+    "weight_kg": 856,
+    "aspiration": "NA"
+  },
+  "Nissan Silvia K's Aero (S14) '96": {
+    "category": "Road Car",
+    "pp_rating": 485.97,
+    "power_hp": 216,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "Porsche 911 Turbo Rally (930)": {
+    "category": "Road Car",
+    "pp_rating": 485.69,
+    "power_hp": 246,
+    "weight_kg": 1250,
+    "aspiration": "TC",
+    "torque_kgfm": 25.8,
+    "torque_rpm": 7000
+  },
+  "De Tomaso Mangusta (Christian Dior)": {
+    "category": "Road Car",
+    "pp_rating": 485.05,
+    "power_hp": 300,
+    "weight_kg": 1185,
+    "aspiration": "NA"
+  },
+  "De Tomaso Mangusta '69": {
+    "category": "Road Car",
+    "pp_rating": 485.05,
+    "power_hp": 300,
+    "weight_kg": 1185,
+    "aspiration": "NA"
+  },
+  "Ferrari 250 GT Berlinetta passo corto '61": {
+    "category": "Road Car",
+    "pp_rating": 484.11,
+    "power_hp": 275,
+    "weight_kg": 960,
+    "aspiration": "NA"
+  },
+  "Toyota Crown Athlete G Safety Car": {
+    "category": "Road Car",
+    "pp_rating": 484.02,
+    "power_hp": 309,
+    "weight_kg": 1650,
+    "aspiration": "NA"
+  },
+  "BMW Z4 3.0i '03": {
+    "category": "Road Car",
+    "pp_rating": 483.79,
+    "power_hp": 227,
+    "weight_kg": 1290,
+    "aspiration": "NA"
+  },
+  "Mitsubishi Lancer Evolution IV GSR '96": {
+    "category": "Road Car",
+    "pp_rating": 483.34,
+    "power_hp": 273,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Ford Escort RS Cosworth '92": {
+    "category": "Road Car",
+    "pp_rating": 482.45,
+    "power_hp": 223,
+    "weight_kg": 1275,
+    "aspiration": "TC"
+  },
+  "Honda S2000 '99": {
+    "category": "Road Car",
+    "pp_rating": 482.22,
+    "power_hp": 242,
+    "weight_kg": 1240,
+    "aspiration": "NA"
+  },
+  "Mazda SPIRIT RACING ROADSTER 12R '25": {
+    "category": "Road Car",
+    "pp_rating": 481.72,
+    "aspiration": "NA"
+  },
+  "Mitsubishi Lancer Evolution III GSR '95": {
+    "category": "Road Car",
+    "pp_rating": 481.44,
+    "power_hp": 264,
+    "weight_kg": 1260,
+    "aspiration": "TC"
+  },
+  "Nissan Fairlady Z 300ZX TT 2seater '89": {
+    "category": "Road Car",
+    "pp_rating": 480.87,
+    "power_hp": 276,
+    "weight_kg": 1510,
+    "aspiration": "TC"
+  },
+  "Porsche 911 Carrera RS (901) '73": {
+    "category": "Road Car",
+    "pp_rating": 479.32,
+    "power_hp": 206,
+    "weight_kg": 1075,
+    "aspiration": "NA"
+  },
+  "Renault Clio R.S. 220 Trophy '15": {
+    "category": "Road Car",
+    "pp_rating": 478.53,
+    "power_hp": 216,
+    "weight_kg": 1179,
+    "aspiration": "TC"
+  },
+  "Renault Clio R.S. 220 Trophy '16": {
+    "category": "Road Car",
+    "pp_rating": 477.05,
+    "power_hp": 216,
+    "weight_kg": 1204,
+    "aspiration": "TC"
+  },
+  "Shelby G.T.350 '65": {
+    "category": "Road Car",
+    "pp_rating": 476.82,
+    "power_hp": 304,
+    "weight_kg": 1270,
+    "aspiration": "NA"
+  },
+  "Mazda RX500 '70": {
+    "category": "Road Car",
+    "pp_rating": 476.13,
+    "power_hp": 247,
+    "weight_kg": 850,
+    "aspiration": "NA"
+  },
+  "Toyota 86 GRMN '16": {
+    "category": "Road Car",
+    "pp_rating": 475.55,
+    "power_hp": 214,
+    "weight_kg": 1220,
+    "aspiration": "NA"
+  },
+  "Mitsubishi GTO Twin Turbo '91": {
+    "category": "Road Car",
+    "pp_rating": 475.04,
+    "power_hp": 285,
+    "weight_kg": 1700,
+    "aspiration": "TC"
+  },
+  "Ferrari 308 GTB '75": {
+    "category": "Road Car",
+    "pp_rating": 474.85,
+    "power_hp": 251,
+    "weight_kg": 1090,
+    "aspiration": "NA"
+  },
+  "Toyota Supra 3.0GT Turbo A '88": {
+    "category": "Road Car",
+    "pp_rating": 472.7,
+    "power_hp": 266,
+    "weight_kg": 1530,
+    "aspiration": "TC"
+  },
+  "Subaru BRZ STI Sport '18": {
+    "category": "Road Car",
+    "pp_rating": 472.57,
+    "power_hp": 203,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "De Tomaso Pantera '71": {
+    "category": "Road Car",
+    "pp_rating": 471.41,
+    "power_hp": 325,
+    "weight_kg": 1420,
+    "aspiration": "NA"
+  },
+  "Ford Sierra RS 500 Cosworth '87": {
+    "category": "Road Car",
+    "pp_rating": 471.34,
+    "power_hp": 223,
+    "weight_kg": 1207,
+    "aspiration": "TC"
+  },
+  "Audi TT Coupé 3.2 quattro '03": {
+    "category": "Road Car",
+    "pp_rating": 471.33,
+    "power_hp": 239,
+    "weight_kg": 1520,
+    "aspiration": "NA"
+  },
+  "Chevrolet Chevelle SS 454 '70": {
+    "category": "Road Car",
+    "pp_rating": 470.57,
+    "power_hp": 449,
+    "weight_kg": 1762,
+    "aspiration": "NA"
+  },
+  "Nissan Sileighty '98": {
+    "category": "Road Car",
+    "pp_rating": 470.49,
+    "power_hp": 203,
+    "weight_kg": 1170,
+    "aspiration": "TC"
+  },
+  "Renault Clio V6 24V '00": {
+    "category": "Road Car",
+    "pp_rating": 469.36,
+    "power_hp": 229,
+    "weight_kg": 1335,
+    "aspiration": "NA"
+  },
+  "Toyota Celica GT-FOUR (ST205) '94": {
+    "category": "Road Car",
+    "pp_rating": 467.35,
+    "power_hp": 250,
+    "weight_kg": 1380,
+    "aspiration": "TC"
+  },
+  "BMW M3 Sport Evolution '89": {
+    "category": "Road Car",
+    "pp_rating": 466.56,
+    "power_hp": 234,
+    "weight_kg": 1200,
+    "aspiration": "NA"
+  },
+  "Honda Integra Type R (DC2) '98": {
+    "category": "Road Car",
+    "pp_rating": 465.38,
+    "power_hp": 198,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Nissan 180SX Type X '96": {
+    "category": "Road Car",
+    "pp_rating": 465.26,
+    "power_hp": 203,
+    "weight_kg": 1220,
+    "aspiration": "TC"
+  },
+  "Volkswagen Golf VII GTI '14": {
+    "category": "Road Car",
+    "pp_rating": 464.61,
+    "power_hp": 216,
+    "weight_kg": 1390,
+    "aspiration": "TC"
+  },
+  "Pontiac GTO 'The Judge' '69": {
+    "category": "Road Car",
+    "pp_rating": 464.59,
+    "power_hp": 364,
+    "weight_kg": 1610,
+    "aspiration": "NA"
+  },
+  "DS AUTOMOBILES DS 3 Racing '11": {
+    "category": "Road Car",
+    "pp_rating": 463.86,
+    "power_hp": 203,
+    "weight_kg": 1165,
+    "aspiration": "TC"
+  },
+  "Mercedes-Benz 190 E 2.5-16 Evolution II '91": {
+    "category": "Road Car",
+    "pp_rating": 462.11,
+    "power_hp": 231,
+    "weight_kg": 1340,
+    "aspiration": "NA"
+  },
+  "Mazda RX-7 GT-X (FC) '90": {
+    "category": "Road Car",
+    "pp_rating": 461.93,
+    "power_hp": 203,
+    "weight_kg": 1250,
+    "aspiration": "TC"
+  },
+  "BMW M3 '89": {
+    "category": "Road Car",
+    "pp_rating": 461.07,
+    "power_hp": 212,
+    "weight_kg": 1200,
+    "aspiration": "NA"
+  },
+  "Honda Integra Type R (DC2) '95": {
+    "category": "Road Car",
+    "pp_rating": 460.75,
+    "power_hp": 197,
+    "weight_kg": 1060,
+    "aspiration": "NA"
+  },
+  "Peugeot 208 GTi by Peugeot Sport '14": {
+    "category": "Road Car",
+    "pp_rating": 459.89,
+    "power_hp": 204,
+    "weight_kg": 1200,
+    "aspiration": "TC"
+  },
+  "Plymouth Superbird '70": {
+    "category": "Road Car",
+    "pp_rating": 458.82,
+    "power_hp": 425,
+    "weight_kg": 1755,
+    "aspiration": "NA"
+  },
+  "Toyota 86 GT\"Limited\" '16": {
+    "category": "Road Car",
+    "pp_rating": 457.36,
+    "power_hp": 203,
+    "weight_kg": 1240,
+    "aspiration": "NA"
+  },
+  "Chevrolet Camaro Z28 '69": {
+    "category": "Road Car",
+    "pp_rating": 456.8,
+    "power_hp": 289,
+    "weight_kg": 1415,
+    "aspiration": "NA"
+  },
+  "Subaru BRZ S '15": {
+    "category": "Road Car",
+    "pp_rating": 454.54,
+    "power_hp": 197,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Toyota 86 GT '15": {
+    "category": "Road Car",
+    "pp_rating": 454.47,
+    "power_hp": 197,
+    "weight_kg": 1230,
+    "aspiration": "NA"
+  },
+  "Volkswagen Beetle 1966 Desert Racer": {
+    "category": "Road Car",
+    "pp_rating": 453.7,
+    "power_hp": 150,
+    "weight_kg": 980,
+    "aspiration": "TC",
+    "torque_kgfm": 23.0,
+    "torque_rpm": 5200
+  },
+  "Dodge Super Bee '70": {
+    "category": "Road Car",
+    "pp_rating": 452.63,
+    "power_hp": 335,
+    "weight_kg": 1533,
+    "aspiration": "NA"
+  },
+  "Chevrolet Corvette Convertible (C3) '69": {
+    "category": "Road Car",
+    "pp_rating": 452.15,
+    "power_hp": 298,
+    "weight_kg": 1552,
+    "aspiration": "NA"
+  },
+  "Mitsubishi FTO GP Version R '97": {
+    "category": "Road Car",
+    "pp_rating": 450.4,
+    "power_hp": 197,
+    "weight_kg": 1150,
+    "aspiration": "NA"
+  },
+  "Nissan Skyline GTS-R (R31) '87": {
+    "category": "Road Car",
+    "pp_rating": 450.16,
+    "power_hp": 207,
+    "weight_kg": 1340,
+    "aspiration": "TC"
+  },
+  "DMC DeLorean S2 '04": {
+    "category": "Road Car",
+    "pp_rating": 449.82,
+    "power_hp": 197,
+    "weight_kg": 1288,
+    "aspiration": "NA"
+  },
+  "Volvo V40 T5 R-Design '13": {
+    "category": "Road Car",
+    "pp_rating": 448.44,
+    "power_hp": 210,
+    "weight_kg": 1540,
+    "aspiration": "TC"
+  },
+  "Jaguar E-type Coupé '61": {
+    "category": "Road Car",
+    "pp_rating": 448.12,
+    "power_hp": 264,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Lancia Stratos '73": {
+    "category": "Road Car",
+    "pp_rating": 447.56,
+    "power_hp": 185,
+    "weight_kg": 980,
+    "aspiration": "NA"
+  },
+  "Volkswagen Polo GTI '14": {
+    "category": "Road Car",
+    "pp_rating": 446.74,
+    "power_hp": 189,
+    "weight_kg": 1272,
+    "aspiration": "TC"
+  },
+  "Ford Mustang Mach 1 '71": {
+    "category": "Road Car",
+    "pp_rating": 446.26,
+    "power_hp": 302,
+    "weight_kg": 1615,
+    "aspiration": "NA"
+  },
+  "Honda Civic Type R (EK) '98": {
+    "category": "Road Car",
+    "pp_rating": 445.59,
+    "power_hp": 181,
+    "weight_kg": 1050,
+    "aspiration": "NA"
+  },
+  "Ferrari Dino 246 GT '71": {
+    "category": "Road Car",
+    "pp_rating": 445.12,
+    "power_hp": 191,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Aston Martin DB5 '64": {
+    "category": "Road Car",
+    "pp_rating": 444.78,
+    "power_hp": 281,
+    "weight_kg": 1468,
+    "aspiration": "NA"
+  },
+  "MINI Cooper S '05": {
+    "category": "Road Car",
+    "pp_rating": 444.1,
+    "power_hp": 167,
+    "weight_kg": 1180,
+    "aspiration": "SC"
+  },
+  "Honda Civic Type R (EK) '97": {
+    "category": "Road Car",
+    "pp_rating": 442.82,
+    "power_hp": 176,
+    "weight_kg": 1050,
+    "aspiration": "NA"
+  },
+  "Mercedes-Benz 300 SL (W194) '52": {
+    "category": "Road Car",
+    "pp_rating": 438.43,
+    "power_hp": 178,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Chevrolet Corvette (C1) '58": {
+    "category": "Road Car",
+    "pp_rating": 437.66,
+    "power_hp": 243,
+    "weight_kg": 1327,
+    "aspiration": "NA"
+  },
+  "Ford F-150 SVT Raptor '11": {
+    "category": "Road Car",
+    "pp_rating": 436.38,
+    "power_hp": 411,
+    "weight_kg": 2724,
+    "aspiration": "NA"
+  },
+  "Porsche Spyder type 550/1500RS '55": {
+    "category": "Road Car",
+    "pp_rating": 435.18,
+    "power_hp": 108,
+    "weight_kg": 590,
+    "aspiration": "NA"
+  },
+  "Suzuki Swift Sport '17": {
+    "category": "Road Car",
+    "pp_rating": 435.05,
+    "power_hp": 137,
+    "weight_kg": 970,
+    "aspiration": "TC"
+  },
+  "Peugeot RCZ GT Line '15": {
+    "category": "Road Car",
+    "pp_rating": 427.26,
+    "power_hp": 152,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Alfa Romeo MiTo ‘09": {
+    "category": "Road Car",
+    "pp_rating": 426.99,
+    "power_hp": 152,
+    "weight_kg": 1145,
+    "aspiration": "TC"
+  },
+  "Mazda Roadster NR-A (ND) '22": {
+    "category": "Road Car",
+    "pp_rating": 425.0,
+    "power_hp": 130,
+    "weight_kg": 1010,
+    "aspiration": "NA"
+  },
+  "BMW 3.0 CSL '73": {
+    "category": "Road Car",
+    "pp_rating": 423.95,
+    "power_hp": 202,
+    "weight_kg": 1250,
+    "aspiration": "NA"
+  },
+  "Toyota S-FR '15": {
+    "category": "Road Car",
+    "pp_rating": 423.36,
+    "power_hp": 133,
+    "weight_kg": 1050,
+    "aspiration": "NA"
+  },
+  "MAZDA3 '19": {
+    "category": "Road Car",
+    "pp_rating": 422.45,
+    "power_hp": 177,
+    "weight_kg": 1480,
+    "aspiration": "NA"
+  },
+  "Toyota Tundra TRD Pro '19": {
+    "category": "Road Car",
+    "pp_rating": 421.61,
+    "power_hp": 379,
+    "weight_kg": 2555,
+    "aspiration": "NA"
+  },
+  "Mazda Roadster S (ND) '15": {
+    "category": "Road Car",
+    "pp_rating": 420.97,
+    "power_hp": 128,
+    "weight_kg": 990,
+    "aspiration": "NA"
+  },
+  "Nissan Silvia K's Dia Selection (S13) '90": {
+    "category": "Road Car",
+    "pp_rating": 420.7,
+    "power_hp": 171,
+    "weight_kg": 1140,
+    "aspiration": "TC"
+  },
+  "Nissan Qashqai Tekna e-Power '22": {
+    "category": "Road Car",
+    "pp_rating": 420.67,
+    "power_hp": 187,
+    "weight_kg": 1624,
+    "aspiration": "TC"
+  },
+  "Alpine A110 '72": {
+    "category": "Road Car",
+    "pp_rating": 420.38,
+    "power_hp": 138,
+    "weight_kg": 715,
+    "aspiration": "NA"
+  },
+  "Maserati Merak SS '80": {
+    "category": "Road Car",
+    "pp_rating": 419.75,
+    "power_hp": 216,
+    "weight_kg": 1420,
+    "aspiration": "NA"
+  },
+  "Lancia Delta HF Integrale Evoluzione '91": {
+    "category": "Road Car",
+    "pp_rating": 418.24,
+    "power_hp": 209,
+    "weight_kg": 1350,
+    "aspiration": "TC"
+  },
+  "Mercedes-Benz 300 SL Coupé '54": {
+    "category": "Road Car",
+    "pp_rating": 417.63,
+    "power_hp": 212,
+    "weight_kg": 1295,
+    "aspiration": "NA"
+  },
+  "Plymouth XNR Ghia Roadster '60": {
+    "category": "Road Car",
+    "pp_rating": 416.9,
+    "power_hp": 250,
+    "weight_kg": 1500,
+    "aspiration": "NA"
+  },
+  "Abarth 500 '09": {
+    "category": "Road Car",
+    "pp_rating": 415.44,
+    "power_hp": 133,
+    "weight_kg": 1035,
+    "aspiration": "TC"
+  },
+  "BMW 3.0 CSL '71": {
+    "category": "Road Car",
+    "pp_rating": 412.97,
+    "power_hp": 177,
+    "weight_kg": 1165,
+    "aspiration": "NA"
+  },
+  "Ford Roadster": {
+    "category": "Road Car",
+    "pp_rating": 412.51,
+    "power_hp": 179,
+    "weight_kg": 1115,
+    "aspiration": "NA"
+  },
+  "Renault R5 Turbo '80": {
+    "category": "Road Car",
+    "pp_rating": 410.69,
+    "power_hp": 159,
+    "weight_kg": 970,
+    "aspiration": "TC"
+  },
+  "Pontiac Firebird Trans Am '78": {
+    "category": "Road Car",
+    "pp_rating": 410.63,
+    "power_hp": 219,
+    "weight_kg": 1640,
+    "aspiration": "NA"
+  },
+  "Nissan Fairlady Z 432 '69": {
+    "category": "Road Car",
+    "pp_rating": 409.19,
+    "power_hp": 157,
+    "weight_kg": 1040,
+    "aspiration": "NA"
+  },
+  "Honda Civic SiR･II (EG) '93": {
+    "category": "Road Car",
+    "pp_rating": 407.11,
+    "power_hp": 167,
+    "weight_kg": 1070,
+    "aspiration": "NA"
+  },
+  "Nissan Fairlady 240ZG (HS30) '71": {
+    "category": "Road Car",
+    "pp_rating": 407.06,
+    "power_hp": 147,
+    "weight_kg": 1010,
+    "aspiration": "NA"
+  },
+  "Toyota 2000GT '67": {
+    "category": "Road Car",
+    "pp_rating": 405.8,
+    "power_hp": 153,
+    "weight_kg": 1120,
+    "aspiration": "NA"
+  },
+  "Suzuki Swift Sport '07": {
+    "category": "Road Car",
+    "pp_rating": 405.13,
+    "power_hp": 123,
+    "weight_kg": 1060,
+    "aspiration": "NA"
+  },
+  "Nissan Skyline Hard Top 2000GT-R (KPGC10) '70": {
+    "category": "Road Car",
+    "pp_rating": 401.02,
+    "power_hp": 157,
+    "weight_kg": 1100,
+    "aspiration": "NA"
+  },
+  "Mazda CX-30 X Smart Edition '21": {
+    "category": "Road Car",
+    "pp_rating": 400.53,
+    "power_hp": 187,
+    "weight_kg": 1490,
+    "aspiration": "NA"
+  },
+  "BMW i3 '15": {
+    "category": "Road Car",
+    "pp_rating": 400.14,
+    "power_hp": 166,
+    "weight_kg": 1260,
+    "aspiration": "EV"
+  },
+  "Nissan Skyline 2000GT-R (KPGC110) '73": {
+    "category": "Road Car",
+    "pp_rating": 398.99,
+    "power_hp": 157,
+    "weight_kg": 1145,
+    "aspiration": "NA"
+  },
+  "Peugeot 205 GTI '88": {
+    "category": "Road Car",
+    "pp_rating": 396.19,
+    "power_hp": 128,
+    "weight_kg": 875,
+    "aspiration": "NA"
+  },
+  "Alfa Romeo 8C 2900B Touring Berlinetta '38": {
+    "category": "Road Car",
+    "pp_rating": 394.51,
+    "power_hp": 179,
+    "weight_kg": 1310,
+    "aspiration": "SC"
+  },
+  "Honda Civic Si Extra (EF) '87": {
+    "category": "Road Car",
+    "pp_rating": 393.51,
+    "power_hp": 128,
+    "weight_kg": 910,
+    "aspiration": "NA"
+  },
+  "Toyota Alphard Executive Lounge '18": {
+    "category": "Road Car",
+    "pp_rating": 390.93,
+    "power_hp": 296,
+    "weight_kg": 2210,
+    "aspiration": "NA"
+  },
+  "Nissan Silvia Q's (S13) '88": {
+    "category": "Road Car",
+    "pp_rating": 384.86,
+    "power_hp": 132,
+    "weight_kg": 1090,
+    "aspiration": "NA"
+  },
+  "Toyota Corolla Levin 1600GT APEX (AE86) '83": {
+    "category": "Road Car",
+    "pp_rating": 384.76,
+    "power_hp": 127,
+    "weight_kg": 940,
+    "aspiration": "NA"
+  },
+  "Toyota Sprinter Trueno 1600GT APEX (AE86) '83": {
+    "category": "Road Car",
+    "pp_rating": 384.75,
+    "power_hp": 127,
+    "weight_kg": 940,
+    "aspiration": "NA"
+  },
+  "Mazda Eunos Roadster (NA) '89": {
+    "category": "Road Car",
+    "pp_rating": 381.78,
+    "power_hp": 117,
+    "weight_kg": 940,
+    "aspiration": "NA"
+  },
+  "Honda CR-V e:HEV EX・Black Edition '21": {
+    "category": "Road Car",
+    "pp_rating": 381.02,
+    "power_hp": 181,
+    "weight_kg": 1700,
+    "aspiration": "NA"
+  },
+  "Porsche 356 A/1500 GS GT Carrera Speedster '56": {
+    "category": "Road Car",
+    "pp_rating": 378.47,
+    "power_hp": 107,
+    "weight_kg": 840,
+    "aspiration": "NA"
+  },
+  "Renault Avantime 3.0 V6 24V '02": {
+    "category": "Road Car",
+    "pp_rating": 377.18,
+    "power_hp": 204,
+    "weight_kg": 1741,
+    "aspiration": "NA"
+  },
+  "Mazda Atenza Sedan XD L Package '15": {
+    "category": "Road Car",
+    "pp_rating": 376.23,
+    "power_hp": 172,
+    "weight_kg": 1600,
+    "aspiration": "TC"
+  },
+  "Toyota Prius G '09": {
+    "category": "Road Car",
+    "pp_rating": 374.51,
+    "power_hp": 146,
+    "weight_kg": 1350,
+    "aspiration": "NA"
+  },
+  "Renault Captur S Edition '21": {
+    "category": "Road Car",
+    "pp_rating": 373.48,
+    "power_hp": 138,
+    "weight_kg": 1234,
+    "aspiration": "TC"
+  },
+  "Toyota RAV4 Adventure '20": {
+    "category": "Road Car",
+    "pp_rating": 372.01,
+    "power_hp": 168,
+    "weight_kg": 1630,
+    "aspiration": "NA"
+  },
+  "Volkswagen Golf I GTI '83": {
+    "category": "Road Car",
+    "pp_rating": 371.47,
+    "power_hp": 110,
+    "weight_kg": 890,
+    "aspiration": "NA"
+  },
+  "Peugeot 2008 Allure '21": {
+    "category": "Road Car",
+    "pp_rating": 367.32,
+    "power_hp": 129,
+    "weight_kg": 1192,
+    "aspiration": "TC"
+  },
+  "Porsche 356 A/1500 GS Carrera '56": {
+    "category": "Road Car",
+    "pp_rating": 361.76,
+    "power_hp": 97,
+    "weight_kg": 840,
+    "aspiration": "NA"
+  },
+  "Citroën BX 19 TRS '87": {
+    "category": "Road Car",
+    "pp_rating": 357.04,
+    "power_hp": 103,
+    "weight_kg": 995,
+    "aspiration": "NA"
+  },
+  "Toyota C-HR S '18": {
+    "category": "Road Car",
+    "pp_rating": 356.4,
+    "power_hp": 136,
+    "weight_kg": 1440,
+    "aspiration": "NA"
+  },
+  "Renault R8 Gordini '66": {
+    "category": "Road Car",
+    "pp_rating": 355.18,
+    "power_hp": 101,
+    "weight_kg": 850,
+    "aspiration": "NA"
+  },
+  "Toyota Aqua S '11": {
+    "category": "Road Car",
+    "pp_rating": 354.12,
+    "power_hp": 109,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Honda S660 '15": {
+    "category": "Road Car",
+    "pp_rating": 348.14,
+    "power_hp": 63,
+    "weight_kg": 830,
+    "aspiration": "TC"
+  },
+  "Honda Fit Hybrid '14": {
+    "category": "Road Car",
+    "pp_rating": 345.7,
+    "power_hp": 138,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Alfa Romeo Giulia Sprint GT Veloce '67": {
+    "category": "Road Car",
+    "pp_rating": 344.64,
+    "power_hp": 104,
+    "weight_kg": 1040,
+    "aspiration": "NA"
+  },
+  "Suzuki Jimny Sierra JC '18": {
+    "category": "Road Car",
+    "pp_rating": 342.52,
+    "power_hp": 100,
+    "weight_kg": 1070,
+    "aspiration": "NA"
+  },
+  "Mercedes-Benz S Barker Tourer '29": {
+    "category": "Road Car",
+    "pp_rating": 337.72,
+    "power_hp": 177,
+    "weight_kg": 1270,
+    "aspiration": "SC"
+  },
+  "Mazda Demio XD Touring '15": {
+    "category": "Road Car",
+    "pp_rating": 334.99,
+    "power_hp": 103,
+    "weight_kg": 1080,
+    "aspiration": "TC"
+  },
+  "Citroën DS 21 Pallas '70": {
+    "category": "Road Car",
+    "pp_rating": 329.95,
+    "power_hp": 103,
+    "weight_kg": 1300,
+    "aspiration": "NA"
+  },
+  "Volvo 240 SE Estate '93": {
+    "category": "Road Car",
+    "pp_rating": 324.12,
+    "power_hp": 109,
+    "weight_kg": 1324,
+    "aspiration": "NA"
+  },
+  "Honda Beat '91": {
+    "category": "Road Car",
+    "pp_rating": 316.17,
+    "power_hp": 63,
+    "weight_kg": 760,
+    "aspiration": "NA"
+  },
+  "Autobianchi A112 Abarth '85": {
+    "category": "Road Car",
+    "pp_rating": 315.46,
+    "power_hp": 71,
+    "weight_kg": 710,
+    "aspiration": "NA"
+  },
+  "Toyota Land Cruiser FJ40V '74": {
+    "category": "Road Car",
+    "pp_rating": 305.78,
+    "power_hp": 128,
+    "weight_kg": 1610,
+    "aspiration": "NA"
+  },
+  "Suzuki Cappuccino '91": {
+    "category": "Road Car",
+    "pp_rating": 304.76,
+    "power_hp": 62,
+    "weight_kg": 700,
+    "aspiration": "TC"
+  },
+  "Honda N-ONE RS '22": {
+    "category": "Road Car",
+    "pp_rating": 302.12,
+    "power_hp": 63,
+    "weight_kg": 840,
+    "aspiration": "TC"
+  },
+  "Renault Kangoo 1.4 '01": {
+    "category": "Road Car",
+    "pp_rating": 294.72,
+    "power_hp": 73,
+    "weight_kg": 1080,
+    "aspiration": "NA"
+  },
+  "Daihatsu Copen '02": {
+    "category": "Road Car",
+    "pp_rating": 292.04,
+    "power_hp": 62,
+    "weight_kg": 830,
+    "aspiration": "TC"
+  },
+  "Fiat 500 1.2 8V Lounge SS '08": {
+    "category": "Road Car",
+    "pp_rating": 290.47,
+    "power_hp": 65,
+    "weight_kg": 1010,
+    "aspiration": "NA"
+  },
+  "Renault Twingo '93": {
+    "category": "Road Car",
+    "pp_rating": 284.47,
+    "power_hp": 54,
+    "weight_kg": 790,
+    "aspiration": "NA"
+  },
+  "Toyota Hiace Van DX '16": {
+    "category": "Road Car",
+    "pp_rating": 273.63,
+    "power_hp": 134,
+    "weight_kg": 1680,
+    "aspiration": "NA"
+  },
+  "Honda S800 '66": {
+    "category": "Road Car",
+    "pp_rating": 272.18,
+    "power_hp": 68,
+    "weight_kg": 720,
+    "aspiration": "NA"
+  },
+  "Suzuki Jimny XC '18": {
+    "category": "Road Car",
+    "pp_rating": 269.56,
+    "power_hp": 63,
+    "weight_kg": 1030,
+    "aspiration": "TC"
+  },
+  "Mini-Cooper 'S' '65": {
+    "category": "Road Car",
+    "pp_rating": 263.99,
+    "power_hp": 64,
+    "weight_kg": 605,
+    "aspiration": "NA"
+  },
+  "Abarth 1500 Biposto Bertone B.A.T 1 '52": {
+    "category": "Road Car",
+    "pp_rating": 262.24,
+    "power_hp": 73,
+    "weight_kg": 870,
+    "aspiration": "NA"
+  },
+  "Toyota Sports 800 '65": {
+    "category": "Road Car",
+    "pp_rating": 238.36,
+    "power_hp": 43,
+    "weight_kg": 580,
+    "aspiration": "NA"
+  },
+  "Suzuki Carry KC '12": {
+    "category": "Road Car",
+    "pp_rating": 233.26,
+    "power_hp": 47,
+    "weight_kg": 710,
+    "aspiration": "NA"
+  },
+  "Toyota Himedic '21": {
+    "category": "Road Car",
+    "pp_rating": 230.97,
+    "power_hp": 157,
+    "weight_kg": 2860,
+    "aspiration": "NA"
+  },
+  "Jeep Willys MB '45": {
+    "category": "Road Car",
+    "pp_rating": 178.27,
+    "power_hp": 60,
+    "weight_kg": 1113,
+    "aspiration": "NA"
+  },
+  "Fiat Abarth 595 SS '70": {
+    "category": "Road Car",
+    "pp_rating": 175.22,
+    "power_hp": 30,
+    "weight_kg": 470,
+    "aspiration": "NA"
+  },
+  "Volkswagen 1200 '66": {
+    "category": "Road Car",
+    "pp_rating": 167.47,
+    "power_hp": 33,
+    "weight_kg": 780,
+    "aspiration": "NA"
+  },
+  "Renault R4 GTL '85": {
+    "category": "Road Car",
+    "pp_rating": 154.94,
+    "power_hp": 33,
+    "weight_kg": 720,
+    "aspiration": "NA"
+  },
+  "Fiat Panda 30 CL '85": {
+    "category": "Road Car",
+    "pp_rating": 147.8,
+    "power_hp": 29,
+    "weight_kg": 650,
+    "aspiration": "NA"
+  },
+  "Volkswagen Sambabus Typ 2 '62": {
+    "category": "Road Car",
+    "pp_rating": 103.64,
+    "power_hp": 33,
+    "weight_kg": 1095,
+    "aspiration": "NA"
+  },
+  "Fiat 500 F '68": {
+    "category": "Road Car",
+    "pp_rating": 85.03,
+    "power_hp": 16,
+    "weight_kg": 520,
+    "aspiration": "NA"
+  },
+  "Mercedes-Benz Unimog Type 411 '62": {
+    "category": "Road Car",
+    "pp_rating": 32.4,
+    "power_hp": 29,
+    "weight_kg": 1940,
+    "aspiration": "NA"
+  }
+}

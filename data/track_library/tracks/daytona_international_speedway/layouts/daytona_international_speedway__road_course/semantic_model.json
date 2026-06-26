@@ -1,0 +1,192 @@
+{
+  "schema": "track_semantic_model_v1",
+  "track_id": "daytona_international_speedway",
+  "layout_id": "daytona_international_speedway__road_course",
+  "notes": "Daytona Road Course semantic model derived from Group 17S seed authoring. All windows are estimated from track layout knowledge. T1 apex at 8.2% confirmed from UAT telemetry; all others approximated.",
+  "sectors": [
+    {
+      "sector_id": "S1",
+      "display_name": "Sector 1 — Banking to Infield Entry",
+      "start_progress_pct": 0.0,
+      "end_progress_pct": 33.0,
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "sector_id": "S2",
+      "display_name": "Sector 2 — Infield",
+      "start_progress_pct": 33.0,
+      "end_progress_pct": 66.0,
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "sector_id": "S3",
+      "display_name": "Sector 3 — Return to Banking",
+      "start_progress_pct": 66.0,
+      "end_progress_pct": 100.0,
+      "source": "estimated",
+      "confidence": "low"
+    }
+  ],
+  "corners": [
+    {
+      "corner_id": "T1",
+      "display_name": "T1 Bus Stop Entry",
+      "start_progress_pct": 5.5,
+      "apex_progress_pct": 8.2,
+      "end_progress_pct": 11.0,
+      "direction": "left",
+      "sector_id": "S1",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T2",
+      "display_name": "T2 Bus Stop Exit",
+      "start_progress_pct": 11.0,
+      "apex_progress_pct": 12.8,
+      "end_progress_pct": 15.0,
+      "direction": "right",
+      "sector_id": "S1",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T3",
+      "display_name": "T3",
+      "start_progress_pct": 16.0,
+      "apex_progress_pct": 19.0,
+      "end_progress_pct": 22.0,
+      "direction": "right",
+      "sector_id": "S1",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T4",
+      "display_name": "T4",
+      "start_progress_pct": 22.0,
+      "apex_progress_pct": 25.0,
+      "end_progress_pct": 28.0,
+      "direction": "left",
+      "sector_id": "S1",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T5",
+      "display_name": "T5",
+      "start_progress_pct": 29.0,
+      "apex_progress_pct": 32.0,
+      "end_progress_pct": 35.0,
+      "direction": "right",
+      "sector_id": "S1",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T6",
+      "display_name": "T6",
+      "start_progress_pct": 39.0,
+      "apex_progress_pct": 42.5,
+      "end_progress_pct": 46.0,
+      "direction": "left",
+      "sector_id": "S2",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T7",
+      "display_name": "T7",
+      "start_progress_pct": 48.0,
+      "apex_progress_pct": 51.0,
+      "end_progress_pct": 54.0,
+      "direction": "right",
+      "sector_id": "S2",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T8",
+      "display_name": "T8",
+      "start_progress_pct": 57.0,
+      "apex_progress_pct": 60.0,
+      "end_progress_pct": 63.0,
+      "direction": "left",
+      "sector_id": "S2",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T9",
+      "display_name": "T9",
+      "start_progress_pct": 64.0,
+      "apex_progress_pct": 67.5,
+      "end_progress_pct": 71.0,
+      "direction": "right",
+      "sector_id": "S3",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T10",
+      "display_name": "T10",
+      "start_progress_pct": 73.0,
+      "apex_progress_pct": 76.0,
+      "end_progress_pct": 79.0,
+      "direction": "left",
+      "sector_id": "S3",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T11",
+      "display_name": "T11",
+      "start_progress_pct": 79.0,
+      "apex_progress_pct": 82.0,
+      "end_progress_pct": 85.5,
+      "direction": "right",
+      "sector_id": "S3",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "corner_id": "T12",
+      "display_name": "T12 Banking Entry",
+      "start_progress_pct": 88.0,
+      "apex_progress_pct": 92.0,
+      "end_progress_pct": 96.0,
+      "direction": "left",
+      "sector_id": "S3",
+      "source": "estimated",
+      "confidence": "low"
+    }
+  ],
+  "complexes": [
+    {
+      "complex_id": "BusStop",
+      "display_name": "Bus Stop Chicane",
+      "member_corner_ids": ["T1", "T2"],
+      "start_progress_pct": 5.5,
+      "end_progress_pct": 15.0,
+      "sector_id": "S1",
+      "coaching_name": "Bus Stop",
+      "notes": "T1 and T2 form the Bus Stop chicane — treat as one braking/rotation complex",
+      "source": "estimated",
+      "confidence": "low"
+    },
+    {
+      "complex_id": "T10T11",
+      "display_name": "T10/T11 Complex",
+      "member_corner_ids": ["T10", "T11"],
+      "start_progress_pct": 73.0,
+      "end_progress_pct": 85.5,
+      "sector_id": "S3",
+      "coaching_name": "Horseshoe",
+      "notes": "T10 and T11 are connected — treat as one braking/rotation complex per NGR seed model",
+      "source": "estimated",
+      "confidence": "low"
+    }
+  ]
+}

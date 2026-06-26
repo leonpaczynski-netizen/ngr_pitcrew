@@ -1,0 +1,24 @@
+{
+  "schema": "source_manifest_v1",
+  "track_id": "daytona_international_speedway",
+  "layout_id": "daytona_international_speedway__road_course",
+  "sources": [
+    {
+      "name": "Track layout knowledge / estimated from circuit maps",
+      "url": "",
+      "retrieved_at": "2026-06-26",
+      "notes": "Corner windows and sector boundaries estimated from published circuit diagrams and driver knowledge."
+    }
+  ],
+  "fields_estimated": [
+    "corner_windows",
+    "sector_boundaries",
+    "corner_complexes",
+    "lap_length_m"
+  ],
+  "fields_verified": [
+    "T1_apex_at_8.2pct"
+  ],
+  "notes": "T1 apex at 8.2% progress confirmed from UAT telemetry capture. All other corner windows are estimated from track layout knowledge. Seed coordinate geometry not yet available.",
+  "last_reviewed_at": "2026-06-26"
+}

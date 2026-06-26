@@ -1,0 +1,499 @@
+{
+  "last_updated": "2026-06-20",
+  "note": "Auto-updated from dg-edge.com. Click 'Reload BOP' in Car Setup to apply.",
+  "cars": {
+    "GR.1": {
+      "Jaguar XJR-9 '88": {
+        "weight_kg": 894,
+        "power_hp": 644
+      },
+      "Peugeot 908 HDi FAP '10": {
+        "weight_kg": 930,
+        "power_hp": 546
+      },
+      "Audi R18 TDI '11": {
+        "weight_kg": 900,
+        "power_hp": 533
+      },
+      "Toyota TS030 Hybrid '12": {
+        "weight_kg": 955,
+        "power_hp": 530
+      },
+      "Nissan GT-R LM NISMO '15": {
+        "weight_kg": 880,
+        "power_hp": 568
+      },
+      "Bugatti Bugatti VGT (Gr.1)": {
+        "weight_kg": 1050,
+        "power_hp": 641
+      },
+      "Hyundai HYUNDAI N 2025 VGT (Gr.1)": {
+        "weight_kg": 1072,
+        "power_hp": 557
+      },
+      "Mazda LM55 VGT (Gr.1)": {
+        "weight_kg": 950,
+        "power_hp": 544
+      },
+      "Mazda 787B '91": {
+        "weight_kg": 830,
+        "power_hp": 649
+      },
+      "Alpine Alpine VGT '17": {
+        "weight_kg": 950,
+        "power_hp": 577
+      },
+      "Dodge SRT Tomahawk VGT (Gr.1)": {
+        "weight_kg": 995,
+        "power_hp": 589
+      },
+      "Toyota TS050 - Hybrid '16": {
+        "weight_kg": 950,
+        "power_hp": 493
+      },
+      "Porsche 919 Hybrid '16": {
+        "weight_kg": 975,
+        "power_hp": 500
+      },
+      "Audi Audi VGT": {
+        "weight_kg": 1250,
+        "power_hp": 706
+      },
+      "Peugeot L750R HYbrid VGT 2017": {
+        "weight_kg": 860,
+        "power_hp": 597
+      },
+      "Audi R18 '16": {
+        "weight_kg": 875,
+        "power_hp": 482
+      },
+      "McLaren McLaren VGT (Gr.1)": {
+        "weight_kg": 915,
+        "power_hp": 510
+      },
+      "Porsche 962 C '88": {
+        "weight_kg": 870,
+        "power_hp": 690
+      },
+      "Toyota GR010 HYBRID '21": {
+        "weight_kg": 1040,
+        "power_hp": 610
+      },
+      "Nissan R92CP '92": {
+        "weight_kg": 905,
+        "power_hp": 726
+      },
+      "Mercedes-Benz Sauber Mercedes C9 '89": {
+        "weight_kg": 913,
+        "power_hp": 695
+      },
+      "Porsche 963 '24": {
+        "weight_kg": 1030,
+        "power_hp": 610
+      },
+      "BMW M Hybrid V8 '25": {
+        "weight_kg": 1030,
+        "power_hp": 609
+      },
+      "Ferrari 499P '23": {
+        "weight_kg": 1030,
+        "power_hp": 611
+      },
+      "Peugeot 9X8 '25": {
+        "weight_kg": 1030,
+        "power_hp": 611
+      }
+    },
+    "GR.2": {
+      "Honda NSX CONCEPT-GT '16": {
+        "weight_kg": 1064,
+        "power_hp": 604
+      },
+      "Lexus SC430 GT500 '08": {
+        "weight_kg": 1111,
+        "power_hp": 517
+      },
+      "Audi RS 5 Turbo DTM '19": {
+        "weight_kg": 986,
+        "power_hp": 604
+      },
+      "Lexus RC F GT500 '16": {
+        "weight_kg": 1030,
+        "power_hp": 614
+      },
+      "Toyota GT-One (TS020) '99": {
+        "weight_kg": 900,
+        "power_hp": 581
+      },
+      "Honda NSX GT500 '08": {
+        "weight_kg": 1150,
+        "power_hp": 519
+      },
+      "Nissan GT-R GT500 '08": {
+        "weight_kg": 1130,
+        "power_hp": 528
+      },
+      "Nissan GT-R NISMO GT500 '16": {
+        "weight_kg": 1035,
+        "power_hp": 613
+      },
+      "Mercedes-Benz CLK-LM '98": {
+        "weight_kg": 940,
+        "power_hp": 582
+      },
+      "BMW McLaren F1 GTR Race Car '97": {
+        "weight_kg": 950,
+        "power_hp": 603
+      }
+    },
+    "GR.3": {
+      "Aston Martin V12 Vantage GT3 '12": {
+        "weight_kg": 1250,
+        "power_hp": 485
+      },
+      "Nissan GT-R NISMO GT3 '18": {
+        "weight_kg": 1355,
+        "power_hp": 491
+      },
+      "Toyota GR Supra Racing Concept '18": {
+        "weight_kg": 1250,
+        "power_hp": 462
+      },
+      "Genesis Genesis X GR3": {
+        "weight_kg": 1290,
+        "power_hp": 466
+      },
+      "Chevrolet Corvette C7 Gr.3": {
+        "weight_kg": 1300,
+        "power_hp": 480
+      },
+      "BMW M6 GT3 Sprint Model '16": {
+        "weight_kg": 1326,
+        "power_hp": 462
+      },
+      "Audi R8 LMS Evo '19": {
+        "weight_kg": 1305,
+        "power_hp": 444
+      },
+      "McLaren 650S GT3 '15": {
+        "weight_kg": 1315,
+        "power_hp": 477
+      },
+      "Honda NSX Gr.3": {
+        "weight_kg": 1300,
+        "power_hp": 483
+      },
+      "Renault R.S.01 GT3 '16": {
+        "weight_kg": 1315,
+        "power_hp": 466
+      },
+      "Lamborghini Huracán GT3 '15": {
+        "weight_kg": 1321,
+        "power_hp": 450
+      },
+      "Mazda RX-VISION GT3 CONCEPT Stealth Model": {
+        "weight_kg": 1269,
+        "power_hp": 433
+      },
+      "Subaru BRZ GT300 '21": {
+        "weight_kg": 1315,
+        "power_hp": 440
+      },
+      "Ford Ford GT Race Car '18": {
+        "weight_kg": 1250,
+        "power_hp": 443
+      },
+      "Citroën GT by Citroën Race Car (Gr.3)": {
+        "weight_kg": 1260,
+        "power_hp": 444
+      },
+      "Ford Ford GT LM Race Car Spec II": {
+        "weight_kg": 1255,
+        "power_hp": 449
+      },
+      "AMG Mercedes-AMG GT3 '16": {
+        "weight_kg": 1325,
+        "power_hp": 455
+      },
+      "Ferrari 458 Italia GT3 '13": {
+        "weight_kg": 1315,
+        "power_hp": 450
+      },
+      "Audi R8 LMS '15": {
+        "weight_kg": 1356,
+        "power_hp": 451
+      },
+      "Subaru WRX Gr.3": {
+        "weight_kg": 1295,
+        "power_hp": 497
+      },
+      "Mitsubishi Lancer Evolution Final Gr.3": {
+        "weight_kg": 1300,
+        "power_hp": 507
+      },
+      "BMW M6 GT3 Endurance Model '16": {
+        "weight_kg": 1326,
+        "power_hp": 462
+      },
+      "Dodge Viper SRT GT3-R '15": {
+        "weight_kg": 1300,
+        "power_hp": 475
+      },
+      "Peugeot PEUGEOT VGT (Gr.3)": {
+        "weight_kg": 1269,
+        "power_hp": 477
+      },
+      "Nissan GT-R NISMO GT3 '13": {
+        "weight_kg": 1315,
+        "power_hp": 509
+      },
+      "Nissan GT-R GT500 '99": {
+        "weight_kg": 1210,
+        "power_hp": 454
+      },
+      "Lexus RC F GT3 '17": {
+        "weight_kg": 1300,
+        "power_hp": 450
+      },
+      "Toyota FT-1 VGT (Gr.3)": {
+        "weight_kg": 1350,
+        "power_hp": 473
+      },
+      "Volkswagen Volkswagen GTI VGT (Gr.3)": {
+        "weight_kg": 1260,
+        "power_hp": 502
+      },
+      "BMW Z4 GT3 '11": {
+        "weight_kg": 1250,
+        "power_hp": 460
+      },
+      "McLaren McLaren F1 GTR - BMW '95": {
+        "weight_kg": 1176,
+        "power_hp": 438
+      },
+      "Hyundai Genesis Gr.3": {
+        "weight_kg": 1260,
+        "power_hp": 483
+      },
+      "Peugeot RCZ Gr.3": {
+        "weight_kg": 1265,
+        "power_hp": 484
+      },
+      "Mazda Atenza Gr.3": {
+        "weight_kg": 1326,
+        "power_hp": 493
+      },
+      "Lexus RC F GT3 prototype '16": {
+        "weight_kg": 1310,
+        "power_hp": 449
+      },
+      "BMW M3 GT '11": {
+        "weight_kg": 1296,
+        "power_hp": 466
+      },
+      "Mazda RX-VISION GT3 CONCEPT": {
+        "weight_kg": 1269,
+        "power_hp": 433
+      },
+      "Jaguar F-type Gr.3": {
+        "weight_kg": 1254,
+        "power_hp": 469
+      },
+      "Porsche 911 RSR (991) '17": {
+        "weight_kg": 1310,
+        "power_hp": 444
+      },
+      "Alfa Romeo 4C Gr.3": {
+        "weight_kg": 1240,
+        "power_hp": 455
+      },
+      "AMG Mercedes-AMG GT3 '20": {
+        "weight_kg": 1350,
+        "power_hp": 461
+      },
+      "Toyota Supra GT500 '97": {
+        "weight_kg": 1175,
+        "power_hp": 448
+      },
+      "Ford Mustang Gr.3": {
+        "weight_kg": 1300,
+        "power_hp": 483
+      },
+      "AMG SLS AMG GT3 '11": {
+        "weight_kg": 1360,
+        "power_hp": 485
+      },
+      "Suzuki SUZUKI VGT (Gr.3)": {
+        "weight_kg": 1220,
+        "power_hp": 469
+      },
+      "Volkswagen Beetle Gr.3": {
+        "weight_kg": 1289,
+        "power_hp": 479
+      },
+      "Aston Martin DBR9 GT1 '10": {
+        "weight_kg": 1175,
+        "power_hp": 468
+      },
+      "Ford Ford GT LM Spec II Test Car": {
+        "weight_kg": 1265,
+        "power_hp": 443
+      },
+      "Nissan Skyline Super Silhouette '84": {
+        "weight_kg": 1005,
+        "power_hp": 517
+      },
+      "Honda NSX GT500 '00": {
+        "weight_kg": 1235,
+        "power_hp": 428
+      },
+      "Ferrari 296 GT3 '23": {
+        "weight_kg": 1320,
+        "power_hp": 444
+      },
+      "Porsche 911 GT3 R (992) '22": {
+        "weight_kg": 1320,
+        "power_hp": 446
+      }
+    },
+    "GR.4": {
+      "Bugatti Veyron Gr.4": {
+        "weight_kg": 1661,
+        "power_hp": 355
+      },
+      "Alfa Romeo 155 2.5 V6 TI '93": {
+        "weight_kg": 1200,
+        "power_hp": 298
+      },
+      "Subaru WRX Gr.4": {
+        "weight_kg": 1366,
+        "power_hp": 318
+      },
+      "Toyota GR Supra Race Car '19": {
+        "weight_kg": 1400,
+        "power_hp": 316
+      },
+      "Lamborghini Huracán Gr.4": {
+        "weight_kg": 1433,
+        "power_hp": 295
+      },
+      "Audi TT Cup '16": {
+        "weight_kg": 1130,
+        "power_hp": 305
+      },
+      "McLaren 650S Gr.4": {
+        "weight_kg": 1370,
+        "power_hp": 320
+      },
+      "Honda NSX Gr.4": {
+        "weight_kg": 1425,
+        "power_hp": 320
+      },
+      "BMW M4 Gr.4": {
+        "weight_kg": 1380,
+        "power_hp": 324
+      },
+      "Mazda Atenza Gr.4": {
+        "weight_kg": 1406,
+        "power_hp": 346
+      },
+      "Nissan Silvia spec-R Aero (S15) Touring Car": {
+        "weight_kg": 1185,
+        "power_hp": 302
+      },
+      "Nissan GT-R Gr.4": {
+        "weight_kg": 1460,
+        "power_hp": 334
+      },
+      "Volkswagen Scirocco Gr.4": {
+        "weight_kg": 1090,
+        "power_hp": 294
+      },
+      "Mitsubishi Lancer Evolution Final Gr.4": {
+        "weight_kg": 1345,
+        "power_hp": 324
+      },
+      "Genesis G70 GR4": {
+        "weight_kg": 1411,
+        "power_hp": 327
+      },
+      "Aston Martin V8 Vantage Gr.4": {
+        "weight_kg": 1355,
+        "power_hp": 312
+      },
+      "Ferrari 458 Italia Gr.4": {
+        "weight_kg": 1410,
+        "power_hp": 315
+      },
+      "Mazda MAZDA3 Gr.4": {
+        "weight_kg": 1200,
+        "power_hp": 327
+      },
+      "Alfa Romeo 4C Gr.4": {
+        "weight_kg": 1105,
+        "power_hp": 275
+      },
+      "Renault Mégane Trophy '11": {
+        "weight_kg": 1155,
+        "power_hp": 292
+      },
+      "Porsche Cayman GT4 Clubsport '16": {
+        "weight_kg": 1370,
+        "power_hp": 304
+      },
+      "Citroën GT by Citroën Gr.4": {
+        "weight_kg": 1410,
+        "power_hp": 312
+      },
+      "AMG SLS AMG Gr.4": {
+        "weight_kg": 1426,
+        "power_hp": 330
+      },
+      "Lexus RC F Gr.4": {
+        "weight_kg": 1411,
+        "power_hp": 339
+      },
+      "Peugeot RCZ Gr.4": {
+        "weight_kg": 1225,
+        "power_hp": 318
+      },
+      "Chevrolet Corvette C7 Gr.4": {
+        "weight_kg": 1360,
+        "power_hp": 311
+      },
+      "Ford Mustang Gr.4": {
+        "weight_kg": 1411,
+        "power_hp": 332
+      },
+      "Hyundai Genesis Gr.4": {
+        "weight_kg": 1350,
+        "power_hp": 326
+      },
+      "Suzuki Swift Sport Gr.4": {
+        "weight_kg": 1000,
+        "power_hp": 283
+      },
+      "Jaguar F-type Gr.4": {
+        "weight_kg": 1401,
+        "power_hp": 327
+      },
+      "Renault Mégane Gr.4": {
+        "weight_kg": 1165,
+        "power_hp": 297
+      },
+      "Dodge Viper Gr.4": {
+        "weight_kg": 1405,
+        "power_hp": 322
+      },
+      "Toyota 86 Gr.4": {
+        "weight_kg": 1320,
+        "power_hp": 313
+      },
+      "Hyundai ELANTRA N TC '24": {
+        "weight_kg": 1265,
+        "power_hp": 332
+      }
+    }
+  },
+  "bop_version": "1.70"
+}
