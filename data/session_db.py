@@ -756,6 +756,21 @@ class SessionDB:
             ).fetchone()
         return row[0] if row else 0
 
+    def get_best_practice_lap_ms(self, car_id: int, track: str) -> Optional[int]:
+        """Return best non-pit-lap practice lap time in ms for this car+track, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MIN(lr.lap_time_ms) AS best "
+                "FROM lap_records lr "
+                "JOIN sessions s ON lr.session_id = s.id "
+                "WHERE s.car_id=? AND s.track=? "
+                "AND lr.session_type='Practice' AND lr.is_pit_lap=0",
+                (car_id, track)
+            ).fetchone()
+        if row and row["best"]:
+            return int(row["best"])
+        return None
+
     def get_all_cars(self) -> list[dict]:
         """Return all cars ordered by name."""
         with self._lock:

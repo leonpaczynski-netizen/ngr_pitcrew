@@ -1011,7 +1011,15 @@ class MainWindow(TrackModellingMixin, QMainWindow):
         tgt_row.addWidget(self._spin_qual_min)
         tgt_row.addWidget(self._spin_qual_sec)
         tgt_row.addStretch()
+        self._btn_qual_use_practice = QPushButton("Use best practice lap")
+        self._lbl_qual_practice_status = QLabel("")
+        self._lbl_qual_practice_status.setWordWrap(True)
+        tgt_row.addWidget(self._btn_qual_use_practice)
+        self._btn_qual_use_practice.clicked.connect(self._qual_use_practice_lap)
+        self._spin_qual_min.valueChanged.connect(self._qual_sync_target_to_announcer)
+        self._spin_qual_sec.valueChanged.connect(self._qual_sync_target_to_announcer)
         layout.addWidget(tgt_box)
+        layout.addWidget(self._lbl_qual_practice_status)
 
         sec_box = QGroupBox("Current Lap vs Target")
         sec_box.setStyleSheet(self._group_style())
@@ -2187,6 +2195,30 @@ class MainWindow(TrackModellingMixin, QMainWindow):
                 f"{format_laptime_display(record.lap_time_ms)} "
                 f"({sign}{delta / 1000:.3f}s {label})")
             self._lbl_qual_last.setStyleSheet(f"color:{col};")
+
+    def _qual_sync_target_to_announcer(self) -> None:
+        ms = self._spin_qual_min.value() * 60000 + round(self._spin_qual_sec.value() * 1000)
+        if hasattr(self, "_announcer") and self._announcer:
+            self._announcer.set_qualifying_target_ms(ms)
+
+    def _qual_use_practice_lap(self) -> None:
+        evt = self._active_event() if hasattr(self, "_active_event") else {}
+        car_name = self._config.get("strategy", {}).get("car", "")
+        car_id = self._db.get_car_id(car_name) if self._db and car_name else 0
+        track = evt.get("track", "") if evt else ""
+        if not car_id or not track:
+            self._lbl_qual_practice_status.setText("No active car or track set.")
+            return
+        best = self._db.get_best_practice_lap_ms(car_id, track)
+        if best is None or best <= 0:
+            self._lbl_qual_practice_status.setText("No practice laps recorded for this car and track.")
+            return
+        mins = best // 60000
+        secs = (best % 60000) / 1000.0
+        self._spin_qual_min.setValue(mins)
+        self._spin_qual_sec.setValue(secs)
+        from data.session_db import ms_to_str
+        self._lbl_qual_practice_status.setText(f"Target set from practice: {ms_to_str(best)}")
 
     def _auto_refresh_gearbox_debug(self) -> None:
         if not hasattr(self, "_txt_gearbox_debug"):

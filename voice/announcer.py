@@ -474,6 +474,7 @@ class VoiceAnnouncer(threading.Thread):
         self._engine = None
         self._beep_dev_eff: Optional[int] = None
         self._session_mode: str = "race"
+        self._qualifying_target_ms: int = 0
 
     # ------------------------------------------------------------------ public
 
@@ -553,6 +554,11 @@ class VoiceAnnouncer(threading.Thread):
     def set_session_mode(self, mode: str) -> None:
         """Set the current session mode so event handlers can suppress mode-inappropriate alerts."""
         self._session_mode = mode.lower()
+        if mode.lower() != "qualifying" and hasattr(self, "_handler"):
+            self._handler._qualifying_lap_count = 0
+
+    def set_qualifying_target_ms(self, ms: int) -> None:
+        self._qualifying_target_ms = max(0, int(ms))
 
     def mute_for(self, secs: float) -> None:
         """Hold all non-bypass queued items for `secs` seconds (PTT recording window)."""
@@ -1045,6 +1051,10 @@ class AnnouncerEventHandler:
 
     def __init__(self, announcer: VoiceAnnouncer) -> None:
         self._a = announcer
+        self._qualifying_lap_count: int = 0
+
+    def _is_flying_lap(self) -> bool:
+        return self._a._session_mode == "qualifying" and self._qualifying_lap_count >= 1
 
     def handle(self, event: TelemetryEvent) -> None:
         cfg = self._a._cfg
@@ -1090,6 +1100,23 @@ class AnnouncerEventHandler:
 
         self._a.announce(text, Priority.LOW, f"lap_{lap_n}", 0.0)
 
+        if self._a._session_mode == "qualifying":
+            self._qualifying_lap_count += 1
+            record = data.get("record")
+            lap_ms = getattr(record, "lap_time_ms", 0) if record else 0
+            target_ms = self._a._qualifying_target_ms
+            if lap_ms > 0 and target_ms > 0:
+                delta_ms = lap_ms - target_ms
+                abs_sec = abs(delta_ms) / 1000.0
+                delta_str = f"{abs_sec:.3f}s"
+                if delta_ms < 0:
+                    phrase = f"Lap complete. {delta_str} under target."
+                elif delta_ms > 0:
+                    phrase = f"Lap complete. {delta_str} over target."
+                else:
+                    phrase = "Lap complete. On target."
+                self._a.announce(phrase, Priority.LOW, "qual_lap_delta", 0.0)
+
         laps_rem = data.get("laps_remaining", 0)
         if laps_rem == 1:
             self._a.announce("Last lap.", Priority.LOW, "last_lap", 0.0)
@@ -1133,6 +1160,8 @@ class AnnouncerEventHandler:
     }
 
     def _on_tyre(self, data: dict) -> None:
+        if self._is_flying_lap():
+            return
         label     = data["label"]
         new_state = data["new_state"]
         word      = self._STATE_WORDS.get(new_state, new_state.value)
