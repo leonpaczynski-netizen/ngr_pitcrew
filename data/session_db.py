@@ -316,7 +316,28 @@ CREATE INDEX IF NOT EXISTS idx_setup_recs_car_track
 
 _DDL_V6 = ""  # Schema changes applied via ALTER TABLE in _migrate_v6
 
-_DDL = _DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6
+_DDL_V8 = """
+CREATE TABLE IF NOT EXISTS race_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL,
+    car_id INTEGER NOT NULL,
+    setup_id INTEGER,
+    plan_name TEXT NOT NULL,
+    stints_json TEXT NOT NULL,
+    strategy_rank INTEGER,
+    strategy_name TEXT,
+    estimated_time_s REAL,
+    ai_summary TEXT,
+    ai_risks TEXT,
+    ai_positives TEXT,
+    ai_negatives TEXT,
+    driver_notes TEXT NOT NULL DEFAULT '',
+    setup_name TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
+_DDL = _DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -378,6 +399,10 @@ class SessionDB:
             self._migrate_v7()
             self._conn.execute("PRAGMA user_version = 7")
             self._conn.commit()
+        if version < 8:
+            self._migrate_v8()
+            self._conn.execute("PRAGMA user_version = 8")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -414,6 +439,10 @@ class SessionDB:
                 if "duplicate column" not in str(e).lower():
                     raise
 
+    def _migrate_v8(self) -> None:
+        """Create race_plans table (schema version 8)."""
+        self._conn.executescript(_DDL_V8)
+
     def _migrate_v6(self) -> None:
         try:
             self._conn.execute(
@@ -449,6 +478,69 @@ class SessionDB:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
+
+    # ------------------------------------------------------------------
+    # Race Plans CRUD (schema version 8)
+    # ------------------------------------------------------------------
+
+    def save_race_plan(
+        self,
+        event_id: int,
+        car_id: int,
+        setup_id,
+        plan_name: str,
+        stints_json: str,
+        strategy_rank,
+        strategy_name,
+        estimated_time_s,
+        ai_summary,
+        ai_risks,
+        ai_positives,
+        ai_negatives,
+        driver_notes: str,
+        setup_name,
+    ) -> int:
+        """Insert and return the new plan id."""
+        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO race_plans
+                       (event_id, car_id, setup_id, plan_name, stints_json,
+                        strategy_rank, strategy_name, estimated_time_s,
+                        ai_summary, ai_risks, ai_positives, ai_negatives,
+                        driver_notes, setup_name, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    event_id, car_id, setup_id, plan_name, stints_json,
+                    strategy_rank, strategy_name, estimated_time_s,
+                    ai_summary, ai_risks, ai_positives, ai_negatives,
+                    driver_notes, setup_name, created_at,
+                ),
+            )
+            self._conn.commit()
+            return cur.lastrowid or 0
+
+    def get_race_plans(self, event_id: int, car_id: int) -> list[dict]:
+        """Return all plans for event+car, ordered by created_at DESC, id DESC."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM race_plans
+                   WHERE event_id=? AND car_id=?
+                   ORDER BY created_at DESC, id DESC""",
+                (event_id, car_id),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_latest_race_plan(self, event_id: int, car_id: int) -> Optional[dict]:
+        """Return the most recent plan for event+car, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT * FROM race_plans
+                   WHERE event_id=? AND car_id=?
+                   ORDER BY created_at DESC, id DESC LIMIT 1""",
+                (event_id, car_id),
+            ).fetchone()
+        return dict(row) if row else None
 
     def close(self) -> None:
         with self._lock:

@@ -205,7 +205,7 @@ class TestMigrationV6(unittest.TestCase):
         # Check user_version
         with db._lock:
             version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 7)
+        self.assertEqual(version, 8)
 
 
 class TestBuildCarSetupSignature(unittest.TestCase):

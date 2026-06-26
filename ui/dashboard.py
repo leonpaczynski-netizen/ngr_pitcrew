@@ -628,6 +628,10 @@ class MainWindow(TrackModellingMixin, QMainWindow):
             for _d in _saved_stops:
                 self._strategy_add_stint(preset=_d)
 
+        # Load most recent saved race plan into the strategy engine (if available)
+        if self._strategy_engine is not None:
+            self._live_init_from_plan()
+
         # Restore last AI strategy analysis so results survive app restart
         self._restore_strategy_cache()
 
@@ -3982,6 +3986,52 @@ class MainWindow(TrackModellingMixin, QMainWindow):
         btn_row.addWidget(btn_apply)
         btn_row.addWidget(btn_reset)
         plan_layout.addLayout(btn_row)
+
+        # --- Save Race Plan section ---
+        _sep2 = QFrame()
+        _sep2.setFrameShape(QFrame.Shape.HLine)
+        _sep2.setStyleSheet("color: #444;")
+        plan_layout.addWidget(_sep2)
+
+        # Saved plans combo
+        saved_plans_row = QHBoxLayout()
+        saved_plans_row.addWidget(QLabel("Saved Plans:", styleSheet=f"color: {_TEXT};"))
+        self._sb_saved_plans_combo = QComboBox()
+        self._sb_saved_plans_combo.setMinimumWidth(280)
+        self._sb_saved_plans_combo.setToolTip("Previously saved race plans for the active event and car.")
+        self._sb_saved_plans_combo.currentIndexChanged.connect(self._sb_on_saved_plan_selected)
+        saved_plans_row.addWidget(self._sb_saved_plans_combo, 1)
+        plan_layout.addLayout(saved_plans_row)
+
+        # Plan name input
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Plan Name:", styleSheet=f"color: {_TEXT};"))
+        self._sb_plan_name_input = QLineEdit()
+        self._sb_plan_name_input.setPlaceholderText("Enter a name for this plan…")
+        self._sb_plan_name_input.textChanged.connect(self._sb_on_plan_name_changed)
+        name_row.addWidget(self._sb_plan_name_input, 1)
+        plan_layout.addLayout(name_row)
+
+        # Driver notes
+        plan_layout.addWidget(QLabel("Driver Notes:", styleSheet=f"color: {_TEXT};"))
+        self._sb_driver_notes_input = QTextEdit()
+        self._sb_driver_notes_input.setPlaceholderText("Optional notes for this race plan…")
+        self._sb_driver_notes_input.setMaximumHeight(80)  # ~4 rows
+        self._sb_driver_notes_input.setStyleSheet(
+            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
+        plan_layout.addWidget(self._sb_driver_notes_input)
+
+        # Save button
+        save_btn_row = QHBoxLayout()
+        save_btn_row.addStretch()
+        self._sb_btn_save_plan = QPushButton("Save Race Plan")
+        self._sb_btn_save_plan.setStyleSheet(
+            "background: #2E7D32; color: white; font-weight: bold; padding: 6px 16px;")
+        self._sb_btn_save_plan.setEnabled(False)
+        self._sb_btn_save_plan.clicked.connect(self._sb_save_race_plan)
+        save_btn_row.addWidget(self._sb_btn_save_plan)
+        plan_layout.addLayout(save_btn_row)
+
         return plan_box
 
     def _build_practice_lap_bank_group(self) -> QGroupBox:
@@ -4846,6 +4896,201 @@ class MainWindow(TrackModellingMixin, QMainWindow):
         if stops_data:
             self._on_tyre_preset_changed(stops_data[0].get("compound", ""))
         self._update_live_plan(stops_data)
+
+    # ------------------------------------------------------------------
+    # Save Race Plan helpers
+    # ------------------------------------------------------------------
+
+    def _sb_on_plan_name_changed(self, text: str) -> None:
+        self._sb_btn_save_plan.setEnabled(bool(text.strip()))
+
+    def _sb_save_race_plan(self) -> None:
+        """Persist the current stint plan to the database."""
+        from PyQt6.QtWidgets import QMessageBox
+        import json as _json
+
+        plan_name = self._sb_plan_name_input.text().strip()
+        if not plan_name:
+            return
+
+        driver_notes = self._sb_driver_notes_input.toPlainText()
+
+        evt = self._active_event()
+        if not evt:
+            QMessageBox.warning(self, "No Active Event",
+                                "No active event is set. Please activate an event first.")
+            return
+
+        event_id = evt.get("id") or self._db.get_event_id(evt.get("name", "")) if self._db else 0
+        if not event_id:
+            QMessageBox.warning(self, "No Active Event",
+                                "Could not resolve active event ID.")
+            return
+
+        # Car ID resolution
+        car_id = 0
+        if self._db is not None:
+            car_name = self._config.get("strategy", {}).get("car", "")
+            car_id = self._db.get_car_id(car_name) if car_name else 0
+        if not car_id:
+            QMessageBox.warning(self, "No Active Car",
+                                "No active car set. Please start a telemetry session for "
+                                "this car before saving a race plan.")
+            return
+
+        # Setup ID (best-effort)
+        setup_id = None
+        setup_name = None
+
+        # Strategy option fields (best-effort)
+        strategy_rank = None
+        strategy_name = None
+        estimated_time_s = None
+        ai_summary = None
+        ai_risks = None
+        ai_positives = None
+        ai_negatives = None
+
+        sel_idx = -1
+        for i, btn in enumerate(self._ai_apply_btns):
+            if btn.isVisible() and i < len(self._strategy_options):
+                sel_idx = i
+                break
+        if sel_idx >= 0 and sel_idx < len(self._strategy_options):
+            opt = self._strategy_options[sel_idx]
+            strategy_rank = getattr(opt, "rank", None)
+            strategy_name = getattr(opt, "name", None)
+            estimated_time_s = getattr(opt, "estimated_time_s", None)
+            ai_summary = getattr(opt, "summary", None)
+            ai_risks = getattr(opt, "risks", None)
+            ai_positives = getattr(opt, "positives", None)
+            ai_negatives = getattr(opt, "negatives", None)
+
+        # Build stints list from table
+        fuel_burn = self._computed_fuel_burn_lpl()
+        stints = []
+        cumulative_laps = 0
+        total_rows = self._strategy_stint_table.rowCount()
+        for row in range(total_rows):
+            compound_w = self._strategy_stint_table.cellWidget(row, 1)
+            laps_w     = self._strategy_stint_table.cellWidget(row, 2)
+            ref_w      = self._strategy_stint_table.cellWidget(row, 3)
+            thresh_w   = self._strategy_stint_table.cellWidget(row, 4)
+            compound = compound_w.text().strip() if compound_w else "Unknown"
+            laps = laps_w.value() if laps_w else 10
+            ref_ms = self._parse_ref_lap(ref_w.text().strip() if ref_w else "")
+            thresh_ms = int((thresh_w.value() if thresh_w else 2.0) * 1000)
+            cumulative_laps += laps
+            is_last = (row == total_rows - 1)
+            stints.append({
+                "laps": laps,
+                "compound": compound,
+                "ref_lap_ms": ref_ms,
+                "pace_threshold_ms": thresh_ms,
+                "pit_lap": None if is_last else cumulative_laps,
+                "target_lap_ms": ref_ms,
+                "fuel_target_l": round(laps * fuel_burn, 3),
+            })
+
+        stints_json = _json.dumps(stints)
+
+        try:
+            self._db.save_race_plan(
+                event_id=event_id,
+                car_id=car_id,
+                setup_id=setup_id,
+                plan_name=plan_name,
+                stints_json=stints_json,
+                strategy_rank=strategy_rank,
+                strategy_name=strategy_name,
+                estimated_time_s=estimated_time_s,
+                ai_summary=ai_summary,
+                ai_risks=ai_risks,
+                ai_positives=ai_positives,
+                ai_negatives=ai_negatives,
+                driver_notes=driver_notes,
+                setup_name=setup_name,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Failed", str(exc))
+            return
+
+        self._sb_refresh_saved_plans_combo()
+        self._bridge.event_log_entry.emit(f"[Strategy] Race plan '{plan_name}' saved.")
+
+    def _sb_refresh_saved_plans_combo(self) -> None:
+        """Repopulate the saved plans combo for the active event+car."""
+        if not hasattr(self, "_sb_saved_plans_combo"):
+            return
+        if self._db is None:
+            self._sb_saved_plans_combo.clear()
+            return
+
+        evt = self._active_event()
+        if not evt:
+            self._sb_saved_plans_combo.clear()
+            return
+
+        event_id = evt.get("id") or self._db.get_event_id(evt.get("name", ""))
+        car_name = self._config.get("strategy", {}).get("car", "")
+        car_id = self._db.get_car_id(car_name) if car_name else 0
+        if not event_id or not car_id:
+            self._sb_saved_plans_combo.clear()
+            return
+
+        plans = self._db.get_race_plans(event_id, car_id)
+        self._sb_saved_plans_combo.blockSignals(True)
+        self._sb_saved_plans_combo.clear()
+        for plan in plans:
+            label = f"{plan['plan_name']} ({plan['created_at'][:10]})"
+            self._sb_saved_plans_combo.addItem(label)
+            self._sb_saved_plans_combo.setItemData(
+                self._sb_saved_plans_combo.count() - 1,
+                plan,
+            )
+        self._sb_saved_plans_combo.blockSignals(False)
+
+    def _sb_on_saved_plan_selected(self, index: int) -> None:
+        """Restore driver notes when a saved plan is selected from the combo."""
+        if index < 0 or self._sb_saved_plans_combo.count() == 0:
+            return
+        plan = self._sb_saved_plans_combo.itemData(index)
+        if not plan:
+            return
+        if hasattr(self, "_sb_driver_notes_input"):
+            self._sb_driver_notes_input.setPlainText(plan.get("driver_notes", "") or "")
+
+    def _live_init_from_plan(self) -> None:
+        """Load the most recent saved race plan for the active event+car into the engine."""
+        from strategy.engine import Stint as _Stint
+        if self._db is None or self._strategy_engine is None:
+            return
+
+        evt = self._active_event()
+        if not evt:
+            return
+        event_id = evt.get("id") or self._db.get_event_id(evt.get("name", ""))
+        car_name = self._config.get("strategy", {}).get("car", "")
+        car_id = self._db.get_car_id(car_name) if car_name else 0
+        if not event_id or not car_id:
+            return
+
+        plan = self._db.get_latest_race_plan(event_id, car_id)
+        if not plan:
+            return
+
+        import json as _json
+        try:
+            stint_dicts = _json.loads(plan.get("stints_json", "[]"))
+        except Exception:
+            return
+
+        _STINT_KEYS = {"laps", "compound", "ref_lap_ms", "pace_threshold_ms"}
+        stints = [
+            _Stint(**{k: v for k, v in d.items() if k in _STINT_KEYS}, stint_num=i + 1)
+            for i, d in enumerate(stint_dicts)
+        ]
+        self._strategy_engine.set_plan(stints)
 
     def _update_live_plan(self, stops_data: list[dict]) -> None:
         """Refresh the Active Race Plan label on the Live tab."""
@@ -7991,6 +8236,8 @@ class MainWindow(TrackModellingMixin, QMainWindow):
                     self._lbl_fuel_burn_display.setText("— (complete practice laps to calibrate)")
             # Group 24 AC5: refresh live map for newly active event
             self._live_try_load_active_event_map()
+            # Refresh saved plans combo for the newly active event
+            self._sb_refresh_saved_plans_combo()
         except Exception:
             import traceback; traceback.print_exc()
 
