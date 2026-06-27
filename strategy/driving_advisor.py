@@ -6,12 +6,15 @@ build_setup_advice_response(setup) — Claude API, maps telemetry + DB history t
 """
 from __future__ import annotations
 
+import json as _json
+import re as _re
 from statistics import mean
 from typing import Optional, TYPE_CHECKING
 
 from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
+from strategy.setup_ranges import resolve_ranges
 from ui.gt7_data import build_track_context
 
 _ALL_TUNING_CATS = [
@@ -38,6 +41,140 @@ def _tuning_constraint_block(
             f"Only recommend changes to ALLOWED areas.\n\n"
         )
     return ""
+
+# ---------------------------------------------------------------------------
+# Canonical param keys recognised by the combined-setup response normaliser.
+# Must match the setup_fields key list given in _build_combined_prompt and the
+# keys used by setup_ranges.GENERIC_DEFAULTS / _parse_setup_recommendation.
+# ---------------------------------------------------------------------------
+_CANONICAL_SETUP_PARAMS: frozenset[str] = frozenset({
+    "ride_height_front", "ride_height_rear",
+    "springs_front", "springs_rear",
+    "dampers_front_comp", "dampers_front_ext",
+    "dampers_rear_comp", "dampers_rear_ext",
+    "arb_front", "arb_rear",
+    "camber_front", "camber_rear",
+    "toe_front", "toe_rear",
+    "aero_front", "aero_rear",
+    "lsd_initial", "lsd_accel", "lsd_decel",
+    "lsd_front_initial", "lsd_front_accel", "lsd_front_decel",
+    "brake_bias",
+    "ballast_kg", "ballast_position",
+    "power_restrictor",
+    "transmission_max_speed_kmh",
+})
+
+# Aliases: legacy/alternate names the AI may produce → canonical key
+_PARAM_ALIASES: dict[str, str] = {
+    "brake_bias_front": "brake_bias",
+}
+
+
+def _slug(text: str) -> str:
+    """Strip all non-alphanumeric characters and lowercase — for fuzzy matching."""
+    return _re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+# Pre-built slug → canonical key map for fast matching
+_SLUG_TO_CANONICAL: dict[str, str] = {
+    _slug(k): k for k in _CANONICAL_SETUP_PARAMS
+}
+
+
+def _resolve_field_key(field: str, setting: str) -> str | None:
+    """Return the canonical param key for a change item, or None if unresolvable.
+
+    Resolution order:
+    1. ``field`` is already a recognised canonical key — return as-is.
+    2. ``field`` is a known alias — return the canonical key.
+    3. Slug-match ``field`` against all canonical keys.
+    4. Slug-match ``setting`` (the human label) against all canonical keys.
+    """
+    if field and field in _CANONICAL_SETUP_PARAMS:
+        return field
+    if field and field in _PARAM_ALIASES:
+        return _PARAM_ALIASES[field]
+    # Slug-match field value
+    if field:
+        s = _slug(field)
+        if s in _SLUG_TO_CANONICAL:
+            return _SLUG_TO_CANONICAL[s]
+        for k_slug, k in _SLUG_TO_CANONICAL.items():
+            if k_slug in s or s in k_slug:
+                return k
+    # Slug-match the human-readable setting label
+    if setting:
+        s = _slug(str(setting))
+        if s in _SLUG_TO_CANONICAL:
+            return _SLUG_TO_CANONICAL[s]
+        for k_slug, k in _SLUG_TO_CANONICAL.items():
+            if k_slug in s or s in k_slug:
+                return k
+    return None
+
+
+def _normalise_changes(
+    changes: list[dict],
+    setup_fields: dict[str, object],
+    car_name: str,
+) -> list[dict]:
+    """Enrich each change item with resolved ``field`` and ``to_clamped`` keys.
+
+    Parameters
+    ----------
+    changes:
+        Raw list of change dicts from the AI JSON (mutated in-place copies).
+    setup_fields:
+        The ``setup_fields`` dict from the same AI response (already clamped
+        by the prompt's numeric-value constraint, used as preferred source).
+    car_name:
+        Used with resolve_ranges to obtain per-car bounds for ``to_clamped``.
+
+    Returns
+    -------
+    A new list of dicts with ``field`` (str | None) and ``to_clamped`` added.
+    Every other key is preserved unchanged.
+
+    Contract for the frontend
+    -------------------------
+    - ``ch["field"]``      — canonical param key (str) or None if unresolvable.
+    - ``ch["to"]``         — raw AI recommended value (string or number, unchanged).
+    - ``ch["to_clamped"]`` — numeric value clamped to per-car range, or the raw
+                             ``to`` value if the field is unresolvable or non-numeric.
+    """
+    ranges = resolve_ranges(car_name)
+    result: list[dict] = []
+    for ch in changes:
+        ch = dict(ch)  # copy; never mutate caller's data
+        raw_field   = str(ch.get("field", "")).strip()
+        raw_setting = str(ch.get("setting", "")).strip()
+        resolved    = _resolve_field_key(raw_field, raw_setting)
+        ch["field"] = resolved
+
+        # Derive to_clamped: prefer the value from setup_fields (already
+        # instructed to be numeric and in-range); fall back to clamping
+        # ch["to"] against the resolved range.
+        raw_to = ch.get("to")
+        to_clamped: object = raw_to
+        if resolved is not None:
+            # If setup_fields carries this param, use that numeric value
+            # (it matches what the apply-button path will use).
+            if resolved in setup_fields:
+                to_clamped = setup_fields[resolved]
+            elif raw_to is not None and resolved in ranges:
+                try:
+                    num = float(raw_to)
+                    lo, hi = ranges[resolved]
+                    to_clamped = max(lo, min(hi, num))
+                    # Preserve int type for integer params
+                    if isinstance(lo, int) and isinstance(hi, int):
+                        to_clamped = int(to_clamped)
+                except (TypeError, ValueError):
+                    pass  # non-numeric "to" — leave as-is
+        ch["to_clamped"] = to_clamped
+        result.append(ch)
+    return result
+
 
 if TYPE_CHECKING:
     from telemetry.recorder import LapTelemetryRecorder, LapStats
@@ -289,6 +426,20 @@ class DrivingAdvisor:
                 )
                 if _recs:
                     self._db.insert_setup_recommendations(_recs)
+            # Normalise changes server-side: resolve 'field' key and add
+            # 'to_clamped' so the frontend never needs to slug-guess or
+            # re-clamp raw AI values.
+            try:
+                _data = _json.loads(_response_text)
+                _raw_changes = _data.get("changes") or []
+                _setup_fields = _data.get("setup_fields") or {}
+                if isinstance(_raw_changes, list) and _raw_changes:
+                    _data["changes"] = _normalise_changes(
+                        _raw_changes, _setup_fields, car_name
+                    )
+                    _response_text = _json.dumps(_data, ensure_ascii=False)
+            except Exception:
+                pass  # If normalisation fails, return the original text unchanged
             return _response_text
         except Exception as e:
             return f"Setup analysis failed: {e}"
@@ -332,6 +483,19 @@ class DrivingAdvisor:
                 )
                 if _recs:
                     self._db.insert_setup_recommendations(_recs)
+            # Normalise changes server-side: resolve 'field' key and add
+            # 'to_clamped'. The feeling path has no setup_fields dict, so
+            # _normalise_changes falls back to range-clamping ch["to"] directly.
+            try:
+                _data = _json.loads(_response_text)
+                _raw_changes = _data.get("changes") or []
+                if isinstance(_raw_changes, list) and _raw_changes:
+                    _data["changes"] = _normalise_changes(
+                        _raw_changes, {}, car_name
+                    )
+                    _response_text = _json.dumps(_data, ensure_ascii=False)
+            except Exception:
+                pass  # If normalisation fails, return the original text unchanged
             return _response_text
         except Exception as e:
             return f"Setup advice failed: {e}"
@@ -962,10 +1126,11 @@ Reply ONLY with valid JSON — no markdown fences, no extra text:
 {{
   "analysis": "2–3 sentence plain-English explanation of what is causing the handling problem.",
   "changes": [
-    {{"setting": "Setting Name", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}},
-    {{"setting": "Setting Name", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
+    {{"setting": "Setting Name", "field": "arb_rear", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}},
+    {{"setting": "Setting Name", "field": "camber_front", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
   ]
-}}"""
+}}
+In changes, "field" MUST be the exact canonical param key (e.g. arb_front, camber_rear, springs_front, lsd_accel, brake_bias, ride_height_front, toe_rear, etc.)."""
 
     def _build_combined_prompt(
         self,
@@ -1093,18 +1258,19 @@ arb_front, arb_rear, ride_height_front, ride_height_rear,
 springs_front, springs_rear, dampers_front_comp, dampers_front_ext,
 dampers_rear_comp, dampers_rear_ext, camber_front, camber_rear,
 toe_front, toe_rear, aero_front, aero_rear,
-lsd_initial, lsd_accel, lsd_decel, brake_bias_front,
+lsd_initial, lsd_accel, lsd_decel, brake_bias,
 transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
 
 Reply ONLY with valid JSON — no markdown fences, no extra text:
 {{
   "analysis": "2–3 sentence plain-English summary of what the telemetry shows and the primary issue.",
   "changes": [
-    {{"setting": "Setting Name", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
+    {{"setting": "Setting Name", "field": "arb_front", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
   ],
   "setup_fields": {{
     "arb_front": 4
   }}
 }}
-In setup_fields include ONLY the fields being changed, with numeric values (not strings)."""
+In setup_fields include ONLY the fields being changed, with numeric values (not strings).
+In changes, "field" MUST be the exact canonical key from the setup_fields list above."""
 

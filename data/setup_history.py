@@ -104,6 +104,17 @@ def format_for_prompt(config_id: str, max_entries: int = 5) -> str:
                     f"  Dampers comp/ext F: {s.get('dampers_front_comp','?')}/{s.get('dampers_front_ext','?')}  "
                     f"  R: {s.get('dampers_rear_comp','?')}/{s.get('dampers_rear_ext','?')}"
                 )
+                # Camber is always rendered as a positive value (abs) regardless of
+                # how it was stored — old entries may carry negative values under the
+                # previous convention.
+                _cf_raw = s.get("camber_front")
+                _cr_raw = s.get("camber_rear")
+                _cf = abs(float(_cf_raw)) if _cf_raw is not None else "?"
+                _cr = abs(float(_cr_raw)) if _cr_raw is not None else "?"
+                lines.append(
+                    f"  Camber F/R: {_cf}/{_cr}°  "
+                    f"  Toe F/R: {s.get('toe_front','?')}/{s.get('toe_rear','?')}°"
+                )
                 lines.append(
                     f"  LSD init/accel/decel: {s.get('lsd_initial','?')}/{s.get('lsd_accel','?')}/{s.get('lsd_decel','?')}  "
                     f"  Brake bias: {s.get('brake_bias','?')}  "

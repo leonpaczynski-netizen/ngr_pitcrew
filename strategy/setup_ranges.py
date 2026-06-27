@@ -31,8 +31,8 @@ GENERIC_DEFAULTS: dict[str, tuple] = {
     "dampers_rear_ext":       (1,    100),
     "arb_front":              (1,    7),
     "arb_rear":               (1,    7),
-    "camber_front":           (-5.0, 0.0),
-    "camber_rear":            (-5.0, 0.0),
+    "camber_front":           (0.0, 6.0),
+    "camber_rear":            (0.0, 6.0),
     "toe_front":              (-2.00, 2.00),
     "toe_rear":               (-2.00, 2.00),
     "aero_front":             (0,    1000),
@@ -100,12 +100,44 @@ def _invalidate_cache() -> None:
     _cache_mtime = None
 
 
+def _positive_camber(v: float) -> float:
+    """Return the absolute (positive) representation of a camber value.
+
+    GT7 camber is always expressed as a positive number in the UI and in
+    AI prompts (0.00 = no camber; 6.0 = maximum camber). This helper
+    normalises values stored under the old negative convention.
+    """
+    return abs(v)
+
+
+def _normalise_camber_bounds(lo: float, hi: float) -> tuple[float, float]:
+    """Return a (lo, hi) camber range in the positive convention.
+
+    Steps:
+    1. If either bound is negative, apply abs() to both and sort so lo <= hi.
+    2. If the result is degenerate (lo == hi and lo > 0), set lo = 0.0 so the
+       range spans from zero — e.g. (-6.0, 6.0) → abs → (6.0, 6.0) → (0.0, 6.0).
+    3. Already-positive non-degenerate ranges are returned unchanged.
+    """
+    if lo < 0 or hi < 0:
+        lo, hi = abs(lo), abs(hi)
+        if lo > hi:
+            lo, hi = hi, lo
+    if lo == hi and lo > 0:
+        lo = 0.0
+    return (lo, hi)
+
+
 def resolve_ranges(car_name: str) -> dict[str, tuple]:
     """Return a COPY of GENERIC_DEFAULTS with per-car overrides applied.
 
     car_name is stripped of whitespace before lookup.
     Empty or unknown car returns pure defaults.
     Never mutates GENERIC_DEFAULTS.
+
+    Camber normalisation: any per-car camber_front / camber_rear override
+    whose bounds contain a negative value is converted to its absolute form
+    so the returned tuple is always in the positive convention (0–6 range).
     """
     car_name = car_name.strip() if car_name else ""
     result = dict(GENERIC_DEFAULTS)   # shallow copy; tuples are immutable
@@ -128,6 +160,11 @@ def resolve_ranges(car_name: str) -> dict[str, tuple]:
             continue
         if param in result:
             result[param] = (lo, hi)
+
+    # Normalise camber to the positive convention.
+    for camber_param in ("camber_front", "camber_rear"):
+        lo, hi = result[camber_param]
+        result[camber_param] = _normalise_camber_bounds(lo, hi)
 
     return result
 
@@ -169,7 +206,13 @@ def save_car_ranges(car_name: str, overrides: dict[str, dict]) -> None:
 
     car_entry = dict(merged.get(car_name, {}))
     for param, bounds in overrides.items():
-        car_entry[param] = {"min": bounds["min"], "max": bounds["max"]}
+        lo = bounds["min"]
+        hi = bounds["max"]
+        # Normalise camber bounds to the positive convention before persisting,
+        # mirroring resolve_ranges.
+        if param in ("camber_front", "camber_rear"):
+            lo, hi = _normalise_camber_bounds(lo, hi)
+        car_entry[param] = {"min": lo, "max": hi}
     merged[car_name] = car_entry
 
     # Atomic write: write .tmp then replace

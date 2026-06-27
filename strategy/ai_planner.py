@@ -27,6 +27,18 @@ _JSON_SYSTEM = (
     "No reasoning, no explanations, no markdown, no text before or after the JSON."
 )
 
+_RETRY_INSTRUCTION = "Reply with ONLY the JSON object. No reasoning. No prose."
+
+
+def _is_truncated(raw: str) -> bool:
+    """Return True if the AI response appears to have been cut off mid-JSON.
+
+    A complete JSON object always ends with a closing brace. If the stripped
+    response does not end with '}' the output was almost certainly truncated
+    by the token limit and should be retried.
+    """
+    return not raw.rstrip().endswith("}")
+
 _RACE_ENGINEERING_CONTEXT = """
 ## Race engineering framework (apply this methodology)
 
@@ -464,18 +476,48 @@ def build_car_setup(
         pit_loss_secs=_pit_loss,
         race_engineer_brief=race_engineer_brief,
     )
-    _raw_setup = call_api(prompt, api_key, max_tokens=2500, system=_JSON_SYSTEM,
-                          feature="Build Car Setup",
-                          structured_payload={"car": car, "track": track,
-                                              "track_location_id": track_location_id or None,
-                                              "layout_id": layout_id or None,
-                                              "track_context_included": bool(track_location_id and layout_id),
-                                              "session_type": session_type,
-                                              "race_laps": race_laps,
-                                              "has_bop": bop_data is not None},
-                          model=model, car_id=car_id, track=track,
-                          session_id=session_id)
-    _setup_result = _parse_setup_recommendation(_raw_setup, ranges=_car_ranges)
+    _api_kwargs = dict(
+        api_key=api_key,
+        max_tokens=6000,
+        system=_JSON_SYSTEM,
+        feature="Build Car Setup",
+        structured_payload={"car": car, "track": track,
+                            "track_location_id": track_location_id or None,
+                            "layout_id": layout_id or None,
+                            "track_context_included": bool(track_location_id and layout_id),
+                            "session_type": session_type,
+                            "race_laps": race_laps,
+                            "has_bop": bop_data is not None},
+        model=model,
+        car_id=car_id,
+        track=track,
+        session_id=session_id,
+    )
+    _raw_setup = call_api(prompt, **_api_kwargs)
+    _parse_ok = False
+    try:
+        if not _is_truncated(_raw_setup):
+            _setup_result = _parse_setup_recommendation(_raw_setup, ranges=_car_ranges)
+            _parse_ok = True
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        pass
+
+    if not _parse_ok:
+        # First attempt failed (truncated or structurally malformed) — retry
+        # once with a tightened instruction to suppress reasoning preamble.
+        _retry_prompt = _RETRY_INSTRUCTION + "\n\n" + prompt
+        _raw_setup = call_api(_retry_prompt, **_api_kwargs)
+        try:
+            if _is_truncated(_raw_setup):
+                raise RuntimeError(
+                    "Setup could not be generated — AI response was incomplete. Please try again."
+                )
+            _setup_result = _parse_setup_recommendation(_raw_setup, ranges=_car_ranges)
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            raise RuntimeError(
+                "Setup could not be generated — AI response was incomplete. Please try again."
+            )
+
     _setup_result.raw_response = _raw_setup
     return _setup_result
 
@@ -1306,7 +1348,7 @@ For transmission fields:
   dampers_front_comp / dampers_rear_comp : {_fmt_range(*_r['dampers_front_comp'])} %  ← Damping Ratio (Compression); this is a guideline only — not a constraint: typical starting point 30–40 %
   dampers_front_ext  / dampers_rear_ext  : {_fmt_range(*_r['dampers_front_ext'])} %  ← Damping Ratio (Expansion); this is a guideline only — not a constraint: typical starting point 35–50 %; extension must usually be ≥ compression
   arb_front / arb_rear                 : {_fmt_range(*_r['arb_front'])}
-  camber_front / camber_rear           : {_fmt_range(*_r['camber_front'])} °  ← always negative in GT7 (0.00 = no camber)
+  camber_front / camber_rear           : {_fmt_range(*_r['camber_front'])} °  ← always POSITIVE in GT7 (0.00 = no camber; 6.0 = maximum camber)
   toe_front / toe_rear                 : {_fmt_range(*_r['toe_front'])} °  ← convention: negative front = toe-out, positive rear = toe-in
   aero_front / aero_rear               : {_fmt_range(*_r['aero_front'])} (downforce setting; use 0 for non-aero cars)
   lsd_initial / lsd_accel / lsd_decel  : {_fmt_range(*_r['lsd_initial'])}  ← Rear LSD
@@ -1380,8 +1422,8 @@ Keep the entire reasoning as one string; separate change-blocks by blank lines.
   "dampers_rear_ext": 40,
   "arb_front": 4,
   "arb_rear": 3,
-  "camber_front": -1.0,
-  "camber_rear": -1.5,
+  "camber_front": 1.0,
+  "camber_rear": 1.5,
   "toe_front": 0.00,
   "toe_rear": 0.05,
   "aero_front": 0,
@@ -1539,8 +1581,8 @@ def _parse_setup_recommendation(
         dampers_rear_ext=  _clamp(int(d.get("dampers_rear_ext",   35)),   *ranges["dampers_rear_ext"]),
         arb_front=  _clamp(int(d.get("arb_front", 5)),                    *ranges["arb_front"]),
         arb_rear=   _clamp(int(d.get("arb_rear",  4)),                    *ranges["arb_rear"]),
-        camber_front=_clamp(float(d.get("camber_front", -1.0)),           *ranges["camber_front"]),
-        camber_rear= _clamp(float(d.get("camber_rear",  -1.5)),           *ranges["camber_rear"]),
+        camber_front=_clamp(float(d.get("camber_front", 1.0)),            *ranges["camber_front"]),
+        camber_rear= _clamp(float(d.get("camber_rear",  1.5)),            *ranges["camber_rear"]),
         toe_front=   _clamp(float(d.get("toe_front",  0.00)),             *ranges["toe_front"]),
         toe_rear=    _clamp(float(d.get("toe_rear",   0.05)),             *ranges["toe_rear"]),
         aero_front=  _clamp(int(d.get("aero_front", 400)),                *ranges["aero_front"]),

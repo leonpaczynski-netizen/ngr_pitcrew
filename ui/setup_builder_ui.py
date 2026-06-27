@@ -184,15 +184,15 @@ class SetupBuilderMixin:
         self._setup_dmp_r_ext  = _int(1, 100, 35); self._setup_dmp_r_ext.setSuffix(" %")
         self._setup_arb_f      = _int(1, 7, 5)
         self._setup_arb_r      = _int(1, 7, 4)
-        self._setup_cam_f      = _dbl(-5.0, 0.0, 0.1, 1, -1.0)
-        self._setup_cam_r      = _dbl(-5.0, 0.0, 0.1, 1, -1.5)
+        self._setup_cam_f      = _dbl(0.0, 6.0, 0.1, 1, 1.0)
+        self._setup_cam_r      = _dbl(0.0, 6.0, 0.1, 1, 1.5)
         self._setup_toe_f      = _dbl(-2.0, 2.0, 0.01, 2, 0.00)
         self._setup_toe_r      = _dbl(-2.0, 2.0, 0.01, 2, 0.05)
         _cam_tip = (
-            "Negative camber leans the top of the tyre inward.\n"
-            "More negative camber improves cornering grip but reduces braking stability "
+            "0 = no camber; higher values lean the tyre top inward (GT7 shows 0–6).\n"
+            "More camber improves cornering grip but reduces braking stability "
             "and straight-line traction.\n"
-            "Less negative camber gives a flatter contact patch but reduces mid-corner grip."
+            "Less camber gives a flatter contact patch but reduces mid-corner grip."
         )
         self._setup_cam_f.setToolTip(_cam_tip)
         self._setup_cam_r.setToolTip(_cam_tip)
@@ -382,7 +382,7 @@ class SetupBuilderMixin:
             ("Damping Ratio (Compression)", self._setup_dmp_f_comp, self._setup_dmp_r_comp),
             ("Damping Ratio (Expansion)",   self._setup_dmp_f_ext,  self._setup_dmp_r_ext),
             ("Natural Frequency",           self._setup_spr_f,      self._setup_spr_r,    "Hz"),
-            ("Negative Camber Angle (°)",   self._setup_cam_f,      self._setup_cam_r,    "°"),
+            ("Camber Angle (°)",             self._setup_cam_f,      self._setup_cam_r,    "°"),
             ("Toe Angle (°)",               self._setup_toe_f,      self._setup_toe_r,    "°"),
         ])
         setup_layout.addWidget(susp_grp)
@@ -538,14 +538,16 @@ class SetupBuilderMixin:
         btn_load_setup.clicked.connect(self._setup_load_selected)
         self._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
 
-        self._btn_apply_ai_setup = QPushButton("Apply to Setup & Save")
+        self._btn_apply_ai_setup = QPushButton("Apply to Setup")
         self._btn_apply_ai_setup.setStyleSheet(
             "background: #2E6A4A; color: white; font-weight: bold; padding: 6px 12px;")
         self._btn_apply_ai_setup.setToolTip(
-            "Apply the AI's recommended changes to the setup form and save as a new setup entry.")
+            "Apply the AI's recommended changes to the setup form.\n"
+            "Changed fields are highlighted until you click Save Setup to persist them.")
         self._btn_apply_ai_setup.setVisible(False)
         self._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
         self._last_setup_ai_fields: dict = {}
+        self._highlighted_fields: set = set()
 
         setup_btn_row.addWidget(btn_save_setup)
         setup_btn_row.addWidget(QLabel("Load:", styleSheet=lbl_s))
@@ -719,8 +721,8 @@ class SetupBuilderMixin:
         self._setup_dmp_r_ext.setValue(d.get("dampers_rear_ext", d.get("dampers_rear", 35)))
         self._setup_arb_f.setValue(d.get("arb_front", 5))
         self._setup_arb_r.setValue(d.get("arb_rear", 4))
-        self._setup_cam_f.setValue(d.get("camber_front", -1.0))
-        self._setup_cam_r.setValue(d.get("camber_rear", -1.5))
+        self._setup_cam_f.setValue(abs(d.get("camber_front", 1.0)))
+        self._setup_cam_r.setValue(abs(d.get("camber_rear", 1.5)))
         self._setup_toe_f.setValue(d.get("toe_front", 0.00))
         self._setup_toe_r.setValue(d.get("toe_rear", 0.05))
         self._setup_aero_f.setValue(d.get("aero_front", 400))
@@ -842,6 +844,8 @@ class SetupBuilderMixin:
         self._setup_label.setText(f"Setup {count + 1}")
 
     def _setup_save(self) -> None:
+        # Clear any field highlights from AI apply — user has chosen to persist.
+        self._clear_setup_highlights()
         # Persist race engineer brief to active event before saving setup
         self._save_re_brief_to_active_event()
         d = self._current_setup_dict()
@@ -1017,16 +1021,36 @@ class SetupBuilderMixin:
             html += f"<div style='{chg_hdr}'>" \
                     "<b style='color:#8BC34A;'>&#9745; CHANGES TO MAKE IN CAR SETUP</b></div>"
             for ch in changes:
-                s   = ch.get("setting", "?")
-                frm = ch.get("from", "?")
-                to  = ch.get("to", "?")
-                why = ch.get("why", "")
+                s       = ch.get("setting", "?")
+                frm     = ch.get("from", "?")
+                to_raw  = ch.get("to", "?")
+                # Backend supplies to_clamped (value already within the car's allowed range).
+                # Falls back to raw to when field is None or to is non-numeric.
+                _clamped_val = ch.get("to_clamped", to_raw)
+                why     = ch.get("why", "")
+                # Prefer the clamped value when the param field was resolved by the backend.
+                # field is None when the backend could not identify the param — show raw value.
+                _field = ch.get("field")
+                _clamp_note = ""
+                if _field is not None:
+                    # Field resolved — display the clamped value, never the raw out-of-range one.
+                    to_display = _clamped_val
+                    # Annotate only when clamped differs from raw (numeric guard).
+                    try:
+                        if abs(float(_clamped_val) - float(to_raw)) > 1e-9:
+                            _clamp_note = f" (clamped to {_clamped_val})"
+                    except (TypeError, ValueError):
+                        pass  # non-numeric (e.g. tyre name) — no annotation needed
+                else:
+                    # Field unresolvable — acceptable degradation: show raw value as-is.
+                    to_display = to_raw
                 html += (
                     f"<div style='{chg_row}'>"
                     f"<b style='color:#E0E0E0;'>{s}</b>&nbsp;&nbsp;"
                     f"<span style='color:#F5A623;'>{frm}</span>"
                     f"&nbsp;&#8594;&nbsp;"
-                    f"<span style='color:#8BC34A;'>{to}</span>"
+                    f"<span style='color:#8BC34A;'>{to_display}</span>"
+                    + (f"<span style='color:#AAA; font-size:10px;'>{_clamp_note}</span>" if _clamp_note else "")
                     + (f"<br><span style='color:#888;font-size:11px;'>&nbsp;&nbsp;&nbsp;{why}</span>" if why else "")
                     + "</div>"
                 )
@@ -1062,7 +1086,9 @@ class SetupBuilderMixin:
             if s.get("name") == car and str(s.get("setup_label", "")).startswith("AI Fix")
         )
         self._setup_label.setText(f"AI Fix {ai_count + 1}")
-        self._setup_save()
+        # Highlight changed fields so the user can see what was modified.
+        # The save is intentionally deferred — click Save Setup to persist.
+        self._highlight_changed_fields(list(self._last_setup_ai_fields.keys()))
         # Link recommendation to this session
         _car_id_apply = getattr(self, "_car_id_build", 0)
         _track_apply = self._config.get("strategy", {}).get("track", "")
@@ -1286,6 +1312,16 @@ class SetupBuilderMixin:
             self._spin_top_speed.setValue(rec.transmission_max_speed_kmh)
         # Prevent the telemetry packet timer from overwriting the AI-filled values.
         self._gear_ratios_captured = True
+        # Highlight all params the build populated so the user can see what changed.
+        _build_param_keys = [
+            "ride_height_front", "ride_height_rear", "springs_front", "springs_rear",
+            "dampers_front_comp", "dampers_front_ext", "dampers_rear_comp", "dampers_rear_ext",
+            "arb_front", "arb_rear", "camber_front", "camber_rear", "toe_front", "toe_rear",
+            "aero_front", "aero_rear", "lsd_initial", "lsd_accel", "lsd_decel",
+            "lsd_front_initial", "lsd_front_accel", "lsd_front_decel",
+            "brake_bias", "ballast_kg", "ballast_position", "power_restrictor",
+        ]
+        self._highlight_changed_fields(_build_param_keys)
 
         # Auto-fill shift RPM from AI recommendation.
         if hasattr(rec, "shift_rpm") and rec.shift_rpm > 0:
@@ -1334,12 +1370,22 @@ class SetupBuilderMixin:
             _paras = [". ".join(_paras[:3]), ". ".join(_paras[3:6]), ". ".join(_paras[6:])]
             _paras = [p for p in _paras if p]
         reasoning_html = "".join(f"<p style='{_para_style}'>{p}</p>" for p in _paras)
+        # Append a neutral note when reasoning is present to indicate that all values
+        # have been clamped to the car's allowed parameter ranges.
+        _range_note_html = ""
+        if _paras:
+            _range_note_html = (
+                "<p style='color:#888; font-size:11px; margin:4px 0 0 0;'>"
+                "(Values shown applied to the car's allowed range.)"
+                "</p>"
+            )
         self._build_setup_result.setHtml(
             rpm_section
             + ecu_section
             + gear_section
             + f"<b>AI Setup Reasoning</b><br>"
             + reasoning_html
+            + _range_note_html
         )
 
         # Save build setup to history
@@ -1565,6 +1611,73 @@ class SetupBuilderMixin:
                 result_widget.setVisible(True)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Story 4 — field highlight helpers
+    # ------------------------------------------------------------------
+
+    # Param key → widget attribute name mapping (mirrors _rebound_setup_spinboxes _PARAM_MAP).
+    _HIGHLIGHT_PARAM_MAP: dict[str, str] = {
+        "ride_height_front":  "_setup_rh_f",
+        "ride_height_rear":   "_setup_rh_r",
+        "springs_front":      "_setup_spr_f",
+        "springs_rear":       "_setup_spr_r",
+        "dampers_front_comp": "_setup_dmp_f_comp",
+        "dampers_front_ext":  "_setup_dmp_f_ext",
+        "dampers_rear_comp":  "_setup_dmp_r_comp",
+        "dampers_rear_ext":   "_setup_dmp_r_ext",
+        "arb_front":          "_setup_arb_f",
+        "arb_rear":           "_setup_arb_r",
+        "camber_front":       "_setup_cam_f",
+        "camber_rear":        "_setup_cam_r",
+        "toe_front":          "_setup_toe_f",
+        "toe_rear":           "_setup_toe_r",
+        "aero_front":         "_setup_aero_f",
+        "aero_rear":          "_setup_aero_r",
+        "lsd_initial":        "_setup_lsd_i",
+        "lsd_accel":          "_setup_lsd_a",
+        "lsd_decel":          "_setup_lsd_d",
+        "lsd_front_initial":  "_setup_lsd_f_i",
+        "lsd_front_accel":    "_setup_lsd_f_a",
+        "lsd_front_decel":    "_setup_lsd_f_d",
+        "brake_bias":         "_setup_bb",
+        "ballast_kg":         "_setup_ballast_kg",
+        "ballast_position":   "_setup_ballast_pos",
+        "power_restrictor":   "_setup_power_rest",
+    }
+
+    _HIGHLIGHT_STYLE = "background:#2A4A2A; border:1px solid #8BC34A;"
+
+    def _highlight_changed_fields(self, field_names: list[str]) -> None:
+        """Highlight spinboxes for the given param keys with a green tint.
+
+        Clears any previous highlights first so re-applying replaces cleanly.
+        """
+        self._clear_setup_highlights()
+        _highlighted: set[str] = getattr(self, "_highlighted_fields", set())
+        for key in field_names:
+            attr = self._HIGHLIGHT_PARAM_MAP.get(key)
+            if attr is None:
+                continue
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            widget.setStyleSheet(self._HIGHLIGHT_STYLE)
+            _highlighted.add(key)
+        self._highlighted_fields = _highlighted
+
+    def _clear_setup_highlights(self) -> None:
+        """Remove highlight styling from all currently-highlighted spinboxes."""
+        _highlighted: set[str] = getattr(self, "_highlighted_fields", set())
+        for key in list(_highlighted):
+            attr = self._HIGHLIGHT_PARAM_MAP.get(key)
+            if attr is None:
+                continue
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            widget.setStyleSheet("")
+        self._highlighted_fields = set()
 
     # ------------------------------------------------------------------
     # Task 1 — spinbox re-bounding slot
