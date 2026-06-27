@@ -59,7 +59,11 @@
       "Bash(xargs grep -l \"# TODO\\\\|# FIXME\\\\|# HACK\\\\|# XXX\\\\|# DEPRECATED\")",
       "Bash(xargs grep -E \"^\\\\s*if\\\\s+\\(False|0\\):\")",
       "Bash(python -m pytest tests/ --co -q)",
-      "Bash(python -m pytest tests/ -q --ignore=tests/test_voice_announcer.py)"
+      "Bash(python -m pytest tests/ -q --ignore=tests/test_voice_announcer.py)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\VR_Dashboard\" -Recurse -Name -Include \"*.py\")",
+      "Bash(Select-String -Pattern \"\\(dashboard|track_modelling\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
