@@ -19,6 +19,9 @@ _SRC = pathlib.Path(__file__).parent.parent
 def _dashboard_text() -> str:
     return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
 
+def _setup_builder_text() -> str:
+    return (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+
 
 def _state_text() -> str:
     return (_SRC / "telemetry" / "state.py").read_text(encoding="utf-8")
@@ -58,7 +61,7 @@ class TestTopSpeedGuard(unittest.TestCase):
 
     def test_spin_top_speed_special_value_text(self):
         """_spin_top_speed must show '—' when value is 0 (no valid capture)."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         pos = src.find("self._spin_top_speed = QDoubleSpinBox()")
         self.assertGreater(pos, -1, "_spin_top_speed QDoubleSpinBox creation must exist")
         snippet = src[pos:pos + 400]
@@ -81,7 +84,7 @@ class TestTopSpeedGuard(unittest.TestCase):
 
     def test_current_setup_dict_includes_transmission_max_speed(self):
         """_current_setup_dict must still include transmission_max_speed_kmh key."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         body = _method_body(src, "_current_setup_dict")
         self.assertIn("transmission_max_speed_kmh", body,
                       "_current_setup_dict must include transmission_max_speed_kmh in the setup dict")
@@ -101,7 +104,7 @@ class TestDriverFeedbackLocation(unittest.TestCase):
 
     def test_feedback_form_not_in_setup_builder(self):
         """_build_driver_feedback_form must NOT be called from _build_setup_builder_tab."""
-        body = _method_body(_dashboard_text(), "_build_setup_builder_tab")
+        body = _method_body(_setup_builder_text(), "_build_setup_builder_tab")
         self.assertNotIn("_build_driver_feedback_form", body,
                          "_build_setup_builder_tab must not call _build_driver_feedback_form")
 

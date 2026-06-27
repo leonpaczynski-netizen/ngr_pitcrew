@@ -30,6 +30,9 @@ def _listener_text() -> str:
 def _dashboard_text() -> str:
     return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
 
+def _setup_builder_text() -> str:
+    return (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+
 
 def _state_text() -> str:
     return (_SRC / "telemetry" / "state.py").read_text(encoding="utf-8")
@@ -226,7 +229,7 @@ class TestLiveTyreCompoundDisplay(unittest.TestCase):
 
     def test_sync_setup_builder_updates_compound_label(self):
         """_sync_setup_builder_from_event must call _refresh_live_tyre_label (DEF-P2-027)."""
-        body = _method_body(_dashboard_text(), "_sync_setup_builder_from_event")
+        body = _method_body(_setup_builder_text(), "_sync_setup_builder_from_event")
         self.assertIn("_refresh_live_tyre_label", body,
                       "_sync_setup_builder_from_event must call _refresh_live_tyre_label (DEF-P2-027)")
 
@@ -255,13 +258,13 @@ class TestBrakeBalanceStep(unittest.TestCase):
 
     def test_setup_bb_single_step_1(self):
         """_setup_bb must call setSingleStep(1) — one unit per click matches GT7."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         self.assertIn("_setup_bb.setSingleStep(1)", src,
                       "_setup_bb must have setSingleStep(1) called explicitly")
 
     def test_setup_bb_exists_in_setup_builder(self):
         """_setup_bb spinbox must exist in the setup builder section."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         self.assertIn("_setup_bb", src,
                       "_setup_bb brake balance spinbox must exist")
 

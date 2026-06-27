@@ -22,7 +22,8 @@ REPO = Path(__file__).parent.parent
 AI_CLIENT  = REPO / "strategy" / "_ai_client.py"
 AI_PLANNER = REPO / "strategy" / "ai_planner.py"
 DA         = REPO / "strategy" / "driving_advisor.py"
-DASHBOARD  = REPO / "ui" / "dashboard.py"
+DASHBOARD        = REPO / "ui" / "dashboard.py"
+SETUP_BUILDER_UI = REPO / "ui" / "setup_builder_ui.py"
 
 
 def _src(path: Path) -> str:
@@ -333,19 +334,19 @@ class TestDashboardCarIdResolution(unittest.TestCase):
         self.assertIn("car_id=_car_id_hist", body)
 
     def test_run_build_setup_resolves_car_id(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         self.assertIn("_car_id_build", body)
 
     def test_run_build_setup_uses_get_car_id(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         self.assertIn("get_car_id", body)
 
     def test_run_build_setup_passes_car_id_to_build_car_setup(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         self.assertIn("car_id=_car_id_build", body)
 
     def test_run_build_setup_car_id_resolved_before_worker(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         build_pos = body.find("_car_id_build")
         worker_pos = body.find("def _worker()")
         self.assertGreater(worker_pos, build_pos,
@@ -356,7 +357,7 @@ class TestDashboardCarIdResolution(unittest.TestCase):
         self.assertIn("else 0", body)
 
     def test_run_build_setup_safe_default_when_no_db(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         self.assertIn("else 0", body)
 
 

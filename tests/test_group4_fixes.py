@@ -19,6 +19,9 @@ _SRC = pathlib.Path(__file__).parent.parent
 def _dashboard_text() -> str:
     return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
 
+def _setup_builder_text() -> str:
+    return (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+
 def _planner_text() -> str:
     return (_SRC / "strategy" / "ai_planner.py").read_text(encoding="utf-8")
 
@@ -50,7 +53,7 @@ class TestBoPSourceOfTruth(unittest.TestCase):
 
     def test_current_setup_dict_reads_bop_from_strategy_config(self):
         """_current_setup_dict must read bop_race from _config['strategy']['bop']."""
-        body = _method_body(_dashboard_text(), "_current_setup_dict")
+        body = _method_body(_setup_builder_text(), "_current_setup_dict")
         self.assertIn('strategy', body)
         self.assertIn('bop', body)
         self.assertNotIn("_chk_bop", body)
@@ -64,18 +67,18 @@ class TestBoPSourceOfTruth(unittest.TestCase):
 
     def test_lbl_rc_bop_exists_in_race_conditions_group(self):
         """Race Conditions group must have a _lbl_rc_bop read-only label."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         self.assertIn("_lbl_rc_bop", src,
                       "Race Conditions group must display BoP status from active Event")
 
     def test_lbl_rc_tuning_exists_in_race_conditions_group(self):
         """Race Conditions group must have a _lbl_rc_tuning read-only label."""
-        src = _dashboard_text()
+        src = _setup_builder_text()
         self.assertIn("_lbl_rc_tuning", src)
 
     def test_sync_setup_builder_populates_rc_bop(self):
         """_sync_setup_builder_from_event must populate _lbl_rc_bop."""
-        body = _method_body(_dashboard_text(), "_sync_setup_builder_from_event")
+        body = _method_body(_setup_builder_text(), "_sync_setup_builder_from_event")
         self.assertIn("_lbl_rc_bop", body)
         self.assertIn("_lbl_rc_tuning", body)
 
@@ -145,13 +148,13 @@ class TestTuningPermissionsVisibility(unittest.TestCase):
 class TestSetupBuilderPermissions(unittest.TestCase):
 
     def test_apply_setup_permissions_method_exists(self):
-        """_apply_setup_permissions must exist in dashboard.py."""
-        src = _dashboard_text()
+        """_apply_setup_permissions must exist in setup_builder_ui.py."""
+        src = _setup_builder_text()
         self.assertIn("def _apply_setup_permissions(", src)
 
     def test_apply_setup_permissions_always_re_enables_tyres(self):
         """_apply_setup_permissions must unconditionally re-enable tyre widgets at the end."""
-        body = _method_body(_dashboard_text(), "_apply_setup_permissions")
+        body = _method_body(_setup_builder_text(), "_apply_setup_permissions")
         # After the main loop, tyre attrs must be force-enabled
         idx_tyres = body.rfind("_setup_tyre_f")
         idx_loop = body.find("for cat, attrs in")
@@ -168,12 +171,12 @@ class TestSetupBuilderPermissions(unittest.TestCase):
 
     def test_locked_banner_widget_exists_in_setup_builder(self):
         """_setup_locked_banner must be created in _build_car_setup_group."""
-        body = _method_body(_dashboard_text(), "_build_car_setup_group")
+        body = _method_body(_setup_builder_text(), "_build_car_setup_group")
         self.assertIn("_setup_locked_banner", body)
 
     def test_sync_setup_calls_apply_permissions(self):
         """_sync_setup_builder_from_event must call _apply_setup_permissions."""
-        body = _method_body(_dashboard_text(), "_sync_setup_builder_from_event")
+        body = _method_body(_setup_builder_text(), "_sync_setup_builder_from_event")
         self.assertIn("_apply_setup_permissions", body)
 
 
@@ -195,7 +198,7 @@ class TestAITuningConstraintPropagation(unittest.TestCase):
 
     def test_setup_analyse_ai_passes_tuning_params(self):
         """_setup_analyse_ai must pass allowed_tuning and tuning_locked to the advisor."""
-        body = _method_body(_dashboard_text(), "_setup_analyse_ai")
+        body = _method_body(_setup_builder_text(), "_setup_analyse_ai")
         self.assertIn("allowed_tuning", body)
         self.assertIn("tuning_locked", body)
 
@@ -293,7 +296,7 @@ class TestAIOutputValidation(unittest.TestCase):
 
     def test_display_setup_result_calls_validator(self):
         """Source scan: _display_setup_result must call validate_ai_setup_response."""
-        body = _method_body(_dashboard_text(), "_display_setup_result")
+        body = _method_body(_setup_builder_text(), "_display_setup_result")
         self.assertIn("validate_ai_setup_response", body,
                       "_display_setup_result must validate AI output for tuning compliance")
 

@@ -52,6 +52,7 @@ def _file_src(path: Path) -> str:
 
 AI_PLANNER       = ROOT / "strategy" / "ai_planner.py"
 DASHBOARD        = ROOT / "ui" / "dashboard.py"
+SETUP_BUILDER_UI = ROOT / "ui" / "setup_builder_ui.py"
 QUERY_LS         = ROOT / "voice" / "query_listener.py"
 PRACTICE_ORCH    = ROOT / "strategy" / "practice_orchestrator.py"
 
@@ -210,7 +211,7 @@ class TestDEF_P2_039_AvailTyres:
         assert "avail_tyres" in body
 
     def test_run_build_setup_passes_avail_tyres(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         assert "avail_tyres" in body
 
 # ---------------------------------------------------------------------------
@@ -418,19 +419,19 @@ class TestDEF_P3_010_BuildSetupRaceContext:
         assert "timed" in body
 
     def test_run_build_setup_passes_tyre_wear_mult(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         assert "tyre_wear_multiplier=" in body
 
     def test_run_build_setup_passes_race_type(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         assert "race_type=" in body
 
     def test_run_build_setup_passes_avail_tyres(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         assert "avail_tyres=" in body
 
     def test_run_build_setup_passes_req_tyres(self):
-        body = _method_body(DASHBOARD, None, "_run_build_setup")
+        body = _method_body(SETUP_BUILDER_UI, None, "_run_build_setup")
         assert "req_tyres=" in body
 
 # ---------------------------------------------------------------------------
