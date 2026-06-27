@@ -126,11 +126,12 @@ GT7 uses a torque-sensing (Salisbury-style) limited slip differential.
 - Braking sensitivity: activates under deceleration. Controls rear axle behaviour during trail braking and downshifts.
 
 **Anti-roll bar range:**
-GT7 ARB values range 1–10. Higher = more resistance to body roll. Stiffer front ARB increases understeer on entry. Stiffer rear ARB increases oversteer on entry (reduces rear compliance).
+GT7 ARB values range 1–7. Higher = more resistance to body roll. Stiffer front ARB increases understeer on entry. Stiffer rear ARB increases oversteer on entry (reduces rear compliance).
 
 **Toe:**
-Front toe-out: improves turn-in agility, increases tyre scrub and wear if excessive. Toe-in values are negative in GT7 menus.
-Rear toe-in: improves straight-line and high-speed stability, reduces low-speed rotation. Typically set positive (toe-in).
+Convention (GT7): negative front = toe-out, positive rear = toe-in.
+Front toe-out (negative value): improves turn-in agility; excessive amounts increase tyre scrub and wear.
+Rear toe-in (positive value): improves straight-line and high-speed stability, reduces low-speed rotation.
 
 **Camber:**
 Too much camber = tyre runs on inner shoulder = overheating and accelerated inner wear. In GT7, optimal camber varies by car and track.
@@ -149,6 +150,26 @@ Each ratio can be adjusted independently. Critical gears for this driver: 2nd (w
 ## PART 2 — DRIVER PERSONAL TUNING PROFILE
 
 The following is the complete personal driving profile for this driver. All AI advice must be tailored to this profile.
+
+---
+
+### Driver Race Behaviour
+
+- Often follows closely through corners
+- Prefers late-braking overtakes
+- Rarely forces passes on track
+- Will fuel-save if instructed
+- Will short-shift if advantageous
+- Prefers predictable exits over rotation
+- Will adjust brake bias if instructed
+
+### Tyre-Wear Priorities
+
+- Reduce rear overheating
+- Minimise wheelspin
+- Protect front-left tyre
+- Maintain consistent balance over a stint
+- Avoid late-stint understeer
 
 ---
 
@@ -440,12 +461,12 @@ This section contains validated GT7 parameter ranges and starting values sourced
 
 | Parameter | GT7 Range | Typical Start | Notes |
 |-----------|-----------|---------------|-------|
-| Dampers — Compression F/R | 20–40 | 30 | CARDINAL RULE: must always be lower than Extension |
-| Dampers — Extension/Rebound F/R | 30–50 | 40 | CARDINAL RULE: must always be higher than Compression |
-| Anti-Roll Bar F/R | 1–10 | 5 F / 4 R | Scale is 1–10, not 1–7 |
-| LSD Initial | 5–60 | 10 | Minimum is 5, not 1 |
-| LSD Acceleration | 5–60 | 15–25 | Higher = more lock under power |
-| LSD Deceleration | 5–60 | 5–10 | Controls braking/trail-braking rotation |
+| Dampers — Compression F/R | 1–100 | 30 | CARDINAL RULE: must always be lower than Extension. Typical starting window 20–40 (guideline only, not a constraint on the adjustable range) |
+| Dampers — Extension/Rebound F/R | 1–100 | 40 | CARDINAL RULE: must always be higher than Compression. Typical starting window 30–50 (guideline only, not a constraint on the adjustable range) |
+| Anti-Roll Bar F/R | 1–7 | 5 F / 4 R | Scale is 1–7 |
+| LSD Initial | 0–60 | 10 | Full range 0–60 |
+| LSD Acceleration | 0–60 | 15–25 | Higher = more lock under power |
+| LSD Deceleration | 0–60 | 5–10 | Controls braking/trail-braking rotation |
 | Springs | 1.00–20.00 Hz | varies by car | GT7 uses Natural Frequency in Hz |
 | Ride Height | 60–200 mm | car-dependent | |
 | Camber | 0.00 to −5.00° | −1.0 F / −1.5 R | Always enter as negative in GT7 |
@@ -548,8 +569,8 @@ Starting adjustment increments: ±2 for Compression, ±3 for Extension.
 
 | Setting | Effect |
 |---------|--------|
-| Front toe-out (positive value in GT7) | Improves turn-in response; increases tyre scrub at speed |
-| Front toe-in (negative value in GT7) | Reduces turn-in but improves straight-line stability |
+| Front toe-out (negative value in GT7) | Improves turn-in response; increases tyre scrub at speed |
+| Front toe-in (positive value in GT7) | Reduces turn-in but improves straight-line stability |
 | Rear toe-in (positive value in GT7) | Increases stability on exit and at high speed; reduces rotation |
 | Rear toe-out (negative value in GT7) | Increases rear rotation but risks instability; rarely used |
 

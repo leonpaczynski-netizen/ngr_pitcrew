@@ -19,6 +19,7 @@ from strategy._ai_client import (
     format_setup_for_prompt,
     load_gt7_reference,
 )
+from strategy.setup_ranges import resolve_ranges
 from ui.gt7_data import build_track_context
 
 _JSON_SYSTEM = (
@@ -398,7 +399,7 @@ def build_car_setup(
     actual_bhp: float = 0.0,
     num_gears: int = 0,
     drivetrain: str = "",
-    has_aero: bool = False,
+    has_aero: bool = False,     # deprecated — inert; aero always applies
     car_specs: dict | None = None,
     allowed_tuning: list[str] | None = None,
     tuning_locked: bool = False,
@@ -415,8 +416,35 @@ def build_car_setup(
     session_id: int = 0,
     setup_history: str = "",
     setup_comparison: str = "",
+    duration_mins: int = 0,
+    mandatory_stops: int = 0,
+    refuel_rate_lps: float = 0.0,
+    pit_loss_secs: float = 0.0,
+    race_engineer_brief: str = "",
 ) -> CarSetupRecommendation:
     """Ask Claude to generate a complete from-scratch car setup."""
+    # Resolve per-car parameter ranges near the top so both prompt builder and
+    # parser share the same ranges object.
+    _car_ranges = resolve_ranges(car)
+
+    # Source pit_loss_secs from track library defaults if caller supplies 0.
+    # The per-track default is expected to live in the track library seed data
+    # (e.g. a "pit_loss_secs" field on the track or layout manifest).
+    # Currently no track library entry carries this field, so this always falls
+    # back to 0.0 — which means the hybrid_block omits the pit-loss line.
+    # When the track library adds per-track pit_loss_secs in future, this will
+    # pick it up automatically.
+    _pit_loss = pit_loss_secs
+    if not _pit_loss and track_location_id:
+        try:
+            from data.track_library import load_track_metadata as _load_tm
+            _tm = _load_tm(track_location_id)
+            if _tm is not None:
+                # TrackMetadata is a dataclass; use getattr with a default
+                _pit_loss = float(getattr(_tm, "pit_loss_secs", 0.0) or 0.0)
+        except Exception:
+            pass
+
     from strategy.track_context_prompt import get_track_context_for_ai as _get_tc
     _track_ctx = _get_tc(track_location_id, layout_id, car_name=car)
     prompt = _build_setup_from_scratch_prompt(
@@ -429,6 +457,12 @@ def build_car_setup(
         avail_tyres=avail_tyres, req_tyres=req_tyres, race_type=race_type,
         track_context=_track_ctx,
         setup_history=setup_history, setup_comparison=setup_comparison,
+        ranges=_car_ranges,
+        duration_mins=duration_mins,
+        mandatory_stops=mandatory_stops,
+        refuel_rate_lps=refuel_rate_lps,
+        pit_loss_secs=_pit_loss,
+        race_engineer_brief=race_engineer_brief,
     )
     _raw_setup = call_api(prompt, api_key, max_tokens=2500, system=_JSON_SYSTEM,
                           feature="Build Car Setup",
@@ -441,7 +475,7 @@ def build_car_setup(
                                               "has_bop": bop_data is not None},
                           model=model, car_id=car_id, track=track,
                           session_id=session_id)
-    _setup_result = _parse_setup_recommendation(_raw_setup)
+    _setup_result = _parse_setup_recommendation(_raw_setup, ranges=_car_ranges)
     _setup_result.raw_response = _raw_setup
     return _setup_result
 
@@ -1053,7 +1087,7 @@ def _build_setup_from_scratch_prompt(
     actual_bhp: float = 0.0,
     num_gears: int = 0,
     drivetrain: str = "",
-    has_aero: bool = False,
+    has_aero: bool = False,     # deprecated — inert; aero always applies
     car_specs: dict | None = None,
     allowed_tuning: list[str] | None = None,
     tuning_locked: bool = False,
@@ -1066,16 +1100,32 @@ def _build_setup_from_scratch_prompt(
     track_context: str = "",
     setup_history: str = "",
     setup_comparison: str = "",
+    ranges: dict | None = None,
+    duration_mins: int = 0,
+    mandatory_stops: int = 0,
+    refuel_rate_lps: float = 0.0,
+    pit_loss_secs: float = 0.0,
+    race_engineer_brief: str = "",
 ) -> str:
     car_specs = car_specs or {}
     gt7_ref = load_gt7_reference()
+    # Resolve per-car ranges (falls back to generic defaults if car unknown)
+    _ranges = ranges if ranges is not None else resolve_ranges(car)
     _is_quali = "qualifying" in session_type.lower()
     if _is_quali:
         session_desc = "1 qualifying lap (maximise single-lap peak pace, tyre warm-up, maximum rotation, no tyre wear concern)"
     elif race_type == "timed":
-        session_desc = "timed race (optimise for consistency, tyre life, fuel efficiency, and stable race pace)"
+        session_desc = (
+            "timed race (optimise for lowest total race time: minimise tyre degradation, "
+            "fuel consumption, cumulative pit stop time, and time lost to traffic and dirty air; "
+            "maintain consistency; allow sacrificing small qualifying pace for a faster overall race)"
+        )
     else:
-        session_desc = f"{race_laps}-lap race (optimise for consistency, tyre life, fuel efficiency, and stable race pace)"
+        session_desc = (
+            f"{race_laps}-lap race (optimise for lowest total race time: minimise tyre degradation, "
+            "fuel consumption, cumulative pit stop time, and time lost to traffic and dirty air; "
+            "maintain consistency; allow sacrificing small qualifying pace for a faster overall race)"
+        )
 
     # Race context block for the AI prompt
     _race_ctx_lines: list[str] = []
@@ -1104,11 +1154,35 @@ def _build_setup_from_scratch_prompt(
         "\n## Race Conditions\n" + "\n".join(_race_ctx_lines) + "\n"
     ) if _race_ctx_lines else ""
 
+    # --- Section D: hybrid race-context inputs ---
+    _hybrid_lines: list[str] = []
+    if duration_mins:
+        _hybrid_lines.append(f"  Race duration: {duration_mins} min")
+    if mandatory_stops:
+        _hybrid_lines.append(f"  Mandatory pit stops: {mandatory_stops}")
+    if refuel_rate_lps:
+        _hybrid_lines.append(f"  Refuel rate: {refuel_rate_lps:.1f} L/s")
+    if pit_loss_secs:
+        _hybrid_lines.append(f"  Pit lane time loss: {pit_loss_secs:.1f} s")
+    _hybrid_block = (
+        "\n## Race Strategy Context\n" + "\n".join(_hybrid_lines) + "\n"
+    ) if _hybrid_lines else ""
+
+    # Race engineer brief — injected verbatim before the JSON template
+    _brief_stripped = race_engineer_brief.strip() if race_engineer_brief else ""
+
     if bop_data:
-        weight_line = (f"  BOP minimum weight: {bop_data['weight_kg']} kg "
+        weight_line = (f"  BOP minimum weight: {bop_data.get('weight_kg', '?')} kg "
                        f"(set by regulations — ballast_kg should reach this if needed)")
-        power_line  = (f"  BOP power level: {bop_data['power_pct']}% of car maximum "
-                       f"(fixed by regulations — set power_restrictor to {bop_data['power_pct']})")
+        if "power_pct" in bop_data:
+            power_line = (f"  BOP power level: {bop_data['power_pct']}% of car maximum "
+                          f"(fixed by regulations — set power_restrictor to {bop_data['power_pct']})")
+        elif "power_hp" in bop_data:
+            power_line = (f"  BOP power level: {bop_data['power_hp']} hp "
+                          f"(fixed by regulations — power is locked, leave power_restrictor at 100)")
+        else:
+            power_line = ("  BOP power level: regulated "
+                          "(fixed by regulations — power is locked, leave power_restrictor at 100)")
         bop_block   = (
             "\n⚠️  BOP RACE — the gearbox is LOCKED by the game. "
             "Do NOT recommend gear_ratios or final_drive. "
@@ -1142,11 +1216,12 @@ def _build_setup_from_scratch_prompt(
     else:
         power_installed = "Installed engine power: not specified — use car's known tuned output."
 
+    # Aero always applies — every car has aero range 0–max in this system.
+    # The has_aero parameter is retained in the signature for UI compatibility
+    # but no longer changes the aero instruction.
     aero_note = (
-        "Aero parts ARE fitted (front splitter / GT wing installed). "
-        "Return appropriate aero_front and aero_rear downforce values for this track."
-        if has_aero else
-        "No adjustable aero parts fitted. Set aero_front = 0 and aero_rear = 0."
+        "Return appropriate aero_front and aero_rear downforce values for this track "
+        "(range 0–1000; set to 0 if this car has no adjustable aero parts)."
     )
 
     # Additional spec lines from car_specs.json (scraped from dg-edge.com)
@@ -1218,6 +1293,31 @@ For transmission fields:
         if setup_comparison else ""
     )
 
+    # Build the valid-ranges text block from resolved per-car ranges
+    def _fmt_range(lo, hi):
+        if isinstance(lo, float) or isinstance(hi, float):
+            return f"{lo:.2f}–{hi:.2f}"
+        return f"{lo}–{hi}"
+
+    _r = _ranges
+    _ranges_block = f"""GT7 valid ranges for every field (clamp your values to these — the game will reject anything outside):
+  ride_height_front / ride_height_rear : {_fmt_range(*_r['ride_height_front'])} mm
+  springs_front / springs_rear         : {_fmt_range(*_r['springs_front'])} Hz  ← GT7 uses NATURAL FREQUENCY in Hz, NOT N/mm or kg/mm
+  dampers_front_comp / dampers_rear_comp : {_fmt_range(*_r['dampers_front_comp'])} %  ← Damping Ratio (Compression); this is a guideline only — not a constraint: typical starting point 30–40 %
+  dampers_front_ext  / dampers_rear_ext  : {_fmt_range(*_r['dampers_front_ext'])} %  ← Damping Ratio (Expansion); this is a guideline only — not a constraint: typical starting point 35–50 %; extension must usually be ≥ compression
+  arb_front / arb_rear                 : {_fmt_range(*_r['arb_front'])}
+  camber_front / camber_rear           : {_fmt_range(*_r['camber_front'])} °  ← always negative in GT7 (0.00 = no camber)
+  toe_front / toe_rear                 : {_fmt_range(*_r['toe_front'])} °  ← convention: negative front = toe-out, positive rear = toe-in
+  aero_front / aero_rear               : {_fmt_range(*_r['aero_front'])} (downforce setting; use 0 for non-aero cars)
+  lsd_initial / lsd_accel / lsd_decel  : {_fmt_range(*_r['lsd_initial'])}  ← Rear LSD
+  lsd_front_initial / lsd_front_accel / lsd_front_decel : {_fmt_range(*_r['lsd_front_initial'])}  ← Front LSD (AWD only; set to 0 for non-AWD cars)
+  brake_bias                           : {_fmt_range(*_r['brake_bias'])}  ← NEGATIVE = more FRONT braking, POSITIVE = more REAR braking
+  ballast_kg                           : {_fmt_range(*_r['ballast_kg'])} kg
+  ballast_position                     : {_fmt_range(*_r['ballast_position'])}  ← −50 = full rear, +50 = full front
+  power_restrictor                     : {_fmt_range(*_r['power_restrictor'])} %
+  shift_rpm                            : engine RPM to upshift for best lap time (typically just past peak power RPM;
+                                         set to 0 only if car is electric or data is unavailable)"""
+
     return f"""You are an expert Gran Turismo 7 car setup engineer who knows the game's physics in detail.
 
 ## GT7 Knowledge Base (includes this driver's personal tuning philosophy and preferences)
@@ -1230,26 +1330,9 @@ Build a complete from-scratch car setup optimised for:
   {build_track_context(track)}
   Session: {session_desc}
 {weight_line}
-{power_line}{_race_ctx_block}
+{power_line}{_race_ctx_block}{_hybrid_block}
 {(track_context + chr(10) + chr(10)) if track_context else ""}{_history_block}{_comparison_block}{bop_block}{car_specs_block}
-GT7 valid ranges for every field (clamp your values to these — the game will reject anything outside):
-  ride_height_front / ride_height_rear : 60–200 mm
-  springs_front / springs_rear         : 1.00–20.00 Hz  ← GT7 uses NATURAL FREQUENCY in Hz, NOT N/mm or kg/mm
-  dampers_front_comp / dampers_rear_comp : 1–100 %  ← Damping Ratio (Compression); typical 30–40 %
-  dampers_front_ext  / dampers_rear_ext  : 1–100 %  ← Damping Ratio (Expansion); typical 35–50 %; usually ≥ compression
-  arb_front / arb_rear                 : 1–7
-  camber_front / camber_rear           : −5.00 to 0.00 °
-  toe_front / toe_rear                 : −2.00 to +2.00 °
-  aero_front / aero_rear               : 0–1000 (downforce setting; 0 if no aero parts fitted — see car specs above)
-  lsd_initial / lsd_accel / lsd_decel  : 0–60  ← Rear LSD
-  lsd_front_initial / lsd_front_accel / lsd_front_decel : 0–60  ← Front LSD (AWD only; set to 0 for non-AWD cars)
-  brake_bias                           : −5 (more FRONT braking) to +5 (more REAR braking)
-                                         ← IMPORTANT: in GT7 POSITIVE = MORE REAR bias, NEGATIVE = MORE FRONT bias
-  ballast_kg                           : 0–60 kg
-  ballast_position                     : −50 (rear) to +50 (front)
-  power_restrictor                     : 0–100 %
-  shift_rpm                            : engine RPM to upshift for best lap time (typically just past peak power RPM;
-                                         set to 0 only if car is electric or data is unavailable)
+{_ranges_block}
 
 GT7 has TWO power-limiting mechanisms — advise on both when max_power is specified:
 
@@ -1273,12 +1356,18 @@ For weight/power management:
   - power_restrictor: % of ECU max (100 = unrestricted)
 {transmission_section}
 Tailor every decision to the driver's known style from the knowledge base (braking stability first, rotation on entry, predictable rear).
-
+{(chr(10) + "## Race Engineer Brief" + chr(10) + _brief_stripped + chr(10)) if _brief_stripped else ""}
 Reply ONLY with a valid JSON object — no markdown fences, no extra text.
-For the reasoning field: write EXACTLY 3 short paragraphs separated by \\n\\n.
-  Para 1: Key suspension decisions (springs, dampers, ride height, ARB) and why.
-  Para 2: How the driver's known style shaped the setup (braking bias, rotation, predictability).
-  Para 3: Power/ECU/gear choices and what to watch for in the first laps.
+For the reasoning field, explain every significant change with these seven labelled sub-points
+(use EXACT label strings, one set per changed parameter, separated by blank lines):
+  "Expected lap-time effect": how this setting affects single-lap pace
+  "Expected tyre-wear effect": impact on degradation over a stint
+  "Expected fuel effect": influence on fuel consumption
+  "Expected braking-stability effect": effect on entry and trail-braking behaviour
+  "Confidence": how certain you are in this recommendation (high / medium / low) and why
+  "Validation method": what the driver should test on circuit to confirm
+  "Telemetry indicator": which GT7 telemetry signal or observable to watch
+Keep the entire reasoning as one string; separate change-blocks by blank lines.
 
 {{
   "ride_height_front": 80,
@@ -1306,7 +1395,7 @@ For the reasoning field: write EXACTLY 3 short paragraphs separated by \\n\\n.
   "power_restrictor": 100.0,
   "ecu_recommendation": "Stock ECU, no power restriction needed.",
   "shift_rpm": 7200,{gear_json}
-  "reasoning": "Para 1 text here.\\n\\nPara 2 text here.\\n\\nPara 3 text here."
+  "reasoning": "springs_front set to 3.50 Hz\\nExpected lap-time effect: ...\\nExpected tyre-wear effect: ...\\nExpected fuel effect: ...\\nExpected braking-stability effect: ...\\nConfidence: medium — typical Gr.3 starting point\\nValidation method: run 3 laps and note dive under braking\\nTelemetry indicator: front suspension travel on braking zones\\n\\nNext change..."
 }}"""
 
 
@@ -1421,35 +1510,52 @@ def _clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
 
-def _parse_setup_recommendation(raw: str) -> CarSetupRecommendation:
+def _parse_setup_recommendation(
+    raw: str,
+    ranges: dict | None = None,
+) -> CarSetupRecommendation:
+    """Parse the AI JSON response into a CarSetupRecommendation.
+
+    Parameters
+    ----------
+    raw:
+        Raw JSON string from the AI.
+    ranges:
+        Resolved parameter ranges dict (from resolve_ranges). If None,
+        falls back to pure generic defaults. Gearbox params are NOT
+        range-managed and are left unchanged.
+    """
+    if ranges is None:
+        ranges = resolve_ranges("")
     d = json.loads(_strip_fences(raw))
     return CarSetupRecommendation(
-        ride_height_front=_clamp(float(d.get("ride_height_front", 80)),   60, 200),
-        ride_height_rear= _clamp(float(d.get("ride_height_rear",  80)),   60, 200),
-        springs_front=    _clamp(float(d.get("springs_front", 3.50)),   1.00, 20.00),
-        springs_rear=     _clamp(float(d.get("springs_rear",  3.00)),   1.00, 20.00),
-        dampers_front_comp=_clamp(int(d.get("dampers_front_comp", 30)), 1, 100),
-        dampers_front_ext= _clamp(int(d.get("dampers_front_ext",  40)), 1, 100),
-        dampers_rear_comp= _clamp(int(d.get("dampers_rear_comp",  25)), 1, 100),
-        dampers_rear_ext=  _clamp(int(d.get("dampers_rear_ext",   35)), 1, 100),
-        arb_front=  _clamp(int(d.get("arb_front", 5)),   1, 7),
-        arb_rear=   _clamp(int(d.get("arb_rear",  4)),   1, 7),
-        camber_front=_clamp(float(d.get("camber_front", -1.0)), -5.0, 0.0),
-        camber_rear= _clamp(float(d.get("camber_rear",  -1.5)), -5.0, 0.0),
-        toe_front=   _clamp(float(d.get("toe_front",  0.00)), -2.00, 2.00),
-        toe_rear=    _clamp(float(d.get("toe_rear",   0.05)), -2.00, 2.00),
-        aero_front=  _clamp(int(d.get("aero_front", 400)),  0, 1000),
-        aero_rear=   _clamp(int(d.get("aero_rear",  600)),  0, 1000),
-        lsd_initial= _clamp(int(d.get("lsd_initial", 10)),  0, 60),
-        lsd_accel=   _clamp(int(d.get("lsd_accel",  15)),   0, 60),
-        lsd_decel=   _clamp(int(d.get("lsd_decel",   5)),   0, 60),
-        lsd_front_initial=_clamp(int(d.get("lsd_front_initial", 0)), 0, 60),
-        lsd_front_accel=  _clamp(int(d.get("lsd_front_accel",   0)), 0, 60),
-        lsd_front_decel=  _clamp(int(d.get("lsd_front_decel",   0)), 0, 60),
-        brake_bias=  _clamp(int(d.get("brake_bias",   0)), -5,  5),
-        ballast_kg=      _clamp(float(d.get("ballast_kg",      0.0)),   0, 60),
-        ballast_position=_clamp(int(d.get("ballast_position",  0)),   -50, 50),
-        power_restrictor=_clamp(float(d.get("power_restrictor", 100.0)), 0, 100),
+        ride_height_front=_clamp(float(d.get("ride_height_front", 80)),   *ranges["ride_height_front"]),
+        ride_height_rear= _clamp(float(d.get("ride_height_rear",  80)),   *ranges["ride_height_rear"]),
+        springs_front=    _clamp(float(d.get("springs_front", 3.50)),     *ranges["springs_front"]),
+        springs_rear=     _clamp(float(d.get("springs_rear",  3.00)),     *ranges["springs_rear"]),
+        dampers_front_comp=_clamp(int(d.get("dampers_front_comp", 30)),   *ranges["dampers_front_comp"]),
+        dampers_front_ext= _clamp(int(d.get("dampers_front_ext",  40)),   *ranges["dampers_front_ext"]),
+        dampers_rear_comp= _clamp(int(d.get("dampers_rear_comp",  25)),   *ranges["dampers_rear_comp"]),
+        dampers_rear_ext=  _clamp(int(d.get("dampers_rear_ext",   35)),   *ranges["dampers_rear_ext"]),
+        arb_front=  _clamp(int(d.get("arb_front", 5)),                    *ranges["arb_front"]),
+        arb_rear=   _clamp(int(d.get("arb_rear",  4)),                    *ranges["arb_rear"]),
+        camber_front=_clamp(float(d.get("camber_front", -1.0)),           *ranges["camber_front"]),
+        camber_rear= _clamp(float(d.get("camber_rear",  -1.5)),           *ranges["camber_rear"]),
+        toe_front=   _clamp(float(d.get("toe_front",  0.00)),             *ranges["toe_front"]),
+        toe_rear=    _clamp(float(d.get("toe_rear",   0.05)),             *ranges["toe_rear"]),
+        aero_front=  _clamp(int(d.get("aero_front", 400)),                *ranges["aero_front"]),
+        aero_rear=   _clamp(int(d.get("aero_rear",  600)),                *ranges["aero_rear"]),
+        lsd_initial= _clamp(int(d.get("lsd_initial", 10)),                *ranges["lsd_initial"]),
+        lsd_accel=   _clamp(int(d.get("lsd_accel",  15)),                 *ranges["lsd_accel"]),
+        lsd_decel=   _clamp(int(d.get("lsd_decel",   5)),                 *ranges["lsd_decel"]),
+        lsd_front_initial=_clamp(int(d.get("lsd_front_initial", 0)),      *ranges["lsd_front_initial"]),
+        lsd_front_accel=  _clamp(int(d.get("lsd_front_accel",   0)),      *ranges["lsd_front_accel"]),
+        lsd_front_decel=  _clamp(int(d.get("lsd_front_decel",   0)),      *ranges["lsd_front_decel"]),
+        brake_bias=  _clamp(int(d.get("brake_bias",   0)),                *ranges["brake_bias"]),
+        ballast_kg=      _clamp(float(d.get("ballast_kg",      0.0)),     *ranges["ballast_kg"]),
+        ballast_position=_clamp(int(d.get("ballast_position",  0)),       *ranges["ballast_position"]),
+        power_restrictor=_clamp(float(d.get("power_restrictor", 100.0)), *ranges["power_restrictor"]),
+        # Gearbox params are NOT range-managed — leave unchanged
         final_drive=float(d.get("final_drive", 0.0)),
         transmission_max_speed_kmh=float(d.get("transmission_max_speed_kmh", 0.0)),
         gear_ratios=[float(x) for x in d.get("gear_ratios", [])],

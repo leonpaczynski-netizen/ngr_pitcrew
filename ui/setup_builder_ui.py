@@ -10,13 +10,30 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QGroupBox, QLabel, QPushButton, QCheckBox,
-    QDoubleSpinBox, QSpinBox, QLineEdit, QTextEdit,
+    QDoubleSpinBox, QSpinBox, QAbstractSpinBox, QLineEdit, QTextEdit,
     QComboBox, QScrollArea,
 )
+
+from strategy.setup_ranges import resolve_ranges, save_car_ranges, GENERIC_DEFAULTS
+from ui.car_ranges_dialog import CarRangesDialog  # noqa: F401 — used in _open_car_ranges_dialog
 
 # Module-level display constants — must match dashboard.py
 _DARK_CARD = "#2A2A2A"
 _TEXT       = "#E0E0E0"
+
+
+def _set_spin_readonly(spin, readonly: bool) -> None:
+    """Make a spinbox read-only (min==max case) or editable again.
+
+    Read-only is preferred over disabled so the value remains visible and
+    copyable.  Buttons are hidden when read-only to signal non-editability.
+    """
+    spin.setReadOnly(readonly)
+    spin.setButtonSymbols(
+        QAbstractSpinBox.ButtonSymbols.NoButtons
+        if readonly
+        else QAbstractSpinBox.ButtonSymbols.UpDownArrows
+    )
 
 
 class SetupBuilderMixin:
@@ -167,8 +184,8 @@ class SetupBuilderMixin:
         self._setup_dmp_r_ext  = _int(1, 100, 35); self._setup_dmp_r_ext.setSuffix(" %")
         self._setup_arb_f      = _int(1, 7, 5)
         self._setup_arb_r      = _int(1, 7, 4)
-        self._setup_cam_f      = _dbl(-5.0, 5.0, 0.1, 1, -1.0)
-        self._setup_cam_r      = _dbl(-5.0, 5.0, 0.1, 1, -1.5)
+        self._setup_cam_f      = _dbl(-5.0, 0.0, 0.1, 1, -1.0)
+        self._setup_cam_r      = _dbl(-5.0, 0.0, 0.1, 1, -1.5)
         self._setup_toe_f      = _dbl(-2.0, 2.0, 0.01, 2, 0.00)
         self._setup_toe_r      = _dbl(-2.0, 2.0, 0.01, 2, 0.05)
         _cam_tip = (
@@ -180,9 +197,9 @@ class SetupBuilderMixin:
         self._setup_cam_f.setToolTip(_cam_tip)
         self._setup_cam_r.setToolTip(_cam_tip)
         self._setup_toe_f.setToolTip(
-            "Front toe-out (positive) sharpens steering response and corner entry.\n"
+            "Front toe-out (negative) sharpens steering response and corner entry.\n"
             "Too much toe-out makes the car nervous on turn-in.\n"
-            "Toe-in (negative) increases straight-line stability but slows steering response."
+            "Toe-in (positive) increases straight-line stability but slows steering response."
         )
         self._setup_toe_r.setToolTip(
             "Rear toe-in (positive) improves rear stability on throttle and braking.\n"
@@ -272,12 +289,6 @@ class SetupBuilderMixin:
         self._setup_drivetrain.setToolTip(
             "Car's drivetrain layout. Sets up AI's handling philosophy.\n"
             "FR = front-engine rear-drive, MR = mid-rear-drive, AWD = all-wheel drive.")
-
-        self._chk_has_aero = QCheckBox("Aero parts fitted")
-        self._chk_has_aero.setToolTip(
-            "Check if the car has adjustable aerodynamic parts fitted\n"
-            "(front splitter, GT wing, dive planes, etc.).\n"
-            "When unchecked, AI will set aero_front and aero_rear to 0.")
 
         self._setup_label  = QLineEdit(); self._setup_label.setPlaceholderText("e.g. Race Baseline, Wet Setup…"); self._setup_label.setMaxLength(40)
         self._setup_notes  = QLineEdit(); self._setup_notes.setPlaceholderText("Optional notes")
@@ -411,8 +422,6 @@ class SetupBuilderMixin:
         _fr_grid(aero_grp, [
             ("Downforce (kg)", self._setup_aero_f, self._setup_aero_r),
         ])
-        # Add checkbox in the next row of the grid (row 0=header, row 1=downforce → row 2)
-        aero_grp.layout().addWidget(self._chk_has_aero, 2, 0, 1, 4)
         setup_layout.addWidget(aero_grp)
 
         # ── Performance Adjustment ────────────────────────────────────────────
@@ -488,6 +497,23 @@ class SetupBuilderMixin:
         notes_row.addRow(QLabel("Notes:", styleSheet=lbl_s), self._setup_notes)
         setup_layout.addLayout(notes_row)
 
+        # ── Race Engineer Brief ───────────────────────────────────────────────
+        self._re_brief_label = QLabel("Race Engineer Brief:", styleSheet=lbl_s)
+        self._re_brief_input = QTextEdit()
+        self._re_brief_input.setMaximumHeight(80)
+        self._re_brief_input.setStyleSheet(
+            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #555;")
+        self._re_brief_input.setPlaceholderText(
+            "Optional race engineer notes — injected verbatim into the AI prompt "
+            "(strategy preference, tyre targets, acceptable compromises, traffic, etc.)")
+        re_brief_row = QHBoxLayout()
+        re_brief_row.addWidget(self._re_brief_label)
+        re_brief_row.addWidget(self._re_brief_input)
+        setup_layout.addLayout(re_brief_row)
+        # Visibility controlled by session type — shown for Race, hidden for Qualifying
+        self._setup_type.currentTextChanged.connect(self._update_re_brief_visibility)
+        self._update_re_brief_visibility(self._setup_type.currentText())
+
         # Save / Load / Analyse row
         setup_btn_row = QHBoxLayout()
         btn_save_setup   = QPushButton("Save Setup")
@@ -536,7 +562,8 @@ class SetupBuilderMixin:
         setup_layout.addWidget(self._setup_result_text)
         setup_layout.addWidget(self._btn_apply_ai_setup)
 
-        # Build Setup with AI
+        # Build Setup with AI + Set Car Ranges
+        _build_row = QHBoxLayout()
         self._btn_build_setup = QPushButton("Build Setup with AI")
         self._btn_build_setup.setStyleSheet(
             "background: #1A5C2A; color: white; font-weight: bold; padding: 6px 16px;")
@@ -546,7 +573,15 @@ class SetupBuilderMixin:
             "Fill in Min Weight and Max Power above first — all fields will be auto-filled.\n"
             "You can adjust any value after the AI fills them.")
         self._btn_build_setup.clicked.connect(self._run_build_setup)
-        setup_layout.addWidget(self._btn_build_setup)
+        self._btn_set_car_ranges = QPushButton("Set Car Ranges…")
+        self._btn_set_car_ranges.setToolTip(
+            "Define per-car min/max bounds for every setup parameter.\n"
+            "These bounds constrain the spinboxes and the AI output for this car.")
+        self._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
+        _build_row.addWidget(self._btn_build_setup)
+        _build_row.addWidget(self._btn_set_car_ranges)
+        _build_row.addStretch()
+        setup_layout.addLayout(_build_row)
 
         # Shift RPM — auto-filled by AI Build Setup, used by the live shift beep
         _sb = self._config.get("shift_beep", {})
@@ -665,6 +700,10 @@ class SetupBuilderMixin:
         car = d.get("name", "")
         if car:
             self._autofill_car_specs(car)
+        # Re-bound spinbox ranges for this car BEFORE setting values, so per-car
+        # range overrides take effect and values are not silently truncated.
+        # NOTE: _rebound_setup_spinboxes must NOT trigger an AI/build call.
+        self._rebound_setup_spinboxes(car or None)
         _st_map = {"Race": "Race Setup", "Qualifying": "Qualifying Setup", "Practice": "Race Setup"}
         _st_raw = d.get("setup_type", _st_map.get(d.get("session", ""), "Race Setup"))
         idx = self._setup_type.findText(_st_raw)
@@ -803,6 +842,8 @@ class SetupBuilderMixin:
         self._setup_label.setText(f"Setup {count + 1}")
 
     def _setup_save(self) -> None:
+        # Persist race engineer brief to active event before saving setup
+        self._save_re_brief_to_active_event()
         d = self._current_setup_dict()
         ca = self._config.setdefault("car_setup", {})
         existing = next(
@@ -1061,8 +1102,14 @@ class SetupBuilderMixin:
         actual_bhp   = self._setup_actual_bhp.value() if hasattr(self, "_setup_actual_bhp") else 0.0
         num_gears    = self._setup_num_gears.value() if hasattr(self, "_setup_num_gears") else 0
         drivetrain   = self._setup_drivetrain.currentData() if hasattr(self, "_setup_drivetrain") else ""
-        has_aero     = self._chk_has_aero.isChecked() if hasattr(self, "_chk_has_aero") else False
         bop_data     = self._get_bop_data_for_car()
+        # Hybrid event fields for build_car_setup
+        _sc_ev = self._config.get("strategy", {})
+        _duration_mins   = int(_sc_ev.get("race_duration_minutes", 0))
+        _mandatory_stops = int(_sc_ev.get("mandatory_stops", 0))
+        _refuel_rate_lps = float(_sc_ev.get("refuel_speed_lps", 0.0))
+        _pit_loss_secs   = float(_sc_ev.get("pit_loss_secs", 0.0))
+        _re_brief        = self._re_brief_input.toPlainText().strip() if hasattr(self, "_re_brief_input") else ""
         _, _car_specs = self._load_car_specs_for_current()
         _sc_build = self._config.get("strategy", {})
         _allowed_tuning = _sc_build.get("allowed_tuning_categories", []) or None
@@ -1110,7 +1157,7 @@ class SetupBuilderMixin:
                                       min_weight, max_power, api_key,
                                       bop_data=bop_data,
                                       actual_bhp=actual_bhp, num_gears=num_gears,
-                                      drivetrain=drivetrain, has_aero=has_aero,
+                                      drivetrain=drivetrain,
                                       car_specs=_car_specs,
                                       allowed_tuning=_allowed_tuning,
                                       tuning_locked=_tuning_locked,
@@ -1126,7 +1173,12 @@ class SetupBuilderMixin:
                                       layout_id=_layout_id_build,
                                       session_id=_session_id_build,
                                       setup_history=_setup_history_str,
-                                      setup_comparison=_setup_comparison_str)
+                                      setup_comparison=_setup_comparison_str,
+                                      duration_mins=_duration_mins,
+                                      mandatory_stops=_mandatory_stops,
+                                      refuel_rate_lps=_refuel_rate_lps,
+                                      pit_loss_secs=_pit_loss_secs,
+                                      race_engineer_brief=_re_brief)
                 from strategy._rec_parser import parse_recommendations_from_response as _parse_recs
                 try:
                     _ai_id_build = self._db._conn.execute(
@@ -1180,29 +1232,48 @@ class SetupBuilderMixin:
 
     def _apply_build_setup_result(self, rec, session_type: str = "Race") -> None:
         """Fill all Car Setup form fields from an AI CarSetupRecommendation."""
-        self._setup_rh_f.setValue(int(round(rec.ride_height_front)))
-        self._setup_rh_r.setValue(int(round(rec.ride_height_rear)))
-        self._setup_spr_f.setValue(rec.springs_front)
-        self._setup_spr_r.setValue(rec.springs_rear)
-        self._setup_dmp_f_comp.setValue(int(round(rec.dampers_front_comp)))
-        self._setup_dmp_f_ext.setValue(int(round(rec.dampers_front_ext)))
-        self._setup_dmp_r_comp.setValue(int(round(rec.dampers_rear_comp)))
-        self._setup_dmp_r_ext.setValue(int(round(rec.dampers_rear_ext)))
-        self._setup_arb_f.setValue(int(round(rec.arb_front)))
-        self._setup_arb_r.setValue(int(round(rec.arb_rear)))
-        self._setup_cam_f.setValue(rec.camber_front)
-        self._setup_cam_r.setValue(rec.camber_rear)
-        self._setup_toe_f.setValue(rec.toe_front)
-        self._setup_toe_r.setValue(rec.toe_rear)
-        self._setup_aero_f.setValue(int(round(rec.aero_front)))
-        self._setup_aero_r.setValue(int(round(rec.aero_rear)))
-        self._setup_lsd_i.setValue(int(round(rec.lsd_initial)))
-        self._setup_lsd_a.setValue(int(round(rec.lsd_accel)))
-        self._setup_lsd_d.setValue(int(round(rec.lsd_decel)))
-        self._setup_bb.setValue(int(round(rec.brake_bias)))
-        self._setup_ballast_kg.setValue(rec.ballast_kg)
-        self._setup_ballast_pos.setValue(int(round(rec.ballast_position)))
-        self._setup_power_rest.setValue(rec.power_restrictor)
+        # Re-bound spinboxes with per-car ranges before setting values
+        _car_name = self._config.get("strategy", {}).get("car", "") or ""
+        _ranges = resolve_ranges(_car_name)
+
+        def _set_int(spin, param, val):
+            lo, hi = _ranges.get(param, (spin.minimum(), spin.maximum()))
+            spin.setRange(int(lo), int(hi))
+            _set_spin_readonly(spin, lo >= hi)
+            spin.setValue(max(int(lo), min(int(hi), int(round(val)))))
+
+        def _set_dbl(spin, param, val):
+            lo, hi = _ranges.get(param, (spin.minimum(), spin.maximum()))
+            spin.setRange(float(lo), float(hi))
+            _set_spin_readonly(spin, lo >= hi)
+            spin.setValue(max(float(lo), min(float(hi), float(val))))
+
+        _set_int(self._setup_rh_f,       "ride_height_front",  rec.ride_height_front)
+        _set_int(self._setup_rh_r,       "ride_height_rear",   rec.ride_height_rear)
+        _set_dbl(self._setup_spr_f,      "springs_front",      rec.springs_front)
+        _set_dbl(self._setup_spr_r,      "springs_rear",       rec.springs_rear)
+        _set_int(self._setup_dmp_f_comp, "dampers_front_comp", rec.dampers_front_comp)
+        _set_int(self._setup_dmp_f_ext,  "dampers_front_ext",  rec.dampers_front_ext)
+        _set_int(self._setup_dmp_r_comp, "dampers_rear_comp",  rec.dampers_rear_comp)
+        _set_int(self._setup_dmp_r_ext,  "dampers_rear_ext",   rec.dampers_rear_ext)
+        _set_int(self._setup_arb_f,      "arb_front",          rec.arb_front)
+        _set_int(self._setup_arb_r,      "arb_rear",           rec.arb_rear)
+        _set_dbl(self._setup_cam_f,      "camber_front",       rec.camber_front)
+        _set_dbl(self._setup_cam_r,      "camber_rear",        rec.camber_rear)
+        _set_dbl(self._setup_toe_f,      "toe_front",          rec.toe_front)
+        _set_dbl(self._setup_toe_r,      "toe_rear",           rec.toe_rear)
+        _set_int(self._setup_aero_f,     "aero_front",         rec.aero_front)
+        _set_int(self._setup_aero_r,     "aero_rear",          rec.aero_rear)
+        _set_int(self._setup_lsd_i,      "lsd_initial",        rec.lsd_initial)
+        _set_int(self._setup_lsd_a,      "lsd_accel",          rec.lsd_accel)
+        _set_int(self._setup_lsd_d,      "lsd_decel",          rec.lsd_decel)
+        _set_int(self._setup_lsd_f_i,    "lsd_front_initial",  rec.lsd_front_initial)
+        _set_int(self._setup_lsd_f_a,    "lsd_front_accel",    rec.lsd_front_accel)
+        _set_int(self._setup_lsd_f_d,    "lsd_front_decel",    rec.lsd_front_decel)
+        _set_int(self._setup_bb,         "brake_bias",         rec.brake_bias)
+        _set_dbl(self._setup_ballast_kg, "ballast_kg",         rec.ballast_kg)
+        _set_int(self._setup_ballast_pos,"ballast_position",   rec.ballast_position)
+        _set_dbl(self._setup_power_rest, "power_restrictor",   rec.power_restrictor)
         if hasattr(rec, "ecu_recommendation") and rec.ecu_recommendation:
             self._lbl_ecu_rec.setText(rec.ecu_recommendation)
         else:
@@ -1371,6 +1442,9 @@ class SetupBuilderMixin:
             self._on_bop_toggled(_bop)
             self._apply_setup_permissions(_bop, _tuning, _cats)
             self._refresh_live_tyre_label()
+            # Re-bound spinboxes for the new car and load race engineer brief
+            self._rebound_setup_spinboxes(sc.get("car", "") or "")
+            self._load_re_brief_from_active_event()
         except Exception:
             pass
 
@@ -1491,3 +1565,121 @@ class SetupBuilderMixin:
                 result_widget.setVisible(True)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Task 1 — spinbox re-bounding slot
+    # ------------------------------------------------------------------
+
+    def _rebound_setup_spinboxes(self, car_name: str | None = None) -> None:
+        """Re-apply per-car (min,max) to every in-scope setup spinbox.
+
+        Called when the active car changes (via _sync_setup_builder_from_event /
+        autofill) and after saving car ranges.  Must NOT trigger an AI call.
+        """
+        _car = (car_name or "").strip() or self._config.get("strategy", {}).get("car", "") or ""
+        _ranges = resolve_ranges(_car)
+
+        # Map: (param_key, spinbox_attr, is_double)
+        _PARAM_MAP = [
+            ("ride_height_front",  "_setup_rh_f",       False),
+            ("ride_height_rear",   "_setup_rh_r",       False),
+            ("springs_front",      "_setup_spr_f",      True),
+            ("springs_rear",       "_setup_spr_r",      True),
+            ("dampers_front_comp", "_setup_dmp_f_comp", False),
+            ("dampers_front_ext",  "_setup_dmp_f_ext",  False),
+            ("dampers_rear_comp",  "_setup_dmp_r_comp", False),
+            ("dampers_rear_ext",   "_setup_dmp_r_ext",  False),
+            ("arb_front",          "_setup_arb_f",      False),
+            ("arb_rear",           "_setup_arb_r",      False),
+            ("camber_front",       "_setup_cam_f",      True),
+            ("camber_rear",        "_setup_cam_r",      True),
+            ("toe_front",          "_setup_toe_f",      True),
+            ("toe_rear",           "_setup_toe_r",      True),
+            ("aero_front",         "_setup_aero_f",     False),
+            ("aero_rear",          "_setup_aero_r",     False),
+            ("lsd_initial",        "_setup_lsd_i",      False),
+            ("lsd_accel",          "_setup_lsd_a",      False),
+            ("lsd_decel",          "_setup_lsd_d",      False),
+            ("lsd_front_initial",  "_setup_lsd_f_i",    False),
+            ("lsd_front_accel",    "_setup_lsd_f_a",    False),
+            ("lsd_front_decel",    "_setup_lsd_f_d",    False),
+            ("brake_bias",         "_setup_bb",         False),
+            ("ballast_kg",         "_setup_ballast_kg", True),
+            ("ballast_position",   "_setup_ballast_pos",False),
+            ("power_restrictor",   "_setup_power_rest", True),
+        ]
+
+        for param, attr, is_dbl in _PARAM_MAP:
+            spin = getattr(self, attr, None)
+            if spin is None:
+                continue
+            lo, hi = _ranges.get(param, (spin.minimum(), spin.maximum()))
+            if is_dbl:
+                lo, hi = float(lo), float(hi)
+                spin.setRange(lo, hi)
+                cur = spin.value()
+                spin.setValue(max(lo, min(hi, cur)))
+            else:
+                lo, hi = int(lo), int(hi)
+                spin.setRange(lo, hi)
+                cur = spin.value()
+                spin.setValue(max(lo, min(hi, cur)))
+            # Read-only when min==max (parameter not adjustable on this car)
+            _set_spin_readonly(spin, lo >= hi)
+
+    # ------------------------------------------------------------------
+    # Task 2 — "Set Car Ranges…" dialog
+    # ------------------------------------------------------------------
+
+    def _open_car_ranges_dialog(self) -> None:
+        """Open the CarRangesDialog for the currently active car."""
+        car_name = self._config.get("strategy", {}).get("car", "") or ""
+        dlg = CarRangesDialog(car_name, self)
+        dlg.ranges_saved.connect(self._rebound_setup_spinboxes)
+        dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Task 3 — Race Engineer Brief visibility + persistence helpers
+    # ------------------------------------------------------------------
+
+    def _update_re_brief_visibility(self, session_type_text: str = "") -> None:
+        """Show Race Engineer Brief for race sessions; hide for Qualifying."""
+        is_qual = "qual" in (session_type_text or "").lower()
+        for w in (getattr(self, "_re_brief_label", None),
+                  getattr(self, "_re_brief_input", None)):
+            if w is not None:
+                w.setVisible(not is_qual)
+
+    def _load_re_brief_from_active_event(self) -> None:
+        """Populate _re_brief_input from the active event's race_engineer_brief."""
+        if not hasattr(self, "_re_brief_input"):
+            return
+        evt = self._active_event() if hasattr(self, "_active_event") else {}
+        brief = evt.get("race_engineer_brief", "") or ""
+        self._re_brief_input.blockSignals(True)
+        self._re_brief_input.setPlainText(brief)
+        self._re_brief_input.blockSignals(False)
+
+    def _save_re_brief_to_active_event(self) -> None:
+        """Write _re_brief_input text into the active event in config and persist."""
+        if not hasattr(self, "_re_brief_input"):
+            return
+        aid = self._config.get("active_event_id")
+        if not aid:
+            return
+        brief = self._re_brief_input.toPlainText() or ""
+        # Update in config["events"]
+        for evt in self._config.get("events", []):
+            if evt.get("name") == aid:
+                evt["race_engineer_brief"] = brief
+                break
+        # Also update in DB if available
+        if self._db is not None:
+            try:
+                existing = self._db.get_event(aid)
+                if existing:
+                    existing["race_engineer_brief"] = brief
+                    self._db.upsert_event(existing)
+            except Exception as _e:
+                print(f"[SetupBuilder] re_brief DB save failed: {_e}")
+        self._persist_config()
