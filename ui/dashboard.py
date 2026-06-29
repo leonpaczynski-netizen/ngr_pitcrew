@@ -38,7 +38,6 @@ from data.logger import LapDataLogger
 from data.session_db import ms_to_str
 from data.exporter import export_to_excel
 from ui.track_map_vm import TrackMapDrawData
-from ui.track_map_widget import TrackMapWidget
 from voice.announcer import VoiceAnnouncer
 from ui.widgets import (
     TyreWidget, FuelBar, ConnectionStatusWidget, BigValueLabel,
@@ -459,7 +458,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._gear_ratios_captured: bool = False
         self._lap_compound_tags: dict[int, str] = {}
         self._default_lap_compound: str = ""
-        self._last_auto_session_type = None  # tracks last telemetry session type for auto-sync
         self._strategy_result_queue: queue.Queue = queue.Queue()
         self._strategy_options: list = []
         self._strategy_options_html_base: str = ""
@@ -469,6 +467,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._degradation_result_queue: queue.Queue = queue.Queue()
         self._profile_update_queue: queue.Queue = queue.Queue()
         self._tyre_degradation_cache: dict = {}
+        self._strat_practice_sid: int = 0  # practice session id captured at pre-race analysis time
         self._pit_lane_active: bool = False  # Group 21B — pit lane transition tracking
         self._tm_cached_draw_data: Optional[TrackMapDrawData] = None  # AC1 dirty-flag cache
         self._live_label_cache: dict[str, str] = {}  # AC3 label dirty-flag cache
@@ -504,6 +503,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Load most recent saved race plan into the strategy engine (if available)
         if self._strategy_engine is not None:
             self._live_init_from_plan()
+            # Wire the mid-race re-plan callback so the engine can launch the worker
+            self._strategy_engine._replan_callback = self._launch_replan_worker
 
         # Restore last AI strategy analysis so results survive app restart
         self._restore_strategy_cache()
@@ -520,9 +521,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         if self._query_listener is not None:
             self._query_listener.set_active_setup_getter(self._current_setup_dict)
-
-        # Group 24 AC5: auto-load live map for active event on startup
-        self._live_try_load_active_event_map()
 
     # ------------------------------------------------------------------ UI setup
 
@@ -677,31 +675,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         lap_layout.addRow("Lap #:",   self._lbl_current_lap)
         lap_layout.addRow("RPM:",     self._lbl_rpm)
 
-        # Live track map — shows car position when a station map is loaded
-        self._live_map_widget = TrackMapWidget()
-        self._live_map_widget.setMinimumHeight(180)
-        self._live_map_widget.setToolTip(
-            "Live car position on the track map.\n"
-            "Requires a calibrated reference path. "
-            "Build and save a reference path on the Track Modelling tab."
-        )
-        # Group 24 AC5: track name label above live map
-        self._live_lbl_track = QLabel("Track: not mapped — calibrate first")
-        self._live_lbl_track.setStyleSheet("color: #888888;")
-        self._live_lbl_track.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._live_lbl_track.setFont(QFont("Segoe UI", 9))
-        self._live_lbl_track.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
-        )
-        _live_map_col = QVBoxLayout()
-        _live_map_col.setSpacing(2)
-        _live_map_col.setContentsMargins(0, 0, 0, 0)
-        _live_map_col.addWidget(self._live_lbl_track)
-        _live_map_col.addWidget(self._live_map_widget, 1)
-
         mid_row.addWidget(tyre_box)
         mid_row.addWidget(lap_box)
-        mid_row.addLayout(_live_map_col, 1)  # stretch=1 fills remaining space
         root.addLayout(mid_row)
 
         # Row 3: Fuel bar
@@ -711,6 +686,42 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._fuel_bar = FuelBar()
         fuel_layout.addWidget(self._fuel_bar)
         root.addWidget(fuel_box)
+
+        # Row 3b: Shift Beep controls — shared across all mode panels
+        _sb_cfg = self._config.get("shift_beep", {})
+        shift_beep_box = QGroupBox("Shift Beep")
+        shift_beep_box.setStyleSheet(self._group_style())
+        shift_beep_layout = QHBoxLayout(shift_beep_box)
+        shift_beep_layout.setSpacing(12)
+
+        self._chk_shift_beep_enabled = QCheckBox("Enable shift beep")
+        self._chk_shift_beep_enabled.setChecked(bool(_sb_cfg.get("enabled", True)))
+        self._chk_shift_beep_enabled.setStyleSheet(f"color: {_TEXT};")
+        shift_beep_layout.addWidget(self._chk_shift_beep_enabled)
+
+        shift_beep_layout.addWidget(QLabel("Shift RPM — Qualifying:", styleSheet=f"color:{_TEXT};"))
+        self._spin_live_shift_rpm_qual = QSpinBox()
+        self._spin_live_shift_rpm_qual.setRange(0, 20000)
+        self._spin_live_shift_rpm_qual.setSingleStep(100)
+        self._spin_live_shift_rpm_qual.setSuffix(" RPM")
+        self._spin_live_shift_rpm_qual.setValue(int(_sb_cfg.get("qual_rpm", 7000)))
+        shift_beep_layout.addWidget(self._spin_live_shift_rpm_qual)
+
+        shift_beep_layout.addWidget(QLabel("Shift RPM — Race:", styleSheet=f"color:{_TEXT};"))
+        self._spin_live_shift_rpm_race = QSpinBox()
+        self._spin_live_shift_rpm_race.setRange(0, 20000)
+        self._spin_live_shift_rpm_race.setSingleStep(100)
+        self._spin_live_shift_rpm_race.setSuffix(" RPM")
+        self._spin_live_shift_rpm_race.setValue(int(_sb_cfg.get("race_rpm", 6500)))
+        shift_beep_layout.addWidget(self._spin_live_shift_rpm_race)
+
+        shift_beep_layout.addStretch()
+        root.addWidget(shift_beep_box)
+
+        # Connect signals after both spinboxes exist
+        self._chk_shift_beep_enabled.stateChanged.connect(self._on_shift_beep_setting_changed)
+        self._spin_live_shift_rpm_qual.valueChanged.connect(self._on_shift_beep_setting_changed)
+        self._spin_live_shift_rpm_race.valueChanged.connect(self._on_shift_beep_setting_changed)
 
         # Qualifying sector-tracking state (initialised before panels are built)
         self._qual_road_dist_max: float = 0.0
@@ -925,6 +936,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Suppress strategy pit alerts when not in Race mode
         if self._strategy_engine is not None:
             self._strategy_engine.set_race_active(mode == "Race")
+            self._strategy_engine.set_qualifying_active(mode == "Qualifying")
         # Push session type to tracker so LapRecords use the correct type
         if self._tracker is not None:
             _mode_map = {
@@ -937,6 +949,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if hasattr(self, "_announcer") and self._announcer is not None:
             self._announcer.set_session_mode(mode.lower())
         self._refresh_live_tyre_label()
+        # Write live mode to the shared ref so on_packet uses the correct shift RPM threshold
+        if hasattr(self, "_live_mode_ref"):
+            import main
+            with main._state_lock:
+                self._live_mode_ref[0] = mode
         # Open a new session immediately so laps (including the first outlap) are linked
         if self._db is not None and self._dispatcher is not None:
             try:
@@ -957,6 +974,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             except Exception as exc:
                 print(f"[LiveMode] session open error: {exc}")
 
+    def _on_shift_beep_setting_changed(self, *_args) -> None:
+        """Persist shift-beep settings to config and mirror to Setup spinboxes."""
+        sb = self._config.setdefault("shift_beep", {})
+        sb["enabled"]  = self._chk_shift_beep_enabled.isChecked()
+        sb["qual_rpm"] = self._spin_live_shift_rpm_qual.value()
+        sb["race_rpm"] = self._spin_live_shift_rpm_race.value()
+        self._persist_config()
+        # Mirror to read-only Setup-tab spinboxes (they display but cannot be
+        # edited; blockSignals avoids triggering any re-entrant save handlers).
+        if hasattr(self, "_spin_shift_rpm_qual"):
+            self._spin_shift_rpm_qual.blockSignals(True)
+            self._spin_shift_rpm_qual.setValue(sb["qual_rpm"])
+            self._spin_shift_rpm_qual.blockSignals(False)
+        if hasattr(self, "_spin_shift_rpm_race"):
+            self._spin_shift_rpm_race.blockSignals(True)
+            self._spin_shift_rpm_race.setValue(sb["race_rpm"])
+            self._spin_shift_rpm_race.blockSignals(False)
 
     # --- Settings tab -------------------------------------------------------
 
@@ -1873,23 +1907,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             pos_str = "—"
         self._lbl_position.set_value(pos_str)
 
-        # Session type — combo is master; telemetry auto-syncs combo on state change
-        if self._tracker is not None:
-            st = self._tracker.session_type
-            _COMBO_TEXT = {
-                SessionType.PRACTICE:   "Practice",
-                SessionType.QUALIFYING: "Qualifying",
-                SessionType.RACE:       "Race",
-            }
-            new_text = _COMBO_TEXT.get(st)
-            if new_text and new_text != self._last_auto_session_type:
-                self._last_auto_session_type = new_text
-                if new_text != self._combo_live_mode.currentText():
-                    self._combo_live_mode.blockSignals(True)
-                    self._combo_live_mode.setCurrentText(new_text)
-                    self._combo_live_mode.blockSignals(False)
-                    if self._strategy_engine is not None:
-                        self._strategy_engine.set_race_active(new_text == "Race")
         cars = p.cars_in_race
         session_text = self._combo_live_mode.currentText()
         if cars > 0:
@@ -3156,6 +3173,213 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # AI analysis helpers
     # ------------------------------------------------------------------
 
+    def _resolve_strat_session_id(self) -> int:
+        """Resolve the session id used for strategy lap-data queries.
+
+        Prefers the live dispatcher session (correct pre-race, when the active
+        session IS the practice session), then falls back to the historian-selected
+        session, then 0 (all car+track history). Shared by pre-race analysis and the
+        mid-race re-plan input assembly so the two never drift apart.
+        """
+        _strat_sid = 0
+        if hasattr(self, "_dispatcher") and self._dispatcher is not None:
+            _live_sid = getattr(self._dispatcher, "_session_id", 0) or 0
+            if _live_sid > 0:
+                _strat_sid = _live_sid
+        if _strat_sid == 0:
+            _hist_sid = getattr(self, "_hist_selected_session_id", None)
+            if _hist_sid and int(_hist_sid) > 0:
+                _strat_sid = int(_hist_sid)
+        return _strat_sid
+
+    def _assemble_strategy_inputs(self, session_id_override: int | None = None) -> dict:
+        """Collect all inputs needed for a strategy analysis call.
+
+        Returns a dict with keys: params, lap_data_by_compound, car_id, session_id,
+        car_name, car_specs, setup_comparison_text, tyre_degradation_cache,
+        model_name, api_key.
+
+        ``session_id_override`` — when provided and > 0, use it directly as the
+        practice session id for the lap-data query instead of reading the live
+        dispatcher session.  Pass 0 (or omit) to use the standard resolution:
+        read the dispatcher's live session id, then fall back to
+        ``_hist_selected_session_id``.  Callers that already know the practice
+        session id (e.g. mid-race re-plan, which must NOT use the race session)
+        should supply it via this parameter.
+
+        lap_data_by_compound is always queried using the practice session id so
+        that in-race laps do not pollute the practice compound baseline.
+        Fallback when no practice session id is known: pass session_id=0 to
+        get_compound_lap_sequences, which returns ALL history for this car+track
+        (better than the race session alone).
+        """
+        from strategy.ai_planner import RaceParams
+        api_key = self._ai_api_key.text().strip()
+        _ui_lap_data = self._read_ui_lap_table()
+
+        _sc = self._config.get("strategy", {})
+        _race_type = _sc.get("race_type", "lap")
+        total_laps = int(_sc.get("total_laps", 25))
+
+        _mandatory_stops = int(_sc.get("mandatory_stops", 0))
+        _mandatory_cpds  = self._get_mandatory_compounds()
+        race_params = {
+            "track":                _sc.get("track", ""),
+            "track_location_id":    _sc.get("track_location_id", ""),
+            "layout_id":            _sc.get("layout_id", ""),
+            "total_laps":           total_laps,
+            "tyre_wear_multiplier": float(_sc.get("tyre_wear_multiplier", 1.0)),
+            "fuel_burn_per_lap":    float(self._config.get("strategy", {}).get("fuel_burn_per_lap", 2.0)),
+            "refuel_speed_lps":     float(_sc.get("refuel_speed_lps", 10.0)),
+            "pit_loss_secs":        float(_sc.get("pit_loss_secs", 23.0)),
+            "min_mandatory_stops":  _mandatory_stops,
+            "mandatory_compounds":  _mandatory_cpds,
+            "race_type":            _race_type,
+            "duration_mins":        int(_sc.get("race_duration_minutes", 0)),
+            "tuning_locked":        not bool(_sc.get("tuning", True)),
+            "allowed_tuning":       _sc.get("allowed_tuning_categories") or [],
+            "bop":                  bool(_sc.get("bop", False)),
+            "avail_tyres":          _sc.get("avail_tyres", []) or [],
+        }
+
+        params = RaceParams(**race_params)
+
+        _car_name, _car_specs = self._load_car_specs_for_current()
+        _setup_comparison = self._build_setup_comparison_text(race_params["track"])
+        _car_id_strat = self._db.get_car_id(_car_name) if self._db and _car_name else 0
+
+        # Resolve the practice session id used for lap-data queries.
+        # If session_id_override is supplied and > 0, use it directly — this is
+        # the pre-race practice session id captured by _run_ai_analysis and stored
+        # in self._strat_practice_sid, preventing the mid-race re-plan from
+        # querying only in-race laps (spec Risk #2 / AC8).
+        # An explicit override is authoritative, INCLUDING 0: override == 0 means
+        # "no known practice session" and is passed straight through so the DB query
+        # uses session_id=0 (all car+track history, which includes practice laps) —
+        # never the live race session.
+        # When no override is given (None), fall back to the live dispatcher session
+        # (correct pre-race when the active session IS the practice session), then to
+        # the historian-selected session.
+        if session_id_override is not None:
+            _strat_sid: int = session_id_override
+        else:
+            _strat_sid = self._resolve_strat_session_id()
+
+        lap_data_by_compound: dict[str, list[float]] = {}
+        if self._db and _car_id_strat > 0 and race_params.get("track"):
+            try:
+                lap_data_by_compound = self._db.get_strategy_lap_data(
+                    _car_id_strat,
+                    race_params["track"],
+                    _strat_sid,
+                    _ui_lap_data,
+                )
+            except Exception as _e:
+                print(f"[AssembleStrategyInputs] get_strategy_lap_data failed: {_e}")
+                lap_data_by_compound = _ui_lap_data
+        else:
+            lap_data_by_compound = _ui_lap_data
+
+        _strat_model_name = self._config.get("anthropic", {}).get("model", "claude-opus-4-8")
+        degradation = self._tyre_degradation_cache if self._tyre_degradation_cache else None
+
+        return {
+            "params":                  params,
+            "lap_data_by_compound":    lap_data_by_compound,
+            "car_id":                  _car_id_strat,
+            "session_id":              _strat_sid,
+            "car_name":                _car_name,
+            "car_specs":               _car_specs,
+            "setup_comparison_text":   _setup_comparison,
+            "tyre_degradation_cache":  degradation,
+            "model_name":              _strat_model_name,
+            "api_key":                 api_key,
+        }
+
+    def _launch_replan_worker(self, reason: str) -> None:
+        """Launch an off-thread worker to run a mid-race AI strategy re-plan.
+
+        Called by the engine's _replan_callback from the telemetry thread.
+        The worker posts ("replan_ok", result) or ("replan_error", str) to
+        _strategy_result_queue, which is drained on the Qt main thread.
+        """
+        import threading as _threading
+
+        def _worker():
+            try:
+                from strategy.strategy_orchestrator import run_strategy_analysis
+
+                # Use the practice session id captured at pre-race analysis time so
+                # get_compound_lap_sequences queries PRACTICE laps, not in-race laps
+                # (spec Risk #2 / AC8).  Fallback: if no practice session was recorded
+                # (e.g. user loaded a saved plan without running pre-race analysis),
+                # pass 0 — this makes get_compound_lap_sequences use ALL car+track
+                # history, which still includes practice and is strictly better than
+                # the live race session id.
+                inputs = self._assemble_strategy_inputs(
+                    session_id_override=self._strat_practice_sid
+                )
+
+                # Build the race_situation dict (spec Risk #1: use live fuel burn)
+                _engine = self._strategy_engine
+                _tracker = self._tracker
+                _sc = self._config.get("strategy", {})
+                _total_laps = int(_sc.get("total_laps", 0))
+                _current_lap = getattr(_tracker, "laps_recorded", 0) if _tracker else 0
+                _laps_remaining = max(0, _total_laps - _current_lap)
+
+                # Determine active stint compound and tyre age
+                _current_compound = "Unknown"
+                _tyre_age_laps = 0
+                if _engine is not None:
+                    with _engine._lock:
+                        _active = _engine._active_stint()
+                        if _active is not None:
+                            _current_compound = _active.compound
+                            _tyre_age_laps = _current_lap - _active.start_lap
+                        _orig_stints = [s.to_dict() for s in _engine._stints]
+                        _recent_laps = list(_engine._recent_lap_times)
+                else:
+                    _orig_stints = []
+                    _recent_laps = []
+
+                # Prefer live fuel burn from tracker (spec Risk #1)
+                _live_fuel = 0.0
+                if _tracker is not None:
+                    _live_fuel = getattr(_tracker, "avg_fuel_per_lap", 0.0) or 0.0
+
+                race_situation = {
+                    "current_lap":          _current_lap,
+                    "total_laps":           _total_laps,
+                    "laps_remaining":       _laps_remaining,
+                    "current_compound":     _current_compound,
+                    "tyre_age_laps":        _tyre_age_laps,
+                    "live_fuel_burn_lpl":   _live_fuel,
+                    "replan_reason":        reason,
+                    "original_plan_stints": _orig_stints,
+                    "recent_lap_times_ms":  _recent_laps,
+                }
+
+                result = run_strategy_analysis(
+                    inputs["params"],
+                    inputs["lap_data_by_compound"],
+                    inputs["api_key"],
+                    self._db,
+                    car_id=inputs["car_id"],
+                    session_id=inputs["session_id"],
+                    car_name=inputs["car_name"],
+                    car_specs=inputs["car_specs"],
+                    setup_comparison_text=inputs["setup_comparison_text"],
+                    tyre_degradation_cache=inputs["tyre_degradation_cache"],
+                    model_name=inputs["model_name"],
+                    race_situation=race_situation,
+                )
+                self._strategy_result_queue.put(("replan_ok", result))
+            except Exception as exc:
+                self._strategy_result_queue.put(("replan_error", str(exc)))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
     def _run_ai_analysis(self) -> None:
         """Collect inputs, save params to config, launch analysis thread."""
         from strategy.ai_planner import RaceParams
@@ -3222,15 +3446,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _setup_comparison = self._build_setup_comparison_text(race_params["track"])
         _car_id_strat = self._db.get_car_id(_car_name) if self._db and _car_name else 0
 
-        _strat_sid: int = 0
-        if hasattr(self, "_dispatcher") and self._dispatcher is not None:
-            _live_sid = getattr(self._dispatcher, "_session_id", 0) or 0
-            if _live_sid > 0:
-                _strat_sid = _live_sid
-        if _strat_sid == 0:
-            _hist_sid = getattr(self, "_hist_selected_session_id", None)
-            if _hist_sid and int(_hist_sid) > 0:
-                _strat_sid = int(_hist_sid)
+        _strat_sid: int = self._resolve_strat_session_id()
+
+        # Capture the practice session id at pre-race analysis time so that
+        # mid-race re-plans can query PRACTICE laps (not live race laps).
+        # This is the earliest safe capture point: the current session IS the
+        # practice session, so _strat_sid refers to practice here (AC8 / spec Risk #2).
+        self._strat_practice_sid = _strat_sid
 
         lap_data_by_compound: dict[str, list[float]] = {}
         if self._db and _car_id_strat > 0 and race_params.get("track"):
@@ -3259,12 +3481,36 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 btn.setEnabled(True)
             return
 
-        # Refine timed-race lap count now that lap_data_by_compound is available
+        # Refine timed-race lap count now that lap_data_by_compound is available.
+        # Use ceil + a representative CLEAN lap (best/min lap of the compound with
+        # the most data, tiebreak on fastest average) — this matches exactly what
+        # strategy.feasibility.estimate_race_laps() uses so the UI estimate agrees
+        # with the feasibility module rather than diverging from a flat mean of all
+        # (including slow/degraded) laps.
         if race_params.get("race_type") == "timed":
+            from strategy.feasibility import estimate_race_laps as _estimate_race_laps
             _duration_secs = float(_sc.get("race_duration_minutes", 60)) * 60.0
-            all_times = [t for times in lap_data_by_compound.values() for t in times]
-            avg_lap_secs = (sum(all_times) / len(all_times) / 1000.0) if all_times else 90.0
-            total_laps = max(1, int(_duration_secs / avg_lap_secs))
+            _representative_lap_s: float = 0.0
+            if lap_data_by_compound:
+                # Pick the compound with the most laps; tiebreak on lowest average.
+                # Use its minimum (best) clean lap — consistent with ai_planner.analyse_strategy.
+                try:
+                    from statistics import mean as _mean
+                    _rep_compound = max(
+                        lap_data_by_compound,
+                        key=lambda c: (
+                            len(lap_data_by_compound[c]),
+                            -_mean(lap_data_by_compound[c]) if lap_data_by_compound[c] else 0,
+                        ),
+                    )
+                    _rep_laps = lap_data_by_compound[_rep_compound]
+                    if _rep_laps:
+                        _representative_lap_s = min(_rep_laps) / 1000.0  # ms → s
+                except Exception:
+                    pass
+            _est_laps = _estimate_race_laps(_duration_secs, _representative_lap_s)
+            # estimate_race_laps returns 0 if representative_lap_s <= 0; preserve floor of 1.
+            total_laps = max(1, _est_laps)
             self._config.setdefault("strategy", {})["total_laps"] = total_laps
             race_params["total_laps"] = total_laps
 
@@ -3529,15 +3775,30 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._refresh_live_strategy_combo()
 
     def _display_strategy_results(self, result: tuple) -> None:
-        self._btn_ai_analyse.setEnabled(True)
         status, payload = result
+
+        # Mid-race re-plan results — handled silently; the engine speaks the result
+        if status == "replan_ok":
+            if self._strategy_engine is not None:
+                self._strategy_engine.apply_replan(payload)
+            return
+        if status == "replan_error":
+            if self._strategy_engine is not None:
+                self._strategy_engine.replan_failed()
+            print(f"[Replan] failed: {payload}")
+            return
+
+        self._btn_ai_analyse.setEnabled(True)
 
         if status == "error":
             self._ai_results_text.setHtml(
                 f"<span style='color:#F55;'>Analysis failed:</span><br><pre>{payload}</pre>")
             return
 
-        options = payload
+        # Task 1: extract .strategies explicitly from a StrategyResult; also
+        # handle the legacy code path where payload is still a bare list
+        # (e.g. any other caller that hasn't been updated yet).
+        options = getattr(payload, "strategies", payload)
         self._strategy_options = options
         self._strategy_options_html_base = self._build_strategy_html(options)
 
@@ -3568,7 +3829,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             pass
 
+        # Task 2: append feasibility metadata (rejected strategies, data gaps,
+        # assumptions, calculation notes) below the strategy cards when present.
+        # Only render a section if its list is non-empty; never show empty headers.
+        _feasibility_html = self._build_feasibility_html(payload)
+
         _full_html = (_warn_html + self._strategy_options_html_base) if _warn_html else self._strategy_options_html_base
+        if _feasibility_html:
+            _full_html += _feasibility_html
         self._ai_results_text.setHtml(_full_html)
 
         for i, btn in enumerate(self._ai_apply_btns):
@@ -3640,6 +3908,63 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             )
         return html
 
+    def _build_feasibility_html(self, payload) -> str:
+        """Build compact HTML for rejected strategies, data gaps, assumptions, and
+        calculation notes from a StrategyResult.  Returns an empty string if payload
+        is a bare list (legacy path) or all four lists are empty, so no empty headers
+        are ever rendered.
+        """
+        # Only process StrategyResult objects — bare list payloads have no metadata.
+        rejected   = getattr(payload, "rejected_strategies", None) or []
+        data_gaps  = getattr(payload, "data_gaps",            None) or []
+        assumptions        = getattr(payload, "assumptions",         None) or []
+        calculation_notes  = getattr(payload, "calculation_notes",   None) or []
+
+        if not (rejected or data_gaps or assumptions or calculation_notes):
+            return ""
+
+        _sep    = "border-top:1px solid #2A3A4A; margin-top:12px; padding-top:10px;"
+        _hdr    = "color:#AAA; font-size:11px; font-weight:bold; margin:6px 0 2px 0;"
+        _item   = "color:#CCC; font-size:11px; margin:1px 0 1px 14px;"
+        _note   = "color:#888; font-size:10px; margin:1px 0 1px 14px;"
+
+        html = f"<div style='{_sep}'>"
+
+        if rejected:
+            html += f"<p style='{_hdr}'>Rejected Stop Counts</p>"
+            for r in rejected:
+                name   = getattr(r, "name",   str(r))
+                reason = getattr(r, "reason", "")
+                html += (
+                    f"<p style='{_item}'>"
+                    f"<span style='color:#F5A623;'>{name}</span>"
+                    f"{(' — ' + reason) if reason else ''}</p>"
+                )
+
+        if data_gaps:
+            html += f"<p style='{_hdr}'>Data Gaps</p>"
+            for g in data_gaps:
+                name = getattr(g, "name",        str(g))
+                desc = getattr(g, "description", "")
+                html += (
+                    f"<p style='{_item}'>"
+                    f"<span style='color:#F55;'>{name}</span>"
+                    f"{(' — ' + desc) if desc else ''}</p>"
+                )
+
+        if assumptions:
+            html += f"<p style='{_hdr}'>Assumptions</p>"
+            for a in assumptions:
+                html += f"<p style='{_note}'>&#8226; {a}</p>"
+
+        if calculation_notes:
+            html += f"<p style='{_hdr}'>Calculation Notes</p>"
+            for n in calculation_notes:
+                html += f"<p style='{_note}'>&#8226; {n}</p>"
+
+        html += "</div>"
+        return html
+
     def _apply_strategy_option(self, index: int) -> None:
         if index >= len(self._strategy_options):
             return
@@ -3660,6 +3985,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     def _on_reset_clicked(self) -> None:
         if self._tracker is not None:
             self._tracker.reset()
+            self._tracker.set_session_type_override(None)
         self._bridge.race_state_changed.emit("IDLE")
 
     def _build_workflow_guide_group(self) -> QGroupBox:
@@ -6665,8 +6991,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 _fb_loaded = getattr(self, "_loaded_session_avg_fuel", 0.0) or 0.0
                 if _fb_avg <= 0 and _fb_loaded <= 0:
                     self._lbl_fuel_burn_display.setText("— (complete practice laps to calibrate)")
-            # Group 24 AC5: refresh live map for newly active event
-            self._live_try_load_active_event_map()
             # Refresh saved plans combo for the newly active event
             self._sb_refresh_saved_plans_combo()
         except Exception:

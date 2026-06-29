@@ -534,6 +534,9 @@ class SetupBuilderMixin:
         # Visibility controlled by session type — shown for Race, hidden for Qualifying
         self._setup_type.currentTextChanged.connect(self._update_re_brief_visibility)
         self._update_re_brief_visibility(self._setup_type.currentText())
+        # Write practice_is_qual ref whenever session type changes
+        self._setup_type.currentTextChanged.connect(self._on_setup_type_changed)
+        self._on_setup_type_changed(self._setup_type.currentText())
 
         # Save / Load / Analyse row
         setup_btn_row = QHBoxLayout()
@@ -619,8 +622,9 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_qual.setValue(int(_sb.get("qual_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_qual.setToolTip(
             "Optimal RPM to upshift for qualifying / unrestricted power.\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Qualifying.")
-        self._spin_shift_rpm_qual.valueChanged.connect(self._save_settings)
+            "Auto-filled when you run 'Build Setup with AI' with session = Qualifying.\n"
+            "Edit via the Live tab Shift Beep controls.")
+        _set_spin_readonly(self._spin_shift_rpm_qual, True)
         self._spin_shift_rpm_race = QSpinBox()
         self._spin_shift_rpm_race.setRange(0, 20000)
         self._spin_shift_rpm_race.setSingleStep(100)
@@ -629,8 +633,9 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_race.setValue(int(_sb.get("race_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_race.setToolTip(
             "Optimal RPM to upshift during the race (may be lower if ECU/power restrictor is applied).\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Race.")
-        self._spin_shift_rpm_race.valueChanged.connect(self._save_settings)
+            "Auto-filled when you run 'Build Setup with AI' with session = Race.\n"
+            "Edit via the Live tab Shift Beep controls.")
+        _set_spin_readonly(self._spin_shift_rpm_race, True)
         shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
         shift_rpm_form.addRow("Race:", self._spin_shift_rpm_race)
         setup_layout.addWidget(shift_rpm_box)
@@ -859,12 +864,58 @@ class SetupBuilderMixin:
             self._setup_load_combo.setCurrentIndex(0)   # show placeholder
         self._setup_load_combo.blockSignals(False)
 
-    def _suggest_setup_label(self) -> None:
-        car = self._config.get("strategy", {}).get("car", "")
-        count = sum(1 for s in self._saved_setups if s.get("name") == car)
-        self._setup_label.setText(f"Setup {count + 1}")
+    def _setup_type_prefix(self) -> str:
+        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo."""
+        return "Q" if "qual" in self._setup_type.currentText().lower() else "R"
+
+    def _generate_setup_name(self) -> str | None:
+        """Build '<Q|R> <event name> <number>' for the active event, or None if no event."""
+        from ui.setup_name_helper import build_setup_name, next_setup_number
+        event_name = ""
+        if hasattr(self, "_active_event"):
+            event_name = (self._active_event() or {}).get("name", "") or ""
+        if not event_name:
+            return None
+        prefix = self._setup_type_prefix()
+        n = next_setup_number(self._saved_setups, prefix, event_name)
+        return build_setup_name(prefix, event_name, n)
+
+    def _prefill_setup_label(self) -> None:
+        """Pre-fill the editable setup-label field with the auto-generated name.
+
+        Fires when the setup type or active event changes. No-op when there is no
+        active event (the user can still type a name; the save guard handles it).
+        """
+        name = self._generate_setup_name()
+        if name:
+            self._setup_label.setText(name)
 
     def _setup_save(self) -> None:
+        # Require an active event so setups are always named/grouped by event.
+        _evt_name = ""
+        if hasattr(self, "_active_event"):
+            _evt_name = (self._active_event() or {}).get("name", "") or ""
+        if not _evt_name:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Active Event",
+                "Please select an active event in the Event Planner before saving a setup.",
+            )
+            return
+        # D-RESAVE: resolve the final label before persisting. A structured auto-name
+        # (or empty field) advances to the next numbered attempt for this event, so
+        # saving a loaded/previously-saved structured setup creates a NEW number
+        # instead of overwriting. Manual/freeform names are kept exactly as typed.
+        from ui.setup_name_helper import resolve_save_name
+        self._setup_label.setText(
+            resolve_save_name(
+                self._setup_label.text(),
+                self._setup_type_prefix(),
+                _evt_name,
+                self._saved_setups,
+            )
+        )
         # Clear any field highlights from AI apply — user has chosen to persist.
         self._clear_setup_highlights()
         # Persist race engineer brief to active event before saving setup
@@ -1349,13 +1400,37 @@ class SetupBuilderMixin:
         self._highlight_changed_fields(_build_param_keys)
 
         # Auto-fill shift RPM from AI recommendation.
-        if hasattr(rec, "shift_rpm") and rec.shift_rpm > 0:
-            is_qual = "qual" in session_type.lower()
-            if is_qual and hasattr(self, "_spin_shift_rpm_qual"):
-                self._spin_shift_rpm_qual.setValue(rec.shift_rpm)
-            elif not is_qual and hasattr(self, "_spin_shift_rpm_race"):
-                self._spin_shift_rpm_race.setValue(rec.shift_rpm)
-            self._save_settings()
+        # Use new dual fields (shift_rpm_qual / shift_rpm_race) with legacy fallback.
+        _qual_rpm = getattr(rec, "shift_rpm_qual", 0) or 0
+        _race_rpm = getattr(rec, "shift_rpm_race", 0) or 0
+        _legacy_rpm = getattr(rec, "shift_rpm", 0) or 0
+        if _qual_rpm == 0 and _legacy_rpm > 0:
+            _qual_rpm = _legacy_rpm
+        if _race_rpm == 0 and _legacy_rpm > 0:
+            _race_rpm = _legacy_rpm
+        if _qual_rpm > 0 or _race_rpm > 0:
+            sb = self._config.setdefault("shift_beep", {})
+            if _qual_rpm > 0:
+                sb["qual_rpm"] = _qual_rpm
+                if hasattr(self, "_spin_shift_rpm_qual"):
+                    self._spin_shift_rpm_qual.blockSignals(True)
+                    self._spin_shift_rpm_qual.setValue(_qual_rpm)
+                    self._spin_shift_rpm_qual.blockSignals(False)
+                if hasattr(self, "_spin_live_shift_rpm_qual"):
+                    self._spin_live_shift_rpm_qual.blockSignals(True)
+                    self._spin_live_shift_rpm_qual.setValue(_qual_rpm)
+                    self._spin_live_shift_rpm_qual.blockSignals(False)
+            if _race_rpm > 0:
+                sb["race_rpm"] = _race_rpm
+                if hasattr(self, "_spin_shift_rpm_race"):
+                    self._spin_shift_rpm_race.blockSignals(True)
+                    self._spin_shift_rpm_race.setValue(_race_rpm)
+                    self._spin_shift_rpm_race.blockSignals(False)
+                if hasattr(self, "_spin_live_shift_rpm_race"):
+                    self._spin_live_shift_rpm_race.blockSignals(True)
+                    self._spin_live_shift_rpm_race.setValue(_race_rpm)
+                    self._spin_live_shift_rpm_race.blockSignals(False)
+            self._persist_config()
 
         gear_section = ""
         if rec.final_drive > 0.0 or rec.transmission_max_speed_kmh > 0 or rec.gear_ratios:
@@ -1428,6 +1503,8 @@ class SetupBuilderMixin:
                     "setup_snapshot": snapshot,
                     "reasoning": rec.reasoning,
                     "shift_rpm": getattr(rec, "shift_rpm", 0),
+                    "shift_rpm_qual": getattr(rec, "shift_rpm_qual", 0),
+                    "shift_rpm_race": getattr(rec, "shift_rpm_race", 0),
                     "ecu_recommendation": getattr(rec, "ecu_recommendation", ""),
                 })
             except Exception as _e:
@@ -1465,6 +1542,9 @@ class SetupBuilderMixin:
                 self._lbl_setup_event_ctx.setText(
                     f"Active Event: {name}  |  Track: {track}  |  Car: {car}"
                 )
+            # Refresh the structured setup-name suggestion for the active event.
+            if hasattr(self, "_setup_label"):
+                self._prefill_setup_label()
 
             _green = "color: #AAE4AA; font-size: 11px;"
             if hasattr(self, "_lbl_rc_race_type"):
@@ -1779,6 +1859,22 @@ class SetupBuilderMixin:
     # ------------------------------------------------------------------
     # Task 3 — Race Engineer Brief visibility + persistence helpers
     # ------------------------------------------------------------------
+
+    def _on_setup_type_changed(self, session_type_text: str = "") -> None:
+        """Write _practice_is_qual_ref[0] when the Setup-tab session type changes.
+
+        The ref is read by on_packet in main.py to select the correct shift RPM
+        threshold when the live mode is Practice.  Guard with hasattr since tests
+        may construct the window before main() injects the ref.
+        """
+        is_qual = "qual" in (session_type_text or "").lower()
+        if hasattr(self, "_practice_is_qual_ref"):
+            import main
+            with main._state_lock:
+                self._practice_is_qual_ref[0] = is_qual
+        # Regenerate the structured setup-name suggestion for the new Q/R prefix.
+        if hasattr(self, "_setup_label"):
+            self._prefill_setup_label()
 
     def _update_re_brief_visibility(self, session_type_text: str = "") -> None:
         """Show Race Engineer Brief for race sessions; hide for Qualifying."""

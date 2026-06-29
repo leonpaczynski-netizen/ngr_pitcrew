@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 _HISTORY_PATH = Path(__file__).parent / "setup_history.json"
@@ -44,7 +44,9 @@ def save_entry(
       type         : "build_qual" | "build_race" | "analyse_setup" | "feeling_fix"
       setup_snapshot : dict of setup values (for build types)
       reasoning    : str (for build types)
-      shift_rpm    : int (for build types)
+      shift_rpm    : int (for build types) — legacy; max(shift_rpm_qual, shift_rpm_race)
+      shift_rpm_qual : int (for build types) — upshift RPM for qualifying
+      shift_rpm_race : int (for build types) — upshift RPM for race
       analysis     : str (summary text from advisor)
       changes      : list of {"setting", "from", "to", "why"} dicts
       feeling      : str (driver description, for feeling_fix type)
@@ -52,7 +54,7 @@ def save_entry(
     if not config_id:
         return
     entry = dict(entry)
-    entry["ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    entry["ts"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     with _lock:
         data = _load_all()
         cfg = data.setdefault(config_id, {"car": car, "track": track, "entries": []})
@@ -115,11 +117,18 @@ def format_for_prompt(config_id: str, max_entries: int = 5) -> str:
                     f"  Camber F/R: {_cf}/{_cr}°  "
                     f"  Toe F/R: {s.get('toe_front','?')}/{s.get('toe_rear','?')}°"
                 )
+                # Display shift RPM: prefer new per-session fields; fall back to legacy.
+                _srq = e.get("shift_rpm_qual")
+                _srr = e.get("shift_rpm_race")
+                if _srq is not None or _srr is not None:
+                    _shift_str = f"Shift RPM qual/race: {_srq or 0}/{_srr or 0}"
+                else:
+                    _shift_str = f"Shift RPM: {e.get('shift_rpm', '?')}"
                 lines.append(
                     f"  LSD init/accel/decel: {s.get('lsd_initial','?')}/{s.get('lsd_accel','?')}/{s.get('lsd_decel','?')}  "
                     f"  Brake bias: {s.get('brake_bias','?')}  "
                     f"  Restrictor: {s.get('power_restrictor','?')}%  "
-                    f"  Shift RPM: {e.get('shift_rpm', '?')}"
+                    f"  {_shift_str}"
                 )
             if e.get("reasoning"):
                 reasoning_preview = str(e["reasoning"])[:400]

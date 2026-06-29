@@ -9,6 +9,7 @@ car setup recommendations, and suggestions for further practice.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from statistics import mean, stdev
@@ -18,6 +19,13 @@ from strategy._ai_client import (
     call_api,
     format_setup_for_prompt,
     load_gt7_reference,
+)
+from strategy.feasibility import (
+    DataGap,
+    FeasibilityReport,
+    RejectedStrategy,
+    compute_feasibility,
+    estimate_race_laps,
 )
 from strategy.setup_ranges import resolve_ranges
 from ui.gt7_data import build_track_context
@@ -122,6 +130,54 @@ class StrategyOption:
     risks: str
     positives: str = ""
     negatives: str = ""
+    # New fields — risk/ranking metadata returned by the AI
+    estimated_speed_rank: int = 0      # 1 = fastest overall, 2 = second, 3 = third
+    tyre_risk: str = ""
+    fuel_risk: str = ""
+    traffic_risk: str = ""
+    undercut_risk: str = ""
+    confidence_score: float = 0.0
+    why_label: str = ""
+
+
+@dataclass
+class StrategyResult:
+    """Container for the full strategy analysis result.
+
+    Wraps a list[StrategyOption] with the feasibility metadata.
+    Provides __iter__/__len__/__getitem__ shims for backward compatibility
+    with callers that treat the return value as a plain list.
+    """
+    strategies: list[StrategyOption]
+    rejected_strategies: list[RejectedStrategy]
+    data_gaps: list[DataGap]
+    assumptions: list[str]
+    calculation_notes: list[str]
+    feasibility: FeasibilityReport
+
+    # ------------------------------------------------------------------
+    # Backward-compat list shims
+    # ------------------------------------------------------------------
+    def __iter__(self):
+        return iter(self.strategies)
+
+    def __len__(self) -> int:
+        return len(self.strategies)
+
+    def __getitem__(self, index):
+        return self.strategies[index]
+
+    def __eq__(self, other) -> bool:
+        """Allow comparison with lists for backward compatibility.
+
+        Callers that stored the old list[StrategyOption] return value and
+        compare it to [] or another list will continue to work.
+        """
+        if isinstance(other, list):
+            return self.strategies == other
+        if isinstance(other, StrategyResult):
+            return self.strategies == other.strategies
+        return NotImplemented
 
 
 @dataclass
@@ -168,7 +224,9 @@ class CarSetupRecommendation:
     lsd_front_accel: int = 0
     lsd_front_decel: int = 0
     ecu_recommendation: str = ""      # plain-English advice on ECU stage + Power Restrictor combo
-    shift_rpm: int = 0                # engine RPM to upshift for best lap time (0 = unknown)
+    shift_rpm: int = 0                # legacy: max(shift_rpm_qual, shift_rpm_race); 0 = unknown
+    shift_rpm_qual: int = 0           # upshift RPM for qualifying (just past peak power, ≤ rev-limit − 200)
+    shift_rpm_race: int = 0           # upshift RPM for race (more conservative than qual — energy/tyre saving)
     raw_response: str = ""
 
 
@@ -190,18 +248,84 @@ def analyse_strategy(
     corner_issues_summary: str = "",
     model: str | None = None,
     car_id: int = 0,
-) -> list[StrategyOption]:
-    """Call Claude and return up to 3 ranked strategy options."""
+    race_situation: dict | None = None,
+) -> "StrategyResult":
+    """Call Claude and return a StrategyResult with ranked strategy options and feasibility metadata.
+
+    Representative lap selection: we use the minimum (best) clean lap time of the
+    fastest (most laps) compound rather than a flat mean across all compounds.
+    This choice is conservative — the fastest car on a flying lap is what GT7's
+    AI uses for pace projections — and is documented here so future reviewers
+    understand the decision.
+    """
     from strategy.track_context_prompt import get_track_context_for_ai as _get_tc
+
+    # ------------------------------------------------------------------
+    # Compute representative clean lap for timed-race lap estimation.
+    # Use min(laps) of the compound with the most data (tiebreak: fastest
+    # average).  This is intentionally a best-case single lap, not a mean,
+    # because GT7's lap estimate for timed races is based on the driver's
+    # best pace, not average pace.
+    # ------------------------------------------------------------------
+    _representative_lap_s: float = 0.0
+    if lap_data_by_compound:
+        # Pick compound with most laps; tiebreak on lowest average
+        _best_compound = max(
+            lap_data_by_compound,
+            key=lambda c: (
+                len(lap_data_by_compound[c]),
+                -mean(lap_data_by_compound[c]) if lap_data_by_compound[c] else 0,
+            ),
+        )
+        _best_laps = lap_data_by_compound[_best_compound]
+        if _best_laps:
+            _representative_lap_s = min(_best_laps) / 1000.0  # ms → s
+
+    # ------------------------------------------------------------------
+    # Estimate race laps (timed) or take directly from params (lap race)
+    # ------------------------------------------------------------------
+    if params.race_type == "timed":
+        _duration_s = (params.duration_mins or 0) * 60.0
+        _estimated_laps = estimate_race_laps(_duration_s, _representative_lap_s)
+    else:
+        _estimated_laps = params.total_laps
+
+    # ------------------------------------------------------------------
+    # Run feasibility gate
+    # ------------------------------------------------------------------
+    _feasibility = compute_feasibility(
+        params, lap_data_by_compound, degradation, _estimated_laps
+    )
+
+    # ------------------------------------------------------------------
+    # Short-circuit: if ALL stop counts are rejected, do NOT call the API.
+    # Returning immediately prevents token waste and stops the AI from
+    # inventing strategies when nothing is feasible.
+    # ------------------------------------------------------------------
+    if not _feasibility.feasible_stop_counts:
+        return StrategyResult(
+            strategies=[],
+            rejected_strategies=_feasibility.rejected_strategies,
+            data_gaps=_feasibility.data_gaps,
+            assumptions=_feasibility.assumptions,
+            calculation_notes=_feasibility.calculation_notes,
+            feasibility=_feasibility,
+        )
+
     _track_ctx = _get_tc(params.track_location_id, params.layout_id, car_name=car_name)
-    prompt = _build_race_prompt(params, lap_data_by_compound, degradation,
-                                setup_history=setup_history,
-                                car_name=car_name, car_specs=car_specs or {},
-                                setup_comparison=setup_comparison,
-                                fuel_sequence=fuel_sequence or [],
-                                compound_sequences=compound_sequences or {},
-                                corner_issues_summary=corner_issues_summary,
-                                track_context=_track_ctx)
+    prompt = _build_race_prompt(
+        params, lap_data_by_compound, degradation,
+        setup_history=setup_history,
+        car_name=car_name, car_specs=car_specs or {},
+        setup_comparison=setup_comparison,
+        fuel_sequence=fuel_sequence or [],
+        compound_sequences=compound_sequences or {},
+        corner_issues_summary=corner_issues_summary,
+        track_context=_track_ctx,
+        feasibility_report=_feasibility,
+        race_situation=race_situation,
+    )
+
     _warnings: list = []
     if not params.track:
         _warnings.append("Track missing — recommendation may be inaccurate")
@@ -226,7 +350,19 @@ def analyse_strategy(
                    feature="Strategy Analysis", structured_payload=_payload,
                    model=model, car_id=car_id, track=params.track)
     try:
-        return _parse_strategies(raw)
+        result = _parse_strategies(raw, feasibility=_feasibility)
+        # Merge feasibility data_gaps and assumptions that aren't already present
+        _existing_gap_names = {dg.name for dg in result.data_gaps}
+        for dg in _feasibility.data_gaps:
+            if dg.name not in _existing_gap_names:
+                result.data_gaps.append(dg)
+                _existing_gap_names.add(dg.name)
+        _existing_assumptions = set(result.assumptions)
+        for a in _feasibility.assumptions:
+            if a not in _existing_assumptions:
+                result.assumptions.append(a)
+                _existing_assumptions.add(a)
+        return result
     except Exception as exc:
         preview = raw[:300].replace("\n", " ") if raw else "(empty)"
         raise RuntimeError(
@@ -586,10 +722,9 @@ def _race_rules_block(params: RaceParams) -> str:
 
 def _wear_note(params: RaceParams) -> str:
     if params.tyre_wear_multiplier == 1.0:
-        return "Tyre wear rate is the same as in practice."
-    extra_pct = (params.tyre_wear_multiplier - 1.0) * 100.0
-    return (f"Race tyre wear is {params.tyre_wear_multiplier:.1f}× faster than practice "
-            f"(+{extra_pct:.0f}%).")
+        return "Tyre wear multiplier is 1.0× (standard); practice and race share this wear rate."
+    return (f"Tyre wear multiplier is {params.tyre_wear_multiplier:.1f}× and applies equally to "
+            f"practice and race, so the practice lap data already reflects race wear — do not scale it.")
 
 
 def _build_fuel_trend_block(fuel_sequence: list) -> str:
@@ -657,6 +792,8 @@ def _build_race_prompt(
     compound_sequences: dict | None = None,
     corner_issues_summary: str = "",
     track_context: str = "",
+    feasibility_report: "FeasibilityReport | None" = None,
+    race_situation: dict | None = None,
 ) -> str:
     car_specs = car_specs or {}
     gt7_ref = load_gt7_reference()
@@ -679,16 +816,17 @@ def _build_race_prompt(
     else:
         degradation_block = (
             "## Tyre degradation estimates (no practice data)\n"
-            "GT7 compound estimates: RS ~10–16 race laps, RM ~18–25 race laps, RH ~28–40 race laps.\n"
+            "GT7 compound baselines at standard (1.0×) wear: RS ~10–16 laps, RM ~18–25 laps, RH ~28–40 laps.\n"
             "Assume pace drops linearly so that by the tyre life lap the compound is 2.0s slower than reference.\n"
-            f"Tyre life in race laps = practice_laps_before_deg / {params.tyre_wear_multiplier:.1f} (wear multiplier)."
+            f"This event's tyre wear multiplier is {params.tyre_wear_multiplier:.1f}×; if above 1.0×, expect "
+            f"proportionally shorter tyre life than the baselines above."
         )
 
     rules_block = _race_rules_block(params)
     mandatory_instruction = ""
     if params.min_mandatory_stops > 0:
         mandatory_instruction += (
-            f"\n0. MANDATORY: all 3 strategies must include at least "
+            f"\n0. MANDATORY: all strategies must include at least "
             f"{params.min_mandatory_stops} pit stop(s) — this is a race rule."
         )
     if params.mandatory_compounds:
@@ -752,14 +890,134 @@ def _build_race_prompt(
         f"\n{corner_issues_summary}\n" if corner_issues_summary.strip() else ""
     )
 
+    # ------------------------------------------------------------------
+    # Build feasibility block from FeasibilityReport
+    # ------------------------------------------------------------------
+    _report = feasibility_report
+    if _report is not None:
+        _fs_counts = _report.feasible_stop_counts
+        if _fs_counts:
+            _fs_str = ", ".join(f"{n}-stop" for n in _fs_counts)
+        else:
+            _fs_str = "(none — all stop counts rejected; return zero feasible strategies)"
+
+        _rej_lines = []
+        for rs in _report.rejected_strategies:
+            _rej_lines.append(f"  - {rs.name}: {rs.reason}")
+        _rej_block = "\n".join(_rej_lines) if _rej_lines else "  (none)"
+
+        _gap_lines = []
+        for dg in _report.data_gaps:
+            _gap_lines.append(f"  - {dg.name}: {dg.description}")
+        _gap_block = "\n".join(_gap_lines) if _gap_lines else "  (none)"
+
+        _assump_lines = "\n".join(f"  - {a}" for a in _report.assumptions) or "  (none)"
+        _calc_lines = "\n".join(f"  - {c}" for c in _report.calculation_notes) or "  (none)"
+
+        _eligible_str = ", ".join(_report.eligible_compounds) or "(none)"
+        _ineligible_str = ", ".join(_report.ineligible_compounds) or "(none)"
+
+        feasibility_block = f"""## Feasibility Gate (pre-computed — treat as authoritative)
+Estimated race laps: {_report.estimated_laps}
+Feasible stop counts: {_fs_str}
+Eligible compounds (≥8 clean laps, validated degradation): {_eligible_str}
+Ineligible compounds (insufficient data — do NOT use in calculated stints): {_ineligible_str}
+
+Rejected stop counts:
+{_rej_block}
+
+Data gaps:
+{_gap_block}
+
+Assumptions:
+{_assump_lines}
+
+Calculation notes:
+{_calc_lines}"""
+    else:
+        feasibility_block = ""
+
+    # ------------------------------------------------------------------
+    # Build data-quality summary for the prompt
+    # ------------------------------------------------------------------
+    _dq_lines: list[str] = [
+        "## Data Quality Summary",
+        "Out/in/pit laps are excluded from all lap-time counts below.",
+        "Measured = GT7 packet values. Calculated = derived (physics). Estimated = inferred proxy (uncertainty).",
+        "Tyre wear [estimated — radius trend, varies with temperature].",
+        "Wheelspin/lockup events [calculated — wheel slip threshold].",
+    ]
+    for compound, times in sorted(lap_data.items()):
+        if not times:
+            continue
+        avg = mean(times)
+        sd = stdev(times) if len(times) > 1 else 0.0
+        deg_entry = (degradation or {}).get(compound, {})
+        conf = deg_entry.get("confidence", "not available") if deg_entry else "not available"
+        _dq_lines.append(
+            f"  {compound}: {len(times)} clean laps — "
+            f"avg {avg/1000:.3f}s, best {min(times)/1000:.3f}s, "
+            f"std-dev {sd/1000:.3f}s [calculated] — degradation confidence: {conf}"
+        )
+    _data_quality_block = "\n".join(_dq_lines)
+
+    # ------------------------------------------------------------------
+    # Stop-count instruction based on feasibility
+    # ------------------------------------------------------------------
+    if _report is not None and _report.feasible_stop_counts:
+        _stop_instruction = (
+            f"consider ONLY the following feasible stop counts: "
+            f"{', '.join(str(n) + '-stop' for n in _report.feasible_stop_counts)}. "
+            "Do not propose any stop count not in this list."
+        )
+    elif _report is not None and not _report.feasible_stop_counts:
+        _stop_instruction = (
+            "ALL stop counts have been rejected by the feasibility gate (see Feasibility Gate section). "
+            "Return zero feasible strategies in 'strategies'. Place all options in 'rejected_strategies' "
+            "with the reasons from the feasibility gate."
+        )
+    else:
+        _stop_instruction = (
+            "consider 1-stop, 2-stop, and 0-stop options "
+            "(only include 0-stop if compound endurance allows and no mandatory stop rule exists)"
+        )
+
+    # ------------------------------------------------------------------
+    # Mid-race re-plan block (prepended when race_situation is provided)
+    # ------------------------------------------------------------------
+    if race_situation is not None:
+        _rs = race_situation
+        _orig_stints_json = json.dumps(_rs.get("original_plan_stints", []), indent=2)
+        _recent_laps_str = ", ".join(
+            str(ms) for ms in (_rs.get("recent_lap_times_ms") or [])
+        )
+        _midrace_block = (
+            "## MID-RACE RE-PLAN — read this first\n"
+            "The race is in progress. Do NOT plan from lap 1. "
+            "Re-plan ONLY the remaining laps. The first output stint IS the current stint in progress "
+            "(tyres already aged, fuel already used — these are sunk costs).\n\n"
+            f"- current_lap: {_rs.get('current_lap', '?')}\n"
+            f"- total_laps: {_rs.get('total_laps', '?')}\n"
+            f"- laps_remaining: {_rs.get('laps_remaining', '?')}\n"
+            f"- current_compound: {_rs.get('current_compound', '?')}\n"
+            f"- tyre_age_laps: {_rs.get('tyre_age_laps', '?')}\n"
+            f"- live_fuel_burn_lpl: {_rs.get('live_fuel_burn_lpl', '?')}\n"
+            f"- replan_reason: {_rs.get('replan_reason', '?')}\n"
+            f"- recent_lap_times_ms: [{_recent_laps_str}]\n\n"
+            "Original plan stints:\n"
+            f"```json\n{_orig_stints_json}\n```\n"
+        )
+    else:
+        _midrace_block = ""
+
     return f"""You are an expert Gran Turismo 7 race strategist with deep knowledge of the game's physics and mechanics.
 
 ## GT7 Knowledge Base
 {gt7_ref}
 
 ---
-
-Analyse the race below and produce exactly 3 strategy options ranked by estimated total race time (fastest first).
+{(_midrace_block + chr(10)) if _midrace_block else ""}
+Analyse the race below and produce strategy options.
 
 ## Race parameters
 {f"- Car: {car_line}" + chr(10) if car_line else ""}- {build_track_context(params.track)}
@@ -776,31 +1034,64 @@ Analyse the race below and produce exactly 3 strategy options ranked by estimate
 {_fuel_trend_block}{_corner_issues_section}
 {(chr(10) + rules_block) if rules_block else ""}{tuning_block}
 {(chr(10) + setup_history) if setup_history else ""}{(chr(10) + setup_comparison) if setup_comparison else ""}
+{_data_quality_block}
+
 {_DATA_QUALITY_NOTE}
 
+{feasibility_block}
+
+## Explicit rules — follow these exactly
+- Do not invent missing compound data. Use only compounds with measured practice laps.
+- Do not produce impossible stop counts. Only propose stop counts in the feasible_stop_counts list above.
+- Reject infeasible strategies explicitly in rejected_strategies with a clear reason.
+- Use measured event data over generic GT7 knowledge. Seed track data is context only, not confirmed geometry.
+- Do NOT use ANY compound in a calculated stint unless it appears in the eligible compounds list above (this includes RS and RH, but also any compound — e.g. RM — with insufficient data). Ineligible compounds may appear ONLY in data_gaps or testing recommendations.
+- Pit work is sequential: refuel time adds on top of pit_loss_secs (which already covers the tyre swap). No separate tyre-change duration.
+- pit_loss_secs ({params.pit_loss_secs:.1f}s) is the authoritative pit lane time loss; do not use seed-track pit delta data.
+- Pit stop time formula: pit_time_s = pit_loss_secs + ceil(fuel_to_add_litres / refuel_speed_lps).
+- GT7 fuel: full tank = 100 litres = 100%. Starting fuel is always 100. Max fuel-limited laps = floor(100 / fuel_burn_per_lap).
+
 ## Instructions{mandatory_instruction}
-1. Consider 1-stop, 2-stop, and no-stop options (only include no-stop if compound endurance allows and no mandatory stop rule exists).
+1. {_stop_instruction}
 2. Use the tyre degradation section above for stint lengths — do not exceed the optimal stint.
-3. Pit stop time = ceil(fuel_for_next_stint / refuel_speed) + pit_loss_secs.
+3. Pit stop time = pit_loss_secs + ceil(fuel_for_next_stint / refuel_speed_lps).
 4. Total time = Σ (laps × pace) + Σ pit_stop_times, accounting for degraded pace in later laps of each stint.
 5. Set pace_threshold_ms = 2000 for Soft, 2500 for Medium, 3000 for Hard/Racing Hard.
 6. Set ref_lap_ms to the recorded average for that compound.
 
-## Output
-Name the three strategies exactly:
-- Rank 1: "Safe" (prioritise finishing, minimum risk — conservative compound choice, extra fuel margin)
-- Rank 2: "Balanced" (best estimated time with moderate risk)
-- Rank 3: "Aggressive" (maximum pace, highest risk — fewest stops, softest compounds)
+## Strategy naming and risk labels
+Name strategies using descriptive names that reflect the actual stop count and compound choice (e.g. "1-Stop Medium/Hard").
+Apply risk labels to each strategy:
+  - "Safe" = highest finish confidence (conservative compound, extra fuel margin, reliability focus)
+  - "Balanced" = best estimated total race time with moderate risk
+  - "Aggressive" = fastest lap pace, highest risk (softest compounds, minimum fuel, fewest safe stops)
+These are LABELS — the actual label goes in the "name" field.
 
+Set "estimated_speed_rank" SEPARATELY from the label:
+  1 = fastest estimated race time, 2 = second fastest, 3 = third fastest.
+A "Safe" strategy may have estimated_speed_rank=1 if it is genuinely the fastest option.
+Do NOT force Safe=Rank1, Balanced=Rank2, Aggressive=Rank3.
+
+## Per-strategy risk fields required in output
+For each strategy set:
+  - "tyre_risk": "low" / "medium" / "high" (likelihood of tyre failure or unexpected cliff)
+  - "fuel_risk": "low" / "medium" / "high" (likelihood of running short of fuel)
+  - "traffic_risk": "low" / "medium" / "high" (sensitivity to slower cars or pit traffic)
+  - "undercut_risk": "low" / "medium" / "high" (vulnerability to being undercut by a rival)
+  - "confidence_score": 0.0–1.0 (your confidence this strategy will play out as estimated)
+  - "why_label": one sentence explaining why this label (Safe/Balanced/Aggressive) was assigned
+
+## Output
 Reply ONLY with a valid JSON object — no markdown, no extra text:
 
 {{
   "strategies": [
     {{
       "rank": 1,
-      "name": "Safe",
+      "name": "Safe — 1-Stop Medium/Hard",
+      "estimated_speed_rank": 2,
       "stints": [
-        {{"compound": "Soft", "laps": 14, "ref_lap_ms": 95200, "pace_threshold_ms": 2000}},
+        {{"compound": "Medium", "laps": 14, "ref_lap_ms": 96200, "pace_threshold_ms": 2500}},
         {{"compound": "Hard", "laps": 11, "ref_lap_ms": 97400, "pace_threshold_ms": 3000}}
       ],
       "estimated_time_s": 2401.5,
@@ -808,8 +1099,26 @@ Reply ONLY with a valid JSON object — no markdown, no extra text:
       "summary": "Safest route to the finish. Conservative compound choice minimises risk.",
       "risks": "Slightly slower overall — but high chance of finishing.",
       "positives": "Low risk of tyre failure or fuel issues.",
-      "negatives": "Sacrifices pace in exchange for reliability."
+      "negatives": "Sacrifices pace in exchange for reliability.",
+      "tyre_risk": "low",
+      "fuel_risk": "low",
+      "traffic_risk": "medium",
+      "undercut_risk": "medium",
+      "confidence_score": 0.85,
+      "why_label": "Labelled Safe because it uses the hardest available compound with an extra fuel margin."
     }}
+  ],
+  "rejected_strategies": [
+    {{"name": "0-stop", "reason": "Tyre life insufficient for no-stop; RM optimal stint is 18 laps but 38 laps needed."}}
+  ],
+  "data_gaps": [
+    {{"name": "compound_RS_insufficient_data", "description": "RS has only 3 clean laps — needs 8 for a calculated stint."}}
+  ],
+  "assumptions": [
+    "GT7 may require completing the lap in progress when the timer expires — actual laps may be estimated + 1."
+  ],
+  "calculation_notes": [
+    "Race laps estimated as ceil(7200s / 96.3s) = 75 laps."
   ]
 }}"""
 
@@ -827,9 +1136,6 @@ _TUNING_CATEGORY_KEYS: dict[str, list[str]] = {
     "power":         ["power_restrictor"],
     "ballast":       ["ballast_kg", "ballast_position"],
 }
-
-_ALL_TUNING_CATS: list[str] = list(_TUNING_CATEGORY_KEYS.keys())
-
 
 def _build_per_lap_telemetry_block(rows: list) -> str:
     """Format the per-lap telemetry table for the practice prompt (Phase 2-A)."""
@@ -1024,10 +1330,14 @@ Analyse the practice session below and provide:
 **Further practice** (`further_practice`): 4–6 structured tests from the testing programme above. Specify laps, compound, and exactly what to record on each run.
 
 ## Output format
-Name the three strategies exactly:
-- Rank 1: "Safe" (prioritise finishing, minimum risk)
-- Rank 2: "Balanced" (best estimated time with moderate risk)
-- Rank 3: "Aggressive" (maximum pace, highest risk)
+Name each strategy using a descriptive label that reflects the risk profile — not a forced rank:
+  - "Safe" = highest finish confidence (conservative compound, extra fuel margin, reliability focus)
+  - "Balanced" = best estimated total race time with moderate risk
+  - "Aggressive" = fastest lap pace, highest risk (softest compounds, minimum fuel)
+These are LABELS — a "Safe" strategy is allowed to have estimated_speed_rank=1 if it is genuinely the fastest option.
+Do NOT force Safe=Rank1, Balanced=Rank2, Aggressive=Rank3.
+
+Set "estimated_speed_rank" SEPARATELY from the label (1=fastest estimated race time, 2=second, 3=third).
 
 Reply ONLY with valid JSON — no markdown fences, no extra text:
 
@@ -1036,6 +1346,7 @@ Reply ONLY with valid JSON — no markdown fences, no extra text:
     {{
       "rank": 1,
       "name": "Safe",
+      "estimated_speed_rank": 2,
       "stints": [{{"compound": "...", "laps": 0, "ref_lap_ms": 0, "pace_threshold_ms": 2000}}],
       "estimated_time_s": 0.0,
       "pit_time_s": 0.0,
@@ -1057,8 +1368,12 @@ Reply ONLY with valid JSON — no markdown fences, no extra text:
 }}"""
 
 
+# Setup-tuning categories that can be locked by event rules. Must match the
+# selectable checkboxes in DashboardWindow._TUNING_CATEGORIES — "tyres" is NOT a
+# setup-tuning field (compound choice is a strategy decision handled elsewhere),
+# so it must not appear here or it is always reported as LOCKED.
 _ALL_TUNING_CATS = [
-    "tyres", "brake_balance", "suspension", "differential",
+    "brake_balance", "suspension", "differential",
     "aero", "transmission", "power", "ballast", "steering", "nitrous",
 ]
 
@@ -1173,7 +1488,7 @@ def _build_setup_from_scratch_prompt(
     _race_ctx_lines: list[str] = []
     if tyre_wear_multiplier != 1.0:
         _race_ctx_lines.append(f"  Tyre wear multiplier: {tyre_wear_multiplier:.1f}x "
-                               f"(race wears tyres {tyre_wear_multiplier:.1f}x faster than practice)")
+                               f"(applies to both practice and race; high wear favours tyre conservation)")
     if fuel_multiplier != 1.0:
         _race_ctx_lines.append(f"  Fuel multiplier: {fuel_multiplier:.1f}x")
     if avail_tyres:
@@ -1342,23 +1657,44 @@ For transmission fields:
         return f"{lo}–{hi}"
 
     _r = _ranges
+
+    # Per-car ranges can be set independently for each side / sub-parameter via
+    # the Car Ranges dialog, so never collapse a group to one side's range —
+    # show both when they differ (compact when identical).
+    def _pair(front_key, rear_key):
+        f, rr = _r[front_key], _r[rear_key]
+        if f == rr:
+            return _fmt_range(*f)
+        return f"front {_fmt_range(*f)} / rear {_fmt_range(*rr)}"
+
+    def _group(keys, labels):
+        vals = [_r[k] for k in keys]
+        if all(v == vals[0] for v in vals):
+            return _fmt_range(*vals[0])
+        return ", ".join(f"{lbl} {_fmt_range(*v)}" for lbl, v in zip(labels, vals))
+
     _ranges_block = f"""GT7 valid ranges for every field (clamp your values to these — the game will reject anything outside):
-  ride_height_front / ride_height_rear : {_fmt_range(*_r['ride_height_front'])} mm
-  springs_front / springs_rear         : {_fmt_range(*_r['springs_front'])} Hz  ← GT7 uses NATURAL FREQUENCY in Hz, NOT N/mm or kg/mm
-  dampers_front_comp / dampers_rear_comp : {_fmt_range(*_r['dampers_front_comp'])} %  ← Damping Ratio (Compression); this is a guideline only — not a constraint: typical starting point 30–40 %
-  dampers_front_ext  / dampers_rear_ext  : {_fmt_range(*_r['dampers_front_ext'])} %  ← Damping Ratio (Expansion); this is a guideline only — not a constraint: typical starting point 35–50 %; extension must usually be ≥ compression
-  arb_front / arb_rear                 : {_fmt_range(*_r['arb_front'])}
-  camber_front / camber_rear           : {_fmt_range(*_r['camber_front'])} °  ← always POSITIVE in GT7 (0.00 = no camber; 6.0 = maximum camber)
-  toe_front / toe_rear                 : {_fmt_range(*_r['toe_front'])} °  ← convention: negative front = toe-out, positive rear = toe-in
-  aero_front / aero_rear               : {_fmt_range(*_r['aero_front'])} (downforce setting; use 0 for non-aero cars)
-  lsd_initial / lsd_accel / lsd_decel  : {_fmt_range(*_r['lsd_initial'])}  ← Rear LSD
-  lsd_front_initial / lsd_front_accel / lsd_front_decel : {_fmt_range(*_r['lsd_front_initial'])}  ← Front LSD (AWD only; set to 0 for non-AWD cars)
+  ride_height_front / ride_height_rear : {_pair('ride_height_front', 'ride_height_rear')} mm
+  springs_front / springs_rear         : {_pair('springs_front', 'springs_rear')} Hz  ← GT7 uses NATURAL FREQUENCY in Hz, NOT N/mm or kg/mm
+  dampers_front_comp / dampers_rear_comp : {_pair('dampers_front_comp', 'dampers_rear_comp')} %  ← Damping Ratio (Compression); this is a guideline only — not a constraint: typical starting point 30–40 %
+  dampers_front_ext  / dampers_rear_ext  : {_pair('dampers_front_ext', 'dampers_rear_ext')} %  ← Damping Ratio (Expansion); this is a guideline only — not a constraint: typical starting point 35–50 %; extension must usually be ≥ compression
+  arb_front / arb_rear                 : {_pair('arb_front', 'arb_rear')}
+  camber_front / camber_rear           : {_pair('camber_front', 'camber_rear')} °  ← always POSITIVE in GT7 (0.00 = no camber; 6.0 = maximum camber)
+  toe_front / toe_rear                 : {_pair('toe_front', 'toe_rear')} °  ← convention: negative front = toe-out, positive rear = toe-in
+  aero_front / aero_rear               : {_pair('aero_front', 'aero_rear')} (downforce setting; use 0 for non-aero cars)
+  lsd_initial / lsd_accel / lsd_decel  : {_group(['lsd_initial', 'lsd_accel', 'lsd_decel'], ['initial', 'accel', 'decel'])}  ← Rear LSD
+  lsd_front_initial / lsd_front_accel / lsd_front_decel : {_group(['lsd_front_initial', 'lsd_front_accel', 'lsd_front_decel'], ['initial', 'accel', 'decel'])}  ← Front LSD (AWD only; set to 0 for non-AWD cars)
   brake_bias                           : {_fmt_range(*_r['brake_bias'])}  ← NEGATIVE = more FRONT braking, POSITIVE = more REAR braking
   ballast_kg                           : {_fmt_range(*_r['ballast_kg'])} kg
   ballast_position                     : {_fmt_range(*_r['ballast_position'])}  ← −50 = full rear, +50 = full front
   power_restrictor                     : {_fmt_range(*_r['power_restrictor'])} %
-  shift_rpm                            : engine RPM to upshift for best lap time (typically just past peak power RPM;
-                                         set to 0 only if car is electric or data is unavailable)"""
+  shift_rpm_qual                       : upshift RPM for the best qualifying lap — place just past the PEAK-POWER RPM,
+                                         capped ~200 RPM below the rev limiter; 0 if electric or peak RPM unknown.
+                                         NOTE: only peak power/torque figures are available — there is no full power curve.
+  shift_rpm_race                       : upshift RPM for the race — chosen EXPLICITLY for energy and tyre saving, more
+                                         conservative than shift_rpm_qual; NOT a fixed offset from qual; 0 if unknown.
+                                         Do NOT derive by subtracting a fixed amount from shift_rpm_qual — think about
+                                         what RPM serves the driver best for consistency and preservation."""
 
     return f"""You are an expert Gran Turismo 7 car setup engineer who knows the game's physics in detail.
 
@@ -1436,7 +1772,8 @@ Keep the entire reasoning as one string; separate change-blocks by blank lines.
   "ballast_position": 0,
   "power_restrictor": 100.0,
   "ecu_recommendation": "Stock ECU, no power restriction needed.",
-  "shift_rpm": 7200,{gear_json}
+  "shift_rpm_qual": 7400,
+  "shift_rpm_race": 7000,{gear_json}
   "reasoning": "springs_front set to 3.50 Hz\\nExpected lap-time effect: ...\\nExpected tyre-wear effect: ...\\nExpected fuel effect: ...\\nExpected braking-stability effect: ...\\nConfidence: medium — typical Gr.3 starting point\\nValidation method: run 3 laps and note dive under braking\\nTelemetry indicator: front suspension travel on braking zones\\n\\nNext change..."
 }}"""
 
@@ -1456,7 +1793,9 @@ def _build_degradation_prompt(
     return f"""You are a GT7 tyre degradation analyst.
 
 Analyse the practice lap sequences below and identify the performance cliff for each compound.
-The race wear multiplier is {wear_multiplier:.1f}× (practice laps × multiplier = race equivalent laps).
+The tyre wear multiplier is {wear_multiplier:.1f}× and applies EQUALLY to practice and race in this
+setup, so these practice laps were already run at race wear rate — the degradation you see IS the race
+degradation. Do NOT scale practice laps to "race-equivalent"; report race laps equal to the practice laps observed.
 
 ## Practice lap times (ordered within each stint)
 {laps_block}
@@ -1464,8 +1803,8 @@ The race wear multiplier is {wear_multiplier:.1f}× (practice laps × multiplier
 For each compound determine:
 1. cliff_lap_practice — the practice lap number within the stint where pace drops non-linearly (sudden or accelerating degradation, not just normal variation). Use lap 1 as index 1. IMPORTANT: a cliff MUST be sustained across at least 2 consecutive laps. A single slow lap (spin, lock-up, traffic, outlier) does NOT constitute a cliff — set cliff_lap_practice to null if the drop is not confirmed by the following lap.
 2. pace_loss_at_cliff_s — how many seconds/lap slower at the cliff vs the early-stint average (laps 1-3).
-3. total_life_race — total race laps the compound lasts before it is fully uncompetitive (unscaled: multiply practice total by {1/wear_multiplier:.2f} or estimate if data is short).
-4. optimal_stint_race — race laps up to but NOT including the cliff (= (cliff_lap_practice - 1) / {wear_multiplier:.1f}, rounded down, minimum 1).
+3. total_life_race — total race laps the compound lasts before it is fully uncompetitive. This EQUALS the total practice laps before it becomes uncompetitive (no scaling — practice and race share the same wear rate), or estimate if data is short.
+4. optimal_stint_race — race laps up to but NOT including the cliff (= cliff_lap_practice - 1, minimum 1; no scaling).
 5. confidence — "high" if ≥8 laps of data, "medium" if 4–7, "low" if <4.
 
 ## Compound life ordering constraint (MUST be respected)
@@ -1516,7 +1855,17 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def _parse_strategies(raw: str) -> list[StrategyOption]:
+def _parse_strategies(
+    raw: str,
+    feasibility: "FeasibilityReport | None" = None,
+) -> "StrategyResult":
+    """Parse the AI JSON response into a StrategyResult.
+
+    Backward compatible: tolerates old JSON missing the new fields (uses .get defaults).
+    Accepts an optional FeasibilityReport to embed in the result; callers may also
+    pass None for pure parse-only use (e.g. in tests), in which case an empty report
+    is constructed.
+    """
     data = json.loads(_strip_fences(raw))
     options: list[StrategyOption] = []
     for s in data.get("strategies", []):
@@ -1530,16 +1879,74 @@ def _parse_strategies(raw: str) -> list[StrategyOption]:
             risks=str(s.get("risks", "")),
             positives=str(s.get("positives", "")),
             negatives=str(s.get("negatives", "")),
+            # New fields — default gracefully when absent (old JSON compat)
+            estimated_speed_rank=int(s.get("estimated_speed_rank", 0)),
+            tyre_risk=str(s.get("tyre_risk", "")),
+            fuel_risk=str(s.get("fuel_risk", "")),
+            traffic_risk=str(s.get("traffic_risk", "")),
+            undercut_risk=str(s.get("undercut_risk", "")),
+            confidence_score=float(s.get("confidence_score", 0.0)),
+            why_label=str(s.get("why_label", "")),
         ))
     options.sort(key=lambda x: x.rank)
-    return options
+
+    # Parse top-level rejected_strategies
+    _rejected: list[RejectedStrategy] = []
+    for r in data.get("rejected_strategies", []):
+        if isinstance(r, dict):
+            _rejected.append(RejectedStrategy(
+                name=str(r.get("name", "")),
+                reason=str(r.get("reason", "")),
+            ))
+        elif isinstance(r, str):
+            # Tolerate plain strings (lenient parsing)
+            _rejected.append(RejectedStrategy(name="", reason=r))
+
+    # Parse top-level data_gaps
+    _gaps: list[DataGap] = []
+    for g in data.get("data_gaps", []):
+        if isinstance(g, dict):
+            _gaps.append(DataGap(
+                name=str(g.get("name", "")),
+                description=str(g.get("description", "")),
+            ))
+        elif isinstance(g, str):
+            # Tolerate plain strings
+            _gaps.append(DataGap(name="", description=g))
+
+    # Parse top-level assumptions and calculation_notes
+    _assumptions: list[str] = [str(a) for a in data.get("assumptions", [])]
+    _calc_notes: list[str] = [str(n) for n in data.get("calculation_notes", [])]
+
+    # Build empty FeasibilityReport if none provided
+    if feasibility is None:
+        feasibility = FeasibilityReport(
+            estimated_laps=0,
+            feasible_stop_counts=[],
+            rejected_strategies=[],
+            data_gaps=[],
+            assumptions=[],
+            calculation_notes=[],
+            eligible_compounds=[],
+            ineligible_compounds=[],
+        )
+
+    return StrategyResult(
+        strategies=options,
+        rejected_strategies=_rejected,
+        data_gaps=_gaps,
+        assumptions=_assumptions,
+        calculation_notes=_calc_notes,
+        feasibility=feasibility,
+    )
 
 
 def _parse_practice_response(raw: str) -> PracticeAnalysis:
     data = json.loads(_strip_fences(raw))
-    strategies = _parse_strategies(json.dumps({"strategies": data.get("strategies", [])}))
+    # _parse_strategies now returns a StrategyResult; extract .strategies for PracticeAnalysis
+    strategy_result = _parse_strategies(json.dumps({"strategies": data.get("strategies", [])}))
     return PracticeAnalysis(
-        strategies=strategies,
+        strategies=strategy_result.strategies,
         setup_changes=list(data.get("setup_changes", [])),
         further_practice=list(data.get("further_practice", [])),
         aero_fuel_analysis=str(data.get("aero_fuel_analysis", "")),
@@ -1603,7 +2010,13 @@ def _parse_setup_recommendation(
         gear_ratios=[float(x) for x in d.get("gear_ratios", [])],
         reasoning=str(d.get("reasoning", "")),
         ecu_recommendation=str(d.get("ecu_recommendation", "")),
-        shift_rpm=_clamp(int(d.get("shift_rpm", 0)), 0, 20000),
+        shift_rpm_qual=_clamp(int(d.get("shift_rpm_qual", 0)), 0, 20000),
+        shift_rpm_race=_clamp(int(d.get("shift_rpm_race", 0)), 0, 20000),
+        # Legacy: populate shift_rpm as max of qual/race; fall back to old "shift_rpm" when both are 0
+        shift_rpm=max(
+            _clamp(int(d.get("shift_rpm_qual", 0)), 0, 20000),
+            _clamp(int(d.get("shift_rpm_race", 0)), 0, 20000),
+        ) or _clamp(int(d.get("shift_rpm", 0)), 0, 20000),
     )
 
 

@@ -1,15 +1,15 @@
 """Acceptance tests — Track Modelling Tab Extraction Refactor.
 
 Covers all acceptance criteria for the refactor that moved all _tm_* methods,
-_build_track_modelling_tab(), _live_try_load_active_event_map(), state
-initialisations, and _tm_ai_corner_verify_signal out of dashboard.py and
-into ui/track_modelling_ui.py as TrackModellingMixin.
+_build_track_modelling_tab(), state initialisations, and
+_tm_ai_corner_verify_signal out of dashboard.py and into
+ui/track_modelling_ui.py as TrackModellingMixin.
 
 ACs verified here:
   AC1 — track_modelling_ui.py structure (class, methods, signal, state attrs)
   AC2 — dashboard.py class declaration and absence of _tm_ method definitions
   AC3 — _on_tab_changed() and signal connection remain in dashboard.py
-  AC4 — _live_try_load_active_event_map() lives in the mixin, not dashboard.py
+  AC4 — _live_try_load_active_event_map() removed (Group A cleanup)
   AC6 — mixin contains >= 1700 lines (proxy for >= 2554 lines removed)
   AC7 — zero self._db references in the mixin
 """
@@ -51,9 +51,12 @@ class TestAC1MixinStructure:
             "_build_track_modelling_tab() not found in track_modelling_ui.py"
         )
 
-    def test_live_try_load_active_event_map_in_mixin(self):
-        assert re.search(r"def _live_try_load_active_event_map\(", MIXIN_SRC), (
-            "_live_try_load_active_event_map() not found in track_modelling_ui.py"
+    def test_live_try_load_active_event_map_removed(self):
+        # Group A cleanup: _live_try_load_active_event_map() was deleted because
+        # the Live-tab map widget was removed.
+        assert not re.search(r"def _live_try_load_active_event_map\(", MIXIN_SRC), (
+            "_live_try_load_active_event_map() must not exist in track_modelling_ui.py "
+            "after Group A cleanup"
         )
 
     def test_tm_ai_corner_verify_signal_in_mixin(self):
@@ -140,22 +143,24 @@ class TestAC3TabChangedInDashboard:
 
 
 # ---------------------------------------------------------------------------
-# AC4 — _live_try_load_active_event_map() in mixin, not in dashboard.py
+# AC4 — _live_try_load_active_event_map() removed by Group A cleanup
 # ---------------------------------------------------------------------------
 
-class TestAC4LiveTryLoadInMixinOnly:
-    """AC4: _live_try_load_active_event_map() moved to mixin exclusively."""
+class TestAC4LiveTryLoadRemoved:
+    """AC4: _live_try_load_active_event_map() deleted in Group A cleanup (Live-tab map removed)."""
 
-    def test_method_in_mixin(self):
-        assert re.search(r"def _live_try_load_active_event_map\(", MIXIN_SRC), (
-            "_live_try_load_active_event_map() not found in track_modelling_ui.py"
+    def test_method_not_in_mixin(self):
+        assert not re.search(r"def _live_try_load_active_event_map\(", MIXIN_SRC), (
+            "_live_try_load_active_event_map() must not exist in track_modelling_ui.py "
+            "after Group A cleanup"
         )
 
     def test_method_not_defined_in_dashboard(self):
         assert not re.search(
             r"def _live_try_load_active_event_map\(", DASHBOARD_SRC
         ), (
-            "_live_try_load_active_event_map() is still defined in dashboard.py"
+            "_live_try_load_active_event_map() must not exist in dashboard.py "
+            "after Group A cleanup"
         )
 
 

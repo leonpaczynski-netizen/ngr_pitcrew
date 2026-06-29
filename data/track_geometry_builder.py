@@ -21,6 +21,7 @@ from data.track_calibration import (
     CalibrationLapQuality,
     evaluate_lap_quality,
     estimate_path_length,
+    detect_pit_lap_raw,
 )
 from data.track_station_map import resample_path_to_uniform_spacing
 from data.track_seed_coordinate_map import (
@@ -29,6 +30,13 @@ from data.track_seed_coordinate_map import (
     export_seed_coordinate_map_json,
 )
 from data.track_library import _layout_dir, update_manifest_availability
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+CLOSURE_GAP_WARN_M: float = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +60,7 @@ class GeometryBuildResult:
     seed_map:             Optional[SeedCoordinateMap]
     confidence:           str    # "low" | "medium" | "high"
     station_count:        int
+    closure_gap_m:        float = 0.0
 
 
 @dataclass
@@ -118,10 +127,45 @@ def filter_full_laps(
             if 5.0 <= delta <= 20.0 and path_len < manifest_lap_length_m:
                 consistent_short_count += 1
 
+    # Gate 0a: identify the out-lap as the lap with the lowest lap_number
+    min_lap_number = min((l.lap_number for l in session.laps), default=None)
+
     results: List[LapGeometryFilterResult] = []
+    out_lap_rejected = False
 
     for idx, lap in enumerate(session.laps):
         path_len = path_lengths[idx]
+
+        # --- Gate 0a: OUT-LAP rejection ---
+        # Reject ONLY the first lap with the lowest lap_number (always starts from
+        # pits). If several laps share that lap_number (telemetry ties), reject just
+        # the first occurrence so legitimate clean laps are not over-excluded.
+        # Fall back to idx==0 if lap_number is unavailable/ambiguous.
+        is_out_lap = not out_lap_rejected and (
+            (min_lap_number is not None and lap.lap_number == min_lap_number)
+            or (min_lap_number is None and idx == 0)
+        )
+        if is_out_lap:
+            out_lap_rejected = True
+            results.append(LapGeometryFilterResult(
+                lap_index=idx,
+                status="rejected",
+                reason="out-lap: first calibration lap excluded (always starts from pits)",
+                delta_pct=0.0,
+                note="",
+            ))
+            continue
+
+        # --- Gate 0b: PIT-IN lap rejection ---
+        if detect_pit_lap_raw(lap.samples):
+            results.append(LapGeometryFilterResult(
+                lap_index=idx,
+                status="rejected",
+                reason="pit-in lap: telemetry indicates pit lane excursion",
+                delta_pct=0.0,
+                note="",
+            ))
+            continue
 
         # --- Step 1: existing quality gates ---
         qr = evaluate_lap_quality(
@@ -237,6 +281,16 @@ def build_seed_geometry(
         avg_z = sum(r[i][2] for r in truncated) / n_laps
         averaged.append((avg_x, avg_y, avg_z))
 
+    # Closure gap: XZ Euclidean distance between first and last averaged point
+    if len(averaged) >= 2:
+        import math as _math
+        closure_gap_m = _math.sqrt(
+            (averaged[-1][0] - averaged[0][0]) ** 2
+            + (averaged[-1][2] - averaged[0][2]) ** 2
+        )
+    else:
+        closure_gap_m = 0.0
+
     # Confidence tier
     n_accepted = len(accepted_indices)
     if n_accepted >= 4:
@@ -280,6 +334,7 @@ def build_seed_geometry(
         seed_map=seed_map,
         confidence=confidence,
         station_count=len(stations),
+        closure_gap_m=closure_gap_m,
     )
 
 

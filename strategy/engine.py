@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from statistics import mean
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from telemetry.state import RaceStateTracker, TelemetryEvent
@@ -101,6 +101,7 @@ class RaceStrategyEngine:
         self._stints: list[Stint] = []
         self._active = False
         self._ui_race_mode = True   # False when UI is in Practice/Qualifying — blocks RACE_STARTED
+        self._qualifying_mode: bool = False  # True when UI is in Qualifying specifically
         self._recent_lap_times: list[int] = []
         self._rain_condition = False
         self._damage_level = ""
@@ -124,6 +125,11 @@ class RaceStrategyEngine:
         self._consecutive_grip_laps: int = 0
         self._grip_recalc_done: bool = False
 
+        # Mid-race re-plan state
+        self._replan_in_flight: bool = False
+        self._adapted_plan: bool = False
+        self._replan_callback: Optional[Callable[[str], None]] = None
+
     # ------------------------------------------------------------------
     # Public API (Qt main thread)
     # ------------------------------------------------------------------
@@ -137,6 +143,16 @@ class RaceStrategyEngine:
             self._ui_race_mode = enabled
             if not enabled:
                 self._active = False
+
+    def set_qualifying_active(self, enabled: bool) -> None:
+        """Track whether the UI is in Qualifying mode specifically.
+
+        Called by the dashboard from _on_live_mode_changed.  Lets _on_race_start
+        distinguish Qualifying from Practice so it can announce the one-time
+        qualifying session acknowledgement.
+        """
+        with self._lock:
+            self._qualifying_mode = enabled
 
     def set_plan(self, stints: list[Stint]) -> None:
         with self._lock:
@@ -158,6 +174,8 @@ class RaceStrategyEngine:
             self._grip_alert_until = 0.0
             self._consecutive_grip_laps = 0
             self._grip_recalc_done = False
+            self._replan_in_flight = False  # I3: loading a new plan cancels any stale in-flight replan
+            self._adapted_plan = False      # I3: fresh plan is not yet adapted
             self._assign_lap_ranges()
         print(f"[Strategy] plan set: {len(stints)} stints")
         if self._bridge:
@@ -371,8 +389,17 @@ class RaceStrategyEngine:
         return f"fuel to {math.ceil(target)} litres"
 
     def _on_race_start(self, data: dict) -> None:
+        # Qualifying mode: fire the one-time session-start acknowledgement and return.
+        # The engine does not activate strategy tracking in qualifying.
+        if self._qualifying_mode:
+            self._adapted_plan = False
+            self._announcer.announce(
+                "Qualifying session started. Push for your best lap.",
+                Priority.HIGH, "strategy_race_start", 0.0,
+            )
+            return
         if not self._ui_race_mode:
-            return  # UI is in Practice/Qualifying — ignore game's race start event
+            return  # UI is in Practice — ignore game's race start event
         self._active = True
         self._recent_lap_times = []
         self._rain_condition = False
@@ -389,6 +416,8 @@ class RaceStrategyEngine:
         self._grip_alert_until = 0.0
         self._consecutive_grip_laps = 0
         self._grip_recalc_done = False
+        self._adapted_plan = False
+        self._replan_in_flight = False  # I2: clear in-flight flag on race start so restart unblocks replan
         self._assign_lap_ranges()
         if not self._stints:
             return
@@ -449,6 +478,8 @@ class RaceStrategyEngine:
         self._consecutive_grip_laps = 0
         self._grip_recalc_done = False
         self._grip_alert_until = 0.0
+        # Re-arm the mid-race re-plan trigger for the new stint
+        self._adapted_plan = False
         if self._bridge:
             self._bridge.strategy_status_changed.emit(self._build_status_str())
             # Update tyre thresholds for the new compound
@@ -556,6 +587,7 @@ class RaceStrategyEngine:
             self._announcer.announce(msg, Priority.HIGH,
                                      "strategy_tyre_deg", 60.0)
             stint.tyre_alert_issued = True
+            self._request_replan(reason="tyre degradation breach")
 
     def _check_lap_targets(self, record, stint: Stint) -> None:
         """Compare actual lap time and fuel to stint targets; alert only when outside tolerance."""
@@ -580,6 +612,11 @@ class RaceStrategyEngine:
                     msg = f"Lap time {delta_s:.1f} seconds below target."
                     self._announcer.announce(
                         msg, Priority.MEDIUM, "strategy_pace_lap", 10.0)
+                # Trigger mid-race re-plan once 4 consecutive slow laps are recorded
+                if self._slow_lap_count >= 4:
+                    self._request_replan(
+                        reason=f"{delta_s:.1f}s off target for {self._slow_lap_count} laps"
+                    )
             else:
                 self._slow_lap_count = 0
 
@@ -675,6 +712,93 @@ class RaceStrategyEngine:
             msg = (f"Fuel consumption changed to {avg:.1f} litres per lap. "
                    f"Pit fuel targets updated.")
             self._announcer.announce(msg, Priority.HIGH, "strategy_recalc", 30.0)
+
+    # ------------------------------------------------------------------
+    # Mid-race re-plan (called from telemetry thread / Qt main thread)
+    # ------------------------------------------------------------------
+
+    def _request_replan(self, reason: str) -> None:
+        """Safely request a mid-race strategy re-plan.
+
+        Called from the telemetry thread (inside _on_lap_completed) or from
+        _check_tyre_degradation.  Must not block.  Sets in-flight flag, announces
+        a standby message, and invokes the callback (if set) with the reason string.
+        """
+        if self._replan_in_flight or self._adapted_plan:
+            return
+        self._replan_in_flight = True
+        self._announcer.announce(
+            "Adapting strategy, stand by.",
+            Priority.HIGH, "strategy_replan_request", 0.0,
+        )
+        if self._replan_callback is not None:
+            self._replan_callback(reason)
+
+    def apply_replan(self, result) -> None:
+        """Apply a new strategy returned by the AI re-plan worker.
+
+        Called on the Qt main thread by the dashboard after the off-thread
+        worker posts a successful result.  ``result`` is a StrategyResult
+        (iterable of StrategyOption).
+
+        If result has no strategies, delegates to replan_failed().
+        """
+        options = list(result)
+        if not options:
+            self.replan_failed()
+            return
+
+        with self._lock:
+            first_option = options[0]
+            new_stint_dicts = list(first_option.stints)
+            if not new_stint_dicts:
+                pass  # fall through — treat empty stints as failure
+            else:
+                # Keep completed stints; rebuild remaining ones from the AI result
+                completed = [s for s in self._stints if s.completed]
+                current_lap = self._tracker.laps_recorded
+
+                new_stints: list[Stint] = []
+                start_cursor = current_lap
+                for i, d in enumerate(new_stint_dicts):
+                    stint_num = len(completed) + i + 1
+                    s = Stint.from_dict(d, stint_num=stint_num)
+                    s.start_lap = start_cursor
+                    s.end_lap = start_cursor + s.laps - 1
+                    start_cursor = s.end_lap + 1
+                    new_stints.append(s)
+
+                self._stints = completed + new_stints
+                self._adapted_plan = True
+                self._slow_lap_count = 0
+                self._replan_in_flight = False
+
+                # Build announcement
+                new_pit_lap = new_stints[0].end_lap if new_stints else 0
+                new_ref_ms = new_stints[0].ref_lap_ms if new_stints else 0
+                ref_str = ms_to_str(new_ref_ms) if new_ref_ms > 0 else "unchanged"
+                msg = (
+                    f"Strategy adapted. "
+                    f"New pit window lap {new_pit_lap}. "
+                    f"Target {ref_str} per lap."
+                )
+                self._announcer.announce(msg, Priority.HIGH, "strategy_adapted", 0.0)
+
+                if self._bridge:
+                    self._bridge.strategy_status_changed.emit(self._build_status_str())
+                return
+
+        # If we reach here, new_stint_dicts was empty
+        self.replan_failed()
+
+    def replan_failed(self) -> None:
+        """Called when a mid-race re-plan attempt returns no usable result.
+
+        Clears the in-flight flag so a future trigger can retry.  Stints are
+        left intact.  Stays silent to avoid distracting the driver.
+        """
+        with self._lock:
+            self._replan_in_flight = False
 
     def _build_status_str(self) -> str:
         if not self._stints:

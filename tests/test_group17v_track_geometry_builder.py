@@ -158,14 +158,16 @@ def test_classify_delta_critical():
 # ---------------------------------------------------------------------------
 
 def test_full_lap_accepted_exact_length():
-    lap = _make_lap(side_m=100.0)  # perimeter = 400.0
-    session = _make_session([lap])
+    # Prepend dummy out-lap (lap_number=0) so the test lap (lap_number=1) survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)  # perimeter = 400.0
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    assert len(results) == 1
-    fr = results[0]
+    assert len(results) == 2
+    fr = results[1]
     assert fr.status == "accepted"
     assert fr.reason == ""
-    assert fr.lap_index == 0
+    assert fr.lap_index == 1
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +176,12 @@ def test_full_lap_accepted_exact_length():
 
 def test_full_lap_accepted_within_4pct():
     # side_m = 97 → measured path ~383 m → delta ~4.2% → accepted with racing-line note
-    lap = _make_lap(side_m=97.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap (lap_number=0) so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=97.0)
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "accepted"
     assert "racing-line" in fr.note
 
@@ -189,10 +193,12 @@ def test_full_lap_accepted_within_4pct():
 def test_lap_rejected_incomplete_single_5pct():
     # side_m = 94.1 → perimeter ~ 376.4 → delta ~ 5.9%
     # Need path < 95% of 400 = 380 → side < 95 → 94.1 * 4 = 376.4 < 380
-    lap = _make_lap(side_m=94.0)  # 376 m, delta = 6.0%
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and hits the geometry gate
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=94.0)  # 376 m, delta = 6.0%
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert fr.reason == "incomplete lap"
 
@@ -203,10 +209,12 @@ def test_lap_rejected_incomplete_single_5pct():
 
 def test_lap_rejected_incomplete_single_15pct():
     # side_m = 85 → 340 m → delta = 15%
-    lap = _make_lap(side_m=85.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and hits the geometry gate
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=85.0)
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert fr.reason == "incomplete lap"
 
@@ -217,10 +225,17 @@ def test_lap_rejected_incomplete_single_15pct():
 
 def test_lap_rejected_scale_discrepancy_3_consistent():
     # side_m = 92 → 368 m → delta = 8%
-    laps = [_make_lap(lap_number=i + 1, side_m=92.0) for i in range(3)]
+    # Prepend dummy out-lap (lap_number=0, full side_m=100) so it is the out-lap.
+    # The three short laps (lap_numbers 1,2,3) all have consistent_short_count >= 3
+    # → classified as "scale discrepancy".
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    laps = [out_lap] + [_make_lap(lap_number=i + 1, side_m=92.0) for i in range(3)]
     session = _make_session(laps)
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    for fr in results:
+    # results[0] = out-lap rejection; results[1..3] = scale discrepancy
+    assert results[0].status == "rejected"
+    assert "out-lap" in results[0].reason
+    for fr in results[1:]:
         assert fr.status == "rejected"
         assert fr.reason == "scale discrepancy"
 
@@ -231,10 +246,12 @@ def test_lap_rejected_scale_discrepancy_3_consistent():
 
 def test_lap_rejected_critical_over_20pct():
     # side_m = 79 → 316 m → delta = 21%
-    lap = _make_lap(side_m=79.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and hits the geometry gate
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=79.0)
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert fr.reason == "critical / wrong layout"
 
@@ -244,7 +261,10 @@ def test_lap_rejected_critical_over_20pct():
 # ---------------------------------------------------------------------------
 
 def test_existing_quality_failures_propagated():
-    # Lap with too few samples (< MIN_CALIBRATION_SAMPLES = 50)
+    # Lap with too few samples (< MIN_CALIBRATION_SAMPLES = 50).
+    # Prepend dummy out-lap (lap_number=0) so the bad lap (lap_number=1) survives Gate 0a
+    # and reaches the quality evaluator.
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
     bad_lap = CalibrationLap(
         lap_number=1,
         lap_time_ms=120_000,
@@ -256,9 +276,9 @@ def test_existing_quality_failures_propagated():
         )],  # only 1 sample
         quality=CalibrationLapQuality.REJECTED,
     )
-    session = _make_session([bad_lap])
+    session = _make_session([out_lap, bad_lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     # The reason should come from quality evaluator, not full-lap check
     assert "racing-line" not in fr.reason
@@ -288,8 +308,11 @@ def test_no_accepted_laps_blocks_generate():
 # ---------------------------------------------------------------------------
 
 def test_single_lap_builds_low_confidence_map():
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap (lap_number=0) so the test lap (lap_number=1) survives Gate 0a.
+    # After exclusion exactly one accepted lap → low confidence.
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
     )
@@ -310,7 +333,9 @@ def test_single_lap_builds_low_confidence_map():
 # ---------------------------------------------------------------------------
 
 def test_two_laps_medium_confidence():
-    laps = [_make_lap(lap_number=i + 1, side_m=100.0) for i in range(2)]
+    # Prepend dummy out-lap (lap_number=0) so both test laps survive Gate 0a → medium confidence.
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    laps = [out_lap] + [_make_lap(lap_number=i + 1, side_m=100.0) for i in range(2)]
     session = _make_session(laps)
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
@@ -324,7 +349,9 @@ def test_two_laps_medium_confidence():
 # ---------------------------------------------------------------------------
 
 def test_four_laps_high_confidence():
-    laps = [_make_lap(lap_number=i + 1, side_m=100.0) for i in range(4)]
+    # Prepend dummy out-lap (lap_number=0) so all four test laps survive Gate 0a → high confidence.
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    laps = [out_lap] + [_make_lap(lap_number=i + 1, side_m=100.0) for i in range(4)]
     session = _make_session(laps)
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
@@ -338,8 +365,9 @@ def test_four_laps_high_confidence():
 # ---------------------------------------------------------------------------
 
 def test_xyz_averaged_across_laps():
-    # Lap A: x offset +10, Lap B: x offset -10 → average x should ≈ 0
-    laps = []
+    # Lap A: x offset +10, Lap B: x offset -10 → average x should ≈ 0.
+    # Prepend dummy out-lap (lap_number=0) so both averaged laps survive Gate 0a.
+    laps = [_make_lap(lap_number=0, side_m=100.0)]   # dummy out-lap
     for i, x_offset in enumerate([10.0, -10.0]):
         samples = []
         base = _make_square_samples(n_samples=80, side_m=100.0, y=0.0, lap_number=i + 1)
@@ -379,8 +407,10 @@ def test_xyz_averaged_across_laps():
 # ---------------------------------------------------------------------------
 
 def test_has_z_coordinates_true():
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
     )
@@ -393,8 +423,10 @@ def test_has_z_coordinates_true():
 
 def test_save_writes_geometry_seed_map_json(tmp_path):
     _make_manifest(tmp_path)
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
     )
@@ -413,8 +445,10 @@ def test_save_writes_geometry_seed_map_json(tmp_path):
 
 def test_save_updates_manifest_seed_geometry_true(tmp_path):
     _make_manifest(tmp_path)
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
     )
@@ -433,8 +467,10 @@ def test_save_updates_manifest_seed_geometry_true(tmp_path):
 
 def test_resolve_seed_coordinate_map_returns_saved_file(tmp_path):
     _make_manifest(tmp_path)
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(
         session, MANIFEST_LAP_M, "test_track", "test_layout"
     )
@@ -490,8 +526,10 @@ def test_generate_disabled_when_no_session():
 
 
 def test_generate_disabled_when_seed_already_available():
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a → can_generate=True
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     build_result = build_seed_geometry(session, MANIFEST_LAP_M, "t", "l")
     states = get_geometry_button_states(build_result, None, seed_available=True, session_active=True)
     enabled, _ = states["generate"]
@@ -499,8 +537,10 @@ def test_generate_disabled_when_seed_already_available():
 
 
 def test_save_enabled_when_build_result_can_generate_no_save_yet():
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a → can_generate=True
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     build_result = build_seed_geometry(session, MANIFEST_LAP_M, "t", "l")
     states = get_geometry_button_states(build_result, None, seed_available=False, session_active=True)
     enabled, _ = states["save"]
@@ -526,8 +566,10 @@ def test_save_disabled_when_cannot_generate():
 def test_save_disabled_after_already_saved():
     from pathlib import Path
     save_result = GeometrySaveResult(saved_path=Path("x.json"), manifest_updated=True, error="")
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a → can_generate=True
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     build_result = build_seed_geometry(session, MANIFEST_LAP_M, "t", "l")
     states = get_geometry_button_states(build_result, save_result, seed_available=True, session_active=True)
     enabled, _ = states["save"]
@@ -627,10 +669,12 @@ def test_lap_at_exactly_95pct_threshold_accepted():
     (With 80 samples on a square, chord underestimation is ~5 m, so side_m=96
     gives ~379 m which falls just short; side_m=97 gives ~383 m which clears it.)
     """
-    lap = _make_lap(side_m=97)  # estimated path ~383 m > 380 m threshold
-    session = _make_session([lap])
+    # Prepend dummy out-lap (lap_number=0) so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=97)  # estimated path ~383 m > 380 m threshold
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "accepted", (
         f"Lap above 95% threshold should be accepted, got {fr.status!r} (reason={fr.reason!r})"
     )
@@ -639,10 +683,12 @@ def test_lap_at_exactly_95pct_threshold_accepted():
 def test_lap_just_below_95pct_threshold_rejected():
     """A lap with path_length just below 95% of manifest_lap_length_m should be REJECTED."""
     # 95% of 400 = 380. side_m = 94.9 → 379.6 m < 380 → rejected.
-    lap = _make_lap(side_m=94.9)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and hits the geometry gate.
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=94.9)
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert "incomplete" in fr.reason or "scale" in fr.reason or "critical" in fr.reason
 
@@ -668,14 +714,16 @@ def test_quality_fail_off_track_rejected():
             speed_kph=100.0, gear=4, rpm=6000.0, throttle=0.8, brake=0.0,
             is_off_track=True,
         )
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and reaches quality check
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
     lap = CalibrationLap(
         lap_number=1, lap_time_ms=120_000, samples=samples,
         quality=CalibrationLapQuality.USABLE, quality_reasons=[],
         path_length_m=400.0,
     )
-    session = _make_session([lap])
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert "off" in fr.reason.lower() or "off-track" in fr.reason.lower()
 
@@ -692,14 +740,16 @@ def test_quality_fail_pit_lane_rejected():
             speed_kph=100.0, gear=4, rpm=6000.0, throttle=0.8, brake=0.0,
             is_in_pit_lane=True,
         )
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and reaches quality check
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
     lap = CalibrationLap(
         lap_number=1, lap_time_ms=120_000, samples=samples,
         quality=CalibrationLapQuality.USABLE, quality_reasons=[],
         path_length_m=400.0,
     )
-    session = _make_session([lap])
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert "pit" in fr.reason.lower()
 
@@ -715,14 +765,16 @@ def test_quality_fail_coordinate_jump_rejected():
         speed_kph=s.speed_kph, gear=s.gear, rpm=s.rpm,
         throttle=s.throttle, brake=s.brake,
     )
+    # Prepend dummy out-lap so the test lap (lap_number=1) survives Gate 0a and reaches quality check
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
     lap = CalibrationLap(
         lap_number=1, lap_time_ms=120_000, samples=samples,
         quality=CalibrationLapQuality.USABLE, quality_reasons=[],
         path_length_m=400.0,
     )
-    session = _make_session([lap])
+    session = _make_session([out_lap, lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
-    fr = results[0]
+    fr = results[1]
     assert fr.status == "rejected"
     assert "jump" in fr.reason.lower() or "teleport" in fr.reason.lower() or "reset" in fr.reason.lower()
 
@@ -758,8 +810,10 @@ def test_quality_fail_path_outlier_rejected():
 def test_saved_json_has_correct_schema_field(tmp_path):
     """AC5: geometry.seed_map.json must contain schema = 'seed_coordinate_map_v1'."""
     _make_manifest(tmp_path)
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(session, MANIFEST_LAP_M, "test_track", "test_layout")
     save_seed_geometry_to_library(
         result.seed_map, "test_track", "test_layout", base_dir=tmp_path
@@ -775,8 +829,10 @@ def test_saved_json_has_correct_schema_field(tmp_path):
 
 def test_station_count_approximately_equals_lap_length_m():
     """AC4: 1 m resampling → station count ≈ lap_length_m ± small tolerance."""
-    lap = _make_lap(side_m=100.0)  # perimeter = 400 m
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)  # perimeter = 400 m
+    session = _make_session([out_lap, lap])
     result = build_seed_geometry(session, MANIFEST_LAP_M, "test_track", "test_layout")
     assert result.can_generate is True
     # At 1 m spacing over a ~400 m path, expect 380–420 stations
@@ -816,8 +872,10 @@ def test_generate_disabled_reason_contains_session():
 
 def test_generate_disabled_reason_when_seed_available_and_prior_build():
     """AC11: generate disabled when seed already available AND a prior build_result exists."""
-    lap = _make_lap(side_m=100.0)
-    session = _make_session([lap])
+    # Prepend dummy out-lap so the test lap survives Gate 0a → can_generate=True
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, lap])
     build_result = build_seed_geometry(session, MANIFEST_LAP_M, "t", "l")
     # seed_available=True + build_result present → generate disabled
     states = get_geometry_button_states(build_result, None, seed_available=True, session_active=True)

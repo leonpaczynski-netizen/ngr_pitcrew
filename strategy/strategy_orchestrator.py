@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from strategy.ai_planner import analyse_strategy
+from strategy.ai_planner import StrategyResult, analyse_strategy
 
 _log = logging.getLogger(__name__)
 
@@ -24,8 +24,12 @@ def run_strategy_analysis(
     setup_comparison_text: str,
     tyre_degradation_cache,          # dict | None
     model_name: str,
-) -> list:  # list[StrategyOption]
-    """Run a full race strategy analysis and return ranked options.
+    race_situation: dict | None = None,
+) -> StrategyResult:
+    """Run a full race strategy analysis and return a StrategyResult.
+
+    StrategyResult is iterable (delegates to its strategies list) for backward
+    compatibility with callers that treat the return value as list[StrategyOption].
 
     Parameters match the subset extracted from the dashboard worker.
     """
@@ -96,7 +100,7 @@ def run_strategy_analysis(
     # ------------------------------------------------------------------ #
     # 4. AI call
     # ------------------------------------------------------------------ #
-    options = analyse_strategy(
+    result = analyse_strategy(
         params,
         lap_data_by_compound,
         api_key,
@@ -110,6 +114,7 @@ def run_strategy_analysis(
         corner_issues_summary=corner_summary,
         model=model_name or None,
         car_id=car_id,
+        race_situation=race_situation,
     )
 
-    return options
+    return result

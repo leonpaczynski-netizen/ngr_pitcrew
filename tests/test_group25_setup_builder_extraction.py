@@ -10,7 +10,7 @@ def _src(rel):
 _METHODS = [
     "_build_car_setup_group", "_current_setup_dict", "_fill_setup_fields",
     "_load_car_specs_for_current", "_apply_setup_permissions",
-    "_refresh_setup_combo", "_suggest_setup_label", "_setup_save",
+    "_refresh_setup_combo", "_generate_setup_name", "_setup_save",
     "_setup_load_selected", "_setup_analyse_ai", "_display_setup_result",
     "_apply_and_save_ai_setup", "_run_build_setup", "_display_build_setup_result",
     "_apply_build_setup_result", "_sync_setup_builder_from_event",

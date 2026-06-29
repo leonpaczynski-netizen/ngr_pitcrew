@@ -18,8 +18,11 @@ from __future__ import annotations
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from unittest.mock import MagicMock, patch
+
+if TYPE_CHECKING:
+    from strategy.driving_advisor import DrivingAdvisor
 
 import pytest
 
@@ -394,9 +397,14 @@ class TestAnalyseStrategyTrackContext:
             _payloads.append(kw.get("structured_payload", {}))
             raise RuntimeError("no api")
 
+        # Need ≥8 clean laps + degradation entry so the feasibility gate passes
+        # and call_api is actually invoked (Fix 1 short-circuits when all stops rejected).
+        _laps = [90000.0] * 8
+        _deg = {"RM": {"optimal_stint_race": 15, "total_life_race": 18,
+                       "cliff_lap_practice": 16, "pace_loss_at_cliff_s": 1.5, "confidence": "high"}}
         with patch("strategy.ai_planner.call_api", side_effect=_fake_call):
             with pytest.raises(RuntimeError):
-                analyse_strategy(p, {"RM": [90000.0]}, "key")
+                analyse_strategy(p, {"RM": _laps}, "key", degradation=_deg)
 
         assert _payloads
         payload = _payloads[0]
@@ -413,9 +421,14 @@ class TestAnalyseStrategyTrackContext:
             _payloads.append(kw.get("structured_payload", {}))
             raise RuntimeError("no api")
 
+        # Need ≥8 clean laps + degradation entry so the feasibility gate passes
+        # and call_api is actually invoked (Fix 1 short-circuits when all stops rejected).
+        _laps = [90000.0] * 8
+        _deg = {"RM": {"optimal_stint_race": 15, "total_life_race": 18,
+                       "cliff_lap_practice": 16, "pace_loss_at_cliff_s": 1.5, "confidence": "high"}}
         with patch("strategy.ai_planner.call_api", side_effect=_fake_call):
             with pytest.raises(RuntimeError):
-                analyse_strategy(p, {"RM": [90000.0]}, "key")
+                analyse_strategy(p, {"RM": _laps}, "key", degradation=_deg)
 
         payload = _payloads[0]
         assert payload.get("track_context_included") is False
@@ -713,9 +726,15 @@ class TestMissingLayoutIdSafety:
             track_location_id="",   # explicitly empty
             layout_id="",
         )
+        # Provide ≥8 laps + degradation so the feasibility gate passes and call_api is invoked.
+        # Fix 1 short-circuits before calling the API when all stops are rejected, so
+        # we must pass enough data to get at least one feasible stop count.
+        _laps = [90000.0] * 8
+        _deg = {"RM": {"optimal_stint_race": 10, "total_life_race": 12,
+                       "cliff_lap_practice": 11, "pace_loss_at_cliff_s": 1.5, "confidence": "high"}}
         with patch("strategy.ai_planner.call_api", side_effect=RuntimeError("no api")):
             with pytest.raises(RuntimeError, match="no api"):
-                analyse_strategy(p, {"RM": [90000.0]}, "key")
+                analyse_strategy(p, {"RM": _laps}, "key", degradation=_deg)
 
     def test_build_car_setup_no_crash_with_missing_loc(self):
         from strategy.ai_planner import build_car_setup

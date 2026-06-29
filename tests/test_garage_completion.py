@@ -20,7 +20,7 @@ def _make_db() -> SessionDB:
     return SessionDB(":memory:")
 
 
-def _insert_rec(db: SessionDb, car_id: int, track: str, text: str = "Some advice") -> None:
+def _insert_rec(db: SessionDB, car_id: int, track: str, text: str = "Some advice") -> None:
     db._conn.execute(
         """INSERT INTO setup_recommendations
            (ai_interaction_id, session_id, car_id, track, layout_id,

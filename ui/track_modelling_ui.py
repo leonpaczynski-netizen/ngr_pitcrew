@@ -4,7 +4,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from data.track_geometry_builder import GeometryBuildResult, GeometrySaveResult
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -14,7 +17,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QComboBox, QSplitter, QTextEdit,
     QFrame, QSizePolicy, QListWidget,
     QListWidgetItem, QPlainTextEdit, QFormLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView,
+    QTableWidgetItem, QHeaderView, QLineEdit,
 )
 
 from telemetry.state import Priority
@@ -79,6 +82,7 @@ from ui.track_map_vm import (
     TrackMapDrawData,
     CarDot,
 )
+from ui.track_map_widget import TrackMapWidget
 
 # Telemetry-behaviour segment types that must NOT appear in Segment Review geometry table.
 _TELEMETRY_OVERLAY_SEG_TYPES: frozenset = frozenset({
@@ -1130,8 +1134,6 @@ class TrackModellingMixin:
             dd = self._tm_cached_draw_data
             if hasattr(self, "_tm_map_widget"):
                 self._tm_map_widget.set_draw_data(dd)
-            if hasattr(self, "_live_map_widget"):
-                self._live_map_widget.set_draw_data(dd)
             # Group 21B — announce pit lane entry/exit transitions
             pit_now = bool(match_result.is_pit_likely)
             if pit_now != self._pit_lane_active:
@@ -1260,8 +1262,6 @@ class TrackModellingMixin:
             self._tm_cached_draw_data = dd
             if hasattr(self, "_tm_map_widget"):
                 self._tm_map_widget.set_draw_data(dd)
-            if hasattr(self, "_live_map_widget"):
-                self._live_map_widget.set_draw_data(dd)
 
             n  = self._tm_station_map.station_count()
             nc = len(self._tm_station_map.seeded_corners)
@@ -1357,8 +1357,6 @@ class TrackModellingMixin:
             self._tm_cached_draw_data = dd
             if hasattr(self, "_tm_map_widget"):
                 self._tm_map_widget.set_draw_data(dd)
-            if hasattr(self, "_live_map_widget"):
-                self._live_map_widget.set_draw_data(dd)
             n  = sm.station_count()
             nc = len(sm.seeded_corners)
             if hasattr(self, "_tm_map_note_lbl"):
@@ -1373,33 +1371,6 @@ class TrackModellingMixin:
             self._tm_run_alignment()
         except Exception:
             logging.debug("station map load failed", exc_info=True)
-
-    def _live_try_load_active_event_map(self) -> None:
-        """Group 24 AC5: load the station map for the active event into the Live tab map."""
-        loc_id = self._config.get("strategy", {}).get("track_location_id", "")
-        lay_id = self._config.get("strategy", {}).get("layout_id", "")
-        if not loc_id:
-            if hasattr(self, "_live_lbl_track"):
-                self._live_lbl_track.setText("Track: not mapped — calibrate first")
-                self._live_lbl_track.setStyleSheet("color: #888888;")
-            return
-        try:
-            path = _find_station_map_path(loc_id, lay_id)
-            sm = _import_station_map(path) if path and path.exists() else None
-        except Exception:
-            sm = None
-        if sm is not None:
-            dd = _build_map_draw_data(sm)
-            if hasattr(self, "_live_map_widget"):
-                self._live_map_widget.set_draw_data(dd)
-            if hasattr(self, "_live_lbl_track"):
-                self._live_lbl_track.setText(f"Track: {loc_id} — {lay_id}")
-                self._live_lbl_track.setStyleSheet("color: #4caf50;")
-        else:
-            if hasattr(self, "_live_lbl_track"):
-                self._live_lbl_track.setText("Track: not mapped — calibrate first")
-                self._live_lbl_track.setStyleSheet("color: #888888;")
-
     def _tm_save_path(self) -> None:
         """Button handler: save the built reference path to JSON."""
         ctrl = getattr(self, "_tm_controller", None)
@@ -1886,11 +1857,6 @@ class TrackModellingMixin:
         except Exception:
             pass  # best-effort
         self._tm_refresh_alignment_panel(result)
-        # Group 24 AC5: update live map if accepted track matches active event
-        active_loc = self._config.get("strategy", {}).get("track_location_id", "")
-        active_lay = self._config.get("strategy", {}).get("layout_id", "")
-        if sm.track_location_id == active_loc and sm.layout_id == active_lay:
-            self._live_try_load_active_event_map()
 
     def _tm_rebuild_model(self) -> None:
         """Clear station map and alignment result — requires full recalibration.
@@ -1908,7 +1874,7 @@ class TrackModellingMixin:
             project_to_screen         as _proj,
         )
         _empty = _build_draw(None)
-        for _attr in ("_tm_map_widget", "_live_map_widget"):
+        for _attr in ("_tm_map_widget",):
             _w = getattr(self, _attr, None)
             if _w is not None and hasattr(_w, "set_draw_data"):
                 _w.set_draw_data(_proj(_empty, _w.width() or 400, _w.height() or 300))
@@ -2393,7 +2359,29 @@ class TrackModellingMixin:
             )
             self._tm_seed_build_result = result
             self._tm_seed_save_result  = None
+            # Refresh the panel FIRST — it sets per-lap diagnostics on the status
+            # label — then APPEND our user-facing message so the refresh does not
+            # overwrite it.
             self._tm_refresh_seed_geometry_panel()
+            lbl = getattr(self, "_tm_seed_geo_status_lbl", None)
+            if not result.can_generate:
+                if lbl is not None:
+                    _existing = lbl.text()
+                    lbl.setText(
+                        (_existing + "\n\n" if _existing else "")
+                        + "Not enough clean laps to build the map. Drive more full laps"
+                        " starting and finishing on the grid, not from the pits."
+                    )
+                return
+            from data.track_geometry_builder import CLOSURE_GAP_WARN_M as _CLOSURE_GAP_WARN_M
+            if result.closure_gap_m > _CLOSURE_GAP_WARN_M and lbl is not None:
+                _existing = lbl.text()
+                lbl.setStyleSheet("color:#F5C542;")
+                lbl.setText(
+                    (_existing + "\n\n" if _existing else "")
+                    + f"Map built but track loop gap is {result.closure_gap_m:.1f} m"
+                    f" (>{_CLOSURE_GAP_WARN_M:.0f} m). More clean laps may improve closure."
+                )
         except Exception as exc:
             lbl = getattr(self, "_tm_seed_geo_status_lbl", None)
             if lbl is not None:

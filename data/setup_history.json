@@ -234,5 +234,621 @@
         "ts": "2026-06-19T11:27:29"
       }
     ]
+  },
+  "373aa89edb": {
+    "car": "Porsche 963 '24",
+    "track": "Daytona – Road Course",
+    "entries": [
+      {
+        "type": "build_race",
+        "session_type": "Race Setup",
+        "setup_snapshot": {
+          "name": "Porsche 963 '24",
+          "car": "Porsche 963 '24",
+          "setup_label": "Setup 1",
+          "track": "Daytona – Road Course",
+          "condition": "Dry",
+          "setup_type": "Race Setup",
+          "ride_height_front": 70,
+          "ride_height_rear": 75,
+          "springs_front": 5.2,
+          "springs_rear": 5.5,
+          "dampers_front_comp": 32,
+          "dampers_front_ext": 42,
+          "dampers_rear_comp": 34,
+          "dampers_rear_ext": 40,
+          "arb_front": 5,
+          "arb_rear": 4,
+          "camber_front": -3.2,
+          "camber_rear": -2.8,
+          "toe_front": 0.0,
+          "toe_rear": 0.15,
+          "aero_front": 0,
+          "aero_rear": 0,
+          "lsd_initial": 14,
+          "lsd_accel": 24,
+          "lsd_decel": 8,
+          "lsd_front_initial": 0,
+          "lsd_front_accel": 0,
+          "lsd_front_decel": 0,
+          "tvcd": "Active",
+          "torque_distribution_rear": 50,
+          "brake_bias_front": -1,
+          "ballast_kg": 0.0,
+          "ballast_position": 0,
+          "power_restrictor": 100.0,
+          "tyre_front": "Racing Medium",
+          "tyre_rear": "Racing Medium",
+          "ecu_ingame": "Stock",
+          "ecu_ingame_output": 100.0,
+          "transmission_type": "Stock",
+          "nitrous_type": "None",
+          "nitrous_output": 0.0,
+          "notes": "",
+          "ecu_recommendation": "BOP fixes power at 610 hp — leave Power Restrictor at 100%. No ECU change permitted under regulations.",
+          "bop_race": true,
+          "gear_ratios": [],
+          "final_drive": 0.0,
+          "transmission_max_speed_kmh": 0,
+          "captured_at": "2026-06-27 12:08"
+        },
+        "reasoning": "The 963 is a high-downforce prototype but with no adjustable aero parts fitted here, the mechanical platform must do all the work, so I set firm prototype-range springs (5.20 F / 5.50 R Hz) to keep a stable, consistent ride height under the heavy compression of the Daytona banking — float or bottoming there would be dangerous and inconsistent. Ride heights are kept low (70/75 mm) with mild rake for a settled aero/mechanical platform, but not so low that the banked transitions cause bottoming. Dampers follow the cardinal rule (extension ≥ compression); rear extension is held moderate at 40 to avoid the rear springing back too fast and creating lift-off snap, while front compression at 32 controls dive under the firm trail-brake entries into the infield. ARB 5F/4R gives slightly stiffer front for turn-in while preserving rear compliance for traction off the slow infield corners.\n\nThis driver is a front-led trail-braker who needs a planted, predictable rear before he attacks corner entry, so brake bias is moved slightly forward (-1) to guard against rear locking under deceleration and downshifts. Rear toe-in is set generously (+0.15) for high-speed stability through the banking and the fast infield kinks, and to resist lift-off oversteer when he releases the brake to rotate. LSD is biased toward stability: initial 14 keeps the rear composed during small throttle changes, deceleration 8 keeps the rear calm during trail braking without ploughing, and acceleration 24 locks both rear wheels progressively so the car drives forward off the slow infield exits without snapping. Front ARB and neutral front toe keep the nose sharp and immediate without making the car nervous mid-corner.\n\nPower and gearing are locked by BOP — Power Restrictor stays at 100% and the gearbox is fixed, so shift_rpm is set to 0 and no ratio changes are recommended. Car is already at the 1030 kg BOP minimum so no ballast is added. In the opening laps watch the banked sections for any rear float or bottoming — if the rear feels skaty over the banking transitions, raise rear ride height a couple of mm and reduce rear extension slightly. With 3.0x tyre wear, manage wheelspin out of the infield hairpins to protect the rears; if mid-stint rotation fades, the slight forward brake bias and the deceleration LSD give you safe trail-brake rotation without compromising the stable platform.",
+        "shift_rpm": 0,
+        "ecu_recommendation": "BOP fixes power at 610 hp — leave Power Restrictor at 100%. No ECU change permitted under regulations.",
+        "ts": "2026-06-27T02:38:54"
+      },
+      {
+        "type": "build_race",
+        "session_type": "Race Setup",
+        "setup_snapshot": {
+          "name": "Porsche 963 '24",
+          "car": "Porsche 963 '24",
+          "setup_label": "Setup 1",
+          "track": "Daytona – Road Course",
+          "condition": "Dry",
+          "setup_type": "Race Setup",
+          "ride_height_front": 70,
+          "ride_height_rear": 75,
+          "springs_front": 5.2,
+          "springs_rear": 5.5,
+          "dampers_front_comp": 32,
+          "dampers_front_ext": 42,
+          "dampers_rear_comp": 33,
+          "dampers_rear_ext": 40,
+          "arb_front": 5,
+          "arb_rear": 4,
+          "camber_front": -3.2,
+          "camber_rear": -2.8,
+          "toe_front": -0.05,
+          "toe_rear": 0.2,
+          "aero_front": 250,
+          "aero_rear": 380,
+          "lsd_initial": 14,
+          "lsd_accel": 24,
+          "lsd_decel": 8,
+          "lsd_front_initial": 0,
+          "lsd_front_accel": 0,
+          "lsd_front_decel": 0,
+          "tvcd": "Active",
+          "torque_distribution_rear": 50,
+          "brake_bias_front": -1,
+          "ballast_kg": 0.0,
+          "ballast_position": 0,
+          "power_restrictor": 100.0,
+          "tyre_front": "Racing Medium",
+          "tyre_rear": "Racing Medium",
+          "ecu_ingame": "Stock",
+          "ecu_ingame_output": 100.0,
+          "transmission_type": "Stock",
+          "nitrous_type": "None",
+          "nitrous_output": 0.0,
+          "notes": "",
+          "ecu_recommendation": "Power is BOP-locked at 610 hp. Leave the ECU stock and Power Restrictor at 100 % — no power management required for this regulated event.",
+          "bop_race": true,
+          "gear_ratios": [],
+          "final_drive": 0.0,
+          "transmission_max_speed_kmh": 0,
+          "captured_at": "2026-06-27 12:09"
+        },
+        "reasoning": "The 963 is a high-downforce prototype, so springs sit in the lower-prototype band (5.2 F / 5.5 R Hz) to keep a controlled but not rigid platform — Daytona's banked oval section loads the car heavily and demands a stable aero platform, while the technical infield rewards compliance over kerbs. Ride height is kept low for aero efficiency but with a small positive rake (70 F / 75 R) for braking stability and to avoid bottoming on the banking transition. Dampers follow the cardinal rule with extension above compression; rear extension is deliberately kept moderate (40) rather than stiff to prevent the rear springing back too quickly and triggering lift-off oversteer over the infield crests. ARB is 5 F / 4 R — slightly stiffer front for turn-in precision while leaving the rear compliant for traction and a planted feel under power.\n\nThis driver leads with the front and trail-brakes deep, so brake bias is set slightly forward (-1) to kill any rear locking during downshifts into the infield hairpins, and LSD deceleration is kept low (8) so the rear stays composed under trail braking and rotates progressively rather than snapping. Rear toe-in is generous at +0.20° to give the trustworthy, supported rear he relies on through the banking and high-speed direction changes, paired with a touch of front toe-out (-0.05°) for sharp turn-in without nervousness. LSD initial (14) and acceleration (24) are moderate to lock both wheels progressively on exit — giving traction first, then mild rotation — matching his smooth, build-the-throttle exit style rather than stamping on power. Rear aero is biased higher than front (380/250) to guarantee high-speed stability on the banking while still leaving the front alive.\n\nPower and gearing are locked by BOP, so leave the restrictor at 100 % and do not touch the gearbox — shift_rpm is set to 0 as the transmission is fixed. In the first laps watch rear tyre temperatures on the banking; with 3.0x wear, favour Racing Medium for the consistency and tyre life this timed race rewards, lifting-and-coasting into the infield braking zones to save fuel. If the rear feels skaty under trail braking early on, nudge brake bias one more click forward; if the car refuses to rotate in the slow infield, drop LSD acceleration a couple of points before touching anything else.",
+        "shift_rpm": 0,
+        "ecu_recommendation": "Power is BOP-locked at 610 hp. Leave the ECU stock and Power Restrictor at 100 % — no power management required for this regulated event.",
+        "ts": "2026-06-27T02:39:57"
+      },
+      {
+        "type": "build_qual",
+        "session_type": "Qualifying Setup",
+        "setup_snapshot": {
+          "name": "Porsche 963 '24",
+          "car": "Porsche 963 '24",
+          "setup_label": "Endduro Rd1 Setupp 1",
+          "track": "Daytona – Road Course",
+          "condition": "Dry",
+          "setup_type": "Qualifying Setup",
+          "ride_height_front": 60,
+          "ride_height_rear": 65,
+          "springs_front": 5.8,
+          "springs_rear": 6.1,
+          "dampers_front_comp": 34,
+          "dampers_front_ext": 46,
+          "dampers_rear_comp": 32,
+          "dampers_rear_ext": 42,
+          "arb_front": 5,
+          "arb_rear": 4,
+          "camber_front": -3.4,
+          "camber_rear": -2.8,
+          "toe_front": -0.1,
+          "toe_rear": 0.2,
+          "aero_front": 350,
+          "aero_rear": 480,
+          "lsd_initial": 12,
+          "lsd_accel": 22,
+          "lsd_decel": 8,
+          "lsd_front_initial": 0,
+          "lsd_front_accel": 0,
+          "lsd_front_decel": 0,
+          "tvcd": "Active",
+          "torque_distribution_rear": 50,
+          "brake_bias_front": -1,
+          "ballast_kg": 0.0,
+          "ballast_position": 0,
+          "power_restrictor": 100.0,
+          "tyre_front": "Racing Medium",
+          "tyre_rear": "Racing Medium",
+          "ecu_ingame": "Stock",
+          "ecu_ingame_output": 100.0,
+          "transmission_type": "Stock",
+          "nitrous_type": "None",
+          "nitrous_output": 0.0,
+          "notes": "",
+          "ecu_recommendation": "Power is locked at the BoP 610 hp level — leave Power Restrictor at 100% and run the stock ECU. No power management permitted under regulations.",
+          "bop_race": true,
+          "gear_ratios": [],
+          "final_drive": 0.0,
+          "transmission_max_speed_kmh": 0,
+          "captured_at": "2026-06-27 12:12"
+        },
+        "reasoning": "This is a high-downforce LMDh prototype, so the platform must stay flat and low for the banked oval section and stable through the infield. I ran the car near minimum ride height (60/65 mm) with a tiny rake for stability under load on the banking, and used firm prototype-level springs (5.8/6.1 Hz) since this is a single qualifying lap where platform precision beats compliance — Daytona's infield is relatively smooth so we can afford the stiffness. Dampers follow the cardinal rule with extension always above compression; front compression is raised slightly to resist dive under heavy braking into the infield chicane and rear extension is kept moderate so the rear never springs back and provokes lift-off snap. ARB is set front-biased (5/4) to give the heavy rear-engined-style prototype precise turn-in without unsettling the rear platform at the high speeds the banking generates.\n\nThe driver is a trail-braking, front-led pilot who needs deep braking without rear lock and progressive rotation, so I biased brakes slightly forward (-1) to plant the rear under trail braking and kept LSD deceleration low (8) for composed downshifts and gentle entry rotation. Rear toe-in is increased to +0.20 — more than a pure time-trial figure — to keep the rear axle trustworthy through Daytona's fast direction changes and on the banking, while a touch of front toe-out (-0.10) sharpens the nose response he wants on turn-in. Moderate LSD initial (12) and acceleration (22) lock both driven wheels progressively so the car finishes rotating as he feeds throttle, rather than snapping or pushing wide. Aero is set with a healthy rear margin (350 front / 480 rear) to give the high-speed confidence he relies on, recovering rotation mechanically rather than by starving the rear.\n\nPower and gearbox are locked by BoP and the event rules, so the Restrictor stays at 100% and no ECU change is recommended — gear ratios are left untouched per the locked transmission. Shift point is set near peak power around 8000 rpm; validate against the in-game tach on the out-lap. On the first push lap watch tyre temperature, since RS-style slicks need to be in the 80–100°C window before the banked section loads them hard — do a proper warm-up lap. Also watch rear stability at the transition from the banking into the infield braking zone; if the rear feels skaty there, add one click of rear extension reduction or nudge brake bias another step forward before touching aero.",
+        "shift_rpm": 8000,
+        "ecu_recommendation": "Power is locked at the BoP 610 hp level — leave Power Restrictor at 100% and run the stock ECU. No power management permitted under regulations.",
+        "ts": "2026-06-27T02:42:25"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps",
+        "analysis": "The driver reports good balance, rotation, traction and braking stability — the chassis is working well — but explicitly flags a lack of stability over bumps, which the telemetry strongly confirms with 10.8 bottoming events per lap (very high) on a stiff qualifying setup with low ride heights (68/72 mm). The 26.6 wheelspin and 17.6 snap-throttle events are real but largely driver/throttle-input driven on a 670 hp car with locked transmission/power, so the primary fixable issue within allowed areas is the bottoming and bump compliance, addressed per the driver's bumpy-track and crest-stability philosophy.",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "from": "68 mm",
+            "to": "75 mm",
+            "why": "Raising front ride height directly reduces the 10.8 bottoming events/lap on Daytona's bumps and banking transitions, restoring the stable platform the driver wants."
+          },
+          {
+            "setting": "Ride Height Rear",
+            "from": "72 mm",
+            "to": "80 mm",
+            "why": "Lifting the rear more than the front preserves a conservative rake while curing chassis ground contact that unsettles the rear over bumps."
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "from": "39",
+            "to": "36",
+            "why": "Reducing rear rebound lets the rear follow the surface and settle without springing back over crests, improving bump stability while staying above rear compression (31) per the cardinal rule."
+          },
+          {
+            "setting": "Springs Rear",
+            "from": "4.85 N/mm",
+            "to": "4.55 N/mm",
+            "why": "Softening the rear spring adds compliance over Daytona's undulations and banking joints, helping the rear maintain contact without hurting the driver's confirmed good traction."
+          }
+        ],
+        "ts": "2026-06-27T04:45:21"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps",
+        "analysis": "The driver reports good entry balance, rotation, traction and braking stability — the chassis is fundamentally working — but explicitly flags a lack of stability over bumps, and the telemetry strongly confirms this with 10.8 bottoming events/lap (very high) on a stiff qualifying setup with low ride heights (70/80 mm). The 26.6 wheelspin and 17.6 snap-throttle events are real but largely driver throttle-input driven on a 670 hp car with locked transmission and power, so within the allowed areas the primary fixable issue is chassis bottoming and bump compliance — addressed per the driver's bumpy/undulating-track philosophy (raise ride height, soften rear, reduce rear rebound).",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "from": "70 mm",
+            "to": "76 mm",
+            "why": "Raising the front directly attacks the 10.8 bottoming events/lap caused by Daytona's banking transitions and infield bumps, restoring the stable platform the driver wants without disturbing his confirmed good front balance."
+          },
+          {
+            "setting": "Ride Height Rear",
+            "from": "80 mm",
+            "to": "86 mm",
+            "why": "Lifting the rear by the same amount preserves the existing mild rake while eliminating chassis ground contact that unsettles the rear over crests, protecting the driver's confirmed rear-under-braking stability."
+          },
+          {
+            "setting": "Springs Rear",
+            "from": "4.55 N/mm",
+            "to": "4.30 N/mm",
+            "why": "Softening the rear spring adds compliance over Daytona's undulations and banking joints so the rear maintains contact over bumps, per the bumpy-track philosophy, without hurting confirmed good exit traction."
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "from": "36",
+            "to": "33",
+            "why": "Reducing rear rebound lets the rear follow the surface and settle without springing back over crests, improving bump stability while remaining above rear compression (31) per the cardinal rule."
+          }
+        ],
+        "ts": "2026-06-27T04:50:53"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target\nNotes: lacks stability over bumps",
+        "analysis": "The driver confirms good entry, rotation, traction and braking — the chassis balance is fundamentally working — but explicitly flags a lack of stability over bumps, and the telemetry strongly confirms this with 10.8 bottoming events per lap (very high) on a stiff qualifying setup with low ride heights (70/86 mm). Per the driver's bumpy/undulating-track philosophy, the fix is to raise the platform and add rear compliance, NOT to chase the 26.6 wheelspin/17.6 snap-throttle events, which are driver throttle-input driven on a 670 hp car with locked transmission and power and fall outside the allowed adjustment areas.",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "from": "70 mm",
+            "to": "78 mm",
+            "why": "Raising the front directly attacks the 10.8 bottoming events/lap from Daytona's banking transitions and infield bumps, restoring the stable platform without disturbing the driver's confirmed good front balance."
+          },
+          {
+            "setting": "Ride Height Rear",
+            "from": "86 mm",
+            "to": "94 mm",
+            "why": "Lifting the rear by the same amount preserves the existing mild rake while eliminating chassis ground contact that unsettles the rear over crests, protecting confirmed rear-under-braking stability."
+          },
+          {
+            "setting": "Springs Rear",
+            "from": "4.3 N/mm",
+            "to": "4.0 N/mm",
+            "why": "Softening the rear spring adds compliance over Daytona's undulations and banking joints so the rear maintains contact over bumps, per the bumpy-track philosophy, without hurting confirmed good exit traction."
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "from": "33",
+            "to": "31",
+            "why": "Reducing rear rebound (still above rear compression 31... held equal at the floor) lets the rear follow the surface and settle without springing back over crests; paired with softer rear comp to stay clear of the cardinal rule."
+          },
+          {
+            "setting": "Dampers Rear Comp",
+            "from": "31",
+            "to": "28",
+            "why": "Lowering rear compression maintains the required Extension-above-Compression margin while adding bump absorption over Daytona's banking joints."
+          }
+        ],
+        "ts": "2026-06-27T04:52:34"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target",
+        "analysis": "The driver reports good entry but two clear issues: mid-corner push (understeer) and rear loose on throttle (power oversteer on exit). Telemetry confirms the exit problem is real with 25.3 wheelspin and 14.7 snap-throttle events/lap on a 670 hp car, plus 11.7 bottoming events/lap indicating the stiff qualifying platform with low ride heights (70/90 mm) is grounding out over Daytona's banking transitions. Within allowed areas (suspension, diff, aero, brake bias), I'll prioritise calming exit wheelspin via the LSD per the power-oversteer fix, raise the platform to kill bottoming, and recover mid-corner rotation with rear ARB — without removing the rear stability the driver depends on.",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "from": "70 mm",
+            "to": "76 mm",
+            "why": "Raising the front attacks the 11.7 bottoming events/lap from Daytona's banking and infield bumps, restoring the stable platform the driver needs without disturbing his confirmed good entry balance."
+          },
+          {
+            "setting": "Ride Height Rear",
+            "from": "90 mm",
+            "to": "96 mm",
+            "why": "Lifting the rear equally preserves the existing mild rake while eliminating chassis ground contact that unsettles the rear on power application and over crests."
+          },
+          {
+            "setting": "LSD Acceleration",
+            "from": "24",
+            "to": "18",
+            "why": "Per the power-oversteer fix, reducing acceleration lock makes the rear lock more progressively under throttle, directly targeting the 25.3 wheelspin/lap and 'rear loose on throttle' on this 670 hp car with locked power/transmission."
+          },
+          {
+            "setting": "LSD Initial",
+            "from": "14",
+            "to": "16",
+            "why": "A small initial-torque increase steadies the rear during the throttle-pickup transition so the car does not step out as power is fed, matching the driver's progressive-throttle, predictable-rear preference."
+          },
+          {
+            "setting": "ARB Rear",
+            "from": "4",
+            "to": "3",
+            "why": "Softening the rear bar adds mid-corner rotation to cure the 'pushes wide' understeer while increasing rear compliance, recovering grip without making the rear nervous on exit."
+          }
+        ],
+        "ts": "2026-06-27T05:14:55"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\nNotes: very loose over bumps",
+        "analysis": "The driver confirms good entry, mid-corner rotation and stable braking, but explicitly flags the car as 'very loose over bumps' — and telemetry strongly confirms this with 16.0 bottoming events/lap (very high) on a low, stiff platform (70/75 mm). The 23.3 wheelspin and 14.3 snap-throttle events/lap are driver throttle-input driven on a 670 hp car with locked power/transmission, so per the priority order I target the telemetry-confirmed bottoming and rear compliance first, not the input-driven wheelspin which falls outside meaningful adjustment here. The 'rear loose on throttle' is best addressed via a small LSD acceleration reduction to make rear lock more progressive without disturbing the confirmed-good balance.",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "field": "ride_height_front",
+            "from": "70 mm",
+            "to": "78 mm",
+            "why": "Raising the front directly attacks the 16.0 bottoming events/lap from Daytona's banking transitions and infield bumps, restoring the stable platform the driver depends on without disturbing his confirmed good entry balance.",
+            "to_clamped": 78
+          },
+          {
+            "setting": "Ride Height Rear",
+            "field": "ride_height_rear",
+            "from": "75 mm",
+            "to": "83 mm",
+            "why": "Lifting the rear by the same amount preserves the existing mild rake while eliminating chassis ground contact that makes the rear feel loose over crests and bumps.",
+            "to_clamped": 83
+          },
+          {
+            "setting": "Springs Rear",
+            "field": "springs_rear",
+            "from": "4.6 N/mm",
+            "to": "4.3 N/mm",
+            "why": "Softening the rear spring adds compliance over Daytona's undulations and banking joints so the rear keeps contact over bumps, per the bumpy-track philosophy, without hurting confirmed good rotation.",
+            "to_clamped": 4.3
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "field": "dampers_rear_ext",
+            "from": "38",
+            "to": "35",
+            "why": "Reducing rear rebound (still safely above rear compression of 30) lets the rear follow the surface and settle without springing back over crests, directly easing the 'very loose over bumps' complaint.",
+            "to_clamped": 35
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "27",
+            "to": "22",
+            "why": "A modest acceleration-lock reduction makes the rear lock more progressively under power to ease the 'rear loose on throttle' exit, matching the driver's progressive-throttle, predictable-rear preference.",
+            "to_clamped": 22
+          }
+        ],
+        "ts": "2026-06-27T06:53:05"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\nNotes: very loose over bumps\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: very loose over bumps, more loose on exit then before",
+        "analysis": "The driver confirms good entry, good mid-corner rotation and stable braking — the two genuine complaints are 'very loose over bumps' and 'rear loose on throttle, more loose on exit than before'. Telemetry strongly backs the bump issue: 15.8 bottoming events/lap is very high on a low, stiff platform (70/83 mm), so the rear is grounding through Daytona's banking transitions and infield undulations and losing contact. The 31.2 wheelspin and 18.6 snap-throttle events/lap are driver throttle-input driven on a 670 hp car with power/transmission LOCKED, so I attack the confirmed-good balance carefully: fix the platform first (priority order step 5), then make rear lock more progressive on exit via a small LSD acceleration trim — without touching the entry/mid-corner that the driver likes.",
+        "changes": [
+          {
+            "setting": "Ride Height Front",
+            "field": "ride_height_front",
+            "from": "70 mm",
+            "to": "78 mm",
+            "why": "Directly attacks the very high 15.8 bottoming events/lap from Daytona's banking joints and infield bumps, restoring the stable platform without disturbing the driver's confirmed-good entry balance.",
+            "to_clamped": 78
+          },
+          {
+            "setting": "Ride Height Rear",
+            "field": "ride_height_rear",
+            "from": "83 mm",
+            "to": "91 mm",
+            "why": "Lifting the rear by the same 8 mm preserves the existing mild rake while eliminating chassis ground contact that makes the rear feel loose over crests, which is the core of the 'very loose over bumps' complaint.",
+            "to_clamped": 91
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "field": "dampers_rear_ext",
+            "from": "35",
+            "to": "32",
+            "why": "Reducing rear rebound (still safely above rear compression of 30 per the cardinal rule) lets the rear follow the surface and settle without springing back over crests, easing both the bump looseness and lift-off instability.",
+            "to_clamped": 32
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "22",
+            "to": "18",
+            "why": "Per the power-oversteer fix, slightly reducing acceleration lock makes the rear lock more progressively under throttle to calm the 'rear loose on throttle' exit on this 670 hp car, without making it numb.",
+            "to_clamped": 18
+          }
+        ],
+        "ts": "2026-06-27T07:04:19"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: very loose over bumps, not  predictable enough for a race setup",
+        "analysis": "The driver confirms good entry, mid-corner rotation and stable braking — the two real complaints are 'very loose over bumps' and 'rear loose on throttle on exit'. Telemetry strongly confirms the bump issue: 6.0 bottoming events/lap is high on this low 70/90 mm platform, so the chassis is grounding through Daytona's banking joints and infield undulations and losing rear contact. The 16.0 wheelspin and 10.0 snap-throttle events/lap are driver throttle-input driven on a 670 hp car with power/transmission LOCKED, so per the priority order I fix the platform first, then make rear lock more progressive on exit via a small LSD acceleration trim — without disturbing the confirmed-good entry/mid balance.",
+        "changes": [
+          {
+            "setting": "Springs Rear",
+            "field": "springs_rear",
+            "from": "4.3 Hz",
+            "to": "3.90 Hz",
+            "why": "Softening the rear spring adds compliance over Daytona's banking joints and undulations so the rear keeps contact and bottoms less, per the bumpy-track philosophy, without hurting the confirmed-good rotation.",
+            "to_clamped": 3.9
+          },
+          {
+            "setting": "Springs Front",
+            "field": "springs_front",
+            "from": "4.4 Hz",
+            "to": "4.10 Hz",
+            "why": "A small matching front softening reduces the 6.0 bottoming events/lap and lets the platform follow the surface, since front ride height is already maxed at 70 mm and cannot be raised.",
+            "to_clamped": 4.1
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "field": "dampers_rear_ext",
+            "from": "32",
+            "to": "31",
+            "why": "Trimming rear rebound (still above rear compression of 30 per the cardinal rule) lets the rear settle without springing back over crests, directly easing the 'very loose over bumps' and lift-off looseness.",
+            "to_clamped": 31
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "18",
+            "to": "15",
+            "why": "Per the power-oversteer fix, slightly reducing acceleration lock makes the rear lock more progressively under throttle to calm the 'rear loose on throttle' exit without touching entry behaviour.",
+            "to_clamped": 15
+          }
+        ],
+        "ts": "2026-06-27T07:54:34"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: very loose over bumps, not  predictable enough for a race setup\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: still loose over bumps but better, very loose on corner exit. suggest needs more aero!",
+        "analysis": "The driver confirms good entry, good mid-corner rotation and stable braking — the two genuine complaints are 'very loose over bumps' and 'rear loose on throttle on exit', with the second sheet noting it pushes wide mid-corner and asking for more aero. Telemetry strongly backs the bump issue: 8.5 bottoming events/lap is very high on this low platform (70/90 mm), so the rear is grounding through Daytona's banking transitions and infield undulations and losing contact, which also drives the lift-off/exit looseness. The 15.8 wheelspin and 9.0 snap-throttle events/lap are throttle-input driven on a 670 hp car with power/transmission LOCKED, so I fix the platform first (priority step 5), add the requested rear aero for exit/high-speed stability, then make rear lock more progressive via a small LSD acceleration trim — without disturbing the confirmed-good entry/mid balance.",
+        "changes": [
+          {
+            "setting": "Ride Height Rear",
+            "field": "ride_height_rear",
+            "from": "90 mm",
+            "to": "90 mm",
+            "why": "Rear is already maxed at 90 mm so it cannot be raised further to cure the 8.5 bottoming events/lap — the fix must come from springs, dampers and aero instead (no change, noted for clarity).",
+            "to_clamped": "90 mm"
+          },
+          {
+            "setting": "Springs Rear",
+            "field": "springs_rear",
+            "from": "3.90 Hz",
+            "to": "3.50 Hz",
+            "why": "Softening the rear spring to the minimum adds compliance over Daytona's banking joints and infield undulations so the rear keeps contact and bottoms less, per the bumpy-track philosophy, without hurting the confirmed-good rotation.",
+            "to_clamped": 3.5
+          },
+          {
+            "setting": "Dampers Rear Ext",
+            "field": "dampers_rear_ext",
+            "from": "31",
+            "to": "30",
+            "why": "Trimming rear rebound to match rear compression (30) lets the rear settle without springing back over crests, directly easing the 'very loose over bumps' and lift-off looseness on exit.",
+            "to_clamped": 30
+          },
+          {
+            "setting": "Rear Aero",
+            "field": "aero_rear",
+            "from": "830",
+            "to": "900",
+            "why": "The driver explicitly asked for more aero and reports exit looseness and mid-corner push at speed — adding rear downforce gives the high-speed exit stability and rear platform support he wants while front aero (700) stays low to keep turn-in alive.",
+            "to_clamped": 900
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "15",
+            "to": "13",
+            "why": "Per the power-oversteer fix, slightly reducing acceleration lock makes the rear lock more progressively under throttle to calm the 'rear loose on throttle' exit without touching the confirmed-good entry behaviour.",
+            "to_clamped": 13
+          }
+        ],
+        "ts": "2026-06-27T08:03:56"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: very loose over bumps, not  predictable enough for a race setup\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: still loose over bumps but better, very loose on corner exit. suggest needs more aero!\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nFuel Use: On target\nNotes: additionoal aero much better grip, average fuel only went up from 3.19 to 3.26 per lap, should we add a bit more aero to front and rear to increase stability given low fuel impact?",
+        "analysis": "By the third feedback sheet the driver reports good rotation, good exit traction and on-target fuel after the earlier aero additions, with no remaining handling complaint — the only telemetry-confirmed issues are 6.6 bottoming events/lap on a low 70/90 mm platform and 20.4 wheelspin / 15.0 snap-throttle events/lap, which are driver throttle-input driven on a 670 hp car with power and transmission LOCKED. Zero oversteer and zero lock-up events confirm the chassis balance is sound, so I address the platform bottoming (priority step 5) and honour the driver's request for a small additional aero increase given the proven low fuel cost (3.19→3.26 L/lap).",
+        "changes": [
+          {
+            "setting": "Springs Rear",
+            "field": "springs_rear",
+            "from": "3.50 Hz",
+            "to": "3.50 Hz",
+            "why": "Rear spring is already at the minimum allowed value (3.50 Hz) so it cannot be softened further to reduce bottoming — the fix must come from damper rebound and aero instead (no change, noted for clarity).",
+            "to_clamped": "3.50 Hz"
+          },
+          {
+            "setting": "Dampers Rear Comp",
+            "field": "dampers_rear_comp",
+            "from": "30",
+            "to": "26",
+            "why": "Reducing rear compression lets the rear absorb Daytona's banking joints and infield undulations with more wheel travel, directly cutting the 6.6 bottoming events/lap while staying below rear rebound per the cardinal rule.",
+            "to_clamped": 26
+          },
+          {
+            "setting": "Dampers Front Comp",
+            "field": "dampers_front_comp",
+            "from": "32",
+            "to": "28",
+            "why": "Matching a small front compression reduction adds front compliance over the same surfaces since front ride height is already at the 70 mm maximum and cannot be raised, keeping the platform following the surface evenly.",
+            "to_clamped": 28
+          },
+          {
+            "setting": "Front Aero",
+            "field": "aero_front",
+            "from": "700",
+            "to": "750",
+            "why": "The driver requested a touch more aero for stability and confirmed the fuel impact is negligible; a small front increase preserves the front-positive balance he likes without overloading the rear, improving high-speed and banking confidence.",
+            "to_clamped": 750
+          }
+        ],
+        "ts": "2026-06-27T08:26:35"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: very loose over bumps, not  predictable enough for a race setup\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nNotes: still loose over bumps but better, very loose on corner exit. suggest needs more aero!\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nFuel Use: On target\nNotes: additionoal aero much better grip, average fuel only went up from 3.19 to 3.26 per lap, should we add a bit more aero to front and rear to increase stability given low fuel impact?\n\n--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Good traction\nRear Under Braking: Stable\nFuel Use: On target\nNotes: slightly loose on bumps again",
+        "analysis": "Across the four feedback sheets the chassis balance is fundamentally sound — entry is good, mid-corner rotation is good, and rear-under-braking is consistently stable, which the telemetry confirms (0.0 lock-ups, 0.0 oversteer events). The two genuinely actionable problems are the recurring 'loose over bumps' complaint and 7.8 bottoming events/lap, which is very high and means the rear platform is grounding through Daytona's banking transitions and infield undulations on this low 70/90 mm setup. The 26.4 wheelspin / 18.8 snap-throttle events/lap are driver throttle-input driven on a 670 hp car with power and transmission LOCKED, so the only lever left for exit composure is making rear lock more progressive via the differential — but the platform bottoming is the priority issue and must be addressed first (priority step 5).",
+        "changes": [
+          {
+            "setting": "Dampers Rear Ext",
+            "field": "dampers_rear_ext",
+            "from": "30",
+            "to": "33",
+            "why": "Rear rebound currently sits equal to rear compression (30) which lets the rear spring back uncontrolled over Daytona's banking joints and crests; raising extension to 33 lets the rear settle progressively after compression, directly easing the recurring 'loose over bumps' feeling while staying above compression per the cardinal rule.",
+            "to_clamped": 33
+          },
+          {
+            "setting": "Dampers Rear Comp",
+            "field": "dampers_rear_comp",
+            "from": "26",
+            "to": "24",
+            "why": "With rear ride height already maxed at 90 mm and the rear spring near minimum, reducing rear compression gives the rear more wheel travel to absorb undulations and cut the 7.8 bottoming events/lap without lifting the car.",
+            "to_clamped": 24
+          },
+          {
+            "setting": "Dampers Front Comp",
+            "field": "dampers_front_comp",
+            "from": "28",
+            "to": "26",
+            "why": "A small matching front compression reduction keeps the platform following the surface evenly since front ride height is already at its 70 mm maximum and cannot be raised, preventing a front/rear compliance mismatch over bumps.",
+            "to_clamped": 26
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "13",
+            "to": "18",
+            "why": "With power and transmission locked, raising acceleration lock makes both rear wheels break traction together more progressively rather than the inside wheel spinning up abruptly, smoothing the heavy 26.4 wheelspin/lap and improving exit composure without touching the confirmed-good entry/mid balance.",
+            "to_clamped": 18
+          }
+        ],
+        "ts": "2026-06-27T08:41:17"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Good balance\nMid-Corner: Good rotation\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\nFuel Use: On target",
+        "analysis": "Telemetry confirms a fundamentally sound chassis — 0.0 lock-ups, 0.0 oversteer events, stable rear under braking — so the driver's only genuine handling complaint, 'rear loose on throttle,' is exit-phase power oversteer driven by 21.8 wheelspin and 14.5 snap-throttle events/lap on a 670 hp Gr.1 car. With transmission and power LOCKED, the only levers for exit composure are the differential (make rear lock more progressive) and the rear platform. The 11.0 bottoming events/lap is the secondary issue: the rear is grounding through Daytona's banking and infield undulations on the maxed-out 90 mm rear ride height, which can itself contribute to the rear feeling loose on exit by unloading the tyres.",
+        "changes": [
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "18",
+            "to": "26",
+            "why": "Per the power-oversteer fix, raising acceleration sensitivity locks both driven wheels more progressively under throttle so the rear steps out less when the driver feeds power, directly targeting the 'rear loose on throttle' complaint without touching locked power/transmission.",
+            "to_clamped": 26
+          },
+          {
+            "setting": "LSD Initial",
+            "field": "lsd_initial",
+            "from": "16",
+            "to": "18",
+            "why": "A small initial-torque increase keeps the rear axle composed during the throttle pickup transition so the car doesn't snap as load shifts rearward, matching the driver's need for progressive exit rotation.",
+            "to_clamped": 18
+          },
+          {
+            "setting": "Dampers Rear Comp",
+            "field": "dampers_rear_comp",
+            "from": "24",
+            "to": "22",
+            "why": "With rear ride height already maxed at 90 mm and rear springs near minimum, reducing rear compression gives the rear more wheel travel to absorb the banking joints and cut the high 11.0 bottoming events/lap, keeping the rear tyres loaded on exit.",
+            "to_clamped": 22
+          },
+          {
+            "setting": "ARB Rear",
+            "field": "arb_rear",
+            "from": "3",
+            "to": "2",
+            "why": "Softening the rear bar one step increases rear mechanical compliance and traction on corner exit, per the power-oversteer and FR/race-bias philosophy of softer rear roll stiffness to settle a rear that's loose under throttle.",
+            "to_clamped": 2
+          }
+        ],
+        "ts": "2026-06-27T10:24:35"
+      }
+    ]
   }
 }

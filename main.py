@@ -120,6 +120,11 @@ DEFAULT_CONFIG = {
         "lap_time_tolerance_ms": 1500,
         "fuel_tolerance_liters": 0.5,
     },
+    "shift_beep": {
+        "enabled": True,
+        "qual_rpm": 7000,
+        "race_rpm": 6500,
+    },
     "anthropic": {
         "api_key": ""
     },
@@ -146,6 +151,89 @@ def load_config(path: str) -> dict:
     except json.JSONDecodeError as e:
         _log.warning("JSON error in %s: %s — using defaults", path, e)
         return dict(DEFAULT_CONFIG)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — shift-beep logic (module-level so they are unit-testable)
+# ---------------------------------------------------------------------------
+
+def resolve_threshold(
+    live_mode: str,
+    is_racing: bool,
+    practice_is_qual: bool,
+    sb: dict,
+) -> tuple[str, float]:
+    """Return (thresh_key, thresh) for the shift-beep RPM gate.
+
+    Selection rules:
+      - Race mode (is_racing=True)  -> "race_rpm"
+      - "Qualifying" (live_mode)    -> "qual_rpm"
+      - "Practice"                  -> "qual_rpm" if practice_is_qual else "race_rpm"
+      - Any other live_mode         -> "qual_rpm"
+
+    Falls back to legacy "rpm" key and then 7000 so an empty dict never raises.
+    """
+    if is_racing:
+        key = "race_rpm"
+    elif live_mode == "Practice":
+        key = "qual_rpm" if practice_is_qual else "race_rpm"
+    else:
+        key = "qual_rpm"
+    thresh = float(sb.get(key) or sb.get("rpm", 7000))
+    return key, thresh
+
+
+def should_shift_beep(
+    prev_gear: int,
+    cur_gear: int,
+    rpm: float,
+    threshold: float,
+    shift_above: bool,
+    enabled: bool,
+    muted_until: float,
+    downshift_muted_until: float,
+    now: float,
+) -> tuple[bool, bool, float]:
+    """Decide whether to fire a shift beep this packet.
+
+    Returns (beep, new_shift_above, new_downshift_muted_until).
+
+    Rules:
+    - enabled=False  -> no beep; shift_above and downshift_muted_until unchanged.
+    - Gear neutral (0) or reverse (not 1-8) -> no beep.
+    - Downshift detected (1<=cur_gear<=8 and prev_gear>0 and cur_gear<prev_gear)
+        -> no beep; set new_downshift_muted_until = now + 0.3; reset shift_above=True
+           so a throttle blip after the downshift doesn't fire.
+    - Upshift / steady (1<=cur_gear<=8):
+        -> beep when rpm>=threshold AND NOT shift_above AND now>=muted_until
+           AND now>=downshift_muted_until; then new_shift_above=True.
+    - Re-arm: when rpm < 0.95*threshold -> new_shift_above=False.
+    """
+    if not enabled:
+        return False, shift_above, downshift_muted_until
+
+    valid_gear = 1 <= cur_gear <= 8
+    if not valid_gear:
+        return False, shift_above, downshift_muted_until
+
+    # Downshift: cur_gear < prev_gear (and both are valid drive gears or prev was neutral)
+    if prev_gear > 0 and cur_gear < prev_gear:
+        # Mute beep for 0.3 s and keep shift_above=True (suppress blip spike)
+        return False, True, now + 0.3
+
+    # Re-arm hysteresis when RPM drops back below 95 % of threshold
+    new_shift_above = shift_above
+    if rpm < threshold * 0.95:
+        new_shift_above = False
+
+    # Fire beep
+    if (rpm >= threshold
+            and not new_shift_above
+            and now >= muted_until
+            and now >= downshift_muted_until):
+        return True, True, downshift_muted_until
+
+    return False, new_shift_above, downshift_muted_until
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +495,11 @@ def main() -> None:
     _shift_muted_until = [0.0]      # suppress shift beeps after race finish (set by dispatcher)
     _shift_last_gear = [0]          # last observed gear; used to detect downshifts
     _is_racing = [False]            # True between RACE_STARTED and RACE_FINISHED (selects race vs qual RPM)
+    # Snapshot refs written by the UI under _state_lock (see REF INJECTION CONTRACT below).
+    # Frontend-builder writes [0] via window._live_mode_ref and window._practice_is_qual_ref.
+    _live_mode_snap = ["Qualifying"]    # current session mode string; default Qualifying until race starts
+    _practice_is_qual = [False]         # True when Practice tab is set to "qual simulation"
+    _shift_downshift_muted_until = [0.0]  # monotonic: suppress beep after a downshift for 0.3 s
     _car_id_ref = _car_id_ref_early  # same list shared with driving_advisor
 
     # Real-time driving alert state — each is a single-element list for closure mutation
@@ -462,28 +555,37 @@ def main() -> None:
         # the engine is fully running; suppressing there felt broken to the user.
         sb = config.get("shift_beep", {})
         with _state_lock:
-            _shift_muted_snap = _shift_muted_until[0]
-            _is_racing_snap   = _is_racing[0]
-        if sb.get("enabled") and packet.car_on_track and time.time() >= _shift_muted_snap:
-            # Use race RPM during an active race; qual RPM for qualifying / practice.
-            # Fall back to legacy "rpm" key for configs saved before this change.
-            thresh_key = "race_rpm" if _is_racing_snap else "qual_rpm"
-            thresh = float(sb.get(thresh_key) or sb.get("rpm", 7000))
-            cur_gear = packet.current_gear
-            # Downshift detected: suppress by keeping _shift_above armed so the
-            # RPM spike from a throttle blip doesn't trigger a beep.
-            if cur_gear > 0 and _shift_last_gear[0] > 0 and cur_gear < _shift_last_gear[0]:
-                _shift_above[0] = True
-            elif cur_gear > 0 and packet.engine_rpm >= thresh and not _shift_above[0]:
-                _shift_above[0] = True
-                print(f"[ShiftBeep] fired — engine {packet.engine_rpm:.0f} >= thresh {thresh:.0f} "
-                      f"({thresh_key}) gear {cur_gear}")
-                # Play directly via winsound (WASAPI shared mode — always warm, no queue delay).
-                if not announcer.play_beep_direct():
-                    print("[ShiftBeep] play_beep_direct failed — check rpm.wav exists and winsound is available")
-            elif packet.engine_rpm < thresh * 0.95:
-                _shift_above[0] = False
-            _shift_last_gear[0] = cur_gear
+            _shift_muted_snap            = _shift_muted_until[0]
+            _is_racing_snap              = _is_racing[0]
+            _live_mode_snap_val          = _live_mode_snap[0]
+            _practice_is_qual_snap       = _practice_is_qual[0]
+            _downshift_muted_snap        = _shift_downshift_muted_until[0]
+        _now_wall = time.time()
+        thresh_key, thresh = resolve_threshold(
+            _live_mode_snap_val, _is_racing_snap, _practice_is_qual_snap, sb
+        )
+        cur_gear = packet.current_gear
+        beep, new_shift_above, new_downshift_muted = should_shift_beep(
+            prev_gear=_shift_last_gear[0],
+            cur_gear=cur_gear,
+            rpm=float(packet.engine_rpm),
+            threshold=thresh,
+            shift_above=_shift_above[0],
+            enabled=bool(sb.get("enabled")),
+            muted_until=_shift_muted_snap,
+            downshift_muted_until=_downshift_muted_snap,
+            now=_now_wall,
+        )
+        if beep:
+            print(f"[ShiftBeep] fired — engine {packet.engine_rpm:.0f} >= thresh {thresh:.0f} "
+                  f"({thresh_key}) gear {cur_gear}")
+            # Play directly via winsound (WASAPI shared mode — always warm, no queue delay).
+            if not announcer.play_beep_direct():
+                print("[ShiftBeep] play_beep_direct failed — check rpm.wav exists and winsound is available")
+        _shift_above[0] = new_shift_above
+        with _state_lock:
+            _shift_downshift_muted_until[0] = new_downshift_muted
+        _shift_last_gear[0] = cur_gear
 
         # ── Real-time oversteer alert ────────────────────────────────────────
         # Wheelspin and lock-up detection data is used for per-lap coaching on
@@ -553,6 +655,29 @@ def main() -> None:
         db=db,
         dispatcher=dispatcher,
     )
+
+    # REF INJECTION CONTRACT — post-construction attribute injection for shift-beep mode refs.
+    # The frontend (MainWindow / dashboard slots) MUST write [0] under _state_lock:
+    #   window._live_mode_ref[0]       = "Race" | "Qualifying" | "Practice"  (str)
+    #   window._practice_is_qual_ref[0] = True | False                       (bool)
+    # These are shared single-element lists (closures captured in on_packet).
+    # Import _state_lock from main (or use getattr(window, '_state_lock_ref')) to guard writes.
+    window._live_mode_ref       = _live_mode_snap        # list[str]  — on_packet reads [0]
+    window._practice_is_qual_ref = _practice_is_qual     # list[bool] — on_packet reads [0]
+
+    # Sync the refs with persisted/restored state NOW (before the listener starts).
+    # Without this, the snapshots keep their module defaults until the user first
+    # touches the Live-mode combo / Setup-type selector, so early packets would use
+    # the wrong shift-RPM threshold (e.g. qual_rpm while the saved mode is Race).
+    with _state_lock:
+        _live_mode_snap[0] = config.get("live", {}).get("mode", "Race")
+        _stype = ""
+        if hasattr(window, "_setup_type") and window._setup_type is not None:
+            try:
+                _stype = window._setup_type.currentText()
+            except Exception:
+                _stype = ""
+        _practice_is_qual[0] = "qual" in _stype.lower()
 
     conn_monitor = ConnectionMonitor(listener, bridge)
 

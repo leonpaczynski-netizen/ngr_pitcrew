@@ -1105,7 +1105,9 @@ class AnnouncerEventHandler:
             record = data.get("record")
             lap_ms = getattr(record, "lap_time_ms", 0) if record else 0
             target_ms = self._a._qualifying_target_ms
+
             if lap_ms > 0 and target_ms > 0:
+                # AC4: manual target takes precedence — no lap-count gate, fires every lap.
                 delta_ms = lap_ms - target_ms
                 abs_sec = abs(delta_ms) / 1000.0
                 delta_str = f"{abs_sec:.3f}s"
@@ -1116,6 +1118,24 @@ class AnnouncerEventHandler:
                 else:
                     phrase = "Lap complete. On target."
                 self._a.announce(phrase, Priority.LOW, "qual_lap_delta", 0.0)
+
+            elif lap_ms > 0 and self._qualifying_lap_count >= 3:
+                # AC3: no manual target — use best lap of the current session as reference.
+                # Lap 1 (out-lap) and lap 2 (first timed lap, no prior reference) are silent.
+                # DECISION B5: first spoken delta is lap 3+.
+                best_ms = data.get("best_lap_ms", 0)
+                # AC6: if no valid best lap is available, say nothing.
+                if best_ms and best_ms > 0:
+                    delta_ms = lap_ms - best_ms
+                    abs_sec = abs(delta_ms) / 1000.0
+                    delta_str = f"{abs_sec:.3f}s"
+                    if delta_ms < 0:
+                        phrase = f"Lap complete. {delta_str} under target."
+                    elif delta_ms > 0:
+                        phrase = f"Lap complete. {delta_str} over target."
+                    else:
+                        phrase = "Lap complete. On target."
+                    self._a.announce(phrase, Priority.LOW, "qual_lap_delta", 0.0)
 
         laps_rem = data.get("laps_remaining", 0)
         if laps_rem == 1:
@@ -1247,6 +1267,12 @@ class AnnouncerEventHandler:
     # --- race start ---
 
     def _on_race_start(self, data: dict) -> None:
+        # In qualifying the engine already fires "Qualifying session started." —
+        # suppress this handler's "Race started." so the driver does not hear both.
+        # Matches the guard pattern used by _on_pit, _on_fuel_low, and _on_race_finish.
+        # Practice mode is intentionally left unchanged (driver hears "Race started.").
+        if getattr(self._a, "_session_mode", "race") == "qualifying":
+            return
         race_type = data.get("race_type", RaceType.UNKNOWN)
         laps      = data.get("laps_in_race", 0)
         rem_ms    = data.get("remaining_time_ms", -1)

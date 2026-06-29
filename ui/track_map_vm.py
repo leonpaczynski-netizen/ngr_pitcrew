@@ -18,6 +18,7 @@ Coordinate projection:
 from __future__ import annotations
 
 import math
+from collections import OrderedDict, namedtuple
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -147,10 +148,12 @@ def build_track_map_draw_data(
     if station_map is None or not station_map.stations:
         return empty
 
-    # Centreline polyline (using X, Z)
+    # Centreline polyline (using X, Z) — close the loop so the circuit joins
     centreline: List[MapPoint] = [
         MapPoint(s.x, s.z) for s in station_map.stations
     ]
+    if len(centreline) > 1:
+        centreline.append(centreline[0])
 
     # Width corridor edges
     width_left:  List[MapPoint] = []
@@ -302,6 +305,34 @@ def _station_z(station_m: float, sm: TrackStationMap) -> float:
 # Screen projection
 # ---------------------------------------------------------------------------
 
+# Projection cache.  project_to_screen() reallocates every polyline point on
+# every repaint (many times a second during a race).  The heavy geometry only
+# changes when a *new* TrackMapDrawData object is built; within one object's
+# lifetime the live path mutates just car_dot (and the highlight scalars) in
+# place.  So we cache the projected result keyed on the source object's identity
+# + canvas size and, on a hit, reproject only the single car-dot point.
+#
+# All callers run on the Qt GUI thread (telemetry arrives via a queued signal),
+# so no lock is needed.  A strong ref to the source object is held in the entry
+# so its id() cannot be reused while cached; the `source is draw_data` check
+# defends against reuse after eviction anyway.
+_PROJ_CACHE_MAX = 8
+_PROJ_CACHE: "OrderedDict[tuple, _ProjEntry]" = OrderedDict()
+_ProjEntry = namedtuple("_ProjEntry", "source params result")
+
+
+def _project_point(x: float, y: float, params: tuple) -> MapPoint:
+    off_x, off_y, scale, min_x, max_y = params
+    return MapPoint(off_x + (x - min_x) * scale, off_y + (max_y - y) * scale)
+
+
+def _project_car_dot(cd, params: tuple):
+    if cd is None:
+        return None
+    pp = _project_point(cd.x, cd.y, params)
+    return CarDot(x=pp.x, y=pp.y, confidence=cd.confidence, is_valid=cd.is_valid)
+
+
 def project_to_screen(
     draw_data:  TrackMapDrawData,
     canvas_w:   int,
@@ -320,6 +351,18 @@ def project_to_screen(
 
     if span_x < 1e-3 or span_y < 1e-3:
         return draw_data   # degenerate — return as-is
+
+    cache_key = (id(draw_data), canvas_w, canvas_h, margin)
+    cached = _PROJ_CACHE.get(cache_key)
+    if cached is not None and cached.source is draw_data:
+        # Geometry unchanged for this object; only the live car dot (mutated in
+        # place each packet) and the highlight scalars can differ frame-to-frame.
+        result = cached.result
+        result.car_dot = _project_car_dot(draw_data.car_dot, cached.params)
+        result.highlight_start_progress = draw_data.highlight_start_progress
+        result.highlight_end_progress   = draw_data.highlight_end_progress
+        _PROJ_CACHE.move_to_end(cache_key)
+        return result
 
     avail_w = canvas_w - 2 * margin
     avail_h = canvas_h - 2 * margin
@@ -363,7 +406,7 @@ def project_to_screen(
             is_placeholder = lbl.is_placeholder,
         ))
 
-    return TrackMapDrawData(
+    result = TrackMapDrawData(
         centreline       = proj_list(draw_data.centreline),
         width_left       = proj_list(draw_data.width_left),
         width_right      = proj_list(draw_data.width_right),
@@ -381,3 +424,12 @@ def project_to_screen(
         highlight_end_progress         = draw_data.highlight_end_progress,
         pit_lane_polyline              = proj_list(draw_data.pit_lane_polyline),
     )
+
+    _PROJ_CACHE[cache_key] = _ProjEntry(
+        source=draw_data,
+        params=(off_x, off_y, scale, min_x, max_y),
+        result=result,
+    )
+    while len(_PROJ_CACHE) > _PROJ_CACHE_MAX:
+        _PROJ_CACHE.popitem(last=False)   # evict least-recently-used
+    return result

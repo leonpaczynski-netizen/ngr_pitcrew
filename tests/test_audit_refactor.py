@@ -79,7 +79,6 @@ class FakeDashboardAC1:
         self._tm_cached_draw_data = None
         self._pit_lane_active = False
         self._tm_map_widget = FakeMapWidget()
-        self._live_map_widget = FakeMapWidget()
         self._announcer = None
         self._build_calls = 0
 
@@ -122,8 +121,6 @@ class FakeDashboardAC1:
             dd = self._tm_cached_draw_data
             if hasattr(self, "_tm_map_widget"):
                 self._tm_map_widget.set_draw_data(dd)
-            if hasattr(self, "_live_map_widget"):
-                self._live_map_widget.set_draw_data(dd)
         except Exception:
             pass
 
@@ -179,15 +176,14 @@ def test_ac1_cache_invalidated_on_station_map_change():
     assert dash._build_calls == 2
 
 
-def test_ac1_set_draw_data_called_on_both_widgets():
-    """Both _tm_map_widget and _live_map_widget receive set_draw_data on each call."""
+def test_ac1_set_draw_data_called_on_tm_widget():
+    """_tm_map_widget receives set_draw_data on each call (Live-tab map removed in Group A)."""
     dash = FakeDashboardAC1()
 
     dash._tm_update_live_map_dot(FakePacket())
     dash._tm_update_live_map_dot(FakePacket())
 
     assert len(dash._tm_map_widget.draw_data_calls) == 2
-    assert len(dash._live_map_widget.draw_data_calls) == 2
 
 
 # ---------------------------------------------------------------------------

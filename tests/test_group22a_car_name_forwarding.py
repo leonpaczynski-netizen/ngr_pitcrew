@@ -149,15 +149,22 @@ class TestAiPlannerCarNameForwarding(unittest.TestCase):
             captured["car_name"] = car_name
             return "ctx"
 
+        # Provide ≥8 laps + degradation so the feasibility gate passes and
+        # _get_tc is actually called (Fix 1 short-circuits before the _get_tc
+        # call when all stop counts are rejected due to insufficient data).
+        _laps = [90000.0] * 8
+        _deg = {"RM": {"optimal_stint_race": 15, "total_life_race": 18,
+                       "cliff_lap_practice": 16, "pace_loss_at_cliff_s": 1.5, "confidence": "high"}}
         with patch("strategy.track_context_prompt.get_track_context_for_ai",
                    side_effect=_fake_get_tc), \
              patch("strategy.ai_planner.call_api", side_effect=RuntimeError("no api")):
             try:
                 analyse_strategy(
                     self._minimal_params(),
-                    {"RM": [90000.0]},
+                    {"RM": _laps},
                     "key",
                     car_name="Ferrari 296",
+                    degradation=_deg,
                 )
             except RuntimeError:
                 pass

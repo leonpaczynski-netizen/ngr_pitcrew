@@ -623,8 +623,12 @@ class TestDrawingPrimitives:
         from ui.track_map_vm import build_track_map_draw_data
         sm = self._station_map()
         dd = build_track_map_draw_data(sm)
-        assert len(dd.width_left)  == len(dd.centreline)
-        assert len(dd.width_right) == len(dd.centreline)
+        # centreline has N+1 points (N stations + 1 closing point to join the circuit).
+        # Width edge polylines are NOT closed, so they remain N points.
+        n_stations = len(sm.stations)
+        assert len(dd.centreline) == n_stations + 1
+        assert len(dd.width_left)  == n_stations
+        assert len(dd.width_right) == n_stations
 
     def test_corner_labels_count_matches_corners(self):
         from ui.track_map_vm import build_track_map_draw_data

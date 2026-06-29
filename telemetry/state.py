@@ -247,7 +247,7 @@ class RaceStateTracker:
 
     @property
     def session_type(self) -> "SessionType":
-        return self._session_type
+        return self._session_type_override if self._session_type_override is not None else self._session_type
 
     @property
     def tyre_states(self) -> dict[str, TyreState]:

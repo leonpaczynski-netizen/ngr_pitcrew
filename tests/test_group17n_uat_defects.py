@@ -19,9 +19,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from data.track_calibration import CalibrationSession
 
 
 # ---------------------------------------------------------------------------
