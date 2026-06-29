@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-06-26 (Group 17U — Track Library Schema and Seed Data Registry — 2329 pass / 5 skip / 0 fail — 83 tests in test_group17u_track_library_schema.py)
+> Last updated: 2026-06-29 (Group 31 — Race-Engineer Prompt Directives + Validation — 3426 pass / 6 skip / 0 fail — 144 tests in test_group31_race_engineer.py)
 > Read PROJECT_STATE.md first, then this file, before touching any code.
 
 ---
@@ -3300,3 +3300,87 @@ Malformed files silently skipped; errors recorded in `TrackModelResolverResult.e
 - `TestRegressionImports` — 9 tests: 17A–17H importable, RaceParams has new fields, DrivingAdvisor has method, get_track_context returns string
 
 **Tests Run:** 1420 pass / 5 skip / 0 fail (1425 collected)
+
+---
+
+### Group 31 — Race-Engineer Prompt Directives, Validation, and Bottoming Classifier (2026-06-29)
+
+**Primary file:** `strategy/driving_advisor.py`
+**Secondary files:** `telemetry/recorder.py`, `ui/setup_builder_ui.py`
+**Test file:** `tests/test_group31_race_engineer.py` (144 tests)
+
+**New module-level functions added to `strategy/driving_advisor.py`:**
+- `_validate_setup_response(parsed, car_name, allowed_tuning, locked_fields, setup) -> dict` — 7-check validation layer; appends `validation_errors` list to parsed JSON; never silently drops changes
+- `_classify_bottoming_location(bottoming_positions, loc_id, lay_id) -> str` — delegates to `enrich_telemetry_issues`; votes on segment type; returns category string or "unknown"
+- `_derive_locked_fields(allowed_tuning) -> set[str]` — maps allowed-tuning categories to canonical param names; has comments for unmapped categories (steering, nitrous)
+- `_race_engineer_directives(..., setup=None) -> str` — generates AC1–AC13 directive text including I1 ride-height-at-max detection
+
+**Changes to existing functions:**
+- `_normalise_changes`: added no-op stripping (from == to_clamped → drop change)
+- `_get_previous_ai_context(feature, prior_outcomes=None)`: renders structured block when prior_outcomes is a non-empty list
+- `build_setup_advice_response`: max_tokens 1000→1500; post-call normalise+validate+locked-strip
+- `build_combined_setup_response`: max_tokens 1200→1500 (C2); C1 setup_fields rebuild after normalise; C3a locked-field strip from both changes and setup_fields; normalise+validate; passes `prior_outcomes`
+- `_build_setup_prompt` and `_build_combined_prompt`: inject `_race_engineer_directives` block + extended JSON schema (AC8 keys: `primary_issue`, `issue_classification`, `validation_targets`, `do_not_change_reasoning`, `confidence`, `expected_validation`)
+
+**Changes to `telemetry/recorder.py`:**
+- `LapStats`: added `bottoming_positions: list = field(default_factory=list)`
+- `_compute_stats`: captures rising-edge XYZ on bottoming events (mirrors snap_throttle_positions pattern)
+
+**Changes to `ui/setup_builder_ui.py`:**
+- Added `_format_validation_errors_banner(validation_errors: list) -> str` pure module-level helper (C3b)
+- `_display_setup_result`: reads `validation_errors` from parsed JSON; renders banner before changes list
+
+**Defects fixed:**
+- C1/I3: `build_combined_setup_response` now rebuilds `setup_fields` from surviving normalised changes after `_normalise_changes` strips no-ops
+- C2: `build_combined_setup_response` max_tokens corrected to 1500 (was 1200)
+- C3a: locked-field changes stripped from both `changes` and `setup_fields` after validation in both entry points
+- C3b: `validation_errors` rendered as orange banner in `_display_setup_result`
+- I1/AC3: `_race_engineer_directives` now accepts `setup` dict; emits explicit "do NOT recommend raising" when ride height is at per-car max with bottoming present; emits "IS permissible" when below max
+- I5: `_derive_locked_fields` has inline comments explaining that `steering` and `nitrous` categories have no canonical setup params mapped yet
+
+**Acceptance criteria covered:**
+- AC1: Per-car range clamping enforced; prompts state unit and step (Hz, kg, °, mm)
+- AC2: Ride-height reported in mm, springs in Hz; camber always ≤ 0 (negative convention)
+- AC3: Ride-height escalation sequence (springs → ARB → damper → RH); at-max → no-op warning; I1 explicit names fields
+- AC4: Stable braking preserved — "do NOT change brake_bias" when lockups < 0.5 and consistency < 15 m
+- AC5: AC5 smallest-effective-change instruction in prompt
+- AC6: Snap-throttle driver-input separation when snap > 0 and os_throttle_on > 0
+- AC7: Issue classification (`setup-limited`, `driver-input-limited`, `mixed`, `insufficient-data`)
+- AC8: Extended JSON schema keys injected into prompt
+- AC9: Track zone context from bottoming/oversteer positions; "low confidence" when positions empty
+- AC10: Bottoming count and classifier output injected when avg_bottom > 0
+- AC11: Race-objective framing (lap race: stint/tyre; timed: time-window/fuel)
+- AC12: Short-sample warning when laps < 20% of event laps
+- AC13: Smallest-effective-change instruction
+- AC14: Server-side validation (unresolvable field, out-of-range, locked, no-op, string-not-number, >4 changes, setup_fields mismatch)
+
+**Test classes:**
+- `TestAC1RangeAuthority` — 3 tests
+- `TestAC1RangeAuthorityAugmented` — 2 tests (per-car min/max override)
+- `TestAC2Units` — 4 tests
+- `TestAC3RideHeightEscalation` — 4 tests
+- `TestAC3RideHeightEscalationAugmented` — 6 tests (includes I1 at-max vs below-max)
+- `TestAC4StableBraking` — 5 tests
+- `TestAC5SmallestEffectiveChange` — 2 tests
+- `TestAC6SnapThrottleDriverInput` — 4 tests
+- `TestAC7IssueClassification` — 4 tests
+- `TestAC8ExtendedJsonSchema` — 5 tests
+- `TestAC9ZoneContext` — 4 tests
+- `TestAC10BottomingCount` — 4 tests
+- `TestAC11RaceObjectiveFraming` — 4 tests
+- `TestAC12ShortSampleWarning` — 3 tests
+- `TestAC13SmallestEffectiveChange` — 2 tests
+- `TestAC14ValidationErrors` — 7 tests
+- `TestModuleLevelFunctionsExist` — 4 tests
+- `TestNormaliseChangesRegression` — 3 tests
+- `TestClassifyBottomingLocation` — 4 tests
+- `TestPriorOutcomesStructuredBlock` — 5 tests
+- `TestPromptPriorOutcomesIntegration` — 3 tests
+- `TestPorsche963ReferenceFailureCase` — 7 tests (end-to-end scenario with per-car ranges)
+- `TestC1CombinedRebuildSetupFieldsAfterNoOpStrip` — 2 tests
+- `TestC2MaxTokensBehavioural` — 2 tests (captures max_tokens via call_api stub)
+- `TestC3aLockedFieldStripped` — 2 tests
+- `TestC3bValidationErrorsBanner` — 5 tests (pure helper, no Qt)
+- `TestI1AC3RideHeightAtMax` — 5 tests
+
+**Full suite result after Group 31: 3426 pass / 6 skip / 0 fail**

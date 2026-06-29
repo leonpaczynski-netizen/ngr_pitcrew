@@ -22,6 +22,27 @@ _DARK_CARD = "#2A2A2A"
 _TEXT       = "#E0E0E0"
 
 
+def _format_validation_errors_banner(validation_errors: list) -> str:
+    """Return an HTML banner string for validation_errors from the AI response.
+
+    Pure helper (no Qt) — renders validation errors as an orange warning
+    banner in the same style as the DEF-P2-007 event-restriction banner.
+    Returns "" when there are no errors to display.
+    """
+    if not validation_errors:
+        return ""
+    items = "".join(
+        f"<li style='margin:2px 0;'>{e}</li>" for e in validation_errors
+    )
+    return (
+        "<div style='background:#1A1A00; border:1px solid #C8A020; "
+        "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+        "&#9888; <b>Setup Validation Warnings</b>"
+        f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{items}</ul>"
+        "</div>"
+    )
+
+
 def _set_spin_readonly(spin, readonly: bool) -> None:
     """Make a spinbox read-only (min==max case) or editable again.
 
@@ -989,6 +1010,7 @@ class SetupBuilderMixin:
             analysis = str(data.get("analysis", ""))
             changes: list = data.get("changes", [])
             setup_fields: dict = data.get("setup_fields", {})
+            _validation_errors: list = data.get("validation_errors", [])
         except (_json.JSONDecodeError, AttributeError):
             # Fallback: display raw text, no changes section
             if _violation_banner:
@@ -1000,6 +1022,9 @@ class SetupBuilderMixin:
             if hasattr(self, "_btn_apply_ai_setup"):
                 self._btn_apply_ai_setup.setVisible(False)
             return
+
+        # Build a validation-errors banner when the server-side validator flagged issues.
+        _validation_banner = _format_validation_errors_banner(_validation_errors)
 
         # Store parsed fields so the apply button can use them
         self._last_setup_ai_fields = {
@@ -1015,7 +1040,7 @@ class SetupBuilderMixin:
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
-        html = _violation_banner + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
+        html = _violation_banner + _validation_banner + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
 
         if changes:
             html += f"<div style='{chg_hdr}'>" \

@@ -17,8 +17,12 @@ from strategy._rec_parser import parse_recommendations_from_response
 from strategy.setup_ranges import resolve_ranges
 from ui.gt7_data import build_track_context
 
+# Setup-tuning categories that can be locked by event rules. Must match the
+# selectable checkboxes in DashboardWindow._TUNING_CATEGORIES — "tyres" is NOT a
+# setup-tuning field (compound choice is a strategy decision handled elsewhere),
+# so it must not appear here or it is always reported as LOCKED.
 _ALL_TUNING_CATS = [
-    "tyres", "brake_balance", "suspension", "differential",
+    "brake_balance", "suspension", "differential",
     "aero", "transmission", "power", "ballast", "steering", "nitrous",
 ]
 
@@ -41,6 +45,56 @@ def _tuning_constraint_block(
             f"Only recommend changes to ALLOWED areas.\n\n"
         )
     return ""
+
+
+# Fields shown in the per-car valid-ranges block, in display order, with units.
+# Front/rear are listed separately because per-car ranges can differ per side.
+_RANGE_BLOCK_FIELDS: list[tuple[str, str]] = [
+    ("ride_height_front", "mm"), ("ride_height_rear", "mm"),
+    ("springs_front", "Hz"), ("springs_rear", "Hz"),
+    ("dampers_front_comp", "%"), ("dampers_front_ext", "%"),
+    ("dampers_rear_comp", "%"), ("dampers_rear_ext", "%"),
+    ("arb_front", ""), ("arb_rear", ""),
+    ("camber_front", "° (positive 0–6)"), ("camber_rear", "° (positive 0–6)"),
+    ("toe_front", "°"), ("toe_rear", "°"),
+    ("aero_front", "downforce"), ("aero_rear", "downforce"),
+    ("lsd_initial", ""), ("lsd_accel", ""), ("lsd_decel", ""),
+    ("brake_bias", ""), ("ballast_kg", "kg"), ("ballast_position", ""),
+    ("power_restrictor", "%"),
+]
+
+
+def _fmt_bound(lo, hi) -> str:
+    if isinstance(lo, float) or isinstance(hi, float):
+        return f"{lo:.2f}–{hi:.2f}"
+    return f"{lo}–{hi}"
+
+
+def _valid_ranges_block(car_name: str) -> str:
+    """Per-car min–max for every adjustable field, so the AI suggests values
+    within the car's real limits and knows which parts ARE adjustable.
+
+    Without this block the analysis prompts list only field NAMES, so the AI
+    has no idea of the car's bounds and conservatively declines to touch
+    parts like aero. Built from the same resolve_ranges() data the parser
+    clamps against, so the advice and the applied values agree.
+    """
+    r = resolve_ranges(car_name)
+    lines = []
+    for field, unit in _RANGE_BLOCK_FIELDS:
+        if field not in r:
+            continue
+        lo, hi = r[field]
+        suffix = f" {unit}" if unit else ""
+        lines.append(f"  {field}: {_fmt_bound(lo, hi)}{suffix}")
+    body = "\n".join(lines)
+    return (
+        "## Valid setup ranges for THIS car — stay within these (the game rejects "
+        "out-of-range values). A non-zero range means the part IS adjustable on this "
+        "car, including aero (aero_front / aero_rear downforce) — recommend aero "
+        "changes when they help:\n"
+        f"{body}\n"
+    )
 
 # ---------------------------------------------------------------------------
 # Canonical param keys recognised by the combined-setup response normaliser.
@@ -172,8 +226,266 @@ def _normalise_changes(
                 except (TypeError, ValueError):
                     pass  # non-numeric "to" — leave as-is
         ch["to_clamped"] = to_clamped
+
+        # Drop no-ops: if the clamped target equals the current value, this
+        # change does nothing (e.g. ride-height already at its valid maximum).
+        # Skip only when "from" parses as a float; leave unparseable from-values
+        # in place so the AI's text is still surfaced.
+        try:
+            from_val = float(ch.get("from", ""))
+            if isinstance(to_clamped, (int, float)) and float(to_clamped) == from_val:
+                continue  # no-op: drop this change
+        except (TypeError, ValueError):
+            pass  # unparseable from-value — keep the change
+
         result.append(ch)
     return result
+
+
+def _derive_locked_fields(allowed_tuning: "list[str] | None") -> "set[str]":
+    """Return the set of canonical field keys that are locked given allowed_tuning.
+
+    Maps tuning category codes to canonical parameter keys.  Fields whose
+    categories are NOT in allowed_tuning are considered locked.
+    """
+    if not allowed_tuning:
+        return set()
+
+    # Map tuning category codes to the canonical field keys they cover.
+    # NOTE: "steering" and "nitrous" categories from _ALL_TUNING_CATS have no
+    # mapped setup params yet.  If only those categories are allowed, this
+    # function returns an empty locked set (no params to lock), which is the
+    # correct safe fallback — the validator then has nothing to flag.
+    _CAT_FIELDS: dict[str, list[str]] = {
+        "suspension": [
+            "ride_height_front", "ride_height_rear",
+            "springs_front", "springs_rear",
+            "dampers_front_comp", "dampers_front_ext",
+            "dampers_rear_comp", "dampers_rear_ext",
+            "arb_front", "arb_rear",
+            "camber_front", "camber_rear",
+            "toe_front", "toe_rear",
+        ],
+        "aero": ["aero_front", "aero_rear"],
+        "differential": ["lsd_initial", "lsd_accel", "lsd_decel",
+                         "lsd_front_initial", "lsd_front_accel", "lsd_front_decel"],
+        "brake_balance": ["brake_bias"],
+        "transmission": ["transmission_max_speed_kmh"],
+        "power": ["power_restrictor"],
+        "ballast": ["ballast_kg", "ballast_position"],
+        # "steering": []   — no canonical setup params mapped yet
+        # "nitrous": []    — no canonical setup params mapped yet
+    }
+
+    allowed_fields: set[str] = set()
+    for cat in allowed_tuning:
+        for f in _CAT_FIELDS.get(cat, []):
+            allowed_fields.add(f)
+
+    locked: set[str] = set()
+    for fields_list in _CAT_FIELDS.values():
+        for f in fields_list:
+            if f not in allowed_fields:
+                locked.add(f)
+    return locked
+
+
+def _validate_setup_response(
+    parsed: dict,
+    car_name: str,
+    allowed_tuning: "list[str] | None",
+    locked_fields: "set[str] | None",
+    setup: dict,
+) -> dict:
+    """Validate an already-parsed + already-normalised AI response dict.
+
+    Appends a top-level ``validation_errors`` key listing all detected
+    problems.  Changes are NOT dropped — callers decide what to do with
+    invalid items.
+
+    Parameters
+    ----------
+    parsed:
+        Already-parsed (and normalised) AI response dict.
+    car_name:
+        Used to obtain per-car ranges via resolve_ranges.
+    allowed_tuning:
+        List of allowed tuning category codes (e.g. ["suspension", "aero"]).
+        When None, no locked-field checks are performed.
+    locked_fields:
+        Explicit set of canonical field keys that must not be changed.
+        May be None (no locked checks).
+    setup:
+        Current setup dict — used to derive the set of known setup_fields keys.
+    """
+    errors: list[str] = []
+    ranges = resolve_ranges(car_name)
+    changes = parsed.get("changes") or []
+    sf = parsed.get("setup_fields") or {}
+
+    # Collect canonical keys touched by changes
+    change_fields: set[str] = set()
+    for ch in changes:
+        f = ch.get("field")
+        if f is not None:
+            change_fields.add(f)
+
+    # 1. Every change field must be a recognised canonical key
+    for ch in changes:
+        f = ch.get("field")
+        if f is None:
+            errors.append(
+                f"change '{ch.get('setting', '?')}' has no recognisable canonical field key"
+            )
+        elif f not in _CANONICAL_SETUP_PARAMS:
+            errors.append(f"change field '{f}' is not a known canonical setup key")
+
+    # 2. Every to_clamped must be within resolved ranges (for known fields)
+    for ch in changes:
+        f = ch.get("field")
+        tc = ch.get("to_clamped")
+        if f and f in ranges and isinstance(tc, (int, float)):
+            lo, hi = ranges[f]
+            if not (lo <= tc <= hi):
+                errors.append(
+                    f"change field '{f}' to_clamped={tc} is outside valid range [{lo}, {hi}]"
+                )
+
+    # 3. No change targets a locked field
+    if locked_fields:
+        for ch in changes:
+            f = ch.get("field")
+            if f and f in locked_fields:
+                errors.append(f"change field '{f}' targets a locked field")
+
+    # 4. No remaining no-ops (from == to_clamped)
+    for ch in changes:
+        tc = ch.get("to_clamped")
+        try:
+            from_val = float(ch.get("from", ""))
+            if isinstance(tc, (int, float)) and float(tc) == from_val:
+                errors.append(
+                    f"change field '{ch.get('field', '?')}' is a no-op (from == to_clamped == {tc})"
+                )
+        except (TypeError, ValueError):
+            pass
+
+    # 5. Every numeric to_clamped must be a number, not a string
+    for ch in changes:
+        tc = ch.get("to_clamped")
+        f = ch.get("field")
+        if f and f in ranges and isinstance(tc, str):
+            errors.append(
+                f"change field '{f}' to_clamped is a string ({tc!r}), expected numeric"
+            )
+
+    # 6. Too many changes
+    if len(changes) > 4:
+        errors.append(
+            f"too many changes (>4): {len(changes)} changes recommended — prefer 2–4 targeted changes"
+        )
+
+    # 7. setup_fields / changes consistency
+    sf_keys = set(sf.keys())
+    for f in change_fields:
+        if f and f not in sf_keys:
+            errors.append(
+                f"change field '{f}' is in changes but missing from setup_fields"
+            )
+    for f in sf_keys:
+        if f not in change_fields:
+            errors.append(
+                f"setup_fields key '{f}' has no corresponding change entry"
+            )
+
+    parsed["validation_errors"] = errors
+    return parsed
+
+
+def _classify_bottoming_location(
+    bottoming_positions: list,
+    loc_id: str,
+    lay_id: str,
+) -> str:
+    """Classify the most likely track context for recorded bottoming events.
+
+    Returns one of:
+      "braking zone" | "kerb strike" | "banking compression" |
+      "infield bump" | "throttle-exit squat" | "unknown"
+
+    Uses enrich_telemetry_issues to map bottoming positions to reviewed
+    segments and their phases.  Falls back to "unknown" gracefully when
+    loc_id/lay_id are empty, positions are empty, or enrichment raises
+    or returns nothing.
+    """
+    if not bottoming_positions or not loc_id or not lay_id:
+        return "unknown"
+
+    # Phase/segment-type → vocabulary mapping
+    _PHASE_TO_CATEGORY = {
+        "braking":   "braking zone",
+        "entry":     "braking zone",
+        "traction":  "throttle-exit squat",
+        "exit":      "throttle-exit squat",
+        "straight":  "infield bump",
+        "apex":      "banking compression",
+    }
+    _SEG_TYPE_TO_CATEGORY = {
+        "braking_zone":   "braking zone",
+        "corner_entry":   "braking zone",
+        "corner_exit":    "throttle-exit squat",
+        "traction_zone":  "throttle-exit squat",
+        "kerb_zone":      "kerb strike",
+        "banking_zone":   "banking compression",
+        "straight":       "infield bump",
+    }
+
+    try:
+        from data.track_issue_enrichment import (
+            RawTelemetryIssue,
+            TrackIssueType,
+            TrackIssuePhase,
+            enrich_telemetry_issues,
+        )
+        raw_issues = []
+        for pos in bottoming_positions:
+            if len(pos) >= 3:
+                raw_issues.append(RawTelemetryIssue(
+                    issue_type=TrackIssueType.UNKNOWN,
+                    phase=TrackIssuePhase.UNKNOWN,
+                    lap_num=0,
+                    pos_x=float(pos[0]),
+                    pos_y=float(pos[1]),
+                    pos_z=float(pos[2]),
+                    evidence="bottoming event",
+                ))
+        if not raw_issues:
+            return "unknown"
+
+        result = enrich_telemetry_issues(raw_issues, loc_id, lay_id)
+        if not result or not result.enriched_issues:
+            return "unknown"
+
+        # Vote on category across resolved issues
+        votes: dict[str, int] = {}
+        for ei in result.enriched_issues:
+            cat = None
+            # Try segment type first
+            seg_type = ei.matched_segment_type or ""
+            if seg_type in _SEG_TYPE_TO_CATEGORY:
+                cat = _SEG_TYPE_TO_CATEGORY[seg_type]
+            else:
+                # Fall back to phase of raw issue
+                phase_val = ei.raw.phase.value if hasattr(ei.raw.phase, "value") else str(ei.raw.phase)
+                cat = _PHASE_TO_CATEGORY.get(phase_val)
+            if cat:
+                votes[cat] = votes.get(cat, 0) + 1
+
+        if not votes:
+            return "unknown"
+        return max(votes, key=votes.__getitem__)
+    except Exception:
+        return "unknown"
 
 
 if TYPE_CHECKING:
@@ -186,6 +498,197 @@ def _delta_str(ms: int, best_ms: int) -> str:
         return ""
     d = (ms - best_ms) / 1000.0
     return f" ({d:+.3f}s from best)" if d != 0 else " (best lap)"
+
+
+def _race_engineer_directives(
+    avg_lockups: float,
+    avg_consist: float,
+    avg_snap: float,
+    avg_os_ton: float,
+    avg_bottom: float,
+    car_name: str,
+    laps_sample_len: int,
+    event_ctx: dict,
+    wheelspin_positions: list,
+    snap_throttle_positions: list,
+    oversteer_positions: list,
+    bottoming_positions: list,
+    loc_id: str,
+    lay_id: str,
+    setup: "dict | None" = None,
+) -> str:
+    """Return shared race-engineer directive text for injection into both
+    setup prompt builders (_build_setup_prompt and _build_combined_prompt).
+
+    Covers AC1–AC13 directives.
+
+    Parameters
+    ----------
+    setup:
+        The current car setup dict.  When supplied, AC3 checks whether
+        ride_height_front/rear are at the per-car maximum and emits an
+        explicit, targeted instruction — do NOT recommend raising a value
+        that is already at its valid maximum.
+    """
+    ranges = resolve_ranges(car_name)
+    directives: list[str] = []
+    setup = setup or {}
+
+    # AC1 — range authority
+    directives.append(
+        "## Race Engineer Directives\n"
+        "AC1 RANGE AUTHORITY: The per-car valid ranges shown above are the FINAL AUTHORITY "
+        "and override any generic range in the knowledge base. If the knowledge base says ARB 1–7 "
+        "but this car allows 1–10, use the car range."
+    )
+
+    # AC2 — units
+    directives.append(
+        "AC2 UNITS: Springs/natural frequency MUST be expressed in GT7 natural frequency (Hz), "
+        "never N/mm. Camber values are POSITIVE GT7 menu values (0.00–6.00) — "
+        "NEVER output a negative camber value."
+    )
+
+    # AC3 — ride-height escalation
+    rh_front_max = ranges.get("ride_height_front", (60, 200))[1]
+    rh_rear_max  = ranges.get("ride_height_rear",  (60, 200))[1]
+
+    # Determine whether current ride-height values are at their per-car maximum.
+    _rh_front_at_max = False
+    _rh_rear_at_max  = False
+    try:
+        _rhf_cur = float(setup.get("ride_height_front", -1))
+        if _rhf_cur >= 0:
+            _rh_front_at_max = (_rhf_cur >= rh_front_max)
+    except (TypeError, ValueError):
+        pass
+    try:
+        _rhr_cur = float(setup.get("ride_height_rear", -1))
+        if _rhr_cur >= 0:
+            _rh_rear_at_max = (_rhr_cur >= rh_rear_max)
+    except (TypeError, ValueError):
+        pass
+
+    directives.append(
+        f"AC3 RIDE-HEIGHT ESCALATION: If bottoming is high but ride height is already at its "
+        f"valid maximum (front max={rh_front_max} mm, rear max={rh_rear_max} mm), do NOT "
+        f"recommend a ride-height change — classify it as a platform-control issue and escalate "
+        f"to springs/natural frequency, compression/extension damping, aero platform, ARB and "
+        f"LSD traction. Never output a no-op change (e.g. 70→70). If a setting is already at "
+        f"its limit, state that only in analysis or do_not_change_reasoning."
+    )
+    if avg_bottom > 0:
+        # Explicit, targeted instruction when we know the current setup value.
+        _at_max_parts = []
+        if _rh_front_at_max:
+            _rhf_val = setup.get("ride_height_front", rh_front_max)
+            _at_max_parts.append(
+                f"ride_height_front is currently {_rhf_val} mm, which equals its valid maximum "
+                f"({rh_front_max} mm) — do NOT recommend raising it"
+            )
+        if _rh_rear_at_max:
+            _rhr_val = setup.get("ride_height_rear", rh_rear_max)
+            _at_max_parts.append(
+                f"ride_height_rear is currently {_rhr_val} mm, which equals its valid maximum "
+                f"({rh_rear_max} mm) — do NOT recommend raising it"
+            )
+        if _at_max_parts:
+            directives.append(
+                f"  ↳ Bottoming detected (avg={avg_bottom:.1f}/lap) AND ride height is already "
+                f"at its maximum: {'; '.join(_at_max_parts)}. "
+                f"Escalate to springs/natural frequency, compression/extension damping, "
+                f"aero platform, ARB and LSD traction instead. "
+                f"already at limit — do not output a no-op change."
+            )
+        else:
+            directives.append(
+                f"  ↳ Bottoming is detected (avg={avg_bottom:.1f}/lap). "
+                f"Ride-height front max={rh_front_max} mm, rear max={rh_rear_max} mm. "
+                f"Ride height is currently BELOW its maximum — a ride-height change IS "
+                f"permissible if it addresses the bottoming."
+            )
+
+    # AC4 — stable braking
+    if avg_lockups < 0.5 and 0 <= avg_consist < 15:
+        directives.append(
+            "AC4 STABLE BRAKING: Braking is stable with no lock-up pattern — do NOT change "
+            "brake_bias or lsd_decel unless another strong signal requires it; preserve "
+            "existing strengths (entry, mid-corner) without telemetry justification."
+        )
+
+    # AC5 — issue classification
+    directives.append(
+        "AC5 ISSUE CLASSIFICATION: For each major issue, classify it as exactly one of: "
+        "setup-limited | driver-input-limited | mixed | insufficient-data. "
+        "Use these exact strings in the issue_classification JSON key."
+    )
+
+    # AC6 — snap throttle driver input
+    if avg_snap > 0 and avg_os_ton > 0:
+        directives.append(
+            "AC6 SNAP-THROTTLE DRIVER INPUT: Snap-throttle-correlated wheelspin is partly driver "
+            "input. Setup can reduce sensitivity (LSD accel, springs, gearing) but cannot fully "
+            "fix driver-input-triggered wheelspin. Recommend legal setup changes if the car is "
+            "too unstable, but do not claim setup alone solves snap throttle."
+        )
+
+    # AC9 — corner/phase context zones
+    all_positions = (
+        list(wheelspin_positions or []) +
+        list(snap_throttle_positions or []) +
+        list(oversteer_positions or [])
+    )
+    if all_positions:
+        directives.append(
+            "AC9 ZONE CONTEXT: Position clusters for wheelspin/snap-throttle/oversteer events "
+            "are provided in the telemetry intelligence section above. When referencing these, "
+            "label clusters as 'Zone A', 'Zone B', etc., or by lap-distance % — do NOT invent "
+            "corner names (e.g. 'Turn 3' or 'T3') unless they come from validated track "
+            "intelligence. Add caveat: 'low confidence — positional estimate only'."
+        )
+
+    # AC10 — bottoming location
+    if avg_bottom > 0:
+        _all_btm = list(bottoming_positions or [])
+        btm_cat = _classify_bottoming_location(_all_btm, loc_id, lay_id)
+        directives.append(
+            f"AC10 BOTTOMING LOCATION (low confidence): {btm_cat}"
+        )
+
+    # AC11 — race objective
+    race_type = event_ctx.get("race_type", "")
+    if race_type in ("lap", "timed"):
+        directives.append(
+            "AC11 RACE OBJECTIVE: This is a TOTAL RACE performance target. The setup must "
+            "preserve stability over a full stint, protect tyre life, reduce wheelspin to "
+            "minimise tyre stress, reduce bottoming to protect the platform, maintain the fuel "
+            "target, avoid a spiky or nervous car over the stint duration, and preserve driver "
+            "confidence throughout. Do not optimise for single-lap pace at the expense of tyre "
+            "and fuel performance over the stint."
+        )
+
+    # AC12 — short-sample warning
+    event_laps = event_ctx.get("laps", 0)
+    try:
+        event_laps = int(event_laps)
+    except (TypeError, ValueError):
+        event_laps = 0
+    if event_laps > 0 and laps_sample_len < max(1, round(event_laps * 0.2)):
+        directives.append(
+            f"AC12 SHORT SAMPLE WARNING: Telemetry covers only {laps_sample_len} lap(s) "
+            f"out of {event_laps} event laps (<20%). Tyre wear, fuel load, and thermal "
+            f"degradation effects are NOT captured in this sample. The setup must still be "
+            f"designed for the full race distance."
+        )
+
+    # AC13 — smallest effective change
+    directives.append(
+        "AC13 SMALLEST EFFECTIVE CHANGE: Use the smallest effective change. Prefer 2–4 targeted "
+        "changes. Avoid changing multiple settings that solve the same problem unless severity is "
+        "high. Do not mask the diagnosis by changing too many things at once."
+    )
+
+    return "\n\n".join(directives)
 
 
 class DrivingAdvisor:
@@ -326,6 +829,7 @@ class DrivingAdvisor:
         self, setup_dict: dict, car_name: str = "", car_specs: dict | None = None,
         allowed_tuning: "list[str] | None" = None, tuning_locked: bool = False,
         compound: str = "", corner_issues_summary: str = "",
+        prior_outcomes: "list[dict] | None" = None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [{setting,from,to,why}]}."""
         api_key = self._config.get("anthropic", {}).get("api_key", "")
@@ -343,10 +847,11 @@ class DrivingAdvisor:
                                           allowed_tuning=allowed_tuning,
                                           tuning_locked=tuning_locked,
                                           compound=compound,
-                                          corner_issues_summary=corner_issues_summary)
+                                          corner_issues_summary=corner_issues_summary,
+                                          prior_outcomes=prior_outcomes)
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
-            _response_text = call_api(prompt, api_key, max_tokens=1000,
+            _response_text = call_api(prompt, api_key, max_tokens=1500,
                                       feature="Setup Advice",
                                       structured_payload={"lap_count": len(recent),
                                                           "car": car_name,
@@ -368,6 +873,42 @@ class DrivingAdvisor:
                 )
                 if _recs:
                     self._db.insert_setup_recommendations(_recs)
+            # Normalise changes and run validation (mirror combined path)
+            try:
+                _data = _json.loads(_response_text)
+                _raw_changes = _data.get("changes") or []
+                _setup_fields = _data.get("setup_fields") or {}
+                if isinstance(_raw_changes, list) and _raw_changes:
+                    _data["changes"] = _normalise_changes(
+                        _raw_changes, _setup_fields, car_name
+                    )
+                    # Rebuild setup_fields from normalised changes
+                    _normalised_sf: dict = {}
+                    for _ch in _data["changes"]:
+                        _f = _ch.get("field")
+                        _tc = _ch.get("to_clamped")
+                        if _f and isinstance(_tc, (int, float)):
+                            _normalised_sf[_f] = _tc
+                    _data["setup_fields"] = _normalised_sf
+                _locked = _derive_locked_fields(allowed_tuning) if allowed_tuning else None
+                _data = _validate_setup_response(
+                    _data, car_name, allowed_tuning, _locked, setup_dict
+                )
+                # C3a: strip locked-field changes from changes + setup_fields so the
+                # Apply button can never write a locked value.  The violation is already
+                # recorded in validation_errors.
+                if _locked:
+                    _data["changes"] = [
+                        _c for _c in (_data.get("changes") or [])
+                        if _c.get("field") not in _locked
+                    ]
+                    _data["setup_fields"] = {
+                        _k: _v for _k, _v in (_data.get("setup_fields") or {}).items()
+                        if _k not in _locked
+                    }
+                _response_text = _json.dumps(_data, ensure_ascii=False)
+            except Exception:
+                pass  # If normalisation/validation fails, return the original text unchanged
             return _response_text
         except Exception as e:
             return f"Setup analysis failed: {e}"
@@ -378,6 +919,7 @@ class DrivingAdvisor:
         feeling: str | None = None,
         allowed_tuning: "list[str] | None" = None, tuning_locked: bool = False,
         compound: str = "",
+        prior_outcomes: "list[dict] | None" = None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -400,10 +942,11 @@ class DrivingAdvisor:
             feeling=feeling,
             allowed_tuning=allowed_tuning, tuning_locked=tuning_locked,
             compound=compound,
+            prior_outcomes=prior_outcomes,
         )
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
-            _response_text = call_api(prompt, api_key, max_tokens=1200,
+            _response_text = call_api(prompt, api_key, max_tokens=1500,
                                       feature="Combined Setup",
                                       structured_payload={"lap_count": len(recent),
                                                           "car": car_name,
@@ -428,7 +971,7 @@ class DrivingAdvisor:
                     self._db.insert_setup_recommendations(_recs)
             # Normalise changes server-side: resolve 'field' key and add
             # 'to_clamped' so the frontend never needs to slug-guess or
-            # re-clamp raw AI values.
+            # re-clamp raw AI values; then validate.
             try:
                 _data = _json.loads(_response_text)
                 _raw_changes = _data.get("changes") or []
@@ -437,9 +980,34 @@ class DrivingAdvisor:
                     _data["changes"] = _normalise_changes(
                         _raw_changes, _setup_fields, car_name
                     )
-                    _response_text = _json.dumps(_data, ensure_ascii=False)
+                # Rebuild setup_fields from surviving normalised changes so stale
+                # keys from stripped no-ops never reach the validator or Apply button.
+                _normalised_sf: dict = {}
+                for _ch in _data.get("changes") or []:
+                    _f = _ch.get("field")
+                    _tc = _ch.get("to_clamped")
+                    if _f and isinstance(_tc, (int, float)):
+                        _normalised_sf[_f] = _tc
+                _data["setup_fields"] = _normalised_sf
+                _locked = _derive_locked_fields(allowed_tuning) if allowed_tuning else None
+                _data = _validate_setup_response(
+                    _data, car_name, allowed_tuning, _locked, setup_dict
+                )
+                # C3a: strip locked-field changes from changes + setup_fields so the
+                # Apply button can never write a locked value.  The violation is already
+                # recorded in validation_errors.
+                if _locked:
+                    _data["changes"] = [
+                        _c for _c in (_data.get("changes") or [])
+                        if _c.get("field") not in _locked
+                    ]
+                    _data["setup_fields"] = {
+                        _k: _v for _k, _v in (_data.get("setup_fields") or {}).items()
+                        if _k not in _locked
+                    }
+                _response_text = _json.dumps(_data, ensure_ascii=False)
             except Exception:
-                pass  # If normalisation fails, return the original text unchanged
+                pass  # If normalisation/validation fails, return the original text unchanged
             return _response_text
         except Exception as e:
             return f"Setup analysis failed: {e}"
@@ -681,7 +1249,51 @@ class DrivingAdvisor:
         except Exception:
             return ""
 
-    def _get_previous_ai_context(self, feature: str) -> str:
+    def _get_previous_ai_context(
+        self,
+        feature: str,
+        prior_outcomes: "list[dict] | None" = None,
+    ) -> str:
+        """Return prior AI context block for injection into prompts.
+
+        When *prior_outcomes* is supplied (list of dicts with keys: setting,
+        from_value, to_value, applied (True/False/"unknown"), result
+        ("improved"/"worse"/"no_change"/"unknown")), a structured block is
+        rendered that instructs the AI not to repeat a prior recommendation
+        unless: it was not applied, it improved and needs a further step,
+        telemetry still supports the direction, or outcome is unknown.
+
+        When *prior_outcomes* is not supplied, the free-text DB path is used
+        unchanged (backward-compatible).
+        """
+        if prior_outcomes is not None:
+            if not prior_outcomes:
+                return ""
+            lines = ["## Prior Recommended Changes and Outcomes"]
+            for po in prior_outcomes:
+                setting   = po.get("setting", "?")
+                from_val  = po.get("from_value", "?")
+                to_val    = po.get("to_value", "?")
+                applied   = po.get("applied", "unknown")
+                result_   = po.get("result", "unknown")
+                applied_s = (
+                    "applied" if applied is True
+                    else "not applied" if applied is False
+                    else "unknown whether applied"
+                )
+                lines.append(
+                    f"  - {setting}: {from_val} → {to_val} | {applied_s} | outcome: {result_}"
+                )
+            lines.append(
+                "\nDo NOT repeat a prior recommendation unless: "
+                "(a) it was not applied, "
+                "(b) it improved the car and a further step is needed, "
+                "(c) current telemetry still strongly supports the same direction, "
+                "or (d) the outcome is unknown."
+            )
+            return "\n".join(lines)
+
+        # Free-text DB path (original behaviour)
         if self._db is None:
             return ""
         try:
@@ -963,6 +1575,7 @@ If location-based patterns show clustering, name the type of corner (braking/fas
         compound: str = "",
         corner_issues_summary: str = "",
         live_position=None,
+        prior_outcomes: "list[dict] | None" = None,
     ) -> str:
         car_specs = car_specs or {}
         avg_lockups  = mean(l.lock_up_count   for l in laps)
@@ -983,13 +1596,43 @@ If location-based patterns show clustering, name the type of corner (braking/fas
             else "(unmeasured)"
         )
 
+        # Aggregate position lists across all laps for directives
+        _wsp_all = [p for l in laps for p in getattr(l, "wheelspin_positions", [])]
+        _stp_all = [p for l in laps for p in getattr(l, "snap_throttle_positions", [])]
+        _osp_all = [p for l in laps for p in getattr(l, "oversteer_positions", [])]
+        _btp_all = [p for l in laps for p in getattr(l, "bottoming_positions", [])]
+
+        _cfg = getattr(self, "_config", {})
+        sc = _cfg.get("strategy", {}) if isinstance(_cfg, dict) else {}
+        loc_id = sc.get("track_location_id") or ""
+        lay_id = sc.get("layout_id") or ""
+
+        directives_block = _race_engineer_directives(
+            avg_lockups=avg_lockups,
+            avg_consist=avg_consist,
+            avg_snap=avg_snap,
+            avg_os_ton=avg_os_ton,
+            avg_bottom=avg_bottom,
+            car_name=car_name,
+            laps_sample_len=len(laps),
+            event_ctx=getattr(self, "_event_ctx", {}),
+            wheelspin_positions=_wsp_all,
+            snap_throttle_positions=_stp_all,
+            oversteer_positions=_osp_all,
+            bottoming_positions=_btp_all,
+            loc_id=loc_id,
+            lay_id=lay_id,
+            setup=setup,
+        )
+
         setup_block    = format_setup_for_prompt(setup)
         gt7_ref        = load_gt7_reference()
         header         = self._car_track_header(car_name, car_specs)
         tuning_block   = _tuning_constraint_block(allowed_tuning, tuning_locked)
+        ranges_block   = _valid_ranges_block(car_name)
         event_block    = self._get_event_context_block()
         feedback_block = self._get_driver_feedback_context()
-        prev_ai_block  = self._get_previous_ai_context("Setup Advice")
+        prev_ai_block  = self._get_previous_ai_context("Setup Advice", prior_outcomes)
         track_intel_block = self._get_track_intelligence_context()
         enriched_issues_block = self._get_enriched_issue_context(laps)
         live_segment_block = self._get_live_segment_context(live_position)
@@ -1042,14 +1685,33 @@ Braking consistency (std-dev) [calculated]:      {'n/a' if avg_consist < 0 else 
 {chr(10) + extra_sections if extra_sections else ""}
 {self._DATA_QUALITY_NOTE}
 
-Reply ONLY with valid JSON — no markdown fences, no extra text:
+{ranges_block}
+{directives_block}
+
+## Valid setup_fields keys (numeric values only — use ONLY keys for fields you are changing)
+arb_front, arb_rear, ride_height_front, ride_height_rear,
+springs_front, springs_rear, dampers_front_comp, dampers_front_ext,
+dampers_rear_comp, dampers_rear_ext, camber_front, camber_rear,
+toe_front, toe_rear, aero_front, aero_rear,
+lsd_initial, lsd_accel, lsd_decel, brake_bias,
+transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
+
+Reply ONLY with valid JSON — no markdown fences, no extra text.
+issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data
 {{
   "analysis": "2–3 sentence plain-English summary of what the telemetry shows and the primary issue.",
+  "primary_issue": "single dominant problem in one phrase",
+  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not currently an issue"}},
   "changes": [
-    {{"setting": "Setting Name", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}},
-    {{"setting": "Setting Name", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
-  ]
-}}"""
+    {{"setting": "Rear Natural Frequency", "field": "springs_rear", "from": "3.50", "to": "3.75", "why": "one-sentence reason", "expected_validation": "bottoming events reduce without making exit traction worse"}}
+  ],
+  "setup_fields": {{"springs_rear": 3.75}},
+  "validation_targets": {{"bottoming_events_per_lap": "reduce by 25-30%", "wheelspin_events_per_lap": "reduce or become less concentrated", "braking_stability": "must remain stable", "driver_feedback": "rear should feel calmer"}},
+  "do_not_change_reasoning": ["No brake bias change because braking is stable", "No ride height change because ride height is already at the valid maximum"],
+  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}}
+}}
+In setup_fields include ONLY the fields being changed, with numeric values (not strings).
+In changes, "field" MUST be the exact canonical key from the setup_fields list above."""
 
     def _build_feeling_prompt(
         self,
@@ -1063,6 +1725,7 @@ Reply ONLY with valid JSON — no markdown fences, no extra text:
         setup_block = format_setup_for_prompt(setup)
         gt7_ref = load_gt7_reference()
         header = self._car_track_header(car_name, car_specs)
+        ranges_block = _valid_ranges_block(car_name)
 
         # Attach recent telemetry snapshot to cross-check driver description
         recent = self._recorder.recent_laps(3)
@@ -1119,6 +1782,7 @@ Rules:
 ## Current car setup
 {setup_block}
 
+{ranges_block}
 ## Historical context for this car and track
 {history_str}
 {chr(10) + prev_ai_block if prev_ai_block else ""}
@@ -1145,6 +1809,7 @@ In changes, "field" MUST be the exact canonical param key (e.g. arb_front, cambe
         compound: str = "",
         corner_issues_summary: str = "",
         live_position=None,
+        prior_outcomes: "list[dict] | None" = None,
     ) -> str:
         """Unified setup-analysis prompt: always includes telemetry; optionally adds feeling."""
         car_specs = car_specs or {}
@@ -1184,6 +1849,35 @@ In changes, "field" MUST be the exact canonical param key (e.g. arb_front, cambe
                     f"(observed {avg_top_spd:.0f} km/h vs target {top_speed_target:.0f} km/h)."
                 )
 
+        # Aggregate position lists across all laps for directives
+        _wsp_all = [p for l in laps for p in getattr(l, "wheelspin_positions", [])]
+        _stp_all = [p for l in laps for p in getattr(l, "snap_throttle_positions", [])]
+        _osp_all = [p for l in laps for p in getattr(l, "oversteer_positions", [])]
+        _btp_all = [p for l in laps for p in getattr(l, "bottoming_positions", [])]
+
+        _cfg = getattr(self, "_config", {})
+        sc = _cfg.get("strategy", {}) if isinstance(_cfg, dict) else {}
+        loc_id = sc.get("track_location_id") or ""
+        lay_id = sc.get("layout_id") or ""
+
+        directives_block = _race_engineer_directives(
+            avg_lockups=avg_lockups,
+            avg_consist=avg_consist,
+            avg_snap=avg_snap,
+            avg_os_ton=avg_os_ton,
+            avg_bottom=avg_bottom,
+            car_name=car_name,
+            laps_sample_len=len(laps),
+            event_ctx=getattr(self, "_event_ctx", {}),
+            wheelspin_positions=_wsp_all,
+            snap_throttle_positions=_stp_all,
+            oversteer_positions=_osp_all,
+            bottoming_positions=_btp_all,
+            loc_id=loc_id,
+            lay_id=lay_id,
+            setup=setup,
+        )
+
         feeling_section = ""
         if feeling:
             feeling_section = f"""
@@ -1199,9 +1893,10 @@ If a corner number is mentioned, target that type of corner (slow/fast/braking z
         gt7_ref        = load_gt7_reference()
         header         = self._car_track_header(car_name, car_specs)
         tuning_block   = _tuning_constraint_block(allowed_tuning, tuning_locked)
+        ranges_block   = _valid_ranges_block(car_name)
         event_block    = self._get_event_context_block()
         feedback_block = self._get_driver_feedback_context()
-        prev_ai_block  = self._get_previous_ai_context("Setup Advice")
+        prev_ai_block  = self._get_previous_ai_context("Setup Advice", prior_outcomes)
         track_intel_block = self._get_track_intelligence_context()
         enriched_issues_block = self._get_enriched_issue_context(laps)
         live_segment_block = self._get_live_segment_context(live_position)
@@ -1253,6 +1948,9 @@ Braking consistency (std-dev) [calculated]:      {'n/a' if avg_consist < 0 else 
 {chr(10) + extra_sections if extra_sections else ""}
 {self._DATA_QUALITY_NOTE}
 
+{ranges_block}
+{directives_block}
+
 ## Valid setup_fields keys (numeric values only — use ONLY keys for fields you are changing)
 arb_front, arb_rear, ride_height_front, ride_height_rear,
 springs_front, springs_rear, dampers_front_comp, dampers_front_ext,
@@ -1261,15 +1959,19 @@ toe_front, toe_rear, aero_front, aero_rear,
 lsd_initial, lsd_accel, lsd_decel, brake_bias,
 transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
 
-Reply ONLY with valid JSON — no markdown fences, no extra text:
+Reply ONLY with valid JSON — no markdown fences, no extra text.
+issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data
 {{
   "analysis": "2–3 sentence plain-English summary of what the telemetry shows and the primary issue.",
+  "primary_issue": "single dominant problem in one phrase",
+  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not currently an issue"}},
   "changes": [
-    {{"setting": "Setting Name", "field": "arb_front", "from": "current value", "to": "recommended value", "why": "one-sentence reason"}}
+    {{"setting": "Rear Natural Frequency", "field": "springs_rear", "from": "3.50", "to": "3.75", "why": "one-sentence reason", "expected_validation": "bottoming events reduce without making exit traction worse"}}
   ],
-  "setup_fields": {{
-    "arb_front": 4
-  }}
+  "setup_fields": {{"springs_rear": 3.75}},
+  "validation_targets": {{"bottoming_events_per_lap": "reduce by 25-30%", "wheelspin_events_per_lap": "reduce or become less concentrated", "braking_stability": "must remain stable", "driver_feedback": "rear should feel calmer"}},
+  "do_not_change_reasoning": ["No brake bias change because braking is stable", "No ride height change because ride height is already at the valid maximum"],
+  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}}
 }}
 In setup_fields include ONLY the fields being changed, with numeric values (not strings).
 In changes, "field" MUST be the exact canonical key from the setup_fields list above."""

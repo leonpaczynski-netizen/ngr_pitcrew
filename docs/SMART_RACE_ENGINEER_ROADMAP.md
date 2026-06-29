@@ -2,9 +2,61 @@
 
 > **Vision:** GT7 Pit Crew learns your driving style, your car preferences, your track-specific weaknesses, and your setup response history — getting smarter with every session, until its advice is indistinguishable from a real race engineer who has been watching you drive for years.
 >
-> **Date:** 2026-06-23
+> **Date:** 2026-06-29 (updated)
 > **Prerequisite:** Group 15 remediation plan approved (`/docs/GROUP15_AI_CONTEXT_REMEDIATION_PLAN.md`).
-> **Status:** Roadmap — no implementation has started beyond Group 15 planning.
+> **Status:** Phase 1 and setup-prompt engineering delivered (Groups 26–31). Phase 2 onwards is roadmap.
+
+---
+
+## Outstanding Feature Requests — Setup-Advice Review (2026-06-27)
+
+> Logged from the setup-advice review that delivered car-specific tuning ranges and
+> the race-engineer prompt upgrade (items 1–7). The two items below were explicitly
+> **deferred** from that work to be scoped and built as their own efforts. Both are
+> larger than a prompt edit and overlap the learning/telemetry phases below.
+> **Status: To be scoped.**
+
+### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
+
+After each race, the AI should evaluate whether its own setup recommendations actually
+worked, and adjust its confidence accordingly — so that over many races the engineer
+becomes *Leon's* engineer rather than a generic model.
+
+For every recommendation it made, score it against the measured outcome, e.g.:
+
+```
+Rear toe — Expected: better traction.
+Actual: tyre wear improved 9%, exit speed +2 km/h.  → Confidence increased.
+
+LSD Accel — Expected: reduce wheelspin.
+Actual: no measurable improvement.                  → Confidence reduced.
+```
+
+Requires: capturing each recommendation's expected effects (the seven labelled
+sub-points now emitted by the setup prompt — see §6.4 and the Group 26 work),
+correlating them with post-change telemetry, and persisting a per-recommendation
+confidence/score that feeds back into future prompts.
+
+**Heavily overlaps:** §5 (Data Model for Learning Over Time — `ai_interactions.outcome_rating`/
+`was_followed`, `setup_deltas`, `prediction_log`), §6.4 (Learning Feedback Layer), and
+Phase 3-B/3-C. Scope should reconcile OFR-1 with those rather than duplicate them.
+
+### OFR-2 — Separate Race vs Qualifying Telemetry Disciplines
+
+Qualifying and race are different engineering problems and should optimise against
+different telemetry targets:
+
+- **Qualifying:** peak grip, peak braking, peak rotation, one-lap pace.
+- **Race:** fuel per lap, tyre wear per corner, brake-lock frequency, wheelspin
+  frequency, steering corrections, throttle smoothness, average exit speed,
+  consistency, traffic performance, dirty-air performance.
+
+The setup prompt already branches quali vs race for the *objective text* (Group 26),
+but telemetry inputs and the optimisation discipline are not yet differentiated.
+
+**Heavily overlaps:** §2 (Setup Engineering telemetry), §3 (Race Strategy telemetry),
+and Phase 2 (per-lap telemetry in practice/strategy prompts). Scope should build on
+Phase 2 rather than start fresh.
 
 ---
 
@@ -1303,6 +1355,8 @@ All data retains the `[measured]`, `[calculated]`, `[estimated]`, `[historical]`
 ---
 
 #### Phase 7: Recommended Implementation Group
+
+**Group 31** = Race-engineer prompt directives (AC1–AC14) + bottoming classifier + server-side validation + `prior_outcomes` structured block + C-series defect fixes (C1 setup_fields rebuild, C2 max_tokens=1500, C3 locked-field strip + validation banner, I1 ride-height-at-max directive, I5 _derive_locked_fields comments). Delivered 2026-06-29.
 
 **Group 16** = Phase 2 (per-lap telemetry in practice/strategy prompts) — immediate next group after Group 15
 **Group 17** = Phase 3 (learning data model — `setup_deltas`, `compound_profiles`, `prediction_log`, `driver_weaknesses`)

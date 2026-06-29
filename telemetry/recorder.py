@@ -72,6 +72,7 @@ class LapStats:
     oversteer_positions: list = field(default_factory=list)
     snap_throttle_positions: list = field(default_factory=list)
     over_braking_positions: list = field(default_factory=list)
+    bottoming_positions: list = field(default_factory=list)      # [(x,y,z), …]
     # B3 — over-braking (100 % brake into slow corner) and abrupt release
     over_braking_count: int = 0
     abrupt_release_count: int = 0
@@ -186,11 +187,13 @@ def _compute_stats(frames: list[TelemetryFrame], lap_num: int,
 
     # Bottoming: body_height below ground-clearance threshold
     bottoming_count = 0
+    bottoming_positions: list = []
     in_bottom = False
     for f in frames:
         if 0.0 < f.body_height < _BOTTOMING_HEIGHT_THRESHOLD:
             if not in_bottom:
                 bottoming_count += 1
+                bottoming_positions.append((f.pos_x, f.pos_y, f.pos_z))
                 in_bottom = True
         else:
             in_bottom = False
@@ -336,6 +339,7 @@ def _compute_stats(frames: list[TelemetryFrame], lap_num: int,
         oversteer_positions=over_pos,
         snap_throttle_positions=snap_throttle_positions,
         over_braking_positions=over_brake_pos,
+        bottoming_positions=bottoming_positions,
         over_braking_count=over_braking_count,
         abrupt_release_count=abrupt_release_count,
         car_max_speed_theoretical_kmh=car_max_speed_theoretical_kmh,

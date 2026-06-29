@@ -1,7 +1,50 @@
 # Current Claude Handoff
 
 ## Current Objective
-Group 17U complete. Track Library Schema and Seed Data Registry. 2329 pass / 5 skip / 0 fail. Daytona seed coordinate geometry remains unavailable — add `data/track_library/tracks/daytona_international_speedway/layouts/daytona_international_speedway__road_course/geometry.seed_map.json` to the track library to enable full coordinate geometry alignment and acceptance.
+Group 31 complete. Race-Engineer Prompt Directives, Validation, and Bottoming Classifier. 3426 pass / 6 skip / 0 fail. 144 tests in `tests/test_group31_race_engineer.py`. Both entry points (`build_setup_advice_response` and `build_combined_setup_response`) now normalise, validate, and strip locked fields from the AI response before returning. The UI renders validation errors as a banner. Defects C1/C2/C3/I1/I5 resolved.
+
+No outstanding blockers. Next work: OFR-1 (between-race learning loop) or Phase 2 (per-lap telemetry in practice/strategy prompts — Group 16 in roadmap).
+
+## Group 31 — Session Notes (2026-06-29)
+
+**Problem solved:** The setup advisor's AI responses had no server-side validation, could recommend locked fields, allowed no-ops to pass through, used a 1200-token response cap, and had no race-engineer discipline in the prompt.
+
+**What was added / fixed:**
+
+- **`telemetry/recorder.py`:** `LapStats.bottoming_positions: list` field added; `_compute_stats` captures rising-edge XYZ on bottoming events (mirrors snap_throttle_positions pattern).
+
+- **`strategy/driving_advisor.py`:**
+  - `_normalise_changes`: no-op stripping — when `from == to_clamped` the change is dropped before it reaches the AI context or the Apply button.
+  - `_derive_locked_fields(allowed_tuning) -> set[str]`: maps allowed-tuning category strings to canonical setup param names; has inline comments explaining `steering` and `nitrous` have no canonical params yet.
+  - `_validate_setup_response(parsed, car_name, allowed_tuning, locked_fields, setup) -> dict`: 7 checks (unresolvable field, out-of-range, locked, no-op, string-not-number, >4 changes warning, setup_fields mismatch); appends `validation_errors` list; never drops changes.
+  - `_classify_bottoming_location(positions, loc_id, lay_id) -> str`: delegates to `enrich_telemetry_issues`; votes on `matched_segment_type`; returns a category string or "unknown".
+  - `_race_engineer_directives(...)`: generates AC1–AC13 directive block for injection into both prompts; includes I1 fix — when `setup` is passed and ride height is at the per-car max AND bottoming > 0, emits explicit "do NOT recommend raising it" with field names; when below max, emits "IS permissible".
+  - `_get_previous_ai_context(feature, prior_outcomes=None)`: renders structured block with do-not-repeat instruction when `prior_outcomes` is a non-empty list.
+  - `build_setup_advice_response`: max_tokens 1000→1500; post-call normalise+validate+C3a locked-strip.
+  - `build_combined_setup_response`: max_tokens 1200→1500 (C2); C1 setup_fields rebuild after normalise; C3a locked-field strip from both `changes` and `setup_fields`; normalise+validate; passes `prior_outcomes`.
+  - `_build_setup_prompt` and `_build_combined_prompt`: inject `_race_engineer_directives` block + extended JSON schema (AC8 keys: `primary_issue`, `issue_classification`, `validation_targets`, `do_not_change_reasoning`, `confidence`, `expected_validation`).
+
+- **`ui/setup_builder_ui.py`:**
+  - `_format_validation_errors_banner(validation_errors: list) -> str`: pure module-level helper — returns HTML orange-banner string; returns "" for empty list.
+  - `_display_setup_result`: reads `validation_errors` from parsed JSON; calls `_format_validation_errors_banner`; injects banner before the changes list.
+
+**Defects resolved in this session:**
+- C1/I3: `build_combined_setup_response` now rebuilds `setup_fields` from surviving normalised changes — stale no-op keys never reach the validator or Apply button.
+- C2: `build_combined_setup_response` max_tokens corrected to 1500.
+- C3a: Locked-field changes stripped from both `changes` and `setup_fields` after validation in both entry points.
+- C3b: `validation_errors` rendered as orange warning banner in `_display_setup_result`.
+- I1/AC3: `_race_engineer_directives` explicitly names ride-height fields at their per-car max and states they must not be raised.
+- I5: `_derive_locked_fields` has inline comments for unmapped categories.
+
+**Files added / modified:**
+- `telemetry/recorder.py`: `bottoming_positions` field + population logic
+- `strategy/driving_advisor.py`: all changes listed above
+- `ui/setup_builder_ui.py`: `_format_validation_errors_banner` helper + `_display_setup_result` banner injection
+- `tests/test_group31_race_engineer.py` (NEW): 144 tests covering AC1–AC14 + defect-fix targeted tests
+
+**Full suite result after Group 31: 3426 pass / 6 skip / 0 fail**
+
+---
 
 ## Group 17U — Session Notes (2026-06-26)
 
