@@ -25,6 +25,7 @@ from ui.setup_name_helper import (
     is_structured_name,
     next_setup_number,
     resolve_save_name,
+    setup_display_label,
 )
 from ui import setup_builder_ui as _sbu_mod
 import data.setup_history as _sh
@@ -191,6 +192,26 @@ class TestStructural:
 
     def test_timezone_import_removed(self):
         assert "timezone" not in SH_SRC
+
+
+# ---------------------------------------------------------------------------
+# setup_display_label
+# ---------------------------------------------------------------------------
+class TestSetupDisplayLabel:
+    def test_setup_label_present_returns_setup_label(self):
+        s = {"setup_label": "Q NGR Enduro Rd1 3", "name": "Mazda RX-7"}
+        assert setup_display_label(s) == "Q NGR Enduro Rd1 3"
+
+    def test_setup_label_empty_returns_name(self):
+        s = {"setup_label": "", "name": "Mazda RX-7"}
+        assert setup_display_label(s) == "Mazda RX-7"
+
+    def test_setup_label_absent_returns_name(self):
+        s = {"name": "Mazda RX-7"}
+        assert setup_display_label(s) == "Mazda RX-7"
+
+    def test_both_absent_returns_empty_string(self):
+        assert setup_display_label({}) == ""
 
 
 # ---------------------------------------------------------------------------

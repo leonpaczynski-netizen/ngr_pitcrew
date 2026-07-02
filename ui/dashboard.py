@@ -43,6 +43,7 @@ from ui.widgets import (
     TyreWidget, FuelBar, ConnectionStatusWidget, BigValueLabel,
 )
 from ui.gt7_data import GT7_TRACKS, GT7_TRACK_INFO, GT7_CARS, GT7_CARS_BY_CATEGORY, TYRE_TEMP_PRESETS, normalise_compound
+from ui.setup_name_helper import setup_display_label
 
 
 
@@ -2457,7 +2458,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         for s in self._saved_setups:
             sid = s.get("setup_id")
             if sid:
-                seen[sid] = s.get("name", "")
+                seen[sid] = setup_display_label(s)
         return [""] + [f"{sid} — {name}" for sid, name in sorted(seen.items())]
 
     def _make_setup_combo(self, row: int, current_id: int = 0) -> "QComboBox":
@@ -2513,8 +2514,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             combo.blockSignals(True)
             combo.clear()
             combo.addItems(options)
+            current_prefix = current.split(" —")[0].strip()
             for i in range(combo.count()):
-                if combo.itemText(i) == current:
+                if combo.itemText(i).split(" —")[0].strip() == current_prefix:
                     combo.setCurrentIndex(i)
                     break
             combo.blockSignals(False)
@@ -2531,7 +2533,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             if not rows:
                 return ""
             id_to_name: dict[int, str] = {
-                s["setup_id"]: s.get("name", f"Setup {s['setup_id']}")
+                s["setup_id"]: setup_display_label(s) or f"Setup {s['setup_id']}"
                 for s in self._saved_setups if s.get("setup_id")
             }
             lines = ["## Setup comparison (session history)"]
@@ -3081,7 +3083,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if hasattr(self, "_lbl_bank_status"):
             d = self._current_setup_dict()
             self._set_bank_status(
-                f"Setup saved: {d.get('name', '')} (ID {d.get('setup_id', '?')})")
+                f"Setup saved: {setup_display_label(d)} (ID {d.get('setup_id', '?')})")
 
     def _wipe_all_sessions(self) -> None:
         """Ask for confirmation then delete every session and lap record from the DB."""

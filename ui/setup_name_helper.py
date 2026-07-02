@@ -47,6 +47,14 @@ def resolve_save_name(
     return cur
 
 
+def setup_display_label(s: dict) -> str:
+    """Return the user-facing setup name for display in combos/labels.
+
+    Prefers the setup_label; falls back to the car name; empty string if neither.
+    """
+    return s.get("setup_label") or s.get("name", "")
+
+
 def next_setup_number(saved_setups: list[dict], prefix: str, event_name: str) -> int:
     """Return the next sequence number for setups named '<prefix> <event_name> <n>'.
 
