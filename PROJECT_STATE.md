@@ -7,11 +7,18 @@ Do not add new features until core data flow, persistence, telemetry storage, an
 
 ## Repository / Build Status (2026-07-02)
 
-- **Full test suite:** 3813 pass / 6 skip / 0 fail (6 skips require a Qt display).
-- **Git:** branch `feature/car-setup-ranges-engineer-prompt` merged (fast-forward) into `master` and pushed to the remote **https://github.com/leonpaczynski-netizen/ngr_pitcrew** (`origin/master`). Latest commit `1dea1e3` (Groups 37/37b/38).
+- **Full test suite:** 3984 pass / 6 skip / 0 fail (6 skips require a Qt display).
+- **Git:** integration branch **`integration/setup-brain-strategy-overhaul`** (off latest `master`) merges the two shipped feature branches `feature/setup-diagnosis-engine` and `feature/strategy-outcome-comparison`. Both merges were clean (no conflicts). Not yet merged to `master` — awaiting runtime UAT. Remote: **https://github.com/leonpaczynski-netizen/ngr_pitcrew**.
 - **Secrets:** `api_key.txt` and `config.json` are gitignored — not tracked, not pushed.
-- **Recent work (documented in MASTER_TESTING_REGISTER.md):** Groups 26–38 + lettered Groups A/B/C/D/E + Qualifying Mode — setup-advice overhaul, per-car range enforcement, shift-beep, feasibility-gated race strategy, mid-race AI re-plan + qualifying engineer, and relative-compound tyre degradation.
+- **Latest work (Setup Brain + Strategy Outcome — documented in MASTER_TESTING_REGISTER.md):**
+  - **Setup Brain:** app-side deterministic setup diagnosis BEFORE the AI call (`strategy/setup_diagnosis.py`), driver tuning-model + hard-constraints injected at the top of every setup prompt, post-AI engineering validation with regenerate-once-then-surface, low-confidence track-model guard, structured liked/hated setup-history learning. Bug fixes: springs shown in **Hz** (was N/mm); timed race renders as **"N minutes, Timed Race"** (was "1 laps, Lap Race").
+  - **Strategy Outcome:** deterministic total-race-time comparison (`strategy/outcome.py`) — strategies ranked head-to-head with delta-vs-fastest, confidence, and previously-hidden tyre/fuel/undercut/AI-confidence risk fields surfaced on the cards; refuel time uses the actual refuel rate; "pit loss" relabelled "pit time".
 - **Detailed session notes** for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`.
+
+### Deferred / carried forward (next remediation group)
+- **Setup history key omits track layout:** `config_id` hashes track-name+car+length, not `layout_id`. Two layouts of the same track can share history (config_id re-hash risk if changed — deferred to avoid regressing Event Planner/history/strategy).
+- **From-scratch "Build Setup with AI":** receives the driver tuning-model + hard-constraints prompt text but NOT the post-AI engineering-validation/regenerate loop (no telemetry exists at build-from-scratch time). Only the "Analyse & Get Setup Fix" flow is fully validated.
+- **Strategy finishing-position prediction:** requires rival/opponent telemetry not present in the pipeline today. Remains deferred as genuinely new scope.
 
 ## Phase 1 Fix Status (2026-06-21)
 

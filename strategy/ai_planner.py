@@ -28,6 +28,7 @@ from strategy.feasibility import (
     estimate_race_laps,
 )
 from strategy.setup_ranges import resolve_ranges
+from strategy.setup_diagnosis import PERSONAL_DRIVER_TUNING_MODEL, DRIVER_HARD_CONSTRAINTS
 from ui.gt7_data import build_track_context
 
 _JSON_SYSTEM = (
@@ -138,6 +139,11 @@ class StrategyOption:
     undercut_risk: str = ""
     confidence_score: float = 0.0
     why_label: str = ""
+    # Deterministic outcome fields (computed by strategy/outcome.py; not from AI JSON)
+    deterministic_time_s: float = 0.0   # deterministic T_race; separate from AI's estimated_time_s
+    delta_vs_fastest_s: float = 0.0     # seconds behind the fastest option (0.0 for fastest)
+    outcome_confidence: str = ""        # "high"/"medium"/"low" — based on degradation data coverage
+    rank_by_time: int = 0               # 1 = fastest by deterministic time, ascending
 
 
 @dataclass
@@ -350,7 +356,7 @@ def analyse_strategy(
                    feature="Strategy Analysis", structured_payload=_payload,
                    model=model, car_id=car_id, track=params.track)
     try:
-        result = _parse_strategies(raw, feasibility=_feasibility)
+        result = _parse_strategies(raw, feasibility=_feasibility, params=params, degradation=degradation)
         # Merge feasibility data_gaps and assumptions that aren't already present
         _existing_gap_names = {dg.name for dg in result.data_gaps}
         for dg in _feasibility.data_gaps:
@@ -1788,6 +1794,8 @@ For transmission fields:
 {gt7_ref}
 
 ---
+{PERSONAL_DRIVER_TUNING_MODEL}
+{DRIVER_HARD_CONSTRAINTS}
 {tuning_block}{gearbox_block}
 Build a complete from-scratch car setup optimised for:
   Car: {car}
@@ -1991,6 +1999,8 @@ def _strip_fences(text: str) -> str:
 def _parse_strategies(
     raw: str,
     feasibility: "FeasibilityReport | None" = None,
+    params: "RaceParams | None" = None,
+    degradation: "dict | None" = None,
 ) -> "StrategyResult":
     """Parse the AI JSON response into a StrategyResult.
 
@@ -1998,6 +2008,10 @@ def _parse_strategies(
     Accepts an optional FeasibilityReport to embed in the result; callers may also
     pass None for pure parse-only use (e.g. in tests), in which case an empty report
     is constructed.
+
+    When params and degradation are both provided, compute_outcome / compare_outcomes
+    are called to populate the deterministic_time_s, delta_vs_fastest_s,
+    outcome_confidence, and rank_by_time fields on each StrategyOption.
     """
     data = json.loads(_strip_fences(raw))
     options: list[StrategyOption] = []
@@ -2022,6 +2036,24 @@ def _parse_strategies(
             why_label=str(s.get("why_label", "")),
         ))
     options.sort(key=lambda x: x.rank)
+
+    # ------------------------------------------------------------------
+    # Deterministic outcome comparison (additive — does not alter stints
+    # shape or remove any existing fields; attaches new fields only)
+    # ------------------------------------------------------------------
+    if params is not None and options:
+        try:
+            from strategy.outcome import compare_outcomes as _compare_outcomes
+            _comparison = _compare_outcomes(options, params, degradation)
+            for entry in _comparison:
+                opt = options[entry["index"]]
+                opt.deterministic_time_s = entry["estimated_time_s"]
+                opt.delta_vs_fastest_s = entry["delta_vs_fastest_s"]
+                opt.outcome_confidence = entry["confidence"]
+                opt.rank_by_time = entry["rank_by_time"]
+        except Exception:
+            # Non-fatal: deterministic fields remain at their safe defaults (0.0 / "")
+            pass
 
     # Parse top-level rejected_strategies
     _rejected: list[RejectedStrategy] = []

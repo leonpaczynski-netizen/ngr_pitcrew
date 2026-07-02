@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-02 (Groups 26–38 + A/B/C/D/E + Qualifying Mode — 3813 pass / 6 skip / 0 fail — full suite). Branch `feature/car-setup-ranges-engineer-prompt` merged to `master` and pushed to https://github.com/leonpaczynski-netizen/ngr_pitcrew.
+> Last updated: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite on branch `integration/setup-brain-strategy-overhaul`, merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`; awaiting runtime UAT before merge to `master`). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew. See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
 > Read PROJECT_STATE.md first, then this file, before touching any code.
 >
 > Note: detailed session notes for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`. Groups 26–38 and the lettered groups (A/B/C/D/E) + Qualifying Mode are summarised at the end of this file under "Groups 26–38 + Lettered Groups (Strategy / Race-Engineer / Setup Overhaul)".
@@ -3545,3 +3545,69 @@ Voice delta announcements after a qualifying lap; flying-lap tyre-warning
 suppression; `get_best_practice_lap_ms` DB method; auto-reference delta.
 - Files: `strategy/engine.py`, `voice/announcer.py`, `ui/dashboard.py`
 - Test: `tests/test_qualifying_mode.py` — 22 tests
+
+---
+
+## Integration — Setup Brain + Strategy Outcome (2026-07-02)
+
+Combined integration branch `integration/setup-brain-strategy-overhaul` (off `master`)
+merges two feature branches, in order: (1) `feature/setup-diagnosis-engine`, then
+(2) `feature/strategy-outcome-comparison`. Both merges were clean (no conflicts;
+`strategy/ai_planner.py` auto-merged — the branches touched disjoint regions).
+**Combined full suite: 3984 pass / 6 skip / 0 fail.** Awaiting runtime UAT before
+merge to `master`.
+
+### Setup Brain (`feature/setup-diagnosis-engine`)
+App-side deterministic setup diagnosis is built BEFORE the AI call and the AI's
+answer is validated AFTER (regenerate-once, then surface — never silently applied).
+- **New `strategy/setup_diagnosis.py`:** `build_setup_diagnosis` (bands: bottoming
+  minor `<0.5` / moderate `0.5–1.0` / consider `>1.0` / required `>2.0`; wheelspin
+  meaningful `>5` / major `>10` / severe `>15`; aero near-min = within 10% of range),
+  `validate_setup_engineering` (rejects ride-height-for-minor-bottoming,
+  rear-aero-cut-with-wheelspin, aero-at-min-with-floaty-understeer,
+  gearbox-edit-when-preserve, locked-field, bad units — composes the existing
+  per-car validator), `_parse_driver_feel`, `format_diagnosis_for_prompt`,
+  `_derive_location_confidence` (low-confidence track model blocks ride-height
+  justified by corner-location data), constants `PERSONAL_DRIVER_TUNING_MODEL` +
+  `DRIVER_HARD_CONSTRAINTS` injected at all three prompt sites.
+- **Gearbox preserved** when the driver says it is good, in race AND qualifying,
+  unless telemetry proves a specific gear problem.
+- **Bug fixes:** `strategy/_ai_client.py` springs label N/mm → **Hz** (and aero
+  kg → downforce); `strategy/driving_advisor.py` event context renders timed races
+  as "N minutes, Timed Race" and singular "1 lap".
+- **History learning:** `data/setup_history.py` stores structured liked/hated labels
+  and emits "do not repeat hated" / "prefer confidence-improving" / "subjective
+  confidence is a performance variable" directives.
+- **UI:** `ui/setup_builder_ui.py` engineering-validation-failed banner, App-diagnosis
+  summary line, and Liked/Hated + Applied feedback controls.
+- Files: `strategy/setup_diagnosis.py` (new), `strategy/driving_advisor.py`,
+  `strategy/ai_planner.py`, `strategy/_ai_client.py`, `data/setup_history.py`,
+  `ui/setup_builder_ui.py`.
+- Test: `tests/test_group38_setup_diagnosis.py` — 74 tests (incl. the Porsche
+  RSR '17 / Fuji 50-min regression + regenerate-once orchestration).
+
+### Strategy Outcome (`feature/strategy-outcome-comparison`)
+Strategy Builder now compares TOTAL RACE OUTCOMES deterministically instead of
+listing stints.
+- **New `strategy/outcome.py`:** `compute_outcome` (T_race = degraded-pace lap
+  integral incl. tyre-cliff step + pit time = n_stops·pit_loss + Σ ceil(fuel/refuel
+  rate), 100 L tank; confidence drops when deg data is thin) and `compare_outcomes`
+  (ranks by deterministic time, computes delta-vs-fastest).
+- **Additive wiring:** `StrategyOption` gains `deterministic_time_s`,
+  `delta_vs_fastest_s`, `outcome_confidence`, `rank_by_time`; populated in
+  `_parse_strategies` from the live params + degradation cache. AI's
+  `estimated_time_s`, `stints` shape, and list order are unchanged (Load Strategy N /
+  replan / voice untouched).
+- **UI:** `ui/dashboard.py` `_build_strategy_html` shows app-computed time with
+  "+X.Xs vs fastest", a confidence badge, a "#N by time" rank, and the
+  previously-hidden tyre/fuel/undercut/AI-confidence risk fields; "pit loss"
+  relabelled "pit time".
+- Files: `strategy/outcome.py` (new), `strategy/ai_planner.py`, `ui/dashboard.py`.
+- Tests: `tests/test_group39_strategy_outcome.py` — 53; `tests/test_group40_strategy_card_rendering.py` — 44.
+
+### Deferred / carried forward
+- Setup history key omits track `layout_id` (`config_id` re-hash risk) — deferred.
+- From-scratch "Build Setup with AI" has the constraint prompt text but not the
+  post-AI validation/regenerate loop (no telemetry at build time) — deferred.
+- Strategy finishing-position prediction needs rival telemetry not in the pipeline
+  today — deferred.

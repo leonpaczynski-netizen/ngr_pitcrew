@@ -3886,9 +3886,89 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 f"<span style='color:#AAA;'>({s['laps']} laps)</span>"
                 for s in opt.stints
             )
-            total_m = int(opt.estimated_time_s // 60)
-            total_s = opt.estimated_time_s - total_m * 60
+            ai_m = int(opt.estimated_time_s // 60)
+            ai_s = opt.estimated_time_s - ai_m * 60
             style = card_ok if opt.rank == loaded_rank else card
+
+            # --- Deliverable 1: head-to-head delta and app-computed time ---
+            det_time_s   = getattr(opt, "deterministic_time_s", 0.0) or 0.0
+            delta_s      = getattr(opt, "delta_vs_fastest_s",  0.0) or 0.0
+            if det_time_s > 0.0:
+                det_m = int(det_time_s // 60)
+                det_ss = det_time_s - det_m * 60
+                app_time_str = f"{det_m}:{det_ss:05.2f}"
+                if delta_s == 0.0:
+                    delta_html = "<span style='color:#8BC34A;'>fastest</span>"
+                else:
+                    delta_html = f"<span style='color:#F5A623;'>+{delta_s:.1f}s vs fastest</span>"
+                # Deliverable 2: outcome_confidence coloring
+                oc = getattr(opt, "outcome_confidence", "") or ""
+                if oc == "high":
+                    oc_color   = "#8BC34A"
+                elif oc == "medium":
+                    oc_color   = "#F5C542"
+                elif oc == "low":
+                    oc_color   = "#F55"
+                else:
+                    oc_color   = "#888"
+                conf_badge = (
+                    f" <span style='color:{oc_color}; font-size:10px;'>"
+                    f"(confidence: {oc})</span>" if oc else ""
+                )
+                time_line_html = (
+                    f"<p style='margin:0 0 4px 0; color:#888; font-size:11px;'>"
+                    f"<b style='color:#CCC;'>App: {app_time_str}</b>{conf_badge}"
+                    f" &nbsp;{delta_html}"
+                    f" &nbsp;|&nbsp; AI est: {ai_m}:{ai_s:05.2f}"
+                    f" &nbsp;|&nbsp; pit time {opt.pit_time_s:.1f}s</p>"
+                )
+            else:
+                # Thin-data / not computed: fall back to AI estimate only, no delta
+                time_line_html = (
+                    f"<p style='margin:0 0 4px 0; color:#888; font-size:11px;'>"
+                    f"AI est: {ai_m}:{ai_s:05.2f}"
+                    f" &nbsp;|&nbsp; pit time {opt.pit_time_s:.1f}s</p>"
+                )
+
+            # --- Deliverable 5: rank badge ---
+            rank_by_time = getattr(opt, "rank_by_time", 0) or 0
+            rank_badge = (
+                f" <span style='background:#1C3A2A; color:#8BC34A; font-size:10px; "
+                f"border-radius:3px; padding:0 4px;'>#{rank_by_time} by time</span>"
+                if rank_by_time > 0 else ""
+            )
+
+            # --- Deliverable 3: risk fields and confidence_score ---
+            tyre_risk      = getattr(opt, "tyre_risk",      "") or ""
+            fuel_risk      = getattr(opt, "fuel_risk",      "") or ""
+            undercut_risk  = getattr(opt, "undercut_risk",  "") or ""
+            conf_score     = getattr(opt, "confidence_score", 0.0) or 0.0
+
+            def _risk_chip(label: str, value: str) -> str:
+                if not value:
+                    return ""
+                color = "#8BC34A" if value == "low" else ("#F5A623" if value == "medium" else "#F55")
+                return (
+                    f"<span style='color:{color}; background:#0D1A26; border-radius:3px; "
+                    f"padding:0 5px; margin-right:4px; font-size:10px;'>"
+                    f"{label}: {value}</span>"
+                )
+
+            risk_chips = (
+                _risk_chip("tyre", tyre_risk)
+                + _risk_chip("fuel", fuel_risk)
+                + _risk_chip("undercut", undercut_risk)
+            )
+            score_chip = (
+                f"<span style='color:#888; font-size:10px; margin-right:4px;'>"
+                f"AI conf: {conf_score * 100:.0f}%</span>"
+                if conf_score > 0.0 else ""
+            )
+            risk_row_html = (
+                f"<p style='margin:2px 0 4px 0;'>{risk_chips}{score_chip}</p>"
+                if (risk_chips or score_chip) else ""
+            )
+
             pros_html = (f"<p style='margin:2px 0; color:#8BC34A; font-size:11px;'>"
                          f"&#10003; {opt.positives}</p>" if opt.positives else "")
             cons_html = (f"<p style='margin:2px 0; color:#F5A623; font-size:11px;'>"
@@ -3896,10 +3976,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             html += (
                 f"<div style='{style}'>"
                 f"<p style='margin:0 0 4px 0;'>"
-                f"<b style='color:#F5C542; font-size:13px;'>Strategy {opt.rank}: {opt.name}</b></p>"
+                f"<b style='color:#F5C542; font-size:13px;'>Strategy {opt.rank}: {opt.name}</b>"
+                f"{rank_badge}</p>"
                 f"<p style='margin:0 0 6px 0;'>{stints_html}</p>"
-                f"<p style='margin:0 0 4px 0; color:#888; font-size:11px;'>"
-                f"Est. {total_m}:{total_s:05.2f} &nbsp;|&nbsp; pit loss {opt.pit_time_s:.1f}s</p>"
+                f"{time_line_html}"
+                f"{risk_row_html}"
                 f"<p style='margin:4px 0; line-height:1.5;'>{opt.summary}</p>"
                 f"{pros_html}{cons_html}"
                 f"<p style='margin:4px 0 0 0; color:#F5A623; font-size:11px;'>"
