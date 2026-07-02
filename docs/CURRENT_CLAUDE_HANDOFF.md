@@ -1,15 +1,15 @@
 # Current Claude Handoff
 
 ## Current Objective
-Groups 26–38 + lettered Groups A/B/C/D/E + Qualifying Mode complete. **Full suite: 3813 pass / 6 skip / 0 fail.** Branch `feature/car-setup-ranges-engineer-prompt` merged (fast-forward) into `master` and pushed to https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master`, latest commit `1dea1e3`).
+**Integration: Setup Brain + Strategy Outcome.** Branch `integration/setup-brain-strategy-overhaul` (off latest `master`) merges `feature/setup-diagnosis-engine` then `feature/strategy-outcome-comparison` — both clean, no conflicts. **Full combined suite: 3984 pass / 6 skip / 0 fail.** NOT yet merged to `master` — the next step is **runtime UAT** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md); merge to `master` only after UAT passes.
 
-Latest delivered (see MASTER_TESTING_REGISTER.md "Groups 26–38 + Lettered Groups" section for the full breakdown):
-- **Group 32–34:** feasibility-gated race strategy prompt pipeline (`strategy/feasibility.py`) + dashboard wiring + end-to-end acceptance.
-- **Group 35–36 (Group B):** mid-race AI re-plan + qualifying engineer.
-- **Group 37/37b/38:** relative-compound tyre degradation point (`strategy/relative_degradation.py`) + engine harder-baseline alert + acceptance.
-- **Groups 26–31 + A/C/D/E + Qualifying:** setup-advice overhaul, per-car range enforcement in analyse prompts, no practice→race wear scaling, projection cache, shift-beep, live-tab cleanup, structured setup naming, pit-lap exclusion.
+Delivered (see MASTER_TESTING_REGISTER.md "Integration — Setup Brain + Strategy Outcome"):
+- **Setup Brain:** deterministic app-side diagnosis before the AI call (`strategy/setup_diagnosis.py`), driver tuning-model + hard-constraints at the top of every setup prompt, post-AI engineering validation with regenerate-once-then-surface, low-confidence track-model guard, structured liked/hated setup-history learning. Bug fixes: springs in **Hz** (was N/mm); timed race renders "N minutes, Timed Race" (was "1 laps, Lap Race"). Proven on the Porsche RSR '17 / Fuji regression: ride-height blocked, aero prioritised, gearbox preserved. Tests: `tests/test_group38_setup_diagnosis.py` (74).
+- **Strategy Outcome:** deterministic total-race-time comparison (`strategy/outcome.py`) — head-to-head ranking, delta-vs-fastest, confidence, refuel-rate-based pit time, and previously-hidden risk fields on the cards; "pit loss" → "pit time". Tests: `tests/test_group39_strategy_outcome.py` (53) + `tests/test_group40_strategy_card_rendering.py` (44).
 
-No outstanding blockers. Next work: OFR-1 (between-race learning loop) or Phase 2 (per-lap telemetry in practice/strategy prompts — Group 16 in roadmap).
+**Deferred (carried forward):** setup history key omits track layout (config_id re-hash risk); from-scratch "Build Setup with AI" lacks the post-AI validation loop (no telemetry at build time); strategy finishing-position prediction needs rival telemetry.
+
+**Blocker before merge to `master`:** runtime UAT not yet executed. No automated-test blockers.
 
 ---
 

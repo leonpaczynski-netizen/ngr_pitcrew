@@ -162,6 +162,30 @@ Expected: at least one compound with laps ≥ 3.
 
 ---
 
+## 13. Deterministic Outcome Comparison (Strategy Outcome integration)
+
+Covers the on-device total-race-time comparison added in the Strategy Outcome
+integration. Requires a completed analysis (Section 3) with ≥ 2 strategy cards.
+
+| Step | Description | Expected Result | Pass | Fail | Notes |
+|---|---|---|---|---|---|
+| 13.1 | After an analysis returns ≥ 2 strategies, inspect each card's time line | Each card shows an app-computed total race time (labelled distinctly from the AI's estimate) | | | |
+| 13.2 | Inspect the head-to-head delta | The fastest strategy shows "fastest"; the others show **"+X.Xs vs fastest"** | | | |
+| 13.3 | Inspect the rank badge | Each card shows a **"#N by time"** badge (fastest = #1); card order itself is unchanged (Load Strategy N still maps correctly) | | | |
+| 13.4 | Inspect the pit/refuel figures | The label reads **"pit time"** (not "pit loss"); the value reflects pit loss + refuel time computed from the **actual refuel rate** (`pit loss + fuel / refuel speed`) | | | |
+| 13.5 | Inspect the confidence badge | Each card shows an outcome-confidence indicator; with thin/absent tyre-degradation data the confidence is **low/medium** and visually distinct | | | |
+| 13.6 | Inspect the risk chips | tyre / fuel / undercut risk and the AI confidence % are displayed when present (previously parsed but hidden); absent chips simply don't render | | | |
+| 13.7 | Change the event refuel rate in Event Planner, re-run analysis | Pit/refuel time and the total-time comparison change accordingly (rate is actually used, not a flat guess) | | | |
+
+## 14. Protected Behaviour — Mid-Race Replan & PTT (must still work)
+
+| Step | Description | Expected Result | Pass | Fail | Notes |
+|---|---|---|---|---|---|
+| 14.1 | Load a strategy, start a Race session, and let tyre-deg / fuel drift trigger a re-plan | Mid-race AI re-plan fires and updates the plan as before — unchanged by this integration | | | |
+| 14.2 | Use PTT to ask for strategy / pace / fuel, and report rain / damage | PTT intents respond correctly (Practice/Qualifying/Race); voice prompts unchanged | | | |
+
+---
+
 ## Summary
 
 | Section | Description | Pass | Fail | Defects |
@@ -178,6 +202,8 @@ Expected: at least one compound with laps ≥ 3.
 | 10 | Mandatory compound | | | |
 | 11 | No API key | | | |
 | 12 | Multi-compound data | | | |
+| 13 | Deterministic outcome comparison | | | |
+| 14 | Protected — replan & PTT | | | |
 
 **Overall result:** PASS / FAIL
 

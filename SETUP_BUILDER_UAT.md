@@ -40,7 +40,7 @@ recommendations and correctly persists each iteration into the learning loop.
 | 2.2 | Click **"Build Setup with AI"** button | Button becomes disabled or shows spinner; status changes to "Building…" or similar | | | |
 | 2.3 | Wait for the AI call to complete (up to 60 s) | Spinboxes auto-populate with numeric values across all setup categories | | | |
 | 2.4 | Inspect **Ride Height F/R** | Two numeric values (mm); both > 0 | | | |
-| 2.5 | Inspect **Springs F/R** | Two numeric values (N/mm); both > 0 | | | |
+| 2.5 | Inspect **Springs F/R** | Two numeric values in **Hz** (natural frequency, ~1–20); both > 0. Must NOT be labelled or scaled as N/mm | | | |
 | 2.6 | Inspect **Dampers Comp F/R** | Two numeric values; both within GT7 range | | | |
 | 2.7 | Inspect **Dampers Ext F/R** | Two numeric values; both within GT7 range | | | |
 | 2.8 | Inspect **ARB F/R** | Two numeric values; both within GT7 range | | | |
@@ -162,6 +162,32 @@ Expected: newest row has status = 'applied', before_metrics != '{}'.
 
 ---
 
+## 11. Setup Brain — Diagnosis & Engineering Validation ("Analyse & Get Setup Fix")
+
+Covers the telemetry-backed fix flow added in the Setup Brain integration. Requires
+at least a few recorded laps for the active car+track (so telemetry exists to diagnose).
+
+| Step | Description | Expected Result | Pass | Fail | Notes |
+|---|---|---|---|---|---|
+| 11.1 | In the Handling notes box, type a feel description (e.g. "front floaty, understeer on entry, rear loose on throttle exit, gearbox is good"), then click **"Analyse & Get Setup Fix"** | AI call completes; result panel shows an **"App diagnosis:"** summary line (dominant problem, bottoming band, wheelspin band, gearbox flag, track-model confidence) | | | |
+| 11.2 | Read the AI Log prompt for this call | Prompt contains the **Personal Driver Tuning Model** and **Driver Hard Constraints** blocks near the top, AND a **"Setup diagnosis prepared by the app"** section BEFORE the AI is asked for changes | | | |
+| 11.3 | With bottoming low (~0.2/lap) in the telemetry, confirm the advice | No ride-height increase is recommended for minor bottoming; if the AI tried, the app either regenerated or shows the engineering-validation banner | | | |
+| 11.4 | With front aero at/near minimum + floaty-front feel | Diagnosis reads front aero/platform-limited; advice prioritises front (and rear) aero, not a small mechanical tweak or ride height | | | |
+| 11.5 | With high wheelspin (>15/lap) | Diagnosis shows wheelspin "severe"; advice does not reduce rear aero | | | |
+| 11.6 | With "gearbox is good" in the notes | Gearbox/transmission is preserved (no gear or top-speed change), race or qualifying | | | |
+| 11.7 | Force a bad AI result (or observe the banner when one occurs) | A red **"Engineering validation failed after AI retry"** banner appears above the result; the recommendation is still shown but clearly flagged — never silently applied | | | |
+| 11.8 | Rate the result via the **Liked / Hated / Applied** controls, then save to history | Selection is stored as structured labels; a later Analyse prompt for this car+track includes "do not repeat hated" / confidence directives | | | |
+| 11.9 | With an event whose track model is seed-only / low-confidence | Diagnosis uses zone / lap-% language and does NOT justify a ride-height increase from corner-location data | | | |
+
+## 12. Event Context Correctness (Timed Race)
+
+| Step | Description | Expected Result | Pass | Fail | Notes |
+|---|---|---|---|---|---|
+| 12.1 | Set the active event to a **Timed Race** (e.g. 50 minutes) and run any setup AI call | The AI Log prompt event block reads **"50 minutes, Timed Race"** — NOT "1 laps" or "1 lap / Lap Race" | | | |
+| 12.2 | Set the active event to a **1-lap** Lap Race | Event block reads singular **"1 lap"** (not "1 laps") | | | |
+
+---
+
 ## Summary
 
 | Section | Description | Pass | Fail | Defects |
@@ -176,6 +202,8 @@ Expected: newest row has status = 'applied', before_metrics != '{}'.
 | 8 | No API key | | | |
 | 9 | No active event | | | |
 | 10 | Outcome tracking | | | |
+| 11 | Setup Brain — diagnosis & validation | | | |
+| 12 | Event context correctness (timed race) | | | |
 
 **Overall result:** PASS / FAIL
 
