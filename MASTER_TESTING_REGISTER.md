@@ -1,7 +1,9 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-06-29 (Group 31 — Race-Engineer Prompt Directives + Validation — 3426 pass / 6 skip / 0 fail — 144 tests in test_group31_race_engineer.py)
+> Last updated: 2026-07-02 (Groups 26–38 + A/B/C/D/E + Qualifying Mode — 3813 pass / 6 skip / 0 fail — full suite). Branch `feature/car-setup-ranges-engineer-prompt` merged to `master` and pushed to https://github.com/leonpaczynski-netizen/ngr_pitcrew.
 > Read PROJECT_STATE.md first, then this file, before touching any code.
+>
+> Note: detailed session notes for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`. Groups 26–38 and the lettered groups (A/B/C/D/E) + Qualifying Mode are summarised at the end of this file under "Groups 26–38 + Lettered Groups (Strategy / Race-Engineer / Setup Overhaul)".
 
 ---
 
@@ -3384,3 +3386,162 @@ Malformed files silently skipped; errors recorded in `TrackModelResolverResult.e
 - `TestI1AC3RideHeightAtMax` — 5 tests
 
 **Full suite result after Group 31: 3426 pass / 6 skip / 0 fail**
+
+---
+
+## Groups 26–38 + Lettered Groups (Strategy / Race-Engineer / Setup Overhaul)
+
+> Added 2026-07-02. These groups landed across commits `6440a00` (Group 31),
+> `7cf7d4f` (race-engineer overhaul: Groups 26–36 + A/B/C/D/E + Qualifying),
+> and `1dea1e3` (Groups 37/37b/38). Each entry lists the primary files and the
+> test file with its test count. Full suite after all of these: **3813 pass /
+> 6 skip / 0 fail**.
+
+### Group 26 — Setup Overhaul (2026-06-28)
+Setup-advice prompt/parse overhaul: `GENERIC_DEFAULTS` / `resolve_ranges` /
+`save_car_ranges` / `_parse_setup_recommendation`; prompt contradiction fixes
+(ARB, LSD, dampers, toe); race-vs-qualifying session objective text; hybrid race
+context + race-engineer brief; driver-profile knowledge-base sections; seven-label
+reasoning structure.
+- Files: `strategy/setup_ranges.py`, `strategy/driving_advisor.py`, `knowledge/gt7_tuning_reference.md`
+- Test: `tests/test_group26_setup_overhaul.py` — 66 tests
+
+### Group 27 — Setup Overhaul 2 (2026-06-28)
+`build_car_setup`: `max_tokens=6000`, `_is_truncated`, retry logic, double-failure
+`RuntimeError`; camber positive 0–6 convention across defaults/resolve/parse/prompt/JSON;
+displayed AI suggestions clamped to ranges with "(clamped to …)" annotation; apply-highlight
+/ clear-on-save wiring.
+- Files: `strategy/driving_advisor.py`, `strategy/setup_ranges.py`, `data/car_setup_ranges.json`, `ui/setup_builder_ui.py`
+- Test: `tests/test_group27_setup_overhaul2.py` — 86 tests
+
+### Group 28 — Analyse-path Per-Car Ranges in Prompt (2026-06-28)
+The telemetry/feeling "Analyse / Get Setup Fix" prompts previously listed field
+names only, so the AI never saw the car's real bounds. New shared
+`_valid_ranges_block(car_name)` helper (built from the same `resolve_ranges()`
+data the parser clamps against) injected into all three analyse prompts.
+- Files: `strategy/driving_advisor.py`
+- Test: `tests/test_group28_analyse_prompt_ranges.py` — 21 tests
+
+### Group 29 — Tyre Wear Multiplier: No Practice→Race Scaling (2026-06-28)
+Removed practice→race wear scaling globally. The one configured multiplier is the
+wear rate for BOTH sessions; practice laps ARE race laps. Fixes double-counting for
+drivers who set the same wear in practice and race.
+- Files: `strategy/engine.py`, `strategy/ai_planner.py`
+- Test: `tests/test_group29_tyre_wear_no_scaling.py` — 9 tests
+
+### Group 30 — Track-Map Projection Cache (2026-06-28)
+`project_to_screen()` caching to cut per-frame allocation without ever serving a
+stale live car dot (the live path mutates `draw_data.car_dot` in place each packet).
+- Files: `ui/track_map_vm.py`
+- Test: `tests/test_group30_projection_cache.py` — 6 tests
+
+### Group 31 — Shift Indicator / RPM Beep (backend + Group C UI) (2026-06-29)
+Backend: `should_shift_beep` / `resolve_threshold` pure helpers; new
+`shift_rpm_qual` / `shift_rpm_race` parse fields + prompt text. Group C (frontend):
+Live-tab shift-beep settings persist to `config["shift_beep"]` and mirror to
+read-only Setup spinboxes; live/practice mode snapshots; AI setup-apply writes both
+qual+race thresholds.
+- Files: `voice/announcer.py`, `ui/dashboard.py`, `ui/setup_builder_ui.py`, `strategy/driving_advisor.py`
+- Tests: `tests/test_group31_shift_beep.py` — 47 tests; `tests/test_group31b_shift_beep_ui.py` — 18 tests
+- (Race-Engineer Prompt Directives / validation / bottoming classifier — see the earlier "Group 31" section above; 144 tests in `test_group31_race_engineer.py`.)
+
+### Group 32 — Feasibility-Gated Race Strategy Prompt Pipeline (2026-06-30)
+New `strategy/feasibility.py` feasibility gate integrated with the AI strategy
+prompt pipeline. Estimates race laps, checks compound eligibility, rejects
+short/impossible stints and infeasible stop counts BEFORE any AI call; emits named
+`DataGap`s instead of silent fallbacks; `FeasibilityReport` + `StrategyResult`.
+- Files: `strategy/feasibility.py` (new), `strategy/ai_planner.py`
+- Test: `tests/test_group32_feasibility_gate.py` — 84 tests
+
+### Group 33 — Dashboard Wiring for Feasibility-Gated StrategyResult (2026-06-30)
+UI consumes the new `StrategyResult`: `_display_strategy_results` reads
+`result.strategies` explicitly; `_build_feasibility_html` renders rejected
+strategies / data gaps / assumptions / calculation notes (empty sections produce
+no header); timed-race lap estimate uses `estimate_race_laps` (ceil) + best clean
+lap of the most-sampled compound, matching the feasibility module exactly.
+- Files: `ui/dashboard.py`
+- Test: `tests/test_group33_strategy_result_wiring.py` — 38 tests
+
+### Group 34 — Acceptance: Validated, Feasibility-Gated Race Strategy Prompt (2026-06-30)
+End-to-end acceptance for the feasibility pipeline (AC1–AC12 + edge cases): named
+data gaps, timed-race lap ceil, pre-AI rejection of impossible stop counts, stop
+counts from measured data, strategy names decoupled from speed rank, 4 top-level
+output fields, data-quality summary with std-dev, RS/RH blocked without ≥8 clean
+laps, pit_time formula, risk fields, tuning-lock, explicit prompt rules.
+- Files: `strategy/feasibility.py`, `strategy/ai_planner.py`, `ui/dashboard.py`
+- Test: `tests/test_group34_strategy_feasibility_acceptance.py` — 131 tests
+
+### Group 35 — Mid-Race AI Re-plan + Qualifying Engineer (Group B backend) (2026-07-01)
+`engine._request_replan` (in-flight idempotency); pace trigger fires at
+`slow_lap_count >= 4`; tyre-deg breach trigger; `apply_replan` preserves completed
+stints + sets new `start_lap`; `_on_pit_exit` resets `_adapted_plan`; qualifying ack
+fires once in qualifying mode; `_build_race_prompt` gains a MID-RACE RE-PLAN block
+when `race_situation` populated; orchestrator + dashboard wiring.
+- Files: `strategy/engine.py`, `strategy/ai_planner.py`, `strategy/strategy_orchestrator.py`, `ui/dashboard.py`
+- Test: `tests/test_group35_midrace_replan.py` — 51 tests
+
+### Group 36 — Group B AC Verification (qualifying + mid-race re-plan) (2026-07-01)
+Fills AC gaps not covered by Group 35 / Qualifying Mode: qualifying ack uses
+`Priority.HIGH`; race-finish announcement suppressed in qualifying; descriptive
+replan reason at `slow_lap_count >= 4`; `race_situation` dict contains all required
+keys; `apply_replan` resets `_slow_lap_count` / clears `_replan_in_flight`; adapted
+plan announcement includes new pit lap + target pace; in-flight guard completeness.
+- Files: `strategy/engine.py`, `strategy/ai_planner.py`, `voice/announcer.py`, `ui/dashboard.py`
+- Test: `tests/test_group36_groupB_ac_verification.py` — 51 tests
+
+### Group 37 — Relative-Compound Tyre Degradation Point (2026-07-02)
+New `strategy/relative_degradation.py::compute_relative_degradation`. A compound's
+optimal stint length is measured against the next-harder compound's mean baseline
+pace (skipped-tier aware: RS→RM→RH). Hardest compound, single compound, and wet
+compounds fall back to cliff detection. Handles never-degrades (optimal=0,
+not_yet_degraded), degrade-from-lap-1, and outlier laps that must not trigger a run.
+- Files: `strategy/relative_degradation.py` (new)
+- Test: `tests/test_group37_relative_degradation.py` — 44 tests
+
+### Group 37b — Engine Integration: Harder-Baseline Degradation Alert (2026-07-02)
+`RaceStrategyEngine.set_degradation_cache` + `_check_tyre_degradation` fire a live
+alert when a compound's rolling average crosses its harder-compound baseline; falls
+back to the reference-plus-threshold rule when no baseline is cached.
+- Files: `strategy/engine.py`
+- Test: `tests/test_group37b_engine_harder_baseline.py` — 16 tests
+
+### Group 38 — Acceptance: Relative-Compound Tyre Degradation (2026-07-02)
+Full AC1–AC12 + edge-case acceptance against the real implementation
+(`relative_degradation.py`, `ai_planner._build_degradation_prompt`, `engine`
+degradation cache/alert, `feasibility.check_compound_eligibility`,
+`config.json degradation_consecutive_laps`, `data/tyres.py` ordering). Feasibility
+gate rejects zero-optimal ("not yet degraded") entries; LIFE ordering (RS ≤ RM ≤ RH)
+enforced after merge.
+- Files: `strategy/relative_degradation.py`, `strategy/ai_planner.py`, `strategy/engine.py`, `strategy/feasibility.py`
+- Test: `tests/test_group38_relative_degradation_acceptance.py` — 73 tests
+
+### Group A — Live Tab Cleanup (2026-07-01)
+Live-tab session combo is never driven by telemetry (manual always wins from the
+first packet; auto-sync block removed). `tracker.session_type` honours
+`_session_type_override`. Live-tab map widget/label/column removed (the Track
+Modelling tab keeps its map via `_tm_map_widget`); dead `_live_map_widget` refs
+removed; `test_group24_live_map_autoload.py` deleted. `set_race_active()` called from
+`_on_live_mode_changed` (True only for "Race").
+- Files: `ui/dashboard.py`, `telemetry/state.py`
+- Tests: `tests/test_groupA_combo_no_autosync.py` — 20; `tests/test_groupA_live_tab_cleanup.py` — 26; `tests/test_groupA_session_override_property.py` — 6
+
+### Group D — Structured Setup Naming + Local-Time Timestamp (2026-07-01)
+Pure naming/numbering helpers in `ui/setup_name_helper.py`; mixin
+`_generate_setup_name`; save-guard + prefill wiring; old helper removed;
+`setup_history` timestamp is local time (no `timezone.utc`).
+- Files: `ui/setup_name_helper.py` (new), `ui/setup_builder_ui.py`, `data/setup_history.py`
+- Test: `tests/test_groupD_setup_naming_timestamp.py` — 29 tests
+
+### Group E — Pit-Lap Exclusion + Track-Map Loop Closure (2026-07-01)
+First lap (lowest lap_number) always rejected as out-lap; `detect_pit_lap_raw` laps
+rejected; clean non-first non-pit laps accepted (one result per lap, ordered);
+`closure_gap_m` computed; renderer closes the centreline (not the pit-lane
+polyline); `None` station_map → empty centreline.
+- Files: `data/track_geometry_builder.py`, `ui/track_map_widget.py`
+- Test: `tests/test_group_e_pit_lap_exclusion.py` — 27 tests
+
+### Qualifying Mode — Completion Feature (2026-07-01)
+Voice delta announcements after a qualifying lap; flying-lap tyre-warning
+suppression; `get_best_practice_lap_ms` DB method; auto-reference delta.
+- Files: `strategy/engine.py`, `voice/announcer.py`, `ui/dashboard.py`
+- Test: `tests/test_qualifying_mode.py` — 22 tests

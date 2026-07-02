@@ -1,9 +1,20 @@
 # Current Claude Handoff
 
 ## Current Objective
-Group 31 complete. Race-Engineer Prompt Directives, Validation, and Bottoming Classifier. 3426 pass / 6 skip / 0 fail. 144 tests in `tests/test_group31_race_engineer.py`. Both entry points (`build_setup_advice_response` and `build_combined_setup_response`) now normalise, validate, and strip locked fields from the AI response before returning. The UI renders validation errors as a banner. Defects C1/C2/C3/I1/I5 resolved.
+Groups 26–38 + lettered Groups A/B/C/D/E + Qualifying Mode complete. **Full suite: 3813 pass / 6 skip / 0 fail.** Branch `feature/car-setup-ranges-engineer-prompt` merged (fast-forward) into `master` and pushed to https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master`, latest commit `1dea1e3`).
+
+Latest delivered (see MASTER_TESTING_REGISTER.md "Groups 26–38 + Lettered Groups" section for the full breakdown):
+- **Group 32–34:** feasibility-gated race strategy prompt pipeline (`strategy/feasibility.py`) + dashboard wiring + end-to-end acceptance.
+- **Group 35–36 (Group B):** mid-race AI re-plan + qualifying engineer.
+- **Group 37/37b/38:** relative-compound tyre degradation point (`strategy/relative_degradation.py`) + engine harder-baseline alert + acceptance.
+- **Groups 26–31 + A/C/D/E + Qualifying:** setup-advice overhaul, per-car range enforcement in analyse prompts, no practice→race wear scaling, projection cache, shift-beep, live-tab cleanup, structured setup naming, pit-lap exclusion.
 
 No outstanding blockers. Next work: OFR-1 (between-race learning loop) or Phase 2 (per-lap telemetry in practice/strategy prompts — Group 16 in roadmap).
+
+---
+
+## Prior Objective (historical)
+Group 31 complete. Race-Engineer Prompt Directives, Validation, and Bottoming Classifier. 3426 pass / 6 skip / 0 fail. 144 tests in `tests/test_group31_race_engineer.py`. Both entry points (`build_setup_advice_response` and `build_combined_setup_response`) now normalise, validate, and strip locked fields from the AI response before returning. The UI renders validation errors as a banner. Defects C1/C2/C3/I1/I5 resolved.
 
 ## Group 31 — Session Notes (2026-06-29)
 

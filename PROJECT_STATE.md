@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-02)
+
+- **Full test suite:** 3813 pass / 6 skip / 0 fail (6 skips require a Qt display).
+- **Git:** branch `feature/car-setup-ranges-engineer-prompt` merged (fast-forward) into `master` and pushed to the remote **https://github.com/leonpaczynski-netizen/ngr_pitcrew** (`origin/master`). Latest commit `1dea1e3` (Groups 37/37b/38).
+- **Secrets:** `api_key.txt` and `config.json` are gitignored — not tracked, not pushed.
+- **Recent work (documented in MASTER_TESTING_REGISTER.md):** Groups 26–38 + lettered Groups A/B/C/D/E + Qualifying Mode — setup-advice overhaul, per-car range enforcement, shift-beep, feasibility-gated race strategy, mid-race AI re-plan + qualifying engineer, and relative-compound tyre degradation.
+- **Detailed session notes** for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`.
+
 ## Phase 1 Fix Status (2026-06-21)
 
 | Defect | Title | Status |
