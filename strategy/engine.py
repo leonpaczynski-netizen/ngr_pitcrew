@@ -98,6 +98,10 @@ class RaceStrategyEngine:
         self._db = db
         self._lock = threading.Lock()
 
+        # Degradation cache: per-compound dict from compute_relative_degradation / merge.
+        # Keys are compound codes; each value contains at minimum "harder_baseline_ms".
+        self._degradation_cache: dict = {}
+
         self._stints: list[Stint] = []
         self._active = False
         self._ui_race_mode = True   # False when UI is in Practice/Qualifying — blocks RACE_STARTED
@@ -153,6 +157,23 @@ class RaceStrategyEngine:
         """
         with self._lock:
             self._qualifying_mode = enabled
+
+    def set_degradation_cache(self, cache: dict) -> None:
+        """Store the per-compound degradation dict on the engine.
+
+        The cache is used by _check_tyre_degradation to decide whether to use
+        the harder-compound baseline pace (when harder_baseline_ms is present)
+        or fall back to the ref + pace_threshold_ms logic.
+
+        Parameters
+        ----------
+        cache:
+            Dict keyed by compound code.  Each value is a per-compound result
+            dict as returned by compute_relative_degradation / analyse_tyre_degradation.
+            May be {} or None to clear.  Stored thread-safely.
+        """
+        with self._lock:
+            self._degradation_cache = dict(cache) if cache else {}
 
     def set_plan(self, stints: list[Stint]) -> None:
         with self._lock:
@@ -573,21 +594,45 @@ class RaceStrategyEngine:
             return
         if len(self._recent_lap_times) < 3:
             return
-        best = self._tracker.best_lap_ms
-        ref = stint.ref_lap_ms if stint.ref_lap_ms > 0 else best
-        if ref <= 0:
-            return
         rolling_avg = mean(self._recent_lap_times[-3:])
-        if rolling_avg > ref + stint.pace_threshold_ms:
-            laps_into = laps_recorded - stint.start_lap + 1
-            delta_s = (rolling_avg - ref) / 1000.0
-            msg = (f"Tyre note: {stint.compound} tyres {delta_s:.1f} seconds per lap "
-                   f"off reference. You planned {stint.laps} laps but are "
-                   f"{laps_into} in. Consider pitting early.")
-            self._announcer.announce(msg, Priority.HIGH,
-                                     "strategy_tyre_deg", 60.0)
-            stint.tyre_alert_issued = True
-            self._request_replan(reason="tyre degradation breach")
+
+        # Determine which alert logic to use.
+        # If the engine holds a degradation cache and the current stint's compound
+        # has a non-None harder_baseline_ms, trigger the alert when the rolling
+        # 3-lap average >= harder_baseline_ms.
+        # Otherwise fall back to the existing ref + pace_threshold_ms logic.
+        compound_cache = self._degradation_cache.get(stint.compound, {})
+        harder_baseline_ms = compound_cache.get("harder_baseline_ms") if compound_cache else None
+
+        if harder_baseline_ms is not None:
+            # Relative-baseline alert: fire when rolling average meets or exceeds the baseline.
+            alert_triggered = rolling_avg >= harder_baseline_ms
+            if alert_triggered:
+                laps_into = laps_recorded - stint.start_lap + 1
+                delta_s = (rolling_avg - harder_baseline_ms) / 1000.0
+                msg = (f"Tyre note: {stint.compound} tyres have reached the harder-compound "
+                       f"baseline pace ({harder_baseline_ms / 1000:.3f}s). "
+                       f"You are {laps_into} laps into this stint. Consider pitting early.")
+                self._announcer.announce(msg, Priority.HIGH,
+                                         "strategy_tyre_deg", 60.0)
+                stint.tyre_alert_issued = True
+                self._request_replan(reason="tyre degradation breach")
+        else:
+            # Fallback: original ref + pace_threshold_ms logic (UNCHANGED)
+            best = self._tracker.best_lap_ms
+            ref = stint.ref_lap_ms if stint.ref_lap_ms > 0 else best
+            if ref <= 0:
+                return
+            if rolling_avg > ref + stint.pace_threshold_ms:
+                laps_into = laps_recorded - stint.start_lap + 1
+                delta_s = (rolling_avg - ref) / 1000.0
+                msg = (f"Tyre note: {stint.compound} tyres {delta_s:.1f} seconds per lap "
+                       f"off reference. You planned {stint.laps} laps but are "
+                       f"{laps_into} in. Consider pitting early.")
+                self._announcer.announce(msg, Priority.HIGH,
+                                         "strategy_tyre_deg", 60.0)
+                stint.tyre_alert_issued = True
+                self._request_replan(reason="tyre degradation breach")
 
     def _check_lap_targets(self, record, stint: Stint) -> None:
         """Compare actual lap time and fuel to stint targets; alert only when outside tolerance."""

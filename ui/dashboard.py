@@ -4831,13 +4831,24 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._tyre_ref_table.setItem(r, 3, QTableWidgetItem(str(len(times))))
 
             deg = self._tyre_degradation_cache.get(compound)
+            method = deg.get("degradation_method", "cliff_detection") if deg else "cliff_detection"
             if deg:
                 opt   = str(deg.get("optimal_stint_race", "—"))
                 life  = str(deg.get("total_life_race", "—"))
                 cliff = deg.get("cliff_lap_practice", 0)
                 loss  = deg.get("pace_loss_at_cliff_s", 0.0)
                 conf  = deg.get("confidence", "low")
-                if cliff:
+                if method == "relative_baseline":
+                    harder_ms = deg.get("harder_baseline_ms")
+                    not_yet = deg.get("not_yet_degraded", False)
+                    if not_yet:
+                        note = f"Degrades vs harder compound baseline · {conf}"
+                    elif harder_ms is not None:
+                        delta_s = loss if loss else 0.0
+                        note = f"Degrades vs harder compound baseline · -{delta_s:.1f}s · {conf}"
+                    else:
+                        note = f"Degrades vs harder compound baseline · {conf}"
+                elif cliff:
                     note = f"Cliff lap {cliff} · -{loss:.1f}s · {conf}"
                 else:
                     note = "No cliff detected" if conf != "low" else "Insufficient data"
@@ -4848,7 +4859,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._tyre_ref_table.setItem(r, 4, QTableWidgetItem(opt))
             self._tyre_ref_table.setItem(r, 5, QTableWidgetItem(life))
             cliff_item = QTableWidgetItem(note)
-            if deg and cliff:
+            if deg and method == "relative_baseline":
+                harder_ms = deg.get("harder_baseline_ms")
+                tip_parts = ["Optimal stint derived from harder-compound baseline comparison."]
+                if harder_ms is not None:
+                    tip_parts.append(f"Harder compound baseline: {harder_ms / 1000:.3f}s/lap.")
+                if loss:
+                    tip_parts.append(f"Pace delta vs baseline: -{loss:.1f}s/lap.")
+                tip_parts.append(f"Confidence: {conf}.")
+                cliff_item.setToolTip("\n".join(tip_parts))
+            elif deg and cliff:
                 cliff_item.setToolTip(
                     f"Performance cliff occurs at lap {cliff} of the stint.\n"
                     f"Pace loss after cliff: {loss:.1f}s/lap slower than laps 1–{cliff - 1}.\n"
@@ -5261,6 +5281,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             return
 
         wear_mult = float(self._config.get("strategy", {}).get("tyre_wear_multiplier", 1.0))
+        consecutive_laps = int(self._config.get("strategy", {}).get("degradation_consecutive_laps", 2))
 
         if hasattr(self, "_btn_analyse_deg"):
             self._btn_analyse_deg.setEnabled(False)
@@ -5269,7 +5290,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         def _worker():
             try:
                 result = analyse_tyre_degradation(lap_sequences, wear_mult, api_key,
-                                                  model=self._config.get("anthropic", {}).get("model") or None)
+                                                  model=self._config.get("anthropic", {}).get("model") or None,
+                                                  consecutive_laps=consecutive_laps)
                 self._degradation_result_queue.put(("ok", result))
             except Exception as exc:
                 self._degradation_result_queue.put(("err", str(exc)))
@@ -5285,6 +5307,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             print(f"[Degradation] analysis failed: {payload}")
             return
         self._tyre_degradation_cache = payload
+        if self._strategy_engine is not None:
+            self._strategy_engine.set_degradation_cache(payload)
         self._strategy_calc_refs()   # redraw table with new columns
 
     # ------------------------------------------------------------------

@@ -663,11 +663,34 @@ def analyse_tyre_degradation(
     wear_multiplier: float,
     api_key: str,
     model: str | None = None,
+    consecutive_laps: int = 2,
 ) -> dict:
-    """Ask Claude to identify the performance cliff for each compound."""
-    prompt = _build_degradation_prompt(lap_sequences, wear_multiplier)
+    """Compute tyre degradation for each compound, blending deterministic and AI results.
+
+    Algorithm
+    ---------
+    1. Run the deterministic relative-baseline computation first.
+    2. Call the AI (cliff detection) to supply cliff_lap_practice,
+       pace_loss_at_cliff_s, total_life_race, and confidence.
+    3. MERGE: for each compound where the deterministic method returned
+       degradation_method=="relative_baseline", override optimal_stint_race
+       with the deterministic value and inject degradation_method and
+       harder_baseline_ms.  For cliff_detection compounds, keep the AI result
+       and annotate with degradation_method="cliff_detection",
+       harder_baseline_ms=None.
+    4. Apply life-ordering enforcement (softer compound optimal_stint_race
+       must not exceed the next-harder compound's optimal_stint_race).
+    """
+    from strategy.relative_degradation import compute_relative_degradation
+    from data.tyres import ALL_COMPOUNDS
+
+    # --- Step 1: deterministic relative-baseline ---
+    det_result = compute_relative_degradation(lap_sequences, consecutive_laps=consecutive_laps)
+
+    # --- Step 2: AI cliff analysis ---
+    prompt = _build_degradation_prompt(lap_sequences, wear_multiplier, det_result)
     lap_counts = {c: len(s) for c, s in lap_sequences.items()}
-    return _parse_degradation_response(
+    ai_result = _parse_degradation_response(
         call_api(prompt, api_key, max_tokens=1500, system=_JSON_SYSTEM,
                  feature="Tyre Degradation",
                  structured_payload={"wear_multiplier": wear_multiplier,
@@ -676,6 +699,69 @@ def analyse_tyre_degradation(
                  model=model),
         lap_counts=lap_counts,
     )
+
+    # --- Step 3: MERGE ---
+    merged: dict = {}
+    for compound in lap_sequences:
+        ai_entry = ai_result.get(compound, {})
+        det_entry = det_result.get(compound, {})
+
+        entry = dict(ai_entry)  # start from AI result for cliff fields
+
+        det_method = det_entry.get("degradation_method", "cliff_detection")
+        if det_method == "relative_baseline":
+            # Deterministic result overrides optimal_stint_race
+            entry["optimal_stint_race"] = det_entry.get("optimal_stint_race", 0)
+            entry["degradation_method"] = "relative_baseline"
+            entry["harder_baseline_ms"] = det_entry.get("harder_baseline_ms")
+            # Carry deterministic not_yet_degraded flag
+            entry["not_yet_degraded"] = det_entry.get("not_yet_degraded", False)
+            # Keep AI confidence only where deterministic provides the value;
+            # not_yet_degraded forces "low" regardless
+            if det_entry.get("not_yet_degraded"):
+                entry["confidence"] = "low"
+        else:
+            # Cliff detection — keep AI result, annotate method and baseline
+            entry["degradation_method"] = "cliff_detection"
+            entry["harder_baseline_ms"] = None
+            entry["not_yet_degraded"] = False
+
+        merged[compound] = entry
+
+    # --- Step 4: Life-ordering enforcement ---
+    # ALL_COMPOUNDS is ordered HARDEST-FIRST (lower index = harder compound).
+    # e.g. RH=6, RM=7, RS=8 — RS is softest (highest index).
+    # Invariant: optimal_stint_race(softer) <= optimal_stint_race(harder).
+    #
+    # Algorithm: walk present compounds from HARDEST to SOFTEST.
+    # Maintain a running cap = the smallest positive optimal seen so far among
+    # harder compounds already visited. For each compound with a positive
+    # optimal, if it exceeds the running cap, set it to the running cap.
+    # Compounds with optimal <= 0 (undetermined/not-viable) neither get capped
+    # nor update the running cap — an undetermined harder compound does NOT
+    # force a determined softer compound down to 0.
+    _code_order = [c.code for c in ALL_COMPOUNDS]
+
+    # Sort present compounds hardest-first (ascending index = harder first).
+    present_codes = sorted(
+        [c for c in merged],
+        key=lambda c: _code_order.index(c) if c in _code_order else 9999,
+    )
+
+    running_cap: int | None = None  # smallest positive optimal seen so far (harder compounds)
+    for code in present_codes:
+        opt = merged[code].get("optimal_stint_race", 0) or 0
+        if opt > 0:
+            if running_cap is not None and opt > running_cap:
+                # This softer compound's optimal exceeds the cap set by a harder one — clamp it.
+                merged[code]["optimal_stint_race"] = running_cap
+                opt = running_cap
+            # Update the running cap: softer compounds must not exceed this value.
+            if running_cap is None or opt < running_cap:
+                running_cap = opt
+        # opt <= 0: undetermined — skip; does not affect the running cap.
+
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -1781,7 +1867,21 @@ Keep the entire reasoning as one string; separate change-blocks by blank lines.
 def _build_degradation_prompt(
     lap_sequences: dict[str, list[float]],
     wear_multiplier: float,
+    det_result: dict | None = None,
 ) -> str:
+    """Build the tyre degradation analysis prompt.
+
+    Parameters
+    ----------
+    lap_sequences:
+        Per-compound lap times in ms.
+    wear_multiplier:
+        Race tyre wear multiplier.
+    det_result:
+        Optional output of compute_relative_degradation.  When provided, the
+        prompt instructs the AI to use the pre-computed harder-compound baseline
+        pace as the degradation threshold (AC9) rather than finding its own cliff.
+    """
     lines = []
     for compound, times in sorted(lap_sequences.items()):
         lap_list = ", ".join(
@@ -1789,6 +1889,39 @@ def _build_degradation_prompt(
         )
         lines.append(f"  {compound} ({len(times)} laps): {lap_list}")
     laps_block = "\n".join(lines) if lines else "  (no data)"
+
+    # --- AC9: per-compound baseline pace section ---
+    baseline_lines: list[str] = []
+    if det_result:
+        for compound in sorted(lap_sequences):
+            d = det_result.get(compound, {})
+            baseline_ms = d.get("harder_baseline_ms")
+            if baseline_ms is not None:
+                baseline_s = baseline_ms / 1000.0
+                baseline_lines.append(
+                    f"  {compound}: use {baseline_s:.3f}s/lap as the degradation threshold "
+                    f"(mean pace of the next harder compound). "
+                    f"Do NOT find an internal cliff for this compound — optimal_stint_race "
+                    f"will be overridden by the deterministic calculation. "
+                    f"Focus your analysis on cliff_lap_practice, pace_loss_at_cliff_s, "
+                    f"total_life_race, and confidence."
+                )
+            else:
+                baseline_lines.append(
+                    f"  {compound}: no harder-compound baseline available. "
+                    f"Find the performance cliff using the normal cliff-detection method."
+                )
+
+    if baseline_lines:
+        baseline_block = (
+            "\n## Per-compound degradation thresholds (pre-computed)\n"
+            "Use these to guide your analysis. optimal_stint_race will be set "
+            "deterministically by the caller; supply the other fields.\n"
+            + "\n".join(baseline_lines)
+            + "\n"
+        )
+    else:
+        baseline_block = ""
 
     return f"""You are a GT7 tyre degradation analyst.
 
@@ -1799,12 +1932,12 @@ degradation. Do NOT scale practice laps to "race-equivalent"; report race laps e
 
 ## Practice lap times (ordered within each stint)
 {laps_block}
-
+{baseline_block}
 For each compound determine:
 1. cliff_lap_practice — the practice lap number within the stint where pace drops non-linearly (sudden or accelerating degradation, not just normal variation). Use lap 1 as index 1. IMPORTANT: a cliff MUST be sustained across at least 2 consecutive laps. A single slow lap (spin, lock-up, traffic, outlier) does NOT constitute a cliff — set cliff_lap_practice to null if the drop is not confirmed by the following lap.
 2. pace_loss_at_cliff_s — how many seconds/lap slower at the cliff vs the early-stint average (laps 1-3).
 3. total_life_race — total race laps the compound lasts before it is fully uncompetitive. This EQUALS the total practice laps before it becomes uncompetitive (no scaling — practice and race share the same wear rate), or estimate if data is short.
-4. optimal_stint_race — race laps up to but NOT including the cliff (= cliff_lap_practice - 1, minimum 1; no scaling).
+4. optimal_stint_race — race laps up to but NOT including the cliff (= cliff_lap_practice - 1, minimum 1; no scaling). NOTE: for compounds with a pre-computed threshold above, this value will be overridden — provide your best estimate anyway.
 5. confidence — "high" if ≥8 laps of data, "medium" if 4–7, "low" if <4.
 
 ## Compound life ordering constraint (MUST be respected)
