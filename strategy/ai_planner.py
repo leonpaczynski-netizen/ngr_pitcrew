@@ -28,6 +28,7 @@ from strategy.feasibility import (
     estimate_race_laps,
 )
 from strategy.setup_ranges import resolve_ranges
+from strategy.setup_diagnosis import PERSONAL_DRIVER_TUNING_MODEL, DRIVER_HARD_CONSTRAINTS
 from ui.gt7_data import build_track_context
 
 _JSON_SYSTEM = (
@@ -1788,6 +1789,8 @@ For transmission fields:
 {gt7_ref}
 
 ---
+{PERSONAL_DRIVER_TUNING_MODEL}
+{DRIVER_HARD_CONSTRAINTS}
 {tuning_block}{gearbox_block}
 Build a complete from-scratch car setup optimised for:
   Car: {car}

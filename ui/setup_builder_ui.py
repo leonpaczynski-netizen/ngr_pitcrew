@@ -43,6 +43,32 @@ def _format_validation_errors_banner(validation_errors: list) -> str:
     )
 
 
+def _format_engineering_validation_banner(eng_errors: list) -> str:
+    """Return an HTML banner string for engineering validation failures.
+
+    Distinct from the standard validation-errors banner — uses a red border
+    to signal a higher-severity warning: the AI retry did not resolve the
+    engineering contradiction and the recommendation should not be applied
+    without manual review.
+    Returns "" when there are no errors to display.
+    """
+    if not eng_errors:
+        return ""
+    items = "".join(
+        f"<li style='margin:2px 0;'>{e}</li>" for e in eng_errors
+    )
+    return (
+        "<div style='background:#2A0A0A; border:2px solid #E05050; "
+        "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+        "&#9940; <b>Engineering validation failed after AI retry — review before applying.</b>"
+        "<br><span style='font-size:11px; color:#CC6060;'>"
+        "The recommendation below survived a correction attempt but still contains "
+        "engineering contradictions. Do NOT apply blindly.</span>"
+        f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
+        "</div>"
+    )
+
+
 def _set_spin_readonly(spin, readonly: bool) -> None:
     """Make a spinbox read-only (min==max case) or editable again.
 
@@ -573,6 +599,30 @@ class SetupBuilderMixin:
         self._last_setup_ai_fields: dict = {}
         self._highlighted_fields: set = set()
 
+        # ── Driver Feedback Controls ───────────────────────────────────────────
+        # Rating combo + Applied checkbox shown below the AI result; values are
+        # translated into labels and passed to save_entry when saving to history.
+        _feedback_row = QHBoxLayout()
+        _feedback_row.setContentsMargins(0, 2, 0, 0)
+        _feedback_lbl = QLabel("Rate this result:", styleSheet=f"color: {_TEXT}; font-size: 11px;")
+        self._setup_rating_combo = QComboBox()
+        self._setup_rating_combo.addItems(["—", "Liked", "Hated", "Neutral"])
+        self._setup_rating_combo.setFixedWidth(90)
+        self._setup_rating_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; "
+            f"border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }}"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._setup_applied_check = QCheckBox("Applied")
+        self._setup_applied_check.setStyleSheet(f"color: {_TEXT}; font-size: 11px;")
+        self._setup_applied_check.setToolTip(
+            "Tick if you applied this recommendation to the car setup.")
+        _feedback_row.addWidget(_feedback_lbl)
+        _feedback_row.addWidget(self._setup_rating_combo)
+        _feedback_row.addSpacing(8)
+        _feedback_row.addWidget(self._setup_applied_check)
+        _feedback_row.addStretch()
+
         setup_btn_row.addWidget(btn_save_setup)
         setup_btn_row.addWidget(QLabel("Load:", styleSheet=lbl_s))
         setup_btn_row.addWidget(self._setup_load_combo)
@@ -587,6 +637,7 @@ class SetupBuilderMixin:
         setup_layout.addWidget(self._lbl_setup_save_status)
         setup_layout.addWidget(self._setup_result_text)
         setup_layout.addWidget(self._btn_apply_ai_setup)
+        setup_layout.addLayout(_feedback_row)
 
         # Build Setup with AI + Set Car Ranges
         _build_row = QHBoxLayout()
@@ -1055,6 +1106,32 @@ class SetupBuilderMixin:
                 f"changes to locked areas: <b>{_vc}</b>. Review before applying.</div>"
             )
 
+        # Snapshot driver feedback controls before resetting them.
+        # The user may have rated the PREVIOUS result; capture that rating so it
+        # can be saved with the previous entry's history record, then reset so the
+        # new result starts fresh.
+        _prev_rating_text = ""
+        _prev_hist_labels: list[str] = []
+        if hasattr(self, "_setup_rating_combo"):
+            _prev_rating_text = self._setup_rating_combo.currentText()
+            if _prev_rating_text == "Liked":
+                _prev_hist_labels.append("liked")
+            elif _prev_rating_text == "Hated":
+                _prev_hist_labels.append("hated")
+            elif _prev_rating_text == "Neutral":
+                _prev_hist_labels.append("neutral")
+        if hasattr(self, "_setup_applied_check"):
+            if self._setup_applied_check.isChecked():
+                _prev_hist_labels.append("applied")
+            else:
+                _prev_hist_labels.append("not_applied")
+
+        # Reset controls for the incoming fresh result
+        if hasattr(self, "_setup_rating_combo"):
+            self._setup_rating_combo.setCurrentIndex(0)
+        if hasattr(self, "_setup_applied_check"):
+            self._setup_applied_check.setChecked(False)
+
         # Try to parse structured JSON from the advisor
         try:
             data = json.loads(payload)
@@ -1062,6 +1139,9 @@ class SetupBuilderMixin:
             changes: list = data.get("changes", [])
             setup_fields: dict = data.get("setup_fields", {})
             _validation_errors: list = data.get("validation_errors", [])
+            _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
+            _eng_validation_errors: list = data.get("engineering_validation_errors", [])
+            _diagnosis: dict = data.get("diagnosis") or {}
         except (_json.JSONDecodeError, AttributeError):
             # Fallback: display raw text, no changes section
             if _violation_banner:
@@ -1074,8 +1154,35 @@ class SetupBuilderMixin:
                 self._btn_apply_ai_setup.setVisible(False)
             return
 
+        # Build an engineering-validation-failed banner (distinct, red) when the
+        # AI retry did not resolve the engineering contradiction.
+        _eng_banner = ""
+        if _eng_validation_failed:
+            _eng_banner = _format_engineering_validation_banner(_eng_validation_errors)
+
         # Build a validation-errors banner when the server-side validator flagged issues.
         _validation_banner = _format_validation_errors_banner(_validation_errors)
+
+        # Build a compact diagnosis summary when the backend diagnosis is present.
+        _diagnosis_html = ""
+        if _diagnosis:
+            _dom   = _diagnosis.get("dominant_problem") or "—"
+            _btm   = _diagnosis.get("bottoming_band") or "—"
+            _ws    = _diagnosis.get("wheelspin_band") or "—"
+            _gbx   = _diagnosis.get("gearbox_flag") or "none"
+            _conf  = _diagnosis.get("location_confidence") or "—"
+            _diagnosis_html = (
+                "<div style='background:#1A2A1A; border:1px solid #3A5A3A; "
+                "border-radius:4px; padding:6px 10px; margin-bottom:6px; "
+                "color:#88BB88; font-size:11px;'>"
+                "<b style='color:#8BC34A;'>App diagnosis:</b>&nbsp;"
+                f"<b>{_dom}</b>"
+                f" &nbsp;|&nbsp; bottoming: {_btm}"
+                f" &nbsp;|&nbsp; wheelspin: {_ws}"
+                f" &nbsp;|&nbsp; gearbox: {_gbx}"
+                f" &nbsp;|&nbsp; track-model confidence: {_conf}"
+                "</div>"
+            )
 
         # Store parsed fields so the apply button can use them
         self._last_setup_ai_fields = {
@@ -1085,13 +1192,20 @@ class SetupBuilderMixin:
         if hasattr(self, "_btn_apply_ai_setup"):
             self._btn_apply_ai_setup.setVisible(bool(self._last_setup_ai_fields))
 
-        # Build HTML: analysis block + highlighted changes checklist
+        # Build HTML: engineering banner (highest priority) + diagnosis + event
+        # restriction banner + validation warnings + analysis block + changes
         card = "background:#1C2A3A; border-radius:6px; padding:10px; margin-bottom:8px;"
         chg_hdr = "background:#2A3A1C; border-left:4px solid #8BC34A; border-radius:4px; " \
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
-        html = _violation_banner + _validation_banner + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
+        html = (
+            _eng_banner
+            + _diagnosis_html
+            + _violation_banner
+            + _validation_banner
+            + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
+        )
 
         if changes:
             html += f"<div style='{chg_hdr}'>" \
@@ -1140,12 +1254,18 @@ class SetupBuilderMixin:
         if config_id:
             try:
                 from data.setup_history import save_entry
+                # Use the labels snapshot captured from the controls before they
+                # were reset.  These reflect what the user rated on the PREVIOUS
+                # result (or the first-ever run defaults if this is the first result).
+                # driver_feedback: prefer the feeling text; fall back to rating word.
+                _hist_feedback = feeling or _prev_rating_text or ""
                 save_entry(config_id, car, track, {
                     "type": entry_type,
                     "feeling": feeling or "",
                     "analysis": analysis,
                     "changes": changes,
-                })
+                }, labels=_prev_hist_labels if _prev_hist_labels else None,
+                   driver_feedback=_hist_feedback)
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 

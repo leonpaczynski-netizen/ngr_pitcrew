@@ -15,6 +15,13 @@ from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
 from strategy.setup_ranges import resolve_ranges
+from strategy.setup_diagnosis import (
+    PERSONAL_DRIVER_TUNING_MODEL,
+    DRIVER_HARD_CONSTRAINTS,
+    build_setup_diagnosis,
+    validate_setup_engineering,
+    format_diagnosis_for_prompt,
+)
 from ui.gt7_data import build_track_context
 
 # Setup-tuning categories that can be locked by event rules. Must match the
@@ -94,6 +101,8 @@ def _valid_ranges_block(car_name: str) -> str:
         "car, including aero (aero_front / aero_rear downforce) — recommend aero "
         "changes when they help:\n"
         f"{body}\n"
+        "  brake_bias sign convention: negative = more front braking, "
+        "positive = more rear braking (GT7 scale −5 … +5).\n"
     )
 
 # ---------------------------------------------------------------------------
@@ -830,8 +839,15 @@ class DrivingAdvisor:
         allowed_tuning: "list[str] | None" = None, tuning_locked: bool = False,
         compound: str = "", corner_issues_summary: str = "",
         prior_outcomes: "list[dict] | None" = None,
+        diagnosis: "dict | None" = None,
     ) -> str:
-        """Return a JSON string: {"analysis": str, "changes": [{setting,from,to,why}]}."""
+        """Return a JSON string: {"analysis": str, "changes": [{setting,from,to,why}]}.
+
+        New optional param:
+          diagnosis: pre-computed build_setup_diagnosis dict; computed internally if None.
+        engineering_validation_failed and engineering_validation_errors keys are added
+        to the returned JSON when the engineering validator fires after a single retry.
+        """
         api_key = self._config.get("anthropic", {}).get("api_key", "")
         if not api_key.strip():
             return ("No Anthropic API key set. "
@@ -841,6 +857,15 @@ class DrivingAdvisor:
         if not recent:
             return "Not enough laps recorded yet. Drive a few laps first."
 
+        # Pre-compute diagnosis so it can be injected into the prompt and reused
+        # for engineering validation without re-deriving twice.
+        _event_ctx = getattr(self, "_event_ctx", {})
+        if diagnosis is None:
+            try:
+                diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, None)
+            except Exception:
+                diagnosis = {}
+
         history_str = self._get_history_context()
         prompt = self._build_setup_prompt(recent, setup_dict, history_str,
                                           car_name=car_name, car_specs=car_specs or {},
@@ -848,7 +873,8 @@ class DrivingAdvisor:
                                           tuning_locked=tuning_locked,
                                           compound=compound,
                                           corner_issues_summary=corner_issues_summary,
-                                          prior_outcomes=prior_outcomes)
+                                          prior_outcomes=prior_outcomes,
+                                          diagnosis=diagnosis)
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
             _response_text = call_api(prompt, api_key, max_tokens=1500,
@@ -895,8 +921,7 @@ class DrivingAdvisor:
                     _data, car_name, allowed_tuning, _locked, setup_dict
                 )
                 # C3a: strip locked-field changes from changes + setup_fields so the
-                # Apply button can never write a locked value.  The violation is already
-                # recorded in validation_errors.
+                # Apply button can never write a locked value.
                 if _locked:
                     _data["changes"] = [
                         _c for _c in (_data.get("changes") or [])
@@ -906,6 +931,80 @@ class DrivingAdvisor:
                         _k: _v for _k, _v in (_data.get("setup_fields") or {}).items()
                         if _k not in _locked
                     }
+
+                # Engineering validation + single regenerate
+                try:
+                    _ranges = resolve_ranges(car_name)
+                    _eng_errors = validate_setup_engineering(
+                        _data, diagnosis, setup_dict, _ranges, _event_ctx,
+                        car_name=car_name,
+                    )
+                    if _eng_errors:
+                        # Build a correction prompt and retry once
+                        _correction = (
+                            "\n\n## Engineering Validation Failure\n"
+                            + "\n".join(f"- {e}" for e in _eng_errors)
+                            + "\nCorrect ALL listed issues; do not repeat them."
+                        )
+                        _retry_prompt = prompt + _correction
+                        try:
+                            _retry_text = call_api(
+                                _retry_prompt, api_key, max_tokens=1500,
+                                feature="Setup Advice (retry)",
+                                structured_payload={"lap_count": len(recent),
+                                                    "car": car_name,
+                                                    "has_setup": bool(setup_dict),
+                                                    "retry": True},
+                                model=self._config.get("anthropic", {}).get("model") or None,
+                                car_id=self._car_id_ref[0], track=_track_da,
+                            )
+                            _retry_data = _json.loads(_retry_text)
+                            # Re-normalise
+                            _rr_ch = _retry_data.get("changes") or []
+                            _rr_sf = _retry_data.get("setup_fields") or {}
+                            if isinstance(_rr_ch, list) and _rr_ch:
+                                _retry_data["changes"] = _normalise_changes(_rr_ch, _rr_sf, car_name)
+                                _rr_nsf: dict = {}
+                                for _ch2 in _retry_data["changes"]:
+                                    _f2 = _ch2.get("field")
+                                    _tc2 = _ch2.get("to_clamped")
+                                    if _f2 and isinstance(_tc2, (int, float)):
+                                        _rr_nsf[_f2] = _tc2
+                                _retry_data["setup_fields"] = _rr_nsf
+                            _retry_data = _validate_setup_response(
+                                _retry_data, car_name, allowed_tuning, _locked, setup_dict
+                            )
+                            if _locked:
+                                _retry_data["changes"] = [
+                                    _c for _c in (_retry_data.get("changes") or [])
+                                    if _c.get("field") not in _locked
+                                ]
+                                _retry_data["setup_fields"] = {
+                                    _k: _v for _k, _v in (_retry_data.get("setup_fields") or {}).items()
+                                    if _k not in _locked
+                                }
+                            # Re-validate engineering on retry result
+                            _retry_eng = validate_setup_engineering(
+                                _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
+                                car_name=car_name,
+                            )
+                            if _retry_eng:
+                                # Still failing — surface but return
+                                _retry_data["engineering_validation_failed"] = True
+                                _retry_data["engineering_validation_errors"] = _retry_eng
+                            if diagnosis:
+                                _retry_data["diagnosis"] = diagnosis
+                            _data = _retry_data
+                        except Exception:
+                            # Retry failed (API error, parse error, etc.) — keep original
+                            # but mark engineering validation failed
+                            _data["engineering_validation_failed"] = True
+                            _data["engineering_validation_errors"] = _eng_errors
+                    if diagnosis:
+                        _data["diagnosis"] = diagnosis
+                except Exception:
+                    pass  # Engineering validation must not break the response path
+
                 _response_text = _json.dumps(_data, ensure_ascii=False)
             except Exception:
                 pass  # If normalisation/validation fails, return the original text unchanged
@@ -920,11 +1019,17 @@ class DrivingAdvisor:
         allowed_tuning: "list[str] | None" = None, tuning_locked: bool = False,
         compound: str = "",
         prior_outcomes: "list[dict] | None" = None,
+        diagnosis: "dict | None" = None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
         Always uses full telemetry. If *feeling* is provided it is included alongside
         telemetry — never sent alone. Uses up to *n_laps* most recent laps from the recorder.
+
+        New optional param:
+          diagnosis: pre-computed build_setup_diagnosis dict; computed internally if None.
+        engineering_validation_failed and engineering_validation_errors keys are added
+        to the returned JSON when the engineering validator fires after a single retry.
         """
         api_key = self._config.get("anthropic", {}).get("api_key", "")
         if not api_key.strip():
@@ -935,6 +1040,15 @@ class DrivingAdvisor:
         if not recent:
             return "Not enough laps recorded yet. Drive a few laps first."
 
+        # Pre-compute diagnosis so it can be injected into the prompt and reused
+        # for engineering validation without re-deriving twice.
+        _event_ctx = getattr(self, "_event_ctx", {})
+        if diagnosis is None:
+            try:
+                diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, feeling)
+            except Exception:
+                diagnosis = {}
+
         history_str = self._get_history_context()
         prompt = self._build_combined_prompt(
             recent, setup_dict, history_str,
@@ -943,6 +1057,7 @@ class DrivingAdvisor:
             allowed_tuning=allowed_tuning, tuning_locked=tuning_locked,
             compound=compound,
             prior_outcomes=prior_outcomes,
+            diagnosis=diagnosis,
         )
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
@@ -994,8 +1109,7 @@ class DrivingAdvisor:
                     _data, car_name, allowed_tuning, _locked, setup_dict
                 )
                 # C3a: strip locked-field changes from changes + setup_fields so the
-                # Apply button can never write a locked value.  The violation is already
-                # recorded in validation_errors.
+                # Apply button can never write a locked value.
                 if _locked:
                     _data["changes"] = [
                         _c for _c in (_data.get("changes") or [])
@@ -1005,6 +1119,75 @@ class DrivingAdvisor:
                         _k: _v for _k, _v in (_data.get("setup_fields") or {}).items()
                         if _k not in _locked
                     }
+
+                # Engineering validation + single regenerate
+                try:
+                    _ranges = resolve_ranges(car_name)
+                    _eng_errors = validate_setup_engineering(
+                        _data, diagnosis, setup_dict, _ranges, _event_ctx,
+                        car_name=car_name,
+                    )
+                    if _eng_errors:
+                        _correction = (
+                            "\n\n## Engineering Validation Failure\n"
+                            + "\n".join(f"- {e}" for e in _eng_errors)
+                            + "\nCorrect ALL listed issues; do not repeat them."
+                        )
+                        _retry_prompt = prompt + _correction
+                        try:
+                            _retry_text = call_api(
+                                _retry_prompt, api_key, max_tokens=1500,
+                                feature="Combined Setup (retry)",
+                                structured_payload={"lap_count": len(recent),
+                                                    "car": car_name,
+                                                    "has_setup": bool(setup_dict),
+                                                    "has_feeling": bool(feeling),
+                                                    "retry": True},
+                                model=self._config.get("anthropic", {}).get("model") or None,
+                                car_id=self._car_id_ref[0], track=_track_da,
+                            )
+                            _retry_data = _json.loads(_retry_text)
+                            _rr_ch = _retry_data.get("changes") or []
+                            _rr_sf = _retry_data.get("setup_fields") or {}
+                            if isinstance(_rr_ch, list) and _rr_ch:
+                                _retry_data["changes"] = _normalise_changes(_rr_ch, _rr_sf, car_name)
+                                _rr_nsf: dict = {}
+                                for _ch2 in _retry_data["changes"]:
+                                    _f2 = _ch2.get("field")
+                                    _tc2 = _ch2.get("to_clamped")
+                                    if _f2 and isinstance(_tc2, (int, float)):
+                                        _rr_nsf[_f2] = _tc2
+                                _retry_data["setup_fields"] = _rr_nsf
+                            _retry_data = _validate_setup_response(
+                                _retry_data, car_name, allowed_tuning, _locked, setup_dict
+                            )
+                            if _locked:
+                                _retry_data["changes"] = [
+                                    _c for _c in (_retry_data.get("changes") or [])
+                                    if _c.get("field") not in _locked
+                                ]
+                                _retry_data["setup_fields"] = {
+                                    _k: _v for _k, _v in (_retry_data.get("setup_fields") or {}).items()
+                                    if _k not in _locked
+                                }
+                            _retry_eng = validate_setup_engineering(
+                                _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
+                                car_name=car_name,
+                            )
+                            if _retry_eng:
+                                _retry_data["engineering_validation_failed"] = True
+                                _retry_data["engineering_validation_errors"] = _retry_eng
+                            if diagnosis:
+                                _retry_data["diagnosis"] = diagnosis
+                            _data = _retry_data
+                        except Exception:
+                            _data["engineering_validation_failed"] = True
+                            _data["engineering_validation_errors"] = _eng_errors
+                    if diagnosis:
+                        _data["diagnosis"] = diagnosis
+                except Exception:
+                    pass  # Engineering validation must not break the response path
+
                 _response_text = _json.dumps(_data, ensure_ascii=False)
             except Exception:
                 pass  # If normalisation/validation fails, return the original text unchanged
@@ -1099,10 +1282,13 @@ class DrivingAdvisor:
         race_type = evt.get("race_type", "")
         laps = evt.get("laps", 0)
         duration = evt.get("duration_mins", 0)
+        # Favour timed representation: a timed race may also carry a laps value
+        # (e.g. when laps_in_race was estimated), but race_type=="timed" takes priority.
         if race_type == "timed":
             lines.append(f"Race: {duration} minutes, Timed Race")
         elif laps:
-            lines.append(f"Race: {laps} laps, Lap Race")
+            lap_word = "lap" if int(laps) == 1 else "laps"
+            lines.append(f"Race: {laps} {lap_word}, Lap Race")
         tyre_wear = float(evt.get("tyre_wear", 1.0))
         fuel_mult = float(evt.get("fuel_mult", 1.0))
         if tyre_wear != 1.0 or fuel_mult != 1.0:
@@ -1576,6 +1762,7 @@ If location-based patterns show clustering, name the type of corner (braking/fas
         corner_issues_summary: str = "",
         live_position=None,
         prior_outcomes: "list[dict] | None" = None,
+        diagnosis: "dict | None" = None,
     ) -> str:
         car_specs = car_specs or {}
         avg_lockups  = mean(l.lock_up_count   for l in laps)
@@ -1625,6 +1812,15 @@ If location-based patterns show clustering, name the type of corner (braking/fas
             setup=setup,
         )
 
+        # Compute diagnosis if not supplied
+        _event_ctx = getattr(self, "_event_ctx", {})
+        if diagnosis is None:
+            try:
+                diagnosis = build_setup_diagnosis(laps, setup, car_name, _event_ctx, None)
+            except Exception:
+                diagnosis = {}
+        diagnosis_block = format_diagnosis_for_prompt(diagnosis) if diagnosis else ""
+
         setup_block    = format_setup_for_prompt(setup)
         gt7_ref        = load_gt7_reference()
         header         = self._car_track_header(car_name, car_specs)
@@ -1649,6 +1845,8 @@ If location-based patterns show clustering, name the type of corner (braking/fas
 {gt7_ref}
 
 ---
+{PERSONAL_DRIVER_TUNING_MODEL}
+{DRIVER_HARD_CONSTRAINTS}
 {chr(10) + header + chr(10) if header else ""}{chr(10) + compound_line + chr(10) if compound_line else ""}{tuning_block}Analyse the driver's telemetry and current car setup. Give 2–4 specific setup changes
 tailored to the driver's known style from the knowledge base above.
 Use the driver's personal setup order (stabilise braking first, then front response, etc.)
@@ -1663,7 +1861,7 @@ Metric definitions:
 - snap throttle [calculated]: abrupt 0→100% throttle in < 100 ms — triggers wheelspin and yaw
 - peak lateral G [estimated]: speed × yaw_rate / 9.81 — proxy for cornering intensity
 
-## Telemetry summary ({len(laps)} laps)
+{diagnosis_block + chr(10) if diagnosis_block else ""}## Telemetry summary ({len(laps)} laps)
 Average lock-ups per lap [calculated]:           {avg_lockups:.1f}
 Average wheelspin events per lap [calculated]:   {avg_spins:.1f}
 Average oversteer events per lap [calculated]:   {avg_os_total:.1f}  ({avg_os_ton:.1f} throttle-on, {avg_os_entry:.1f} entry)
@@ -1708,7 +1906,10 @@ issue_classification values MUST be one of: setup-limited | driver-input-limited
   "setup_fields": {{"springs_rear": 3.75}},
   "validation_targets": {{"bottoming_events_per_lap": "reduce by 25-30%", "wheelspin_events_per_lap": "reduce or become less concentrated", "braking_stability": "must remain stable", "driver_feedback": "rear should feel calmer"}},
   "do_not_change_reasoning": ["No brake bias change because braking is stable", "No ride height change because ride height is already at the valid maximum"],
-  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}}
+  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}},
+  "driver_feel_match": {{"supported_by_telemetry": true, "explanation": "Driver reports floaty front; aero_front is near minimum — telemetry-supported."}},
+  "engineering_diagnosis": {{"aero_platform": "front near-min with floaty feel", "ride_height": "not primary issue", "traction": "wheelspin low", "gearbox": "preserve", "braking": "stable"}},
+  "preserve_settings": ["brake_bias", "transmission_max_speed_kmh"]
 }}
 In setup_fields include ONLY the fields being changed, with numeric values (not strings).
 In changes, "field" MUST be the exact canonical key from the setup_fields list above."""
@@ -1810,6 +2011,7 @@ In changes, "field" MUST be the exact canonical param key (e.g. arb_front, cambe
         corner_issues_summary: str = "",
         live_position=None,
         prior_outcomes: "list[dict] | None" = None,
+        diagnosis: "dict | None" = None,
     ) -> str:
         """Unified setup-analysis prompt: always includes telemetry; optionally adds feeling."""
         car_specs = car_specs or {}
@@ -1889,6 +2091,15 @@ Cross-reference the telemetry — if data contradicts the feeling (e.g. driver s
 but lock-ups dominate), call it out and target the telemetry-confirmed issue.
 If a corner number is mentioned, target that type of corner (slow/fast/braking zone)."""
 
+        # Compute diagnosis if not supplied (use feeling for driver feel parsing)
+        _event_ctx = getattr(self, "_event_ctx", {})
+        if diagnosis is None:
+            try:
+                diagnosis = build_setup_diagnosis(laps, setup, car_name, _event_ctx, feeling)
+            except Exception:
+                diagnosis = {}
+        diagnosis_block = format_diagnosis_for_prompt(diagnosis) if diagnosis else ""
+
         setup_block    = format_setup_for_prompt(setup)
         gt7_ref        = load_gt7_reference()
         header         = self._car_track_header(car_name, car_specs)
@@ -1913,6 +2124,8 @@ If a corner number is mentioned, target that type of corner (slow/fast/braking z
 {gt7_ref}
 
 ---
+{PERSONAL_DRIVER_TUNING_MODEL}
+{DRIVER_HARD_CONSTRAINTS}
 {chr(10) + header + chr(10) if header else ""}{chr(10) + compound_line + chr(10) if compound_line else ""}{tuning_block}Analyse the driver's telemetry and current car setup. Give 2–4 specific setup changes
 tailored to the driver's known style from the knowledge base above.
 Use the driver's personal setup priority order (stabilise braking first, then front response, etc.)
@@ -1926,7 +2139,7 @@ Metric definitions:
 - snap throttle [calculated]: abrupt 0→100% throttle in < 100 ms — triggers wheelspin and yaw
 - peak lateral G [estimated]: speed × yaw_rate / 9.81 — proxy for cornering intensity
 
-## Telemetry summary ({len(laps)} laps)
+{diagnosis_block + chr(10) if diagnosis_block else ""}## Telemetry summary ({len(laps)} laps)
 Average lock-ups per lap [calculated]:           {avg_lockups:.1f}
 Average wheelspin events per lap [calculated]:   {avg_spins:.1f}
 Average oversteer events per lap [calculated]:   {avg_os_total:.1f}  ({avg_os_ton:.1f} throttle-on, {avg_os_entry:.1f} entry)
@@ -1971,7 +2184,10 @@ issue_classification values MUST be one of: setup-limited | driver-input-limited
   "setup_fields": {{"springs_rear": 3.75}},
   "validation_targets": {{"bottoming_events_per_lap": "reduce by 25-30%", "wheelspin_events_per_lap": "reduce or become less concentrated", "braking_stability": "must remain stable", "driver_feedback": "rear should feel calmer"}},
   "do_not_change_reasoning": ["No brake bias change because braking is stable", "No ride height change because ride height is already at the valid maximum"],
-  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}}
+  "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}},
+  "driver_feel_match": {{"supported_by_telemetry": true, "explanation": "Driver reports floaty front; aero_front is near minimum — telemetry-supported."}},
+  "engineering_diagnosis": {{"aero_platform": "front near-min with floaty feel", "ride_height": "not primary issue", "traction": "wheelspin low", "gearbox": "preserve", "braking": "stable"}},
+  "preserve_settings": ["brake_bias", "transmission_max_speed_kmh"]
 }}
 In setup_fields include ONLY the fields being changed, with numeric values (not strings).
 In changes, "field" MUST be the exact canonical key from the setup_fields list above."""

@@ -32,11 +32,21 @@ def _save_all(data: dict) -> None:
     )
 
 
+# Fixed label vocabulary for setup history entries
+VALID_LABELS = frozenset({
+    "liked", "hated", "neutral",
+    "applied", "not_applied",
+    "improved", "made_worse",
+})
+
+
 def save_entry(
     config_id: str,
     car: str,
     track: str,
     entry: dict,
+    labels: "list[str] | None" = None,
+    driver_feedback: str = "",
 ) -> None:
     """Append one history entry for this config_id.
 
@@ -50,11 +60,23 @@ def save_entry(
       analysis     : str (summary text from advisor)
       changes      : list of {"setting", "from", "to", "why"} dicts
       feeling      : str (driver description, for feeling_fix type)
+
+    New optional params (backward-compatible):
+      labels         : list of label strings from VALID_LABELS (any invalid labels silently dropped)
+      driver_feedback: free-text driver outcome description (empty = not provided)
     """
     if not config_id:
         return
     entry = dict(entry)
     entry["ts"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    # Attach labels (filter to valid vocabulary)
+    if labels:
+        valid = [l for l in labels if l in VALID_LABELS]
+        if valid:
+            entry["labels"] = valid
+    # Attach driver feedback
+    if driver_feedback:
+        entry["driver_feedback"] = driver_feedback.strip()
     with _lock:
         data = _load_all()
         cfg = data.setdefault(config_id, {"car": car, "track": track, "entries": []})
@@ -80,10 +102,19 @@ def format_for_prompt(config_id: str, max_entries: int = 5) -> str:
 
     Injected into strategy and analysis prompts so the AI is aware of every
     setup change that has already been tried or recommended.
+
+    Entries with 'labels' key:
+      - "hated" label -> emits "DRIVER HATED: <settings/changes>" + directive not to repeat.
+      - "liked" label -> emits "DRIVER LIKED: ..." + directive to prefer similar changes.
+    A single "For this driver, subjective confidence is a performance variable." line is
+    emitted once (at the top) whenever any labelled entry exists.
     """
     entries = load_history(config_id, max_entries)
     if not entries:
         return ""
+
+    # Check whether any entry carries labels — if so, emit subjective-confidence note.
+    _any_labelled = any(e.get("labels") for e in entries)
 
     lines: list[str] = [
         "## Setup history for this car/track/race-length (most recent last)",
@@ -91,9 +122,16 @@ def format_for_prompt(config_id: str, max_entries: int = 5) -> str:
         "Do not re-recommend changes already listed here unless reverting them "
         "is now the correct call, and explain why.",
     ]
+    if _any_labelled:
+        lines.append(
+            "For this driver, subjective confidence is a performance variable."
+        )
+
     for e in entries:
         ts = e.get("ts", "")[:16].replace("T", " ")
         t = e.get("type", "unknown")
+        entry_labels = e.get("labels") or []
+        driver_feedback = e.get("driver_feedback", "")
 
         if t in ("build_qual", "build_race"):
             session = "Qualifying" if t == "build_qual" else "Race"
@@ -153,5 +191,47 @@ def format_for_prompt(config_id: str, max_entries: int = 5) -> str:
                     f"  → {ch.get('setting','?')}: {ch.get('from','?')} → {ch.get('to','?')}"
                     + (f"  ({ch.get('why','')})" if ch.get("why") else "")
                 )
+
+        # Label directives — appended after the entry body
+        if "hated" in entry_labels:
+            # Summarise what was hated: prefer changes, fall back to type
+            _hated_desc = ""
+            _ch_list = e.get("changes") or []
+            if _ch_list:
+                _hated_desc = "; ".join(
+                    f"{c.get('setting','?')} → {c.get('to','?')}"
+                    for c in _ch_list[:4]
+                )
+            if not _hated_desc and e.get("setup_snapshot"):
+                _snap = e["setup_snapshot"]
+                _hated_desc = f"build snapshot springs {_snap.get('springs_front','?')}/{_snap.get('springs_rear','?')} Hz"
+            lines.append(
+                f"  DRIVER HATED: {_hated_desc or 'this setup/change'}"
+            )
+            lines.append(
+                "  Do not repeat changes previously marked as hated unless "
+                "the situation is materially different."
+            )
+        elif "liked" in entry_labels:
+            _liked_desc = ""
+            _ch_list = e.get("changes") or []
+            if _ch_list:
+                _liked_desc = "; ".join(
+                    f"{c.get('setting','?')} → {c.get('to','?')}"
+                    for c in _ch_list[:4]
+                )
+            if not _liked_desc and e.get("setup_snapshot"):
+                _snap = e["setup_snapshot"]
+                _liked_desc = f"build snapshot springs {_snap.get('springs_front','?')}/{_snap.get('springs_rear','?')} Hz"
+            lines.append(
+                f"  DRIVER LIKED: {_liked_desc or 'this setup/change'}"
+            )
+            lines.append(
+                "  Prefer changes that historically improved this driver's "
+                "confidence and telemetry."
+            )
+
+        if driver_feedback:
+            lines.append(f"  Driver feedback: \"{driver_feedback[:200]}\"")
 
     return "\n".join(lines)
