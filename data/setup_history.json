@@ -850,5 +850,233 @@
         "ts": "2026-06-27T10:24:35"
       }
     ]
+  },
+  "a3b02ec7fa": {
+    "car": "Porsche 911 RSR (991) '17",
+    "track": "Fuji Speedway",
+    "entries": [
+      {
+        "type": "build_race",
+        "session_type": "Race Setup",
+        "setup_snapshot": {
+          "name": "Porsche 911 RSR (991) '17",
+          "car": "Porsche 911 RSR (991) '17",
+          "setup_label": "R NGR Porsche Cup Rd7 1",
+          "track": "Fuji Speedway",
+          "condition": "Dry",
+          "setup_type": "Race Setup",
+          "ride_height_front": 70,
+          "ride_height_rear": 74,
+          "springs_front": 3.8,
+          "springs_rear": 4.1,
+          "dampers_front_comp": 32,
+          "dampers_front_ext": 44,
+          "dampers_rear_comp": 34,
+          "dampers_rear_ext": 42,
+          "arb_front": 5,
+          "arb_rear": 4,
+          "camber_front": 3.2,
+          "camber_rear": 2.6,
+          "toe_front": -0.1,
+          "toe_rear": 0.2,
+          "aero_front": 350,
+          "aero_rear": 480,
+          "lsd_initial": 15,
+          "lsd_accel": 25,
+          "lsd_decel": 10,
+          "lsd_front_initial": 0,
+          "lsd_front_accel": 0,
+          "lsd_front_decel": 0,
+          "tvcd": "None",
+          "torque_distribution_rear": 50,
+          "brake_bias_front": -1,
+          "ballast_kg": 0.0,
+          "ballast_position": 0,
+          "power_restrictor": 100.0,
+          "tyre_front": "Racing Medium",
+          "tyre_rear": "Racing Medium",
+          "ecu_ingame": "Stock",
+          "ecu_ingame_output": 100.0,
+          "transmission_type": "Stock",
+          "nitrous_type": "None",
+          "nitrous_output": 0.0,
+          "notes": "",
+          "ecu_recommendation": "Stock ECU, full power (509 bhp installed). No power regulation for this event, so power_restrictor set to 100 %. Note: the 911 RSR is a mid-engine (MR) Gr.3 car despite its road-car rear-engine heritage — tuned accordingly.",
+          "bop_race": false,
+          "gear_ratios": [
+            3.15,
+            2.3,
+            1.8,
+            1.47,
+            1.24,
+            1.05
+          ],
+          "final_drive": 3.55,
+          "transmission_max_speed_kmh": 300,
+          "captured_at": "2026-07-02 16:23"
+        },
+        "reasoning": "IMPORTANT CONTEXT: The seed context references Daytona Road Course, but the event brief specifies Fuji Speedway (~4.6 km, long main straight ~1.5 km). I have tuned for Fuji as the stated event track. Track geometry is seed-level only; corner data is hedged. The 911 RSR is treated as an MR Gr.3 car per the knowledge base, with rear-stability-first, front-led trail-braking bias. Race optimised for 8x wear: conservation over one-lap pace.\n\naero_rear set to 480 (high end for Gr.3)\nExpected lap-time effect: Slight straight-line drag cost on Fuji's long main straight, but strong gain through the fast sector-1/sector-3 sweepers and stable high-speed braking into T1.\nExpected tyre-wear effect: Reduces rear overheating and wheelspin-driven wear by planting the rear — directly serves the driver's priority to reduce rear overheating over an 8x-wear stint.\nExpected fuel effect: Small increase in fuel burn at peak throttle on the straight due to drag; acceptable for the stability return.\nExpected braking-stability effect: Major positive — gives the rear axle the aero support the driver needs to trail-brake deep into T1 without the tail going light.\nConfidence: high — matches the driver's aero philosophy (stabilise rear with aero, recover rotation mechanically).\nValidation method: Trail-brake into the T1 hairpin over 3 laps; confirm the rear stays planted on brake release.\nTelemetry indicator: Rear tyre temp spread and yaw rate on entry to T1.\n\naero_front set to 350\nExpected lap-time effect: Sharpens turn-in for the fast direction changes; kept below rear to preserve a front-positive but not oversteer-prone balance.\nExpected tyre-wear effect: Balanced front load protects the front-left from overheating in long right-handers.\nExpected fuel effect: Negligible independent effect.\nExpected braking-stability effect: Improves front bite under trail braking without inducing lift-off oversteer.\nConfidence: high.\nValidation method: Check turn-in response into the 100R and hairpin; nose should respond immediately.\nTelemetry indicator: Front-left tyre temp and steering-angle vs yaw response.\n\nride_height_front 70 / rear 74\nExpected lap-time effect: Low platform lowers CoG for faster sweepers; mild rake (4 mm) aids turn-in while keeping rear stable.\nExpected tyre-wear effect: Neutral; controlled rake avoids rear unload that causes uneven wear.\nExpected fuel effect: Negligible.\nExpected braking-stability effect: Conservative rake keeps rear planted under heavy braking into T1.\nConfidence: medium — Fuji is fairly flat, so low ride height is safe.\nValidation method: Confirm no bottoming through the fast esses and under braking.\nTelemetry indicator: Ride-height trace / bottoming events.\n\nsprings_front 3.80 / rear 4.10 Hz\nExpected lap-time effect: Firm Gr.3 platform gives precise front response and controlled body movement for a smooth high-speed circuit.\nExpected tyre-wear effect: Rear slightly stiffer than front keeps the platform stable, limiting rear overheating; not so stiff as to skate.\nExpected fuel effect: None.\nExpected braking-stability effect: Controlled platform supports consistent trail braking.\nConfidence: medium — within validated Gr.3 range (3.0–5.3 Hz).\nValidation method: Assess mid-corner stability in Fuji's fast sweepers.\nTelemetry indicator: Suspension travel symmetry front to rear.\n\narb_front 5 / rear 4\nExpected lap-time effect: Front-biased roll stiffness gives sharp turn-in; softer rear bar aids traction and rear compliance.\nExpected tyre-wear effect: Softer rear bar reduces rear tyre stress and wheelspin — key for 8x wear.\nExpected fuel effect: None.\nExpected braking-stability effect: Softer rear bar keeps rear planted on brake release, matching driver preference.\nConfidence: high — matches FR/RR ARB guidance and driver philosophy.\nValidation method: Feel for rear stability on entry to medium-speed corners.\nTelemetry indicator: Rear lateral load transfer / yaw on entry.\n\ndampers 32/44 F, 34/42 R\nExpected lap-time effect: Compression below extension per cardinal rule; controlled dive and squat for stable transitions.\nExpected tyre-wear effect: Moderate settings avoid harshness that spikes tyre temps.\nExpected fuel effect: None.\nExpected braking-stability effect: Front extension (44) prevents nose springing back too fast after brake release; rear extension kept moderate (42, below front) to avoid lift-off oversteer.\nConfidence: medium.\nValidation method: Release brake mid-corner and check the rear does not snap.\nTelemetry indicator: Rear damper velocity on brake release.\n\ncamber 3.2 F / 2.6 R\nExpected lap-time effect: Racing-slick range camber maximises cornering grip in the sweepers.\nExpected tyre-wear effect: Front-left protection — moderate front camber avoids inner-shoulder overheating over the stint.\nExpected fuel effect: None.\nExpected braking-stability effect: Good contact patch under trail braking.\nConfidence: medium — within RS/RM slick range.\nValidation method: Check front-left temp spread after 4 laps.\nTelemetry indicator: Inner vs outer tyre temperature delta.\n\ntoe_front -0.10 / toe_rear 0.20\nExpected lap-time effect: Mild front toe-out sharpens turn-in; generous rear toe-in trades a little rotation for exit stability.\nExpected tyre-wear effect: Rear toe-in reduces rear scrub and overheating; modest front toe-out limits front-left scrub.\nExpected fuel effect: Negligible.\nExpected braking-stability effect: Rear toe-in is a primary stabiliser under trail braking and on brake release — directly serves driver's predictable-rear need.\nConfidence: high.\nValidation method: Confirm high-speed stability through the fast esses.\nTelemetry indicator: Rear yaw stability on turn-in and lift.\n\nlsd_initial 15 / accel 25 / decel 10\nExpected lap-time effect: Moderate lock gives progressive drive off slow corners without power understeer.\nExpected tyre-wear effect: Controlled accel lock (25) limits inside-wheel spin, protecting rear tyres at 8x wear.\nExpected fuel effect: Less wheelspin = marginally better fuel efficiency.\nExpected braking-stability effect: Decel 10 keeps the rear composed during downshifts and trail braking without ploughing.\nConfidence: high — matches Porsche/RR LSD guidance (initial 12–20, accel 20–35, decel 5–15).\nValidation method: Feed throttle out of the hairpin; check for progressive, spin-free drive.\nTelemetry indicator: Rear wheel-speed differential under power.\n\nbrake_bias -1 (slightly forward)\nExpected lap-time effect: Minor; prioritises stability over ultimate rotation.\nExpected tyre-wear effect: Reduces rear lock-up and front-left flat-spotting risk.\nExpected fuel effect: None.\nExpected braking-stability effect: Slight front bias is the driver's stated preference — prevents rear locking during deep trail braking into T1.\nConfidence: high.\nValidation method: Heavy braking into the T1 hairpin; confirm no rear lock.\nTelemetry indicator: Rear wheel lock / brake-pressure trace.\n\nfinal_drive 3.550, max_speed 300, gears [3.15,2.30,1.80,1.47,1.24,1.05]\nExpected lap-time effect: Top gear tuned to reach ~300 km/h near redline on Fuji's ~1.5 km straight; slightly longer 2nd controls wheelspin out of the hairpin.\nExpected tyre-wear effect: Longer low gears reduce wheelspin, protecting rear tyres.\nExpected fuel effect: Race shift point (7900) short-shifts for fuel and tyre saving over the stint.\nExpected braking-stability effect: Longer gearing gives smoother torque delivery, aiding stable entry after downshifts.\nConfidence: medium — final drive should be validated against actual top speed reached on the straight.\nValidation method: Confirm the car tops out just before redline at the end of the main straight; adjust final drive if hitting limiter early or short of 300.\nTelemetry indicator: Speed and RPM trace at the braking point for T1.\n\nSTRATEGY NOTE (50 min, 8x wear): High wear multiplier makes tyre conservation dominant. Racing Medium is the balanced race compound — enough pace with a heat window more forgiving than RS, and far better life than RS at 8x. Plan around a 2-stop on RM with a 1-lap fuel buffer; lift-and-coast into T1 and the hairpin to save fuel and front-left load. Avoid RS unless qualifying only. Keep aero high for rear-tyre consistency — the drag cost is outweighed by reduced degradation across the race distance.",
+        "shift_rpm": 8300,
+        "shift_rpm_qual": 8300,
+        "shift_rpm_race": 7900,
+        "ecu_recommendation": "Stock ECU, full power (509 bhp installed). No power regulation for this event, so power_restrictor set to 100 %. Note: the 911 RSR is a mid-engine (MR) Gr.3 car despite its road-car rear-engine heritage — tuned accordingly.",
+        "ts": "2026-07-02T16:23:16"
+      },
+      {
+        "type": "build_qual",
+        "session_type": "Qualifying Setup",
+        "setup_snapshot": {
+          "name": "Porsche 911 RSR (991) '17",
+          "car": "Porsche 911 RSR (991) '17",
+          "setup_label": "Q NGR Porsche Cup Rd7 1",
+          "track": "Fuji Speedway",
+          "condition": "Dry",
+          "setup_type": "Qualifying Setup",
+          "ride_height_front": 60,
+          "ride_height_rear": 65,
+          "springs_front": 4.2,
+          "springs_rear": 4.4,
+          "dampers_front_comp": 32,
+          "dampers_front_ext": 44,
+          "dampers_rear_comp": 34,
+          "dampers_rear_ext": 42,
+          "arb_front": 5,
+          "arb_rear": 4,
+          "camber_front": 3.2,
+          "camber_rear": 2.6,
+          "toe_front": -0.1,
+          "toe_rear": 0.2,
+          "aero_front": 400,
+          "aero_rear": 560,
+          "lsd_initial": 14,
+          "lsd_accel": 25,
+          "lsd_decel": 10,
+          "lsd_front_initial": 0,
+          "lsd_front_accel": 0,
+          "lsd_front_decel": 0,
+          "tvcd": "None",
+          "torque_distribution_rear": 50,
+          "brake_bias_front": -1,
+          "ballast_kg": 0.0,
+          "ballast_position": 0,
+          "power_restrictor": 100.0,
+          "tyre_front": "Racing Soft",
+          "tyre_rear": "Racing Soft",
+          "ecu_ingame": "Stock",
+          "ecu_ingame_output": 100.0,
+          "transmission_type": "Stock",
+          "nitrous_type": "None",
+          "nitrous_output": 0.0,
+          "notes": "",
+          "ecu_recommendation": "Stock ECU fitted; no power target specified, so Power Restrictor stays at 100% (full 509 bhp).",
+          "bop_race": false,
+          "gear_ratios": [
+            3.15,
+            2.28,
+            1.78,
+            1.45,
+            1.2,
+            1.0
+          ],
+          "final_drive": 3.7,
+          "transmission_max_speed_kmh": 295,
+          "captured_at": "2026-07-02 16:33"
+        },
+        "reasoning": "NOTE ON TRACK DATA: This setup targets Fuji Speedway (F1 layout, long main straight) as named in the session brief. The 'Track Seed Context' block describes Daytona Road Course and is unvalidated seed data only; where it conflicts with the Fuji brief I have prioritised the named session target. Corner-specific claims are hedged because no reviewed track model exists. This is a QUALIFYING setup — maximum single-lap pace, rotation, and warm-up prioritised; tyre wear at 8x is deliberately ignored per the single-lap brief.\n\naero_rear set to 560 (and aero_front 400)\nExpected lap-time effect: The Porsche RSR is a rear-engine Gr.3 with adjustable wings. Fuji has a very long main straight so I kept rear aero in the lower-middle of the range to limit drag while keeping enough high-speed rear support through the fast sector-2 esses (typically fast, based on layout knowledge). Front 400 gives sharp turn-in the driver wants without starving the rear. Net expected gain vs max-aero is straight-line speed, small cost in the fast corners.\nExpected tyre-wear effect: Moderate; lower rear aero slightly reduces rear thermal load but wear is not a concern for a single lap.\nExpected fuel effect: Lower drag reduces peak-throttle burn slightly on the long straight — minor for qualifying.\nExpected braking-stability effect: 560 rear vs 400 front gives a rear-supported platform under trail braking, matching the driver's need for a planted rear when brake pressure is released.\nConfidence: medium — Fuji rewards low drag but exact optimum needs telemetry.\nValidation method: Compare trap speed at end of main straight and rear stability into Turn 1 heavy braking.\nTelemetry indicator: Top speed on main straight and rear tyre-load trace under braking.\n\nride_height_front 60 / rear 65\nExpected lap-time effect: Low ride height lowers CoG for a rear-heavy RR car, sharpening response and high-speed stability on Fuji's flowing sector. Mild rake (rear 5mm higher) preserves front bite without lifting the nose.\nExpected tyre-wear effect: Negligible over one lap.\nExpected fuel effect: None meaningful.\nExpected braking-stability effect: Low front height plants the nose under braking; conservative rake avoids the rear-lifting that causes rear locking the driver dislikes.\nConfidence: high — standard Gr.3 qualifying direction.\nValidation method: Check for bottoming over the main-straight kink and start/finish undulation.\nTelemetry indicator: Suspension travel min values; ride-height contact warnings.\n\nsprings_front 4.20 / rear 4.40 Hz\nExpected lap-time effect: Firm Gr.3 qualifying platform gives precise response for a single hot lap; rear slightly stiffer than front per GT7 design, controlling the rear mass of the RR layout.\nExpected tyre-wear effect: Stiffer springs increase load spikes but irrelevant for one lap.\nExpected fuel effect: None.\nExpected braking-stability effect: Controlled platform limits dive and keeps the contact patch consistent during trail braking.\nConfidence: medium-high — within validated Gr.3 3.0-5.0 Hz window.\nValidation method: Feel for harshness over Fuji kerbs at the final chicane.\nTelemetry indicator: Vertical body movement and pitch trace.\n\ndampers front 32c/44e, rear 34c/42e\nExpected lap-time effect: Compression kept below extension (cardinal rule respected). Slightly higher front extension controls nose rebound after brake release so the front settles cleanly for turn-in.\nExpected tyre-wear effect: Minimal single-lap impact.\nExpected fuel effect: None.\nExpected braking-stability effect: Rear extension deliberately kept moderate (42, below front) to avoid the fast rear rebound that triggers lift-off oversteer — critical for this driver's brake-release rotation. Front compression resists dive.\nConfidence: medium — transient behaviour needs on-track confirmation.\nValidation method: Release brake mid-corner and check the rear does not snap.\nTelemetry indicator: Rear suspension velocity on brake release; yaw rate spike.\n\narb_front 5 / rear 4\nExpected lap-time effect: FR-style split (front one step stiffer) sharpens turn-in for the RR car which naturally wants to rotate; keeps the setup planted rather than nervous.\nExpected tyre-wear effect: Slightly higher front-outer load; not a concern for one lap.\nExpected fuel effect: None.\nExpected braking-stability effect: Softer rear bar keeps rear compliant and stable under trail braking, preventing the rear stepping out on entry.\nConfidence: high — matches KB RR baseline (5/4).\nValidation method: Check mid-corner balance in the fast esses — should be neutral, not loose.\nTelemetry indicator: Front vs rear slip-angle balance mid-corner.\n\ncamber_front 3.2 / rear 2.6\nExpected lap-time effect: Racing-slick range camber maximises lateral grip in Fuji's long fast corners for peak single-lap pace.\nExpected tyre-wear effect: Higher camber loads inner shoulder; irrelevant for a qualifying lap.\nExpected fuel effect: None.\nExpected braking-stability effect: Front 3.2 gives strong front bite under trail braking without over-scrubbing straight-line braking.\nConfidence: medium-high — within validated slick 3.0-4.0 F / 2.5-3.5 R range, kept conservative for warm-up.\nValidation method: Check tyre-temp spread across the tread after the lap.\nTelemetry indicator: Tyre surface temperature inner vs outer.\n\ntoe_front -0.10 / rear 0.20\nExpected lap-time effect: Mild front toe-out aids the sharp turn-in the driver wants; rear toe-in of 0.20 adds high-speed stability for Fuji's fast sections and the long straight.\nExpected tyre-wear effect: Some scrub from toe, negligible for one lap.\nExpected fuel effect: Tiny drag from toe; ignore for qualifying.\nExpected braking-stability effect: Rear toe-in is the key stabiliser preventing lift-off oversteer and rear waywardness under trail braking — deliberately generous per driver preference even in qualifying.\nConfidence: high — directly matches KB philosophy.\nValidation method: Straight-line stability at 250+ km/h and rear behaviour on brake release.\nTelemetry indicator: Rear slip angle at high speed; steering-correction frequency.\n\nlsd_initial 14 / accel 25 / decel 10\nExpected lap-time effect: Moderate initial torque steadies the RR rear during small throttle changes; accel 25 locks progressively for strong exit drive from Fuji's slow final chicane onto the straight.\nExpected tyre-wear effect: Not a concern single-lap; accel kept moderate to avoid wheelspin.\nExpected fuel effect: None.\nExpected braking-stability effect: Decel 10 gives enough rear lock to keep the axle composed during downshifts and trail braking without a locking pirouette.\nConfidence: high — within Porsche/RR validated ranges (12-20 / 20-35 / 5-15).\nValidation method: Check rear on corner exit for snap and on entry for locking.\nTelemetry indicator: Rear-wheel speed difference on throttle and on downshift.\n\nbrake_bias -1\nExpected lap-time effect: Slight front bias gives the driver braking-stability-first confidence to brake deep into Turn 1.\nExpected tyre-wear effect: Negligible single-lap.\nExpected fuel effect: None.\nExpected braking-stability effect: Front bias prevents the rear-heavy RSR from locking rears under heavy braking, directly serving the trail-braking style.\nConfidence: high — matches KB brake preference.\nValidation method: Threshold-brake into the final chicane and check for rear lock.\nTelemetry indicator: Individual wheel lock/rotation under braking.\n\nshift_rpm_qual 8300 / shift_rpm_race 8100\nExpected lap-time effect: Qual shift just past peak power maximises acceleration onto the long straight. Race shift slightly lower for consistency (still relevant if used) but this is a qualifying setup.\nExpected tyre-wear effect: Lower race RPM reduces wheelspin risk out of slow corners.\nExpected fuel effect: Earlier race shift saves marginal fuel.\nExpected braking-stability effect: Neutral.\nConfidence: medium — exact peak-power RPM for the RSR flat-six estimated near 8300-8400.\nValidation method: Watch the power/RPM readout for where acceleration tails off.\nTelemetry indicator: Longitudinal G vs RPM in top of each gear.\n\nfinal_drive 3.700 / max_speed 295 / gears [3.15,2.28,1.78,1.45,1.20,1.00]\nExpected lap-time effect: Slightly shortened final drive gives strong exit drive from Fuji's slow corners while top gear is tuned to reach ~290-295 km/h at redline down the long main straight — avoiding running out of gear before the braking zone.\nExpected tyre-wear effect: Longer 2nd controls wheelspin per driver preference; minimal single-lap impact.\nExpected fuel effect: Matched gearing avoids over-revving and wasteful burn on the straight.\nExpected braking-stability effect: Closer top ratios keep downshifts smooth into heavy braking zones, aiding rear composure.\nConfidence: medium — final drive should be validated against actual trap speed on Fuji's straight; adjust max-speed slider if car hits limiter early or short.\nValidation method: Confirm the car reaches near redline in top just before the Turn 1 braking marker; adjust final drive if it hits limiter too early.\nTelemetry indicator: RPM and speed at end of main straight.",
+        "shift_rpm": 8300,
+        "shift_rpm_qual": 8300,
+        "shift_rpm_race": 8100,
+        "ecu_recommendation": "Stock ECU fitted; no power target specified, so Power Restrictor stays at 100% (full 509 bhp).",
+        "ts": "2026-07-02T16:33:41"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Too much understeer\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine",
+        "analysis": "The car shows entry and mid-corner understeer (push wide) combined with power-on rear looseness — 9 wheelspin events/lap and 3.6 snap-throttle applications confirm poor exit traction, while zero lock-ups and stable braking confirm the front is not the braking problem. The dominant chain is: front won't rotate on entry, so the driver over-inputs and then gets snappy rear on throttle. Braking is stable, so we address front response and exit traction, not brake bias.",
+        "changes": [
+          {
+            "setting": "Front Anti-Roll Bar",
+            "field": "arb_front",
+            "from": "5",
+            "to": "4",
+            "why": "Softening the front ARB frees up front mechanical grip on entry and mid-corner to reduce the push-wide understeer the driver reports.",
+            "expected_validation": "front bites earlier on turn-in and mid-corner push reduces without unsettling the rear",
+            "to_clamped": 4
+          },
+          {
+            "setting": "Front Toe",
+            "field": "toe_front",
+            "from": "-0.10",
+            "to": "-0.15",
+            "why": "A touch more front toe-out sharpens turn-in response to combat the entry understeer, staying conservative to avoid nervousness.",
+            "expected_validation": "sharper nose response on entry, driver stops needing to force the car in",
+            "to_clamped": -0.15
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "25",
+            "to": "20",
+            "why": "High accel lock combined with the RSR's rear weight bias is driving the 9 wheelspin/3.6 snap-throttle events; lowering it makes power delivery more progressive and cuts the power-on rear looseness.",
+            "expected_validation": "wheelspin events drop and rear feels more planted as throttle is fed in",
+            "to_clamped": 20
+          },
+          {
+            "setting": "Rear Toe",
+            "field": "toe_rear",
+            "from": "0.20",
+            "to": "0.25",
+            "why": "A small increase in rear toe-in stabilises the rear on throttle pickup, matching the driver's preference for a supported, predictable rear over exit.",
+            "expected_validation": "rear stays composed as throttle is applied; less snap on corner exit",
+            "to_clamped": 0.25
+          }
+        ],
+        "ts": "2026-07-02T19:11:15"
+      },
+      {
+        "type": "analyse_setup",
+        "feeling": "--- Driver Feedback ---\nCorner Entry: Too much understeer\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\n\n--- Driver Feedback ---\nCorner Entry: Too much understeer\nMid-Corner: Pushes wide\nExit Stability: Rear loose on throttle\nRear Under Braking: Stable\nTyre Condition: Fine\nNotes: car feels light and floaty in the front end",
+        "analysis": "Telemetry confirms the driver's feel: zero lock-ups and stable braking, but heavy front-end understeer (light/floaty front, pushes wide) paired with severe exit wheelspin (22 events/lap, 11.2 snap-throttle apps). This is the classic RSR chain — the rear-heavy Porsche won't rotate up front, so the driver over-inputs and then breaks the rear loose on power. Braking is not the problem, so we target front response first, then exit traction, per the driver's setup priority order. The 'light and floaty front' comment plus 0.2 bottoming/lap points to a front platform that unloads too easily under trail braking — we add a touch of front aero to plant the nose.",
+        "changes": [
+          {
+            "setting": "Front Aero (downforce)",
+            "field": "aero_front",
+            "from": "350",
+            "to": "390",
+            "why": "The driver reports a light, floaty front that pushes wide; adding front downforce plants the nose for turn-in and mid-corner bite without stripping the rear stability the RSR needs at 271 km/h.",
+            "expected_validation": "front feels planted on turn-in, push-wide reduces, no new rear nervousness",
+            "to_clamped": 390
+          },
+          {
+            "setting": "Front Anti-Roll Bar",
+            "field": "arb_front",
+            "from": "4",
+            "to": "3",
+            "why": "Softening the front ARB frees front mechanical grip on entry and mid-corner to directly attack the understeer the driver reports.",
+            "expected_validation": "front bites earlier, driver stops needing to force the car into the corner",
+            "to_clamped": 3
+          },
+          {
+            "setting": "LSD Acceleration",
+            "field": "lsd_accel",
+            "from": "20",
+            "to": "16",
+            "why": "22 wheelspin and 11.2 snap-throttle events/lap combined with the RSR's rear weight bias show the accel lock is grabbing too hard on exit; lowering it makes power delivery progressive and cuts the power-on looseness.",
+            "expected_validation": "wheelspin events drop and rear stays planted as throttle is fed in",
+            "to_clamped": 16
+          },
+          {
+            "setting": "Rear Toe",
+            "field": "toe_rear",
+            "from": "0.25",
+            "to": "0.30",
+            "why": "A small increase in rear toe-in supports the rear on throttle pickup, matching the driver's preference for a stable, predictable rear on exit.",
+            "expected_validation": "rear feels more supported when picking up throttle, less loose on exit",
+            "to_clamped": 0.3
+          }
+        ],
+        "ts": "2026-07-02T19:26:06"
+      }
+    ]
   }
 }

@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite on branch `integration/setup-brain-strategy-overhaul`, merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`; awaiting runtime UAT before merge to `master`). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew. See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
+> Last updated: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite, merged to `master` via `integration/setup-brain-strategy-overhaul` — merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`. Merged after automated tests passed; **runtime UAT still pending** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master` at merge commit `7254835`). See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
 > Read PROJECT_STATE.md first, then this file, before touching any code.
 >
 > Note: detailed session notes for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`. Groups 26–38 and the lettered groups (A/B/C/D/E) + Qualifying Mode are summarised at the end of this file under "Groups 26–38 + Lettered Groups (Strategy / Race-Engineer / Setup Overhaul)".

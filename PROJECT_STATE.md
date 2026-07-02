@@ -8,7 +8,7 @@ Do not add new features until core data flow, persistence, telemetry storage, an
 ## Repository / Build Status (2026-07-02)
 
 - **Full test suite:** 3984 pass / 6 skip / 0 fail (6 skips require a Qt display).
-- **Git:** integration branch **`integration/setup-brain-strategy-overhaul`** (off latest `master`) merges the two shipped feature branches `feature/setup-diagnosis-engine` and `feature/strategy-outcome-comparison`. Both merges were clean (no conflicts). Not yet merged to `master` — awaiting runtime UAT. Remote: **https://github.com/leonpaczynski-netizen/ngr_pitcrew**.
+- **Git:** the two shipped feature branches `feature/setup-diagnosis-engine` and `feature/strategy-outcome-comparison` were combined on `integration/setup-brain-strategy-overhaul` (clean, no conflicts) and **merged to `master`** (merge commit `7254835`, pushed to `origin/master`). Merged after automated tests passed; **runtime UAT still pending**. Remote: **https://github.com/leonpaczynski-netizen/ngr_pitcrew**.
 - **Secrets:** `api_key.txt` and `config.json` are gitignored — not tracked, not pushed.
 - **Latest work (Setup Brain + Strategy Outcome — documented in MASTER_TESTING_REGISTER.md):**
   - **Setup Brain:** app-side deterministic setup diagnosis BEFORE the AI call (`strategy/setup_diagnosis.py`), driver tuning-model + hard-constraints injected at the top of every setup prompt, post-AI engineering validation with regenerate-once-then-surface, low-confidence track-model guard, structured liked/hated setup-history learning. Bug fixes: springs shown in **Hz** (was N/mm); timed race renders as **"N minutes, Timed Race"** (was "1 laps, Lap Race").

@@ -1,7 +1,7 @@
 # Current Claude Handoff
 
 ## Current Objective
-**Integration: Setup Brain + Strategy Outcome.** Branch `integration/setup-brain-strategy-overhaul` (off latest `master`) merges `feature/setup-diagnosis-engine` then `feature/strategy-outcome-comparison` — both clean, no conflicts. **Full combined suite: 3984 pass / 6 skip / 0 fail.** NOT yet merged to `master` — the next step is **runtime UAT** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md); merge to `master` only after UAT passes.
+**Integration: Setup Brain + Strategy Outcome — merged to `master`.** `integration/setup-brain-strategy-overhaul` combined `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison` (clean, no conflicts) and was **merged to `master`** (merge commit `7254835`, pushed). **Full combined suite: 3984 pass / 6 skip / 0 fail.** Merged after automated tests passed; **runtime UAT still pending** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md) — run it against `master` and log results.
 
 Delivered (see MASTER_TESTING_REGISTER.md "Integration — Setup Brain + Strategy Outcome"):
 - **Setup Brain:** deterministic app-side diagnosis before the AI call (`strategy/setup_diagnosis.py`), driver tuning-model + hard-constraints at the top of every setup prompt, post-AI engineering validation with regenerate-once-then-surface, low-confidence track-model guard, structured liked/hated setup-history learning. Bug fixes: springs in **Hz** (was N/mm); timed race renders "N minutes, Timed Race" (was "1 laps, Lap Race"). Proven on the Porsche RSR '17 / Fuji regression: ride-height blocked, aero prioritised, gearbox preserved. Tests: `tests/test_group38_setup_diagnosis.py` (74).
@@ -9,7 +9,7 @@ Delivered (see MASTER_TESTING_REGISTER.md "Integration — Setup Brain + Strateg
 
 **Deferred (carried forward):** setup history key omits track layout (config_id re-hash risk); from-scratch "Build Setup with AI" lacks the post-AI validation loop (no telemetry at build time); strategy finishing-position prediction needs rival telemetry.
 
-**Blocker before merge to `master`:** runtime UAT not yet executed. No automated-test blockers.
+**Remaining step:** runtime UAT (against `master`) not yet executed. No automated-test blockers.
 
 ---
 
