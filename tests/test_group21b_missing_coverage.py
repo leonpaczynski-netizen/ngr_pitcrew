@@ -99,7 +99,7 @@ class TestBuildReferencePathExcludesPitLap:
             return call_count[0] == 3
 
         with patch("data.track_calibration.detect_pit_lap_raw", side_effect=fake_detect):
-            build_reference_path(session)
+            build_reference_path(session, pit_detection_enabled=True)
 
         pit_lap = session.laps[2]  # lap index 2 = lap_number 3
         assert pit_lap.is_pit_lap is True, (
@@ -115,7 +115,7 @@ class TestBuildReferencePathExcludesPitLap:
             return call_count[0] == 3
 
         with patch("data.track_calibration.detect_pit_lap_raw", side_effect=fake_detect):
-            result = build_reference_path(session)
+            result = build_reference_path(session, pit_detection_enabled=True)
 
         pit_warnings = [w for w in result.warnings if "pit" in w.lower()]
         assert pit_warnings, (

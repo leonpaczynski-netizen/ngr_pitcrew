@@ -499,6 +499,83 @@ def get_workflow_error_message(error_key: str) -> str:
     return _WORKFLOW_ERROR_MESSAGES.get(error_key, f"Unknown error state: {error_key}")
 
 
+# ---------------------------------------------------------------------------
+# DEF-17U-UAT-007 — accurate per-lap status labels and build diagnostics
+# ---------------------------------------------------------------------------
+
+#: Human-readable display labels for each CalibrationLapQuality string value.
+#: Partial start/stop laps are shown distinctly from generic "Rejected" and are
+#: NEVER labelled "Pit-in" (GT7 has no reliable pit-lane signal).
+_CAL_LAP_QUALITY_LABELS: dict[str, str] = {
+    "recording":      "Recording",
+    "usable":         "Usable",
+    "low_confidence": "Low confidence",
+    "rejected":       "Rejected",
+    "partial_start":  "Partial (start)",
+    "partial_stop":   "Partial (stop)",
+}
+
+
+def cal_lap_quality_label(quality: str) -> str:
+    """Return the display label for a lap-quality string (safe fallback)."""
+    return _CAL_LAP_QUALITY_LABELS.get(str(quality), str(quality).replace("_", " ").title())
+
+
+def format_no_usable_laps(result) -> str:
+    """Return an accurate, count-based 'no usable laps' message (DEF-17U-UAT-007).
+
+    Replaces the old blanket "All calibration laps appear to be pit-in laps …
+    Drive a clean lap first." wording, which was wrong for clean Time Trial data.
+    The message reports how many complete candidate laps existed, the breakdown of
+    why laps were excluded, and whether pit detection actually ran.
+
+    Accepts any object exposing the CalibrationBuildResult fields (duck-typed).
+    """
+    usable      = int(getattr(result, "usable_lap_count",         0))
+    rejected    = int(getattr(result, "rejected_lap_count",       0))
+    low_conf    = int(getattr(result, "low_confidence_lap_count", 0))
+    p_start     = int(getattr(result, "partial_start_count",      0))
+    p_stop      = int(getattr(result, "partial_stop_count",       0))
+    few_samples = int(getattr(result, "rejected_too_few_samples", 0))
+    path_out    = int(getattr(result, "rejected_path_length",     0))
+    pit_on      = bool(getattr(result, "pit_detection_enabled",   False))
+
+    # "Complete candidate" laps are the non-partial laps that were assessed.
+    complete_candidates = usable + rejected + low_conf
+
+    lines: list[str] = []
+    lines.append("No usable laps captured for the reference path.")
+    lines.append("")
+    lines.append(f"Complete candidate laps: {complete_candidates}")
+    lines.append(
+        f"  • rejected — too few samples: {few_samples}"
+    )
+    lines.append(
+        f"  • rejected — path-length outlier: {path_out}"
+    )
+    lines.append(
+        f"Excluded partial laps: {p_start} partial-start, {p_stop} partial-stop "
+        "(short first/last laps — not counted as rejected)"
+    )
+    lines.append(f"Pit detection: {'on' if pit_on else 'off'}")
+    lines.append("")
+
+    # Recommendation — never recommend "drive a clean lap first" when complete
+    # candidate laps existed but were rejected by a classifier.
+    if complete_candidates > 0:
+        lines.append(
+            "Recommended: complete laps were captured but rejected. "
+            "Check the lap-detection / build diagnostics above rather than re-driving."
+        )
+    else:
+        lines.append(
+            "Recommended: drive at least 2 complete laps "
+            "(cross the start/finish line so each full lap is captured), then Build again."
+        )
+
+    return "\n".join(lines)
+
+
 def get_calibration_button_states(
     ctrl_state: str,
     has_track: bool,
@@ -918,12 +995,19 @@ def format_build_failure_diagnostics(result, session=None) -> str:
     low_conf = int(getattr(result, "low_confidence_lap_count", 0))
     total    = usable + rejected + low_conf
 
+    # DEF-17U-UAT-007: precise, count-based breakdown fields.
+    p_start     = int(getattr(result, "partial_start_count",      0))
+    p_stop      = int(getattr(result, "partial_stop_count",       0))
+    few_samples = int(getattr(result, "rejected_too_few_samples", 0))
+    path_out    = int(getattr(result, "rejected_path_length",     0))
+    pit_on      = bool(getattr(result, "pit_detection_enabled",   False))
+
     # Lap quality breakdown
     lines.append("")
     if total > 0:
         lines.append(
             f"Lap quality:  {usable} usable  /  {rejected} rejected  /  "
-            f"{low_conf} low-confidence  ({total} total captured)"
+            f"{low_conf} low-confidence  ({total} complete candidates)"
         )
     elif session is not None and not getattr(session, "laps", None):
         lines.append("No lap segments were captured in this session.")
@@ -932,14 +1016,30 @@ def format_build_failure_diagnostics(result, session=None) -> str:
             "to create complete lap boundaries."
         )
     else:
-        lines.append("No laps assessed (session data unavailable).")
+        lines.append(f"Lap quality:  {usable} usable  /  {rejected} rejected  /  "
+                     f"{low_conf} low-confidence  ({total} complete candidates)")
 
-    # Per-lap rejection details from build warnings
+    # DEF-17U-UAT-007: rejected sub-reasons and partial-lap accounting.
+    if few_samples or path_out:
+        lines.append(
+            f"Rejected breakdown: {few_samples} too few samples, "
+            f"{path_out} path-length outlier"
+        )
+    if p_start or p_stop:
+        lines.append(
+            f"Excluded partial laps: {p_start} partial-start, {p_stop} partial-stop  "
+            "(short first/last laps — not counted in the rejected total)"
+        )
+    lines.append(f"Pit detection: {'on' if pit_on else 'off'}")
+
+    # Per-lap rejection details from build warnings.  When pit detection is off,
+    # any pit-related warning is suppressed so a false "pit-in" reason never shows.
     warnings = list(getattr(result, "warnings", None) or [])
-    if warnings:
+    warnings_display = warnings if pit_on else [w for w in warnings if "pit" not in w.lower()]
+    if warnings_display:
         lines.append("")
         lines.append("Rejection details:")
-        for w in warnings:
+        for w in warnings_display:
             lines.append(f"  • {w}")
 
     # Car ID
@@ -984,9 +1084,11 @@ def format_build_failure_diagnostics(result, session=None) -> str:
             "Recommended: Drive consistent laps at race pace. "
             "One very long or very short lap causes the others to be rejected as outliers."
         )
-        lines.append(
-            "Avoid pit stops or pauses mid-lap during calibration."
-        )
+        # Only mention pit stops when pit detection actually ran (DEF-17U-UAT-007).
+        if pit_on:
+            lines.append(
+                "Avoid pit stops or pauses mid-lap during calibration."
+            )
     elif usable == 1:
         lines.append(
             "Recommended: Drive 1 more clean lap. Minimum 2 usable laps are required."

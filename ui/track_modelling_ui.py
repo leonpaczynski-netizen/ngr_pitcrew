@@ -1240,17 +1240,21 @@ class TrackModellingMixin:
         result = ctrl.build_reference_path()
         self._tm_update_cal_buttons()
         self._tm_update_cal_status()
-        # Group 21B — show all-pit-laps warning prominently
-        pit_warns = [
-            w for w in (result.warnings or [])
-            if "pit" in w.lower() or "all calibration laps" in w.lower()
-        ]
-        if pit_warns and hasattr(self, "_tm_lbl_cal_status"):
-            warn_text = " | ".join(pit_warns)
-            self._tm_lbl_cal_status.setText(f"WARNING: {warn_text}")
-            self._tm_lbl_cal_status.setStyleSheet(
-                "color: #FF4444; font-size: 10px; font-weight: bold;"
-            )
+        # Group 21B — show all-pit-laps warning prominently, but ONLY when pit
+        # detection actually ran.  DEF-17U-UAT-007: with pit detection off (the
+        # default for Time Trial calibration) no pit warning may be surfaced, so
+        # clean laps are never mislabelled "pit-in".
+        if getattr(result, "pit_detection_enabled", False):
+            pit_warns = [
+                w for w in (result.warnings or [])
+                if "pit" in w.lower() or "all calibration laps" in w.lower()
+            ]
+            if pit_warns and hasattr(self, "_tm_lbl_cal_status"):
+                warn_text = " | ".join(pit_warns)
+                self._tm_lbl_cal_status.setText(f"WARNING: {warn_text}")
+                self._tm_lbl_cal_status.setStyleSheet(
+                    "color: #FF4444; font-size: 10px; font-weight: bold;"
+                )
         if result.success:
             self._tm_try_build_station_map()
         else:

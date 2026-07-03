@@ -1199,11 +1199,20 @@ def _build_no_usable_laps_errors(session: CalibrationSession) -> list[str]:
         usable   = sum(1 for r in qr_list if r.quality == CalibrationLapQuality.USABLE)
         rejected = sum(1 for r in qr_list if r.quality == CalibrationLapQuality.REJECTED)
         low_conf = sum(1 for r in qr_list if r.quality == CalibrationLapQuality.LOW_CONFIDENCE)
+        # DEF-17U-UAT-007: partial start/stop boundary laps are a distinct category
+        # (not rejected, not pit-in) and must be reported so the counts reconcile
+        # with the total captured.
+        partial = sum(
+            1 for r in qr_list
+            if r.quality in (CalibrationLapQuality.PARTIAL_START,
+                             CalibrationLapQuality.PARTIAL_STOP)
+        )
 
+        partial_note = f" / {partial} partial" if partial else ""
         errors: list[str] = [
             f"No usable calibration laps for segment detection: "
-            f"{usable} usable / {rejected} rejected / {low_conf} low-confidence "
-            f"of {total} captured."
+            f"{usable} usable / {rejected} rejected / {low_conf} low-confidence"
+            f"{partial_note} of {total} captured."
         ]
 
         for lap, qr in zip(session.laps, qr_list):

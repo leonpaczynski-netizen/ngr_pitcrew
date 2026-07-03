@@ -1883,3 +1883,27 @@ geometry and accepting it into the library.
 - `tests/test_group18a_track_truth_calibration.py` — 10 tests (wizard stages, illegal transitions, delegated build/accept)
 
 Full suite after Group 18A: **4053 pass / 6 skip / 0 fail.**
+
+---
+
+## DEF-17U-UAT-007 — Calibration Pit-In Detection Disabled by Default (2026-07-03)
+
+**Automatic pit-in classification is now disabled by default for calibration** because GT7
+provides no reliable pit-lane signal. `TelemetrySample.is_in_pit_lane` is always `None` (no
+per-sample pit-lane flag in the GT7 Custom UDP packet — see the calibration quality-rules and
+GT7-limitations notes above), so pit-in could only ever be *inferred* geometrically. That
+inference (`detect_pit_lap_raw()`, a contiguous XZ run > 60 m from the lap centroid for > 10 s)
+false-positived on normal GT7 **Time Trial** laps, wrongly rejecting clean laps and failing the
+reference-path build.
+
+**Change:** `build_reference_path(session, *, pit_detection_enabled=False)` — pit-in detection
+is **opt-in**. `detect_pit_lap_raw()` is only called, and "pit-in" wording only emitted, when a
+caller explicitly passes `pit_detection_enabled=True`. This means the `pit lane > 10%` rejection
+rule listed in the calibration quality table above is inactive unless pit detection is opted in.
+
+**Related partial-lap handling:** the same fix added `PARTIAL_START` / `PARTIAL_STOP`
+`CalibrationLapQuality` values so short first/last laps (captured when Start/Stop is pressed
+mid-lap) are recognised as partial slices — excluded from the build, not counted as rejected —
+instead of poisoning the session median or being mislabelled as outliers. The session median is
+computed from complete (non-partial) laps only. Full detail: `MASTER_TESTING_REGISTER.md`
+(DEF-17U-UAT-007) and `docs/TRACK_MODELLING_RUNTIME_UAT.md` (DEF-17U-UAT-007).
