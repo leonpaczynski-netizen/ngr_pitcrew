@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
+> Last updated: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
+> Prior: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 2 — StrategyContext** — canonical strategy-plan read model `data/strategy_context.py` owning stint plan / stops / fuel burn / `config_id` / degradation assumptions / tolerances, reading event/race rules from EventContext (never duplicating them); `StrategyPromptSnapshot` freezes a consistent event+strategy state for AI prompts; `docs/STRATEGY_CONTEXT_MIGRATION.md` registers every strategy-specific dependency; one low-risk consumer migrated (`_refresh_lap_bank` config_id ★). `config["strategy"]` retained as legacy compatibility. New tests `test_strategy_context.py` (53). **Full suite: 4226 pass / 6 skip / 0 fail.** See "State Consolidation 2 — StrategyContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 1 — EventContext** — canonical event/race read model `data/event_context.py` normalising the DB-event and `config["strategy"]` schemas; `docs/EVENT_CONTEXT_MIGRATION.md` registers every `config["strategy"]` dependency; one low-risk consumer migrated (`_refresh_telemetry_context`). `config["strategy"]` retained as legacy compatibility. New tests `test_event_context.py` (38). **Full suite: 4173 pass / 6 skip / 0 fail.** See "State Consolidation 1 — EventContext" at the end of this file.)
 > Prior: 2026-07-03 (**Product Consolidation Sprint** — audit + safe first-pass UI clean-up. New `docs/PRODUCT_CONSOLIDATION_AUDIT.md` + `ui/product_flow.py` (single-source tab roles / 13-step journey / `build_flow_state_summary()`); "Debug"→"Diagnostics" tab, ⚙ tool-tab markers, Track Modelling "5. Seed Geometry" / "Track Model Status" renames. No feature added, no backend removed, no tab reordered. New tests `test_consolidation_product_flow.py` (27). **Full suite: 4135 pass / 6 skip / 0 fail.** See "Product Consolidation Sprint" at the end of this file.)
@@ -4060,3 +4061,122 @@ AI-input consumers to frozen snapshots (`build_setup_advice_response` /
 threading EventContext + StrategyPromptSnapshot + SetupPromptSnapshot, proving
 prompts unchanged) and then surface the stale-setup indicator from
 `_last_setup_context`. **Recommended: TrackContext first.**
+
+---
+
+## State Consolidation 4 — TrackContext (2026-07-03)
+
+Fourth step of the target architecture from `docs/PRODUCT_CONSOLIDATION_AUDIT.md`
+(§7); follows State Consolidations 1–3 and targets **SSOT-2** ("track/layout
+split three ways"). Branch `state-consolidation-4-track-context` (from
+`state-consolidation-3-setup-context` @ `d9c6231`). Creates a canonical
+**TrackContext** read model owning *only* track/layout identity + model-artefact
+availability + status, keyed to `EventContext.change_hash`. **No track mapping
+feature added, no UI rebuilt, no tab reordered, no persistence format changed,
+no PTT/voice change, no Daytona geometry accuracy claims.** All legacy track
+seed/library/reference-path/station-map/resolver/calibration code is **retained
+unchanged.** Full suite after: **4361 pass / 6 skip / 0 fail** (68 new tests).
+
+### What was built
+- **`data/track_context.py` (NEW, pure Python — no PyQt6, no UI, no DB, no
+  network/AI, no file I/O)**:
+  - `TrackIdentity` — frozen; `track_location_id`/`layout_id` + display names +
+    `combined_id` (`<loc>__<lay>`, matching every per-layout file convention) +
+    `is_complete`.
+  - `TrackMapAvailability` — frozen; seed metadata / lap-length / corner-window /
+    sector / complex / **coordinate-geometry** availability + `seed_source`
+    (track_library/legacy_fallback/none) + reference path (with point count) /
+    calibration laps / station map (with station count) / reviewed model /
+    accepted model / lap offset. **Every flag echoes what the existing audits
+    said — True means "artefact exists / validator accepted", never "geometry
+    is accurate".**
+  - `TrackGeometryStatus` — frozen; `modelling_status` (resolver value wins,
+    seed fallback), `ai_ready`, resolver `resolution_status` +
+    `model_source_type`, `corners_expected`, seed/model lap lengths, and the
+    three Track Truth gates **echoed tri-state** (None = no validation run).
+  - `TrackAlignmentStatus` — frozen; `available` (requires an alignment-shaped
+    object — garbage never reads as a computed alignment), match status,
+    accepted (+at), lap delta, blocker/warning counts, corner position match.
+  - `TrackContextSource` — EMPTY / TRACK_MODELLING_UI / EVENT_CONTEXT /
+    LEGACY_STRATEGY / SEED_LIBRARY. Identity resolution priority: explicit TM
+    combo selection → EventContext ids → `config["strategy"]` ids → seed objects.
+  - `TrackContext` — the above + lap-offset status
+    (not_loaded/provisional_zero/calibrated/on_disk_not_loaded) + confidence +
+    `change_hash` (identity+availability+status **only** — event drift tracked
+    separately via `event_change_hash`). Staleness/mismatch helpers:
+    `matches_event` (**tri-state** — None when no comparable identity),
+    `mismatches_event` (True only on a possible-and-failing comparison),
+    `is_stale_for_event`, `can_attempt_live_mapping` (conservative: identity +
+    station map, says nothing about accuracy), `live_mapping_blockers()`.
+  - `TrackContextValidationResult` + `validate_track_context()` — keeps
+    `identity_warnings`/`identity_missing` separate from
+    `availability_warnings` (what's absent) and `staleness_warnings` (event
+    mismatch/drift). Warnings, never exceptions.
+  - `build_track_context(...)` — duck-typed over the results the **existing**
+    loaders already produce (`SeedAuditResult`, `TrackModelFileAudit`,
+    `TrackModelResolverResult`, `TrackModelAlignmentResult`,
+    `LapStartOffsetCalibration`, `TrackTruthValidationResult`, seed objects,
+    station map object or bare flag). Never raises; EMPTY on garbage.
+  - `flow_flags(ctx)` — **splat-safe** `ui.product_flow` bridge (returns only
+    accepted kwargs) composable with `event_context.flow_flags` via dict merge.
+- **`docs/TRACK_CONTEXT_MIGRATION.md` (NEW)** — the §7 SSOT audit: all 16 track
+  state items (selected track/layout, TM combo state, display names, seed
+  metadata/windows/coordinate map, reference path, station map, reviewed model,
+  accepted model, lap offset, alignment result, live map-matching identity,
+  Track Truth, modelling status) with current owner, files:lines, duplication
+  verdict and future owner; every file format (unchanged); migrated + deferred
+  consumers; stale-model / alignment / library / identity-fallback risks; next
+  sprint.
+- **`ui/track_modelling_ui.py`** — `_build_track_context()` helper (assembles
+  from combo ids + loaded seed layout + the same `audit_layout_seed` /
+  `audit_track_model_files` audits the tab already runs on layout change +
+  `_tm_station_map` / `_tm_alignment_result` / `_tm_offset_calibration` +
+  `_build_event_context()`; read-only; never raises). **Migrated**:
+  `_tm_refresh_track_truth_panel()` reads track/layout identity through
+  TrackContext and captures `self._last_track_context`. **Strictly
+  behaviour-preserving** — only a combo-sourced identity
+  (`TrackContextSource.TRACK_MODELLING_UI`) drives the panel, so an empty combo
+  selection keeps showing the empty state (the context's event/config fallback
+  is deliberately not used there).
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_track_context.py` (NEW) | 68 | identity resolution (**UI combos beat config**, builds from EventContext identity, from legacy strategy ids, seed-only, name-only weak identity, combined_id); availability (seed metadata/windows/count/source; **seed geometry absent stays False — Daytona-style honesty**; ref path ± / calibration laps / station map via flag AND via object / reviewed / accepted; all-false when nothing supplied); geometry status (seed modelling status, **resolver value wins**, tri-state truth gates None-when-absent and **echoed-False when validation blocked**); alignment (represented / unavailable / accepted / **garbage string not available**); lap offset (not_loaded / provisional_zero / calibrated / on_disk_not_loaded); change markers (identical→same; changes on identity/availability/alignment; **ignores event change — tracked via event_change_hash**; deterministic); staleness/mismatch (tri-state matches_event by ids, mismatch, **None when uncomparable**, display-name fallback, is_stale_for_event, live-mapping gate + blockers incl. no-identity); ownership boundary (no event/strategy/setup fields; event read only as change_hash; to_dict excludes them); robustness (garbage/None everything, validate on junk, **broken station_count() defensive**); validation separation (empty; missing layout = identity; missing data = availability; event mismatch = staleness; `.warnings` concatenation; **missing-geometry warning persists even when everything else is accepted**); serialisation + summary lines + **splat-safe flow_flags into build_flow_state_summary** + frozen immutability (ctx + all sub-structures); track_modelling source-scans (`_build_track_context` helper reads event ctx + volatile state + audits; truth panel uses ctx identity + captures `_last_track_context` + combo-source guard; **legacy combo→config fan-out intentionally unchanged**) |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4361/6/0)**.
+- TrackContext exists + covered by tests — **yes**.
+- EventContext / StrategyContext / SetupContext remain canonical owners of their state — **yes** (ownership-boundary tests enforce; TrackContext reads the event only as a key).
+- TrackContext owns only track/layout/map/corner/segment identity + availability state — **yes**.
+- Legacy track modelling, seed, reference path, station map, resolver, calibration code compatible — **yes (untouched; regression suite green)**.
+- `docs/TRACK_CONTEXT_MIGRATION.md` exists and is specific — **yes (16-item SSOT audit with file:line)**.
+- ≥1 low-risk read-only consumer migrated — **yes (`_tm_refresh_track_truth_panel` identity + `_last_track_context` capture)**.
+- No working feature removed; no tab reordered; no new track mapping feature; no PTT/voice change — **yes**.
+- No Daytona geometry accuracy claims — **yes (test-enforced: geometry stays unavailable, truth gates echo False, validation keeps warning)**.
+- Behaviour unchanged except safer/clearer track-state handling — **yes**.
+- Clear next-sprint recommendation — **yes (AI Snapshot Migration, or Home Dashboard Build; migration doc §8)**.
+
+### Manual UAT steps
+1. Open the ⚙ Track Modelling tab, select Daytona → Road Course: confirm the
+   Track Truth / Mapping panel shows exactly the same values as before
+   (Daytona still blocked — no seed geometry).
+2. Clear the layout selection (pick "— Select layout —"): confirm the truth
+   panel returns to its empty "—" state exactly as before.
+3. Build/load a station map and run alignment: confirm the alignment panel and
+   accept-button behaviour are unchanged.
+4. Confirm live map dot, calibration capture, segment detection, lap offset
+   buttons and all AI features behave exactly as before (none were migrated).
+
+### Next sprint
+**AI Snapshot Migration** — thread frozen `EventContext` +
+`StrategyPromptSnapshot` + `SetupPromptSnapshot` + a TrackContext snapshot into
+the AI-input paths (`_run_practice_analysis`, `_assemble_strategy_inputs`,
+`_run_ai_analysis`, `build_setup_advice_response`,
+`get_track_context_for_ai`), proving prompts byte-identical before/after, then
+surface the captured stale indicators (`_last_setup_context`,
+`_last_track_context`). Alternative first step: **Home Dashboard Build** —
+render the missing home/overview panel from
+`build_flow_state_summary(**{**event_flags, **track_flags, …})`, which now has
+real inputs from all four contexts.

@@ -189,3 +189,7 @@ Either:
 
 Recommended: **TrackContext first** (clean, additive, unblocks corner-aware setup
 and strategy context), then the AI-input snapshot migration.
+
+> **Update (State Consolidation 4):** TrackContext **landed** —
+> `data/track_context.py` + `docs/TRACK_CONTEXT_MIGRATION.md`. Next sprint is
+> the AI Snapshot Migration (or the Home Dashboard build) per that doc's §8.

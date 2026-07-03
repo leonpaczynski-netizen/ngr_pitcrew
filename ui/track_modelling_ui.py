@@ -939,6 +939,71 @@ class TrackModellingMixin:
         # Group 18A: refresh Track Truth / Mapping panel
         self._tm_refresh_track_truth_panel()
 
+    def _build_track_context(self):
+        """Canonical read model of the selected track/layout + model state.
+
+        State Consolidation 4: assembles the immutable TrackContext (see
+        ``data/track_context.py``) from state this tab already holds — the
+        combo selection, the loaded seed layout, the existing seed/file audits,
+        and the in-memory station map / alignment / lap-offset objects — keyed
+        to the active EventContext so track-vs-event mismatch and staleness are
+        detectable. Read-only: performs the same audits the tab already runs on
+        layout change; writes nothing. Never raises — returns an EMPTY-source
+        context on failure. Legacy files, loaders and attributes are unchanged.
+        """
+        try:
+            from data.track_context import build_track_context
+            loc_id = (getattr(getattr(self, "_tm_location_combo", None),
+                              "currentData", lambda: "")() or "").strip()
+            lay_id = (getattr(getattr(self, "_tm_layout_combo", None),
+                              "currentData", lambda: "")() or "").strip()
+
+            location_seed = None
+            layout_seed = None
+            _sr = getattr(self, "_tm_seed_result", None)
+            if _sr is not None and getattr(_sr, "success", False) and loc_id:
+                location_seed = get_selected_location(_sr, loc_id)
+                if lay_id:
+                    layout_seed = get_selected_layout(_sr, loc_id, lay_id)
+
+            seed_audit = None
+            file_audit = None
+            if loc_id and lay_id:
+                try:
+                    from data.track_intelligence import audit_layout_seed
+                    seed_audit = audit_layout_seed(layout_seed, loc_id, lay_id)
+                except Exception:
+                    seed_audit = None
+                try:
+                    from data.track_calibration import audit_track_model_files
+                    file_audit = audit_track_model_files(loc_id, lay_id)
+                except Exception:
+                    file_audit = None
+
+            event_ctx = None
+            if hasattr(self, "_build_event_context"):
+                try:
+                    event_ctx = self._build_event_context()
+                except Exception:
+                    event_ctx = None
+
+            return build_track_context(
+                selected_location_id=loc_id,
+                selected_layout_id=lay_id,
+                event_context=event_ctx,
+                strategy=self._config.get("strategy", {}) if hasattr(self, "_config") else None,
+                location_seed=location_seed,
+                layout_seed=layout_seed,
+                seed_audit=seed_audit,
+                file_audit=file_audit,
+                alignment=getattr(self, "_tm_alignment_result", None),
+                station_map=getattr(self, "_tm_station_map", None),
+                offset_calibration=getattr(self, "_tm_offset_calibration", None),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.track_context import empty_track_context
+            return empty_track_context()
+
     def _tm_clear_detail_panels(self) -> None:
         _muted = "color: #888; font-size: 11px;"
         for lbl in self._tm_fact_labels.values():
@@ -1916,8 +1981,20 @@ class TrackModellingMixin:
         format_track_truth_status to every _tm_truth_lbl_* widget.
         Safe to call when no track is selected — placeholder dict handles it.
         """
-        loc_id = (getattr(self._tm_location_combo, "currentData", lambda: "")() or "").strip()
-        lay_id = (getattr(self._tm_layout_combo, "currentData", lambda: "")() or "").strip()
+        # State Consolidation 4: track/layout identity is read through the
+        # canonical TrackContext instead of raw combo reads, and the context is
+        # captured so later sprints can surface staleness. Behaviour-preserving:
+        # only a combo-sourced identity is used (TrackContext also falls back to
+        # event/config ids, but this panel has always been driven by the combos
+        # alone — an empty selection must keep showing the empty state).
+        from data.track_context import TrackContextSource as _TCS
+        ctx = self._build_track_context()
+        self._last_track_context = ctx
+        if ctx.source == _TCS.TRACK_MODELLING_UI:
+            loc_id = ctx.identity.track_location_id
+            lay_id = ctx.identity.layout_id
+        else:
+            loc_id, lay_id = "", ""
 
         model      = None
         validation = None

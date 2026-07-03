@@ -17,6 +17,15 @@ Track Intelligence **does NOT own**:
 - Car setup state
 - Strategy or stint planning state
 
+> **State Consolidation 4 (2026-07-03):** the canonical *read model* for
+> "which track/layout is selected and what model data exists for it" is now
+> **`data/track_context.py` (TrackContext)** — see
+> `docs/TRACK_CONTEXT_MIGRATION.md`. Track Intelligence remains the owner of
+> the seed catalogue, loaders and audits; TrackContext consumes their results
+> (`SeedAuditResult`, resolver/alignment/file-audit objects) and adds identity
+> resolution, availability flags, change markers and staleness helpers. Nothing
+> in this document's loaders or schemas changed.
+
 ## Module Location
 
 ```
