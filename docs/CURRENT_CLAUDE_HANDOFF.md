@@ -1,6 +1,28 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Setup AI Validation Gates — pre-AI, telemetry, and post-AI validation safety layer for the Setup Brain — COMPLETE (2026-07-03).** Branch `feature/group-18a-track-truth-foundation` (commits `b7f1686` + `95eeb35`). **Acceptance suite: `tests/test_setup_ai_validation_gates.py` 109 pass / 0 skip; 329 pass across acceptance + setup-diagnosis + race-engineer.**
+
+**Why it exists:** the Setup Brain's AI prompt had good intelligence but the pipeline could still show invalid setups — wrong-track context (Fuji requested vs Mount Panorama injected), corrupted gearbox telemetry (287.3 km/h achieved vs 10.5 km/h theoretical max), out-of-range aero (`aero_front=0` against an effective 350–450 range), and ride-height at max with no bottoming proof. This layer blocks those *before the driver ever sees the setup*.
+
+**Architecture — three gates in `strategy/driving_advisor.py::build_combined_setup_response`:**
+- **Gate 1 (pre-AI):** `data/setup_prompt_validation.validate_setup_prompt_context` — track / layout / car identity + track-model confidence. On FAIL it **short-circuits without calling the AI** and returns a `setup_validation` payload. `seed_only_fallback` → PASS_WITH_WARNINGS (allow + warn), `not_ai_ready`/`missing`/`error` → FAIL. Track-truth result is resolved and passed so seed-only corner-geometry claims are suppressed.
+- **Gate 2 (telemetry):** `data/setup_telemetry_validation.assess_telemetry_sanity` + `build_telemetry_warning_block` — gearbox sanity (achieved >110% of theoretical = corrupted; ≤0 theoretical or <90% = degraded; constants `GEARBOX_CORRUPT_THRESHOLD=1.10`, `GEARBOX_DEGRADE_THRESHOLD=0.90`) and negative road-distance. A corrupted/degraded warning is injected into the prompt to preserve the gearbox. **Locked decision: corrupted telemetry does NOT hard-FAIL the whole setup** — it forces gearbox preservation and only BLOCKS if the AI changed a gearbox field; otherwise it is a WARNING and the rest of the setup can pass.
+- **Gate 3 (post-AI):** `data/setup_output_validation.validate_setup_output` — 30-field schema completeness, effective-range compliance (aero=0 vs min>0 is a hard BLOCKER), driver hard-constraints (floaty-front / rear-aero), ride-height-proof (top-10% of range without a `consider`/`required` bottoming band), gearbox consistency; **wraps** the existing `setup_diagnosis.validate_setup_engineering` rather than reimplementing. All three results are combined via `merge_results` into the `setup_validation` key. If the validation layer itself errors, it **fails safe** (manual-review PASS_WITH_WARNINGS), never silently dropping the key.
+
+**Effective ranges:** `strategy/setup_ranges.resolve_effective_ranges(car, event_ctx)` layers GENERIC_DEFAULTS < per-car overrides < `event_ctx["field_overrides"]`, and is used by **both** the prompt's ranges block and the output validator so they can never diverge.
+
+**Result schema (`data/setup_validation_result.py`):** `SetupValidationStatus` (PASS/PASS_WITH_WARNINGS/FAIL, lowercase values), `SetupValidationSeverity` (INFO/WARNING/BLOCKER), `RecommendedAction` (use_setup / use_with_caution / regenerate_setup / fix_prompt_then_regenerate / manual_engineer_review_required), `SetupValidationIssue`, `SetupValidationResult` (`.to_dict()` embeds under the `setup_validation` key). FAIL iff any BLOCKER; `safe_to_show_driver = status != FAIL`; `safe_to_apply_in_gt7 = no BLOCKER`.
+
+**UI (`ui/setup_builder_ui.py`):** `_format_setup_validation_banner` renders a red rejection banner (blockers + friendly recommended action) on FAIL, an orange caution banner on PASS_WITH_WARNINGS, nothing on PASS. On FAIL the **Apply** button is hidden and the setup is **not saved to history**. Raw AI output is still logged by `call_api` unchanged.
+
+**Known limitations / deferred:** from-scratch `ai_planner.build_car_setup` path is out of scope (validators are importable by it later); damper-logic and race-suitability checks (original Part 3 items 6 & 8) are only partially present; end-to-end `build_combined_setup_response` is not unit-tested (needs recorder/DB/API) — gates are covered at module level + import-verified. **Runtime UAT pending** (see UAT steps in the session notes).
+
+**Build note:** this work was built alongside the concurrent DEF-17U-UAT-007 fix in the same working tree; a `git reset --hard` from that session wiped the wiring edits mid-build, which were re-applied and committed. Both features now coexist on this branch.
+
+---
+
+## Prior Objective (historical)
 **DEF-17U-UAT-007 — Time Trial calibration laps falsely classified as pit-in / unusable — FIXED (2026-07-03).** Branch `feature/group-18a-track-truth-foundation`.
 
 **Symptom (Post-Group-17U UAT):** In GT7 Time Trial the user drove 5 clean laps and never pitted. Building the reference path failed with *"Not enough usable laps to build reference path (0 usable, need 2)"*. Diagnostics wrongly reported 7 captured laps, rejected lap 1 as an outlier (18.1s / 749m vs session median 128.7s / 6171m), detected laps 2–6 as "pit-in laps", rejected lap 7 (40 samples < 50), and concluded *"All calibration laps appear to be pit-in laps."*

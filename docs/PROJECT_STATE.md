@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Project State
 
-> Last updated: 2026-07-03 (DEF-17U-UAT-007 FIXED — Time Trial calibration builds correctly; pit-in detection now OFF by default, new PARTIAL_START/STOP lap quality. Full suite 4200+ passed, the one failing test is a pre-existing unrelated failure. Prior: Group 18A — Track Truth foundation — 4053 pass / 6 skip / 0 fail)
+> Last updated: 2026-07-03 (**Setup AI Validation Gates** — pre-AI / telemetry / post-AI validation safety layer for the Setup Brain. New `data/setup_validation_result.py` + `setup_prompt_validation.py` + `setup_telemetry_validation.py` + `setup_output_validation.py`; `setup_ranges.resolve_effective_ranges`; three gates in `driving_advisor.build_combined_setup_response`; validation banners in `setup_builder_ui.py`. `test_setup_ai_validation_gates.py` 109 pass / 0 skip incl. the Fuji/Panorama defect-case regression; 329 pass across touched areas. Commits b7f1686 + 95eeb35. Runtime UAT pending. See MASTER_TESTING_REGISTER.md "Setup AI Validation Gates". Prior: DEF-17U-UAT-007 FIXED — Time Trial calibration builds correctly; pit-in detection now OFF by default, new PARTIAL_START/STOP lap quality. Full suite 4200+ passed. Prior: Group 18A — Track Truth foundation — 4053 pass / 6 skip / 0 fail)
 > Read this file first, then MASTER_TESTING_REGISTER.md, before touching any code.
 >
 > Note: this file's group table below was authored through Group 17U. Groups 17V–38, the
