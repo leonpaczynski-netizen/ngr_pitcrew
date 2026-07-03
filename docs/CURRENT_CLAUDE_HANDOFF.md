@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 6b — config_id Hash Byte-Stability Proof — COMPLETE (2026-07-04).** Branch `legacy-fanout-phase-6b-hash-proof` (from `master` @ `8e9fcb6`). Full suite: **4738 pass / 6 skip / 0 fail** (17 new tests). **Purely additive — tests + docs; no production code changed. Retirement-map item 2 delivered as proof + pins; the migration half is provably BLOCKED and folds into items 3/4.**
+
+**The blocker discovered (restore-divergence):** `_load_session_config` (lap-bank "load historical session") deliberately writes a historical session's track/car + race params into the working `config["strategy"]` WITHOUT changing the active event, then recomputes the id — the id must follow the RESTORED session. `EventContext.track`/rules are DB-first → an EventContext-sourced hash would pin the id to the active event mid-restore, silently breaking the feature. Outside restores the two sources are provably identical (post-Phase-4 always in sync — tested). `car` alone is always-safe (strategy-first) but hash inputs move together. **Corrected map:** item 2's migration merges into item 3 (restore redesign) / item 4 (working-race-config home).
+
+**Delivered — `tests/test_race_config_id_hash.py` (17):**
+- **Golden vectors** (5 literal inputs→id pairs, frozen; exercised through the REAL `_compute_race_config_id` on a widget-free stub; incl. `'||l25' → 05e6d2f288`, a real id observed in the field). Test header forbids regenerating vectors on failure — a mismatch means history re-keying; fix the CODE.
+- `DEFAULT_CONFIG` → empty-vector pin; shape/stability/sensitivity (each input independently changes the id); the algorithm's own `l25`/`t60` defaults pinned; unknown race-type tokens hash as lap.
+- **Source-level algorithm pin** (raw-string format, `sha256[:10]`, 25/60 defaults, working-config input source — verbatim body fragments).
+- **Equivalence + divergence proofs** — in-sync EventContext would hash identically (future migration safe outside restores); the restore case demonstrably diverges (the blocker); car's strategy-first safety.
+- Invariants: Phase 5 frozen allowlist untouched; Home-first; config guardrail.
+
+**Next sprint:** **retirement-map item 3 — restore-writer redesign** (a first-class "working race config" flow + home, so the hash inputs, restore writers, and plan-state persistence migrate together under the golden vectors), or **product work** (deferred OFR-1 between-race learning loop). Full detail: `docs/LEGACY_FANOUT_PHASE_6B.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 6b).
+
+---
+
+## Prior Objective (historical)
 **SessionContext Real Connection Signal — COMPLETE (2026-07-04).** Branch `session-context-real-connection` (from `master` @ `ebbaed4`). Full suite: **4721 pass / 6 skip / 0 fail** (18 new tests). **The one-place change promised by the SessionContext sprint, delivered: Home's `live_active`, the flow gates, and the telemetry labels now reflect the REAL UDP-listener state (packet-timeout based), instead of an always-False phantom tracker attribute.**
 
 **What was wired:**
