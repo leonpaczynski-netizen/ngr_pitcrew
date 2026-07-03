@@ -1,6 +1,26 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 5 — Functional Readers + Frozen Allowlist Guard — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-5` (from `master` @ `b58545e`). Full suite: **4682 pass / 6 skip / 0 fail** (15 new tests; 2 legacy pins updated in place). **Scope (explicit product decision: "Functional + guard") — full writer retirement was re-audited and found BLOCKED (telemetry-path dispatcher reads, the config_id hash, restore writers, plan-state persistence, bridges); instead: no product decision reads the legacy dict any more, and a frozen allowlist prevents any new consumer.**
+
+**Functional readers migrated (byte-identical in-sync, tested):**
+- **Live-session open tagging** (`_on_live_mode_changed`) — track/car/event_id from EventContext + config_id from StrategyContext (was 4 raw strat reads).
+- **Degradation params** — `tyre_wear_multiplier` (EventContext) + `degradation_consecutive_laps` (StrategyContext); still read on the UI thread before the worker spawns.
+- **BoP checks** — `_get_bop_data_for_car` + the reload-BoP gate → `EventContext.bop_enabled`/`.car`.
+- **`_current_setup_dict`** event-identity fields (car with the `or "Unknown Car"` fallback, track, weather→condition map, bop) → one `_ev_ctx`; safe off the UI thread (voice-query getter) — SessionDB is `check_same_thread=False` + locked.
+- **Setup-save `event_id`** → `int(_build_event_context().event_id or 0)`.
+
+**Frozen allowlist guard:** `tests/test_legacy_fanout_phase_5.py::FROZEN_ALLOWLIST` pins all **41 remaining `config["strategy"]` access sites** across 40 `(file, method)` entries (each annotated: writer/bridge/hash/plan/restore/cosmetic/telemetry-path). Exact-equality scan — a NEW consumer fails with a pointer to the contexts; a silent removal fails too (shrink the list in the same commit).
+
+**Phase 6 retirement map (docs §4):** (1) dispatcher session-tag snapshot instead of the `main.py` `_dispatch` telemetry-path reads; (2) `_compute_race_config_id` hash byte-stability proof + pinned vectors; (3) restore-writer redesign (`_load_session_config` etc.); (4) a home for plan-state persistence (stops/fuel/tolerances/config_id); (5) reshape the bridges last. None is a correctness risk post-Phase-4 (staleness impossible) — mechanical follow-ups, best 1→2→3.
+
+**Deliverables:** `docs/LEGACY_FANOUT_PHASE_5.md` (NEW); `ui/dashboard.py` + `ui/setup_builder_ui.py` (the five migrations); `tests/test_legacy_fanout_phase_5.py` (15 — allowlist exact-match + creep/removal guard; byte-identity for every migrated read incl. empty defaults + the "Unknown Car" fallback; source-scans; writer/re-sync/Home-first/guardrail invariants); `test_group4_fixes` `TestBoPSourceOfTruth` ×2 updated in place (invariant "BoP from event state, never a widget" — source now EventContext).
+
+**Next sprint (the fan-out series is at its natural pause):** **wire the real UDP connection signal into SessionContext** (one-place change, user-visible), or **Phase 6a** (dispatcher session-tag snapshot — first concrete writer-retirement step), or **return to product work** (e.g. deferred OFR-1 between-race learning loop) now that the state architecture is consolidated. Full detail: `docs/LEGACY_FANOUT_PHASE_5.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 5).
+
+---
+
+## Prior Objective (historical)
 **Legacy Fan-Out Removal Phase 4 — Divergence Elimination + Last Readers — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-4` (from `master` @ `e356879`). Full suite: **4667 pass / 6 skip / 0 fail** (18 new tests; 11 legacy pins updated in place). **The DB event record and the `config["strategy"]` fan-out can no longer diverge, and `_sync_setup_builder_from_event` no longer reads `config["strategy"]` at all. Writer retirement investigated and explicitly deferred to Phase 5 (would break the app today — see below).**
 
 **Deliverables:**

@@ -52,17 +52,24 @@ class TestBoPSourceOfTruth(unittest.TestCase):
                          "_chk_bop (independent BoP toggle) must be removed from Setup Builder")
 
     def test_current_setup_dict_reads_bop_from_strategy_config(self):
-        """_current_setup_dict must read bop_race from _config['strategy']['bop']."""
+        """_current_setup_dict must read bop_race from event state, not a widget.
+
+        Legacy Fan-Out Removal Phase 5 (2026-07-03): the event-state source is
+        now the canonical EventContext (DB-first, byte-identical to the old
+        config['strategy']['bop'] read when in sync). The original invariant —
+        never a UI widget — is unchanged."""
         body = _method_body(_setup_builder_text(), "_current_setup_dict")
-        self.assertIn('strategy', body)
-        self.assertIn('bop', body)
+        self.assertIn("_build_event_context()", body)
+        self.assertIn("bop_enabled", body)
         self.assertNotIn("_chk_bop", body)
 
     def test_get_bop_data_reads_from_strategy_config(self):
-        """_get_bop_data_for_car must read bop from _config['strategy'], not from a widget."""
+        """_get_bop_data_for_car must read bop from event state, not a widget.
+
+        Phase 5: source is the canonical EventContext (see above)."""
         body = _method_body(_dashboard_text(), "_get_bop_data_for_car")
-        self.assertIn('strategy', body)
-        self.assertIn('bop', body)
+        self.assertIn("_build_event_context()", body)
+        self.assertIn("bop_enabled", body)
         self.assertNotIn("_chk_bop", body)
 
     def test_lbl_rc_bop_exists_in_race_conditions_group(self):

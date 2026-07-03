@@ -1158,11 +1158,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Open a new session immediately so laps (including the first outlap) are linked
         if self._db is not None and self._dispatcher is not None:
             try:
-                strat     = self._config.get("strategy", {})
-                track     = strat.get("track", "")
-                car_name  = strat.get("car", "")
-                config_id = strat.get("config_id", "")
-                event_id  = int(strat.get("event_id", 0))
+                # Legacy Fan-Out Removal Phase 5: session tagging reads the
+                # canonical contexts (EventContext DB-first + StrategyContext
+                # config_id) instead of the legacy fan-out. Byte-identical when
+                # in sync — and since Phase 4's re-sync, always in sync.
+                ev_ctx    = self._build_event_context()
+                track     = ev_ctx.track
+                car_name  = ev_ctx.car
+                config_id = self._active_config_id()
+                event_id  = int(ev_ctx.event_id or 0)
                 car_id    = int(self._dispatcher._car_id_ref[0])
                 _type_map = {"Practice": "practice", "Qualifying": "qualifying", "Race": "race"}
                 session_type = _type_map.get(mode, "practice")
@@ -5415,8 +5419,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         from ui.gt7_data import reload_extra, GT7_TRACKS, GT7_TRACK_INFO, GT7_CARS
         reload_extra()
 
-        # Reload BOP label if BOP mode is active
-        if self._config.get("strategy", {}).get("bop", False):
+        # Reload BOP label if BOP mode is active (Phase 5: EventContext, DB-first)
+        if self._build_event_context().bop_enabled:
             self._refresh_bop_label()
 
     def _open_extra_json(self) -> None:
@@ -5429,10 +5433,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             subprocess.Popen(["xdg-open", str(p)])
 
     def _get_bop_data_for_car(self) -> dict | None:
-        """Return BOP dict for the currently selected car, or None if BOP not active."""
-        if not self._config.get("strategy", {}).get("bop", False):
+        """Return BOP dict for the currently selected car, or None if BOP not active.
+
+        Phase 5: BoP flag + car from the canonical EventContext (DB-first) —
+        byte-identical in sync, consistent with the setup-permission gating.
+        """
+        ev_ctx = self._build_event_context()
+        if not ev_ctx.bop_enabled:
             return None
-        car = self._config.get("strategy", {}).get("car", "")
+        car = ev_ctx.car
         bop = self._load_bop_json()
         for _cat, cars in bop.get("cars", {}).items():
             if car in cars:
@@ -5541,8 +5550,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             print("[Degradation] Need 5+ representative laps per compound to analyse.")
             return
 
-        wear_mult = float(self._config.get("strategy", {}).get("tyre_wear_multiplier", 1.0))
-        consecutive_laps = int(self._config.get("strategy", {}).get("degradation_consecutive_laps", 2))
+        # Phase 5: degradation parameters from the canonical contexts —
+        # tyre wear is event truth (EventContext, DB-first), the consecutive-lap
+        # window is strategy-plan state (StrategyContext). Byte-identical
+        # defaults (1.0 / 2). Read on the UI thread before the worker spawns.
+        wear_mult = float(self._build_event_context().tyre_wear_multiplier)
+        consecutive_laps = int(self._build_strategy_context().degradation_consecutive_laps)
 
         if hasattr(self, "_btn_analyse_deg"):
             self._btn_analyse_deg.setEnabled(False)
