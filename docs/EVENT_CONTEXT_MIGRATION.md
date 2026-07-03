@@ -60,7 +60,7 @@ back to the strategy dict entirely when no DB record is available.
 | 2653 | `_get_mandatory_compounds` | mandatory_compounds / required_tyres | Low |
 | 3016 | `_save_session_to_db` | track, car | Low |
 | 3094 | `_save_setup_from_lapdata` | track | Low |
-| 3569 | `_run_practice_analysis` | full race_params (race_type, laps, duration, tyre_wear, fuel_mult, bop, tuning, allowed_tuning, avail_tyres, car, track) | **High** (AI prompt input — migrate late, snapshot-frozen) |
+| 3569 | `_run_practice_analysis` | full race_params (race_type, laps, duration, tyre_wear, fuel_mult, bop, tuning, allowed_tuning, avail_tyres, car, track) | **MIGRATED (AI Snapshot Migration) → frozen `PracticeAnalysisSnapshot` reading EventContext; DEF-P1-005 default preserved. See `docs/AI_SNAPSHOT_MIGRATION.md`** |
 | 3713 | `_display_practice_results` | car/track context | Med |
 | 3827 | `_display_strategy_results` | car/track context | Med |
 | 4199 | `_build_ai_analysis_group` | fuel_mult | Low (label) |
@@ -93,9 +93,9 @@ belong to **StrategyContext** (now landed — State Consolidation 2,
 | 498 | `__init__` | `stops[]` (saved stint plan) | StrategyContext |
 | 2601 | `_computed_fuel_burn_lpl` | `fuel_burn_per_lap` | StrategyContext (telemetry-derived) |
 | 2740 | `_refresh_lap_bank` | `config_id` | StrategyContext (derived match key) — **MIGRATED (State Consolidation 2) → reads `_build_strategy_context().config_id`** |
-| 3238, 3250 | `_assemble_strategy_inputs` | `fuel_burn_per_lap`, plan fields | StrategyContext |
-| 3344 | `_launch_replan_worker` | plan/strategy fields | StrategyContext |
-| 3414, 3454 | `_run_ai_analysis` | strategy inputs, `config_id` | StrategyContext |
+| 3238, 3250 | `_assemble_strategy_inputs` | `fuel_burn_per_lap`, plan fields | **MIGRATED (AI Snapshot Migration) → `StrategyAISnapshot`** |
+| 3344 | `_launch_replan_worker` | plan/strategy fields | StrategyContext (race_situation block still legacy; its `_assemble_strategy_inputs` call is migrated) |
+| 3414, 3454 | `_run_ai_analysis` | strategy inputs, `config_id` | **MIGRATED (AI Snapshot Migration) → `StrategyAISnapshot` incl. `config_id`** |
 | 4193 | `_build_ai_analysis_group` | `fuel_burn_per_lap` | StrategyContext |
 | 5383 | tyre-degradation | `degradation_consecutive_laps` | App setting |
 

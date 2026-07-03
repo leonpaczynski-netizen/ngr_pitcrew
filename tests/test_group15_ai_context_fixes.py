@@ -83,25 +83,40 @@ class TestDEF_P1_013_RaceParams:
         body = _method_body(DASHBOARD, None, "_run_ai_analysis")
         assert '"race_type"' in body, "_run_ai_analysis must pass race_type to race_params"
 
+    # AI Snapshot Migration: race_params assembly moved into the frozen
+    # snapshot layer (data/ai_context_snapshot.py). The same DEF-P1-013 fields
+    # are still passed — verified behaviourally through the production builder
+    # plus a routing scan of the method.
+
+    @staticmethod
+    def _snapshot_race_params(**strategy):
+        from data.ai_context_snapshot import build_strategy_ai_snapshot
+        base = {"track": "Monza"}
+        base.update(strategy)
+        return build_strategy_ai_snapshot(legacy_strategy=base).race_params_dict()
+
     def test_run_ai_analysis_passes_duration_mins(self):
         body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '"duration_mins"' in body
+        assert "_build_strategy_ai_snapshot" in body
+        rp = self._snapshot_race_params(race_type="timed", race_duration_minutes=45)
+        assert rp["duration_mins"] == 45
 
     def test_run_ai_analysis_passes_tuning_locked(self):
-        body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '"tuning_locked"' in body
+        rp = self._snapshot_race_params(tuning=False)
+        assert rp["tuning_locked"] is True
 
     def test_run_ai_analysis_passes_allowed_tuning(self):
-        body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '"allowed_tuning"' in body
+        rp = self._snapshot_race_params(allowed_tuning_categories=["aero"])
+        assert rp["allowed_tuning"] == ["aero"]
 
     def test_run_ai_analysis_passes_bop(self):
-        body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '"bop"' in body
+        rp = self._snapshot_race_params(bop=True)
+        assert rp["bop"] is True
 
     def test_run_ai_analysis_bop_uses_sc_config(self):
-        body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '_sc.get("bop"' in body or "bop" in body
+        # bop still originates from the (event/strategy) config truth.
+        assert self._snapshot_race_params(bop=True)["bop"] is True
+        assert self._snapshot_race_params(bop=False)["bop"] is False
 
     def test_build_race_prompt_injects_tuning_block(self):
         body = _function_body(AI_PLANNER, "_build_race_prompt")
@@ -154,13 +169,24 @@ class TestDEF_P1_014_PracticeWorker:
 # ---------------------------------------------------------------------------
 
 class TestDEF_P2_038_PracticeBoP:
+    # AI Snapshot Migration: bop now enters practice race_params via the
+    # frozen snapshot (data/ai_context_snapshot.py) — same field, new plumbing.
     def test_practice_race_params_has_bop(self):
         body = _method_body(DASHBOARD, None, "_run_practice_analysis")
-        assert '"bop"' in body, "_run_practice_analysis must include bop in race_params"
+        assert "_build_practice_ai_snapshot" in body, \
+            "_run_practice_analysis must build race_params via the frozen snapshot"
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "bop": True},
+            fuel_burn_override=2.5).race_params_dict()
+        assert rp["bop"] is True
 
     def test_practice_bop_reads_from_psc(self):
-        body = _method_body(DASHBOARD, None, "_run_practice_analysis")
-        assert "_psc.get(\"bop\"" in body
+        # bop still originates from the (event/strategy) config truth.
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T"}, fuel_burn_override=2.5).race_params_dict()
+        assert rp["bop"] is False  # safe default preserved
 
     def test_practice_bop_default_false(self):
         body = _method_body(DASHBOARD, None, "_run_practice_analysis")
@@ -180,13 +206,24 @@ class TestDEF_P2_038_PracticeBoP:
 # ---------------------------------------------------------------------------
 
 class TestDEF_P2_039_AvailTyres:
+    # AI Snapshot Migration: avail_tyres now enters race_params via the frozen
+    # snapshot (data/ai_context_snapshot.py) — same field, new plumbing.
     def test_run_ai_analysis_passes_avail_tyres(self):
         body = _method_body(DASHBOARD, None, "_run_ai_analysis")
-        assert '"avail_tyres"' in body
+        assert "_build_strategy_ai_snapshot" in body
+        from data.ai_context_snapshot import build_strategy_ai_snapshot
+        rp = build_strategy_ai_snapshot(
+            legacy_strategy={"track": "T", "avail_tyres": ["RM", "RH"]}).race_params_dict()
+        assert rp["avail_tyres"] == ["RM", "RH"]
 
     def test_practice_race_params_has_avail_tyres(self):
         body = _method_body(DASHBOARD, None, "_run_practice_analysis")
-        assert '"avail_tyres"' in body
+        assert "_build_practice_ai_snapshot" in body
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "avail_tyres": ["RS"]},
+            fuel_burn_override=2.5).race_params_dict()
+        assert rp["avail_tyres"] == ["RS"]
 
     def test_build_race_prompt_injects_avail_line(self):
         body = _function_body(AI_PLANNER, "_build_race_prompt")
@@ -197,10 +234,15 @@ class TestDEF_P2_039_AvailTyres:
         assert "avail_line" in body
 
     def test_avail_tyres_empty_list_is_safe_default(self):
-        src = _file_src(DASHBOARD)
-        # Should not invent tyres when avail_tyres is absent
-        assert '"avail_tyres": _psc.get("avail_tyres", []) or []' in src or \
-               '"avail_tyres":          _sc.get("avail_tyres", []) or []' in src
+        # Should not invent tyres when avail_tyres is absent — the snapshot
+        # returns an empty list, never a made-up compound set.
+        from data.ai_context_snapshot import (
+            build_practice_analysis_snapshot, build_strategy_ai_snapshot)
+        assert build_strategy_ai_snapshot(
+            legacy_strategy={"track": "T"}).race_params_dict()["avail_tyres"] == []
+        assert build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T"},
+            fuel_burn_override=2.5).race_params_dict()["avail_tyres"] == []
 
     def test_build_setup_from_scratch_accepts_avail_tyres(self):
         body = _function_body(AI_PLANNER, "_build_setup_from_scratch_prompt")

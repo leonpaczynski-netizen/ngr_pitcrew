@@ -3237,30 +3237,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         api_key = self._ai_api_key.text().strip()
         _ui_lap_data = self._read_ui_lap_table()
 
-        _sc = self._config.get("strategy", {})
-        _race_type = _sc.get("race_type", "lap")
-        total_laps = int(_sc.get("total_laps", 25))
-
-        _mandatory_stops = int(_sc.get("mandatory_stops", 0))
-        _mandatory_cpds  = self._get_mandatory_compounds()
-        race_params = {
-            "track":                _sc.get("track", ""),
-            "track_location_id":    _sc.get("track_location_id", ""),
-            "layout_id":            _sc.get("layout_id", ""),
-            "total_laps":           total_laps,
-            "tyre_wear_multiplier": float(_sc.get("tyre_wear_multiplier", 1.0)),
-            "fuel_burn_per_lap":    float(self._config.get("strategy", {}).get("fuel_burn_per_lap", 2.0)),
-            "refuel_speed_lps":     float(_sc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_sc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  _mandatory_stops,
-            "mandatory_compounds":  _mandatory_cpds,
-            "race_type":            _race_type,
-            "duration_mins":        int(_sc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_sc.get("tuning", True)),
-            "allowed_tuning":       _sc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_sc.get("bop", False)),
-            "avail_tyres":          _sc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts (EventContext race rules, StrategyContext plan
+        # fields incl. fuel burn/pit loss, TrackContext identity) instead of
+        # live config["strategy"] reads. Byte-identical to the previous inline
+        # expressions when the stores are in sync (proven by
+        # tests/test_ai_context_snapshot.py); fresh DB event values win when
+        # the event was edited after "Set as Active".
+        _ai_snap = self._build_strategy_ai_snapshot()
+        race_params = _ai_snap.race_params_dict()
 
         params = RaceParams(**race_params)
 
@@ -3411,35 +3396,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Read UI lap table early — needed as fallback input for get_strategy_lap_data
         _ui_lap_data = self._read_ui_lap_table()
 
-        # Determine total laps from event config (timed-race estimate is refined
-        # later, after lap_data_by_compound is built from the DB)
-        _sc = self._config.get("strategy", {})
-        _race_type = _sc.get("race_type", "lap")
-        if _race_type == "timed":
-            total_laps = int(_sc.get("total_laps", 25))  # placeholder; updated below
-        else:
-            total_laps = int(_sc.get("total_laps", 25))
-
-        _mandatory_stops = int(_sc.get("mandatory_stops", 0))
-        _mandatory_cpds  = self._get_mandatory_compounds()
-        race_params = {
-            "track":                _sc.get("track", ""),
-            "track_location_id":    _sc.get("track_location_id", ""),
-            "layout_id":            _sc.get("layout_id", ""),
-            "total_laps":           total_laps,
-            "tyre_wear_multiplier": float(_sc.get("tyre_wear_multiplier", 1.0)),
-            "fuel_burn_per_lap":    self._computed_fuel_burn_lpl(),
-            "refuel_speed_lps":     float(_sc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_sc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  _mandatory_stops,
-            "mandatory_compounds":  _mandatory_cpds,
-            "race_type":            _sc.get("race_type", "lap"),
-            "duration_mins":        int(_sc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_sc.get("tuning", True)),
-            "allowed_tuning":       _sc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_sc.get("bop", False)),
-            "avail_tyres":          _sc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts instead of live config["strategy"] reads.
+        # Byte-identical when the stores are in sync (proven by
+        # tests/test_ai_context_snapshot.py). Fuel burn stays telemetry-owned
+        # via _computed_fuel_burn_lpl() (loaded session → tracker → config).
+        _ai_snap = self._build_strategy_ai_snapshot(
+            fuel_burn_override=self._computed_fuel_burn_lpl())
+        race_params = _ai_snap.race_params_dict()
         self._config.setdefault("anthropic", {})["api_key"] = api_key
         self._persist_config()
 
@@ -3452,8 +3416,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         degradation = self._tyre_degradation_cache if self._tyre_degradation_cache else None
 
-        # Load setup history for this race config to give AI context on prior work
-        config_id = self._config.get("strategy", {}).get("config_id", "")
+        # Load setup history for this race config to give AI context on prior
+        # work — the match key comes from the frozen snapshot (StrategyContext).
+        config_id = _ai_snap.config_id
         setup_history_text = ""
         if config_id:
             try:
@@ -3568,42 +3533,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 "No Anthropic API key set. Add your key above.")
             return
 
-        _psc = self._config.get("strategy", {})
-        _tyre_wear = float(_psc.get("tyre_wear_multiplier", 1.0))
-        print(f"[PracticeAnalysis] tyre_wear_multiplier={_tyre_wear:.2f} (from Event config)")
-        race_params = {
-            "track":                _psc.get("track", ""),
-            "track_location_id":    _psc.get("track_location_id", ""),
-            "layout_id":            _psc.get("layout_id", ""),
-            "total_laps":           int(_psc.get("total_laps", 25)),
-            "tyre_wear_multiplier": _tyre_wear,
-            "fuel_burn_per_lap":    self._computed_fuel_burn_lpl(),
-            "refuel_speed_lps":     float(_psc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_psc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  int(_psc.get("mandatory_stops", 0)),
-            "mandatory_compounds":  self._get_mandatory_compounds(),
-            "race_type":            _psc.get("race_type", "lap"),
-            "duration_mins":        int(_psc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_psc.get("tuning", False)),
-            "allowed_tuning":       _psc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_psc.get("bop", False)),
-            "avail_tyres":          _psc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts instead of live config["strategy"] reads.
+        # Byte-identical when the stores are in sync, and the practice path's
+        # DEF-P1-005 safe default (unknown tuning flag → locked) is preserved
+        # (proven by tests/test_ai_context_snapshot.py). Fuel burn stays
+        # telemetry-owned via _computed_fuel_burn_lpl().
+        _ai_snap = self._build_practice_ai_snapshot(
+            fuel_burn_override=self._computed_fuel_burn_lpl())
+        race_params = _ai_snap.race_params_dict()
+        print(f"[PracticeAnalysis] tyre_wear_multiplier="
+              f"{race_params['tyre_wear_multiplier']:.2f} (from Event config)")
         import os as _os
         if _os.environ.get("GT7_AI_DEBUG"):
             _tc_inc = bool(race_params.get("track_location_id") and race_params.get("layout_id"))
             print(
-                f"[PracticeAnalysis DEBUG] bop={_psc.get('bop', False)} "
-                f"tuning={_psc.get('tuning', 'ABSENT')} "
+                f"[PracticeAnalysis DEBUG] bop={race_params['bop']} "
                 f"tuning_locked={race_params['tuning_locked']} "
                 f"allowed_tuning={race_params['allowed_tuning']} "
                 f"race_type={race_params['race_type']} "
-                f"fuel_mult={_psc.get('fuel_multiplier', 1.0)} "
                 f"tyre_wear={race_params['tyre_wear_multiplier']} "
                 f"track_context_included={_tc_inc} "
                 f"track_location_id={race_params.get('track_location_id') or 'MISSING'} "
-                f"layout_id={race_params.get('layout_id') or 'MISSING'}"
+                f"layout_id={race_params.get('layout_id') or 'MISSING'} "
+                f"snapshot={_ai_snap.core.snapshot_id} source={_ai_snap.core.source.value}"
             )
+            for _w in (_ai_snap.core.warnings + _ai_snap.core.stale_warnings):
+                print(f"[PracticeAnalysis DEBUG] snapshot-warning: {_w}")
 
         # Gather tagged lap times from Lap Data tab
         lap_data_by_compound: dict[str, list[float]] = {}
@@ -6889,6 +6845,59 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:  # pragma: no cover - defensive; must never break the UI
             from data.strategy_context import empty_strategy_context
             return empty_strategy_context()
+
+    def _build_strategy_ai_snapshot(self, fuel_burn_override=None):
+        """Frozen AI-input snapshot for race-strategy analysis.
+
+        AI Snapshot Migration: freezes one consistent set of race parameters
+        from the canonical read models (EventContext race rules,
+        StrategyContext plan fields, TrackContext identity) instead of live
+        ``config["strategy"]`` reads at prompt time. Byte-identical to the
+        legacy expressions when the stores are in sync; returns the fresh DB
+        event values when the event was edited after "Set as Active" (the
+        intentional difference — see docs/AI_SNAPSHOT_MIGRATION.md). Never
+        raises; falls back to exact legacy expressions when no event context
+        exists (recorded as a snapshot warning).
+        """
+        try:
+            from data.ai_context_snapshot import build_strategy_ai_snapshot
+            return build_strategy_ai_snapshot(
+                event_context=self._build_event_context(),
+                strategy_context=self._build_strategy_context(),
+                track_context=self._build_track_context(),
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break AI calls
+            from data.ai_context_snapshot import build_strategy_ai_snapshot
+            return build_strategy_ai_snapshot(
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+
+    def _build_practice_ai_snapshot(self, fuel_burn_override=None):
+        """Frozen AI-input snapshot for practice analysis.
+
+        Same as ``_build_strategy_ai_snapshot`` but preserves the practice
+        path's DEF-P1-005 safe default (unknown tuning flag → locked).
+        ``fuel_burn_override`` carries ``_computed_fuel_burn_lpl()``
+        (telemetry-owned until a TelemetryContext sprint).
+        """
+        try:
+            from data.ai_context_snapshot import build_practice_analysis_snapshot
+            return build_practice_analysis_snapshot(
+                event_context=self._build_event_context(),
+                strategy_context=self._build_strategy_context(),
+                track_context=self._build_track_context(),
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break AI calls
+            from data.ai_context_snapshot import build_practice_analysis_snapshot
+            return build_practice_analysis_snapshot(
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
 
     def _refresh_event_list(self) -> None:
         if not hasattr(self, "_event_list"):

@@ -132,7 +132,7 @@ Everything else still reads the legacy stores (compatibility preserved).
 | Consumer | Reads | Why deferred |
 |----------|-------|--------------|
 | `_tm_update_live_map_dot` + `resolve_live_segment` inputs | combo ids | **Live map matching behaviour** — identity timing matters mid-session; migrate with tests + runtime UAT. |
-| `strategy/track_context_prompt.get_track_context_for_ai` + `_run_practice_analysis`/`_assemble_strategy_inputs` id reads | `config["strategy"]` ids | **AI prompt paths** — migrate in the AI Snapshot sprint together with the frozen Event/Strategy/Setup snapshots. |
+| `strategy/track_context_prompt.get_track_context_for_ai` + `_run_practice_analysis`/`_assemble_strategy_inputs` id reads | `config["strategy"]` ids | **MIGRATED (AI Snapshot Migration):** the ids inside `RaceParams` / `SetupAISnapshot` now resolve through TrackContext identity (`docs/AI_SNAPSHOT_MIGRATION.md`); `get_track_context_for_ai` consumes those ids unchanged. |
 | `_tm_on_layout_changed` config fan-out (track_modelling_ui.py:928-929) | writer | The Group 17H **writer** — removed only when all id readers consume TrackContext (source-scanned as intentionally unchanged in `tests/test_track_context.py`). |
 | Event Planner `_evt_track` ↔ strategy `track` name writes | writer | Event-side writer; belongs to the fan-out removal sprint. |
 | `_tm_refresh_alignment_panel` / `_tm_refresh_details` / `_tm_audit_and_show_saved_files` label pipelines | raw result objects | Display-heavy panels driven by existing vm formatters that take the raw objects; rerouting through TrackContext is safe-but-wide — defer to a dedicated pass. |

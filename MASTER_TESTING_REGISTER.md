@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
+> Last updated: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
+> Prior: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 2 — StrategyContext** — canonical strategy-plan read model `data/strategy_context.py` owning stint plan / stops / fuel burn / `config_id` / degradation assumptions / tolerances, reading event/race rules from EventContext (never duplicating them); `StrategyPromptSnapshot` freezes a consistent event+strategy state for AI prompts; `docs/STRATEGY_CONTEXT_MIGRATION.md` registers every strategy-specific dependency; one low-risk consumer migrated (`_refresh_lap_bank` config_id ★). `config["strategy"]` retained as legacy compatibility. New tests `test_strategy_context.py` (53). **Full suite: 4226 pass / 6 skip / 0 fail.** See "State Consolidation 2 — StrategyContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 1 — EventContext** — canonical event/race read model `data/event_context.py` normalising the DB-event and `config["strategy"]` schemas; `docs/EVENT_CONTEXT_MIGRATION.md` registers every `config["strategy"]` dependency; one low-risk consumer migrated (`_refresh_telemetry_context`). `config["strategy"]` retained as legacy compatibility. New tests `test_event_context.py` (38). **Full suite: 4173 pass / 6 skip / 0 fail.** See "State Consolidation 1 — EventContext" at the end of this file.)
@@ -4180,3 +4181,123 @@ surface the captured stale indicators (`_last_setup_context`,
 render the missing home/overview panel from
 `build_flow_state_summary(**{**event_flags, **track_flags, …})`, which now has
 real inputs from all four contexts.
+
+---
+
+## AI Snapshot Migration — Frozen Context Inputs (2026-07-03)
+
+Follows State Consolidations 1–4 and consumes all four read models. Branch
+`ai-snapshot-migration-context-freeze` (from `state-consolidation-4-track-context`
+@ `45b48d5`). Threads **frozen, owner-documented snapshots** into the AI-input
+preparation paths so prompts receive consistent, non-stale, non-mixed state.
+**A migration/safety sprint: no prompt wording changed, no setup/strategy
+intelligence changed, no track mapping change, no PTT/voice change, no tab
+reordered, no legacy store removed.** Full suite after: **4402 pass / 6 skip /
+0 fail** (41 new tests; 20 legacy source-scan tests updated in place).
+
+### What was built
+- **`data/ai_context_snapshot.py` (NEW, pure Python — no PyQt6/UI/network/AI/DB/file-I/O)**:
+  - `AIContextSnapshot` (frozen core) — combined `snapshot_id` (stable hash of
+    payload + component markers), the four component keys (`event_change_hash`,
+    `strategy_change_hash`, `setup_snapshot_id`, `track_change_hash`), `source`
+    (CONTEXTS / LEGACY_ONLY / EMPTY), build `warnings` + `stale_warnings`;
+    `validate_ai_context_snapshot()`.
+  - `StrategyAISnapshot` + `build_strategy_ai_snapshot()` — frozen `race_params`
+    for `_assemble_strategy_inputs`/`_run_ai_analysis` (feeds `RaceParams(**…)`)
+    + `config_id` (StrategyContext). `fuel_burn_override` carries the
+    telemetry-derived `_computed_fuel_burn_lpl()` where the legacy path used it.
+  - `PracticeAnalysisSnapshot` + `build_practice_analysis_snapshot()` — same
+    shape, kept distinct because the practice path's **DEF-P1-005 safe default
+    (unknown tuning flag → LOCKED)** differs from the strategy paths' unlocked
+    default; both regimes preserved exactly.
+  - `SetupAISnapshot` + `build_setup_ai_snapshot()` — the 17 event/track fields
+    the setup AI paths need, preserving the **build-setup legacy defaults
+    (refuel/pit-loss 0.0**, unlike the strategy paths' 10.0/23.0).
+  - Field owners documented per input: event/race truth → EventContext;
+    fuel burn (non-override)/pit loss/config_id → StrategyContext; track ids →
+    TrackContext; setup identity → SetupPromptSnapshot; telemetry fuel burn →
+    caller-supplied (TelemetryContext sprint later).
+  - Staleness detected at build: strategy-built-against-older-event,
+    setup-generated-for-previous-event, Track-Modelling-vs-event mismatch.
+  - `LEGACY_ONLY` fallback evaluates the **exact legacy expressions** and
+    records a warning — never silent when a clean context exists. Builders
+    never raise.
+- **`docs/AI_SNAPSHOT_MIGRATION.md` (NEW)** — all 11 AI prompt/input paths with
+  pre-sprint sources and migrated/deferred status, per-input owners, the
+  byte-identity proof list, the 4 documented intentional differences, the 20
+  updated legacy tests, remaining legacy dependencies, next sprint.
+- **`ui/dashboard.py`** — `_build_strategy_ai_snapshot()` /
+  `_build_practice_ai_snapshot()` helpers (thread `_build_event_context()` +
+  `_build_strategy_context()` + `_build_track_context()` + legacy dict; never
+  raise). **Migrated:** `_assemble_strategy_inputs` (also serving the mid-race
+  re-plan via `_launch_replan_worker`), `_run_ai_analysis` (race_params +
+  `config_id` from the snapshot), `_run_practice_analysis` (race_params; the
+  GT7_AI_DEBUG stdout line now shows snapshot id/source + stale warnings —
+  debug-only surfacing, no UI change).
+- **`ui/setup_builder_ui.py`** — `_build_setup_ai_snapshot()` helper (also
+  threads the captured `_last_setup_context` as a `SetupPromptSnapshot`).
+  **Migrated:** `_run_build_setup` (16 scattered `config["strategy"]` event
+  reads → one frozen snapshot; the worker thread's recommendation metadata now
+  uses the frozen track/layout — the mid-flight config re-read is removed),
+  `_setup_analyse_ai` (allowed/locked/mandatory-compounds).
+
+### Byte-identical prompt proof
+`tests/test_ai_context_snapshot.py` captures the pre-migration expressions
+**verbatim** and proves race-params equality for: full synced state, fuel-burn
+override, lap race, BoP+locked, no-DB-event (legacy-strategy-only context),
+absent-key defaults (25 laps / 10.0 refuel / 23.0 pit / 2.0 burn), present-zero
+preservation (0 never replaced by a default), practice tuning-absent → locked,
+strategy tuning-absent → unlocked, and the setup-path defaults ("Unknown" car,
+0.0/0.0, empty compounds string) — plus **`test_prompt_text_byte_identical`**
+on the real `_build_race_prompt` output.
+
+### Intentional differences (each with a focused test)
+1. **Fresh DB event supersedes a stale fan-out copy** (the migration's purpose)
+   — `test_edited_db_event_supersedes_stale_config`.
+2. **Practice tuning flag: DB truth over the blind locked default** when the
+   config key is missing but a DB event exists —
+   `test_practice_tuning_absent_but_db_event_present_uses_db_truth`
+   (absent-everywhere still → LOCKED, DEF-P1-005 preserved).
+3. GT7_AI_DEBUG stdout format (debug print only, never prompt text).
+4. Build-setup `race_laps` is now always `int` (legacy passed the raw config
+   value uncast; same value for every real config).
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_ai_context_snapshot.py` (NEW) | 41 | golden byte-identity (verbatim legacy expressions vs snapshots, 13 scenarios incl. prompt-text); snapshot semantics (schema/source, id stable, id changes per **each** of the four contexts, frozen-after-legacy-mutation, garbage safety, EMPTY source, to_dict); legacy fallback (matches legacy expressions exactly, practice default, setup inputs); staleness (stale strategy vs event, stale setup vs event, track/event mismatch, no false staleness when synced, validation flags LEGACY_ONLY); source scans (migrated methods route through snapshots and contain **no direct config event-field reads**; dashboard + setup_builder helpers thread the contexts; build-setup worker uses frozen track ids) |
+| Updated in place (20 tests) | — | `test_group7` (BoP context), `test_group10` (tuning_locked derivation), `test_group12a` (DEF-P1-005 default), `test_group15` (DEF-P1-013 / DEF-P2-038 / DEF-P2-039 race-param fields), `test_group2` (tyre-wear source), `test_group36` AC8 (runtime stubs now route through the real snapshot builder; session-id invariants still exercise the real `_assemble_strategy_inputs`). Every update guards the SAME invariant behaviourally at its new home. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4402/6/0)**.
+- AI snapshot module exists + covered by tests — **yes**.
+- Event/Strategy/Setup/Track contexts remain canonical owners — **yes** (snapshot documents the owner of every value).
+- Migrated AI-input paths read from frozen snapshots — **yes (5 paths)**.
+- Prompt output byte-identical where equivalent data exists — **yes (proven)**; intentional differences documented + tested — **yes (4)**.
+- Legacy config compatibility intact; no store removed — **yes**.
+- No feature removed / tab reordered / track mapping / intelligence change — **yes**.
+- `docs/AI_SNAPSHOT_MIGRATION.md` exists and is specific — **yes**.
+- Remaining legacy AI-input dependencies documented — **yes (§7 of the doc)**.
+- Clear next-sprint recommendation — **yes (Home Dashboard Build)**.
+
+### Manual UAT steps
+1. Set an event active, tag practice laps, run **Full Practice Analysis** with
+   `GT7_AI_DEBUG=1`: the dry-run prompt in the AI Log must show the same race
+   parameters as before; stdout shows the snapshot id/source line.
+2. Run **Race Strategy Analysis**: identical prompt inputs (track, laps/duration,
+   wear/fuel multipliers, BoP/tuning, tyres) in the AI Log prompt view.
+3. Edit the active event (e.g. tyre wear) WITHOUT re-clicking "Set as Active",
+   run an analysis: the prompt now reflects the fresh DB value (intentional).
+4. **Build Setup with AI** and **Analyse & Get Setup Fix**: unchanged behaviour;
+   recommendations still save with correct track/layout metadata.
+5. Confirm PTT/voice, live map, calibration and all non-AI features unchanged.
+
+### Next sprint
+**Home Dashboard Build** — render the missing home/overview panel from
+`build_flow_state_summary(**{**event_flags, **track_flags, …})` and surface the
+now-available staleness indicators (`AIContextSnapshot.stale_warnings`,
+`_last_setup_context`, `_last_track_context`) as display-only status rows.
+Afterwards: TelemetryContext (fuel-burn/lap-stats ownership), then remove the
+`_on_event_set_active` + Track Modelling combo fan-outs once every consumer
+reads a context.

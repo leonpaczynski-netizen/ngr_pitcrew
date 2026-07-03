@@ -107,9 +107,9 @@ Everything else still reads `config["strategy"]` (compatibility preserved).
 
 | Consumer | Field(s) | Why deferred |
 |----------|----------|--------------|
-| `_assemble_strategy_inputs` (3213) | `fuel_burn_per_lap`, plan, tolerances **+ event fields** | High-risk AI input path; migrate to read event from EventContext **and** strategy from StrategyContext together, freezing a `StrategyPromptSnapshot` per call (SSOT-7). Interleaves event + strategy reads. |
-| `_run_ai_analysis` (3401) | `config_id`, `fuel_burn_per_lap`, plan | Same AI-input path; must be migrated with `_assemble_strategy_inputs` as a unit. |
-| `_launch_replan_worker` (3317) | plan / `total_laps` | Runs off-thread during a live race; behaviour-critical, migrate late with careful UAT. |
+| `_assemble_strategy_inputs` (3213) | `fuel_burn_per_lap`, plan, tolerances **+ event fields** | **MIGRATED (AI Snapshot Migration)** — reads via `StrategyAISnapshot` (event from EventContext, fuel burn/pit loss/config_id from StrategyContext with legacy defaults preserved). See `docs/AI_SNAPSHOT_MIGRATION.md`. |
+| `_run_ai_analysis` (3401) | `config_id`, `fuel_burn_per_lap`, plan | **MIGRATED (AI Snapshot Migration)** — same snapshot; fuel burn stays the telemetry-derived `_computed_fuel_burn_lpl()` override. |
+| `_launch_replan_worker` (3317) | plan / `total_laps` | Still deferred: the race_situation block reads live engine/tracker state + `total_laps` from config; only its `_assemble_strategy_inputs` call is migrated. |
 | `__init__` stint restore (498) | `stops` | A writer-adjacent restore into the stint table; low-risk but touches UI construction — defer to the batch that also migrates `_strategy_apply_plan`. |
 | `_build_ai_analysis_group` label (4193) | `fuel_burn_per_lap` | UI-construction-time label; migrate with the other Strategy Builder display reads. |
 | degradation worker (5383) | `degradation_consecutive_laps`, `tyre_wear_multiplier` | `tyre_wear_multiplier` is an **event** field — migrate this read to EventContext, and the consecutive-laps read to StrategyContext, in one pass. |

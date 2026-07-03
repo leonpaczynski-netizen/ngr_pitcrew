@@ -230,16 +230,24 @@ class TestRaceParamsBoPFields(unittest.TestCase):
         )
 
     def test_run_practice_analysis_builds_tuning_locked_from_strategy(self):
-        """DEF-P1-005 test 13: _run_practice_analysis derives tuning_locked from strategy config."""
+        """DEF-P1-005 test 13: _run_practice_analysis derives tuning_locked from strategy config.
+
+        AI Snapshot Migration: the derivation moved into
+        build_practice_analysis_snapshot (data/ai_context_snapshot.py) — verify
+        the method routes through the snapshot AND the derivation behaviourally.
+        """
         body = _method_body(_dashboard_text(), "_run_practice_analysis")
-        self.assertIn('"tuning_locked"', body,
-                      '_run_practice_analysis must include tuning_locked in race_params')
-        self.assertIn('not bool(_psc.get("tuning"', body,
-                      'tuning_locked must be derived as not bool(strategy["tuning"])')
-        self.assertIn('"allowed_tuning"', body,
-                      '_run_practice_analysis must include allowed_tuning in race_params')
-        self.assertIn("allowed_tuning_categories", body,
-                      'allowed_tuning must source from strategy["allowed_tuning_categories"]')
+        self.assertIn("_build_practice_ai_snapshot", body,
+                      '_run_practice_analysis must build race_params via the frozen snapshot')
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(legacy_strategy={
+            "track": "T", "tuning": False,
+            "allowed_tuning_categories": ["suspension"],
+        }, fuel_burn_override=2.5).race_params_dict()
+        self.assertTrue(rp["tuning_locked"],
+                        'tuning_locked must be derived as not bool(strategy["tuning"])')
+        self.assertEqual(rp["allowed_tuning"], ["suspension"],
+                         'allowed_tuning must source from allowed_tuning_categories')
 
 
 if __name__ == "__main__":

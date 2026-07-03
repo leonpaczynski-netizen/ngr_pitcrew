@@ -141,8 +141,8 @@ Everything else still reads the legacy stores (compatibility preserved).
 
 | Consumer | Store | Why deferred |
 |----------|-------|--------------|
-| `build_setup_advice_response` / `build_combined_setup_response` prompt construction (driving_advisor.py:837/1015) | current setup + diagnosis + history | **High-risk AI setup-prompt path.** Migrate only once a frozen `SetupPromptSnapshot` is threaded in with tests proving the prompt text is unchanged (sprint constraint). |
-| `build_car_setup` from-scratch (ai_planner.py:544) | event + car | Same AI-prompt-path risk; from-scratch has no telemetry baseline. |
+| `build_setup_advice_response` / `build_combined_setup_response` prompt construction (driving_advisor.py:837/1015) | current setup + diagnosis + history | **Partially migrated (AI Snapshot Migration):** the *event-input assembly* feeding these calls (`_setup_analyse_ai` allowed/locked/compounds) now comes from a frozen `SetupAISnapshot`; the prompt builders' internals remain untouched by design. |
+| `build_car_setup` from-scratch (ai_planner.py:544) | event + car | **Input assembly migrated (AI Snapshot Migration):** `_run_build_setup`'s 16 event/track reads now come from one frozen `SetupAISnapshot` (worker-thread rec metadata frozen too); the prompt builder itself is untouched. |
 | `_apply_and_save_ai_setup` / `_apply_build_setup_result` | form + DB | Mutating apply paths — behaviour-critical; migrate after the read-only surface is proven. |
 | `_resolve_setup_id_for_lap` (dashboard.py:2453) | `_saved_setups` | Behaviour-bearing lap tagging (matches by `captured_at`); not a clean single-context read. |
 | `_setup_save` / DB `save_setup` writers | config + DB | Writers unchanged this sprint by design. |

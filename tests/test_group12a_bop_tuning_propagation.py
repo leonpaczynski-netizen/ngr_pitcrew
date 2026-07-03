@@ -36,25 +36,51 @@ class TestTuningLockedDefault(unittest.TestCase):
     def setUp(self):
         self._body = _method_body(_dashboard_text(), "_run_practice_analysis")
 
+    # AI Snapshot Migration: the DEF-P1-005 derivation moved into
+    # build_practice_analysis_snapshot (data/ai_context_snapshot.py). These
+    # tests keep guarding the same invariants at their new home: the method
+    # routes through the snapshot, and an absent tuning key still means LOCKED.
+
     def test_tuning_locked_uses_false_default(self):
-        """DEF-P1-005: default must be False so absent key → tuning_locked=True (safe)."""
-        self.assertIn('_psc.get("tuning", False)', self._body,
-                      '_run_practice_analysis must use get("tuning", False) not True')
+        """DEF-P1-005: absent tuning key → tuning_locked=True (safe default)."""
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T"},  # no "tuning" key anywhere
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertTrue(rp["tuning_locked"],
+                        'practice analysis must treat an absent tuning flag as LOCKED')
 
     def test_tuning_locked_not_uses_true_default(self):
-        """DEF-P1-005: must NOT have get("tuning", True) which unlocks when key absent."""
+        """DEF-P1-005: the practice path must not silently unlock when key absent."""
         self.assertNotIn('_psc.get("tuning", True)', self._body,
                          '_run_practice_analysis must not use get("tuning", True) as default')
+        # And behaviourally: tuning=False must stay locked, tuning=True unlocked.
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        locked = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "tuning": False},
+            fuel_burn_override=2.5).race_params_dict()
+        unlocked = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "tuning": True},
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertTrue(locked["tuning_locked"])
+        self.assertFalse(unlocked["tuning_locked"])
 
     def test_tuning_locked_key_is_in_race_params(self):
         """tuning_locked must be built into race_params for prompt injection."""
-        self.assertIn('"tuning_locked"', self._body,
-                      '_run_practice_analysis must include "tuning_locked" in race_params')
+        self.assertIn("_build_practice_ai_snapshot", self._body,
+                      '_run_practice_analysis must build race_params via the frozen snapshot')
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T"}, fuel_burn_override=2.5).race_params_dict()
+        self.assertIn("tuning_locked", rp)
 
     def test_allowed_tuning_key_is_in_race_params(self):
         """allowed_tuning must be passed to the AI prompt builder."""
-        self.assertIn('"allowed_tuning"', self._body,
-                      '_run_practice_analysis must include "allowed_tuning" in race_params')
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "allowed_tuning_categories": ["aero"]},
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertEqual(rp["allowed_tuning"], ["aero"])
 
 
 # ---------------------------------------------------------------------------
