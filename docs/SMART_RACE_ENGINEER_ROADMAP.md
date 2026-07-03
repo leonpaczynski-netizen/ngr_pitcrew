@@ -14,7 +14,9 @@
 > the race-engineer prompt upgrade (items 1–7). The two items below were explicitly
 > **deferred** from that work to be scoped and built as their own efforts. Both are
 > larger than a prompt edit and overlap the learning/telemetry phases below.
-> **Status: To be scoped.**
+> **Status: OFR-1 DELIVERED (2026-07-04)** — Loop 1 setup self-scoring built via
+> feature-factory on branch `ofr1-between-race-learning`; see
+> `docs/OFR1_BETWEEN_RACE_LEARNING.md`. **OFR-2: still to be scoped.**
 
 ### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
 

@@ -1,6 +1,19 @@
 # Current Claude Handoff
 
 ## Current Objective
+**OFR-1 — Between-Race Learning Loop (Loop 1: setup self-scoring) — COMPLETE (2026-07-04).** Branch `ofr1-between-race-learning` (from `master` @ `f0a23aa`). Full suite: **4948 pass / 6 skip / 0 fail** (171 new tests; pre-feature baseline 4777). **Built via the /feature-factory chain** (researcher → story approved → brief approved with one design correction → backend → UI → 43-test acceptance verification (all 11 ACs PASS) → validator → fix round → re-verified; builder output checkpoint-committed before each verifier stage per the standing rule).
+
+**What it does:** after each session, the app self-scores the AI's applied setup recommendations against measured before/after telemetry (verdict improved/worsened/neutral/insufficient_data + confidence 0.0–1.0, write-once), and the next setup prompt for that car+track opens with the roadmap-§6.4 plain-English "Performance of Previous Recommendations" block (≥0.5 confidence only, REPLACING the free-text history — never both). Home journey step 13 (`learning_saved`) is finally live, DB-derived via `has_learning_for_car_track`.
+
+**Key design points:** the "after" session is the just-finished session resolved via `get_previous_session_id` (approved correction — `outcome_session_id` is never populated); recs created in the after-session are skipped; cross-layout guard (differing non-empty layout_id never compared); attribution split ×1/N for simultaneous recs; honesty gates (missing before_metrics or <3 clean laps either side → insufficient_data, conf 0.0 — never fabricate); handling-targeted recs judged by handling-event rates, not lap time alone; mixed-signal override (Δt improved but handling agreement <0.3 → neutral); driver-feedback bonus wired via `get_recent_feedback`; NO tyre-radius signal; NO new `config["strategy"]` reads — and the frozen-allowlist scan was EXTENDED to `strategy/driving_advisor.py` (15 pre-existing bridge entries frozen) after the validator caught exactly such a read sneaking in (fixed).
+
+**Pieces:** `data/recommendation_scoring.py` (NEW pure module — the whole algorithm + §6.4 formatter); `data/session_db.py` migration v9 (`score_confidence`/-1.0 sentinel, `score_verdict`, `score_details`) + 6 methods; `ui/dashboard.py` `_trigger_scoring_pass` (never-raises; called after session-open in `_on_live_mode_changed` + `_save_session_to_db`) + the `learning_saved` derivation; `strategy/driving_advisor.py` scored-block-first injection with exact-fallback. Full detail: `docs/OFR1_BETWEEN_RACE_LEARNING.md`, `MASTER_TESTING_REGISTER.md` (OFR-1).
+
+**Next:** drive sessions to accumulate scores (the prompt block appears once ≥0.5-confidence verdicts exist). Build candidates: **OFR-2** (race vs quali telemetry disciplines), or a small History-tab surface for scored recommendations.
+
+---
+
+## Prior Objective (historical)
 **Fan-Out Rule-Cache Deletion — COMPLETE (2026-07-04).** Branch `fanout-rule-cache-deletion` (from `master` @ `8d7c500`). Full suite: **4777 pass / 6 skip / 0 fail** (16 new tests; 12 legacy pins updated in place). **THE AUDIT'S ORIGINAL SSOT VIOLATION IS DELETED** (scoped by explicit product decision: "delete the rule cache"; full schema migration declined as highest-risk).
 
 **What was deleted:** `_fanout_event_to_strategy` no longer writes the 12 event-RULE fields (`tyre_wear_multiplier`, `fuel_mult`, `mandatory_stops`, `weather`, `damage`, `refuel_speed_lps`, `required_tyres`, `mandatory_compounds`, `avail_tyres`, `bop`, `tuning`, `allowed_tuning_categories`). The helper now writes only the legitimate **working-config core** (track, race_type, laps/total_laps, race_duration_minutes — the match-key/restore inputs — and event_id for session tagging). Existing configs keep old rule keys as harmless unread leftovers (neither refreshed nor removed — pinned).
