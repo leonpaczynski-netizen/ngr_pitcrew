@@ -686,3 +686,48 @@ def test_format_performance_block_never_raises_on_none_input():
     """None input is handled gracefully."""
     result = format_performance_block(None)  # type: ignore[arg-type]
     assert result == ""
+
+
+def test_format_performance_block_includes_oversteer_throttle_when_present():
+    """m2: oversteer_throttle delta appears in the measured line when present in score_details."""
+    details = {
+        "target": "handling",
+        "delta_ms": -100,
+        "before_best_ms": 90_000,
+        "after_best_ms": 89_900,
+        "before_clean_laps": 5,
+        "after_clean_laps": 5,
+        "before_compound": "RM",
+        "after_compound": "RM",
+        "handling_agreement": 0.7,
+        "relevant_metrics": 3,
+        "improved_metrics": 3,
+        "oversteer_throttle_before": 1.2,
+        "oversteer_throttle_after": 0.3,
+        "oversteer_throttle_delta": -0.9,
+        "assumptions_note": "before_session = rec creation session",
+    }
+    rec_text = json.dumps({
+        "changes": [
+            {"field": "diff_accel", "from": 20, "to": 15,
+             "why": "reduce oversteer on throttle"}
+        ]
+    })
+    row = {
+        "id": 1,
+        "score_verdict": "improved",
+        "score_confidence": 0.75,
+        "score_details": json.dumps(details),
+        "recommendation_text": rec_text,
+    }
+    result = format_performance_block([row])
+    assert "oversteer on throttle" in result, (
+        "oversteer_throttle metric must appear in the measured line when present")
+
+
+def test_format_performance_block_omits_oversteer_throttle_when_absent():
+    """m2: oversteer_throttle is silently omitted when not in score_details."""
+    result = format_performance_block([_scored_rec()])
+    # The base _scored_rec has no oversteer_throttle_* keys → no error, no mention
+    assert isinstance(result, str)
+    assert len(result) > 0  # rec is still rendered without oversteer_throttle line

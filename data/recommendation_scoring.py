@@ -367,20 +367,23 @@ def compute_verdict_and_confidence(
             else:
                 verdict = "neutral"
         else:  # handling target
-            handling_improved = handling_agreement >= 0.6 and lt_neutral_ok
-            handling_worsened = handling_agreement < 0.3 and delta_ms > 0
-
-            if handling_improved:
-                # Mixed-signal override: laptime clearly improved but handling
-                # clearly worsened → neutral (mixed)
-                if lt_improved and handling_agreement < 0.3:
-                    verdict = "neutral"
-                else:
-                    verdict = "improved"
-            elif handling_worsened or lt_worsened:
-                verdict = "worsened"
-            else:
+            # Mixed-signal override (checked first, independently of improved/worsened):
+            # Δt strongly improved BUT handling clearly worsened → neutral (mixed signal).
+            # This guard must run BEFORE the improved branch because handling_improved
+            # requires agreement ≥ 0.6, which excludes agreement < 0.3 — the inner
+            # check inside `if handling_improved` can therefore never fire.
+            if lt_improved and handling_agreement < 0.3:
                 verdict = "neutral"
+            else:
+                handling_improved = handling_agreement >= 0.6 and lt_neutral_ok
+                handling_worsened = handling_agreement < 0.3 and delta_ms > 0
+
+                if handling_improved:
+                    verdict = "improved"
+                elif handling_worsened or lt_worsened:
+                    verdict = "worsened"
+                else:
+                    verdict = "neutral"
 
         # ------------------------------------------------------------------
         # Confidence
@@ -541,11 +544,12 @@ def format_performance_block(
 
                 # Handling rate pairs (before→after/lap)
                 for metric_key, label in [
-                    ("lock_up",            "lock-ups"),
-                    ("wheelspin",          "wheelspin"),
-                    ("oversteer",          "oversteer"),
-                    ("bottoming",          "bottoming"),
-                    ("brake_consistency",  "brake consistency (m)"),
+                    ("lock_up",              "lock-ups"),
+                    ("wheelspin",            "wheelspin"),
+                    ("oversteer",            "oversteer"),
+                    ("oversteer_throttle",   "oversteer on throttle"),
+                    ("bottoming",            "bottoming"),
+                    ("brake_consistency",    "brake consistency (m)"),
                 ]:
                     b_val = details.get(f"{metric_key}_before")
                     a_val = details.get(f"{metric_key}_after")

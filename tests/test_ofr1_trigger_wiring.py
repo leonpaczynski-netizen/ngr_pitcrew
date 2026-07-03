@@ -86,6 +86,20 @@ class TestTriggerScoringPassBody:
             "_trigger_scoring_pass must be fully wrapped in try/except "
             "so it can never raise")
 
+    def test_calls_get_recent_feedback(self, dash_src):
+        """I1: the feedback query must be wired — get_recent_feedback appears in body."""
+        body = _method_body(dash_src, "_trigger_scoring_pass")
+        assert "get_recent_feedback" in body, (
+            "_trigger_scoring_pass must call get_recent_feedback to populate "
+            "has_driver_feedback")
+
+    def test_no_hardcoded_has_driver_feedback_false(self, dash_src):
+        """I1: has_driver_feedback=False must no longer be hardcoded."""
+        body = _method_body(dash_src, "_trigger_scoring_pass")
+        assert "has_driver_feedback=False" not in body, (
+            "has_driver_feedback must be wired from get_recent_feedback, "
+            "not hardcoded to False")
+
 
 # ---------------------------------------------------------------------------
 # 2. Source-scan: call sites wired correctly
@@ -268,6 +282,7 @@ class TestTriggerScoringPassBehaviour:
         stub._db.get_applied_unverified_recs.return_value = [rec]
         stub._db.get_laps_for_scoring.side_effect = [after_laps, before_laps]
         stub._db.persist_score.return_value = True
+        stub._db.get_recent_feedback.return_value = []
 
         stub._trigger_scoring_pass(42, "Fuji Speedway", "fuji_gp", 99)
 
@@ -277,3 +292,67 @@ class TestTriggerScoringPassBehaviour:
         verdict = stub._db.persist_score.call_args[0][1]
         if verdict != "insufficient_data":
             stub._home_refresh_if_visible.assert_called_once()
+
+    def test_feedback_true_when_rows_exist(self):
+        """I1: when get_recent_feedback returns rows, has_driver_feedback=True flows through."""
+        from unittest.mock import patch, call as mock_call
+        stub = _make_scoring_stub()
+
+        after_laps = [_make_clean_lap() for _ in range(8)]
+        before_laps = [_make_clean_lap(92000) for _ in range(8)]
+        rec = _make_rec(rec_id=10, session_id=3)
+
+        stub._db.get_previous_session_id.return_value = 7
+        stub._db.get_applied_unverified_recs.return_value = [rec]
+        stub._db.get_laps_for_scoring.side_effect = [after_laps, before_laps]
+        stub._db.persist_score.return_value = True
+        # Simulate feedback rows present
+        stub._db.get_recent_feedback.return_value = [{"notes": "oversteery"}]
+
+        captured = {}
+        original_compute = None
+
+        import data.recommendation_scoring as _rs
+        original_compute = _rs.compute_verdict_and_confidence
+
+        def _spy_compute(rec, before_w, after_w, **kwargs):
+            captured["has_driver_feedback"] = kwargs.get("has_driver_feedback")
+            return original_compute(rec, before_w, after_w, **kwargs)
+
+        with patch.object(_rs, "compute_verdict_and_confidence", side_effect=_spy_compute):
+            stub._trigger_scoring_pass(42, "Fuji Speedway", "fuji_gp", 99)
+
+        assert captured.get("has_driver_feedback") is True, (
+            "has_driver_feedback must be True when feedback rows are present")
+        # Also verify get_recent_feedback was called with the correct car+track
+        stub._db.get_recent_feedback.assert_called_once_with(42, "Fuji Speedway")
+
+    def test_feedback_false_when_no_rows(self):
+        """I1: when get_recent_feedback returns empty list, has_driver_feedback=False."""
+        import data.recommendation_scoring as _rs
+        from unittest.mock import patch
+
+        stub = _make_scoring_stub()
+
+        after_laps = [_make_clean_lap() for _ in range(8)]
+        before_laps = [_make_clean_lap(92000) for _ in range(8)]
+        rec = _make_rec(rec_id=11, session_id=3)
+
+        stub._db.get_previous_session_id.return_value = 7
+        stub._db.get_applied_unverified_recs.return_value = [rec]
+        stub._db.get_laps_for_scoring.side_effect = [after_laps, before_laps]
+        stub._db.persist_score.return_value = True
+        stub._db.get_recent_feedback.return_value = []
+
+        captured = {}
+        original_compute = _rs.compute_verdict_and_confidence
+
+        def _spy_compute(rec, before_w, after_w, **kwargs):
+            captured["has_driver_feedback"] = kwargs.get("has_driver_feedback")
+            return original_compute(rec, before_w, after_w, **kwargs)
+
+        with patch.object(_rs, "compute_verdict_and_confidence", side_effect=_spy_compute):
+            stub._trigger_scoring_pass(42, "Fuji Speedway", "fuji_gp", 99)
+
+        assert captured.get("has_driver_feedback") is False, (
+            "has_driver_feedback must be False when no feedback rows exist")

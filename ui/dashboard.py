@@ -819,6 +819,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             after_laps = self._db.get_laps_for_scoring(after_sid)
             after_window = aggregate_lap_window(after_laps)
             multi_count = len(scoreable)
+            # Query driver feedback once for this car+track (not per rec).
+            has_driver_feedback = bool(
+                self._db.get_recent_feedback(car_id, track)
+            )
             written = 0
             for rec in scoreable:
                 # Fetch before-side laps per rec (each rec may have been created
@@ -828,7 +832,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 result = compute_verdict_and_confidence(
                     rec, before_window, after_window,
                     multi_rec_count=multi_count,
-                    has_driver_feedback=False,
+                    has_driver_feedback=has_driver_feedback,
                 )
                 self._db.persist_score(
                     result.rec_id, result.verdict, result.confidence, result.details

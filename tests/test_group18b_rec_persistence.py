@@ -385,7 +385,7 @@ def test_car_setup_recommendation_has_raw_response():
 # ---------------------------------------------------------------------------
 
 # AC1 — schema version must be 9 after migration (v9 adds OFR-1 scoring columns)
-def test_schema_version_is_5(db):
+def test_schema_version_is_current(db):
     """PRAGMA user_version must equal 9 after opening a fresh DB (v9 migration added)."""
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
     assert version == 9, f"Expected schema version 9, got {version}"

@@ -1486,7 +1486,9 @@ class DrivingAdvisor:
         try:
             car_id   = int(self._car_id_ref[0]) or 0
             track    = self._config.get("strategy", {}).get("track", "") or ""
-            layout_id = self._config.get("strategy", {}).get("layout_id", "") or ""
+            # Recs are stored with empty layout_id; the cross-layout guard matches
+            # ''-to-''; no config['strategy'] read permitted here.
+            layout_id = ""
             from data.recommendation_scoring import (
                 format_performance_block as _fmt_perf,
             )

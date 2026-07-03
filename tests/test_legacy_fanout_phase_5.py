@@ -110,10 +110,31 @@ FROZEN_ALLOWLIST = {
     # the dispatcher now holds a frozen SessionTag pushed by the UI. One
     # construction-time seed read remains (before any thread starts).
     ("main.py", "__init__"): 1,                              # SessionTag seed — bridge
+    # -- strategy/driving_advisor.py ----------------------------------------- #
+    # Pre-existing legacy bridge reads, frozen 2026-07-04 when the scan was
+    # extended to close the gap OFR-1's validator found.  After the I2 fix the
+    # OFR-1 path contributes ZERO entries (_get_previous_ai_context retains
+    # only its two pre-existing track reads; layout_id is now a literal "").
+    ("strategy/driving_advisor.py", "build_coaching_response"): 1,
+    ("strategy/driving_advisor.py", "build_combined_setup_response"): 1,
+    ("strategy/driving_advisor.py", "build_driver_feeling_response"): 1,
+    ("strategy/driving_advisor.py", "build_setup_advice_response"): 1,
+    ("strategy/driving_advisor.py", "_build_combined_prompt"): 1,
+    ("strategy/driving_advisor.py", "_build_setup_prompt"): 1,
+    ("strategy/driving_advisor.py", "_car_track_header"): 1,
+    ("strategy/driving_advisor.py", "_get_driver_feedback_context"): 1,
+    ("strategy/driving_advisor.py", "_get_enriched_issue_context"): 1,
+    ("strategy/driving_advisor.py", "_get_event_context_block"): 1,
+    ("strategy/driving_advisor.py", "_get_history_context"): 1,
+    ("strategy/driving_advisor.py", "_get_live_coaching_context"): 1,
+    ("strategy/driving_advisor.py", "_get_live_segment_context"): 1,
+    ("strategy/driving_advisor.py", "_get_previous_ai_context"): 2,
+    ("strategy/driving_advisor.py", "_get_track_intelligence_context"): 1,
 }
 
 _SCAN_FILES = ("ui/dashboard.py", "ui/setup_builder_ui.py",
-               "ui/track_modelling_ui.py", "main.py")
+               "ui/track_modelling_ui.py", "main.py",
+               "strategy/driving_advisor.py")
 _ACCESS = re.compile(r'(?:get|setdefault)\("strategy"')
 
 
