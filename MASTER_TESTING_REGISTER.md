@@ -5331,3 +5331,72 @@ golden-vector suite loudly.)
 race config" flow + home, item 4, so the hash inputs, restore writers, and
 plan-state persistence migrate together under the golden vectors), or
 **return to product work** (deferred OFR-1 between-race learning loop).
+
+---
+
+## Working Race Config Read Model (2026-07-04)
+
+> Branch `working-race-config` (from `master` @ `7f4a95a`).
+> Full doc: `docs/WORKING_RACE_CONFIG.md`.
+> **Full suite: 4760 pass / 6 skip / 0 fail** (25 new tests; hash-vector suite
+> updated in place; `FROZEN_ALLOWLIST` consciously reshaped).
+
+### What was done
+Retirement-map item 3, **reader half** (explicit product decision: "read model +
+readers"; the writer half — writers write a typed object, dict fields become
+derived — is deferred with item 4).
+
+- **`data/working_race_config.py` (NEW, pure)** — `WorkingRaceConfig` (frozen:
+  track, car, raw race_type token, `total_laps` default **25**,
+  `race_duration_minutes` default **60** — the hash's own absent-key defaults,
+  deliberately distinct from EventContext's 0 — plus the stored `config_id`).
+  `from_strategy()` verbatim; one documented hardening (garbage lengths coerce
+  to defaults instead of raising). **Owns the match-key algorithm**
+  (`length_key` / `hash_raw` / `compute_config_id()` = `sha256[:10]`); the 6b
+  golden vectors still exercise the REAL dashboard method through the new
+  delegation — byte-identity proven end-to-end. `length_text()` for the
+  Strategy-tab detail. Semantics per 6b: usually mirrors the active event;
+  deliberately holds a restored historical session's config during a lap-bank
+  restore (why the concept exists apart from EventContext).
+- **Migrated readers** via the new `_working_race_config()` builder (the single
+  bridge read for the concept): `_compute_race_config_id` (delegates);
+  `_update_race_config` label + `race_configs` snapshot values (the `config_id`
+  WRITE stays — it's the writer); `_sync_strategy_from_event` no-event missing
+  checks; `_save_session_to_db` session tagging (a saved session is tagged with
+  what it actually ran under, incl. a restored config).
+- **Allowlist movement (net −3 direct readers):** `_compute_race_config_id` /
+  `_sync_strategy_from_event` / `_save_session_to_db` entries removed;
+  `_update_race_config` 2→1 (write only); `_working_race_config` +1 (bridge).
+- **Milestone: the reader side of the whole consolidation is complete** —
+  remaining `config["strategy"]` access = writers, context/AI bridges,
+  plan-state persistence, and cosmetic reads, all allowlisted and annotated.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_working_race_config.py` (NEW) | 25 | `from_strategy` verbatim reads; the 25/60 absent-key defaults; None-safety; the documented garbage-coercion hardening; immutability; `length_key`/`hash_raw`; `compute_config_id` asserted against the golden vectors directly on the model; unknown race-type hashes as lap; `length_text` display; schema + module purity; source-scans for all four migrated consumers (incl. the config_id write remaining in `_update_race_config` and the snapshot fields fed from the model); writers-untouched pins (`_fanout_event_to_strategy`, `_load_session_config`); reshaped-allowlist exactness; Home-first + config-guardrail invariants. |
+| `tests/test_race_config_id_hash.py` (updated in place) | 18 | The `_bind` stub now binds the REAL `_working_race_config` builder too, so the golden vectors exercise the full delegated dashboard path end-to-end; the source-level algorithm pin moved to `data/working_race_config.py` (same invariant, new home) + a new dashboard-delegation pin. Vectors unchanged and green — byte-identity proven. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4760/6/0)**.
+- Working config named + typed; match-key algorithm owned by the model — **yes**.
+- Golden vectors green through the delegated path (no re-keying) — **yes**.
+- All targeted readers migrated; allowlist consciously reshaped — **yes (net −3)**.
+- Writers untouched (deferred with item 4) — **yes (pinned)**.
+- No behaviour change (labels/snapshot/tagging identical; one documented garbage-hardening) — **yes**.
+- Clear next-sprint recommendation — **yes**.
+
+### Manual UAT steps
+1. Set an event active — the Strategy tab's Session Match Key line (id + track /
+   car / length detail) reads exactly as before.
+2. Load a historical session from the lap bank — the match key still re-keys to
+   the restored session's config (the restore feature intact).
+3. Save a session — it is tagged with the same track/car/match key as before.
+
+### Next sprint
+**Item 3 writer-half + item 4** — writers write the typed `WorkingRaceConfig`
+(or a successor store); the dict's event-rule fields become derived
+compatibility; plan-state gets a durable home — the actual fan-out deletion,
+now guarded end-to-end by the golden vectors + the frozen allowlist. Or
+**product work** (deferred OFR-1 between-race learning loop).

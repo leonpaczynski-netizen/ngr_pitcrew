@@ -79,6 +79,13 @@ reader migration, no writer change, no behaviour change of any kind.
 
 ## 5. Next sprint recommendation
 
+> **Executed (2026-07-04):** the Working Race Config Read Model sprint ran next
+> — item 3's reader half. `WorkingRaceConfig` now names the concept and owns
+> the match-key algorithm (golden vectors green through the delegation); the
+> hash, `_update_race_config` reads, strategy-sync checks, and session-save
+> tagging read the model. Writer half deferred with item 4. See
+> `docs/WORKING_RACE_CONFIG.md`.
+
 * **Retirement-map item 3 — restore-writer redesign**: give the lap-bank
   restore a first-class "working race config" flow (and home, item 4) so the
   hash inputs, the restore writers, and the plan-state persistence can migrate

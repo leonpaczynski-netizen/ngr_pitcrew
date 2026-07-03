@@ -68,7 +68,11 @@ FROZEN_ALLOWLIST = {
     ("ui/dashboard.py", "_build_session_context"): 1,        # bridge input
     ("ui/dashboard.py", "_build_strategy_ai_snapshot"): 2,   # bridge input
     ("ui/dashboard.py", "_build_strategy_context"): 1,       # bridge input
-    ("ui/dashboard.py", "_compute_race_config_id"): 1,       # HASH — byte-stable
+    # Working Race Config sprint (2026-07-04): the hash + _update_race_config
+    # display reads + strategy-sync no-event checks + session-save tagging now
+    # read the named WorkingRaceConfig model; its builder is the single bridge
+    # read for the concept.
+    ("ui/dashboard.py", "_working_race_config"): 1,          # bridge (working config)
     ("ui/dashboard.py", "_display_practice_results"): 1,     # cosmetic
     ("ui/dashboard.py", "_fanout_event_to_strategy"): 1,     # THE writer
     ("ui/dashboard.py", "_live_init_from_plan"): 1,          # plan restore
@@ -79,13 +83,13 @@ FROZEN_ALLOWLIST = {
     ("ui/dashboard.py", "_resolve_setup_id_for_lap"): 1,     # cosmetic
     ("ui/dashboard.py", "_run_ai_analysis"): 1,              # plan state
     ("ui/dashboard.py", "_save_race_params"): 1,             # plan writer
-    ("ui/dashboard.py", "_save_session_to_db"): 1,           # session save
+    # (_save_session_to_db migrated to WorkingRaceConfig — entry removed)
     ("ui/dashboard.py", "_save_setup_from_lapdata"): 1,      # cosmetic
     ("ui/dashboard.py", "_sb_refresh_saved_plans_combo"): 1, # plan state
     ("ui/dashboard.py", "_sb_save_race_plan"): 1,            # plan state
     ("ui/dashboard.py", "_strategy_apply_plan"): 1,          # plan writer
-    ("ui/dashboard.py", "_sync_strategy_from_event"): 1,     # missing-check residual
-    ("ui/dashboard.py", "_update_race_config"): 2,           # config_id writer
+    # (_sync_strategy_from_event residual migrated to WorkingRaceConfig — removed)
+    ("ui/dashboard.py", "_update_race_config"): 1,           # config_id WRITER (read migrated)
     ("ui/dashboard.py", "_update_telemetry_labels"): 1,      # cosmetic
     ("ui/dashboard.py", "_worker"): 1,                       # degradation worker (plan)
     # -- ui/setup_builder_ui.py --------------------------------------------- #
