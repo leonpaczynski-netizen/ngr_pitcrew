@@ -1,5 +1,13 @@
 # EventContext Migration — `config["strategy"]` dependency register
 
+> **Legacy Fan-Out Removal Phase 1 update (2026-07-03):** `dashboard._sync_practice_from_event`
+> now reads the car from `EventContext.car` instead of `config["strategy"]["car"]`
+> (byte-identical — car resolves strategy-first in EventContext and events never
+> store a car). DB-first event-rule reads (track/tyre_wear/fuel_mult/tuning/bop/
+> race-length) remain deferred to Phase 2 because reading them from EventContext
+> would change values when a DB edit post-dates "Set as Active". See
+> `docs/LEGACY_FANOUT_PHASE_1.md`.
+
 > Sprint: **State Consolidation 1 — EventContext** · 2026-07-03
 > Companion: `data/event_context.py`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5, §7)
 > Status: EventContext read model landed; `config["strategy"]` **retained** as

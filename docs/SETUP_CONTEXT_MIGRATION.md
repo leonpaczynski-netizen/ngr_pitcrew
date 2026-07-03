@@ -1,5 +1,12 @@
 # SetupContext Migration — setup-recommendation state register
 
+> **Legacy Fan-Out Removal Phase 1 update (2026-07-03):** the setup-builder's
+> `config_id` reads were migrated to `StrategyContext.config_id` (via
+> `dashboard._active_config_id()`); the remaining setup-builder `config["strategy"]`
+> reads (`car`/`track` for history keys, and the AI-input reads feeding
+> `SetupAISnapshot`) are classified LEGACY_REQUIRED/deferred — see
+> `docs/LEGACY_FANOUT_PHASE_1.md` §3.
+
 > Sprint: **State Consolidation 3 — SetupContext** · 2026-07-03
 > Branch: `state-consolidation-3-setup-context`
 > Companion: `data/setup_context.py`, `tests/test_setup_context.py`,

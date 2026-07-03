@@ -6174,7 +6174,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             evt = self._active_event()
             if not evt:
                 return
-            car   = self._config.get("strategy", {}).get("car", "")
+            # Phase 1: read the car from the canonical EventContext (car is
+            # sourced strategy-first there, so byte-identical to the raw read)
+            # instead of reaching into config["strategy"].
+            car   = self._build_event_context().car
             track = evt.get("track", "")
             if car and hasattr(self, "_bank_car_combo"):
                 idx = self._bank_car_combo.findText(car)
@@ -7047,6 +7050,18 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:  # pragma: no cover - defensive; must never break the UI
             from data.strategy_context import empty_strategy_context
             return empty_strategy_context()
+
+    def _active_config_id(self) -> str:
+        """The active race ``config_id`` (session match key) read from the
+        canonical StrategyContext instead of raw ``config["strategy"]``.
+
+        Legacy Fan-Out Removal Phase 1: ``config_id`` is strategy-plan state
+        owned by StrategyContext, so display/history consumers read it here.
+        Byte-identical to ``config["strategy"].get("config_id", "")`` — the
+        context coerces the same value with ``str(...)`` (proven by test in
+        tests/test_legacy_fanout_phase_1.py). Never raises.
+        """
+        return self._build_strategy_context().config_id
 
     def _build_strategy_ai_snapshot(self, fuel_burn_override=None):
         """Frozen AI-input snapshot for race-strategy analysis.

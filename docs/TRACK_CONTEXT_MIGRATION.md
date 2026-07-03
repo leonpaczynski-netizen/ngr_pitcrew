@@ -1,5 +1,12 @@
 # TrackContext Migration — track/layout/map state register
 
+> **Legacy Fan-Out Removal Phase 1 update (2026-07-03):** no TrackContext
+> consumer was migrated this sprint. The Track Modelling combo writer
+> (`config["strategy"]["track_location_id"]` / `["layout_id"]`) is a preserved
+> WRITER (pinned by test), and the `track` display-name reads are DB-first in
+> EventContext (not byte-identical to the strategy-first raw reads), so they are
+> deferred to Phase 2. See `docs/LEGACY_FANOUT_PHASE_1.md` §3.
+
 > Sprint: **State Consolidation 4 — TrackContext** · 2026-07-03
 > Branch: `state-consolidation-4-track-context`
 > Companion: `data/track_context.py`, `tests/test_track_context.py`,
