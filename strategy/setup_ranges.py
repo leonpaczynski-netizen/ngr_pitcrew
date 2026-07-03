@@ -169,6 +169,50 @@ def resolve_ranges(car_name: str) -> dict[str, tuple]:
     return result
 
 
+def resolve_effective_ranges(
+    car_name: str, event_ctx: dict | None = None
+) -> dict[str, tuple]:
+    """Return the single authoritative {field: (min, max)} range set.
+
+    Precedence (lowest to highest):
+      1. GENERIC_DEFAULTS
+      2. per-car overrides (applied by resolve_ranges via car_setup_ranges.json)
+      3. event-specific overrides in ``event_ctx["field_overrides"]``, shaped
+         ``{field: {"min": N, "max": N}}``.
+
+    Both the AI prompt's machine-readable range block and the post-AI output
+    validator MUST source their ranges from this function so they can never
+    diverge. Never raises; malformed override entries are ignored silently.
+    """
+    ranges = resolve_ranges(car_name)
+
+    if not isinstance(event_ctx, dict):
+        return ranges
+
+    overrides = event_ctx.get("field_overrides")
+    if not isinstance(overrides, dict):
+        return ranges
+
+    for field_name, bounds in overrides.items():
+        if not isinstance(bounds, dict):
+            continue
+        try:
+            lo = bounds["min"]
+            hi = bounds["max"]
+        except (KeyError, TypeError):
+            continue
+        if lo is None or hi is None:
+            continue
+        try:
+            if lo > hi:
+                lo, hi = hi, lo
+        except TypeError:
+            continue
+        ranges[field_name] = (lo, hi)
+
+    return ranges
+
+
 def save_car_ranges(car_name: str, overrides: dict[str, dict]) -> None:
     """Merge per-car overrides into the JSON store and write atomically.
 

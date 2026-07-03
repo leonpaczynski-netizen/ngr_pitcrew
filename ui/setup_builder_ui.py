@@ -1,6 +1,7 @@
 """Setup Builder tab — mixin for MainWindow (DashboardWindow)."""
 from __future__ import annotations
 
+import html
 import json
 import json as _json  # alias used in _display_setup_result (verbatim copy from dashboard.py)
 import time
@@ -67,6 +68,86 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
         f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
         "</div>"
     )
+
+
+_RECOMMENDED_ACTION_LABELS = {
+    "use_setup": "Use setup",
+    "use_with_caution": "Use with caution",
+    "regenerate_setup": "Regenerate the setup",
+    "fix_prompt_then_regenerate": "Fix event/prompt context, then regenerate",
+    "manual_engineer_review_required": "Manual engineer review required",
+}
+
+
+def _format_setup_validation_banner(sv: dict) -> str:
+    """Return an HTML banner for a SetupValidationResult.to_dict() payload.
+
+    Pure helper (no Qt). Consumes only primitives from the ``setup_validation``
+    dict emitted by the backend gates (no cross-layer dataclass import). All
+    validator/AI text is HTML-escaped.
+
+    - FAIL                → red rejection banner (blockers + recommended action)
+    - PASS_WITH_WARNINGS  → orange caution banner (warnings + recommended action)
+    - PASS / unknown / empty → "" (no banner)
+    """
+    if not sv:
+        return ""
+    status = str(sv.get("validation_status", "")).lower()
+    action_code = str(sv.get("recommended_action", ""))
+    action_label = _RECOMMENDED_ACTION_LABELS.get(
+        action_code, action_code.replace("_", " ")
+    )
+    summary = html.escape(str(sv.get("overall_summary", "") or ""))
+
+    if status == "fail":
+        blockers = sv.get("blockers") or []
+        items = "".join(
+            f"<li style='margin:2px 0;'>{html.escape(str(b))}</li>" for b in blockers
+        )
+        fixes = sv.get("minimum_required_prompt_fixes_before_regeneration") or []
+        fixes_html = ""
+        if fixes:
+            fix_items = "".join(
+                f"<li style='margin:2px 0;'>{html.escape(str(f))}</li>" for f in fixes
+            )
+            fixes_html = (
+                "<div style='margin-top:6px; color:#CC8080; font-size:11px;'>"
+                "<b>To fix:</b>"
+                f"<ul style='margin:2px 0 0 0; padding-left:16px;'>{fix_items}</ul></div>"
+            )
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>Setup rejected — validation failed.</b>"
+            + (f"<br><span style='font-size:11px; color:#CC6060;'>{summary}</span>"
+               if summary else "")
+            + (f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
+               if items else "")
+            + fixes_html
+            + ("<div style='margin-top:6px; color:#E0A0A0; font-size:11px;'>"
+               f"<b>Recommended action:</b> {html.escape(action_label)}</div>"
+               if action_label else "")
+            + "</div>"
+        )
+
+    if status == "pass_with_warnings":
+        warnings = sv.get("warnings") or []
+        items = "".join(
+            f"<li style='margin:2px 0;'>{html.escape(str(w))}</li>" for w in warnings
+        )
+        return (
+            "<div style='background:#1A1A00; border:1px solid #C8A020; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+            "&#9888; <b>Setup accepted with cautions</b>"
+            + (f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{items}</ul>"
+               if items else "")
+            + ("<div style='margin-top:6px; font-size:11px;'>"
+               f"<b>Recommended action:</b> {html.escape(action_label)}</div>"
+               if action_label else "")
+            + "</div>"
+        )
+
+    return ""
 
 
 def _set_spin_readonly(spin, readonly: bool) -> None:
@@ -1142,6 +1223,7 @@ class SetupBuilderMixin:
             _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
             _eng_validation_errors: list = data.get("engineering_validation_errors", [])
             _diagnosis: dict = data.get("diagnosis") or {}
+            _setup_validation: dict = data.get("setup_validation") or {}
         except (_json.JSONDecodeError, AttributeError):
             # Fallback: display raw text, no changes section
             if _violation_banner:
@@ -1184,6 +1266,24 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
+        # Setup AI Validation Gates — compute the validation banner and, on a
+        # hard FAIL, reject the setup: hide Apply, clear stored fields, and show
+        # only the rejection reason (do not save a rejected setup to history).
+        _sv_banner = _format_setup_validation_banner(_setup_validation)
+        _sv_status = str(_setup_validation.get("validation_status", "")).lower()
+        if _setup_validation and (
+            _sv_status == "fail"
+            or _setup_validation.get("safe_to_show_driver") is False
+        ):
+            self._last_setup_ai_fields = {}
+            if hasattr(self, "_btn_apply_ai_setup"):
+                self._btn_apply_ai_setup.setVisible(False)
+            self._setup_result_text.setHtml(
+                _sv_banner or _eng_banner or _violation_banner
+                or "<span style='color:#F55;'>Setup rejected by validation.</span>"
+            )
+            return
+
         # Store parsed fields so the apply button can use them
         self._last_setup_ai_fields = {
             k: v for k, v in setup_fields.items()
@@ -1200,7 +1300,8 @@ class SetupBuilderMixin:
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
         html = (
-            _eng_banner
+            _sv_banner
+            + _eng_banner
             + _diagnosis_html
             + _violation_banner
             + _validation_banner

@@ -14,7 +14,7 @@ from typing import Optional, TYPE_CHECKING
 from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
-from strategy.setup_ranges import resolve_ranges
+from strategy.setup_ranges import resolve_ranges, resolve_effective_ranges
 from strategy.setup_diagnosis import (
     PERSONAL_DRIVER_TUNING_MODEL,
     DRIVER_HARD_CONSTRAINTS,
@@ -22,6 +22,14 @@ from strategy.setup_diagnosis import (
     validate_setup_engineering,
     format_diagnosis_for_prompt,
 )
+# Setup AI Validation Gates (pure-Python; validators lazily import strategy/ internally)
+from data.setup_validation_result import merge_results
+from data.setup_prompt_validation import validate_setup_prompt_context
+from data.setup_telemetry_validation import (
+    assess_telemetry_sanity,
+    build_telemetry_warning_block,
+)
+from data.setup_output_validation import validate_setup_output
 from ui.gt7_data import build_track_context
 
 # Setup-tuning categories that can be locked by event rules. Must match the
@@ -77,16 +85,20 @@ def _fmt_bound(lo, hi) -> str:
     return f"{lo}–{hi}"
 
 
-def _valid_ranges_block(car_name: str) -> str:
+def _valid_ranges_block(car_name: str, ranges: "dict | None" = None) -> str:
     """Per-car min–max for every adjustable field, so the AI suggests values
     within the car's real limits and knows which parts ARE adjustable.
 
     Without this block the analysis prompts list only field NAMES, so the AI
     has no idea of the car's bounds and conservatively declines to touch
-    parts like aero. Built from the same resolve_ranges() data the parser
-    clamps against, so the advice and the applied values agree.
+    parts like aero. Built from the same effective-range data the output
+    validator checks against, so the advice and the applied values agree.
+
+    When *ranges* is supplied (the effective ranges resolved once by the
+    caller), it is used verbatim so the prompt and the post-AI validator can
+    never diverge; otherwise per-car ranges are resolved here.
     """
-    r = resolve_ranges(car_name)
+    r = ranges if ranges is not None else resolve_ranges(car_name)
     lines = []
     for field, unit in _RANGE_BLOCK_FIELDS:
         if field not in r:
@@ -1049,6 +1061,57 @@ class DrivingAdvisor:
             except Exception:
                 diagnosis = {}
 
+        # Effective GT7 ranges: one authoritative set shared by the prompt and
+        # the post-AI output validator so they can never diverge (AC7).
+        try:
+            _effective_ranges = resolve_effective_ranges(car_name, _event_ctx)
+        except Exception:
+            _effective_ranges = resolve_ranges(car_name)
+
+        # Track / layout identity for the pre-AI context gate (same config source
+        # the race-engineer directives read).
+        _sc = self._config.get("strategy", {}) if isinstance(self._config, dict) else {}
+        _loc_id = _sc.get("track_location_id") or ""
+        _lay_id = _sc.get("layout_id") or ""
+
+        # ── Gate 1: pre-AI prompt/context validation (AC1–AC3) ────────────────
+        _track_model_result = None
+        if _loc_id and _lay_id:
+            try:
+                from data.track_model_resolver import resolve_best_track_model
+                _track_model_result = resolve_best_track_model(_loc_id, _lay_id)
+            except Exception:
+                _track_model_result = None
+        try:
+            _prompt_result = validate_setup_prompt_context(
+                _event_ctx, _loc_id, _lay_id, car_name,
+                track_model_result=_track_model_result,
+            )
+        except Exception:
+            _prompt_result = None
+        if _prompt_result is not None and \
+                _prompt_result.validation_status.value == "fail":
+            # Do NOT call the AI. Return a rejection payload the UI can render.
+            _merged_fail = merge_results(_prompt_result)
+            return _json.dumps({
+                "analysis": _merged_fail.overall_summary
+                or "Setup rejected — prompt/context validation failed.",
+                "primary_issue": "",
+                "changes": [],
+                "setup_fields": {},
+                "validation_errors": [],
+                "engineering_errors": [],
+                "confidence": 0.0,
+                "setup_validation": _merged_fail.to_dict(),
+            }, ensure_ascii=False)
+
+        # ── Gate 2: telemetry sanity (AC4/AC5) — assessed before the prompt so a
+        # corrupted/degraded warning can be injected to suppress gearbox changes.
+        try:
+            _tele_result = assess_telemetry_sanity(recent)
+        except Exception:
+            _tele_result = None
+
         history_str = self._get_history_context()
         prompt = self._build_combined_prompt(
             recent, setup_dict, history_str,
@@ -1058,7 +1121,15 @@ class DrivingAdvisor:
             compound=compound,
             prior_outcomes=prior_outcomes,
             diagnosis=diagnosis,
+            effective_ranges=_effective_ranges,
         )
+        if _tele_result is not None:
+            try:
+                _tele_block = build_telemetry_warning_block(_tele_result)
+                if _tele_block:
+                    prompt = prompt + "\n\n" + _tele_block
+            except Exception:
+                pass
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
             _response_text = call_api(prompt, api_key, max_tokens=1500,
@@ -1122,7 +1193,7 @@ class DrivingAdvisor:
 
                 # Engineering validation + single regenerate
                 try:
-                    _ranges = resolve_ranges(car_name)
+                    _ranges = _effective_ranges
                     _eng_errors = validate_setup_engineering(
                         _data, diagnosis, setup_dict, _ranges, _event_ctx,
                         car_name=car_name,
@@ -1187,6 +1258,26 @@ class DrivingAdvisor:
                         _data["diagnosis"] = diagnosis
                 except Exception:
                     pass  # Engineering validation must not break the response path
+
+                # ── Gate 3: post-AI output validation (AC6–AC9 + gearbox) ─────
+                # Merge the pre-AI, telemetry and output findings into the one
+                # SetupValidationResult the UI renders. On FAIL the UI hides the
+                # Apply button; the raw AI output is still logged by call_api.
+                try:
+                    _out_result = validate_setup_output(
+                        _data, _effective_ranges, diagnosis or {},
+                        _locked, _event_ctx,
+                        current_setup=setup_dict, car_name=car_name,
+                        telemetry_result=_tele_result,
+                    )
+                    _gate_results = [
+                        r for r in (_prompt_result, _tele_result, _out_result)
+                        if r is not None
+                    ]
+                    _merged = merge_results(*_gate_results)
+                    _data["setup_validation"] = _merged.to_dict()
+                except Exception:
+                    pass  # Validation gates must not break the response path
 
                 _response_text = _json.dumps(_data, ensure_ascii=False)
             except Exception:
@@ -2012,6 +2103,7 @@ In changes, "field" MUST be the exact canonical param key (e.g. arb_front, cambe
         live_position=None,
         prior_outcomes: "list[dict] | None" = None,
         diagnosis: "dict | None" = None,
+        effective_ranges: "dict | None" = None,
     ) -> str:
         """Unified setup-analysis prompt: always includes telemetry; optionally adds feeling."""
         car_specs = car_specs or {}
@@ -2104,7 +2196,7 @@ If a corner number is mentioned, target that type of corner (slow/fast/braking z
         gt7_ref        = load_gt7_reference()
         header         = self._car_track_header(car_name, car_specs)
         tuning_block   = _tuning_constraint_block(allowed_tuning, tuning_locked)
-        ranges_block   = _valid_ranges_block(car_name)
+        ranges_block   = _valid_ranges_block(car_name, effective_ranges)
         event_block    = self._get_event_context_block()
         feedback_block = self._get_driver_feedback_context()
         prev_ai_block  = self._get_previous_ai_context("Setup Advice", prior_outcomes)
