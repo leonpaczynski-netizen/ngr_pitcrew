@@ -15,6 +15,13 @@
 > in sync (int()-wrapped for the integer QSpinBox values), DB-first when they
 > diverge. The **functional** setup-permission/BoP gating still reads
 > `config["strategy"]` (chosen scope). See `docs/LEGACY_FANOUT_PHASE_2.md`.
+>
+> **Legacy Fan-Out Removal Phase 3 update (2026-07-03):** with product sign-off,
+> the functional setup-permission/BoP gating and the DEF-P3-012 tuning
+> validation now also read DB-first EventContext — reader consistency is
+> complete (AI inputs, labels, gating, validation). Only the fan-out writers,
+> minor label fallbacks, and the context-builders' bridge inputs remain on
+> `config["strategy"]`. See `docs/LEGACY_FANOUT_PHASE_3.md`.
 
 > Sprint: **State Consolidation 1 — EventContext** · 2026-07-03
 > Companion: `data/event_context.py`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5, §7)

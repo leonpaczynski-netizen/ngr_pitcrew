@@ -1,7 +1,11 @@
 # Legacy Fan-Out Removal Phase 2 — Event-Rule Display-Label Migration
 
 > Author: Legacy Fan-Out Removal Phase 2 sprint · Date: 2026-07-03
-> Branch: `legacy-fanout-removal-phase-2` (from `master` @ `c94e4ad`)
+> Branch: `legacy-fanout-removal-phase-2` (from `master` @ `0ae591d`)
+>
+> **Phase 3 update (2026-07-03):** the functional gating + DEF-P3-012 validation
+> described as "left on the fan-out" below were subsequently migrated to
+> DB-first EventContext with product sign-off — see `docs/LEGACY_FANOUT_PHASE_3.md`.
 >
 > Companion docs: `docs/LEGACY_FANOUT_PHASE_1.md`,
 > `docs/EVENT_CONTEXT_MIGRATION.md`, `docs/AI_SNAPSHOT_MIGRATION.md`,

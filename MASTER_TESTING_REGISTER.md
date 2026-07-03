@@ -4906,3 +4906,76 @@ EventContext (changes which fields are editable in the diverged case); consider
 first making `_on_event_save` re-sync (or drop) the fan-out so DB and config can't
 diverge, enabling the Set-as-Active fan-out to be retired. Alternative: wire the
 real UDP-listener connection signal into `SessionContext`.
+
+---
+
+## Legacy Fan-Out Removal Phase 3 — Functional Gating / Validation Migration (2026-07-03)
+
+> Branch `legacy-fanout-removal-phase-3` (from `master` @ `4e6721b`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_3.md`.
+> **Full suite: 4649 pass / 6 skip / 0 fail** (20 new tests; 2 Phase 2 pins
+> updated in place).
+
+### What was done
+Scope was set by an explicit product decision — **"flip reads only"**. The two
+remaining **functional** `config["strategy"]` consumers now read DB-first
+`EventContext`; the fan-out writers are untouched (Phase 4's job).
+
+- **Setup-permission gating** (`ui/setup_builder_ui.py
+  _sync_setup_builder_from_event`) — feeds the unchanged `_on_bop_toggled` +
+  `_apply_setup_permissions` from `ev_ctx.bop_enabled` / `ev_ctx.tuning_allowed`
+  / `list(ev_ctx.allowed_tuning_categories)` (was `bool(sc.get("bop"/"tuning",
+  …))` / `sc.get("allowed_tuning_categories", [])`). Gating LOGIC unchanged —
+  only its inputs moved.
+- **DEF-P3-012 strategy-options tuning validation** (`ui/dashboard.py`) —
+  `_strat_locked` / `_strat_allowed` now come from `_build_event_context()`
+  (`tuning_locked` / `allowed_tuning_categories`); the
+  `validate_ai_setup_response` call is unchanged.
+- **Deliberately NOT migrated:** `_on_event_set_active`'s own
+  `_apply_setup_permissions(strat.get(...))` call — inside the writer, `strat`
+  was just written from the UI widgets (fresh by construction; pinned by test).
+
+**Behaviour:** byte-identical in the in-sync case. In the diverged case (event
+edited + Saved, not re-activated) the signed-off change applies: **which setup
+fields are editable, and the tuning validation, follow the fresh DB truth** —
+removing the Phase 2 inconsistency where labels showed DB truth while the lock
+state enforced the stale fan-out. **Reader consistency is now complete** (AI
+inputs, labels, gating, validation all DB-first); the fan-out remains only for
+its writers, minor label fallbacks (refuel/req/avail), the car spinbox rebind,
+`_get_mandatory_compounds`, the no-event branch, and the context-builders'
+legacy-bridge inputs.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_3.py` (NEW) | 20 | **In-sync byte-identity** of the gating trio (`bop_enabled`/`tuning_allowed`/`allowed_tuning_categories`) and the validation inputs (`tuning_locked`, allowed list) vs the verbatim old expressions — parametrized across unrestricted / BoP-on / fully-locked / partially-restricted + empty-state defaults; **DB-first divergence** — an edited-not-reactivated event flips the gating inputs and the lock state; **source-scans** — gating inputs and DEF-P3-012 read EventContext, zero raw `sc.get("bop"/"tuning"/"allowed_tuning_categories")` left at either site, gating calls unchanged (`_on_bop_toggled(_bop)`, `_apply_setup_permissions(_bop, _tuning, _cats)`), `_apply_setup_permissions` body pinned (logic untouched, no config reads), validator still called per option, the writer-internal permission call still reads fresh `strat`; fan-out writers + Home-first + config-guardrail invariants. |
+| `tests/test_legacy_fanout_phase_2.py` (updated in place) | 15 | The two "functional gating still reads fan-out" pins became "gating calls intact" + "permission call signature unchanged" — the invariant that evolved with the Phase 3 sign-off. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4649/6/0)**.
+- Functional gating + validation sourced from DB-first EventContext — **yes**.
+- Byte-identical in-sync; diverged behaviour change signed off + tested — **yes**.
+- Gating/validation logic unchanged (inputs only) — **yes (bodies pinned)**.
+- Fan-out writers preserved; no new writers — **yes (pinned)**.
+- No setup-recommendation/strategy-calc/track-mapping/AI-prompt/PTT/voice/tab-order change — **yes**.
+- No real config touched by tests — **yes**.
+- Clear next-sprint recommendation — **yes (Phase 4: re-sync on save → migrate last readers → retire the writer)**.
+
+### Manual UAT steps
+1. Set an event active — Setup Builder lock state/banner and editable fields are
+   exactly as before (byte-identical to the fan-out).
+2. Edit that event's tuning/BoP rules in Event Planner and **Save** (do NOT
+   re-activate); open Setup Builder — the lock banner and editable fields now
+   follow the edited DB values (and match the readout labels + what the AI
+   would use). Run a strategy analysis — the tuning-violation warning uses the
+   same edited rules.
+3. Click "Set as Active" — everything agrees, as before.
+
+### Next sprint
+**Legacy Fan-Out Removal Phase 4 — retire the divergence, then the fan-out:**
+(1) `_on_event_save` re-syncs the fan-out when the saved event is active
+(config-only); (2) migrate the last minor readers (refuel/req/avail fallbacks,
+`_get_mandatory_compounds`, car rebind); (3) retire the Set-as-Active fan-out
+writer (keep `config["strategy"]` only as the context-builders' input).
+Alternative: wire the real UDP-listener connection signal into `SessionContext`.
