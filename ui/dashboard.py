@@ -676,6 +676,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         has_laps = self._home_has_practice_laps(event_ctx)
         session_ctx = self._build_session_context(
             has_practice_laps=has_laps, has_valid_laps=has_laps)
+        # OFR-1: query DB for real learning state to light up journey step-13.
+        learning = False
+        try:
+            if self._db is not None and event_ctx.car:
+                _cid = self._db.get_car_id(event_ctx.car)
+                if _cid:
+                    learning = self._db.has_learning_for_car_track(_cid, event_ctx.track)
+        except Exception:
+            learning = False
         return build_home_dashboard_state(
             event_context=event_ctx,
             strategy_context=strategy_ctx,
@@ -685,6 +694,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             has_practice_laps=session_ctx.has_practice_laps,
             has_valid_laps=session_ctx.has_valid_laps,
             live_active=session_ctx.live_active,
+            learning_saved=learning,
         )
 
     def _home_has_practice_laps(self, event_ctx) -> bool:
@@ -762,6 +772,79 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._home_refresh()
         except Exception:  # pragma: no cover - defensive
             pass
+
+    def _trigger_scoring_pass(
+        self,
+        car_id: int,
+        track: str,
+        layout_id: str,
+        new_session_id: int,
+    ) -> None:
+        """OFR-1: score any applied-but-unscored setup recommendations from the
+        prior session for this car+track immediately after a new session opens.
+
+        What: fetches the most-recent finished session (before new_session_id),
+        collects any applied-but-unscored recs for car+track+layout, scores each
+        via pure recommendation_scoring helpers, persists the result, then nudges
+        the Home Dashboard if ≥1 non-trivial verdict was written.
+
+        Why: the scoring window is only knowable once the next session opens —
+        that moment confirms the driver has finished a session with the new setup
+        applied, so before/after telemetry can be compared.
+
+        Never raises: the entire body is wrapped in try/except so a DB hiccup or
+        unexpected data cannot block session opening.  Inputs come in as explicit
+        params — never reads config['strategy']."""
+        try:
+            # Guard: DB must be present and car+track must be identified.
+            if self._db is None or car_id <= 0 or not track:
+                return
+            # Resolve the "after" session: the session just finished (most recent
+            # session for this car+track before the freshly opened new_session_id).
+            after_sid = self._db.get_previous_session_id(car_id, track, new_session_id)
+            if not after_sid:
+                return
+            # Fetch recs that are applied but not yet scored for this layout.
+            recs = self._db.get_applied_unverified_recs(car_id, track, layout_id)
+            # Skip any rec that was created in the after session itself —
+            # a recommendation cannot be scored against its own creation session.
+            scoreable = [r for r in recs if r.get("session_id") != after_sid]
+            if not scoreable:
+                return
+            from data.recommendation_scoring import (
+                aggregate_lap_window,
+                compute_verdict_and_confidence,
+            )
+            # Fetch after-side laps once (shared across all recs).
+            after_laps = self._db.get_laps_for_scoring(after_sid)
+            after_window = aggregate_lap_window(after_laps)
+            multi_count = len(scoreable)
+            # Query driver feedback once for this car+track (not per rec).
+            has_driver_feedback = bool(
+                self._db.get_recent_feedback(car_id, track)
+            )
+            written = 0
+            for rec in scoreable:
+                # Fetch before-side laps per rec (each rec may have been created
+                # in a different earlier session).
+                before_laps = self._db.get_laps_for_scoring(rec["session_id"])
+                before_window = aggregate_lap_window(before_laps)
+                result = compute_verdict_and_confidence(
+                    rec, before_window, after_window,
+                    multi_rec_count=multi_count,
+                    has_driver_feedback=has_driver_feedback,
+                )
+                self._db.persist_score(
+                    result.rec_id, result.verdict, result.confidence, result.details
+                )
+                if result.verdict != "insufficient_data":
+                    written += 1
+            print(f"[Learning] scored {len(scoreable)} recommendation(s) for "
+                  f"{car_id}/{track} ({written} non-trivial)")
+            if written >= 1:
+                self._home_refresh_if_visible()
+        except Exception as exc:
+            print(f"[Learning] scoring pass error: {exc}")
 
     # --- Live tab -----------------------------------------------------------
 
@@ -1189,6 +1272,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 )
                 self._dispatcher.set_session_id(sid)
                 print(f"[LiveMode] session opened: id={sid} type={session_type} track={track!r}")
+                # OFR-1: score any prior applied-but-unscored recs now that a
+                # new session has opened and the after-session is identifiable.
+                self._trigger_scoring_pass(car_id, ev_ctx.track, ev_ctx.layout_id, sid)
             except Exception as exc:
                 print(f"[LiveMode] session open error: {exc}")
 
@@ -3274,6 +3360,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception as exc:
             self._set_bank_status(f"Save failed: {exc}")
             return
+        # OFR-1: score prior recs now that the save session has an id; wrc has
+        # no layout notion so pass "" (matches recs saved with empty layout_id).
+        self._trigger_scoring_pass(car_id, wrc.track, "", sid)
         recorder = self._dispatcher._recorder if self._dispatcher else None
         for lap in laps:
             stats = None

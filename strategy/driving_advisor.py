@@ -1479,9 +1479,25 @@ class DrivingAdvisor:
             )
             return "\n".join(lines)
 
-        # Free-text DB path (original behaviour)
+        # Free-text DB path — try OFR-1 scored block first (§6.4), fall back to
+        # free-text get_recommendations_for_context on any exception.
         if self._db is None:
             return ""
+        try:
+            car_id   = int(self._car_id_ref[0]) or 0
+            track    = self._config.get("strategy", {}).get("track", "") or ""
+            # Recs are stored with empty layout_id; the cross-layout guard matches
+            # ''-to-''; no config['strategy'] read permitted here.
+            layout_id = ""
+            from data.recommendation_scoring import (
+                format_performance_block as _fmt_perf,
+            )
+            scored = self._db.get_scored_recs_for_prompt(car_id, track, layout_id)
+            perf_block = _fmt_perf(scored)
+            if perf_block:
+                return perf_block
+        except Exception:
+            pass
         try:
             car_id = int(self._car_id_ref[0]) or 0
             track  = self._config.get("strategy", {}).get("track", "") or ""

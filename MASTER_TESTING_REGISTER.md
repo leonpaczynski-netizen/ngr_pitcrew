@@ -5473,3 +5473,98 @@ was declined as the highest-risk option).
 its goal. Standing item: **OFR-1 between-race learning loop**. Optional
 architectural tail: the plan-state schema migration (item 4 remainder), only
 if/when a feature needs it.
+
+---
+
+## OFR-1 — Between-Race Learning Loop, Loop 1: Setup Self-Scoring (2026-07-04)
+
+> Branch `ofr1-between-race-learning` (from `master` @ `f0a23aa`).
+> Full doc: `docs/OFR1_BETWEEN_RACE_LEARNING.md`. Roadmap spec:
+> `docs/SMART_RACE_ENGINEER_ROADMAP.md` OFR-1 / §5 Loop 1 / §6.4 / Phase 3-B.
+> **Full suite: 4948 pass / 6 skip / 0 fail** (171 new tests; pre-feature
+> baseline 4777). Built via the **/feature-factory** chain with human approval
+> gates (story, brief, findings); builder output checkpoint-committed before
+> each verifier stage.
+
+### What was built
+After each session the app self-scores the AI's applied setup recommendations
+against measured before/after telemetry and feeds the results into future setup
+prompts. Scope (product decision): roadmap **Loop 1 only**.
+
+- **`data/recommendation_scoring.py` (NEW, pure)** — clean-lap windows
+  (non-pit/non-out; majority compound); handling-vs-laptime target
+  classification from the why-text; verdicts with explicit thresholds
+  (improved: Δt<−200 ms or handling agreement ≥0.6 with Δt≤+100; worsened:
+  Δt>+300 ms or agreement <0.3 with Δt>0; **mixed-signal override**: Δt clearly
+  improved but agreement <0.3 → neutral); confidence from evidence quality
+  (−0.1/clean-lap-below-6 each side, −0.15 mixed signals, +0.1 driver-feedback
+  bonus, ×1/N attribution split, clamp); **honesty gates** (missing
+  before_metrics or <3 clean laps either side → insufficient_data, confidence
+  0.0); **no tyre-radius signal**; `format_performance_block()` renders the
+  roadmap-§6.4 plain-English block (≥0.5 confidence only).
+- **`data/session_db.py`** — migration v9 (`score_confidence REAL DEFAULT
+  -1.0` unscored sentinel, `score_verdict ''`, `score_details '{}'`) + 6
+  methods: `get_applied_unverified_recs` (cross-layout guard),
+  `get_laps_for_scoring`, `get_previous_session_id`, `persist_score`
+  (**write-once**), `has_learning_for_car_track`, `get_scored_recs_for_prompt`
+  (≥0.5, verdict-filtered, LIMIT 5). The pre-existing after_metrics write-once
+  contract untouched.
+- **`ui/dashboard.py`** — `_trigger_scoring_pass` (never raises / never blocks
+  session open / zero `config["strategy"]` reads; after-session resolved via
+  `get_previous_session_id` per the approved brief correction — NOT the
+  never-populated `outcome_session_id`; own-session recs skipped; feedback
+  queried once via `get_recent_feedback`; Home refresh on ≥1 real verdict);
+  call sites after session-open in `_on_live_mode_changed` (ev_ctx) and
+  `_save_session_to_db` (wrc); `_build_home_dashboard_state` derives
+  **`learning_saved`** from `has_learning_for_car_track` — journey step 13 is
+  live, DB-derived, restart-proof.
+- **`strategy/driving_advisor.py`** — `_get_previous_ai_context` injects the
+  scored block FIRST; when non-empty it REPLACES the free-text recommendation
+  history (never both); defensive fallback preserves pre-feature behaviour.
+
+### Factory verification + fix round
+43-test acceptance suite: **all 11 ACs + 4 edge cases PASS** (end-to-end: real
+trigger over real :memory: DB; §6.4 block via the real advisor path; step-13
+via the real flow summary; purity/allowlist/no-radius/no-Loop-2-3-tables
+scans). Validator findings, all fixed + re-verified: **C1** dead mixed-signal
+branch → restructured, now reachable + tested; **I1** feedback bonus never
+activated → wired; **I2** a forbidden `config["strategy"]["layout_id"]` read in
+the advisor → removed (literal `''`, matching stored recs) AND the frozen
+allowlist scan **extended to `strategy/driving_advisor.py`** (15 pre-existing
+bridge entries frozen — the scan gap that hid I2 is closed); minors m1/m2.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_recommendation_scoring.py` (NEW) | 57 | verdict matrix incl. boundaries + the now-reachable mixed-signal override; both honesty gates; target classification; attribution split; feedback bonus; clean-lap deductions; §6.4 block rendering incl. oversteer-on-throttle + threshold/insufficient filtering + malformed-row safety; AST purity + no-radius scans |
+| `tests/test_recommendation_scoring_db.py` (NEW) | 45 | migration v9 defaults; full round-trip; write-once; layout guard (match/mismatch/''-''); get_previous_session_id ordering; has_learning False→True; prompt-query threshold/limit/verdict filters |
+| `tests/test_ofr1_trigger_wiring.py` (NEW) | 26 | trigger body scans (no config reads, no outcome_session_id, except-wrapped, feedback query present, no hardcoded False); both call sites after open_session; home-gate scans; behavioural stubs (real method + mocked DB): scoring happens, own-session skip, db-None safe, feedback True/False flows into compute |
+| `tests/test_ofr1_acceptance.py` (NEW) | 43 | one end-to-end test per AC1–AC11 + 4 edge cases (see the AC table in the doc) |
+| Updated in place | — | schema-pin tests 8→9 (test_group18b — also stale name fixed — and test_group18e); `tests/test_legacy_fanout_phase_5.py` `_SCAN_FILES` + FROZEN_ALLOWLIST extended (driving_advisor ×15) |
+
+### Acceptance criteria — status
+All 11 story ACs verified PASS by the independent acceptance suite (automatic
+trigger; write-once verdict+confidence; handling-metrics-not-laptime-alone;
+evidence-quality confidence; insufficient-data honesty; §6.4 prompt block with
+0.5 threshold; learning_saved gate; no tyre-radius; allowlist unchanged-then-
+consciously-extended; purity + isolated tests; Loops 2–3 untouched) plus the 4
+edge cases (multi-rec split, cross-layout, compounds recorded, own-session skip).
+
+### Manual UAT steps
+1. Apply an AI setup recommendation (Setup Builder), drive ≥3 clean laps,
+   change mode / save session; then start the next session on the same car+
+   track — console logs `[Learning] scored N recommendation(s)…` and the
+   History DB row carries verdict + confidence + details.
+2. Ask for setup advice again on that car+track — the prompt (visible in ⚙ AI
+   Log) opens with "Performance of Previous Recommendations" listing the
+   change, expected effect, measured deltas, verdict.
+3. Home tab — journey step 13 ("Save learning…") shows complete once a real
+   verdict exists; fresh car/track combos still show it pending.
+4. Drive <3 clean laps and re-trigger — the recommendation is marked
+   insufficient_data, never a fabricated verdict.
+
+### Next
+Drive sessions to accumulate scores. Build candidates: **OFR-2** (race vs
+qualifying telemetry disciplines) or a History-tab surface for scored
+recommendations.
