@@ -1,6 +1,24 @@
 # Current Claude Handoff
 
 ## Current Objective
+**SessionContext / TelemetryContext — COMPLETE (2026-07-03).** Branch `session-telemetry-context` (from `master` @ `c94e4ad`). Full suite: **4614 pass / 6 skip / 0 fail** (25 new tests). **Additive read-model + byte-identical consumer migration — no telemetry/PTT/voice/live-race/setup/strategy/track/AI/tab-order change; `config["strategy"]` + both fan-out writers preserved.**
+
+**Why it exists:** live-session status ("connected / recording / laps / fuel burn / live?") was read from **volatile tracker attributes** (`tracker._connected`, `._packet_count`, `.avg_fuel_per_lap`, `_active_session_id`, `_loaded_session_avg_fuel`) plus a `config["strategy"]["fuel_burn_per_lap"]` fallback, and the Home Dashboard's `live_active`/`has_practice_laps` were documented approximations built the same way. This adds the telemetry-layer canonical read model (peer of Event/Strategy/Setup/Track contexts).
+
+**Deliverables:**
+- **`data/session_context.py` (NEW, pure Python — no PyQt6/DB/I/O)** — `SessionContext` (frozen): `connected`, `packet_count`, `laps_recorded`, `active_session_id`, `is_recording`, `live_active` (= connected), `live_mode`, `telemetry_avg_fuel_per_lap`, `fuel_burn_per_lap` + `fuel_burn_source` (LOADED_SESSION/TELEMETRY/CONFIG_FALLBACK), `has_practice_laps`, `has_valid_laps`, `source` (EMPTY/LIVE); helpers `connection_text()`/`recording_text()`/`is_live`/`to_dict()`/`flow_flags()`. `build_session_context(...)` never raises. **Byte-identity:** `fuel_burn_per_lap` reproduces `_computed_fuel_burn_lpl`'s 3-tier fallback exactly; `connected` reproduces `tracker is not None and getattr(tracker,"_connected",False)` (still False today — a real connection signal can later be wired in one place).
+- **`ui/dashboard.py`** — new `_build_session_context()` helper (reads the tracker via safe getters + the fuel fallback from `config["strategy"]` as the single legacy bridge + `config["live"]["mode"]`). Migrated: **`_computed_fuel_burn_lpl`** → `self._build_session_context().fuel_burn_per_lap` (the flagship — its `config["strategy"]` read now lives only in the builder); **`_build_home_dashboard_state`** → `session_ctx.live_active`/`.has_practice_laps`/`.has_valid_laps`; **`_refresh_telemetry_context`** → `sctx.connection_text()`/`.packet_count`/`.recording_text()`/`.telemetry_avg_fuel_per_lap`.
+- **`docs/SESSION_CONTEXT_MIGRATION.md` (NEW)** — the ad-hoc-reads table, the model, byte-identity guarantees, migrated consumers, deferred (real connection state; true lap-validity owner), next sprint.
+
+**Tests:** `tests/test_session_context.py` (25 — fuel 3-tier byte-identity vs verbatim legacy + source classification; connection/live/recording semantics; coercion; live-mode default; source EMPTY/LIVE; garbage safety; ownership boundary (no event/strategy/setup/track fields); `flow_flags`; `to_dict`; purity; source-scans that the three consumers read the context and no longer touch tracker internals / inline fallback / config writes; Home-first + config-guardrail invariants).
+
+**Preserved / deferred:** `_home_has_practice_laps` still owns the DB query (SessionContext just carries the flag); `has_valid_laps` still approximated; `config["strategy"]` + both fan-out writers untouched; live-render tracker reads (tyre labels, fuel bar, countdown, per-packet UI) left alone.
+
+**Next sprint: Legacy Fan-Out Removal Phase 2** (migrate the DB-first-precedence event-rule display/validation consumers to EventContext, accepting + testing the behaviour change, then begin retiring the Set-as-Active fan-out) — or **wire real connection state into SessionContext** (now a one-place change). Full detail: `docs/SESSION_CONTEXT_MIGRATION.md`, `MASTER_TESTING_REGISTER.md` (SessionContext / TelemetryContext).
+
+---
+
+## Prior Objective (historical)
 **Legacy Fan-Out Removal Phase 1 — Read-Only Consumer Migration — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-1` (from `config-safety-guardrails` @ `d206be2`). Full suite: **4589 pass / 6 skip / 0 fail** (22 new tests). **Consumer-migration only — every migrated read is byte-identical to the expression it replaces (proven by test); no behaviour change, `config["strategy"]` and both fan-out writers preserved.**
 
 **Why it exists:** reduce dependence on the legacy `config["strategy"]` fan-out cache by moving low-risk read-only consumers onto the canonical read models. This is NOT the sprint that removes the fan-out — writers stay.

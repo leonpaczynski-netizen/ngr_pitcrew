@@ -85,7 +85,7 @@ established precedent from State Consolidation 2.)
 | `dashboard._build_event_context` / `_build_strategy_context` / `_build_track_context` (`strategy=self._config.get("strategy", {})`) | the canonical builders **read** the legacy dict as their input source — this is the bridge, not a leak |
 | `dashboard._build_strategy_ai_snapshot` / `_build_practice_ai_snapshot` and `setup_builder._build_setup_ai_snapshot` (`legacy_strategy=…`) | AI snapshots already consume the legacy dict as a documented fallback (`docs/AI_SNAPSHOT_MIGRATION.md`) |
 | `dashboard._compute_race_config_id` (`track`/`car`/`race_type`/length) | feeds the `config_id` **hash** — changing the source risks changing the hash; must stay byte-identical |
-| `dashboard._computed_fuel_burn_lpl` (`fuel_burn_per_lap`) | telemetry-owned; deferred by AI Snapshot Migration |
+| `dashboard._computed_fuel_burn_lpl` (`fuel_burn_per_lap`) | telemetry-owned; deferred by AI Snapshot Migration — **migrated in the SessionContext sprint (2026-07-03): now reads `SessionContext.fuel_burn_per_lap`, config fuel read moved into the context builder. See `docs/SESSION_CONTEXT_MIGRATION.md`.** |
 
 ### 3d. Deferred — EVENT_CONFIG / STRATEGY_PLAN with a precedence caveat (future phase)
 

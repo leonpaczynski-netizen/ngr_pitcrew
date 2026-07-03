@@ -4763,3 +4763,74 @@ and both fan-out writers preserved.**
 telemetry/session layer a canonical read model and unblock Home's
 `has_valid_laps`/`live_active` approximations, then **Legacy Fan-Out Removal
 Phase 2** for the DB-first-precedence event-rule consumers.
+
+---
+
+## SessionContext / TelemetryContext (2026-07-03)
+
+> Branch `session-telemetry-context` (from `master` @ `c94e4ad`).
+> Full doc: `docs/SESSION_CONTEXT_MIGRATION.md`.
+> **Full suite: 4614 pass / 6 skip / 0 fail** (25 new tests).
+
+### What was done
+Additive canonical read model + **byte-identical** consumer migration — the
+telemetry-layer peer of Event/Strategy/Setup/Track contexts. No telemetry / PTT /
+voice / live-race / calibration / setup / strategy / track / AI / tab-order
+change; `config["strategy"]` and both fan-out writers preserved.
+
+- **`data/session_context.py` (NEW, pure Python — no PyQt6/DB/I/O)** —
+  `SessionContext` frozen dataclass (connected, packet_count, laps_recorded,
+  active_session_id, is_recording, live_active = connected, live_mode,
+  telemetry_avg_fuel_per_lap, fuel_burn_per_lap + fuel_burn_source
+  [LOADED_SESSION/TELEMETRY/CONFIG_FALLBACK], has_practice_laps, has_valid_laps,
+  source [EMPTY/LIVE]); `connection_text()`/`recording_text()`/`is_live`/
+  `to_dict()`/`flow_flags()`; `build_session_context(...)` never raises.
+  **Byte-identity:** `fuel_burn_per_lap` reproduces `_computed_fuel_burn_lpl`'s
+  3-tier fallback (loaded session → live telemetry → config fallback 2.0);
+  `connected` reproduces `tracker is not None and getattr(tracker,"_connected",
+  False)` (resolves False today — a real connection signal can later be wired in
+  one place).
+- **`ui/dashboard.py`** — new `_build_session_context(*, has_practice_laps,
+  has_valid_laps)` helper (safe tracker getters + the `config["strategy"]` fuel
+  fallback as the single legacy bridge read + `config["live"]["mode"]`).
+  Migrated: `_computed_fuel_burn_lpl` → `self._build_session_context().fuel_burn_per_lap`
+  (flagship — the config fuel read now lives only in the builder);
+  `_build_home_dashboard_state` → `session_ctx.live_active` / `.has_practice_laps`
+  / `.has_valid_laps`; `_refresh_telemetry_context` → `sctx.connection_text()` /
+  `.packet_count` / `.recording_text()` / `.telemetry_avg_fuel_per_lap`.
+- **Deferred:** real connection state (now a one-place change); a true
+  lap-validity owner (`has_valid_laps` still approximated); `_home_has_practice_laps`
+  keeps the DB query; live-render tracker reads (tyre labels/fuel bar/countdown/
+  per-packet UI) left alone.
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_session_context.py` (NEW) | 25 | Fuel-burn 3-tier **byte-identity** vs a verbatim copy of the old `_computed_fuel_burn_lpl` (parametrized) + source classification + default 2.0; connection→live_active/text, recording from active_session_id (incl. id 0 vs None), packet/lap coercion, live-mode default, source EMPTY vs LIVE; never-raises on garbage; ownership boundary (no car/track/config_id/stint_plan/setup/layout fields); `flow_flags` bridge; `to_dict` schema; module purity (no PyQt6/sqlite). **Source-scans:** `_build_session_context` reads the tracker via safe getters + the fuel/mode bridge; `_computed_fuel_burn_lpl` delegates to the context (no inline `avg_fuel_per_lap` / `config.get("strategy"`); `_build_home_dashboard_state` uses `session_ctx.live_active` (no `getattr(self._tracker,"_connected"`); `_refresh_telemetry_context` uses `connection_text`/`packet_count`/`recording_text` (no tracker-internal reads); migrated methods write no `config["strategy"]`. Home-first + config-safety guardrail invariants. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4614/6/0)**.
+- Canonical telemetry/session read model added — **yes (`data/session_context.py`)**.
+- Home `live_active`/`has_practice_laps`/`has_valid_laps` + telemetry status labels + `_computed_fuel_burn_lpl` sourced from the context — **yes**.
+- Byte-identical (no behaviour change) — **yes (proven by test)**.
+- No telemetry/PTT/voice/live-race/setup/strategy/track/AI/tab-order change; `config["strategy"]` + fan-out writers preserved — **yes**.
+- No real config touched by tests — **yes (pure-Python; session guard intact)**.
+- Clear next-sprint recommendation — **yes (Legacy Fan-Out Removal Phase 2, or wire real connection state)**.
+
+### Manual UAT steps
+1. Telemetry (⚙) tab — Connection / Packets / Recording / fuel-burn labels read
+   exactly as before (Recording flips Yes/No with an active session; fuel shows
+   "N.NN L/lap (from telemetry)" only when a live average exists).
+2. Home Dashboard — the live/practice signals in the Next Best Action and cards
+   are unchanged.
+3. Strategy fuel numbers (which use `_computed_fuel_burn_lpl`) are identical to
+   before: loaded session average, else live telemetry, else the config default.
+
+### Next sprint
+**Legacy Fan-Out Removal Phase 2** — migrate the DB-first-precedence event-rule
+display/validation consumers (`_sync_strategy_from_event`,
+`_sync_setup_builder_from_event`, tuning/BoP validation) to EventContext,
+accepting + testing the behaviour change, then begin retiring the Set-as-Active
+fan-out. Alternatively, **wire the real UDP-listener connection signal into
+SessionContext** (now a one-place change).
