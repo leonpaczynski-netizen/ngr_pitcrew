@@ -1327,29 +1327,22 @@ class TestAC10EnumValues:
 # ===========================================================================
 
 _FORMAT_SETUP_VALIDATION_BANNER_SKIP_REASON = (
-    "PRODUCTION DEFECT: _format_setup_validation_banner is not implemented in "
-    "ui/setup_builder_ui.py. The function is specified in the brief but absent from "
-    "the deployed codebase. Test logic verified correct — see defect report. "
-    "Fix belongs to frontend-builder."
+    "ui.setup_builder_ui could not be imported (PyQt6 unavailable in this "
+    "environment); _format_setup_validation_banner cannot be exercised here."
 )
 
 
 class TestAC11UIBanner:
     """AC11: _format_setup_validation_banner pure helper — correct HTML per status.
 
-    PRODUCTION DEFECT: this function was specified in the brief but NOT implemented
-    in ui/setup_builder_ui.py. All tests in this class are skipped.
-    See defect report in final output.
-
-    NOTE ON STATUS STRINGS: When implemented, the function must accept the lowercase
-    status strings produced by SetupValidationResult.to_dict() — i.e. "fail",
-    "pass_with_warnings", "pass". The existing wiring code in setup_builder_ui.py
-    uses uppercase string comparisons ("FAIL", "PASS_WITH_WARNINGS") which would
-    be a secondary bug if the function were implemented to match the dict contract.
+    The helper lives in ui/setup_builder_ui.py and consumes the LOWERCASE status
+    strings produced by SetupValidationResult.to_dict() — "fail",
+    "pass_with_warnings", "pass". The wiring in setup_builder_ui.py normalises
+    with .lower() and compares against those lowercase strings.
     """
 
     def _try_import_banner(self):
-        """Import or skip if not available."""
+        """Import the pure helper, or skip if PyQt6 is unavailable in this env."""
         try:
             from ui.setup_builder_ui import _format_setup_validation_banner
             return _format_setup_validation_banner
@@ -1610,6 +1603,16 @@ class TestAC12FullDefectCaseRegression:
             f"Merged result missing expected BLOCKER codes: {missing}; "
             f"got blocker codes: {blocker_codes}"
         )
+        # Locked decision #3: corrupted gearbox telemetry surfaces as a WARNING in
+        # the merged result (it does not by itself hard-FAIL the whole setup).
+        warning_codes = {
+            f.code for f in merged.findings
+            if f.severity == SetupValidationSeverity.WARNING
+        }
+        assert "gearbox_corrupted" in warning_codes, (
+            f"Expected gearbox_corrupted WARNING in merged result; "
+            f"got warning codes: {warning_codes}"
+        )
 
     def test_merged_safe_to_apply_in_gt7_false(self):
         """Merged FAIL result must have safe_to_apply_in_gt7=False."""
@@ -1660,7 +1663,9 @@ class TestPassSetupSaneOutput:
 
         parsed_ai = _sane_porsche_rsr_ai_output()
 
-        # Build effective_ranges manually (resolve_effective_ranges not implemented — PRODUCTION DEFECT)
+        # effective_ranges built inline here to isolate the output-validation
+        # assertions; resolve_effective_ranges precedence is covered by
+        # TestAC7EffectiveRangeCompliance.
         # Start from generic defaults + apply aero event overrides manually
         effective_ranges = resolve_ranges("Porsche 911 RSR '17")
         effective_ranges["aero_front"] = (350.0, 450.0)

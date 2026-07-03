@@ -1278,8 +1278,11 @@ class SetupBuilderMixin:
             self._last_setup_ai_fields = {}
             if hasattr(self, "_btn_apply_ai_setup"):
                 self._btn_apply_ai_setup.setVisible(False)
+            # Show the gate rejection first, but keep any co-occurring engineering
+            # / event-restriction banners so the driver sees every reason.
+            _fail_html = _sv_banner + _eng_banner + _violation_banner
             self._setup_result_text.setHtml(
-                _sv_banner or _eng_banner or _violation_banner
+                _fail_html
                 or "<span style='color:#F55;'>Setup rejected by validation.</span>"
             )
             return

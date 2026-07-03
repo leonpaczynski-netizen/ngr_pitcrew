@@ -1076,16 +1076,30 @@ class DrivingAdvisor:
 
         # ── Gate 1: pre-AI prompt/context validation (AC1–AC3) ────────────────
         _track_model_result = None
+        _track_truth_result = None
         if _loc_id and _lay_id:
             try:
                 from data.track_model_resolver import resolve_best_track_model
                 _track_model_result = resolve_best_track_model(_loc_id, _lay_id)
             except Exception:
                 _track_model_result = None
+            # Track-truth validation result drives corner-geometry suppression
+            # for seed-only tracks (AC3 INFO: corner_geometry_suppressed).
+            try:
+                from data.track_truth import (
+                    resolve_track_truth_model,
+                    validate_track_truth_model,
+                )
+                _ttm = resolve_track_truth_model(_loc_id, _lay_id)
+                if _ttm is not None:
+                    _track_truth_result = validate_track_truth_model(_ttm)
+            except Exception:
+                _track_truth_result = None
         try:
             _prompt_result = validate_setup_prompt_context(
                 _event_ctx, _loc_id, _lay_id, car_name,
                 track_model_result=_track_model_result,
+                track_truth_result=_track_truth_result,
             )
         except Exception:
             _prompt_result = None
@@ -1158,6 +1172,7 @@ class DrivingAdvisor:
             # Normalise changes server-side: resolve 'field' key and add
             # 'to_clamped' so the frontend never needs to slug-guess or
             # re-clamp raw AI values; then validate.
+            _locked = None  # bound up-front so Gate 3 can never see it unbound
             try:
                 _data = _json.loads(_response_text)
                 _raw_changes = _data.get("changes") or []
@@ -1277,7 +1292,28 @@ class DrivingAdvisor:
                     _merged = merge_results(*_gate_results)
                     _data["setup_validation"] = _merged.to_dict()
                 except Exception:
-                    pass  # Validation gates must not break the response path
+                    # Fail SAFE, not open: if the validation layer itself errors,
+                    # surface a caution rather than silently dropping the
+                    # setup_validation key (an absent key reads as PASS in the UI).
+                    _data["setup_validation"] = {
+                        "validation_status": "pass_with_warnings",
+                        "safe_to_show_driver": True,
+                        "safe_to_apply_in_gt7": False,
+                        "overall_summary": "Validation layer error — review this "
+                                           "setup manually before applying.",
+                        "blockers": [],
+                        "warnings": [
+                            "setup_validation_internal_error: the validation "
+                            "gates could not complete; treat this setup with "
+                            "caution."
+                        ],
+                        "field_validation": {},
+                        "driver_style_assessment": "",
+                        "telemetry_assessment": "",
+                        "track_context_assessment": "",
+                        "recommended_action": "manual_engineer_review_required",
+                        "minimum_required_prompt_fixes_before_regeneration": [],
+                    }
 
                 _response_text = _json.dumps(_data, ensure_ascii=False)
             except Exception:
