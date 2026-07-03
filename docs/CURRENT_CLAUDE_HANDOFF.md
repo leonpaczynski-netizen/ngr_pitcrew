@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 2 — Event-Rule Display-Label Migration — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-2` (from `master` @ `c94e4ad`). Full suite: **4629 pass / 6 skip / 0 fail** (15 new tests). **Scope (user-chosen): DISPLAY LABELS ONLY — the Strategy/Setup event-context readout labels now reflect DB-first EventContext (consistent with the AI inputs); functional paths (setup-permission gating, BoP toggle, spinbox rebind) still read `config["strategy"]`, so which fields are editable is unchanged. Byte-identical when the DB event and the fan-out are in sync.**
+
+**Why it exists:** `_on_event_save` writes event edits to the DB (+`config["events"]`) but NOT `config["strategy"]` — only `_on_event_set_active` writes the fan-out. So after editing an event and Saving without re-activating, DB is fresh and the fan-out is stale. The strategy/setup AI already reads DB-first (EventContext, since AI Snapshot Migration), so the labels *describing those inputs* were showing stale fan-out values. Phase 2 makes the labels consistent with the AI.
+
+**Scope decision:** I surfaced (via a scoping question) that `_sync_setup_builder_from_event` isn't purely display — it also feeds `_apply_setup_permissions`/`_on_bop_toggled` (which fields are editable). User chose **display labels only**, leaving those functional inputs on the fan-out.
+
+**Migrated (byte-identical in-sync, DB-first when diverged):**
+- **`dashboard._sync_strategy_from_event`** — the `_lbl_strategy_event_ctx` context line (track/car/length/Wear/Fuel/Refuel, int-wrapped) + `_lbl_fuel_mult_display`, via one `ev_ctx = self._build_event_context()`. `_update_race_config()` writer + `_get_mandatory_compounds()` + the no-event fallback branch left unchanged.
+- **`setup_builder._sync_setup_builder_from_event`** — `_lbl_setup_event_ctx` (track/car) + the `_lbl_rc_*` readouts (race_type/length/fuel/wear/mand_pits/weather/damage + bop/tuning **labels**). Left on the fan-out: refuel/req_tyre/avail_tyres labels (complex fallbacks) and the **functional** `_bop`/`_tuning`/`_cats` → `_apply_setup_permissions`/`_on_bop_toggled` + `_rebound_setup_spinboxes`.
+
+**Byte-identity mechanism:** all event multipliers/counts are `QSpinBox` **integers**, so the migrated labels wrap `int()` around EventContext floats (`"2×"` stays `"2×"`, not `"2.0×"`). `race_type` is safe because EventContext normalises the DB combo text (`"Timed Race"`) and the fan-out token (`"timed"`) to the same value. Verified the full rendered Strategy line + Setup labels byte-identical for an in-sync pair.
+
+**Deliverables:** `docs/LEGACY_FANOUT_PHASE_2.md` (NEW — scope decision, why DB-first, byte-identity, the migrated-vs-left table, the documented behaviour change, next sprint); `ui/dashboard.py` + `ui/setup_builder_ui.py` (the two sync methods); `tests/test_legacy_fanout_phase_2.py` (15 — in-sync byte-identity of label values + int-format guard; DB-first divergence (edited-not-reactivated shows DB truth); source-scans that display labels read EventContext while functional gating still reads `config["strategy"]` and is fed sc-derived `_bop`/`_tuning`/`_cats`; writer + Home-first + config-guardrail invariants).
+
+**Next sprint: Phase 3 — functional gating (needs product sign-off)** — migrate the setup permission/BoP inputs + the tuning/BoP AI-response validation to DB-first EventContext (changes which fields are editable in the diverged case); ideally first make `_on_event_save` re-sync (or drop) the fan-out so DB/config can't diverge, enabling the Set-as-Active fan-out to finally be retired. Alternative: wire the real UDP connection signal into SessionContext. Full detail: `docs/LEGACY_FANOUT_PHASE_2.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 2).
+
+---
+
+## Prior Objective (historical)
 **SessionContext / TelemetryContext — COMPLETE (2026-07-03).** Branch `session-telemetry-context` (from `master` @ `c94e4ad`). Full suite: **4614 pass / 6 skip / 0 fail** (25 new tests). **Additive read-model + byte-identical consumer migration — no telemetry/PTT/voice/live-race/setup/strategy/track/AI/tab-order change; `config["strategy"]` + both fan-out writers preserved.**
 
 **Why it exists:** live-session status ("connected / recording / laps / fuel burn / live?") was read from **volatile tracker attributes** (`tracker._connected`, `._packet_count`, `.avg_fuel_per_lap`, `_active_session_id`, `_loaded_session_avg_fuel`) plus a `config["strategy"]["fuel_burn_per_lap"]` fallback, and the Home Dashboard's `live_active`/`has_practice_laps` were documented approximations built the same way. This adds the telemetry-layer canonical read model (peer of Event/Strategy/Setup/Track contexts).

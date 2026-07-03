@@ -7,6 +7,14 @@
 > race-length) remain deferred to Phase 2 because reading them from EventContext
 > would change values when a DB edit post-dates "Set as Active". See
 > `docs/LEGACY_FANOUT_PHASE_1.md`.
+>
+> **Legacy Fan-Out Removal Phase 2 update (2026-07-03):** the Strategy/Setup
+> event-context **display readout labels** (`_sync_strategy_from_event`,
+> `_sync_setup_builder_from_event`) now read those race-rule fields from
+> EventContext (DB-first) — byte-identical when the DB event and the fan-out are
+> in sync (int()-wrapped for the integer QSpinBox values), DB-first when they
+> diverge. The **functional** setup-permission/BoP gating still reads
+> `config["strategy"]` (chosen scope). See `docs/LEGACY_FANOUT_PHASE_2.md`.
 
 > Sprint: **State Consolidation 1 — EventContext** · 2026-07-03
 > Companion: `data/event_context.py`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5, §7)

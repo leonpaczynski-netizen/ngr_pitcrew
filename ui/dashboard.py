@@ -6141,17 +6141,24 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                            + ("\n" + "\n".join(missing) if missing else ""))
                     self._lbl_strategy_event_ctx.setText(msg)
                 return
+            # Legacy Fan-Out Removal Phase 2 (display labels only): this context
+            # line reflects the canonical EventContext (DB-event-first — matching
+            # the strategy AI inputs since the AI Snapshot Migration). int()
+            # preserves the integer QSpinBox formatting so the line is
+            # byte-identical when the DB event and config["strategy"] are in sync.
+            # _update_race_config() (writer) below is unchanged.
+            ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
-            track = sc.get("track") or evt.get("track", "?")
-            car   = sc.get("car", "") or "—"
-            rt    = sc.get("race_type", "lap")
+            track = ev_ctx.track or "?"
+            car   = ev_ctx.car or "—"
+            rt    = ev_ctx.race_type
             if rt == "timed":
-                length_str = f"{int(sc.get('race_duration_minutes', 60))} min"
+                length_str = f"{int(ev_ctx.race_duration_minutes)} min"
             else:
-                length_str = f"{int(sc.get('total_laps', 25))} laps"
-            tw   = sc.get("tyre_wear_multiplier", evt.get("tyre_wear", 1))
-            fm   = sc.get("fuel_mult", evt.get("fuel_mult", 1))
-            rfl  = sc.get("refuel_speed_lps", 10.0)
+                length_str = f"{int(ev_ctx.laps)} laps"
+            tw   = int(ev_ctx.tyre_wear_multiplier)
+            fm   = int(ev_ctx.fuel_multiplier)
+            rfl  = int(ev_ctx.refuel_rate_lps)
             cpds = self._get_mandatory_compounds()
             cpd_str = f"  |  Required: {', '.join(cpds)}" if cpds else ""
             missing = []
