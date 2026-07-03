@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
 ## Current Objective
+**SessionContext Real Connection Signal — COMPLETE (2026-07-04).** Branch `session-context-real-connection` (from `master` @ `ebbaed4`). Full suite: **4721 pass / 6 skip / 0 fail** (18 new tests). **The one-place change promised by the SessionContext sprint, delivered: Home's `live_active`, the flow gates, and the telemetry labels now reflect the REAL UDP-listener state (packet-timeout based), instead of an always-False phantom tracker attribute.**
+
+**What was wired:**
+- **`MainWindow(udp_listener=...)` (NEW param)** — duck-typed (`.connected`/`.total_received`/`.parse_errors`/`.packet_rate`, all real `UDPListener` properties; `connected` = True on packet receive, False after 3 s silence). `main()` passes the listener (created before the window). Listener attrs are plain bool/int/float — GIL-atomic cross-thread reads, no locks added.
+- **`_build_session_context`** — sources `connected` + `packet_count` from the listener when wired; the legacy tracker-getattr fallbacks are retained verbatim (byte-identical to the old always-False/0 behaviour for tests/legacy constructions — the existing 25 SessionContext tests pass unchanged). Home `live_active` / journey step-12 gate / `_refresh_telemetry_context` labels become real automatically through the existing context plumbing.
+- **`_update_telemetry_labels` (diagnostics panel) — wider latent bug found+fixed:** it read FOUR phantom tracker attrs (`_connected`/`_packet_count`/`_error_count`/`_packet_rate_hz` — none ever existed), so the panel was frozen at "Disconnected / 0 / — Hz / Not started". Now reads the listener's four real stats (old fallbacks preserved when no listener).
+
+**Intended behaviour change (the point):** with SimHub streaming, Home's Live signals and the Telemetry tab show Connected + live packet counts; 3 s of silence → Disconnected. Everything else byte-identical.
+
+**Tests:** `tests/test_session_connection_signal.py` (18 — real `_build_session_context` on widget-free stubs: connected→live ctx+flow_flags, packet totals, disconnected, listener-beats-tracker, missing-attr listener safe; no-listener fallbacks reproduce the old frozen state; real `_update_telemetry_labels` on stubs (lit vs frozen); wiring scans (ctor param, `main()` pass-through, prefers-listener-with-fallback, panel stats); `UDPListener` property contract pinned; Phase 5 allowlist still exact; Home-first + guardrail invariants). Docs: `SESSION_CONTEXT_MIGRATION.md` §5a (the sprint's home), HOME_DASHBOARD_BUILD + PHASE_6A cross-refs.
+
+**Next sprint:** **Phase 6b — `_compute_race_config_id` hash byte-stability proof** (retirement-map item 2: pin hash vectors → prove EventContext inputs identical in-sync → migrate), or **product work** (deferred OFR-1 between-race learning loop) — the state architecture is consolidated and Home is now fully truthful. Full detail: `docs/SESSION_CONTEXT_MIGRATION.md` §5a, `MASTER_TESTING_REGISTER.md` (SessionContext Real Connection Signal).
+
+---
+
+## Prior Objective (historical)
 **Legacy Fan-Out Removal Phase 6a — Dispatcher SessionTag Snapshot — COMPLETE (2026-07-04).** Branch `legacy-fanout-phase-6a-dispatcher-tag` (from `master` @ `b010882`). Full suite: **4703 pass / 6 skip / 0 fail** (21 new tests; Phase 5 allowlist consciously shrunk — the guard held). **Retirement-map item 1 done: the telemetry pipeline no longer touches `config["strategy"]` at runtime.**
 
 **The mechanism:**

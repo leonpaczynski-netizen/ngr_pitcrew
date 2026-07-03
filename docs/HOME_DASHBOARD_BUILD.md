@@ -142,8 +142,10 @@ Approximations (documented, honest):
   a true lap-validity owner is still future work. See
   `docs/SESSION_CONTEXT_MIGRATION.md`.
 * `live_active` = telemetry tracker connected — now read from
-  `SessionContext.live_active` (byte-identical; a real connection signal can be
-  wired into SessionContext in one place later).
+  `SessionContext.live_active`. **Update (2026-07-04, Connection-Signal
+  sprint):** the promised one-place wiring landed — `live_active` now reflects
+  the REAL UDP listener state (packet-timeout based), no longer an
+  approximation. See `docs/SESSION_CONTEXT_MIGRATION.md` §5a.
 * The Setup Brain card shows the **last displayed** setup recommendation
   (`_last_setup_context`); a setup applied in an earlier app run is not
   reconstructed from the DB (deferred — see §5).

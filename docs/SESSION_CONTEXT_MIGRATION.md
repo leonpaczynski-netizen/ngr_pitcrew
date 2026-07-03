@@ -103,16 +103,61 @@ deferred; its `config["strategy"]` read now lives only in the context builder.
 
 ## 5. Deferred / future
 
-* **Real connection state** — today `connected` mirrors the (always-False)
+* ~~**Real connection state** — today `connected` mirrors the (always-False)
   `tracker._connected` read. Wiring the actual UDP-listener connection signal
   into SessionContext is a follow-up; because every consumer now reads the
-  context, that becomes a one-place change.
+  context, that becomes a one-place change.~~
+  **DONE — Connection-Signal sprint (2026-07-04, §5a below).**
 * **`has_valid_laps`** is still approximated as "recorded laps are reviewable"
   (the Home Dashboard approximation) — a true lap-validity owner (a lap/session
   validity model) is future work.
 * Remaining volatile tracker reads elsewhere (live tyre labels, fuel bar, race
   countdown, per-packet UI) are live-render paths, not status/summary reads, and
   were left alone.
+
+## 5a. Connection-Signal sprint (2026-07-04) — the one-place change, delivered
+
+> Branch: `session-context-real-connection` (from `master` @ `ebbaed4`).
+> Full suite: **4721 pass / 6 skip / 0 fail** (18 new tests).
+
+**What:** `MainWindow` gains a `udp_listener` constructor param (duck-typed:
+`.connected` / `.total_received` / `.parse_errors` / `.packet_rate` — all real
+properties on `telemetry/listener.UDPListener`, whose `connected` is
+packet-timeout based: True on receive, False after 3 s of silence). `main()`
+passes the listener (created before the window). Then:
+
+* **`_build_session_context`** sources `connected` + `packet_count` from the
+  listener when wired — so **Home's `live_active`, the flow gates (journey step
+  12), and the telemetry-context labels become REAL** through the existing
+  SessionContext plumbing, exactly the promised one-place change. Without a
+  listener (tests / legacy constructions) the old tracker-getattr fallbacks
+  apply — byte-identical to the previous always-False/0 behaviour (pinned).
+* **`_update_telemetry_labels`** (diagnostics panel) — found and fixed a wider
+  latent bug: it read FOUR phantom tracker attributes (`_connected`,
+  `_packet_count`, `_error_count`, `_packet_rate_hz` — none ever existed), so
+  the panel was frozen at "Disconnected / 0 / — Hz / Not started". It now reads
+  the listener's four real stats, with the old fallbacks preserved when no
+  listener is wired.
+
+**Thread-safety:** listener attrs are plain bool/int/float written by the
+listener thread and read by the UI — GIL-atomic; no locks added.
+
+**Intended behaviour change (the point):** with SimHub streaming, Home's Live
+card / next-action gate and the Telemetry tab now show Connected with live
+packet counts; after 3 s of silence they drop to Disconnected. Everything else
+byte-identical (fallbacks pinned by the existing SessionContext test suite,
+which passes unchanged).
+
+**Tests:** `tests/test_session_connection_signal.py` (18) — the real
+`_build_session_context` bound to widget-free stubs: connected listener →
+live context (+ flow_flags), packet totals flow, disconnected listener,
+listener-beats-tracker, missing-attr listener degrades safely; no-listener
+fallbacks reproduce the old frozen state (incl. real tracker fields still
+flowing); the real `_update_telemetry_labels` on stubs (lit panel vs old frozen
+state); wiring source-scans (ctor param, `main()` pass-through, builder
+prefers-listener-with-fallback, panel reads the four stats); the
+`UDPListener` property contract pinned; Phase 5 frozen allowlist still exact;
+Home-first + config-guardrail invariants.
 
 ## 6. Tests
 

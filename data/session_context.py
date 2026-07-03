@@ -37,10 +37,13 @@ Every field mirrors the exact expression it replaces, so migrated consumers are
 behaviour-preserving (proven in tests/test_session_context.py). In particular
 ``fuel_burn_per_lap`` reproduces ``_computed_fuel_burn_lpl``'s 3-tier fallback
 (loaded historical session → live telemetry average → config fallback default
-2.0), and ``connected`` reproduces ``tracker is not None and
-getattr(tracker, "_connected", False)`` — including that the tracker does not
-currently carry ``_connected`` (so it resolves False today; the read model is
-where a real connection signal would later be wired, in one place).
+2.0). ``connected`` originally reproduced ``tracker is not None and
+getattr(tracker, "_connected", False)`` — an attribute the tracker never
+carried, so it resolved False. The **connection-signal sprint (2026-07-04)**
+delivered the promised one-place fix: the dashboard's ``_build_session_context``
+now sources ``connected``/``packet_count`` from the real ``UDPListener``
+(``.connected`` is packet-timeout based; ``.total_received`` the true counter)
+when one is wired, falling back to the legacy tracker expressions otherwise.
 """
 
 from __future__ import annotations

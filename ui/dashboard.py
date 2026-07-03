@@ -313,6 +313,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         recorder=None,
         db=None,
         dispatcher=None,
+        udp_listener=None,
     ) -> None:
         super().__init__()
         self._config          = config
@@ -328,6 +329,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._recorder        = recorder
         self._db              = db
         self._dispatcher      = dispatcher
+        # Real UDP connection source (SessionContext connection-signal sprint,
+        # 2026-07-04): the UDPListener owns the true connected/packet stats
+        # (packet-timeout based). Duck-typed — needs .connected /
+        # .total_received / .parse_errors / .packet_rate. None in tests/legacy
+        # constructions → the old (always-False) tracker fallbacks apply.
+        self._udp_listener    = udp_listener
         self._last_packet: Optional[GT7Packet] = None
         self._last_packet_received: float = 0.0  # Group 24 AC4: wall-clock of last received packet
         self._gear_ratios_captured: bool = False
@@ -1586,16 +1593,29 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             p  = getattr(self, "_last_packet", None)
             tr = self._tracker
 
-            # Connection group
-            connected = tr is not None and getattr(tr, "_connected", False)
+            # Connection group — connection-signal sprint (2026-07-04): the
+            # UDPListener owns the real stats (connected / total_received /
+            # parse_errors / packet_rate). The old tracker attrs (_connected /
+            # _packet_count / _error_count / _packet_rate_hz) never existed, so
+            # this panel was frozen at "Disconnected / 0 / — Hz"; the tracker
+            # getattr fallbacks preserve that exact behaviour when no listener
+            # is wired (tests / legacy constructions).
+            _lsn = getattr(self, "_udp_listener", None)
+            if _lsn is not None:
+                connected = bool(getattr(_lsn, "connected", False))
+                pkt_count = getattr(_lsn, "total_received", 0)
+                pkt_err   = getattr(_lsn, "parse_errors", 0)
+                pkt_rate  = getattr(_lsn, "packet_rate", 0.0)
+            else:
+                connected = tr is not None and getattr(tr, "_connected", False)
+                pkt_count = getattr(tr, "_packet_count", 0) if tr else 0
+                pkt_err   = getattr(tr, "_error_count", 0) if tr else 0
+                pkt_rate  = getattr(tr, "_packet_rate_hz", 0.0) if tr else 0.0
             self._telem_lbl_connection.setText("Connected" if connected else "Disconnected")
             self._telem_lbl_connection.setStyleSheet(
                 "color: #AAE4AA; font-size: 11px;" if connected else "color: #FF6B6B; font-size: 11px;")
-            pkt_count = getattr(tr, "_packet_count", 0) if tr else 0
             self._telem_lbl_pkt_total_t.setText(str(pkt_count))
-            pkt_err   = getattr(tr, "_error_count", 0) if tr else 0
             self._telem_lbl_pkt_errors_t.setText(str(pkt_err))
-            pkt_rate  = getattr(tr, "_packet_rate_hz", 0.0) if tr else 0.0
             self._telem_lbl_pkt_rate_t.setText(f"{pkt_rate:.1f} Hz" if pkt_rate else "— Hz")
             udp_active = connected or pkt_count > 0
             self._telem_lbl_udp_status.setText("Listening" if udp_active else "Not started")
@@ -7156,9 +7176,22 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         try:
             from data.session_context import build_session_context
             tracker = self._tracker
+            # Connection-signal sprint (2026-07-04): the REAL connection state
+            # and packet count come from the UDPListener when wired (the
+            # documented one-place change — Home's live_active and the
+            # telemetry labels become real). Without a listener the legacy
+            # tracker fallbacks apply (byte-identical: those attrs never
+            # existed on the tracker, resolving False/0 — the old behaviour).
+            listener = getattr(self, "_udp_listener", None)
+            if listener is not None:
+                connected = bool(getattr(listener, "connected", False))
+                packet_count = getattr(listener, "total_received", 0)
+            else:
+                connected = bool(tracker is not None and getattr(tracker, "_connected", False))
+                packet_count = getattr(tracker, "_packet_count", 0) if tracker is not None else 0
             return build_session_context(
-                connected=bool(tracker is not None and getattr(tracker, "_connected", False)),
-                packet_count=getattr(tracker, "_packet_count", 0) if tracker is not None else 0,
+                connected=connected,
+                packet_count=packet_count,
                 laps_recorded=getattr(tracker, "laps_recorded", 0) if tracker is not None else 0,
                 telemetry_avg_fuel_per_lap=(
                     getattr(tracker, "avg_fuel_per_lap", 0.0) if tracker is not None else 0.0),
