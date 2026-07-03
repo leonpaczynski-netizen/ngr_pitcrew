@@ -607,6 +607,7 @@ def main() -> None:
         recorder=recorder,
         db=db,
         dispatcher=dispatcher,
+        udp_listener=listener,
     )
 
     # REF INJECTION CONTRACT — post-construction attribute injection for shift-beep mode refs.

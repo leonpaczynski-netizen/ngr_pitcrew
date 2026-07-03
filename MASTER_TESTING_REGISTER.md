@@ -5208,3 +5208,70 @@ Retirement-map item 2: **`_compute_race_config_id` hash byte-stability proof**
 migrate the hash inputs). Alternative: **wire the real UDP-listener connection
 signal into `SessionContext`** (Home's `live_active` becomes real), or return to
 product work (OFR-1).
+
+---
+
+## SessionContext Real Connection Signal (2026-07-04)
+
+> Branch `session-context-real-connection` (from `master` @ `ebbaed4`).
+> Full doc: `docs/SESSION_CONTEXT_MIGRATION.md` §5a.
+> **Full suite: 4721 pass / 6 skip / 0 fail** (18 new tests).
+
+### What was done
+The one-place change promised by the SessionContext sprint, delivered — plus a
+wider latent-bug fix found during it.
+
+- **`MainWindow(udp_listener=...)` (NEW param)** — duck-typed (`.connected` /
+  `.total_received` / `.parse_errors` / `.packet_rate`, all real properties on
+  `telemetry/listener.UDPListener`; `connected` is packet-timeout based: True on
+  receive, False after 3 s of silence). `main()` passes the listener (created
+  before the window). Listener attrs are plain bool/int/float — GIL-atomic
+  cross-thread reads; no locks added.
+- **`_build_session_context`** — prefers the listener for `connected` +
+  `packet_count`; the legacy tracker-getattr fallbacks are retained verbatim
+  (byte-identical to the old always-False/0 behaviour when no listener is
+  wired — the existing 25-test SessionContext suite passes unchanged). Through
+  the existing context plumbing, **Home's `live_active`, the journey step-12
+  flow gate, and `_refresh_telemetry_context`'s Connection/Packets labels
+  become real automatically.**
+- **`_update_telemetry_labels` (diagnostics panel) — latent bug fixed:** it
+  read FOUR phantom tracker attributes (`_connected`, `_packet_count`,
+  `_error_count`, `_packet_rate_hz` — none ever existed on RaceStateTracker),
+  so the panel was frozen at "Disconnected / 0 / — Hz / Not started". It now
+  reads the listener's four real stats, with the old fallbacks preserved when
+  no listener is wired.
+- **Intended behaviour change (the point):** with SimHub streaming, the Home
+  Live signals and the Telemetry tab show Connected with live packet counts;
+  3 s of silence → Disconnected. Everything else byte-identical.
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_session_connection_signal.py` (NEW) | 18 | The REAL `_build_session_context` bound to widget-free stubs: connected listener → live context + `flow_flags.live_active`; packet totals flow; disconnected listener; listener-beats-tracker; a listener missing the expected attrs degrades safely to disconnected/0. No-listener fallbacks reproduce the old frozen state exactly (no tracker; tracker-without-attrs; real tracker fields like `laps_recorded` still flow). The REAL `_update_telemetry_labels` on stubs — lit panel ("Connected"/"500"/"3"/"59.9 Hz") vs the old frozen state ("Disconnected"/"0"/"— Hz"). Wiring source-scans: ctor param stored, `main()` passes `udp_listener=listener`, the builder prefers-listener-with-fallback (legacy expressions retained verbatim), the panel reads all four listener stats. The `UDPListener` property contract (connected/total_received/parse_errors/packet_rate are properties) pinned against the real class. Phase 5 frozen allowlist still matches exactly; Home-first + config-guardrail invariants. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4721/6/0)**.
+- Home `live_active` / telemetry labels reflect the real UDP state — **yes** (one-place change via SessionContext inputs).
+- No-listener behaviour byte-identical to before — **yes (fallbacks pinned; existing SessionContext suite unchanged)**.
+- No locks added to cross-thread reads — **yes (GIL-atomic plain attrs)**.
+- Diagnostics-panel phantom-attr bug fixed with behaviour preserved sans listener — **yes**.
+- No telemetry semantics / PTT / voice / setup / strategy / track / AI / tab-order change; no new `config["strategy"]` consumers (allowlist exact) — **yes**.
+- Clear next-sprint recommendation — **yes**.
+
+### Manual UAT steps
+1. Launch with SimHub streaming GT7 telemetry — the status bar shows connected
+   (as before), AND now: the Telemetry (⚙) tab's Connection/Packets labels show
+   "Connected" with a climbing packet count; the Diagnostics connection group
+   shows live rate ("~60 Hz") and totals.
+2. Home tab — the live/racing signals (step-12 gate, Live card status) reflect
+   the actual connection; stop SimHub and after ~3 s they drop to disconnected.
+3. Run the app without SimHub — everything reads Disconnected/0 exactly as
+   before.
+
+### Next sprint
+**Phase 6b — `_compute_race_config_id` hash byte-stability proof**
+(retirement-map item 2: pin hash vectors → prove EventContext-sourced inputs
+identical in-sync → migrate the hash inputs), or **return to product work**
+(deferred OFR-1 between-race learning loop) — the state architecture is
+consolidated and the Home Dashboard is now fully truthful.

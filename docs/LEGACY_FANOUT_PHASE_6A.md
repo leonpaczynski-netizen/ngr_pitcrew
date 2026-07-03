@@ -100,6 +100,11 @@ until the allowlist was consciously shrunk).
 
 ## 8. Next sprint recommendation
 
+> **Executed (2026-07-04):** the Connection-Signal sprint ran next — the real
+> UDP-listener state was wired into SessionContext (Home's `live_active` and
+> the telemetry labels are now real). See
+> `docs/SESSION_CONTEXT_MIGRATION.md` §5a.
+
 Retirement-map item 2: **`_compute_race_config_id` hash byte-stability proof**
 (pin hash vectors, prove EventContext-sourced inputs identical in-sync, then
 migrate the hash inputs) — or the standing smaller job: **wire the real
