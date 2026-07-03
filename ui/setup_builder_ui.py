@@ -915,9 +915,54 @@ class SetupBuilderMixin:
             self._setup_load_combo.setCurrentIndex(0)   # show placeholder
         self._setup_load_combo.blockSignals(False)
 
+    def _build_setup_context(self, recommendation: dict | None = None,
+                             diagnosis: dict | None = None):
+        """Canonical read model of the active setup recommendation.
+
+        State Consolidation 3: separates setup-recommendation state (purpose,
+        source, adjustments, baseline/target setup, confidence, validation) from
+        the event truth (EventContext) and strategy truth (StrategyContext /
+        StrategyPromptSnapshot) it was built against, keying the setup to
+        ``EventContext.change_hash`` and ``StrategyPromptSnapshot.snapshot_id``
+        so stale setups are detectable (see ``data/setup_context.py``). Reads the
+        baseline from ``_current_setup_dict()`` and event/strategy keys from the
+        other context helpers. Never raises — returns an EMPTY-source context on
+        failure. Legacy config/DB setup storage is unchanged.
+        """
+        try:
+            from data.setup_context import build_setup_context
+            ev = self._build_event_context() if hasattr(self, "_build_event_context") else None
+            strat_snap = None
+            try:
+                from data.strategy_context import (
+                    build_strategy_context, build_strategy_prompt_snapshot,
+                )
+                sc = build_strategy_context(
+                    strategy=self._config.get("strategy", {}), event_context=ev)
+                strat_snap = build_strategy_prompt_snapshot(sc, ev)
+            except Exception:  # pragma: no cover - defensive
+                strat_snap = None
+            return build_setup_context(
+                setup=self._current_setup_dict(),
+                recommendation=recommendation,
+                event_context=ev,
+                strategy_snapshot=strat_snap,
+                diagnosis=diagnosis,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.setup_context import empty_setup_context
+            return empty_setup_context()
+
     def _setup_type_prefix(self) -> str:
-        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo."""
-        return "Q" if "qual" in self._setup_type.currentText().lower() else "R"
+        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo.
+
+        State Consolidation 3: setup purpose classification is owned by
+        SetupContext — derive it via the canonical ``normalise_purpose`` rather
+        than an ad-hoc substring test (behaviour-preserving: "qual" → Q, else R).
+        """
+        from data.setup_context import normalise_purpose, SetupPurpose
+        purpose = normalise_purpose(self._setup_type.currentText())
+        return "Q" if purpose == SetupPurpose.QUALIFYING else "R"
 
     def _generate_setup_name(self) -> str | None:
         """Build '<Q|R> <event name> <number>' for the active event, or None if no event."""
@@ -1191,6 +1236,26 @@ class SetupBuilderMixin:
         }
         if hasattr(self, "_btn_apply_ai_setup"):
             self._btn_apply_ai_setup.setVisible(bool(self._last_setup_ai_fields))
+
+        # State Consolidation 3: capture the canonical SetupContext for this
+        # displayed recommendation, keyed to EventContext.change_hash and the
+        # StrategyPromptSnapshot.snapshot_id it was built against, so a later
+        # sprint can detect a stale setup. Read-only and additive — it does not
+        # alter the displayed HTML, the history save, or the apply button.
+        try:
+            self._last_setup_context = self._build_setup_context(
+                recommendation={
+                    "analysis": analysis,
+                    "changes": changes,
+                    "setup_fields": setup_fields,
+                    "validation_errors": _validation_errors,
+                    "primary_issue": data.get("primary_issue", ""),
+                    "confidence": data.get("confidence", ""),
+                },
+                diagnosis=_diagnosis,
+            )
+        except Exception:  # pragma: no cover - defensive; never break the display
+            self._last_setup_context = None
 
         # Build HTML: engineering banner (highest priority) + diagnosis + event
         # restriction banner + validation warnings + analysis block + changes

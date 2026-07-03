@@ -137,14 +137,15 @@ fan-out removal in `docs/EVENT_CONTEXT_MIGRATION.md §6`).
 
 ## 9. Recommended next sprint
 
-**SetupContext**, keyed on `EventContext.change_hash` **and** the
-`StrategyContext` snapshot identity (`StrategyPromptSnapshot.snapshot_id`):
+**SetupContext — LANDED (State Consolidation 3, `data/setup_context.py`; see
+`docs/SETUP_CONTEXT_MIGRATION.md`).** Keyed on `EventContext.change_hash` **and**
+`StrategyPromptSnapshot.snapshot_id`; owns setup-recommendation state (purpose,
+adjustments, baseline/target setup, confidence, validation); reads event/strategy
+state only as those keys; detects stale setups via `is_stale_for_event` /
+`is_stale_for_strategy`. `build_strategy_prompt_snapshot()` is consumed by
+SetupContext's builder to key setups to the strategy assumptions.
 
-- owns the current setup + cached setup diagnosis (SSOT-6/-10);
-- reads legality (`bop_enabled`, `tuning_allowed`, `allowed_tuning_categories`)
-  from EventContext and plan assumptions from StrategyContext;
-- invalidates the cached diagnosis when either hash changes.
-
-Then migrate the deferred AI-input consumers (§6) to the frozen
-`StrategyPromptSnapshot`, and finally remove the `config["strategy"]` fan-out
-(EventContext migration §6) once every consumer reads a context.
+Still **deferred**: migrate the deferred AI-input consumers (§6) to the frozen
+`StrategyPromptSnapshot` (jointly with the SetupContext AI-prompt migration), and
+finally remove the `config["strategy"]` fan-out (EventContext migration §6) once
+every consumer reads a context. Next likely sprint: **TrackContext** (SSOT-2).

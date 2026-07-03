@@ -143,13 +143,17 @@ Everything else still reads `config["strategy"]` (compatibility preserved).
 
 ## 7. Next-step plan for StrategyContext & SetupContext
 
-- **StrategyContext**: owns stint plan, tyre refs, feasibility inputs, and the
-  frozen strategy prompt snapshot. Reads event fields **from EventContext**, never
-  from `config["strategy"]`. Depends on this sprint (EventContext) being in place.
-- **SetupContext**: owns the current setup + cached setup diagnosis, keyed on
-  `EventContext.change_hash` so diagnosis is recomputed only when the event
-  actually changes. Reads legality (`bop_enabled`, `tuning_allowed`,
-  `allowed_tuning_categories`) from EventContext.
+- **StrategyContext — LANDED** (State Consolidation 2, `data/strategy_context.py`;
+  `docs/STRATEGY_CONTEXT_MIGRATION.md`). Owns stint plan, stops, fuel burn,
+  `config_id`, degradation assumptions, tolerances, and the frozen
+  `StrategyPromptSnapshot`. Reads event fields **from EventContext**.
+- **SetupContext — LANDED** (State Consolidation 3, `data/setup_context.py`;
+  `docs/SETUP_CONTEXT_MIGRATION.md`). Owns setup-recommendation state, keyed on
+  `EventContext.change_hash` **and** `StrategyPromptSnapshot.snapshot_id` so a
+  setup is detectably stale when the event or strategy changes. Reads event
+  legality only as the `change_hash` key (it does not copy `bop_enabled` /
+  `tuning_allowed` / `allowed_tuning_categories`).
 
 Both are documented in `docs/PRODUCT_CONSOLIDATION_AUDIT.md §7`. EventContext is
-their prerequisite and is now available.
+their prerequisite and is now available. Next likely sprint: **TrackContext**
+(SSOT-2 track/layout unification).

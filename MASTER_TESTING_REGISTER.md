@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**State Consolidation 2 — StrategyContext** — canonical strategy-plan read model `data/strategy_context.py` owning stint plan / stops / fuel burn / `config_id` / degradation assumptions / tolerances, reading event/race rules from EventContext (never duplicating them); `StrategyPromptSnapshot` freezes a consistent event+strategy state for AI prompts; `docs/STRATEGY_CONTEXT_MIGRATION.md` registers every strategy-specific dependency; one low-risk consumer migrated (`_refresh_lap_bank` config_id ★). `config["strategy"]` retained as legacy compatibility. New tests `test_strategy_context.py` (53). **Full suite: 4226 pass / 6 skip / 0 fail.** See "State Consolidation 2 — StrategyContext" at the end of this file.)
+> Last updated: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
+> Prior: 2026-07-03 (**State Consolidation 2 — StrategyContext** — canonical strategy-plan read model `data/strategy_context.py` owning stint plan / stops / fuel burn / `config_id` / degradation assumptions / tolerances, reading event/race rules from EventContext (never duplicating them); `StrategyPromptSnapshot` freezes a consistent event+strategy state for AI prompts; `docs/STRATEGY_CONTEXT_MIGRATION.md` registers every strategy-specific dependency; one low-risk consumer migrated (`_refresh_lap_bank` config_id ★). `config["strategy"]` retained as legacy compatibility. New tests `test_strategy_context.py` (53). **Full suite: 4226 pass / 6 skip / 0 fail.** See "State Consolidation 2 — StrategyContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 1 — EventContext** — canonical event/race read model `data/event_context.py` normalising the DB-event and `config["strategy"]` schemas; `docs/EVENT_CONTEXT_MIGRATION.md` registers every `config["strategy"]` dependency; one low-risk consumer migrated (`_refresh_telemetry_context`). `config["strategy"]` retained as legacy compatibility. New tests `test_event_context.py` (38). **Full suite: 4173 pass / 6 skip / 0 fail.** See "State Consolidation 1 — EventContext" at the end of this file.)
 > Prior: 2026-07-03 (**Product Consolidation Sprint** — audit + safe first-pass UI clean-up. New `docs/PRODUCT_CONSOLIDATION_AUDIT.md` + `ui/product_flow.py` (single-source tab roles / 13-step journey / `build_flow_state_summary()`); "Debug"→"Diagnostics" tab, ⚙ tool-tab markers, Track Modelling "5. Seed Geometry" / "Track Model Status" renames. No feature added, no backend removed, no tab reordered. New tests `test_consolidation_product_flow.py` (27). **Full suite: 4135 pass / 6 skip / 0 fail.** See "Product Consolidation Sprint" at the end of this file.)
 > Prior: 2026-07-03 (DEF-17U-UAT-007: Time Trial calibration laps falsely classified as pit-in / unusable — **FIXED**. Pit-in detection now OFF by default (`build_reference_path(..., pit_detection_enabled=False)`); new `PARTIAL_START` / `PARTIAL_STOP` lap quality so mid-lap start/stop slices no longer block valid laps. New tests: `test_def17u_uat007_calibration_build.py` (~35), `test_def17u_uat007_partial_laps.py` (44). **Full suite: 4200+ passed** (only failing test `test_group28_analyse_prompt_ranges` is a pre-existing, unrelated failure). See "DEF-17U-UAT-007" at the end of this file.
@@ -3957,3 +3958,105 @@ StrategyContext, invalidates the cache when either hash changes. Then migrate th
 deferred AI-input consumers (`_assemble_strategy_inputs`/`_run_ai_analysis`/
 `_launch_replan_worker`) to the frozen `StrategyPromptSnapshot`, and remove the
 `config["strategy"]` fan-out once every consumer reads a context.
+
+---
+
+## State Consolidation 3 — SetupContext (2026-07-03)
+
+Third step of the target architecture from `docs/PRODUCT_CONSOLIDATION_AUDIT.md`
+(§7); follows State Consolidation 1 — EventContext and 2 — StrategyContext and
+depends on both. Branch `state-consolidation-3-setup-context` (the three prior
+consolidation sprints were committed as `1dca4a5` on
+`fix/def-17u-uat007-timetrial-calibration` first). Creates a canonical
+**SetupContext** read model that owns *only* setup-recommendation state and is
+**keyed** to `EventContext.change_hash` and `StrategyPromptSnapshot.snapshot_id`
+so a setup built against one event/strategy can be detected as stale under
+another. **No feature added, no backend removed, no UI rebuilt, no tab reordered,
+no live PTT/voice change.** Legacy setup config/DB storage is **retained as
+compatibility.** Full suite after: **4293 pass / 6 skip / 0 fail** (67 new tests).
+
+### What was built
+- **`data/setup_context.py` (NEW, pure Python — no PyQt6, no DB, no I/O, no AI)**:
+  - `SetupContext` — frozen dataclass owning `setup_id`/`config_id`/`setup_label`,
+    `purpose`, `source`, `car`/`track`/track ids (setup is *for* a car+track;
+    read from the setup dict, falling back to EventContext), `adjustments`
+    (`SetupChangeEntry` tuple), `changed_fields`, frozen `baseline_setup` /
+    `target_setup` (value-copied item tuples with dict accessors), `reason_summary`,
+    `primary_issue`, `confidence`, `validation_warnings`, `applied`, `change_hash`
+    (setup fields only), and the `event_change_hash` / `strategy_snapshot_id` /
+    `telemetry_diagnosis_hash` keys it was built against. Keying helpers
+    `matches_event` / `is_stale_for_event` / `is_stale_for_strategy` /
+    `is_missing_identity` / `matches_purpose`; display `summary_line` /
+    `to_summary_lines` / `to_dict`.
+  - `SetupChangeEntry` — frozen; `to_dict()` round-trips the AI `changes` shape
+    (`{field, from, to, why}`); `_parse_adjustments` accepts `setting`/`field`
+    aliases and skips malformed rows.
+  - `SetupContextSource` enum — EMPTY / AI / GENERATED / MANUAL / SAVED_DB /
+    LEGACY_CONFIG (inferred: recommendation → AI; setup_id → SAVED_DB; else MANUAL).
+  - `SetupPurpose` enum — QUALIFYING / RACE / PRACTICE / TEST / UNKNOWN;
+    `normalise_purpose()` maps "Qualifying Setup"/"Race Setup", history
+    `build_qual`/`build_race`, or free text; never raises.
+  - `SetupContextValidationResult` + `validate_setup_context()` — keeps
+    `setup_warnings`/`setup_missing` **separate** from `staleness_warnings`
+    (event drift, strategy drift, purpose mismatch). `.warnings` concatenates.
+  - `SetupPromptSnapshot` + `build_setup_prompt_snapshot()` — a value-copied
+    freeze of the setup recommendation with the event + strategy keys it was
+    built against; stays stable even if the source setup dict / config mutates
+    later; `snapshot_id` = stable hash of the event + strategy + setup + diagnosis
+    change markers. **Exists for a future AI-setup-prompt migration; the
+    high-risk prompt paths are NOT migrated this sprint.**
+  - `build_setup_context(setup, recommendation, event_context, strategy_snapshot,
+    diagnosis, purpose, source, applied)` — reads event/strategy fields only as
+    `change_hash` / `snapshot_id` keys (never copied as owned state); never raises;
+    EMPTY on missing/garbage input.
+  - `compute_change_hash()` — deterministic 12-char marker over the **setup**
+    fields only (event/strategy tracked via their own hashes).
+- **`docs/SETUP_CONTEXT_MIGRATION.md` (NEW)** — every setup store (config
+  `car_setup.setups`; DB `setups` / `setup_recommendations` / `setup_snapshots` /
+  `lap_records.setup_id`; the AI response payload; diagnosis + `setup_history`)
+  with writers/readers, the ownership boundary, what was migrated, deferred
+  consumers, stale/prompt/validation risks, and the TrackContext/AI-input next plan.
+- **`ui/setup_builder_ui.py`** — `_build_setup_context()` helper (defensive;
+  `_current_setup_dict()` + `_build_event_context()` + a `StrategyPromptSnapshot`
+  → SetupContext). **Migrated**: `_setup_type_prefix()` derives the Q/R purpose via
+  `normalise_purpose` / `SetupPurpose.QUALIFYING`; `_display_setup_result()`
+  captures the canonical `SetupContext` into `self._last_setup_context` (read-only
+  and additive — no change to the displayed HTML, history save, or apply button).
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_setup_context.py` (NEW) | 67 | `normalise_purpose` (qual/race/practice/test/unknown/enum/garbage); build sources (empty/saved_db/manual/ai/overrides); setup fields preserved (identity, purpose-from-setup_type, adjustments parse, changed-fields union, baseline+target dicts, reason/confidence/primary_issue, validation warnings, applied, explicit purpose); **ownership boundary** (no event/race attrs, no strategy-plan attrs, event via change_hash only, strategy via snapshot_id only, to_dict excludes them); **qualifying-vs-race distinguishable** (+ different change_hash, matches_purpose); keying & staleness (matches_event; **stale when event change_hash changes**; **stale when strategy snapshot_id changes**; empty never stale; missing identity; setup hash changes on recommendation change; **setup hash ignores event/strategy**; diagnosis hash; deterministic); robustness (garbage/malformed changes/None/bad setup_id/validate never raise); validation **setup-vs-staleness separation** (empty, missing identity, unknown purpose, stale event → staleness not setup, stale strategy, purpose mismatch, combined `.warnings`); frozen prompt snapshot (combines setup+event+strategy keys, stable id, **stable after legacy mutation**, id changes on event/setup change, to_dict); serialisation + immutability (frozen context + frozen change entry) + legacy setup-dict compat; setup_builder source-scans (`_build_setup_context` helper, `_setup_type_prefix` uses normalise_purpose, `_display_setup_result` captures `_last_setup_context`) |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4293/6/0)**.
+- SetupContext exists + covered by tests — **yes**.
+- EventContext remains canonical owner of event/race config — **yes** (SetupContext reads it only as a key).
+- StrategyContext remains canonical owner of strategy-plan state — **yes** (read only via snapshot_id).
+- SetupContext owns only setup-recommendation state — **yes** (ownership-boundary tests enforce it).
+- Legacy setup config/DB storage retained — **yes**.
+- `docs/SETUP_CONTEXT_MIGRATION.md` exists and is specific — **yes**.
+- ≥1 low-risk read-only consumer migrated — **yes (`_setup_type_prefix` purpose; `_display_setup_result` captures the context)**.
+- No working feature removed; no tab reordered; no track mapping; no PTT/voice change — **yes**.
+- Behaviour unchanged except safer/clearer setup-state handling — **yes**.
+- Clear next-sprint recommendation — **yes (TrackContext, or migrate deferred AI-input consumers to frozen snapshots; migration doc §9)**.
+
+### Manual UAT steps
+1. In Setup Builder, switch the setup type between Race and Qualifying and save a
+   setup: confirm the auto-generated name prefix is still `R`/`Q` exactly as before.
+2. Run "Analyse & Get Setup Fix": confirm the analysis, changes list, diagnosis
+   banner, validation banners, and Apply button behave exactly as before (the new
+   `_last_setup_context` capture is invisible).
+3. Confirm no behaviour changed in Build Setup with AI, apply/save, Garage setups,
+   History, live PTT/voice (all still read the legacy stores this sprint).
+
+### Next sprint
+Either **TrackContext** (unify track/layout SSOT-2; owns reference path / station
+map / corner-segment model / seed geometry / track-truth; SetupContext and
+StrategyContext read corner context from it) **or** migrate the deferred
+AI-input consumers to frozen snapshots (`build_setup_advice_response` /
+`build_combined_setup_response` / `_assemble_strategy_inputs` / `_run_ai_analysis`
+threading EventContext + StrategyPromptSnapshot + SetupPromptSnapshot, proving
+prompts unchanged) and then surface the stale-setup indicator from
+`_last_setup_context`. **Recommended: TrackContext first.**
