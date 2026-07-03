@@ -228,6 +228,54 @@ def empty_session_context() -> SessionContext:
 
 
 # --------------------------------------------------------------------------- #
+# SessionTag — frozen DB-tagging identity for the telemetry dispatcher
+# --------------------------------------------------------------------------- #
+# Legacy Fan-Out Removal Phase 6a (2026-07-04): the EventDispatcher used to read
+# config["strategy"] in its telemetry event path (per-lap DB tagging + the
+# fallback race-session open). Building an EventContext there would mean a DB
+# query per lap event, so instead the UI pushes this small frozen snapshot into
+# the dispatcher whenever a tag-relevant field changes, and the dispatcher reads
+# only the tag. Immutable → a plain attribute swap is atomic under the GIL, so
+# no lock is needed between the UI (writer) and dispatcher (reader) threads.
+@dataclass(frozen=True)
+class SessionTag:
+    """What a live session/lap row is tagged with in the DB."""
+    track: str = ""
+    car: str = ""
+    config_id: str = ""
+    event_id: int = 0
+
+    @classmethod
+    def from_strategy(cls, strategy) -> "SessionTag":
+        """Build from the legacy ``config["strategy"]`` dict — reproduces the
+        dispatcher's original reads verbatim (used to seed the tag at
+        construction time, before any thread starts).
+
+        Note: the old race-start fallback nominally defaulted the track to
+        "Unknown", but ``DEFAULT_CONFIG`` has always materialised
+        ``strategy.track = ""`` so that default was dead code — the real
+        behaviour (empty string) is preserved here.
+        """
+        strategy = strategy or {}
+        return cls(
+            track=_as_str(strategy.get("track", "")),
+            car=_as_str(strategy.get("car", "")),
+            config_id=_as_str(strategy.get("config_id", "")),
+            event_id=_as_int(strategy.get("event_id", 0)),
+        )
+
+
+def build_session_tag(*, track="", car="", config_id="", event_id=0) -> SessionTag:
+    """Coercing constructor for callers assembling a tag from context fields."""
+    return SessionTag(
+        track=_as_str(track),
+        car=_as_str(car),
+        config_id=_as_str(config_id),
+        event_id=_as_int(event_id, 0),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Bridge to ui/product_flow.py (home / next-action surface)
 # --------------------------------------------------------------------------- #
 def flow_flags(ctx: SessionContext) -> dict:

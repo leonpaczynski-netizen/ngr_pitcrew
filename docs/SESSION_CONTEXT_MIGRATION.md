@@ -1,5 +1,11 @@
 # SessionContext Migration — live telemetry / session state register
 
+> **Phase 6a update (2026-07-04):** `data/session_context.py` also hosts
+> `SessionTag` — the frozen DB-tagging identity (track/car/config_id/event_id)
+> the UI pushes into the telemetry `EventDispatcher`, replacing its
+> `config["strategy"]` reads in the event path. See
+> `docs/LEGACY_FANOUT_PHASE_6A.md`.
+
 > Sprint: **SessionContext / TelemetryContext** · 2026-07-03
 > Branch: `session-telemetry-context` (from `master` @ `c94e4ad`)
 >

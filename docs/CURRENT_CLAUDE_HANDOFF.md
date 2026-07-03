@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 6a — Dispatcher SessionTag Snapshot — COMPLETE (2026-07-04).** Branch `legacy-fanout-phase-6a-dispatcher-tag` (from `master` @ `b010882`). Full suite: **4703 pass / 6 skip / 0 fail** (21 new tests; Phase 5 allowlist consciously shrunk — the guard held). **Retirement-map item 1 done: the telemetry pipeline no longer touches `config["strategy"]` at runtime.**
+
+**The mechanism:**
+- **`data/session_context.SessionTag` (NEW, pure)** — frozen dataclass (track/car/config_id/event_id); `from_strategy()` reproduces the dispatcher's original reads verbatim; coercing `build_session_tag()`. Immutable → attribute swap is atomic under the GIL (no lock between UI writer thread and dispatcher reader thread).
+- **`EventDispatcher` (main.py)** — seeds the tag at construction from the config it receives (one-time, pre-thread — the single remaining main.py bridge read, allowlisted as `("main.py","__init__"): 1`, replacing `("main.py","_dispatch"): 2`); `set_session_tag()` None-safe swap; `_dispatch` reads only the tag at both sites (per-lap `write_lap` event_id; fallback race-session open track/car/config_id/event_id). **`self._config` removed entirely.**
+- **`MainWindow._push_session_tag()` (NEW)** — builds from EventContext + `_active_config_id()` (byte-identical, Phase 5 proofs) and pushes. Sites: end of `_update_race_config` (Set-as-Active, garage car select, and session-config restore ALL funnel through it), `_on_event_save`'s active-event re-sync branch (after the fan-out write, ordering pinned), and end of `__init__` (belt-and-braces before `dispatcher.start()`).
+
+**Behaviour notes:** byte-identical in-sync (always, post-Phase-4). The old fallback-open `strat.get("track", "Unknown")` default was DEAD CODE (DEFAULT_CONFIG has always materialised `strategy.track = ""`) — real behaviour (empty string) preserved and pinned by test.
+
+**Tests:** `tests/test_legacy_fanout_phase_6a.py` (21 — SessionTag verbatim/from_strategy/defaults/coercion/immutability + the dead-"Unknown" pin; context-tag == strategy-tag; the REAL EventDispatcher exercised without starting its thread: construction seed, None-safe swap, RACE_STARTED opens the session with exactly the tag fields, LAP_COMPLETED writes event_id from the tag, updated tag used by the next event; source-scans: `_dispatch` config-free, config attr gone, push helper + all sites wired; writer/re-sync/Home-first/guardrail invariants). `tests/test_legacy_fanout_phase_5.py` FROZEN_ALLOWLIST updated in the same commit (main.py `_dispatch`×2 → `__init__`×1).
+
+**Next sprint:** retirement-map item 2 — **`_compute_race_config_id` hash byte-stability proof** (pin hash vectors → prove EventContext inputs identical → migrate) — or **wire the real UDP connection signal into SessionContext** (Home `live_active` becomes real), or **product work** (OFR-1). Full detail: `docs/LEGACY_FANOUT_PHASE_6A.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 6a).
+
+---
+
+## Prior Objective (historical)
 **Legacy Fan-Out Removal Phase 5 — Functional Readers + Frozen Allowlist Guard — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-5` (from `master` @ `b58545e`). Full suite: **4682 pass / 6 skip / 0 fail** (15 new tests; 2 legacy pins updated in place). **Scope (explicit product decision: "Functional + guard") — full writer retirement was re-audited and found BLOCKED (telemetry-path dispatcher reads, the config_id hash, restore writers, plan-state persistence, bridges); instead: no product decision reads the legacy dict any more, and a frozen allowlist prevents any new consumer.**
 
 **Functional readers migrated (byte-identical in-sync, tested):**

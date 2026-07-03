@@ -105,6 +105,12 @@ widget"; the event-state source is now EventContext).
 
 ## 7. Next sprint recommendation
 
+> **Executed (2026-07-04):** Phase 6a ran next — retirement-map item 1 is done.
+> The dispatcher's telemetry-path reads were replaced by a frozen `SessionTag`
+> pushed from the UI, and the allowlist was consciously shrunk
+> (`("main.py","_dispatch"):2` → `("main.py","__init__"):1`). See
+> `docs/LEGACY_FANOUT_PHASE_6A.md`.
+
 The fan-out series has reached its natural pause: staleness is impossible
 (Phase 4), no functional decision reads the dict (Phases 3+5), and the guard
 prevents regression. Recommended next:

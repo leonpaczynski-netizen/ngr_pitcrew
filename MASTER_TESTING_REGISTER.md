@@ -5136,3 +5136,75 @@ UDP-listener connection signal into SessionContext** (one-place change,
 user-visible), **Phase 6a — dispatcher session-tag snapshot** (first concrete
 writer-retirement step), or **return to product work** (e.g. deferred OFR-1
 between-race learning loop).
+
+---
+
+## Legacy Fan-Out Removal Phase 6a — Dispatcher SessionTag Snapshot (2026-07-04)
+
+> Branch `legacy-fanout-phase-6a-dispatcher-tag` (from `master` @ `b010882`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_6A.md`.
+> **Full suite: 4703 pass / 6 skip / 0 fail** (21 new tests; the Phase 5
+> frozen allowlist consciously shrunk in the same commit — the guard held).
+
+### What was done
+Retirement-map item 1 (`docs/LEGACY_FANOUT_PHASE_5.md` §4): **the telemetry
+pipeline no longer touches `config["strategy"]` at runtime.** The
+EventDispatcher's two `_dispatch` reads (per-lap DB tagging `event_id`; the
+fallback race-session open track/car/config_id/event_id) are replaced by a
+frozen **SessionTag** pushed from the UI.
+
+- **`data/session_context.SessionTag` (NEW, pure)** — frozen dataclass;
+  `from_strategy()` reproduces the dispatcher's original reads verbatim;
+  coercing `build_session_tag()`. Immutable → attribute swap is atomic under
+  the GIL (no lock between the UI writer and dispatcher reader threads).
+- **`EventDispatcher` (main.py)** — seeds the tag at construction from the
+  config it receives (one-time, before the thread starts — the single remaining
+  main.py bridge read; allowlist `("main.py","__init__"):1` replaces
+  `("main.py","_dispatch"):2`); `set_session_tag()` None-safe swap; `_dispatch`
+  reads only the tag; **`self._config` removed entirely**.
+- **`MainWindow._push_session_tag()` (NEW)** — builds from `EventContext`
+  (`track`/`car`/`event_id`) + `_active_config_id()` (StrategyContext) —
+  byte-identical per the Phase 5 proofs; never raises. Push sites: end of
+  `_update_race_config` (Set-as-Active, garage car select, and the
+  session-config restore ALL funnel through it), `_on_event_save`'s
+  active-event re-sync branch (after `_fanout_event_to_strategy`; ordering
+  pinned), and end of `__init__` (belt-and-braces before `dispatcher.start()`).
+- **Dead-default note (pinned by test):** the old fallback-open used
+  `strat.get("track", "Unknown")`, but `DEFAULT_CONFIG` has always materialised
+  `strategy.track = ""` — the "Unknown" default never fired; the real behaviour
+  (empty string) is preserved.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_6a.py` (NEW) | 21 | SessionTag pure model (`from_strategy` verbatim vs the legacy expressions; defaults incl. `None`; the dead-"Unknown" note pinned against `DEFAULT_CONFIG`; coercion; immutability); context-built tag == strategy-built tag (in-sync + empty); the **real `EventDispatcher`** constructed with mocks, thread never started: construction seed, no-config seed empty, None-safe swap, `RACE_STARTED` opens the session with exactly the tag fields (car_id from the ref + track/car/config_id/event_id from the tag), `LAP_COMPLETED` writes `event_id` from the tag, an updated tag is used by the next event; source-scans (`_dispatch` has zero config reads; the dispatcher config attr is gone; the push helper builds from the contexts and never reads config; all three push sites wired incl. the after-fan-out ordering in `_on_event_save`); SessionTag model purity; fan-out writer + Phase 4 re-sync + Home-first + config-guardrail invariants. |
+| `tests/test_legacy_fanout_phase_5.py` (updated) | — | `FROZEN_ALLOWLIST`: `("main.py","_dispatch"):2` removed, `("main.py","__init__"):1` added (the construction-time seed — bridge, out of the hot path). The exact-equality guard failed until this conscious update — working as designed. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4703/6/0)**.
+- Telemetry pipeline free of runtime `config["strategy"]` reads — **yes** (`_dispatch` config-free; dispatcher holds no config dict).
+- Tag byte-identical to the old reads — **yes** (verbatim `from_strategy` + context-equivalence tests; push coverage means in-sync always).
+- No lock added to the hot path — **yes** (immutable swap, GIL-atomic).
+- Push coverage complete — **yes** (all tag-field write flows funnel through the three push sites; table in the doc).
+- Fan-out writer / re-sync / TM combo writer / hash / restores / bridges untouched — **yes (pinned)**.
+- No telemetry semantics/announcer/strategy-engine/PTT/voice/setup/strategy/track/AI/tab-order change — **yes**.
+- Clear next-sprint recommendation — **yes**.
+
+### Manual UAT steps
+1. Set an event active, start a Practice session — laps written to the DB carry
+   the same event linkage as before; History rows unchanged in shape.
+2. With no session open, let a race start on-track (fallback open) — the session
+   row carries the active event's track/car/session-match-key/event id exactly
+   as before.
+3. Edit the ACTIVE event and Save (no re-activate), then complete a lap — the
+   lap's event linkage reflects the saved event (fresh tag).
+4. Garage → "Select for Event" with a different car, then drive — new laps tag
+   with the new car via the refreshed session context.
+
+### Next sprint
+Retirement-map item 2: **`_compute_race_config_id` hash byte-stability proof**
+(pin hash vectors → prove EventContext-sourced inputs identical in-sync →
+migrate the hash inputs). Alternative: **wire the real UDP-listener connection
+signal into `SessionContext`** (Home's `live_active` becomes real), or return to
+product work (OFR-1).
