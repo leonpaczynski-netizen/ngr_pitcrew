@@ -1763,14 +1763,23 @@ class SetupBuilderMixin:
                         getattr(self, attr).setText(_warn)
                         getattr(self, attr).setStyleSheet("color: #F5C542; font-size: 11px;")
                 return
+            # Legacy Fan-Out Removal Phase 2 (display labels only): the READOUT
+            # labels below reflect the canonical EventContext (DB-event-first —
+            # consistent with what the strategy/setup AI already consumes since
+            # the AI Snapshot Migration). int() preserves the integer QSpinBox
+            # formatting so the labels are byte-identical when the DB event and
+            # the config["strategy"] fan-out are in sync. The FUNCTIONAL reads
+            # (BoP toggle, setup-permission gating, spinbox rebind) below still
+            # read the active config["strategy"] fan-out (see `sc`) — unchanged.
+            ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
-            track = sc.get("track") or evt.get("track", "?")
-            car   = sc.get("car", "") or "—"
-            tw    = sc.get("tyre_wear_multiplier", evt.get("tyre_wear", 1))
-            fm    = sc.get("fuel_mult", evt.get("fuel_mult", 1))
-            rt    = sc.get("race_type", "lap")
-            laps  = int(sc.get("total_laps", 25))
-            dur   = int(sc.get("race_duration_minutes", 60))
+            track = ev_ctx.track or "?"
+            car   = ev_ctx.car or "—"
+            tw    = int(ev_ctx.tyre_wear_multiplier)
+            fm    = int(ev_ctx.fuel_multiplier)
+            rt    = ev_ctx.race_type
+            laps  = ev_ctx.laps
+            dur   = ev_ctx.race_duration_minutes
             length_str = f"{dur} min" if rt == "timed" else f"{laps} laps"
 
             if hasattr(self, "_lbl_setup_event_ctx"):
@@ -1808,19 +1817,19 @@ class SetupBuilderMixin:
                 self._lbl_rc_avail_tyres.setText(_at_str or "—")
                 self._lbl_rc_avail_tyres.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_mand_pits"):
-                self._lbl_rc_mand_pits.setText(str(int(sc.get("mandatory_stops", 0))))
+                self._lbl_rc_mand_pits.setText(str(ev_ctx.mandatory_stops))
                 self._lbl_rc_mand_pits.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_weather"):
-                self._lbl_rc_weather.setText(sc.get("weather", "—") or "—")
+                self._lbl_rc_weather.setText(ev_ctx.weather or "—")
                 self._lbl_rc_weather.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_damage"):
-                self._lbl_rc_damage.setText(sc.get("damage", "—") or "—")
+                self._lbl_rc_damage.setText(ev_ctx.damage or "—")
                 self._lbl_rc_damage.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_bop"):
-                self._lbl_rc_bop.setText("Yes" if sc.get("bop") else "No")
+                self._lbl_rc_bop.setText("Yes" if ev_ctx.bop_enabled else "No")
                 self._lbl_rc_bop.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_tuning"):
-                self._lbl_rc_tuning.setText("Allowed" if sc.get("tuning") else "Not Allowed")
+                self._lbl_rc_tuning.setText("Allowed" if ev_ctx.tuning_allowed else "Not Allowed")
                 self._lbl_rc_tuning.setStyleSheet(_green)
             _bop    = bool(sc.get("bop", evt.get("bop", False)))
             _tuning = bool(sc.get("tuning", evt.get("tuning", True)))

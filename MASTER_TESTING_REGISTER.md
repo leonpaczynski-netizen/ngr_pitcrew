@@ -4834,3 +4834,75 @@ display/validation consumers (`_sync_strategy_from_event`,
 accepting + testing the behaviour change, then begin retiring the Set-as-Active
 fan-out. Alternatively, **wire the real UDP-listener connection signal into
 SessionContext** (now a one-place change).
+
+---
+
+## Legacy Fan-Out Removal Phase 2 — Event-Rule Display-Label Migration (2026-07-03)
+
+> Branch `legacy-fanout-removal-phase-2` (from `master` @ `c94e4ad`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_2.md`.
+> **Full suite: 4629 pass / 6 skip / 0 fail** (15 new tests).
+
+### What was done
+Scope was set by an explicit product decision — **display labels only**. The
+Strategy/Setup event-context **readout labels** now reflect DB-first
+`EventContext` (consistent with what the strategy/setup AI already consumes since
+the AI Snapshot Migration). The **functional** paths — setup-permission gating
+(`_apply_setup_permissions`), the BoP toggle (`_on_bop_toggled`), the spinbox
+rebind — deliberately still read the active `config["strategy"]` fan-out, so
+**which setup fields are editable is unchanged**.
+
+- **Why DB-first is correct here:** `_on_event_save` writes event edits to the DB
+  (+`config["events"]`) but NOT `config["strategy"]`; only `_on_event_set_active`
+  writes the fan-out. So an edited-but-not-reactivated event has a fresh DB record
+  and a stale fan-out. The AI already reads DB-first, so the labels were showing
+  stale values that disagreed with the AI inputs — Phase 2 aligns them.
+- **Byte-identity (in-sync):** all event multipliers/counts are integer `QSpinBox`
+  values, so the migrated labels wrap `int()` (`"2×"` stays `"2×"`, not `"2.0×"`).
+  `race_type` is safe because `EventContext` normalises the DB combo text
+  (`"Timed Race"`) and the fan-out token (`"timed"`) to the same value. The full
+  rendered Strategy context line and the Setup readout labels were verified
+  byte-identical for an in-sync event/fan-out pair.
+- **`ui/dashboard.py _sync_strategy_from_event`** — `_lbl_strategy_event_ctx`
+  (track/car/length/Wear/Fuel/Refuel, int-wrapped) + `_lbl_fuel_mult_display`,
+  via one `ev_ctx = self._build_event_context()`. `_update_race_config()` writer,
+  `_get_mandatory_compounds()`, and the no-active-event branch unchanged.
+- **`ui/setup_builder_ui.py _sync_setup_builder_from_event`** —
+  `_lbl_setup_event_ctx` (track/car) + `_lbl_rc_*`
+  (race_type/length/fuel/wear/mand_pits/weather/damage + bop/tuning labels). Left
+  on the fan-out: refuel/req_tyre/avail_tyres labels (complex fallbacks) and the
+  functional `_bop`/`_tuning`/`_cats` → `_apply_setup_permissions`/`_on_bop_toggled`
+  + `_rebound_setup_spinboxes`.
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_2.py` (NEW) | 15 | **In-sync byte-identity** of the migrated label values (numeric int-preserved, string, bool, normalised `race_type`) + an integer-formatting guard (`"×2"`, `"5 L/s"`); **DB-first divergence** — an edited-not-reactivated event shows DB truth (wear/fuel/bop/tuning/weather/duration), car/track ids stay strategy-sourced; **source-scans** that both sync methods build `EventContext` and read the migrated labels from it, that the functional gating still reads `config["strategy"]` (`sc.get("bop"/"tuning"/"allowed_tuning_categories")`) and is fed the sc-derived `_bop`/`_tuning`/`_cats` (`_apply_setup_permissions(_bop, _tuning, _cats)`), that `_update_race_config()` is still called, and that no raw wear/fuel strategy reads remain in the strategy label; Set-as-Active writer + Home-first + config-guardrail invariants. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4629/6/0)**.
+- Event-rule display labels sourced from EventContext (DB-first) — **yes**.
+- Functional gating unchanged (chosen scope) — **yes (still reads `config["strategy"]`, pinned)**.
+- Byte-identical in the in-sync case — **yes (verified full rendered strings + field tests)**.
+- Behaviour change documented + tested — **yes (`docs/LEGACY_FANOUT_PHASE_2.md` + diverged tests)**.
+- No setup-logic/strategy-calc/track-mapping/AI-prompt/PTT/voice/tab-order change; `config["strategy"]` + both fan-out writers preserved — **yes**.
+- No real config touched by tests — **yes**.
+- Clear next-sprint recommendation — **yes (Phase 3 functional gating w/ product sign-off, or wire real connection state)**.
+
+### Manual UAT steps
+1. Set an event active — the Strategy and Setup event-context readout labels show
+   exactly what they did before (byte-identical to the fan-out).
+2. Edit that event in Event Planner and click **Save** (do NOT click "Set as
+   Active"); open the Strategy/Setup tabs — the readout **labels** now show the
+   edited values (matching what the AI would use). The editable setup fields /
+   BoP gating are unchanged (still reflect the last activation).
+3. Click "Set as Active" again — labels and gating agree, as before.
+
+### Next sprint
+**Phase 3 — functional gating (needs product sign-off)**: migrate the
+setup-permission/BoP inputs + the tuning/BoP AI-response validation to DB-first
+EventContext (changes which fields are editable in the diverged case); consider
+first making `_on_event_save` re-sync (or drop) the fan-out so DB and config can't
+diverge, enabling the Set-as-Active fan-out to be retired. Alternative: wire the
+real UDP-listener connection signal into `SessionContext`.

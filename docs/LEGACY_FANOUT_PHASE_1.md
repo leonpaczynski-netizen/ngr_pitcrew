@@ -131,6 +131,12 @@ phase that accepts/proves that change:
 * The §3d reads remain the bulk of the fan-out dependence; Phase 2 must decide
   whether display/validation should adopt EventContext's DB-first truth (a
   deliberate, tested behaviour change) or keep strategy-first.
+  **Update (2026-07-03, Phase 2):** the §3d *display labels*
+  (`_sync_strategy_from_event`, `_sync_setup_builder_from_event`) were migrated
+  to DB-first EventContext (byte-identical in sync). The *functional* gating
+  (setup permissions/BoP) and the AI-response tuning/BoP validation were kept on
+  the fan-out pending product sign-off (Phase 3). See
+  `docs/LEGACY_FANOUT_PHASE_2.md`.
 
 ## 7. Next sprint recommendation
 
