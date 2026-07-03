@@ -1,5 +1,12 @@
 # AI Snapshot Migration — frozen context inputs register
 
+> **Legacy Fan-Out Removal Phase 1 update (2026-07-03):** no AI-input read was
+> changed. The `legacy_strategy=self._config.get("strategy", {})` arguments to
+> `_build_strategy_ai_snapshot` / `_build_practice_ai_snapshot` /
+> `_build_setup_ai_snapshot` are the snapshots' documented legacy input source
+> (LEGACY_REQUIRED), not consumer leaks, so they stay. See
+> `docs/LEGACY_FANOUT_PHASE_1.md` §3c.
+
 > Sprint: **AI Snapshot Migration — Frozen Context Inputs** · 2026-07-03
 > Branch: `ai-snapshot-migration-context-freeze`
 > Companion: `data/ai_context_snapshot.py`, `tests/test_ai_context_snapshot.py`,

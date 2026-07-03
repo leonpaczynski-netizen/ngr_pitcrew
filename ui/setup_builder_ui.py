@@ -1350,7 +1350,7 @@ class SetupBuilderMixin:
         self._setup_result_text.setHtml(html)
 
         # Save to history
-        config_id = self._config.get("strategy", {}).get("config_id", "")
+        config_id = self._active_config_id()  # Phase 1: StrategyContext, not raw config["strategy"]
         car  = self._config.get("strategy", {}).get("car", "")
         track = self._config.get("strategy", {}).get("track", "")
         if config_id:
@@ -1724,7 +1724,7 @@ class SetupBuilderMixin:
         )
 
         # Save build setup to history
-        config_id = self._config.get("strategy", {}).get("config_id", "")
+        config_id = self._active_config_id()  # Phase 1: StrategyContext, not raw config["strategy"]
         car  = self._config.get("strategy", {}).get("car", "")
         track = self._config.get("strategy", {}).get("track", "")
         if config_id:
@@ -1912,7 +1912,7 @@ class SetupBuilderMixin:
 
     def _refresh_setup_history_combo(self) -> None:
         try:
-            config_id    = self._config.get("strategy", {}).get("config_id", "")
+            config_id    = self._active_config_id()  # Phase 1: StrategyContext, not raw config["strategy"]
             history_path = Path(__file__).parent.parent / "data" / "setup_history.json"
             if not history_path.exists():
                 self._setup_history_combo.clear()
@@ -1935,7 +1935,7 @@ class SetupBuilderMixin:
         if index < 0:
             return
         try:
-            config_id    = self._config.get("strategy", {}).get("config_id", "")
+            config_id    = self._active_config_id()  # Phase 1: StrategyContext, not raw config["strategy"]
             history_path = Path(__file__).parent.parent / "data" / "setup_history.json"
             if not history_path.exists():
                 return

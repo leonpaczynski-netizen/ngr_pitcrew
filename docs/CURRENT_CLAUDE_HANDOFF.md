@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 1 — Read-Only Consumer Migration — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-1` (from `config-safety-guardrails` @ `d206be2`). Full suite: **4589 pass / 6 skip / 0 fail** (22 new tests). **Consumer-migration only — every migrated read is byte-identical to the expression it replaces (proven by test); no behaviour change, `config["strategy"]` and both fan-out writers preserved.**
+
+**Why it exists:** reduce dependence on the legacy `config["strategy"]` fan-out cache by moving low-risk read-only consumers onto the canonical read models. This is NOT the sprint that removes the fan-out — writers stay.
+
+**Migrated (byte-identical, tested):**
+- **`config_id` → `StrategyContext.config_id`** via a new `dashboard._active_config_id()` accessor. Sites: `setup_builder._refresh_setup_history_combo` + `_on_setup_history_selected` (read-only history lookups), `_display_setup_result` + `_run_build_setup` (history-save keys). Zero raw `config_id` reads remain in `ui/setup_builder_ui.py`. (`_refresh_lap_bank` already used StrategyContext.config_id — precedent.)
+- **`car` → `EventContext.car`** in `dashboard._sync_practice_from_event` (practice-bank combo sync). Car resolves strategy-first in EventContext and the events table never stores a car, so it's byte-identical.
+
+**Why only these:** the canonical builders are **DB-event-first** for race-rule fields (`track`, `tyre_wear`, `fuel_mult`, `tuning`, `bop`, race length) — reading those from EventContext would (correctly) differ from the strategy-first raw read when a DB edit post-dates "Set as Active", i.e. NOT byte-identical. Those are documented + **deferred** to Phase 2. `config_id` (strategy-owned) and `car` (strategy-first) are the fields that are provably identical today.
+
+**Preserved (pinned by tests):** the Event Planner "Set as Active" fan-out (`_on_event_set_active`) and the Track Modelling combo writer (`track_location_id`/`layout_id`); `config["strategy"]` itself; all AI-input snapshot reads (already migrated); the config_id **hash** (`_compute_race_config_id`) and telemetry-owned `_computed_fuel_burn_lpl` (both LEGACY_REQUIRED, byte-stable/owned elsewhere).
+
+**Deliverables:** `docs/LEGACY_FANOUT_PHASE_1.md` (NEW — full classification of every remaining `config["strategy"]` reader: EVENT_CONFIG / STRATEGY_PLAN / TRACK_IDENTITY / SETUP_STATE / AI_INPUT / LEGACY_REQUIRED / WRITER, with the precedence caveat table, migrated list, and deferred list with reasons); `ui/dashboard.py` (`_active_config_id`, `_sync_practice_from_event`); `ui/setup_builder_ui.py` (4 `config_id` sites → helper); `tests/test_legacy_fanout_phase_1.py` (22 — byte-identity for `config_id`/`car` incl. DB-event-without-car; source-scans that migrated consumers use the contexts and no longer read raw; both writers intact; migrated methods write no `config["strategy"]`; Track Modelling's only strategy writes are the two combo ids; tab order Home-first + config guardrail still active).
+
+**Next sprint: SessionContext / TelemetryContext** (additive, low-risk — give the telemetry/session layer a canonical read model so `_computed_fuel_burn_lpl` / `has_valid_laps` / `live_active` / live-session identity stop reading `config["strategy"]`/volatile attrs; unblocks Home's two approximations), then **Legacy Fan-Out Removal Phase 2** (migrate the DB-first-precedence event-rule display/validation consumers, accepting + testing the behaviour change). Full detail: `docs/LEGACY_FANOUT_PHASE_1.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 1).
+
+---
+
+## Prior Objective (historical)
 **Config Safety Guardrails — COMPLETE (2026-07-03).** Branch `config-safety-guardrails` (from `home-dashboard-promotion` @ `69289ba`). Full suite: **4567 pass / 6 skip / 0 fail** (34 new tests). **Safety + test-isolation only: no setup/strategy/track-mapping/AI-prompt/AI-input/telemetry/PTT/voice/calibration/workflow change; `config["strategy"]` + both fan-outs untouched; the only config-schema change is materialising the already-effective `strategy.degradation_consecutive_laps: 2` default (tested).**
 
 **Why it exists:** the app rewrites `config.json` during normal use *and during `MainWindow` construction* (api-key auto-load + `config_id` derivation → `_persist_config`). Last sprint an ad-hoc headless smoke run built `MainWindow` against the real `config.json` and clobbered the user's settings; the file is gitignored so there was no git recovery copy. This sprint makes that class of accident impossible.

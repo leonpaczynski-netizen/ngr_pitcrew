@@ -4701,3 +4701,65 @@ the file is gitignored, so there was no git recovery copy.
 `config["strategy"]` consumers onto `EventContext`/`StrategyContext`, keeping the
 `_on_event_set_active` fan-out writer as compatibility until every reader is
 migrated.
+
+---
+
+## Legacy Fan-Out Removal Phase 1 — Read-Only Consumer Migration (2026-07-03)
+
+> Branch `legacy-fanout-removal-phase-1` (from `config-safety-guardrails`
+> @ `d206be2`). Full doc: `docs/LEGACY_FANOUT_PHASE_1.md`.
+> **Full suite: 4589 pass / 6 skip / 0 fail** (22 new tests).
+
+### What was done
+Consumer-migration only — **every migrated read is byte-identical to the
+expression it replaces (proven by test); no behaviour change; `config["strategy"]`
+and both fan-out writers preserved.**
+
+- **`ui/dashboard.py`** — new `_active_config_id()` accessor returning
+  `StrategyContext.config_id` (strategy-owned, `str(...)`-coerced → byte-identical
+  to `config["strategy"].get("config_id", "")`); `_sync_practice_from_event` reads
+  the car from `EventContext.car` (car resolves strategy-first there and the events
+  table never stores a car → byte-identical).
+- **`ui/setup_builder_ui.py`** — the four `config_id` reads now call
+  `self._active_config_id()`: `_refresh_setup_history_combo` +
+  `_on_setup_history_selected` (read-only history lookups) and
+  `_display_setup_result` + `_run_build_setup` (history-save keys). **Zero raw
+  `config_id` reads remain in the file.**
+- **Preserved / deferred** (documented in `docs/LEGACY_FANOUT_PHASE_1.md`): both
+  fan-out writers (Set-as-Active `_on_event_set_active`; Track Modelling combo
+  `track_location_id`/`layout_id`); the DB-first event-rule reads
+  (track/tyre_wear/fuel_mult/tuning/bop/race-length — not byte-identical to the
+  strategy-first raw reads, so a Phase 2 job); the `config_id` hash
+  `_compute_race_config_id`; telemetry-owned `_computed_fuel_burn_lpl`; all
+  AI-input reads (already snapshot-migrated).
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_1.py` (NEW) | 22 | **Byte-identity:** `StrategyContext.config_id == config["strategy"].get("config_id","")` across absent/empty/string; `EventContext.car == config["strategy"].get("car","")` strategy-only + with a DB event that has no car. **Migrated consumers:** `_active_config_id` uses `_build_strategy_context().config_id`; setup_builder has no raw `config_id` reads + 4 helper calls; the two history lookups use the helper and read no raw `config["strategy"]`; `_sync_practice_from_event` reads `_build_event_context().car`, not raw. **Writers preserved:** `_on_event_set_active` still fans `strat["track"]`/`["bop"]`/`["tuning"]`/`["event_id"]`; Track Modelling still writes `track_location_id`/`layout_id`; `config["strategy"]` not removed. **No new fan-out:** migrated methods write no `config["strategy"]`; setup_builder writes none; Track Modelling's only strategy writes are the two combo ids. **Invariants:** tab order Home-first; config-safety guardrail still blocks real writes. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4589/6/0)**.
+- No real `config.json` writes during tests/smoke — **yes** (all pure-Python; session guard intact).
+- `docs/LEGACY_FANOUT_PHASE_1.md` exists and is specific — **yes** (classifies every remaining reader).
+- Several low-risk read-only consumers migrated where safe — **yes** (5 config_id sites + 1 car site).
+- Remaining readers documented + classified — **yes** (EVENT_CONFIG/STRATEGY_PLAN/TRACK_IDENTITY/SETUP_STATE/AI_INPUT/LEGACY_REQUIRED/WRITER).
+- Fan-out writers remain; no new writers introduced — **yes (pinned)**.
+- No setup/strategy/track/AI-prompt/PTT/voice/live-race change; Home Dashboard still first + functional — **yes**.
+- Clear next-sprint recommendation — **yes (SessionContext/TelemetryContext, then Phase 2)**.
+
+### Manual UAT steps
+1. Set an active event, build/save a setup — the setup-history combo still lists
+   entries for the current session match key, and selecting one still shows its
+   reasoning (config_id now sourced from StrategyContext).
+2. Switch to Practice Review with an active event — the car combo still
+   auto-selects the event's car.
+3. Confirm nothing else changed: strategy/setup labels, AI prompts, tab order,
+   Home landing all behave exactly as before.
+
+### Next sprint
+**SessionContext / TelemetryContext** (additive, low-risk) to give the
+telemetry/session layer a canonical read model and unblock Home's
+`has_valid_laps`/`live_active` approximations, then **Legacy Fan-Out Removal
+Phase 2** for the DB-first-precedence event-rule consumers.

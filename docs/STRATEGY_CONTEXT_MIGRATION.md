@@ -1,5 +1,15 @@
 # StrategyContext Migration — strategy-plan state register
 
+> **Legacy Fan-Out Removal Phase 1 update (2026-07-03):** the active `config_id`
+> read-only consumers now go through `dashboard._active_config_id()` →
+> `StrategyContext.config_id` (byte-identical, strategy-owned): `setup_builder`'s
+> `_refresh_setup_history_combo`, `_on_setup_history_selected`,
+> `_display_setup_result`, and `_run_build_setup` (joining `_refresh_lap_bank`,
+> migrated in this sprint's State Consolidation 2 work). Zero raw `config_id`
+> reads remain in `ui/setup_builder_ui.py`. The `config_id` **hash**
+> (`_compute_race_config_id`) stays a raw read (byte-stable algorithm). See
+> `docs/LEGACY_FANOUT_PHASE_1.md`.
+
 > Sprint: **State Consolidation 2 — StrategyContext** · 2026-07-03
 > Companion: `data/strategy_context.py`, `tests/test_strategy_context.py`,
 > `docs/EVENT_CONTEXT_MIGRATION.md`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5/§7)
