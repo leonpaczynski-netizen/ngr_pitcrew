@@ -5884,10 +5884,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lbl_lap_count.setText("No laps recorded")
 
     def _persist_config(self) -> None:
-        """Write self._config to disk. Called from all save sites."""
+        """Write self._config to disk. Called from all save sites.
+
+        Delegates to config_paths.save_config: atomic (temp-file + os.replace),
+        keeps a .bak backup, and is guarded so that under tests it refuses to
+        overwrite the user's real config.json (raises ConfigSafetyError, caught
+        and logged here so construction/saves never crash). Normal app runs are
+        unaffected — they write the real config exactly as before.
+        """
+        from config_paths import save_config, ConfigSafetyError
         try:
-            with open(self._config_path, "w") as f:
-                json.dump(self._config, f, indent=4)
+            save_config(self._config_path, self._config, backup=True)
+        except ConfigSafetyError as e:
+            print(f"[Config] BLOCKED real-config write under tests: {e}")
         except Exception as e:
             print(f"[Config] save error: {e}")
 

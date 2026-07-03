@@ -81,76 +81,15 @@ class _DebugWriter:
         self._orig.flush()
 
 
-DEFAULT_CONFIG = {
-    "connection": {"host": "127.0.0.1", "port": 33741},
-    "tyre_thresholds": {
-        "cold_max": 70.0, "warming_max": 85.0,
-        "optimal_max": 100.0, "hot_max": 115.0,
-    },
-    "voice": {
-        "enabled": True, "rate": 175, "volume": 1.0, "voice_id": "",
-        "tyre_alerts": True, "lap_alerts": True,
-        # position and countdown moved to on-demand (push-to-talk button)
-        "position_alerts": False, "fuel_alerts": True, "countdown_alerts": False,
-        # sounddevice output device index for beeps; null = system default.
-        # Run the app and check the "[VoiceAnnouncer] sounddevice output devices" log
-        # to find the correct index if beeps play to the wrong device.
-        "beep_device": None,
-        # Set true if beeps are silent despite correct device: routes beep audio
-        # through SAPI5 TTS (Speech Runtime session, always audible) instead of
-        # sounddevice. Beeps become spoken words: "go"/"done"/"shift".
-        "beep_use_tts": False,
-    },
-    "fuel": {"safety_margin_laps": 1.0, "pit_threshold_liters": 0.5},
-    "ui": {"refresh_ms": 100},
-    "query": {
-        "speech_backend": "google",
-        "mic_index": None,
-        "record_secs": 3.0,
-    },
-    "query_button": {},
-    "strategy": {
-        "stops": [],
-        "track": "",
-        "total_laps": 25,
-        "tyre_wear_multiplier": 1.0,
-        "fuel_burn_per_lap": 2.0,
-        "refuel_speed_lps": 10.0,
-        "pit_loss_secs": 20.0,
-        "lap_time_tolerance_ms": 1500,
-        "fuel_tolerance_liters": 0.5,
-    },
-    "shift_beep": {
-        "enabled": True,
-        "qual_rpm": 7000,
-        "race_rpm": 6500,
-    },
-    "anthropic": {
-        "api_key": ""
-    },
-    "car_setup": {
-        "setups": []
-    },
-}
-
-
-def load_config(path: str) -> dict:
-    try:
-        with open(path) as f:
-            loaded = json.load(f)
-        # Deep-merge loaded over defaults
-        cfg = dict(DEFAULT_CONFIG)
-        for k, v in loaded.items():
-            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                cfg[k] = {**cfg[k], **v}
-            else:
-                cfg[k] = v
-        return cfg
-    except FileNotFoundError:
-        return dict(DEFAULT_CONFIG)
-    except json.JSONDecodeError as e:
-        _log.warning("JSON error in %s: %s — using defaults", path, e)
-        return dict(DEFAULT_CONFIG)
+# Config defaults + loading now live in ``config_paths`` (pure, testable, and
+# the single owner of the read/write guardrail that stops tests clobbering the
+# user's real config.json). Re-exported here so existing ``main.DEFAULT_CONFIG``
+# / ``main.load_config`` references keep working.
+from config_paths import (  # noqa: E402
+    DEFAULT_CONFIG,
+    load_config,
+    resolve_config_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -420,12 +359,14 @@ class ConnectionMonitor:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    config_path = "config.json"
     dump_packets = "--dump-packets" in sys.argv
+    explicit_config = None
     if "--config" in sys.argv:
         idx = sys.argv.index("--config")
         if idx + 1 < len(sys.argv):
-            config_path = sys.argv[idx + 1]
+            explicit_config = sys.argv[idx + 1]
+    # Precedence: --config → NGR_CONFIG_PATH env → default config.json.
+    config_path = resolve_config_path(explicit_config)
 
     config = load_config(config_path)
 

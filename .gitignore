@@ -1,5 +1,9 @@
-# Config contains API key and personal settings — do not commit
+# Config contains API key and personal settings — do not commit.
+# Also ignore the atomic-write temp file and the .bak recovery copy
+# (config_paths.save_config).
 config.json
+config.json.bak
+config.json.tmp
 
 # Database files
 data/*.db

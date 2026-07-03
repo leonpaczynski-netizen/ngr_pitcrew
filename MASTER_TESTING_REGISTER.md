@@ -4624,3 +4624,80 @@ still the only `setCurrentIndex` site** (pinned by source-scans).
 the `_on_event_set_active` fan-out writer as compatibility until every reader is
 migrated. Alternative: **SessionContext / TelemetryContext** to make Home's
 `has_valid_laps` / `live_active` approximations owner-backed truth.
+
+---
+
+## Config Safety Guardrails (2026-07-03)
+
+> Branch `config-safety-guardrails` (from `home-dashboard-promotion`
+> @ `69289ba`). Full doc: `docs/CONFIG_SAFETY_GUARDRAILS.md`.
+> **Full suite: 4567 pass / 6 skip / 0 fail** (34 new tests).
+
+### What was done
+Safety + test-isolation only — **no setup/strategy/track-mapping/AI-prompt/
+AI-input/telemetry/PTT/voice/calibration/workflow change; `config["strategy"]`
+and both fan-outs untouched.** The only config-schema change is materialising
+the already-effective `strategy.degradation_consecutive_laps: 2` default.
+
+**Why:** the app rewrites `config.json` during normal use *and during
+`MainWindow` construction* (api-key auto-load from `api_key.txt` + `config_id`
+derivation → `_persist_config`). The Home Dashboard Promotion smoke run built
+`MainWindow` against the real `config.json` and clobbered the user's settings;
+the file is gitignored, so there was no git recovery copy.
+
+- **`config_paths.py` (NEW, pure Python — no PyQt6, no app imports)** — single
+  owner of config path resolution + IO + the guardrail. `DEFAULT_CONFIG` (moved
+  from `main.py`, re-exported there; materialises `degradation_consecutive_laps:
+  2`); `resolve_config_path(explicit)` (`--config` → `NGR_CONFIG_PATH` →
+  `config.json`); `is_test_environment()` / `is_real_config_path()` /
+  `real_config_access_blocked()` (test env + real path + not
+  `NGR_ALLOW_REAL_CONFIG=1`); `load_config()` (deep-merge, never raises; refuses
+  to READ the real config under tests → defaults, no secret exposure);
+  `save_config(path, cfg, *, backup=True)` (refuses to WRITE the real config
+  under tests → `ConfigSafetyError`; serialise-first so no partial writes; `.bak`
+  backup; atomic `tmp` + `os.replace`); `write_default_config()`.
+- **`main.py`** — `DEFAULT_CONFIG`/`load_config` imported from `config_paths`
+  (re-exported); `main()` resolves via `resolve_config_path(explicit)`.
+- **`ui/dashboard.py _persist_config()`** — delegates to `save_config(...,
+  backup=True)`; catches `ConfigSafetyError` (logs, never crashes). ~22 call
+  sites unchanged; normal runs write the real config exactly as before (now
+  atomic + `.bak`).
+- **`.gitignore`** — also ignores `config.json.bak` / `config.json.tmp`.
+- **`tests/conftest.py` (NEW)** — `temp_config_path` fixture (isolated config
+  from `DEFAULT_CONFIG` in `tmp_path`; no `api_key.txt` in its dir) +
+  `_guard_real_config` session-autouse net (SHA-256 of the real config
+  before/after the run — fails the suite if any test mutated it).
+
+### New test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_config_safety_guardrails.py` (NEW) | 31 | resolve precedence (explicit > env > default); `is_test_environment` true under pytest; `is_real_config_path` (real / temp / empty / None); `real_config_access_blocked` (real blocked, temp never, opt-out disables, falsey opt-out stays blocked); `load_config` (missing → defaults, temp merge over defaults, corrupt → defaults, real-under-tests → defaults + no key leak + not the shared dict, doesn't mutate `DEFAULT_CONFIG`); `save_config` (writes temp; refuses real → `ConfigSafetyError`; atomic no `.tmp` leftover; `.bak` holds the previous; no `.bak` on first write; non-serialisable never writes partial; non-dict rejected); `write_default_config` seeds `deg=2`; `DEFAULT_CONFIG` deg=2 + empty api_key + `main` re-export identity; **no real `sk-ant-api\d+-…` value in any repo `.py`**; `.gitignore` protects config + `.bak`/`.tmp`; `config.json` not git-tracked; `main` uses `resolve_config_path`; `_persist_config` uses the guarded saver (no raw `open`/`json.dump`) |
+| `tests/test_config_safety_smoke.py` (NEW) | 3 | `pytest.importorskip("PyQt6")` + offscreen. Constructs the real `MainWindow` against a temp config: wired to the temp path, no api-key leak, real `config.json` byte-identical (SHA-256) before/after; persist-to-temp writes only the temp file; a window mistakenly wired to the real path is **blocked** (logged no-op, not a crash, real file unchanged) |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4567/6/0)**.
+- Real `config.json` not touched by tests or headless smoke runs — **yes** (session-autouse SHA-256 guard + smoke assertions; verified no `.bak`/`.tmp`/diff after a full run).
+- Explicit temp config path mechanism for tests — **yes** (`temp_config_path` fixture; `NGR_CONFIG_PATH`; `resolve_config_path`).
+- MainWindow smoke construction is safe — **yes** (`test_config_safety_smoke.py`).
+- No API keys/secrets committed, logged, or copied into fixtures — **yes** (fixture hashes not raw bytes; source-scan asserts no real key value; temp dirs have no `api_key.txt`).
+- Normal user app config behaviour still works — **yes** (guard is test-mode only; `_persist_config` writes the real config in prod, now atomic + `.bak`).
+- No setup/strategy/track-mapping/AI-prompt/AI-input/PTT/voice/live-race change — **yes**.
+- `docs/CONFIG_SAFETY_GUARDRAILS.md` exists and is specific — **yes**.
+- Clear next-sprint recommendation — **yes (Legacy Fan-Out Removal Phase 1)**.
+
+### Manual UAT steps
+1. `python main.py` — app launches normally, opens on Home (see SMK-001), reads
+   and (on a settings change) writes the real `config.json` as before; a
+   `config.json.bak` appears after the first save.
+2. `python main.py --config C:\tmp\ngr.json` (or set `NGR_CONFIG_PATH`) — the app
+   uses that file instead; the real `config.json` is untouched.
+3. `python -m pytest` — full suite green; the real `config.json` is byte-identical
+   afterwards (the session guard fails loudly otherwise). No `config.json.tmp` /
+   `.bak` left in the repo root from tests.
+
+### Next sprint
+**Legacy Fan-Out Removal Phase 1** — migrate the low-risk read-only
+`config["strategy"]` consumers onto `EventContext`/`StrategyContext`, keeping the
+`_on_event_set_active` fan-out writer as compatibility until every reader is
+migrated.
