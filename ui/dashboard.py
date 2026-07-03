@@ -43,6 +43,13 @@ from ui.widgets import (
     TyreWidget, FuelBar, ConnectionStatusWidget, BigValueLabel,
 )
 from ui.gt7_data import GT7_TRACKS, GT7_TRACK_INFO, GT7_CARS, GT7_CARS_BY_CATEGORY, TYRE_TEMP_PRESETS, normalise_compound
+from ui.tab_registry import (
+    build_default_registry,
+    TAB_LIVE, TAB_EVENT_PLANNER, TAB_GARAGE, TAB_SETUP_BUILDER,
+    TAB_PRACTICE_REVIEW, TAB_STRATEGY_BUILDER, TAB_TELEMETRY, TAB_DIAGNOSTICS,
+    TAB_GUIDE, TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
+    TAB_HOME,
+)
 
 
 
@@ -415,16 +422,57 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
         # Home Dashboard sprint: the Race Engineer Command Centre is APPENDED so
-        # the hard-coded indices 0-12 used by _on_tab_changed never move.
+        # the tab positions 0-12 established before it never move.
         self._tabs.addTab(self._build_home_tab(),             "Home")             # 13
-        self._home_tab_index = self._tabs.count() - 1
+        # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
+        # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
+        # them; a source-scan test + this count check guard the pairing).
+        # Dispatch and navigation go through the registry, never raw indices.
+        self._tab_registry = build_default_registry()
+        if self._tab_registry.count != self._tabs.count():  # pragma: no cover
+            logging.warning(
+                "Tab registry mismatch: %d keys vs %d tabs — update "
+                "DEFAULT_TAB_ORDER in ui/tab_registry.py",
+                self._tab_registry.count, self._tabs.count(),
+            )
         # Product Consolidation Sprint: flag advanced/diagnostic tool tabs so the
         # normal race-engineer workflow reads cleanly. Roles are owned by
         # ui/product_flow.py (single source of truth); this only decorates the
-        # tab titles and never changes tab order or indices.
+        # tab titles and never changes tab order or indices (and the registry
+        # is positional, so decorated labels can never break key lookup).
         self._apply_product_flow_tab_markers()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self._tabs)
+
+    # --- Named tab navigation (Tab Navigation Refactor, 2026-07-03) ----------
+    #
+    # These helpers are the only sanctioned way to locate or select a tab.
+    # All are safe on unknown keys (no-ops / -1 / None — never raise) so
+    # future callers (e.g. Home click-to-navigate) cannot crash the UI.
+
+    def get_tab_index(self, tab_key: str) -> int:
+        """Current index for a stable tab key, or -1 when unknown."""
+        reg = getattr(self, "_tab_registry", None)
+        return reg.index_of(tab_key) if reg is not None else -1
+
+    def has_tab(self, tab_key: str) -> bool:
+        """True when the key is registered on the tab bar."""
+        return self.get_tab_index(tab_key) >= 0
+
+    def current_tab_key(self):
+        """Stable key of the currently selected tab, or None."""
+        reg = getattr(self, "_tab_registry", None)
+        if reg is None or not hasattr(self, "_tabs"):
+            return None
+        return reg.key_at(self._tabs.currentIndex())
+
+    def select_tab(self, tab_key: str) -> bool:
+        """Select a tab by stable key. Returns False (no-op) on unknown keys."""
+        idx = self.get_tab_index(tab_key)
+        if idx < 0 or not hasattr(self, "_tabs"):
+            return False
+        self._tabs.setCurrentIndex(idx)
+        return True
 
     def _apply_product_flow_tab_markers(self) -> None:
         """Prefix advanced/diagnostic tabs with a tool marker (see product_flow).
@@ -573,7 +621,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         try:
             if not hasattr(self, "_tabs") or not hasattr(self, "_home_card_labels"):
                 return
-            if self._tabs.currentIndex() != getattr(self, "_home_tab_index", -1):
+            if self.current_tab_key() != TAB_HOME:
                 return
             self._home_refresh()
         except Exception:  # pragma: no cover - defensive
@@ -5908,27 +5956,34 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # -----------------------------------------------------------------------
 
     def _on_tab_changed(self, index: int) -> None:
-        if index == 10:   self._refresh_history()
-        elif index == 3:  self._sync_setup_builder_from_event()
-        elif index == 5:  self._sync_strategy_from_event()
-        elif index == 4:  self._sync_practice_from_event()
-        elif index == 6:  self._refresh_telemetry_context()
-        elif index == 11: self._flush_ai_log_pending_select()
-        elif index == 12: self._tm_on_tab_shown()
-        elif index == getattr(self, "_home_tab_index", 13): self._home_refresh()  # Home (appended)
+        # Tab Navigation Refactor (2026-07-03): dispatch by stable tab KEY, not
+        # raw numeric index — the registry mirrors the addTab creation order,
+        # so reordering tabs later only means updating DEFAULT_TAB_ORDER in
+        # ui/tab_registry.py alongside the addTab calls. Per-tab behaviour on
+        # activation is unchanged from the index-based dispatch it replaces.
+        reg = getattr(self, "_tab_registry", None)
+        key = reg.key_at(index) if reg is not None else None
+        if key == TAB_HISTORY:            self._refresh_history()
+        elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
+        elif key == TAB_STRATEGY_BUILDER: self._sync_strategy_from_event()
+        elif key == TAB_PRACTICE_REVIEW:  self._sync_practice_from_event()
+        elif key == TAB_TELEMETRY:        self._refresh_telemetry_context()
+        elif key == TAB_AI_LOG:           self._flush_ai_log_pending_select()
+        elif key == TAB_TRACK_MODELLING:  self._tm_on_tab_shown()
+        elif key == TAB_HOME:             self._home_refresh()
 
     def _flush_ai_log_pending_select(self) -> None:
         """Flush deferred AI Log selection — setCurrentRow on a hidden widget has no visual effect.
 
-        Only applies the selection when the AI Log tab (index 11) is currently
-        visible. If called while another tab is active the flag is left set so
-        that _on_tab_changed(11) re-calls this and the selection is applied as
-        soon as the user navigates to the tab.
+        Only applies the selection when the AI Log tab is currently visible.
+        If called while another tab is active the flag is left set so that
+        _on_tab_changed re-calls this when the AI Log tab is shown and the
+        selection is applied as soon as the user navigates to the tab.
         """
         if not getattr(self, "_ai_log_pending_select", False):
             return
         # Leave the flag in place if the AI Log tab is not currently visible.
-        if hasattr(self, "_tabs") and self._tabs.currentIndex() != 11:
+        if hasattr(self, "_tabs") and self.current_tab_key() != TAB_AI_LOG:
             return
         self._ai_log_pending_select = False
         if hasattr(self, "_ai_log_list"):
@@ -6531,7 +6586,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._lbl_fuel_burn_display.setText(
                 f"{self._loaded_session_avg_fuel:.2f} L/lap (loaded session)")
 
-        self._tabs.setCurrentIndex(4)
+        self.select_tab(TAB_PRACTICE_REVIEW)
         self._refresh_practice_summary()
 
     def _refresh_practice_summary(self) -> None:
@@ -7466,7 +7521,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             QMessageBox.warning(self, "Load Failed", "Setup not found in database.")
             return
         self._fill_setup_fields(result["setup_dict"])
-        self._tabs.setCurrentIndex(3)
+        self.select_tab(TAB_SETUP_BUILDER)
 
     def _garage_on_track_selected(self, index: int) -> None:
         track = self._garage_track_combo.currentText()
@@ -7493,7 +7548,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()
             self._bridge.event_log_entry.emit(f"Active car set: {car_name}")
-            self._tabs.setCurrentIndex(1)  # return to Event Planner
+            self.select_tab(TAB_EVENT_PLANNER)  # return to Event Planner
         except Exception:
             pass
 

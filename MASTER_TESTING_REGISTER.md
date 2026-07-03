@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal** — executes the Product Consolidation Audit's §9 items 1/3/4. DELETED: the 7 hidden, never-signal-connected legacy per-segment review buttons + their unreachable `_tm_review_*` handlers + `_tm_refresh_review_buttons`/no-op `_tm_refresh_approval_panel` + 8 dead imports + 4 never-applied style strings (`ui/track_modelling_ui.py`; pure review functions in `data/track_segment_review.py` retained); the dead, never-rendered `_TELEMETRY_REFERENCE_HTML` constant. RENAMED: "Race Config ID" → **"Session Match Key"**; Diagnostics "Rem(clk)"/"rem_ms(raw)"/"Ann queue" → "Time left:"/"remaining_time_ms:"/"Voice queue:"; window title + Guide h1 → **"Next Gear Racing Pit Crew"**. GUIDE FIXED: stale Step 8 (described a "Dashboard" tab with quick-links that never existed) now describes the real Home tab; API-key bullet now points at the Strategy Builder field (audit's "Settings duplicate" claim corrected — no Settings key field exists); new "Tool tabs (⚙) … safe to ignore" note; "pip install" tooltip line removed. NO CHANGE to tab order, `_on_tab_changed` indices, Home Dashboard, diagnostic tabs, any logic/prompt/mapping/PTT/voice/persistence, or the two `config["strategy"]` fan-outs (pinned by test). New tests `test_diagnostic_tab_cleanup.py` (25); `test_group24` `_tm_` floor 54→46 (9 deleted methods enumerated). **Full suite: 4479 pass / 6 skip / 0 fail.** See "Diagnostic Tab Cleanup" at the end of this file.)
+> Last updated: 2026-07-03 (**Tab Navigation Refactor — Named Tab Lookup** — retires the hard-coded tab-index risk flagged since the Product Consolidation audit. New **`ui/tab_registry.py`** (pure, no PyQt6): one stable key per existing tab (`TAB_LIVE`…`TAB_HOME`), `DEFAULT_TAB_ORDER` = the current visual order 0–13 in one place (a source-scan test proves it mirrors the real addTab sequence; a runtime count check warns on drift), `TabRegistry` key↔index mapping that never raises on bad input, `key_for_title()` ⚙-decoration-safe reverse lookup, `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES`. `ui/dashboard.py`: **`_on_tab_changed` dispatches by stable key** (same 8 activation behaviours, zero `index == N` comparisons); navigation helpers `get_tab_index`/`has_tab`/`current_tab_key`/`select_tab` (all safe on unknown keys; `select_tab` holds the only remaining `_tabs.setCurrentIndex` call site); the 3 jump sites now `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`; visibility guards use `current_tab_key() != TAB_AI_LOG/TAB_HOME`; `_home_tab_index` retired. **Tab order byte-identical (all 14 addTab lines pinned), Home stays appended at 13, diagnostic tabs + ⚙ markers unchanged, no logic/prompt/mapping/PTT/voice/persistence/fan-out change.** New tests `test_tab_navigation_registry.py` (33); 6 legacy tests updated in place to the key-based home (group12c AI-Log dispatch, group14 DEF-P2-033 flush guard ×2, group3 history→Practice-Review jump, diagnostic-cleanup + home-dashboard dispatch scans). **Full suite: 4512 pass / 6 skip / 0 fail.** See "Tab Navigation Refactor" at the end of this file.)
+> Prior: 2026-07-03 (**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal** — executes the Product Consolidation Audit's §9 items 1/3/4. DELETED: the 7 hidden, never-signal-connected legacy per-segment review buttons + their unreachable `_tm_review_*` handlers + `_tm_refresh_review_buttons`/no-op `_tm_refresh_approval_panel` + 8 dead imports + 4 never-applied style strings (`ui/track_modelling_ui.py`; pure review functions in `data/track_segment_review.py` retained); the dead, never-rendered `_TELEMETRY_REFERENCE_HTML` constant. RENAMED: "Race Config ID" → **"Session Match Key"**; Diagnostics "Rem(clk)"/"rem_ms(raw)"/"Ann queue" → "Time left:"/"remaining_time_ms:"/"Voice queue:"; window title + Guide h1 → **"Next Gear Racing Pit Crew"**. GUIDE FIXED: stale Step 8 (described a "Dashboard" tab with quick-links that never existed) now describes the real Home tab; API-key bullet now points at the Strategy Builder field (audit's "Settings duplicate" claim corrected — no Settings key field exists); new "Tool tabs (⚙) … safe to ignore" note; "pip install" tooltip line removed. NO CHANGE to tab order, `_on_tab_changed` indices, Home Dashboard, diagnostic tabs, any logic/prompt/mapping/PTT/voice/persistence, or the two `config["strategy"]` fan-outs (pinned by test). New tests `test_diagnostic_tab_cleanup.py` (25); `test_group24` `_tm_` floor 54→46 (9 deleted methods enumerated). **Full suite: 4479 pass / 6 skip / 0 fail.** See "Diagnostic Tab Cleanup" at the end of this file.)
 > Prior: 2026-07-03 (**Home Dashboard Build — Race Engineer Command Centre** — the missing home/overview surface (REQUIREMENTS.md §12.2, audit §1.1) is now built. New `ui/home_dashboard_vm.py` (pure Python — `HomeDashboardState`/`HomeDashboardCard`/`HomeDashboardStatus`/`HomeDashboardWarning`/`HomeDashboardNextAction`; `build_home_dashboard_state()` never raises; six sections: Race Setup / Track Intelligence / Setup Brain / Strategy Brain / AI Input Safety / Next Best Action, all read from the four canonical contexts + the AI snapshot core + `build_flow_state_summary()`). New **Home tab APPENDED at index 13** (`_build_home_tab` — indices 0–12 and `_on_tab_changed` dispatches unchanged; no tab reordered/renamed/removed); refresh on tab-shown + guarded `_home_refresh_if_visible()` hooks after event set-active / `_update_race_config` / setup result display / track-truth refresh — no polling, no new workers. Display-only: source-scans prove the home methods write nothing (no config["strategy"], no persist, no DB/file writes). Stale indicators surfaced in plain English (setup-vs-event, setup-vs-strategy, strategy-vs-event, track mismatch, AI legacy fallback). New tests `test_home_dashboard_vm.py` (52). **Full suite: 4454 pass / 6 skip / 0 fail.** See "Home Dashboard Build" at the end of this file.)
 > Prior: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
@@ -4471,4 +4472,74 @@ indices in `_on_tab_changed` (0–12 + `_home_tab_index`) with
 lookup-by-title/object so tabs can finally be reordered safely; then **move
 Home Dashboard to index 0** and enable its deferred click-to-navigate
 (`docs/HOME_DASHBOARD_BUILD.md` §5). Alternative higher-risk track: **Legacy
+Fan-Out Removal Phase 1**.
+
+---
+
+## Tab Navigation Refactor — Named Tab Lookup (2026-07-03)
+
+> Branch `tab-navigation-named-lookup` (from `diagnostic-tab-cleanup-ui-dags`
+> @ `c4eafdf`). Full doc: `docs/TAB_NAVIGATION_REFACTOR.md`.
+> **Full suite: 4512 pass / 6 skip / 0 fail** (33 new tests; 6 updated in place).
+
+### What was done
+Navigation infrastructure only — **tab order, per-tab activation behaviour,
+the Home tab position, the diagnostic tabs, the ⚙ markers, and every logic
+layer are unchanged** (pinned by source-scans).
+
+- **`ui/tab_registry.py` (NEW, pure Python)** — stable keys `TAB_LIVE`,
+  `TAB_EVENT_PLANNER`, `TAB_GARAGE`, `TAB_SETUP_BUILDER`, `TAB_PRACTICE_REVIEW`,
+  `TAB_STRATEGY_BUILDER`, `TAB_TELEMETRY`, `TAB_DIAGNOSTICS`, `TAB_GUIDE`,
+  `TAB_SETTINGS`, `TAB_HISTORY`, `TAB_AI_LOG`, `TAB_TRACK_MODELLING`,
+  `TAB_HOME`; `DEFAULT_TAB_ORDER` (the current visual order 0–13, the single
+  place a future reorder edits); `TabRegistry` (`register` duplicate-safe,
+  `index_of` → -1 unknown, `key_at` → None out-of-range/garbage, `has`,
+  `count`, `keys` — never raises); `key_for_title()` strips the ⚙ decoration
+  (lookup itself is positional, so decorated labels can never break it);
+  `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES` by test.
+- **`ui/dashboard.py`** — registry built in `_setup_ui` right after the
+  unchanged addTab block (+ count-mismatch warning); `_on_tab_changed`
+  resolves `key_at(index)` and dispatches by key — a 1:1 translation of the
+  old index table; helpers `get_tab_index` / `has_tab` / `current_tab_key` /
+  `select_tab` (only sanctioned `setCurrentIndex` site; False on unknown
+  keys); jumps migrated (`setCurrentIndex(4/3/1)` →
+  `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`);
+  guards migrated (`currentIndex() != 11` → `current_tab_key() != TAB_AI_LOG`;
+  `_home_tab_index` → `current_tab_key() != TAB_HOME`, attribute retired).
+  Mixins never touched `self._tabs` — no changes there.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_tab_navigation_registry.py` (NEW) | 33 | every tab keyed (14, unique) + titles cross-checked vs product_flow; visual order preserved incl. Home last; **DEFAULT_TAB_ORDER mirrors the real addTab sequence (source-extracted)**; key↔index round trip; missing-key/-index/garbage safety; duplicate registration no-op; empty registry safe; ⚙-decorated titles resolve; unknown titles → None; lookup proven positional; module purity; `_on_tab_changed` has zero raw index comparisons + all 8 key→handler pairs; only `select_tab` calls `setCurrentIndex`; no numeric `currentIndex()` checks; `_home_tab_index` retired; 3 jump sites named; visibility guards keyed; helpers defined/safe/stateless; registry+count guard at setup; jump-target key→index mapping proven; all 14 addTab lines pinned; Home after Track Modelling; diagnostic tabs + markers; no strategy writes; fan-out untouched |
+| Updated in place (6 tests) | — | `test_group12c` (AI-Log dispatch → `TAB_AI_LOG`), `test_group14` DEF-P2-033 flush guard ×2 (`current_tab_key()`/`TAB_AI_LOG`), `test_group3` (history jump → `select_tab(TAB_PRACTICE_REVIEW)`), `test_diagnostic_tab_cleanup` + `test_home_dashboard_vm` (`_on_tab_changed` scans → key names + handler names). Every update guards the SAME invariant at its key-based home. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4512/6/0)**.
+- Named tab registry exists — **yes (`ui/tab_registry.py`)**.
+- `_on_tab_changed` dispatches by stable key, no raw hard-coded indices — **yes (source-scanned)**.
+- Tab order unchanged / Home stays at current position / diagnostics available / ⚙ markers work — **yes (pinned)**.
+- No setup/strategy/track/AI-prompt/AI-plumbing/PTT/voice change; no fan-out removal — **yes**.
+- `docs/TAB_NAVIGATION_REFACTOR.md` exists and is specific — **yes**.
+- Clear next-sprint recommendation — **yes (Home Dashboard Promotion)**.
+
+### Manual UAT steps
+1. Launch: tab bar identical to before (14 tabs, same order, ⚙ markers).
+2. Click through History / Setup Builder / Strategy Builder / Practice
+   Review / Telemetry / AI Log / Track Modelling / Home — each tab's
+   on-show refresh behaves exactly as before.
+3. History → "Load into Practice Review" jumps to Practice Review; Garage
+   setup double-click jumps to Setup Builder; Garage "Load to Event ↩"
+   returns to Event Planner.
+4. Trigger an AI call from a non-AI-Log tab, then open ⚙ AI Log — the newest
+   entry is auto-selected (deferred-select guard still works).
+5. Home tab still refreshes on show and via its hooks.
+
+### Next sprint
+**Home Dashboard Promotion — Move Home to index 0 and add click-to-navigate**:
+move the Home `addTab` call + `TAB_HOME` to the front of `DEFAULT_TAB_ORDER`
+together (update the order-pinning tests), open the app on Home, and wire the
+Home cards / next-action banner to `select_tab(...)` (map the flow summary's
+tab names via `key_for_title`). Alternative higher-risk track: **Legacy
 Fan-Out Removal Phase 1**.

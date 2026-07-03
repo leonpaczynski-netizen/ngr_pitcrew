@@ -175,10 +175,16 @@ class TestNothingElseChanged:
             assert needle in dash_src, f"tab wiring changed: {needle}"
 
     def test_on_tab_changed_dispatches_unchanged(self, dash_src):
+        # Tab Navigation Refactor (2026-07-03): dispatch moved from raw indices
+        # to stable tab keys — the same 8 per-tab behaviours must still fire.
         body = _method_body(dash_src, "_on_tab_changed")
-        for frag in ("index == 10", "index == 3", "index == 5", "index == 4",
-                     "index == 6", "index == 11", "index == 12",
-                     "_home_refresh"):
+        for frag in ("TAB_HISTORY", "TAB_SETUP_BUILDER", "TAB_STRATEGY_BUILDER",
+                     "TAB_PRACTICE_REVIEW", "TAB_TELEMETRY", "TAB_AI_LOG",
+                     "TAB_TRACK_MODELLING", "TAB_HOME",
+                     "_refresh_history", "_sync_setup_builder_from_event",
+                     "_sync_strategy_from_event", "_sync_practice_from_event",
+                     "_refresh_telemetry_context", "_flush_ai_log_pending_select",
+                     "_tm_on_tab_shown", "_home_refresh"):
             assert frag in body
 
     def test_diagnostic_tabs_still_built(self, dash_src):

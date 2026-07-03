@@ -1,6 +1,24 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Tab Navigation Refactor — Named Tab Lookup — COMPLETE (2026-07-03).** Branch `tab-navigation-named-lookup` (from `diagnostic-tab-cleanup-ui-dags` @ `c4eafdf`). Full suite: **4512 pass / 6 skip / 0 fail** (33 new tests; 6 legacy tests updated in place to key-based homes). **Navigation infrastructure only: tab order byte-identical, Home stays appended at index 13, per-tab activation behaviour a 1:1 translation of the old index dispatch, no logic/prompt/mapping/PTT/voice/persistence/fan-out change (pinned by source-scans).**
+
+**Why it exists:** tab navigation was keyed to raw numeric positions — `_on_tab_changed` compared hard-coded `10/3/5/4/6/11/12` (+ `_home_tab_index`), three jumps called `setCurrentIndex(4/3/1)`, and two visibility guards compared `currentIndex()` to raw numbers. That forced the Home Dashboard to be appended at 13 and blocked click-to-navigate. This sprint retires the risk the audit flagged as "index-coupled tabs".
+
+**Deliverables:**
+- **`ui/tab_registry.py` (NEW, pure Python — no PyQt6, no config)** — one stable key per existing tab (`TAB_LIVE`, `TAB_EVENT_PLANNER`, `TAB_GARAGE`, `TAB_SETUP_BUILDER`, `TAB_PRACTICE_REVIEW`, `TAB_STRATEGY_BUILDER`, `TAB_TELEMETRY`, `TAB_DIAGNOSTICS`, `TAB_GUIDE`, `TAB_SETTINGS`, `TAB_HISTORY`, `TAB_AI_LOG`, `TAB_TRACK_MODELLING`, `TAB_HOME`); `DEFAULT_TAB_ORDER` = the current visual order 0–13 **in one place** (a test extracts the real addTab title sequence from dashboard source and compares 1:1; a runtime count check warns on drift); `TabRegistry` ordered key↔index mapping that never raises (`index_of` → -1, `key_at` → None, duplicate `register` = safe no-op); `key_for_title()` ⚙-decoration-safe reverse lookup — the registry itself is **positional**, so decorated labels can never break lookup; `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES` by test.
+- **`ui/dashboard.py`** — registry built in `_setup_ui` right after the unchanged addTab block; **`_on_tab_changed` dispatches by stable key** (same 8 behaviours: history refresh, setup/strategy/practice syncs, telemetry context, AI-Log flush, TM tab-shown, Home refresh); navigation helpers **`get_tab_index` / `has_tab` / `current_tab_key` / `select_tab`** (all safe on unknown keys; `select_tab` holds the only remaining `_tabs.setCurrentIndex` call site); jumps migrated to `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`; guards migrated to `current_tab_key() != TAB_AI_LOG/TAB_HOME`; `_home_tab_index` retired. Mixins never touched `self._tabs` — unchanged.
+- **`docs/TAB_NAVIGATION_REFACTOR.md` (NEW)** — the index problem, the registry, the key table, changed/not-changed, tab-order proof, how the Home move becomes an addTab+`DEFAULT_TAB_ORDER`-only change, remaining risks (order/addTab must be edited together — test-guarded; `build_flow_state_summary` returns display names → map via `key_for_title` when click-to-navigate lands).
+
+**Tests:** `tests/test_tab_navigation_registry.py` (NEW, 33 — registry keys/order/round-trip/garbage safety; decorated-title resolution; positional-lookup proof; module purity; `_on_tab_changed` zero raw index comparisons + all 8 key→handler pairs; only `select_tab` calls `setCurrentIndex`; `_home_tab_index` retired; jump sites + guards keyed; helpers safe/stateless; registry count guard; jump-target mapping proven; all 14 addTab lines pinned; Home after Track Modelling; diagnostics + ⚙ markers; fan-out untouched). Updated in place: `test_group12c` (AI-Log dispatch), `test_group14` DEF-P2-033 flush guard ×2, `test_group3` (history jump), `test_diagnostic_tab_cleanup` + `test_home_dashboard_vm` dispatch scans — same invariants, key-based homes.
+
+**Next sprint: Home Dashboard Promotion — Move Home to index 0 and add click-to-navigate** using the registry (`select_tab`; map the flow summary's tab display names via `key_for_title`). Move the Home addTab call + `TAB_HOME` to the front of `DEFAULT_TAB_ORDER` together and update the order-pinning tests. Alternative higher-risk track: **Legacy Fan-Out Removal Phase 1**.
+
+Full detail: `docs/TAB_NAVIGATION_REFACTOR.md`, `MASTER_TESTING_REGISTER.md` (Tab Navigation Refactor).
+
+---
+
+## Prior Objective (historical)
 **Diagnostic Tab Cleanup — Low-Risk UI Dags Removal — COMPLETE (2026-07-03).** Branch `diagnostic-tab-cleanup-ui-dags` (from `home-dashboard-command-centre` @ `d96b967`). Full suite: **4479 pass / 6 skip / 0 fail** (25 new tests). The whole diff is deletions of dead UI, label text and Guide HTML — **no logic, prompt, mapping, PTT/voice, persistence, tab-order, Home-Dashboard, or fan-out change** (all pinned by source-scans).
 
 **Why it exists:** executes the Product Consolidation Audit's remaining low-risk cleanup items (§9 1/3/4) now that the Home Dashboard exists to carry the user-facing overview.

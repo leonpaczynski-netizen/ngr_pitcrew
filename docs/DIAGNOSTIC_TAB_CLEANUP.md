@@ -111,6 +111,10 @@ out of scope for this sprint).
 
 ## 3. Tab-index risk (for the next sprint)
 
+> **Executed (2026-07-03):** the Tab Navigation Refactor sprint ran next —
+> hard-coded indices are gone; dispatch and navigation use the named tab
+> registry (`ui/tab_registry.py`). See `docs/TAB_NAVIGATION_REFACTOR.md`.
+
 Tab indices 0–12 remain hard-coded in `_on_tab_changed`, and the Home tab is
 pinned at appended index 13 via `self._home_tab_index`. This sprint changed no
 indices and added none. The standing recommendation is unchanged and now has

@@ -607,11 +607,14 @@ class TestHomeTabWiring:
             assert f"self.{builder}()" in dash_src
 
     def test_on_tab_changed_handles_home(self, dash_src):
+        # Tab Navigation Refactor (2026-07-03): dispatch is by stable tab key.
         body = _method_body(dash_src, "_on_tab_changed")
-        assert "_home_refresh" in body
-        # Existing dispatches untouched.
-        for frag in ("index == 10", "index == 3", "index == 5", "index == 4",
-                     "index == 6", "index == 11", "index == 12"):
+        assert "_home_refresh" in body and "TAB_HOME" in body
+        # Existing dispatches untouched (key-based since the refactor).
+        for frag in ("_refresh_history", "_sync_setup_builder_from_event",
+                     "_sync_strategy_from_event", "_sync_practice_from_event",
+                     "_refresh_telemetry_context", "_flush_ai_log_pending_select",
+                     "_tm_on_tab_shown"):
             assert frag in body
 
     def test_home_reads_from_canonical_contexts(self, dash_src):

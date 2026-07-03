@@ -192,10 +192,12 @@ Dashboard Build).
 
 ## 6. Remaining UI cleanup risks
 
-* Tab indices remain hard-coded in `_on_tab_changed` (now including the
-  appended Home via `self._home_tab_index`). The audit's index-by-lookup
-  refactor is still outstanding and becomes more valuable with 14 tabs.
-* The Home tab sits at the END of the tab bar; once index-by-lookup lands, a
+* ~~Tab indices remain hard-coded in `_on_tab_changed` (now including the
+  appended Home via `self._home_tab_index`).~~ **RESOLVED (2026-07-03, Tab
+  Navigation Refactor)** — dispatch and navigation now go through the named
+  tab registry (`ui/tab_registry.py`); `_home_tab_index` was retired in
+  favour of `TAB_HOME`. See `docs/TAB_NAVIGATION_REFACTOR.md`.
+* The Home tab sits at the END of the tab bar; with the registry in place, a
   future sprint can move it to position 0 (where a home tab belongs) in one
   reviewed change. Moving it now would violate this sprint's no-reorder rule.
 * The 7 hidden legacy per-segment buttons (`track_modelling_ui.py`) and the
