@@ -132,14 +132,15 @@ class TestMigratedConsumers:
 # --------------------------------------------------------------------------- #
 class TestWritersPreserved:
     def test_event_planner_set_active_writer_intact(self, dash_src):
-        # Phase 4 update: the fan-out block moved verbatim into
-        # _fanout_event_to_strategy (so the save path can re-sync it); the
-        # writer still exists and Set-as-Active still invokes it.
+        # Phase 4: the fan-out block moved into _fanout_event_to_strategy.
+        # Rule-Cache Deletion (2026-07-04): the helper now writes only the
+        # working-config CORE (rules are DB-only via EventContext); it still
+        # exists and Set-as-Active still invokes it.
         helper = _method_body(dash_src, "_fanout_event_to_strategy")
         assert 'strat = self._config.setdefault("strategy", {})' in helper
-        for frag in ('strat["track"]', 'strat["bop"]', 'strat["tuning"]',
+        for frag in ('strat["track"]', 'strat["race_type"]',
                      'strat["event_id"]'):
-            assert frag in helper, f"Set-as-Active fan-out lost {frag}"
+            assert frag in helper, f"working-config fan-out lost {frag}"
         body = _method_body(dash_src, "_on_event_set_active")
         assert "self._fanout_event_to_strategy(evt_name)" in body
 

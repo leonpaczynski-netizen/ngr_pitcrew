@@ -84,6 +84,12 @@ commit.
 
 ## 6. Next sprint recommendation
 
+> **Executed (2026-07-04):** the Fan-Out Rule-Cache Deletion sprint ran next —
+> the 12 event-rule cache writes were deleted from the fan-out helper (proven
+> invisible: all consumers DB-first; the events mirror covers no-DB), leaving
+> only the working-config core this model names. The audit's original SSOT
+> violation no longer exists. See `docs/FANOUT_RULE_CACHE_DELETION.md`.
+
 * **Item 3 writer-half + item 4** — writers write the typed `WorkingRaceConfig`
   (or a successor store), the dict's event-rule fields become derived
   compatibility, and plan-state gets a durable home — the actual fan-out

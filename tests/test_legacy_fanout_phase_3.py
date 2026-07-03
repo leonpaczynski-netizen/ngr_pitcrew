@@ -174,13 +174,17 @@ class TestValidationMigrated:
 
 class TestWriterPathUnchanged:
     def test_set_active_gating_still_reads_fresh_strat(self, dash_src):
-        # Inside the writer the fan-out was JUST written from the UI widgets, so
-        # its own permission call correctly keeps reading strat (fresh by
-        # construction) — deliberately not migrated.
+        # Rule-Cache Deletion (2026-07-04): the writer-internal permission call
+        # was REDUNDANT since this phase — _sync_setup_builder_from_event
+        # (called at activation) applies permissions from the just-saved DB
+        # event via EventContext, with identical values. The redundant call and
+        # its strat.get gating reads are deleted; the invariant ("gating applied
+        # with fresh event values at activation") holds via the sync.
         body = _method_body(dash_src, "_on_event_set_active")
-        assert 'strat.get("bop", False)' in body
-        assert 'strat.get("tuning", True)' in body
-        assert 'strat.get("allowed_tuning_categories", [])' in body
+        assert "self._sync_setup_builder_from_event()" in body
+        assert 'strat.get("bop"' not in body
+        assert 'strat.get("tuning"' not in body
+        assert 'strat.get("allowed_tuning_categories"' not in body
 
     def test_fan_out_writers_preserved(self, dash_src):
         # Phase 4 update: the fan-out block lives in _fanout_event_to_strategy,

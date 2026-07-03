@@ -273,30 +273,48 @@ class TestEventSelectedFixApplied(unittest.TestCase):
 
 class TestEventSetActiveStratKeys(unittest.TestCase):
     # Legacy Fan-Out Removal Phase 4 (2026-07-03): the strat-write block moved
-    # verbatim from _on_event_set_active into _fanout_event_to_strategy (so the
-    # save path can re-sync it). Same invariants, new home; Set-as-Active must
-    # still invoke the helper after _on_event_save().
+    # verbatim from _on_event_set_active into _fanout_event_to_strategy.
+    # Fan-Out Rule-Cache Deletion (2026-07-04): the event-RULE cache writes
+    # (tyre wear, fuel mult, bop, tuning, categories, tyres, ...) are DELETED —
+    # every consumer reads the rules DB-first through the canonical contexts.
+    # The invariant these tests carried ("downstream sees the event values")
+    # now holds via EventContext; here we pin the working-config CORE writes
+    # and that the rule cache stays deleted.
 
     def _body(self) -> str:
         return _method_body(_dashboard_text(), "_fanout_event_to_strategy")
 
     def test_writes_tyre_wear_multiplier(self):
-        self.assertIn('strat["tyre_wear_multiplier"]', self._body())
+        """Rule-cache deletion pin: tyre wear is DB-only (EventContext)."""
+        self.assertNotIn('strat["tyre_wear_multiplier"]', self._body())
 
     def test_writes_fuel_mult(self):
-        self.assertIn('strat["fuel_mult"]', self._body())
+        """Rule-cache deletion pin: fuel mult is DB-only (EventContext)."""
+        self.assertNotIn('strat["fuel_mult"]', self._body())
 
     def test_writes_bop(self):
-        self.assertIn('strat["bop"]', self._body())
+        """Rule-cache deletion pin: bop is DB-only (EventContext)."""
+        self.assertNotIn('strat["bop"]', self._body())
 
     def test_writes_tuning(self):
-        self.assertIn('strat["tuning"]', self._body())
+        """Rule-cache deletion pin: tuning is DB-only (EventContext)."""
+        self.assertNotIn('strat["tuning"]', self._body())
 
     def test_writes_allowed_tuning_categories(self):
-        self.assertIn('strat["allowed_tuning_categories"]', self._body())
+        """Rule-cache deletion pin: categories are DB-only (EventContext)."""
+        self.assertNotIn('strat["allowed_tuning_categories"]', self._body())
 
     def test_writes_required_tyres(self):
-        self.assertIn('strat["required_tyres"]', self._body())
+        """Rule-cache deletion pin: required tyres are DB-only (EventContext)."""
+        self.assertNotIn('strat["required_tyres"]', self._body())
+
+    def test_writes_working_config_core(self):
+        """The legitimate working-config core IS still written."""
+        body = self._body()
+        for frag in ('strat["track"]', 'strat["race_type"]', 'strat["laps"]',
+                     'strat["total_laps"]', 'strat["race_duration_minutes"]',
+                     'strat["event_id"]'):
+            self.assertIn(frag, body)
 
     def test_on_event_save_called_before_strat_writes(self):
         """_on_event_save() must flush form to DB before the fan-out reads the

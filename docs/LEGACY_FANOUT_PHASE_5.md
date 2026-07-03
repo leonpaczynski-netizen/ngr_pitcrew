@@ -77,6 +77,13 @@ Deleting the Set-as-Active fan-out writer requires all of the following first:
    owning the match-key algorithm under the golden vectors) and the remaining
    working-config readers migrated. The WRITER half below stays, deferred with
    item 4 — see `docs/WORKING_RACE_CONFIG.md`.
+   **Writer half resolved (2026-07-04, Fan-Out Rule-Cache Deletion):** the
+   event-RULE cache writes were DELETED from `_fanout_event_to_strategy`
+   (proven invisible — all consumers DB-first); the remaining writes are the
+   legitimate working-config core. The audit's SSOT violation no longer
+   exists. See `docs/FANOUT_RULE_CACHE_DELETION.md`. Item 4's remainder
+   (a durable home for plan state) is a schema decision, not a correctness
+   one.
    (`_load_session_config` ×3, `_strategy_apply_plan`,
    `_save_race_params`, `_update_race_config`, garage car writer) — they WRITE
    track/car/laps/config_id into the dict; the restore design must move to the

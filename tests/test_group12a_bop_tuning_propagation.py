@@ -132,14 +132,21 @@ class TestStratIsReference(unittest.TestCase):
                       "the fan-out must use setdefault to get a reference, not .get()")
 
     def test_tuning_written_to_strat(self):
-        """strat["tuning"] must be written so the key exists for _run_practice_analysis."""
-        self.assertIn('strat["tuning"]', self._body,
-                      'the fan-out must write strat["tuning"] so the key is present')
+        """Rule-cache deletion pin (2026-07-04): tuning is NO LONGER cached.
+
+        The original reason ("so the key exists for _run_practice_analysis")
+        is obsolete — practice analysis reads the frozen AI snapshot, whose
+        CONTEXTS source takes tuning DB-first from EventContext whenever an
+        event is active; the LEGACY_ONLY fallback only fires with no event, in
+        which case the fan-out never ran anyway."""
+        self.assertNotIn('strat["tuning"]', self._body,
+                         "tuning must not be re-cached in config['strategy']")
 
     def test_bop_written_to_strat(self):
-        """strat["bop"] must be written alongside tuning."""
-        self.assertIn('strat["bop"]', self._body,
-                      'the fan-out must write strat["bop"]')
+        """Rule-cache deletion pin (2026-07-04): bop is NO LONGER cached
+        (DB-only via EventContext — same reasoning as tuning)."""
+        self.assertNotIn('strat["bop"]', self._body,
+                         "bop must not be re-cached in config['strategy']")
 
 
 # ---------------------------------------------------------------------------
