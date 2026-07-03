@@ -47,13 +47,15 @@ The dashboard exposes **13 tabs** (`ui/dashboard.py:536–548`), in this order:
 ### 1.1 The biggest structural gap: no "home / next action" surface
 
 > **RESOLVED (2026-07-03, Home Dashboard Build sprint).** The Race Engineer
-> Command Centre now exists: a **Home tab appended at index 13** rendering
+> Command Centre now exists: a **Home tab** rendering
 > `ui/home_dashboard_vm.py` (event / track intelligence / setup / strategy /
 > AI-input-safety cards + the suggested next action from
 > `build_flow_state_summary`), built from the four canonical contexts.
-> Display-only; tab indices 0–12 unchanged. Residual: the tab sits at the END
-> of the tab bar until the index-by-lookup refactor lands (§9 risk note), and
-> the telemetry-owned flags are approximations — see
+> Display-only. It was first appended at index 13 (indices 0–12 unchanged);
+> the **Home Dashboard Promotion** sprint (2026-07-03) then moved it to
+> **index 0 as the default landing tab** and added click-to-navigate from the
+> cards (`docs/HOME_DASHBOARD_PROMOTION.md`). Residual: the
+> telemetry-owned flags are approximations — see
 > `docs/HOME_DASHBOARD_BUILD.md` §3/§6.
 
 `REQUIREMENTS.md §12.1` specifies **9** tabs, the first being a **Dashboard**

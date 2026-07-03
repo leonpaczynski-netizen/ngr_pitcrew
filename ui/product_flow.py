@@ -36,8 +36,9 @@ ROLE_DIAGNOSTIC = "diagnostic"
 
 # Canonical tab titles (base, undecorated) mapped to their role.
 # NOTE: "Diagnostics" is the consolidated name for the old "Debug" tab.
-# NOTE: "Home" is the Race Engineer Command Centre (Home Dashboard sprint) —
-# appended after the original 13 tabs so existing indices never move.
+# NOTE: "Home" is the Race Engineer Command Centre (Home Dashboard sprint).
+# Home Dashboard Promotion (2026-07-03) moved it to the FIRST tab (index 0),
+# the default landing page; roles here are position-independent.
 TAB_ROLES: Dict[str, str] = {
     "Home": ROLE_WORKFLOW,
     "Live Race Engineer": ROLE_WORKFLOW,

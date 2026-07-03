@@ -178,7 +178,7 @@ are pre-populated from your active event — no manual re-entry needed.</p>
 <p class="note">If you miss a pit stop, the engineer detects it and announces a revised window immediately — no manual update needed.</p>
 
 <h3><span class="step">Step 8</span> &nbsp; Home — race engineer overview</h3>
-<p>The <b>Home</b> tab (last tab) is the Race Engineer Command Centre. It shows your
+<p>The <b>Home</b> tab (first tab, shown when the app opens) is the Race Engineer Command Centre. It shows your
 active event, track data status, latest setup, strategy plan, and whether the AI
 is working from up-to-date inputs — plus the single suggested <b>next step</b> and
 which tab to do it on. Anything stale or missing is flagged in plain English.
@@ -397,6 +397,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if self._query_listener is not None:
             self._query_listener.set_active_setup_getter(self._current_setup_dict)
 
+        # Home Dashboard Promotion (2026-07-03): Home is the default landing tab,
+        # so render it once now that every context source it reads is wired.
+        # Guarded/defensive — never blocks startup.
+        self._home_refresh()
+
     # ------------------------------------------------------------------ UI setup
 
     def _setup_ui(self) -> None:
@@ -408,22 +413,25 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         _strategy_builder_widget = self._build_strategy_builder_tab()
 
-        self._tabs.addTab(self._build_live_tab(),             "Live Race Engineer") # 0
-        self._tabs.addTab(self._build_event_planner_tab(),    "Event Planner")   # 1
-        self._tabs.addTab(self._build_garage_tab(),           "Garage")           # 2
-        self._tabs.addTab(self._build_setup_builder_tab(),    "Setup Builder")    # 3
-        self._tabs.addTab(self._build_practice_review_tab(),  "Practice Review")  # 4
-        self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 5
-        self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 6
-        self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 7
-        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 8
-        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
-        self._tabs.addTab(self._build_history_tab(),          "History")          # 10
-        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
-        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
-        # Home Dashboard sprint: the Race Engineer Command Centre is APPENDED so
-        # the tab positions 0-12 established before it never move.
-        self._tabs.addTab(self._build_home_tab(),             "Home")             # 13
+        # Home Dashboard Promotion (2026-07-03): the Race Engineer Command Centre
+        # LEADS the tab bar and is the default landing page. The move is
+        # order-only — DEFAULT_TAB_ORDER in ui/tab_registry.py leads with
+        # TAB_HOME and the (positional) registry re-derives every index, so no
+        # dispatch, navigation, or visibility code references a raw position.
+        self._tabs.addTab(self._build_home_tab(),             "Home")             # 0
+        self._tabs.addTab(self._build_live_tab(),             "Live Race Engineer") # 1
+        self._tabs.addTab(self._build_event_planner_tab(),    "Event Planner")   # 2
+        self._tabs.addTab(self._build_garage_tab(),           "Garage")           # 3
+        self._tabs.addTab(self._build_setup_builder_tab(),    "Setup Builder")    # 4
+        self._tabs.addTab(self._build_practice_review_tab(),  "Practice Review")  # 5
+        self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 6
+        self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 7
+        self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 8
+        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 9
+        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 10
+        self._tabs.addTab(self._build_history_tab(),          "History")          # 11
+        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 12
+        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 13
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -443,6 +451,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._apply_product_flow_tab_markers()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self._tabs)
+        # Home Dashboard Promotion (2026-07-03): open the app on Home. Home is
+        # the first tab (index 0) so it is already current, but select by stable
+        # key to make the landing tab explicit and position-independent. The
+        # first render is triggered once at the end of __init__ via
+        # _home_refresh() (state the dashboard reads is fully wired by then).
+        self.select_tab(TAB_HOME)
 
     # --- Named tab navigation (Tab Navigation Refactor, 2026-07-03) ----------
     #
@@ -494,6 +508,45 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # renders ui/home_dashboard_vm.py state built from the canonical contexts
     # and owns/mutates no domain state. Refreshes when shown (_on_tab_changed)
     # and via _home_refresh_if_visible() hooks after key workflow actions.
+    #
+    # Home Dashboard Promotion (2026-07-03): Home leads the tab bar and its
+    # cards offer click-to-navigate to the relevant tool tab via select_tab
+    # (stable keys only). Navigation is tab-change only — see _home_navigate.
+
+    # Shared style for the Home click-to-navigate buttons.
+    _HOME_NAV_BTN_QSS = (
+        "QPushButton { background: #333333; color: #E0E0E0;"
+        " border: 1px solid #555; border-radius: 4px; padding: 3px 12px;"
+        " font-size: 11px; }"
+        "QPushButton:hover { background: #3A5A8A; border-color: #5A7ABA; }"
+    )
+
+    def _home_nav_button_text(self, tab_key: str) -> str:
+        """"Open <Tab>" label from the UNDECORATED base title (never the ⚙
+        label). Falls back to a plain "Open" if the key is unknown."""
+        try:
+            from ui.tab_registry import TAB_BASE_TITLES
+            base = TAB_BASE_TITLES.get(tab_key)
+            return f"Open {base}" if base else "Open"
+        except Exception:  # pragma: no cover - defensive
+            return "Open"
+
+    def _home_navigate(self, tab_key: str) -> None:
+        """Navigate from a Home card to a tool tab. **Tab-change only** — it
+        never mutates domain state, starts AI/telemetry/calibration, or saves.
+        Safe no-op when the target tab is unavailable (select_tab returns
+        False on an unknown key). Never raises out to the UI."""
+        try:
+            if not tab_key or not self.has_tab(tab_key):
+                return
+            self.select_tab(tab_key)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _home_navigate_next_action(self) -> None:
+        """Open the next-best-action's recommended tab (resolved in
+        _home_refresh). No-op if nothing is currently recommended."""
+        self._home_navigate(getattr(self, "_home_next_action_tab_key", None))
 
     def _build_home_tab(self) -> QWidget:
         from ui.home_dashboard_vm import CARD_ORDER
@@ -517,14 +570,29 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         header_row.addWidget(self._home_btn_refresh)
         root.addLayout(header_row)
 
+        # Next-best-action banner + a click-to-navigate button (Home Dashboard
+        # Promotion). The button opens the recommended tab via select_tab; its
+        # target is resolved in _home_refresh from the flow summary's tab name
+        # (mapped to a stable key with tab_registry.key_for_title).
+        na_banner = QWidget()
+        na_banner.setStyleSheet(
+            f"background: {_DARK_CARD}; border-left: 4px solid #F5C542;"
+            " border-radius: 6px;"
+        )
+        na_row = QHBoxLayout(na_banner)
+        na_row.setContentsMargins(14, 10, 14, 10)
         self._home_next_action_lbl = QLabel("")
         self._home_next_action_lbl.setWordWrap(True)
         self._home_next_action_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self._home_next_action_lbl.setStyleSheet(
-            f"background: {_DARK_CARD}; border-left: 4px solid #F5C542;"
-            " border-radius: 6px; padding: 10px 14px;"
-        )
-        root.addWidget(self._home_next_action_lbl)
+        na_row.addWidget(self._home_next_action_lbl, 1)
+        self._home_next_action_btn = QPushButton("Open")
+        self._home_next_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._home_next_action_btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
+        self._home_next_action_btn.clicked.connect(self._home_navigate_next_action)
+        self._home_next_action_btn.setVisible(False)
+        self._home_next_action_tab_key = None
+        na_row.addWidget(self._home_next_action_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(na_banner)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -532,16 +600,42 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         container = QWidget()
         grid = QGridLayout(container)
         grid.setSpacing(8)
+        from ui.home_dashboard_vm import tab_key_for_card
         self._home_card_labels = {}
         for i, key in enumerate(CARD_ORDER):
+            cell = QWidget()
+            cell.setStyleSheet(
+                f"background: {_DARK_CARD}; border-radius: 6px;")
+            cell_l = QVBoxLayout(cell)
+            cell_l.setContentsMargins(10, 10, 10, 8)
+            cell_l.setSpacing(6)
+
             lbl = QLabel("—")
             lbl.setWordWrap(True)
             lbl.setTextFormat(Qt.TextFormat.RichText)
             lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            lbl.setStyleSheet(
-                f"background: {_DARK_CARD}; border-radius: 6px; padding: 10px;")
+            lbl.setStyleSheet("background: transparent;")
             self._home_card_labels[key] = lbl
-            grid.addWidget(lbl, i // 2, i % 2)
+            cell_l.addWidget(lbl, 1)
+
+            # Click-to-navigate: an "Open <Tab>" button per mapped card. Stable
+            # key only (never the visible label) so the ⚙ decoration is
+            # irrelevant. Tab-change only — see _home_navigate.
+            tab_key = tab_key_for_card(key)
+            if tab_key:
+                btn = QPushButton(self._home_nav_button_text(tab_key))
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
+                btn.setToolTip("Open this tool tab")
+                btn.clicked.connect(
+                    lambda _checked=False, k=tab_key: self._home_navigate(k))
+                btn_row = QHBoxLayout()
+                btn_row.setContentsMargins(0, 0, 0, 0)
+                btn_row.addStretch(1)
+                btn_row.addWidget(btn)
+                cell_l.addLayout(btn_row)
+
+            grid.addWidget(cell, i // 2, i % 2)
         grid.setRowStretch(grid.rowCount(), 1)
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
@@ -607,12 +701,38 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             state = self._build_home_dashboard_state()
             self._home_next_action_lbl.setText(
                 hdvm.format_next_action_html(state.next_action))
+            self._home_update_next_action_button(state.next_action)
             for key, lbl in self._home_card_labels.items():
                 card = state.card(key)
                 if card is not None:
                     lbl.setText(hdvm.format_card_html(card))
         except Exception:  # pragma: no cover - defensive; must never break the UI
             pass
+
+    def _home_update_next_action_button(self, next_action) -> None:
+        """Point the next-action button at the recommended tab, or hide it.
+
+        The flow summary reports a display NAME ("Setup Builder"); resolve it to
+        a stable key with tab_registry.key_for_title (⚙-decoration-safe). The
+        button is hidden when the journey is complete or the name doesn't map to
+        a real tab — no dependence on visible labels, no domain state touched."""
+        btn = getattr(self, "_home_next_action_btn", None)
+        if btn is None:
+            return
+        try:
+            from ui.tab_registry import key_for_title
+            tab_name = getattr(next_action, "tab", "") or ""
+            complete = bool(getattr(next_action, "complete", False))
+            key = key_for_title(tab_name) if tab_name and not complete else None
+            self._home_next_action_tab_key = key
+            if key and self.has_tab(key):
+                btn.setText(self._home_nav_button_text(key))
+                btn.setVisible(True)
+            else:
+                btn.setVisible(False)
+        except Exception:  # pragma: no cover - defensive
+            self._home_next_action_tab_key = None
+            btn.setVisible(False)
 
     def _home_refresh_if_visible(self) -> None:
         """Refresh the Home Dashboard only when it is the current tab — the

@@ -189,10 +189,10 @@ class TestDashboardWiring:
         assert "from ui import product_flow" in dash_src
 
     def test_tab_indices_preserved(self, dash_src):
-        # The clean-up must not reorder tabs (indices are hard-coded in
-        # _on_tab_changed). Track Modelling stays index 12, AI Log index 11.
-        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 12' in dash_src
-        assert '"AI Log")           # 11' in dash_src
+        # Home Dashboard Promotion (2026-07-03): Home leads at index 0, so the
+        # tool tabs shifted down one — Track Modelling index 13, AI Log index 12.
+        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 13' in dash_src
+        assert '"AI Log")           # 12' in dash_src
 
 
 # --------------------------------------------------------------------------- #

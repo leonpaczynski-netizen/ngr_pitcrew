@@ -142,6 +142,47 @@ CARD_ORDER = (CARD_RACE_SETUP, CARD_TRACK, CARD_SETUP, CARD_STRATEGY, CARD_AI_SA
 
 
 # --------------------------------------------------------------------------- #
+# Card → tool-tab navigation (Home Dashboard Promotion, 2026-07-03)
+# --------------------------------------------------------------------------- #
+# Each card maps to the STABLE tab key of the tool the user would open to act on
+# it (see ui/tab_registry.py). Keys — never visible labels — so the ⚙ tool-tab
+# decoration can never affect navigation. The Qt layer resolves a key to an
+# index through the registry and selects it with ``select_tab``; this table is
+# pure data (tab_registry is pure Python too) so it stays unit-testable without
+# a QApplication.
+#
+#   Race Setup         → Event Planner   (create/select the event, car, track)
+#   Track Intelligence → Track Modelling (build/inspect the track model)
+#   Setup Brain        → Setup Builder   (build/refine the car setup)
+#   Strategy Brain     → Strategy Builder(build the race strategy)
+#   AI Input Safety    → AI Log          (inspect the exact AI inputs/outputs)
+from ui.tab_registry import (  # noqa: E402  (pure-Python import, no PyQt6)
+    TAB_EVENT_PLANNER,
+    TAB_TRACK_MODELLING,
+    TAB_SETUP_BUILDER,
+    TAB_STRATEGY_BUILDER,
+    TAB_AI_LOG,
+)
+
+CARD_TAB_KEYS = {
+    CARD_RACE_SETUP: TAB_EVENT_PLANNER,
+    CARD_TRACK: TAB_TRACK_MODELLING,
+    CARD_SETUP: TAB_SETUP_BUILDER,
+    CARD_STRATEGY: TAB_STRATEGY_BUILDER,
+    CARD_AI_SAFETY: TAB_AI_LOG,
+}
+
+
+def tab_key_for_card(card_key: str):
+    """Stable tab key a Home card navigates to, or None when unmapped.
+
+    Never raises — an unknown card key resolves to None so the Qt layer can
+    fail safely and simply not offer navigation for that card.
+    """
+    return CARD_TAB_KEYS.get(card_key)
+
+
+# --------------------------------------------------------------------------- #
 # Safe getters (never raise) — mirror the data/*_context modules
 # --------------------------------------------------------------------------- #
 def _get(obj, name, default=None):

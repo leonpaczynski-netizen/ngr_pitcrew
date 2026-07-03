@@ -4543,3 +4543,84 @@ together (update the order-pinning tests), open the app on Home, and wire the
 Home cards / next-action banner to `select_tab(...)` (map the flow summary's
 tab names via `key_for_title`). Alternative higher-risk track: **Legacy
 Fan-Out Removal Phase 1**.
+
+---
+
+## Home Dashboard Promotion — Move Home to Index 0 and Add Click Navigation (2026-07-03)
+
+> Branch `home-dashboard-promotion` (from `tab-navigation-named-lookup`
+> @ `3b7c9c9`). Full doc: `docs/HOME_DASHBOARD_PROMOTION.md`.
+> **Full suite: 4533 pass / 6 skip / 0 fail** (new promotion test file; 4
+> order-pinning suites updated in place).
+
+### What was done
+UI navigation only — **no setup/strategy/track-mapping/AI-prompt/AI-snapshot/
+telemetry/PTT/voice/calibration/persistence/context-ownership change; no
+`config["strategy"]` fan-out removed; no new hard-coded index; `select_tab`
+still the only `setCurrentIndex` site** (pinned by source-scans).
+
+- **`ui/tab_registry.py`** — `DEFAULT_TAB_ORDER` now **leads with `TAB_HOME`**
+  (comments renumbered 0–13); every non-Home tab keeps its previous relative
+  order (each +1). Header docstring updated. The positional registry re-derives
+  every index — no code/API change. New order: Home / Live / Event Planner /
+  Garage / Setup Builder / Practice Review / Strategy Builder / Telemetry ⚙ /
+  Diagnostics ⚙ / Guide / Settings / History / AI Log ⚙ / Track Modelling ⚙.
+- **`ui/dashboard.py`** — Home `addTab` moved to first (`# 0`);
+  `select_tab(TAB_HOME)` at the end of `_setup_ui` (open on Home by key); one
+  guarded `_home_refresh()` at the end of `__init__` (first render — selecting
+  an already-current index emits no `currentChanged`); `_build_home_tab` adds a
+  per-card **"Open <Tab>" button** + a next-action button (pointing-hand cursor,
+  tooltip, hover accent); new helpers `_home_navigate` (tab-change only, `has_tab`
+  guard), `_home_navigate_next_action`, `_home_update_next_action_button`
+  (maps the flow summary's tab **name** via `key_for_title`), `_home_nav_button_text`
+  (label from undecorated `TAB_BASE_TITLES`) + shared `_HOME_NAV_BTN_QSS`;
+  `_home_refresh` updates the next-action button; Guide HTML "Home tab (last
+  tab)" → "(first tab, shown when the app opens)".
+- **`ui/home_dashboard_vm.py`** — `CARD_TAB_KEYS` mapping + `tab_key_for_card()`
+  (imports the pure `ui/tab_registry` key constants — still no PyQt6): Race
+  Setup→Event Planner, Track Intelligence→Track Modelling, Setup Brain→Setup
+  Builder, Strategy Brain→Strategy Builder, AI Input Safety→AI Log. **Stable
+  keys only — never labels** (⚙-decoration-safe).
+- **`ui/product_flow.py`** — "Home appended at index 13" note → "first tab
+  (index 0)".
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_home_dashboard_promotion.py` (NEW) | 20 | Home leads `DEFAULT_TAB_ORDER` (index 0) + is the first addTab in source; app selects Home via `select_tab(TAB_HOME)`; guarded `_home_refresh()` at end of `__init__`; `DEFAULT_TAB_ORDER` still mirrors the real addTab sequence; card→tab mapping exact + covers every card in `CARD_ORDER` + values are real registry keys + unknown/empty/None card → None; AI Input Safety → a ⚙ diagnostic tab; `_home_navigate` uses `select_tab`+`has_tab`; nav + next-action methods change tab only (no config['strategy'] write / persist / save / upsert / `_run_ai`/`_run_build_setup`/`_run_practice`/`_launch_`/`start_tracker`/calibration/QThread/QTimer); cards wire buttons by key (`tab_key_for_card(key)` + `_home_navigate(k)`); next-action button maps name via `key_for_title` + `has_tab`; button text from `TAB_BASE_TITLES`; no new raw `setCurrentIndex`; all diagnostic tabs built + ⚙ markers applied + diagnostic set unchanged |
+| Updated in place (4 suites) | — | `test_tab_navigation_registry` (Home-first visual order + `index==0` + non-Home relative order preserved; jump-target indices +1 (`TAB_HOME`=0, `TAB_EVENT_PLANNER`=2, `TAB_SETUP_BUILDER`=4, `TAB_PRACTICE_REVIEW`=5, `TAB_AI_LOG`=12, `TAB_TRACK_MODELLING`=13); positional `key_at(7)`=Telemetry; renumbered addTab pins; Home leads before every other tab); `test_home_dashboard_vm` (Home leads before Track Modelling + renumbered pins); `test_diagnostic_tab_cleanup` (renumbered tab-order pins); `test_consolidation_product_flow` (Track Modelling #13 / AI Log #12). Same invariants at the renumbered order. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4533/6/0)**.
+- Home Dashboard is the first visible tab / app opens on Home by default — **yes** (headless smoke: 14 tabs, tab 0 = Home, `current_tab_key()` = `home`).
+- Home cards navigate to relevant tabs by named keys — **yes** (smoke: Setup Brain→setup_builder, Track→track_modelling, next-action→event_planner).
+- No new hard-coded indices; `select_tab` the only tab-selection path — **yes (source-scanned)**.
+- Diagnostic tabs remain / ⚙ markers still work — **yes (pinned)**.
+- No setup / strategy / track / AI-prompt / AI-plumbing / PTT / voice / live-race change; no `config["strategy"]` fan-out removal — **yes**.
+- `docs/HOME_DASHBOARD_PROMOTION.md` exists and is specific — **yes**.
+- Clear next-sprint recommendation — **yes (Legacy Fan-Out Removal Phase 1)**.
+
+### Manual UAT steps
+1. Launch: the app opens on the **Home** tab (Race Engineer Command Centre),
+   which is now the **first** tab; the tab bar shows 14 tabs, Home leading, the
+   rest in their previous relative order with ⚙ markers intact.
+2. On Home, each mapped card shows an "Open <Tab>" button: Race Setup → Event
+   Planner, Track Intelligence → Track Modelling, Setup Brain → Setup Builder,
+   Strategy Brain → Strategy Builder, AI Input Safety → AI Log. Clicking each
+   switches to that tab and nothing else.
+3. The Next Best Action banner shows an "Open <Tab>" button pointing at the
+   recommended tab; clicking it navigates there. With the journey complete the
+   button hides.
+4. Navigating from a card does not start any AI call, telemetry, calibration,
+   or save — it only changes tabs (the target tab's normal on-show refresh runs,
+   same as a manual click).
+5. All prior tab behaviours (History/Setup/Strategy/Practice syncs, AI-Log
+   deferred-select, Track Modelling on-show, Home refresh) still work.
+
+### Next sprint
+**Legacy Fan-Out Removal Phase 1** — migrate the low-risk read-only
+`config["strategy"]` consumers onto `EventContext`/`StrategyContext`, keeping
+the `_on_event_set_active` fan-out writer as compatibility until every reader is
+migrated. Alternative: **SessionContext / TelemetryContext** to make Home's
+`has_valid_laps` / `live_active` approximations owner-backed truth.

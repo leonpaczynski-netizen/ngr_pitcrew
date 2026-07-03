@@ -584,20 +584,22 @@ class TestNeverRaises:
 # Source-scan: Home tab wiring is additive and display-only
 # --------------------------------------------------------------------------- #
 class TestHomeTabWiring:
-    def test_home_tab_appended_after_track_modelling(self, dash_src):
-        tm = dash_src.index('self._build_track_modelling_tab(), "Track Modelling")  # 12')
-        home = dash_src.index('self._build_home_tab(),             "Home")             # 13')
-        assert home > tm, "Home tab must be appended after the original 13 tabs"
+    def test_home_tab_leads_before_track_modelling(self, dash_src):
+        # Home Dashboard Promotion (2026-07-03): Home now LEADS the tab bar.
+        home = dash_src.index('self._build_home_tab(),             "Home")             # 0')
+        tm = dash_src.index('self._build_track_modelling_tab(), "Track Modelling")  # 13')
+        assert home < tm, "Home tab must lead, before the other tabs"
 
-    def test_original_tab_indices_unchanged(self, dash_src):
-        # The exact addTab lines the Product Consolidation sprint pinned.
+    def test_tab_indices_after_home_promotion(self, dash_src):
+        # The addTab lines after Home led the bar (every non-Home tab +1).
         for needle in (
-            '"Live Race Engineer") # 0',
-            '"Event Planner")   # 1',
-            '"Telemetry")        # 6',
-            '"Diagnostics")      # 7',
-            '"AI Log")           # 11',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
+            'self._build_home_tab(),             "Home")             # 0',
+            '"Live Race Engineer") # 1',
+            '"Event Planner")   # 2',
+            '"Telemetry")        # 7',
+            '"Diagnostics")      # 8',
+            '"AI Log")           # 12',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 

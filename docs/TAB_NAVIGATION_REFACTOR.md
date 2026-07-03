@@ -167,6 +167,13 @@ dispatch fragments — key names + handler names instead of `index == N`).
 
 ## 9. Next sprint recommendation
 
+> **Executed (2026-07-03):** the **Home Dashboard Promotion** sprint ran next —
+> Home was moved to index 0 (default landing tab) as the order-only edit this
+> section anticipated, and the Home cards + next-action banner got click-to-
+> navigate via `select_tab` (keys mapped with `key_for_title`). See
+> `docs/HOME_DASHBOARD_PROMOTION.md`. The standing higher-risk track is now
+> **Legacy Fan-Out Removal Phase 1**.
+
 **Home Dashboard Promotion — Move Home to index 0 and add click-to-navigate**:
 move the Home `addTab` call and `TAB_HOME` to the front together (update the
 order-pinning tests), make the app open on Home, and wire the Home cards /

@@ -86,9 +86,13 @@ flags echo the existing audits and never claim accuracy.
 
 ### `ui/dashboard.py` — Home tab (additive)
 
-* The **Home tab is APPENDED at index 13** (after Track Modelling). Tab
-  indices 0–12 are hard-coded in `_on_tab_changed`, so appending is the only
-  zero-risk placement — **no tab was reordered, renamed or removed**.
+* The **Home tab was APPENDED at index 13** (after Track Modelling) in this
+  sprint. Tab indices 0–12 were hard-coded in `_on_tab_changed`, so appending
+  was the only zero-risk placement — **no tab was reordered, renamed or
+  removed**. *(Superseded: the **Home Dashboard Promotion** sprint (2026-07-03)
+  later moved Home to index 0 as the default landing tab, once the Tab
+  Navigation Refactor removed the index coupling — see
+  `docs/HOME_DASHBOARD_PROMOTION.md`.)*
 * `_build_home_tab()` — header + Refresh button, next-action banner label,
   and a 2-column grid of five rich-text card labels in a scroll area, using
   the existing dark-card style.
@@ -177,9 +181,13 @@ Dashboard Build).
   setup recommendation from the DB (`setups` / `setup_recommendations`)
   so the card survives an app restart. Needs a "which setup is active"
   concept the stores don't record yet.
-* **Click-to-navigate** — making the next-action banner/tab names clickable
+* ~~**Click-to-navigate** — making the next-action banner/tab names clickable
   (jump to the named tab). Low risk but touches tab-index coupling; do it
-  together with the index-by-lookup refactor the audit recommends.
+  together with the index-by-lookup refactor the audit recommends.~~
+  **DONE (2026-07-03, Home Dashboard Promotion)** — each card and the
+  next-action banner now carry an "Open <Tab>" button that navigates via
+  `select_tab` using stable keys (`CARD_TAB_KEYS` / `key_for_title`). See
+  `docs/HOME_DASHBOARD_PROMOTION.md`.
 * **Per-panel stale badges** on the Strategy/Setup tabs themselves (the AI
   snapshot migration doc's §8 note) — Home surfaces them centrally first.
 * **Telemetry-derived flags** (`has_valid_laps`, `live_active`) owned by a
@@ -197,9 +205,11 @@ Dashboard Build).
   Navigation Refactor)** — dispatch and navigation now go through the named
   tab registry (`ui/tab_registry.py`); `_home_tab_index` was retired in
   favour of `TAB_HOME`. See `docs/TAB_NAVIGATION_REFACTOR.md`.
-* The Home tab sits at the END of the tab bar; with the registry in place, a
+* ~~The Home tab sits at the END of the tab bar; with the registry in place, a
   future sprint can move it to position 0 (where a home tab belongs) in one
-  reviewed change. Moving it now would violate this sprint's no-reorder rule.
+  reviewed change.~~ **RESOLVED (2026-07-03, Home Dashboard Promotion)** — Home
+  is now the first tab (index 0) and the default landing page. See
+  `docs/HOME_DASHBOARD_PROMOTION.md`.
 * The 7 hidden legacy per-segment buttons (`track_modelling_ui.py`) and the
   Strategy Builder duplicate API-key field are still present (audit §9).
 * `_build_track_context()` re-runs seed/file audits (small file I/O) per

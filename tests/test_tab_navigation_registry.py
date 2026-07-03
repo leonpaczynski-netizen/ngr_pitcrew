@@ -3,9 +3,11 @@
 Two kinds of tests, both following the project's no-Qt convention:
   1. Pure unit tests of ui.tab_registry (no PyQt6).
   2. Source-scan tests that ui/dashboard.py now dispatches and navigates by
-     stable tab key — with NO raw hard-coded tab indices left — while the
-     visible tab order, the Home tab position, and the diagnostic tabs are
-     all unchanged.
+     stable tab key — with NO raw hard-coded tab indices left. Updated by the
+     Home Dashboard Promotion (2026-07-03): Home now leads the tab bar (index
+     0); every other tab kept its relative order and the diagnostic tabs are
+     unchanged. See tests/test_home_dashboard_promotion.py for the promotion's
+     own assertions.
 """
 
 import re
@@ -47,21 +49,35 @@ class TestRegistryKeys:
         # describe the same set of tabs — one can't drift from the other.
         assert set(tr.TAB_BASE_TITLES.values()) == set(pf.TAB_ROLES.keys())
 
-    def test_current_visual_order_is_preserved(self):
-        # Indices 0-13 exactly as the app has shipped them since the Home
-        # Dashboard sprint appended Home at the end.
+    def test_current_visual_order_leads_with_home(self):
+        # Home Dashboard Promotion (2026-07-03): Home LEADS the order (index 0,
+        # the default landing tab); every other tab keeps its previous relative
+        # order.
         expected = (
+            tr.TAB_HOME,
             tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
             tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
             tr.TAB_GUIDE, tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
-            tr.TAB_TRACK_MODELLING, tr.TAB_HOME,
+            tr.TAB_TRACK_MODELLING,
         )
         assert tr.DEFAULT_TAB_ORDER == expected
 
-    def test_home_remains_last_this_sprint(self):
-        assert tr.DEFAULT_TAB_ORDER[-1] == tr.TAB_HOME
-        assert tr.DEFAULT_TAB_ORDER.index(tr.TAB_HOME) == 13
+    def test_home_is_first_this_sprint(self):
+        assert tr.DEFAULT_TAB_ORDER[0] == tr.TAB_HOME
+        assert tr.DEFAULT_TAB_ORDER.index(tr.TAB_HOME) == 0
+
+    def test_non_home_relative_order_preserved(self):
+        # Dropping Home, the remaining tabs must be in exactly the order the
+        # app shipped before the promotion (nothing else moved).
+        without_home = tuple(k for k in tr.DEFAULT_TAB_ORDER if k != tr.TAB_HOME)
+        assert without_home == (
+            tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
+            tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
+            tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
+            tr.TAB_GUIDE, tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
+            tr.TAB_TRACK_MODELLING,
+        )
 
     def test_default_order_matches_addtab_calls_in_dashboard(self, dash_src):
         # The registry is positional, so DEFAULT_TAB_ORDER must mirror the
@@ -135,7 +151,7 @@ class TestDecoratedTitles:
         # The primary mechanism must be registration order — a registry built
         # from keys knows nothing about labels at all.
         reg = tr.build_default_registry()
-        assert reg.key_at(6) == tr.TAB_TELEMETRY  # decorated "⚙ Telemetry" in the UI
+        assert reg.key_at(7) == tr.TAB_TELEMETRY  # decorated "⚙ Telemetry" in the UI
 
     def test_module_is_pure(self):
         src = (ROOT / "ui" / "tab_registry.py").read_text(encoding="utf-8")
@@ -220,14 +236,15 @@ class TestNavigationHelpers:
         assert "self._tab_registry.count != self._tabs.count()" in dash_src
 
     def test_helper_mapping_is_correct_for_jump_targets(self):
-        # The indices select_tab() will resolve for this sprint's jump targets
-        # (proves the behaviour of the migrated setCurrentIndex(4/3/1) calls).
+        # The indices select_tab() resolves for the jump targets, after the
+        # Home Dashboard Promotion shifted every non-Home tab down by one.
         reg = tr.build_default_registry()
-        assert reg.index_of(tr.TAB_PRACTICE_REVIEW) == 4
-        assert reg.index_of(tr.TAB_SETUP_BUILDER) == 3
-        assert reg.index_of(tr.TAB_EVENT_PLANNER) == 1
-        assert reg.index_of(tr.TAB_AI_LOG) == 11
-        assert reg.index_of(tr.TAB_HOME) == 13
+        assert reg.index_of(tr.TAB_HOME) == 0
+        assert reg.index_of(tr.TAB_EVENT_PLANNER) == 2
+        assert reg.index_of(tr.TAB_SETUP_BUILDER) == 4
+        assert reg.index_of(tr.TAB_PRACTICE_REVIEW) == 5
+        assert reg.index_of(tr.TAB_AI_LOG) == 12
+        assert reg.index_of(tr.TAB_TRACK_MODELLING) == 13
 
 
 # --------------------------------------------------------------------------- #
@@ -235,28 +252,31 @@ class TestNavigationHelpers:
 # --------------------------------------------------------------------------- #
 class TestNothingElseChanged:
     def test_tab_order_pinned(self, dash_src):
+        # Home Dashboard Promotion: Home leads at # 0; every other tab shifted
+        # down one but kept its relative order.
         for needle in (
-            '"Live Race Engineer") # 0',
-            '"Event Planner")   # 1',
-            '"Garage")           # 2',
-            '"Setup Builder")    # 3',
-            '"Practice Review")  # 4',
-            '"Strategy Builder") # 5',
-            '"Telemetry")        # 6',
-            '"Diagnostics")      # 7',
-            '"Guide")            # 8',
-            '"Settings")         # 9',
-            '"History")          # 10',
-            '"AI Log")           # 11',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
-            'self._build_home_tab(),             "Home")             # 13',
+            'self._build_home_tab(),             "Home")             # 0',
+            '"Live Race Engineer") # 1',
+            '"Event Planner")   # 2',
+            '"Garage")           # 3',
+            '"Setup Builder")    # 4',
+            '"Practice Review")  # 5',
+            '"Strategy Builder") # 6',
+            '"Telemetry")        # 7',
+            '"Diagnostics")      # 8',
+            '"Guide")            # 9',
+            '"Settings")         # 10',
+            '"History")          # 11',
+            '"AI Log")           # 12',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 
-    def test_home_still_appended_after_track_modelling(self, dash_src):
-        tm = dash_src.index('"Track Modelling")  # 12')
-        home = dash_src.index('"Home")             # 13')
-        assert home > tm
+    def test_home_now_leads_before_every_other_tab(self, dash_src):
+        home = dash_src.index('self._build_home_tab(),             "Home")             # 0')
+        live = dash_src.index('"Live Race Engineer") # 1')
+        tm = dash_src.index('"Track Modelling")  # 13')
+        assert home < live < tm
 
     def test_diagnostic_tabs_still_built_and_marked(self, dash_src):
         for builder in ("_build_telemetry_tab", "_build_debug_tab",

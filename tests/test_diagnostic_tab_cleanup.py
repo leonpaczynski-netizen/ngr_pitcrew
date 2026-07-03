@@ -163,14 +163,16 @@ class TestGuideContent:
 # --------------------------------------------------------------------------- #
 class TestNothingElseChanged:
     def test_tab_order_pinned(self, dash_src):
+        # Home Dashboard Promotion (2026-07-03): Home leads at # 0; the
+        # diagnostic-cleanup tabs shifted down one but kept their relative order.
         for needle in (
-            '"Live Race Engineer") # 0',
-            '"Event Planner")   # 1',
-            '"Telemetry")        # 6',
-            '"Diagnostics")      # 7',
-            '"AI Log")           # 11',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
-            'self._build_home_tab(),             "Home")             # 13',
+            'self._build_home_tab(),             "Home")             # 0',
+            '"Live Race Engineer") # 1',
+            '"Event Planner")   # 2',
+            '"Telemetry")        # 7',
+            '"Diagnostics")      # 8',
+            '"AI Log")           # 12',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 

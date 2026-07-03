@@ -15,6 +15,11 @@ comparison. This module gives each tab a stable key so the dashboard
 dispatches and navigates by **key**, and the visual order lives in exactly one
 place (:data:`DEFAULT_TAB_ORDER`).
 
+Because of that, the **Home Dashboard Promotion** sprint (2026-07-03) could
+move Home to the front (index 0, the default landing tab) as an order-only
+edit: lead :data:`DEFAULT_TAB_ORDER` with ``TAB_HOME`` and reorder the matching
+``addTab`` block together — no dispatch or navigation code changed.
+
 Keys are registered in creation order, so lookup is by position, never by the
 visible label — the ⚙ tool-tab decoration (``product_flow.decorate_tab_title``)
 can never break it. :func:`key_for_title` is provided for the reverse mapping
@@ -54,23 +59,28 @@ TAB_HOME = "home"
 
 # The CURRENT visual tab order (must mirror the ``addTab`` calls in
 # ``ui/dashboard.py`` ``_setup_ui`` exactly — a source-scan test and a runtime
-# count check both guard the pairing). Indices 0–13 as of this sprint; the
-# Home tab stays appended last until the "Home Dashboard Promotion" sprint.
+# count check both guard the pairing). Indices 0–13.
+#
+# Home Dashboard Promotion (2026-07-03): TAB_HOME now LEADS the order (index 0)
+# — it is the default landing tab. The move was order-only: because dispatch and
+# navigation resolve through this positional registry, leading with TAB_HOME and
+# re-numbering the comments (matched to the reordered ``addTab`` block) is the
+# whole change. Every non-Home tab keeps its previous RELATIVE order.
 DEFAULT_TAB_ORDER: Tuple[str, ...] = (
-    TAB_LIVE,              # 0  Live Race Engineer
-    TAB_EVENT_PLANNER,     # 1  Event Planner
-    TAB_GARAGE,            # 2  Garage
-    TAB_SETUP_BUILDER,     # 3  Setup Builder
-    TAB_PRACTICE_REVIEW,   # 4  Practice Review
-    TAB_STRATEGY_BUILDER,  # 5  Strategy Builder
-    TAB_TELEMETRY,         # 6  Telemetry (⚙ tool)
-    TAB_DIAGNOSTICS,       # 7  Diagnostics (⚙ tool)
-    TAB_GUIDE,             # 8  Guide
-    TAB_SETTINGS,          # 9  Settings
-    TAB_HISTORY,           # 10 History
-    TAB_AI_LOG,            # 11 AI Log (⚙ tool)
-    TAB_TRACK_MODELLING,   # 12 Track Modelling (⚙ tool)
-    TAB_HOME,              # 13 Home (appended by the Home Dashboard sprint)
+    TAB_HOME,              # 0  Home (Race Engineer Command Centre — default landing tab)
+    TAB_LIVE,              # 1  Live Race Engineer
+    TAB_EVENT_PLANNER,     # 2  Event Planner
+    TAB_GARAGE,            # 3  Garage
+    TAB_SETUP_BUILDER,     # 4  Setup Builder
+    TAB_PRACTICE_REVIEW,   # 5  Practice Review
+    TAB_STRATEGY_BUILDER,  # 6  Strategy Builder
+    TAB_TELEMETRY,         # 7  Telemetry (⚙ tool)
+    TAB_DIAGNOSTICS,       # 8  Diagnostics (⚙ tool)
+    TAB_GUIDE,             # 9  Guide
+    TAB_SETTINGS,          # 10 Settings
+    TAB_HISTORY,           # 11 History
+    TAB_AI_LOG,            # 12 AI Log (⚙ tool)
+    TAB_TRACK_MODELLING,   # 13 Track Modelling (⚙ tool)
 )
 
 
