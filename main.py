@@ -207,14 +207,27 @@ class EventDispatcher(threading.Thread):
         self._strategy_engine = strategy_engine
         self._recorder = recorder
         self._db = db
-        self._config = config or {}
         self._car_id_ref = car_id_ref or [0]
         self._tracker = tracker
         self._session_id: int = 0
         self._stop = threading.Event()
+        # Legacy Fan-Out Removal Phase 6a: the dispatcher no longer reads
+        # config["strategy"] in the telemetry event path. It holds a frozen
+        # SessionTag (track/car/config_id/event_id), seeded here from the config
+        # it was constructed with (one-time, before the thread starts) and
+        # re-pushed by the UI (MainWindow._push_session_tag) whenever a
+        # tag-relevant field changes. Immutable swap → no lock needed.
+        from data.session_context import SessionTag
+        self._session_tag = SessionTag.from_strategy(
+            (config or {}).get("strategy", {}))
 
     def set_session_id(self, sid: int) -> None:
         self._session_id = sid
+
+    def set_session_tag(self, tag) -> None:
+        """Atomically swap the frozen session tag (called from the UI thread)."""
+        if tag is not None:
+            self._session_tag = tag
 
     def stop(self) -> None:
         self._stop.set()
@@ -256,7 +269,7 @@ class EventDispatcher(threading.Thread):
             if self._db is not None and self._session_id > 0 and self._recorder is not None:
                 try:
                     lap_stats = self._recorder.last_lap()
-                    strat     = self._config.get("strategy", {})
+                    tag       = self._session_tag  # frozen SessionTag (Phase 6a)
                     frames    = self._recorder.last_lap_frames()
                     _compound = (
                         getattr(self._tracker, "_current_compound", "")
@@ -266,7 +279,7 @@ class EventDispatcher(threading.Thread):
                         self._session_id, record.lap_num,
                         record.lap_time_ms, record.fuel_used,
                         lap_stats, compound=_compound,
-                        event_id=int(strat.get("event_id", 0)),
+                        event_id=int(tag.event_id),
                         frames=frames if frames else None,
                         fuel_start=getattr(record, "fuel_start", 0.0),
                         fuel_end=getattr(record, "fuel_end", 0.0),
@@ -293,16 +306,15 @@ class EventDispatcher(threading.Thread):
             if self._db is not None and self._session_id == 0:
                 try:
                     car_id    = int(self._car_id_ref[0])
-                    strat     = self._config.get("strategy", {})
-                    track     = strat.get("track", "Unknown")
-                    car_name  = strat.get("car", "")
-                    config_id = strat.get("config_id", "")
-                    event_id  = int(strat.get("event_id", 0))
+                    # Phase 6a: fallback race-session open tags from the frozen
+                    # SessionTag. (The old strat.get("track", "Unknown") default
+                    # was dead code — DEFAULT_CONFIG materialises track = "".)
+                    tag       = self._session_tag
                     self._session_id = self._db.open_session(
-                        car_id, track, "race", car_name, config_id,
-                        event_id=event_id)
+                        car_id, tag.track, "race", tag.car, tag.config_id,
+                        event_id=int(tag.event_id))
                     print(f"[Dispatcher] fallback race session opened: id={self._session_id} "
-                          f"car={car_id} ({car_name}) track={track}")
+                          f"car={car_id} ({tag.car}) track={tag.track}")
                 except Exception as e:
                     print(f"[Dispatcher] db open_session error: {e}")
 

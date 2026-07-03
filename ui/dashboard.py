@@ -402,6 +402,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Guarded/defensive — never blocks startup.
         self._home_refresh()
 
+        # Phase 6a: align the telemetry dispatcher's frozen SessionTag with the
+        # canonical contexts at startup (the dispatcher seeded itself from the
+        # raw config at construction; identical in-sync — this is belt-and-
+        # braces before its thread starts).
+        self._push_session_tag()
+
     # ------------------------------------------------------------------ UI setup
 
     def _setup_ui(self) -> None:
@@ -2833,6 +2839,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         self._persist_config()
         self._refresh_lap_bank()
+        # Phase 6a: config_id (and possibly track/car upstream) changed — push
+        # a fresh SessionTag to the telemetry dispatcher. Set-as-Active, garage
+        # car select, and the session-config restore all funnel through here.
+        self._push_session_tag()
         # Home Dashboard: strategy inputs changed — keep an open Home tab
         # current (display-only; no-op when Home is not visible).
         self._home_refresh_if_visible()
@@ -7103,6 +7113,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """
         return self._build_strategy_context().config_id
 
+    def _push_session_tag(self) -> None:
+        """Push a fresh frozen SessionTag into the telemetry dispatcher.
+
+        Legacy Fan-Out Removal Phase 6a: the dispatcher no longer reads
+        config["strategy"] in its telemetry event path — the UI pushes this
+        immutable tag (track/car/config_id/event_id, built from the canonical
+        EventContext + StrategyContext — byte-identical to the old raw reads
+        when in sync, and since Phase 4 always in sync) whenever a tag-relevant
+        field changes. Called at the end of _update_race_config (covers
+        Set-as-Active, garage car select, and the session-config restore, all
+        of which funnel through it) and from _on_event_save's active-event
+        re-sync branch. Never raises.
+        """
+        try:
+            if self._dispatcher is None:
+                return
+            from data.session_context import build_session_tag
+            ev_ctx = self._build_event_context()
+            self._dispatcher.set_session_tag(build_session_tag(
+                track=ev_ctx.track,
+                car=ev_ctx.car,
+                config_id=self._active_config_id(),
+                event_id=int(ev_ctx.event_id or 0),
+            ))
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            pass
+
     def _build_session_context(self, *, has_practice_laps: bool = False,
                                has_valid_laps: bool = False):
         """Canonical read model of live telemetry / session status.
@@ -7393,6 +7430,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             # tab syncs) remain exclusive to "Set as Active".
             if name == self._config.get("active_event_id"):
                 self._fanout_event_to_strategy(name)
+                # Phase 6a: the active event's rules (incl. event_id/track)
+                # changed — keep the dispatcher's session tag fresh too.
+                self._push_session_tag()
             self._persist_config()
             self._refresh_event_list()
             for i in range(self._event_list.count()):

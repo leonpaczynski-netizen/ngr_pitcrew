@@ -102,7 +102,10 @@ FROZEN_ALLOWLIST = {
     ("ui/track_modelling_ui.py", "_build_track_context"): 1,     # bridge input
     ("ui/track_modelling_ui.py", "_tm_on_layout_changed"): 2,    # THE combo writer
     # -- main.py -------------------------------------------------------------- #
-    ("main.py", "_dispatch"): 2,                             # telemetry path — LEGACY_REQUIRED
+    # Phase 6a (2026-07-04): the two _dispatch telemetry-path reads are GONE —
+    # the dispatcher now holds a frozen SessionTag pushed by the UI. One
+    # construction-time seed read remains (before any thread starts).
+    ("main.py", "__init__"): 1,                              # SessionTag seed — bridge
 }
 
 _SCAN_FILES = ("ui/dashboard.py", "ui/setup_builder_ui.py",
