@@ -1748,7 +1748,6 @@ class SetupBuilderMixin:
     def _sync_setup_builder_from_event(self) -> None:
         try:
             evt = self._active_event()
-            sc  = self._config.get("strategy", {})
             if not evt:
                 if hasattr(self, "_lbl_setup_event_ctx"):
                     self._lbl_setup_event_ctx.setText(
@@ -1769,9 +1768,10 @@ class SetupBuilderMixin:
             # Migration). int() preserves the integer QSpinBox formatting so the
             # labels are byte-identical when the DB event and the
             # config["strategy"] fan-out are in sync. Phase 3 moved the
-            # FUNCTIONAL gating (BoP toggle + setup permissions) onto EventContext
-            # too (see below); the remaining `sc` reads (refuel/req/avail label
-            # fallbacks, car spinbox rebind) stay on the fan-out for now.
+            # FUNCTIONAL gating (BoP toggle + setup permissions) onto
+            # EventContext; Phase 4 moved the remaining labels (refuel/req/
+            # avail) and the car spinbox rebind — this method no longer reads
+            # config["strategy"] at all.
             ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
             track = ev_ctx.track or "?"
@@ -1804,17 +1804,19 @@ class SetupBuilderMixin:
             if hasattr(self, "_lbl_rc_tyre_wear"):
                 self._lbl_rc_tyre_wear.setText(f"×{int(tw)}")
                 self._lbl_rc_tyre_wear.setStyleSheet(_green)
+            # Phase 4: the last three readout labels (refuel/required/available
+            # tyres) join the rest on EventContext — int() keeps the integer
+            # QSpinBox refuel formatting; the tyre labels join the same compound
+            # CODES the fan-out carried. Byte-identical in sync.
             if hasattr(self, "_lbl_rc_refuel_rate"):
-                self._lbl_rc_refuel_rate.setText(f"{sc.get('refuel_speed_lps', 10)} L/s")
+                self._lbl_rc_refuel_rate.setText(f"{int(ev_ctx.refuel_rate_lps)} L/s")
                 self._lbl_rc_refuel_rate.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_req_tyre"):
-                _rq = sc.get("required_tyres", [])
-                _rq_str = ", ".join(_rq) if isinstance(_rq, list) else (sc.get("mandatory_compounds", "") or "")
+                _rq_str = ", ".join(ev_ctx.required_tyres)
                 self._lbl_rc_req_tyre.setText(_rq_str or "—")
                 self._lbl_rc_req_tyre.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_avail_tyres"):
-                _at = sc.get("avail_tyres", evt.get("avail_tyres", []))
-                _at_str = ", ".join(_at) if isinstance(_at, list) else (_at or "")
+                _at_str = ", ".join(ev_ctx.available_tyres)
                 self._lbl_rc_avail_tyres.setText(_at_str or "—")
                 self._lbl_rc_avail_tyres.setStyleSheet(_green)
             if hasattr(self, "_lbl_rc_mand_pits"):
@@ -1845,8 +1847,10 @@ class SetupBuilderMixin:
             self._on_bop_toggled(_bop)
             self._apply_setup_permissions(_bop, _tuning, _cats)
             self._refresh_live_tyre_label()
-            # Re-bound spinboxes for the new car and load race engineer brief
-            self._rebound_setup_spinboxes(sc.get("car", "") or "")
+            # Re-bound spinboxes for the new car and load race engineer brief.
+            # Phase 4: car via EventContext (strategy-first there and events
+            # never store a car — byte-identical, proven in Phase 1 tests).
+            self._rebound_setup_spinboxes(ev_ctx.car or "")
             self._load_re_brief_from_active_event()
         except Exception:
             pass

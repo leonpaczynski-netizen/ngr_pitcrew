@@ -83,10 +83,16 @@ class TestBoPSourceOfTruth(unittest.TestCase):
         self.assertIn("_lbl_rc_tuning", body)
 
     def test_on_event_set_active_writes_bop_to_strat(self):
-        """_on_event_set_active must write strat['bop'] from _evt_bop."""
-        body = _method_body(_dashboard_text(), "_on_event_set_active")
+        """The Set-as-Active fan-out must write strat['bop'] from _evt_bop.
+
+        Legacy Fan-Out Removal Phase 4 (2026-07-03): the strat-write block moved
+        verbatim into _fanout_event_to_strategy, invoked by _on_event_set_active
+        (and the save-path re-sync). Same invariant, new home."""
+        body = _method_body(_dashboard_text(), "_fanout_event_to_strategy")
         self.assertIn('strat["bop"]', body)
         self.assertIn('_evt_bop', body)
+        self.assertIn("self._fanout_event_to_strategy(evt_name)",
+                      _method_body(_dashboard_text(), "_on_event_set_active"))
 
 
 # ---------------------------------------------------------------------------

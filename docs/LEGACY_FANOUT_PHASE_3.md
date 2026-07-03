@@ -78,6 +78,11 @@ sign-off).
 
 ## 6. Next sprint recommendation
 
+> **Executed (2026-07-03):** Phase 4 ran next — Save now re-syncs the fan-out
+> for the active event (divergence eliminated), the last named readers were
+> migrated, and writer retirement was investigated and deferred to Phase 5 with
+> a concrete dependency list. See `docs/LEGACY_FANOUT_PHASE_4.md`.
+
 **Legacy Fan-Out Removal Phase 4 — retire the divergence, then the fan-out:**
 
 1. Make `_on_event_save` re-sync the fan-out when the saved event is the active

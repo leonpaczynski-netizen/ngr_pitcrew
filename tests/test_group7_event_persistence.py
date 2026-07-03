@@ -272,9 +272,13 @@ class TestEventSelectedFixApplied(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestEventSetActiveStratKeys(unittest.TestCase):
+    # Legacy Fan-Out Removal Phase 4 (2026-07-03): the strat-write block moved
+    # verbatim from _on_event_set_active into _fanout_event_to_strategy (so the
+    # save path can re-sync it). Same invariants, new home; Set-as-Active must
+    # still invoke the helper after _on_event_save().
 
     def _body(self) -> str:
-        return _method_body(_dashboard_text(), "_on_event_set_active")
+        return _method_body(_dashboard_text(), "_fanout_event_to_strategy")
 
     def test_writes_tyre_wear_multiplier(self):
         self.assertIn('strat["tyre_wear_multiplier"]', self._body())
@@ -295,13 +299,14 @@ class TestEventSetActiveStratKeys(unittest.TestCase):
         self.assertIn('strat["required_tyres"]', self._body())
 
     def test_on_event_save_called_before_strat_writes(self):
-        """_on_event_save() must flush form to DB before reading form values into strat."""
-        body = self._body()
+        """_on_event_save() must flush form to DB before the fan-out reads the
+        form values into strat (via _fanout_event_to_strategy)."""
+        body = _method_body(_dashboard_text(), "_on_event_set_active")
         save_pos = body.find("_on_event_save()")
-        tw_pos = body.find('strat["tyre_wear_multiplier"]')
+        fanout_pos = body.find("self._fanout_event_to_strategy(evt_name)")
         self.assertGreater(save_pos, -1, "_on_event_set_active must call _on_event_save()")
-        self.assertGreater(tw_pos, save_pos,
-                           "_on_event_save() must precede strat writes")
+        self.assertGreater(fanout_pos, save_pos,
+                           "_on_event_save() must precede the fan-out write")
 
 
 # ---------------------------------------------------------------------------
