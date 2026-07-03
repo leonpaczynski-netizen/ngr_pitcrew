@@ -122,13 +122,16 @@ class TestAiLogPendingSelect(unittest.TestCase):
         self.assertIn("setCurrentRow", body,
                       "_flush_ai_log_pending_select must call setCurrentRow(count-1)")
 
-    def test_on_tab_changed_calls_flush_for_ai_log_index(self):
-        """DEF-P2-021: _on_tab_changed must flush pending select when AI Log tab (11) is opened."""
+    def test_on_tab_changed_calls_flush_for_ai_log_tab(self):
+        """DEF-P2-021: _on_tab_changed must flush pending select when the AI Log
+        tab is opened. (Tab Navigation Refactor 2026-07-03: dispatch is now by
+        stable tab key TAB_AI_LOG instead of the old hard-coded index 11 —
+        same invariant, key-based home.)"""
         body = _method_body(self._text, "_on_tab_changed")
-        self.assertIn("11", body,
-                      "_on_tab_changed must handle index 11 (AI Log tab)")
+        self.assertIn("TAB_AI_LOG", body,
+                      "_on_tab_changed must handle the AI Log tab (TAB_AI_LOG key)")
         self.assertIn("_flush_ai_log_pending_select", body,
-                      "_on_tab_changed must call _flush_ai_log_pending_select when index==11")
+                      "_on_tab_changed must call _flush_ai_log_pending_select for the AI Log tab")
 
     def test_flush_clears_flag_after_running(self):
         """DEF-P2-021: flush must reset _ai_log_pending_select to False to avoid re-selecting."""

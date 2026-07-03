@@ -364,6 +364,17 @@ class TestAC8PracticeSessionId:
         stub._resolve_strat_session_id = types.MethodType(
             _dash_mod.MainWindow._resolve_strat_session_id, stub
         )
+        # AI Snapshot Migration: the method now reads race params from the
+        # frozen snapshot layer — route the stub through the REAL production
+        # builder over the stub's config (legacy-only source), keeping the
+        # runtime session-id invariants meaningfully exercised.
+        from data.ai_context_snapshot import build_strategy_ai_snapshot as _bss
+        stub._build_strategy_ai_snapshot = (
+            lambda fuel_burn_override=None: _bss(
+                legacy_strategy=stub._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+        )
 
         return stub
 

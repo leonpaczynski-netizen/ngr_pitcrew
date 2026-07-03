@@ -43,18 +43,25 @@ Every AI prompt and response will print to the console and appear in the Debug t
 
 *Run first. If any smoke test fails, stop and fix before proceeding.*
 
+> **Developer note — automated / headless testing (Config Safety Guardrails, 2026-07-03):**
+> Never construct `MainWindow`, run the app, or call `save_config` against the
+> real `config.json` from a test or ad-hoc script — it will rewrite the user's
+> settings. Point it at a temp file (`--config <temp>`, `NGR_CONFIG_PATH`, or the
+> `temp_config_path` pytest fixture). Under pytest the guardrail refuses real-config
+> reads/writes automatically. See `docs/CONFIG_SAFETY_GUARDRAILS.md`.
+
 ---
 
-### SMK-001 — App Launches, Live Tab Is First, No Strategy Loaded
+### SMK-001 — App Launches, Home Tab Is First, No Strategy Loaded
 
-- **Related defects:** PROJECT_STATE.md Live Race Engineer Rules
-- **Feature area:** App startup / Live Race Engineer
+- **Related defects:** PROJECT_STATE.md Live Race Engineer Rules; Home Dashboard Promotion
+- **Feature area:** App startup / Home Dashboard
 - **Preconditions:** App not running. Config file exists from a previous session.
 - **Steps:**
   1. Launch `python main.py`
   2. Observe which tab is active on startup
   3. Check the strategy / pit window area — no race strategy should be pre-loaded
-- **Expected result:** App opens on the Live Race Engineer tab. No race strategy is loaded. No pit window or stint plan visible. Mode selector shows saved mode (Practice or Race).
+- **Expected result:** App opens on the **Home** tab (Race Engineer Command Centre, the first tab since the Home Dashboard Promotion). No race strategy is loaded. On the Live tab, no pit window or stint plan is visible. Mode selector shows saved mode (Practice or Race).
 - **Pass:** ☐ &nbsp;&nbsp; **Fail:** ☐
 - **Notes:** _______________
 - **Evidence:** Screenshot of initial state

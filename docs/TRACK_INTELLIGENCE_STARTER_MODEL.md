@@ -17,6 +17,15 @@ Track Intelligence **does NOT own**:
 - Car setup state
 - Strategy or stint planning state
 
+> **State Consolidation 4 (2026-07-03):** the canonical *read model* for
+> "which track/layout is selected and what model data exists for it" is now
+> **`data/track_context.py` (TrackContext)** — see
+> `docs/TRACK_CONTEXT_MIGRATION.md`. Track Intelligence remains the owner of
+> the seed catalogue, loaders and audits; TrackContext consumes their results
+> (`SeedAuditResult`, resolver/alignment/file-audit objects) and adds identity
+> resolution, availability flags, change markers and staleness helpers. Nothing
+> in this document's loaders or schemas changed.
+
 ## Module Location
 
 ```
@@ -1715,3 +1724,195 @@ New `"seed_source"` key in returned dict:
 - `SeedAuditResult` new fields default correctly for None/no-IDs cases
 - `format_alignment_summary` includes `seed_source` key in all code paths
 - Recalibration blocker text references "lap" and clean-lap guidance
+
+---
+
+## Group 18A — Track Truth Library, Calibration Wizard, Station-Based Map Matching (2026-07-03)
+
+### The problem this solves
+
+Every group up to 17U still let the app treat **curvature-only detected corners** as if
+they were authoritative track truth. A curvature peak is a guess, not a mapped corner.
+Group 18A introduces a proper **Track Truth spine** and the product principle behind it:
+
+> **No mapped-corner confidence ⇒ no high-confidence setup/strategy recommendation.**
+
+This is the **foundation only** — the Setup Brain, Strategy Brain, and Live Race Engineer
+are **not** rewired to consume Track Truth yet (deferred, see below).
+
+### The Track Truth model (`data/track_truth.py`)
+
+Pure-Python, no PyQt6. The authoritative geometry description for one layout.
+
+**Enums** (all `(str, Enum)`):
+- `TrackTruthStatus`: `NO_DATA`, `METADATA_ONLY`, `CURVATURE_PROVISIONAL`, `ACCEPTED_SEED_MAP`, `ACCEPTED_LIVE_MAPPING`
+- `TrackTruthConfidence`: `NONE`, `LOW`, `MEDIUM`, `HIGH`
+- `TrackTruthSource`: `ESTIMATED`, `TELEMETRY_CAPTURED`, `ENGINEER_VALIDATED`
+- `TrackTruthValidationIssue`: `NON_MONOTONIC_STATIONS`, `PROGRESS_OUT_OF_RANGE`, `LAP_LENGTH_ZERO_OR_NEG`, `APEX_OUTSIDE_WINDOW`, `COMPLEX_MISSING_MEMBER`, `SECTOR_PROGRESS_OUT_RANGE`, `CORNERS_EXPECTED_NO_WINDOWS`, `NO_COORDINATE_GEOMETRY`, `SINGLE_MEMBER_COMPLEX`
+
+**Dataclasses:** `TrackStation`, `CornerWindow`, `CornerComplex`, `SectorMarker`,
+`PitLaneDefinition`, `TrackTruthManifest`, `TrackTruthModel`, `TrackTruthValidationResult`.
+Field lists are documented in `docs/TRACK_LIBRARY_SCHEMA.md` (Track Truth Model Schema).
+
+**Schema constants:** `TRUTH_MODEL_SCHEMA="track_truth_model_v1"`,
+`TRUTH_MANIFEST_SCHEMA="track_truth_manifest_v1"`.
+
+**Functions:** `track_truth_model_to_dict`, `track_truth_model_from_dict` (returns `None` on
+schema mismatch, never raises), `export_track_truth_model_json`, `import_track_truth_model_json`,
+`resolve_track_truth_model(track_id, layout_id, base_dir=None)`,
+`validate_track_truth_model(model)`, `can_use_track_truth_for_ai_corner_context(result)`.
+
+**Runtime-built, not stored:** `resolve_track_truth_model()` builds the model at runtime from
+the **existing** library `manifest.json` + `semantic_model.json` (and the coordinate seed map
+when present). **No new JSON file is added to the library.**
+
+### Validation gates — the heart of the spine
+
+`validate_track_truth_model(model)` returns a `TrackTruthValidationResult` with three tiered
+gates:
+
+| Gate | True when |
+|------|-----------|
+| `is_accepted` | **no blockers** |
+| `is_usable_for_live_mapping` | `is_accepted` AND stations present AND `manifest.corners_are_seed_verified` |
+| `is_usable_for_ai_corner_context` | `is_usable_for_live_mapping` AND `manifest.seed_geometry_available` |
+
+**Blockers** (each prevents `is_accepted`):
+- non-monotonic station distances
+- station/sector progress out of 0–100
+- `lap_length_m ≤ 0`
+- apex outside its corner window
+- complex referencing a missing corner ID
+- `corners_expected > 0` but no corner windows
+- **`NO_COORDINATE_GEOMETRY`** — exact text: *"Coordinate geometry unavailable — high-confidence corner mapping is blocked"*
+
+**Warning (not a blocker):** single-member complex.
+
+`corners_are_seed_verified` and `seed_geometry_available` both default to **False** — they
+are explicit growth fields. Until a real accepted seed geometry sets them, corners stay
+provisional/unverified.
+
+**AI guard:** `can_use_track_truth_for_ai_corner_context(result)` returns `True` only when
+the model `is_accepted` AND `is_usable_for_ai_corner_context`; a `None` result → `False`.
+
+**Honesty guarantees:** `summary` never contains the word "accepted" when the model is not
+accepted; a **rejected** model that still has some geometry gets `status = NO_DATA` (never a
+provisional/accepted status).
+
+### How this supersedes curvature-only corner detection
+
+The older pipeline (Group 17E–17T) detected corners from curvature peaks in telemetry and,
+absent seed windows, could present them as though they were verified. Track Truth replaces
+that as the *source of corner truth*:
+
+- Corners derived from curvature alone are `CURVATURE_PROVISIONAL` / unverified and can never
+  reach an accepted status without seed geometry.
+- Corner truth now comes from the semantic model's corner **windows** + coordinate **stations**,
+  validated by the gates above, not from curvature ranking.
+- A corner section that coaching treats as one unit (e.g. Daytona's `Horseshoe` = T10 + T11)
+  is one `CornerComplex`, so the app no longer needs to treat it as two separate detected
+  corners.
+
+### Station-based map matching (`data/track_truth_matcher.py`)
+
+The live map-matching **foundation** — a scoring scaffold designed to be swapped for
+HMM/Viterbi later. Never raises.
+
+- `TrackTruthMatchInput`, `TrackTruthMatchResult`,
+  `match_track_truth_position(inp, model, validation=None) -> TrackTruthMatchResult`.
+- Weighted candidate scoring (private `_score_candidate`): spatial distance + heading
+  agreement + monotonic-progress-from-previous + lap-wrap handling + max-plausible-movement
+  + pit awareness.
+- Confidence bands mirror `data/track_map_matching.py`: ≤5 m HIGH, ≤20 m MEDIUM, ≤60 m LOW,
+  else NONE. Pit likely when speed < 8 kph or distance > 60 m.
+
+### Calibration wizard (`data/track_truth_calibration.py`)
+
+The calibration wizard **foundation** — a controller that walks a driver through capturing
+geometry and accepting it into the library.
+
+- `TrackTruthWizardStage`: `NOT_STARTED`, `CAPTURE_CENTRELINE`, `CAPTURE_LEFT_EDGE`,
+  `CAPTURE_RIGHT_EDGE`, `OPTIONAL_HOT_LAP`, `BUILD_PROPOSED`, `VALIDATE`, `ACCEPT`.
+- `TrackTruthWizardState`, controller `TrackTruthCalibrationWizard`.
+- **Illegal transitions are no-ops** that set `state.error` (never raise).
+- `accept()` is the **only** route to `ACCEPT`; it persists via
+  `save_seed_geometry_to_library` and `advance()` delegates `VALIDATE → ACCEPT` to it.
+- **Geometry building is delegated**, not duplicated: a defensive wrapper around
+  `data/track_geometry_builder.build_seed_geometry` (try/except → `can_generate` False on any
+  error) — no second geometry algorithm exists. (Builds on the `track_geometry_builder`
+  module introduced with the Group 17V / track-geometry work.)
+- `abandon()` resets to `NOT_STARTED`, clears capture sessions, writes no file.
+
+### UI (Track Modelling tab — headless-VM tested only)
+
+- `ui/track_modelling_vm.py`: pure-Python `format_track_truth_status(model, validation,
+  track_id=None, layout_id=None) -> dict` returning a 20-key display dict (value + `_color`
+  keys), with a full `"—"` / `"#888888"` placeholder for the `None` case. Four display states:
+  metadata-only / curvature-provisional / accepted-seed-map / accepted-live-mapping. Uses the
+  terms **"Track Truth"**, **"Map Alignment"**, **"Live Mapping Ready"**; avoids "lap offset
+  calibration".
+- `ui/track_modelling_ui.py`: a **"Track Truth / Mapping"** QGroupBox panel (selected
+  track/layout, track-library availability, coordinate seed-map availability, corner/complex
+  metadata availability, geometry acceptance status, live-map-matching readiness, AI corner
+  context readiness, blockers, warnings) refreshed by `_tm_refresh_track_truth_panel()`, wired
+  into `_tm_on_layout_changed`, `_tm_run_alignment`, `_tm_accept_track_model`,
+  `_tm_rebuild_model`, and `_tm_try_load_accepted_model`.
+- Per project convention this panel has **headless VM tests only** (no Qt test) — needs manual UAT.
+
+### How this fixes the Daytona / curvature problem
+
+- Daytona Road Course truth is built at runtime from its existing manifest + semantic model
+  (12 corners T1–T12, sectors S1–S3, complexes BusStop = T1+T2 and Horseshoe/T10T11 = T10+T11).
+- Daytona has **no** `geometry.seed_map.json`, so its Track Truth model has **zero stations** ⇒
+  validation returns the `NO_COORDINATE_GEOMETRY` blocker ⇒ `is_accepted = False` ⇒ AI corner
+  context is **BLOCKED**. Curvature peaks are therefore never presented as verified truth.
+- `availability.seed_geometry` stays `false` — no code flips it.
+
+### Known limitations
+
+- Daytona corner/sector positions are `source="estimated"`, `confidence="low"` (only the T1
+  apex is verified) — they are metadata, not accepted geometry.
+- Live map matching is a scoring scaffold, not yet HMM/Viterbi.
+- The Track Truth panel has headless VM tests only — no Qt test — pending manual UAT.
+
+### Deferred (natural next steps)
+
+- Wire the `TrackTruthModel` into the Setup Brain / Strategy Brain / Live Race Engineer so
+  recommendations respect the "no mapped corner ⇒ no high-confidence rec" principle.
+- Full HMM/Viterbi matcher (only the scoring scaffold shipped).
+- Produce a real Daytona `geometry.seed_map.json` (acceptance stays blocked until it exists).
+- Add any non-Daytona track; automated track-boundary generation; deep AI prompt integration;
+  automatic track identification.
+
+### Test coverage
+
+**45 new tests total:**
+- `tests/test_group18a_track_truth.py` — 26 tests (model, validation gates, AI guard, JSON round-trip)
+- `tests/test_group18a_track_truth_matcher.py` — 9 tests (candidate scoring, confidence bands, pit awareness)
+- `tests/test_group18a_track_truth_calibration.py` — 10 tests (wizard stages, illegal transitions, delegated build/accept)
+
+Full suite after Group 18A: **4053 pass / 6 skip / 0 fail.**
+
+---
+
+## DEF-17U-UAT-007 — Calibration Pit-In Detection Disabled by Default (2026-07-03)
+
+**Automatic pit-in classification is now disabled by default for calibration** because GT7
+provides no reliable pit-lane signal. `TelemetrySample.is_in_pit_lane` is always `None` (no
+per-sample pit-lane flag in the GT7 Custom UDP packet — see the calibration quality-rules and
+GT7-limitations notes above), so pit-in could only ever be *inferred* geometrically. That
+inference (`detect_pit_lap_raw()`, a contiguous XZ run > 60 m from the lap centroid for > 10 s)
+false-positived on normal GT7 **Time Trial** laps, wrongly rejecting clean laps and failing the
+reference-path build.
+
+**Change:** `build_reference_path(session, *, pit_detection_enabled=False)` — pit-in detection
+is **opt-in**. `detect_pit_lap_raw()` is only called, and "pit-in" wording only emitted, when a
+caller explicitly passes `pit_detection_enabled=True`. This means the `pit lane > 10%` rejection
+rule listed in the calibration quality table above is inactive unless pit detection is opted in.
+
+**Related partial-lap handling:** the same fix added `PARTIAL_START` / `PARTIAL_STOP`
+`CalibrationLapQuality` values so short first/last laps (captured when Start/Stop is pressed
+mid-lap) are recognised as partial slices — excluded from the build, not counted as rejected —
+instead of poisoning the session median or being mislabelled as outliers. The session median is
+computed from complete (non-partial) laps only. Full detail: `MASTER_TESTING_REGISTER.md`
+(DEF-17U-UAT-007) and `docs/TRACK_MODELLING_RUNTIME_UAT.md` (DEF-17U-UAT-007).

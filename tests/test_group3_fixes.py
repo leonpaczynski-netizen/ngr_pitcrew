@@ -272,8 +272,10 @@ class TestSummarySources(unittest.TestCase):
         method_start = text.find("def _on_history_load_session(")
         method_end = text.find("\n    def ", method_start + 1)
         method_body = text[method_start:method_end]
-        # Must switch to Practice Review tab
-        self.assertIn("setCurrentIndex", method_body)
+        # Must switch to Practice Review tab (Tab Navigation Refactor
+        # 2026-07-03: via select_tab(TAB_PRACTICE_REVIEW) instead of the old
+        # setCurrentIndex(4) — same behaviour, key-based navigation).
+        self.assertIn("select_tab(TAB_PRACTICE_REVIEW)", method_body)
 
     def test_refresh_summary_skips_outlap_rows(self):
         """Source scan: _refresh_practice_summary must filter is_out_lap rows."""

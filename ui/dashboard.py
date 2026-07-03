@@ -43,6 +43,13 @@ from ui.widgets import (
     TyreWidget, FuelBar, ConnectionStatusWidget, BigValueLabel,
 )
 from ui.gt7_data import GT7_TRACKS, GT7_TRACK_INFO, GT7_CARS, GT7_CARS_BY_CATEGORY, TYRE_TEMP_PRESETS, normalise_compound
+from ui.tab_registry import (
+    build_default_registry,
+    TAB_LIVE, TAB_EVENT_PLANNER, TAB_GARAGE, TAB_SETUP_BUILDER,
+    TAB_PRACTICE_REVIEW, TAB_STRATEGY_BUILDER, TAB_TELEMETRY, TAB_DIAGNOSTICS,
+    TAB_GUIDE, TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
+    TAB_HOME,
+)
 
 
 
@@ -94,9 +101,14 @@ _GUIDE_HTML = """
   .step { color:#F5C542; font-weight:bold; }
 </style>
 
-<h1>GT7 VR Dashboard — User Guide</h1>
+<h1>Next Gear Racing Pit Crew — User Guide</h1>
 <p class="note">Real-time race engineer for Gran Turismo 7. Reads UDP telemetry from your PS5,
 gives voice alerts, and uses the Claude AI API as your personal race engineer.</p>
+
+<p class="note"><b>Tool tabs (⚙):</b> tabs whose name starts with a gear symbol —
+<b>⚙ Telemetry</b>, <b>⚙ Diagnostics</b>, <b>⚙ AI Log</b> and <b>⚙ Track Modelling</b> —
+are advanced tools for checking raw data and troubleshooting. They are safe to
+ignore during a normal race weekend; the workflow below never requires them.</p>
 
 <h2>How to use this app — 10-step workflow</h2>
 <p>The app is event-centred: every tab draws its context from the <b>active event</b>.
@@ -165,9 +177,11 @@ are pre-populated from your active event — no manual re-entry needed.</p>
 </ul>
 <p class="note">If you miss a pit stop, the engineer detects it and announces a revised window immediately — no manual update needed.</p>
 
-<h3><span class="step">Step 8</span> &nbsp; Dashboard — event and session overview</h3>
-<p>The <b>Dashboard</b> tab shows your active event summary, current strategy status,
-recent session history, and quick-link buttons to jump to any tab in one click.
+<h3><span class="step">Step 8</span> &nbsp; Home — race engineer overview</h3>
+<p>The <b>Home</b> tab (first tab, shown when the app opens) is the Race Engineer Command Centre. It shows your
+active event, track data status, latest setup, strategy plan, and whether the AI
+is working from up-to-date inputs — plus the single suggested <b>next step</b> and
+which tab to do it on. Anything stale or missing is flagged in plain English.
 Good for checking overall state before and after a race weekend.</p>
 
 <h3><span class="step">Step 9</span> &nbsp; History — browse past sessions</h3>
@@ -179,7 +193,8 @@ Use <b>Load to Practice Review</b> to pull old laps back into the analysis workf
 <p>Configure once and leave:</p>
 <ul>
   <li><b>Connection</b> — PS5 IP address and UDP port (default 33741). Must match GT7 "Send Data" settings.</li>
-  <li><b>API Key</b> — Anthropic API key for AI features. Store in <b>api_key.txt</b> or paste it here.</li>
+  <li><b>API Key</b> — Anthropic API key for AI features. Store it in <b>api_key.txt</b>
+      next to config.json, or paste it into the key field on the <b>Strategy Builder</b> tab.</li>
   <li><b>Voice Alerts</b> — enable/disable categories, set push-to-talk key.</li>
   <li><b>Driver Profile</b> — click <b>Refresh Stats</b> after each race weekend (free, instant).
       Run <b>Propose Profile Update</b> every 3–5 weekends to keep the AI's model of your driving current.</li>
@@ -234,150 +249,10 @@ Also accepts full names: Soft, Medium, Hard, Inter, Wet, Racing Soft, etc.</p>
 </table>
 """
 
-_TELEMETRY_REFERENCE_HTML = """
-<style>
-  body  { background:#2A2A2A; color:#E0E0E0; font-family:'Segoe UI',sans-serif; font-size:11px; }
-  h1    { color:#2EA043; font-size:16px; margin-bottom:4px; }
-  h2    { color:#AAE4AA; font-size:13px; margin-top:16px; margin-bottom:4px;
-          border-bottom:1px solid #3A3A3A; padding-bottom:2px; }
-  table { border-collapse:collapse; width:100%; margin-top:4px; }
-  th    { background:#1F4E78; color:white; padding:4px 8px; text-align:left; font-size:11px; }
-  td    { padding:3px 8px; border-bottom:1px solid #333; vertical-align:top; font-size:11px; }
-  tr:nth-child(even) td { background:#252525; }
-  .yes  { color:#8BC34A; font-weight:bold; }
-  .log  { color:#F5C542; }
-  .no   { color:#888; }
-  .sug  { color:#79C7E3; font-style:italic; }
-</style>
-
-<h1>GT7 Telemetry Field Reference</h1>
-<p style="color:#888; font-size:11px;">
-  All 72 fields parsed from the GT7 UDP packet (368 bytes, decrypted with IV 0xDEADBEEF).
-  Status: <span class="yes">&#9679; Active</span> = used in race logic &nbsp;
-  <span class="log">&#9679; Logged</span> = recorded to DB / frame log, not analysed &nbsp;
-  <span class="no">&#9679; Unused</span> = parsed but not currently used.
-</p>
-
-<h2>Position &amp; Motion (12 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>pos_x / pos_y / pos_z</td><td>World-space XYZ position (metres)</td><td class="no">Unused</td><td class="sug">Track-map display, corner identification for sector analysis</td></tr>
-<tr><td>vel_x / vel_y</td><td>Lateral and longitudinal velocity (m/s)</td><td class="log">Logged</td><td class="sug">Per-lap velocity profile; combined with angvel_z for lateral G calculation</td></tr>
-<tr><td>vel_z</td><td>Vertical velocity (m/s)</td><td class="no">Unused</td><td class="sug">Kerb impact detection (vertical spike)</td></tr>
-<tr><td>rot_pitch / rot_yaw / rot_roll</td><td>Euler angles (radians)</td><td class="no">Unused</td><td class="sug">Kerb-riding detection (roll spike), instability warning, attitude display</td></tr>
-<tr><td>angvel_z</td><td>Yaw angular velocity (rad/s) — positive = turning left</td><td class="yes">Active</td><td>Real-time oversteer audio alert (&gt;1.8 rad/s, sustained 0.3 s, 8 s cooldown); per-lap oversteer event count; peak lateral G; AI coaching and setup prompts</td></tr>
-<tr><td>angvel_x / angvel_y</td><td>Pitch and roll angular velocity (rad/s)</td><td class="no">Unused</td><td class="sug">Roll-rate spikes at kerbs; pitch instability under heavy braking</td></tr>
-</table>
-
-<h2>Engine &amp; Powertrain (14 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>engine_rpm</td><td>Engine speed (RPM)</td><td class="yes">Active</td><td>Shift beep, rev-limit alert</td></tr>
-<tr><td>gear_raw / current_gear / suggested_gear</td><td>Current gear (nibble), suggested gear (nibble)</td><td class="yes">Active</td><td>Gear display, downshift detection</td></tr>
-<tr><td>throttle_raw</td><td>Throttle pedal position (0–255)</td><td class="yes">Active</td><td>Snap-throttle detection (delta &gt;60% in one frame); wheelspin alert threshold; AI coaching prompt</td></tr>
-<tr><td>brake_raw</td><td>Brake pedal position (0–255)</td><td class="yes">Active</td><td>Lock-up detection; real-time brake-release alert; braking consistency analysis; AI coaching</td></tr>
-<tr><td>clutch / clutch_engagement / clutch_gearbox_rpm</td><td>Clutch position, engagement, gearbox RPM</td><td class="no">Unused</td><td class="sug">Launch control monitoring, clutch slip detection</td></tr>
-<tr><td>gear_ratio_1–8</td><td>Individual gear ratios</td><td class="yes">Active</td><td>Setup capture, AI setup prompt</td></tr>
-<tr><td>transmission_max_speed</td><td>Top speed target (km/h)</td><td class="yes">Active</td><td>Setup capture</td></tr>
-<tr><td>turbo_boost</td><td>Turbo boost pressure</td><td class="no">Unused</td><td class="sug">Boost map monitoring, under-boost detection (worn engine)</td></tr>
-</table>
-
-<h2>Fuel System (2 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>fuel_level</td><td>Current fuel (litres)</td><td class="yes">Active</td><td>Fuel bar, pit fuel target, strategy</td></tr>
-<tr><td>fuel_capacity</td><td>Tank capacity (litres)</td><td class="yes">Active</td><td>Fuel bar fill percentage</td></tr>
-</table>
-
-<h2>Tyres &amp; Handling (17 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>tyre_temp_fl/fr/rl/rr</td><td>Tyre surface temperature (°C)</td><td class="yes">Active</td><td>Tyre widgets, state alerts, driving advice</td></tr>
-<tr><td>wheel_rps_fl/fr/rl/rr</td><td>Wheel rotation speed (rev/s)</td><td class="yes">Active</td><td>Per-lap wheelspin and lock-up event counts (no audio — data fed to AI driving advice); oversteer detection; AI coaching prompt</td></tr>
-<tr><td>tyre_radius_fl/fr/rl/rr</td><td>Effective tyre radius (m)</td><td class="yes">Active</td><td>Used with wheel_rps to compute linear wheel speed for slip detection. Also potential tyre wear proxy (radius shrinks).</td></tr>
-<tr><td>suspension_fl/fr/rl/rr</td><td>Suspension travel (m)</td><td class="yes">Active</td><td>Kerb event detection (&gt;40 mm travel triggers count); logged per lap; fed to AI setup and coaching prompts</td></tr>
-<tr><td>oil_pressure</td><td>Engine oil pressure (bar)</td><td class="no">Unused</td><td class="sug">Low oil pressure alert (engine damage indicator)</td></tr>
-<tr><td>water_temp</td><td>Coolant temperature (°C)</td><td class="no">Unused</td><td class="sug">Overheating alert after damage or long slow laps</td></tr>
-<tr><td>oil_temp</td><td>Oil temperature (°C)</td><td class="no">Unused</td><td class="sug">Warm-up monitoring, abnormal heat after damage</td></tr>
-<tr><td>body_height</td><td>Chassis height above ground (m)</td><td class="yes">Active</td><td>Bottoming event detection (&lt;40 mm triggers count); logged per lap; fed to AI setup prompt as "bottoming" metric</td></tr>
-</table>
-
-<h2>Road &amp; Track (4 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>road_distance</td><td>Distance along road surface (m, resets per lap)</td><td class="yes">Active</td><td>Qualifying lap-fraction / projected time calculation</td></tr>
-<tr><td>road_plane_x/y/z</td><td>Road surface normal vector</td><td class="no">Unused</td><td class="sug">Banking / camber detection; surface grip estimation on gravel/grass</td></tr>
-</table>
-
-<h2>Lap &amp; Race Timing (6 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>best_lap_ms</td><td>Session best lap (ms, −1 = none)</td><td class="yes">Active</td><td>Delta display, strategy reference</td></tr>
-<tr><td>last_lap_ms</td><td>Most recent completed lap (ms, −1 = none)</td><td class="yes">Active</td><td>Lap display, lap recording</td></tr>
-<tr><td>laps_completed</td><td>Laps counter from packet (unreliable in GT7)</td><td class="yes">Active</td><td>Change-detection only; actual count tracked by RaceStateTracker</td></tr>
-<tr><td>laps_in_race</td><td>Total laps in race (−1 timed, 0 unlimited, N = lap race)</td><td class="yes">Active</td><td>Countdown, strategy total-lap setting</td></tr>
-<tr><td>remaining_time_ms</td><td>Time remaining (timed sessions, −1 otherwise)</td><td class="yes">Active</td><td>Countdown display, fuel strategy for timed races</td></tr>
-<tr><td>time_of_day_ms</td><td>Session elapsed clock (ms)</td><td class="yes">Active</td><td>Qualifying intra-lap elapsed time tracking</td></tr>
-</table>
-
-<h2>Game State &amp; Flags (7 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>car_on_track</td><td>Car is on the circuit surface</td><td class="yes">Active</td><td>Guards shift beep; off-track event detection</td></tr>
-<tr><td>paused / loading</td><td>Game pause / loading screen flags</td><td class="yes">Active</td><td>Suppresses events during non-race states</td></tr>
-<tr><td>in_gear</td><td>Transmission is in gear</td><td class="yes">Active</td><td>Available for gear-change detection</td></tr>
-<tr><td>rev_limiter_active</td><td>Rev limiter engaged</td><td class="no">Unused</td><td class="sug">Alert when driver holds limiter too long (shift point reminder)</td></tr>
-<tr><td>rpm_alert_min / rpm_alert_max</td><td>In-game RPM alert thresholds set by player</td><td class="no">Unused</td><td class="sug">Auto-seed the shift beep threshold from the player's in-game setting</td></tr>
-</table>
-
-<h2>Position &amp; Cars (3 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>current_position</td><td>Race position (1-based; 0 = unknown)</td><td class="yes">Active</td><td>Position display, position-change events</td></tr>
-<tr><td>total_cars / cars_in_race</td><td>Total cars on grid</td><td class="yes">Active</td><td>Position display (P3/18), session detection</td></tr>
-<tr><td>unused_0xD4</td><td>Undocumented field (may encode race position)</td><td class="no">Unused</td><td class="sug">Cross-reference with current_position for reliability improvement</td></tr>
-</table>
-
-<h2>Car Identity (2 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>car_id</td><td>GT7 car model ID</td><td class="yes">Active</td><td>Car-specific AI prompt injection, BOP lookup</td></tr>
-<tr><td>car_max_speed_raw</td><td>Top-speed limiter value</td><td class="no">Unused</td><td class="sug">Could derive maximum attainable speed for gear ratio advice</td></tr>
-</table>
-
-<h2>Computed / Derived (9 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>speed_kmh / speed_ms</td><td>Vehicle speed (km/h and m/s)</td><td class="yes">Active</td><td>Speed display, pre-race detection</td></tr>
-<tr><td>tyre_temps (tuple)</td><td>All four tyre temperatures grouped</td><td class="yes">Active</td><td>Tyre widget updates</td></tr>
-<tr><td>wheel_rps (tuple)</td><td>All four wheel speeds grouped</td><td class="log">Logged</td><td class="sug">Wheel-slip delta: (wheel_rps × tyre_radius × 2π) vs speed_ms</td></tr>
-<tr><td>suspension (tuple)</td><td>All four suspension values grouped</td><td class="log">Logged</td><td class="sug">Bump severity histogram, bottoming events per lap</td></tr>
-<tr><td>tyre_radius (tuple)</td><td>All four tyre radii grouped</td><td class="log">Logged</td><td class="sug">Long-run wear proxy: compare start-of-stint vs end-of-stint radii</td></tr>
-<tr><td>gear_ratios (list)</td><td>Gears 1–8 as a list (None for unused)</td><td class="yes">Active</td><td>Setup capture for AI prompts</td></tr>
-<tr><td>transmission_max_speed_kmh</td><td>Max speed in km/h</td><td class="yes">Active</td><td>Setup capture</td></tr>
-<tr><td>packet_id</td><td>Sequence number (for duplicate / drop detection)</td><td class="yes">Active</td><td>Already used to detect race reset</td></tr>
-<tr><td>start_pos_and_cars (raw byte)</td><td>Packed position + car count</td><td class="yes">Active</td><td>Decoded into current_position / total_cars</td></tr>
-</table>
-
-<h2>Key Gaps &amp; Suggestions</h2>
-<table>
-<tr><th>Gap</th><th>Fields needed</th><th>What to build</th></tr>
-<tr><td><b>&#9679; Wheel-slip / lock-up tracking</b> <span style="color:#8BC34A">(Implemented)</span></td><td>wheel_rps, tyre_radius, speed_ms</td>
-    <td>Per-lap wheelspin and lock-up event counts. No audio alert — data is fed to the AI driving advice panel in Practice mode. Sustain gate prevents single-frame spikes.</td></tr>
-<tr><td><b>&#9679; Oversteer audio alert</b> <span style="color:#8BC34A">(Implemented)</span></td><td>angvel_z, throttle_raw</td>
-    <td>Real-time voice alert when yaw &gt;1.8 rad/s with rear slip, sustained 0.3 s. 8 s cooldown. Per-lap count also fed to AI coaching.</td></tr>
-<tr><td>Auto shift-point seeding</td><td>rpm_alert_min / rpm_alert_max</td>
-    <td class="sug">When the player sets an RPM alert in GT7, mirror it to the app's shift beep without needing to type it in Settings.</td></tr>
-<tr><td>Tyre wear estimation</td><td>tyre_radius (already logged)</td>
-    <td class="sug">Track tyre_radius at stint start vs. end. Shrinkage of &gt;2mm = measurable wear. Plot as "virtual tyre life" alongside lap times.</td></tr>
-<tr><td>Throttle / brake coaching</td><td>throttle_raw, brake_raw (already logged)</td>
-    <td class="sug">Detect over-braking (100% brake into slow corners) and snap throttle on exit. Combine with oversteer data for targeted advice.</td></tr>
-<tr><td>Engine / thermal alerts</td><td>oil_pressure, water_temp, oil_temp</td>
-    <td class="sug">Alert on abnormal values after a collision. Low oil pressure = potential engine damage; high water temp = cooling problem / long slow lap.</td></tr>
-<tr><td>Kerb / bottoming analysis</td><td>suspension, body_height</td>
-    <td class="sug">Count suspension hits &gt; threshold per lap. High count = aggressive kerb usage. Correlate with lap time to see if it helps or hurts.</td></tr>
-</table>
-"""
+# Diagnostic Tab Cleanup (2026-07-03): the _TELEMETRY_REFERENCE_HTML constant
+# (the 72-field GT7 UDP packet reference) was dead code - defined but never
+# rendered anywhere - and was deleted. The packet format is documented in
+# telemetry/parser.py and docs/.
 
 
 class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
@@ -484,7 +359,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._saved_setups = list(config.get("car_setup", {}).get("setups", []))
             self._migrate_setup_ids()
 
-        self.setWindowTitle("GT7 VR Dashboard")
+        self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
         self._setup_ui()
@@ -522,6 +397,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if self._query_listener is not None:
             self._query_listener.set_active_setup_getter(self._current_setup_dict)
 
+        # Home Dashboard Promotion (2026-07-03): Home is the default landing tab,
+        # so render it once now that every context source it reads is wired.
+        # Guarded/defensive — never blocks startup.
+        self._home_refresh()
+
     # ------------------------------------------------------------------ UI setup
 
     def _setup_ui(self) -> None:
@@ -533,21 +413,339 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         _strategy_builder_widget = self._build_strategy_builder_tab()
 
-        self._tabs.addTab(self._build_live_tab(),             "Live Race Engineer") # 0
-        self._tabs.addTab(self._build_event_planner_tab(),    "Event Planner")   # 1
-        self._tabs.addTab(self._build_garage_tab(),           "Garage")           # 2
-        self._tabs.addTab(self._build_setup_builder_tab(),    "Setup Builder")    # 3
-        self._tabs.addTab(self._build_practice_review_tab(),  "Practice Review")  # 4
-        self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 5
-        self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 6
-        self._tabs.addTab(self._build_debug_tab(),            "Debug")            # 7
-        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 8
-        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
-        self._tabs.addTab(self._build_history_tab(),          "History")          # 10
-        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
-        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
+        # Home Dashboard Promotion (2026-07-03): the Race Engineer Command Centre
+        # LEADS the tab bar and is the default landing page. The move is
+        # order-only — DEFAULT_TAB_ORDER in ui/tab_registry.py leads with
+        # TAB_HOME and the (positional) registry re-derives every index, so no
+        # dispatch, navigation, or visibility code references a raw position.
+        self._tabs.addTab(self._build_home_tab(),             "Home")             # 0
+        self._tabs.addTab(self._build_live_tab(),             "Live Race Engineer") # 1
+        self._tabs.addTab(self._build_event_planner_tab(),    "Event Planner")   # 2
+        self._tabs.addTab(self._build_garage_tab(),           "Garage")           # 3
+        self._tabs.addTab(self._build_setup_builder_tab(),    "Setup Builder")    # 4
+        self._tabs.addTab(self._build_practice_review_tab(),  "Practice Review")  # 5
+        self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 6
+        self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 7
+        self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 8
+        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 9
+        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 10
+        self._tabs.addTab(self._build_history_tab(),          "History")          # 11
+        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 12
+        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 13
+        # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
+        # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
+        # them; a source-scan test + this count check guard the pairing).
+        # Dispatch and navigation go through the registry, never raw indices.
+        self._tab_registry = build_default_registry()
+        if self._tab_registry.count != self._tabs.count():  # pragma: no cover
+            logging.warning(
+                "Tab registry mismatch: %d keys vs %d tabs — update "
+                "DEFAULT_TAB_ORDER in ui/tab_registry.py",
+                self._tab_registry.count, self._tabs.count(),
+            )
+        # Product Consolidation Sprint: flag advanced/diagnostic tool tabs so the
+        # normal race-engineer workflow reads cleanly. Roles are owned by
+        # ui/product_flow.py (single source of truth); this only decorates the
+        # tab titles and never changes tab order or indices (and the registry
+        # is positional, so decorated labels can never break key lookup).
+        self._apply_product_flow_tab_markers()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self._tabs)
+        # Home Dashboard Promotion (2026-07-03): open the app on Home. Home is
+        # the first tab (index 0) so it is already current, but select by stable
+        # key to make the landing tab explicit and position-independent. The
+        # first render is triggered once at the end of __init__ via
+        # _home_refresh() (state the dashboard reads is fully wired by then).
+        self.select_tab(TAB_HOME)
+
+    # --- Named tab navigation (Tab Navigation Refactor, 2026-07-03) ----------
+    #
+    # These helpers are the only sanctioned way to locate or select a tab.
+    # All are safe on unknown keys (no-ops / -1 / None — never raise) so
+    # future callers (e.g. Home click-to-navigate) cannot crash the UI.
+
+    def get_tab_index(self, tab_key: str) -> int:
+        """Current index for a stable tab key, or -1 when unknown."""
+        reg = getattr(self, "_tab_registry", None)
+        return reg.index_of(tab_key) if reg is not None else -1
+
+    def has_tab(self, tab_key: str) -> bool:
+        """True when the key is registered on the tab bar."""
+        return self.get_tab_index(tab_key) >= 0
+
+    def current_tab_key(self):
+        """Stable key of the currently selected tab, or None."""
+        reg = getattr(self, "_tab_registry", None)
+        if reg is None or not hasattr(self, "_tabs"):
+            return None
+        return reg.key_at(self._tabs.currentIndex())
+
+    def select_tab(self, tab_key: str) -> bool:
+        """Select a tab by stable key. Returns False (no-op) on unknown keys."""
+        idx = self.get_tab_index(tab_key)
+        if idx < 0 or not hasattr(self, "_tabs"):
+            return False
+        self._tabs.setCurrentIndex(idx)
+        return True
+
+    def _apply_product_flow_tab_markers(self) -> None:
+        """Prefix advanced/diagnostic tabs with a tool marker (see product_flow).
+
+        Idempotent and display-only — tab indices used by _on_tab_changed are
+        unaffected. Kept defensive so a UI import issue can never block startup.
+        """
+        try:
+            from ui import product_flow
+        except Exception:  # pragma: no cover - defensive; UI must still launch
+            return
+        for i in range(self._tabs.count()):
+            self._tabs.setTabText(i, product_flow.decorate_tab_title(self._tabs.tabText(i)))
+
+    # --- Home tab (Race Engineer Command Centre) -----------------------------
+    #
+    # Home Dashboard sprint (2026-07-03): the overview surface the audit found
+    # was never built (REQUIREMENTS.md §12.2, audit §1.1). Display-only — it
+    # renders ui/home_dashboard_vm.py state built from the canonical contexts
+    # and owns/mutates no domain state. Refreshes when shown (_on_tab_changed)
+    # and via _home_refresh_if_visible() hooks after key workflow actions.
+    #
+    # Home Dashboard Promotion (2026-07-03): Home leads the tab bar and its
+    # cards offer click-to-navigate to the relevant tool tab via select_tab
+    # (stable keys only). Navigation is tab-change only — see _home_navigate.
+
+    # Shared style for the Home click-to-navigate buttons.
+    _HOME_NAV_BTN_QSS = (
+        "QPushButton { background: #333333; color: #E0E0E0;"
+        " border: 1px solid #555; border-radius: 4px; padding: 3px 12px;"
+        " font-size: 11px; }"
+        "QPushButton:hover { background: #3A5A8A; border-color: #5A7ABA; }"
+    )
+
+    def _home_nav_button_text(self, tab_key: str) -> str:
+        """"Open <Tab>" label from the UNDECORATED base title (never the ⚙
+        label). Falls back to a plain "Open" if the key is unknown."""
+        try:
+            from ui.tab_registry import TAB_BASE_TITLES
+            base = TAB_BASE_TITLES.get(tab_key)
+            return f"Open {base}" if base else "Open"
+        except Exception:  # pragma: no cover - defensive
+            return "Open"
+
+    def _home_navigate(self, tab_key: str) -> None:
+        """Navigate from a Home card to a tool tab. **Tab-change only** — it
+        never mutates domain state, starts AI/telemetry/calibration, or saves.
+        Safe no-op when the target tab is unavailable (select_tab returns
+        False on an unknown key). Never raises out to the UI."""
+        try:
+            if not tab_key or not self.has_tab(tab_key):
+                return
+            self.select_tab(tab_key)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _home_navigate_next_action(self) -> None:
+        """Open the next-best-action's recommended tab (resolved in
+        _home_refresh). No-op if nothing is currently recommended."""
+        self._home_navigate(getattr(self, "_home_next_action_tab_key", None))
+
+    def _build_home_tab(self) -> QWidget:
+        from ui.home_dashboard_vm import CARD_ORDER
+        w = QWidget()
+        root = QVBoxLayout(w)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        title = QLabel("Race Engineer Command Centre")
+        title.setStyleSheet(f"color: {_TEXT}; font-size: 16px; font-weight: bold;")
+        header_row.addWidget(title)
+        header_row.addStretch()
+        self._home_btn_refresh = QPushButton("Refresh")
+        self._home_btn_refresh.setStyleSheet(
+            f"QPushButton {{ background: {_DARK_CARD}; color: {_TEXT};"
+            " border: 1px solid #555; border-radius: 4px; padding: 4px 14px; }"
+            "QPushButton:hover { background: #3A3A3A; }"
+        )
+        self._home_btn_refresh.clicked.connect(self._home_refresh)
+        header_row.addWidget(self._home_btn_refresh)
+        root.addLayout(header_row)
+
+        # Next-best-action banner + a click-to-navigate button (Home Dashboard
+        # Promotion). The button opens the recommended tab via select_tab; its
+        # target is resolved in _home_refresh from the flow summary's tab name
+        # (mapped to a stable key with tab_registry.key_for_title).
+        na_banner = QWidget()
+        na_banner.setStyleSheet(
+            f"background: {_DARK_CARD}; border-left: 4px solid #F5C542;"
+            " border-radius: 6px;"
+        )
+        na_row = QHBoxLayout(na_banner)
+        na_row.setContentsMargins(14, 10, 14, 10)
+        self._home_next_action_lbl = QLabel("")
+        self._home_next_action_lbl.setWordWrap(True)
+        self._home_next_action_lbl.setTextFormat(Qt.TextFormat.RichText)
+        na_row.addWidget(self._home_next_action_lbl, 1)
+        self._home_next_action_btn = QPushButton("Open")
+        self._home_next_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._home_next_action_btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
+        self._home_next_action_btn.clicked.connect(self._home_navigate_next_action)
+        self._home_next_action_btn.setVisible(False)
+        self._home_next_action_tab_key = None
+        na_row.addWidget(self._home_next_action_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(na_banner)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setSpacing(8)
+        from ui.home_dashboard_vm import tab_key_for_card
+        self._home_card_labels = {}
+        for i, key in enumerate(CARD_ORDER):
+            cell = QWidget()
+            cell.setStyleSheet(
+                f"background: {_DARK_CARD}; border-radius: 6px;")
+            cell_l = QVBoxLayout(cell)
+            cell_l.setContentsMargins(10, 10, 10, 8)
+            cell_l.setSpacing(6)
+
+            lbl = QLabel("—")
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            lbl.setStyleSheet("background: transparent;")
+            self._home_card_labels[key] = lbl
+            cell_l.addWidget(lbl, 1)
+
+            # Click-to-navigate: an "Open <Tab>" button per mapped card. Stable
+            # key only (never the visible label) so the ⚙ decoration is
+            # irrelevant. Tab-change only — see _home_navigate.
+            tab_key = tab_key_for_card(key)
+            if tab_key:
+                btn = QPushButton(self._home_nav_button_text(tab_key))
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
+                btn.setToolTip("Open this tool tab")
+                btn.clicked.connect(
+                    lambda _checked=False, k=tab_key: self._home_navigate(k))
+                btn_row = QHBoxLayout()
+                btn_row.setContentsMargins(0, 0, 0, 0)
+                btn_row.addStretch(1)
+                btn_row.addWidget(btn)
+                cell_l.addLayout(btn_row)
+
+            grid.addWidget(cell, i // 2, i % 2)
+        grid.setRowStretch(grid.rowCount(), 1)
+        scroll.setWidget(container)
+        root.addWidget(scroll, 1)
+        return w
+
+    def _build_home_dashboard_state(self):
+        """Assemble the Home Dashboard view-model state from the canonical
+        contexts. Read-only: every input comes from the existing context
+        builders (or captured contexts); nothing is written anywhere."""
+        from ui.home_dashboard_vm import build_home_dashboard_state
+        event_ctx = self._build_event_context()
+        strategy_ctx = self._build_strategy_context()
+        # The latest displayed setup recommendation (State Consolidation 3
+        # capture). None until a setup result has been displayed this session.
+        setup_ctx = getattr(self, "_last_setup_context", None)
+        track_ctx = self._build_track_context()
+        # Pure computation of what the AI-input snapshot would be right now —
+        # no AI call is made; this reports frozen-vs-legacy input status.
+        ai_snap = self._build_strategy_ai_snapshot()
+        has_laps = self._home_has_practice_laps(event_ctx)
+        live = self._tracker is not None and getattr(self._tracker, "_connected", False)
+        return build_home_dashboard_state(
+            event_context=event_ctx,
+            strategy_context=strategy_ctx,
+            setup_context=setup_ctx,
+            track_context=track_ctx,
+            ai_snapshot=ai_snap,
+            has_practice_laps=has_laps,
+            # Approximation until a SessionContext owns lap validity: recorded
+            # laps are treated as reviewable laps (documented in
+            # docs/HOME_DASHBOARD_BUILD.md).
+            has_valid_laps=has_laps,
+            live_active=bool(live),
+        )
+
+    def _home_has_practice_laps(self, event_ctx) -> bool:
+        """True when saved sessions with laps exist for the active car/track.
+        Read-only DB query; defensive — returns False on any failure."""
+        try:
+            if self._db is None:
+                return False
+            car = getattr(event_ctx, "car", "") or ""
+            track = getattr(event_ctx, "track", "") or ""
+            if not car and not track:
+                return False
+            for s in self._db.get_all_sessions(limit=60):
+                if car and (s.get("car_name") or "") != car:
+                    continue
+                if track and (s.get("track") or "") != track:
+                    continue
+                if int(s.get("total_laps") or 0) > 0:
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _home_refresh(self) -> None:
+        """Rebuild and render the Home Dashboard. Display-only; never raises."""
+        if not hasattr(self, "_home_card_labels"):
+            return
+        try:
+            from ui import home_dashboard_vm as hdvm
+            state = self._build_home_dashboard_state()
+            self._home_next_action_lbl.setText(
+                hdvm.format_next_action_html(state.next_action))
+            self._home_update_next_action_button(state.next_action)
+            for key, lbl in self._home_card_labels.items():
+                card = state.card(key)
+                if card is not None:
+                    lbl.setText(hdvm.format_card_html(card))
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            pass
+
+    def _home_update_next_action_button(self, next_action) -> None:
+        """Point the next-action button at the recommended tab, or hide it.
+
+        The flow summary reports a display NAME ("Setup Builder"); resolve it to
+        a stable key with tab_registry.key_for_title (⚙-decoration-safe). The
+        button is hidden when the journey is complete or the name doesn't map to
+        a real tab — no dependence on visible labels, no domain state touched."""
+        btn = getattr(self, "_home_next_action_btn", None)
+        if btn is None:
+            return
+        try:
+            from ui.tab_registry import key_for_title
+            tab_name = getattr(next_action, "tab", "") or ""
+            complete = bool(getattr(next_action, "complete", False))
+            key = key_for_title(tab_name) if tab_name and not complete else None
+            self._home_next_action_tab_key = key
+            if key and self.has_tab(key):
+                btn.setText(self._home_nav_button_text(key))
+                btn.setVisible(True)
+            else:
+                btn.setVisible(False)
+        except Exception:  # pragma: no cover - defensive
+            self._home_next_action_tab_key = None
+            btn.setVisible(False)
+
+    def _home_refresh_if_visible(self) -> None:
+        """Refresh the Home Dashboard only when it is the current tab — the
+        cheap hook workflow actions call so an open Home tab stays current
+        without adding polling or background work."""
+        try:
+            if not hasattr(self, "_tabs") or not hasattr(self, "_home_card_labels"):
+                return
+            if self.current_tab_key() != TAB_HOME:
+                return
+            self._home_refresh()
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     # --- Live tab -----------------------------------------------------------
 
@@ -1014,11 +1212,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._btn_refresh_web = QPushButton("Refresh Data from Web")
         self._btn_refresh_web.setFixedHeight(28)
         self._btn_refresh_web.setToolTip(
-            "Scrapes the latest car list, track list, and BOP settings from:\n"
+            "Downloads the latest car list, track list, and BOP settings from:\n"
             "  • gran-turismo.com/gb/gt7/carlist\n"
             "  • gran-turismo.com/sg/gt7/tracklist\n"
             "  • dg-edge.com/database/bop\n"
-            "Requires: pip install requests beautifulsoup4"
+            "Needs an internet connection; the status line below reports progress."
         )
         self._btn_refresh_web.clicked.connect(self._refresh_data_from_web)
         self._btn_open_extra = QPushButton("Edit Extra JSON")
@@ -1512,7 +1710,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lbl_dbg_race_type = _sl("RaceType: —")
         self._lbl_dbg_session   = _sl("Session: —")
         self._lbl_dbg_laps      = _sl("Laps: —/—")
-        self._lbl_dbg_rem_comp  = _sl("Rem(clk): —")
+        self._lbl_dbg_rem_comp  = _sl("Time left: —")
         for lbl in (self._lbl_dbg_phase, self._lbl_dbg_race_type,
                     self._lbl_dbg_session, self._lbl_dbg_laps,
                     self._lbl_dbg_rem_comp):
@@ -1524,7 +1722,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         r3 = QHBoxLayout(); r3.setSpacing(16)
         self._lbl_dbg_cars_raw = _sl("cars_in_race: —")
         self._lbl_dbg_laps_raw = _sl("laps_in_race: —")
-        self._lbl_dbg_rem_raw  = _sl("rem_ms(raw): —")
+        self._lbl_dbg_rem_raw  = _sl("remaining_time_ms: —")
         self._lbl_dbg_ontrack  = _sl("on_track: —")
         self._lbl_dbg_loading  = _sl("loading: —")
         self._lbl_dbg_pos_raw  = _sl("pos: —")
@@ -1537,7 +1735,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         # ── Row 4: announcer state ───────────────────────────────────────
         r4 = QHBoxLayout(); r4.setSpacing(16)
-        self._lbl_dbg_ann_q    = _sl("Ann queue: —")
+        self._lbl_dbg_ann_q    = _sl("Voice queue: —")
         self._lbl_dbg_ann_mute = _sl("Muted: No")
         for lbl in (self._lbl_dbg_ann_q, self._lbl_dbg_ann_mute):
             r4.addWidget(lbl)
@@ -2629,6 +2827,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         self._persist_config()
         self._refresh_lap_bank()
+        # Home Dashboard: strategy inputs changed — keep an open Home tab
+        # current (display-only; no-op when Home is not visible).
+        self._home_refresh_if_visible()
 
     def _get_mandatory_compounds(self) -> list[str]:
         """Return mandatory compounds from the active event config."""
@@ -2719,7 +2920,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             and (not sel_car or s.get("car_name") == sel_car)
         ]
 
-        current_config_id = self._config.get("strategy", {}).get("config_id", "")
+        # State Consolidation 2: the active config_id is strategy-plan state —
+        # read it from the canonical StrategyContext, not raw config["strategy"].
+        current_config_id = self._build_strategy_context().config_id
         current_id = self._lap_bank_combo.currentData()
         self._lap_bank_combo.blockSignals(True)
         self._lap_bank_combo.clear()
@@ -3217,30 +3420,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         api_key = self._ai_api_key.text().strip()
         _ui_lap_data = self._read_ui_lap_table()
 
-        _sc = self._config.get("strategy", {})
-        _race_type = _sc.get("race_type", "lap")
-        total_laps = int(_sc.get("total_laps", 25))
-
-        _mandatory_stops = int(_sc.get("mandatory_stops", 0))
-        _mandatory_cpds  = self._get_mandatory_compounds()
-        race_params = {
-            "track":                _sc.get("track", ""),
-            "track_location_id":    _sc.get("track_location_id", ""),
-            "layout_id":            _sc.get("layout_id", ""),
-            "total_laps":           total_laps,
-            "tyre_wear_multiplier": float(_sc.get("tyre_wear_multiplier", 1.0)),
-            "fuel_burn_per_lap":    float(self._config.get("strategy", {}).get("fuel_burn_per_lap", 2.0)),
-            "refuel_speed_lps":     float(_sc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_sc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  _mandatory_stops,
-            "mandatory_compounds":  _mandatory_cpds,
-            "race_type":            _race_type,
-            "duration_mins":        int(_sc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_sc.get("tuning", True)),
-            "allowed_tuning":       _sc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_sc.get("bop", False)),
-            "avail_tyres":          _sc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts (EventContext race rules, StrategyContext plan
+        # fields incl. fuel burn/pit loss, TrackContext identity) instead of
+        # live config["strategy"] reads. Byte-identical to the previous inline
+        # expressions when the stores are in sync (proven by
+        # tests/test_ai_context_snapshot.py); fresh DB event values win when
+        # the event was edited after "Set as Active".
+        _ai_snap = self._build_strategy_ai_snapshot()
+        race_params = _ai_snap.race_params_dict()
 
         params = RaceParams(**race_params)
 
@@ -3391,35 +3579,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Read UI lap table early — needed as fallback input for get_strategy_lap_data
         _ui_lap_data = self._read_ui_lap_table()
 
-        # Determine total laps from event config (timed-race estimate is refined
-        # later, after lap_data_by_compound is built from the DB)
-        _sc = self._config.get("strategy", {})
-        _race_type = _sc.get("race_type", "lap")
-        if _race_type == "timed":
-            total_laps = int(_sc.get("total_laps", 25))  # placeholder; updated below
-        else:
-            total_laps = int(_sc.get("total_laps", 25))
-
-        _mandatory_stops = int(_sc.get("mandatory_stops", 0))
-        _mandatory_cpds  = self._get_mandatory_compounds()
-        race_params = {
-            "track":                _sc.get("track", ""),
-            "track_location_id":    _sc.get("track_location_id", ""),
-            "layout_id":            _sc.get("layout_id", ""),
-            "total_laps":           total_laps,
-            "tyre_wear_multiplier": float(_sc.get("tyre_wear_multiplier", 1.0)),
-            "fuel_burn_per_lap":    self._computed_fuel_burn_lpl(),
-            "refuel_speed_lps":     float(_sc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_sc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  _mandatory_stops,
-            "mandatory_compounds":  _mandatory_cpds,
-            "race_type":            _sc.get("race_type", "lap"),
-            "duration_mins":        int(_sc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_sc.get("tuning", True)),
-            "allowed_tuning":       _sc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_sc.get("bop", False)),
-            "avail_tyres":          _sc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts instead of live config["strategy"] reads.
+        # Byte-identical when the stores are in sync (proven by
+        # tests/test_ai_context_snapshot.py). Fuel burn stays telemetry-owned
+        # via _computed_fuel_burn_lpl() (loaded session → tracker → config).
+        _ai_snap = self._build_strategy_ai_snapshot(
+            fuel_burn_override=self._computed_fuel_burn_lpl())
+        race_params = _ai_snap.race_params_dict()
         self._config.setdefault("anthropic", {})["api_key"] = api_key
         self._persist_config()
 
@@ -3432,8 +3599,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         degradation = self._tyre_degradation_cache if self._tyre_degradation_cache else None
 
-        # Load setup history for this race config to give AI context on prior work
-        config_id = self._config.get("strategy", {}).get("config_id", "")
+        # Load setup history for this race config to give AI context on prior
+        # work — the match key comes from the frozen snapshot (StrategyContext).
+        config_id = _ai_snap.config_id
         setup_history_text = ""
         if config_id:
             try:
@@ -3548,42 +3716,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 "No Anthropic API key set. Add your key above.")
             return
 
-        _psc = self._config.get("strategy", {})
-        _tyre_wear = float(_psc.get("tyre_wear_multiplier", 1.0))
-        print(f"[PracticeAnalysis] tyre_wear_multiplier={_tyre_wear:.2f} (from Event config)")
-        race_params = {
-            "track":                _psc.get("track", ""),
-            "track_location_id":    _psc.get("track_location_id", ""),
-            "layout_id":            _psc.get("layout_id", ""),
-            "total_laps":           int(_psc.get("total_laps", 25)),
-            "tyre_wear_multiplier": _tyre_wear,
-            "fuel_burn_per_lap":    self._computed_fuel_burn_lpl(),
-            "refuel_speed_lps":     float(_psc.get("refuel_speed_lps", 10.0)),
-            "pit_loss_secs":        float(_psc.get("pit_loss_secs", 23.0)),
-            "min_mandatory_stops":  int(_psc.get("mandatory_stops", 0)),
-            "mandatory_compounds":  self._get_mandatory_compounds(),
-            "race_type":            _psc.get("race_type", "lap"),
-            "duration_mins":        int(_psc.get("race_duration_minutes", 0)),
-            "tuning_locked":        not bool(_psc.get("tuning", False)),
-            "allowed_tuning":       _psc.get("allowed_tuning_categories") or [],
-            "bop":                  bool(_psc.get("bop", False)),
-            "avail_tyres":          _psc.get("avail_tyres", []) or [],
-        }
+        # AI Snapshot Migration: race parameters come from a frozen snapshot of
+        # the canonical contexts instead of live config["strategy"] reads.
+        # Byte-identical when the stores are in sync, and the practice path's
+        # DEF-P1-005 safe default (unknown tuning flag → locked) is preserved
+        # (proven by tests/test_ai_context_snapshot.py). Fuel burn stays
+        # telemetry-owned via _computed_fuel_burn_lpl().
+        _ai_snap = self._build_practice_ai_snapshot(
+            fuel_burn_override=self._computed_fuel_burn_lpl())
+        race_params = _ai_snap.race_params_dict()
+        print(f"[PracticeAnalysis] tyre_wear_multiplier="
+              f"{race_params['tyre_wear_multiplier']:.2f} (from Event config)")
         import os as _os
         if _os.environ.get("GT7_AI_DEBUG"):
             _tc_inc = bool(race_params.get("track_location_id") and race_params.get("layout_id"))
             print(
-                f"[PracticeAnalysis DEBUG] bop={_psc.get('bop', False)} "
-                f"tuning={_psc.get('tuning', 'ABSENT')} "
+                f"[PracticeAnalysis DEBUG] bop={race_params['bop']} "
                 f"tuning_locked={race_params['tuning_locked']} "
                 f"allowed_tuning={race_params['allowed_tuning']} "
                 f"race_type={race_params['race_type']} "
-                f"fuel_mult={_psc.get('fuel_multiplier', 1.0)} "
                 f"tyre_wear={race_params['tyre_wear_multiplier']} "
                 f"track_context_included={_tc_inc} "
                 f"track_location_id={race_params.get('track_location_id') or 'MISSING'} "
-                f"layout_id={race_params.get('layout_id') or 'MISSING'}"
+                f"layout_id={race_params.get('layout_id') or 'MISSING'} "
+                f"snapshot={_ai_snap.core.snapshot_id} source={_ai_snap.core.source.value}"
             )
+            for _w in (_ai_snap.core.warnings + _ai_snap.core.stale_warnings):
+                print(f"[PracticeAnalysis DEBUG] snapshot-warning: {_w}")
 
         # Gather tagged lap times from Lap Data tab
         lap_data_by_compound: dict[str, list[float]] = {}
@@ -4201,15 +4360,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "Keys look like 'sk-ant-api03-...' — stored locally in config.json only."
         )
 
-        # Race Config ID — derived from track + car + race length
+        # Session match key (internally: race config_id) — derived from
+        # track + car + race length. Diagnostic Tab Cleanup (2026-07-03):
+        # relabelled from the developer-facing "Race Config ID".
         self._lbl_config_id = QLabel(
             "—",
             styleSheet="color: #64B5F6; font-family: monospace; font-size: 10px;",
         )
         self._lbl_config_id.setToolTip(
-            "Unique identifier for this specific race configuration (track + car + length).\n"
-            "The Practice Lap Bank only shows sessions recorded under the same config.\n"
-            "Changes automatically when you update track, car, or race length."
+            "Identifies this exact race configuration (track + car + race length).\n"
+            "The Practice Lap Bank only shows sessions recorded under the same configuration.\n"
+            "Updates automatically when you change track, car, or race length."
         )
 
         param_form.addRow(QLabel("Fuel Multiplier:", styleSheet=lbl_style), self._lbl_fuel_mult_display)
@@ -4220,7 +4381,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _sep.setFrameShape(QFrame.Shape.HLine)
         _sep.setStyleSheet("color: #444;")
         param_form.addRow(_sep)
-        param_form.addRow(QLabel("Race Config ID:", styleSheet=lbl_style), self._lbl_config_id)
+        param_form.addRow(QLabel("Session Match Key:", styleSheet=lbl_style), self._lbl_config_id)
         ai_layout.addLayout(param_form)
 
         ai_btn_row = QHBoxLayout()
@@ -5723,10 +5884,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lbl_lap_count.setText("No laps recorded")
 
     def _persist_config(self) -> None:
-        """Write self._config to disk. Called from all save sites."""
+        """Write self._config to disk. Called from all save sites.
+
+        Delegates to config_paths.save_config: atomic (temp-file + os.replace),
+        keeps a .bak backup, and is guarded so that under tests it refuses to
+        overwrite the user's real config.json (raises ConfigSafetyError, caught
+        and logged here so construction/saves never crash). Normal app runs are
+        unaffected — they write the real config exactly as before.
+        """
+        from config_paths import save_config, ConfigSafetyError
         try:
-            with open(self._config_path, "w") as f:
-                json.dump(self._config, f, indent=4)
+            save_config(self._config_path, self._config, backup=True)
+        except ConfigSafetyError as e:
+            print(f"[Config] BLOCKED real-config write under tests: {e}")
         except Exception as e:
             print(f"[Config] save error: {e}")
 
@@ -5836,14 +6006,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._lbl_dbg_race_type.setText(f"RaceType: {tr.race_type.value}")
             self._lbl_dbg_session.setText(f"Session: {tr.session_type.value}")
             self._lbl_dbg_laps.setText(f"Laps: {tr.laps_recorded}/{tr.laps_in_race}")
-            self._lbl_dbg_rem_comp.setText(f"Rem(clk): {rem_str}")
+            self._lbl_dbg_rem_comp.setText(f"Time left: {rem_str}")
 
         # ── Raw packet fields ────────────────────────────────────────────
         p = self._last_packet
         if p is not None:
             self._lbl_dbg_cars_raw.setText(f"cars_in_race: {p.cars_in_race}")
             self._lbl_dbg_laps_raw.setText(f"laps_in_race: {p.laps_in_race}")
-            self._lbl_dbg_rem_raw.setText(f"rem_ms(raw): {p.remaining_time_ms}")
+            self._lbl_dbg_rem_raw.setText(f"remaining_time_ms: {p.remaining_time_ms}")
             self._lbl_dbg_ontrack.setText(f"on_track: {p.car_on_track}")
             self._lbl_dbg_loading.setText(f"loading: {p.loading}")
             self._lbl_dbg_pos_raw.setText(f"pos: {p.current_position}/{p.cars_in_race}")
@@ -5853,7 +6023,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             q = self._announcer.queue_depth
             mu = self._announcer.muted_until
             mute_str = f"{mu - time.time():.1f}s" if mu > time.time() else "No"
-            self._lbl_dbg_ann_q.setText(f"Ann queue: {q}")
+            self._lbl_dbg_ann_q.setText(f"Voice queue: {q}")
             self._lbl_dbg_ann_mute.setText(f"Muted: {mute_str}")
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -5915,26 +6085,34 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # -----------------------------------------------------------------------
 
     def _on_tab_changed(self, index: int) -> None:
-        if index == 10:   self._refresh_history()
-        elif index == 3:  self._sync_setup_builder_from_event()
-        elif index == 5:  self._sync_strategy_from_event()
-        elif index == 4:  self._sync_practice_from_event()
-        elif index == 6:  self._refresh_telemetry_context()
-        elif index == 11: self._flush_ai_log_pending_select()
-        elif index == 12: self._tm_on_tab_shown()
+        # Tab Navigation Refactor (2026-07-03): dispatch by stable tab KEY, not
+        # raw numeric index — the registry mirrors the addTab creation order,
+        # so reordering tabs later only means updating DEFAULT_TAB_ORDER in
+        # ui/tab_registry.py alongside the addTab calls. Per-tab behaviour on
+        # activation is unchanged from the index-based dispatch it replaces.
+        reg = getattr(self, "_tab_registry", None)
+        key = reg.key_at(index) if reg is not None else None
+        if key == TAB_HISTORY:            self._refresh_history()
+        elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
+        elif key == TAB_STRATEGY_BUILDER: self._sync_strategy_from_event()
+        elif key == TAB_PRACTICE_REVIEW:  self._sync_practice_from_event()
+        elif key == TAB_TELEMETRY:        self._refresh_telemetry_context()
+        elif key == TAB_AI_LOG:           self._flush_ai_log_pending_select()
+        elif key == TAB_TRACK_MODELLING:  self._tm_on_tab_shown()
+        elif key == TAB_HOME:             self._home_refresh()
 
     def _flush_ai_log_pending_select(self) -> None:
         """Flush deferred AI Log selection — setCurrentRow on a hidden widget has no visual effect.
 
-        Only applies the selection when the AI Log tab (index 11) is currently
-        visible. If called while another tab is active the flag is left set so
-        that _on_tab_changed(11) re-calls this and the selection is applied as
-        soon as the user navigates to the tab.
+        Only applies the selection when the AI Log tab is currently visible.
+        If called while another tab is active the flag is left set so that
+        _on_tab_changed re-calls this when the AI Log tab is shown and the
+        selection is applied as soon as the user navigates to the tab.
         """
         if not getattr(self, "_ai_log_pending_select", False):
             return
         # Leave the flag in place if the AI Log tab is not currently visible.
-        if hasattr(self, "_tabs") and self._tabs.currentIndex() != 11:
+        if hasattr(self, "_tabs") and self.current_tab_key() != TAB_AI_LOG:
             return
         self._ai_log_pending_select = False
         if hasattr(self, "_ai_log_list"):
@@ -6014,11 +6192,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             if not hasattr(self, "_telem_lbl_event"):
                 return
             evt = self._active_event()
+            # State Consolidation 1: read event/car/track from the canonical
+            # EventContext read model instead of reaching into config["strategy"].
+            ctx = self._build_event_context()
             self._telem_lbl_event.setText(
-                evt.get("name", "None — set in Event Planner") if evt else "—"
+                (ctx.event_name or "None — set in Event Planner") if evt else "—"
             )
-            self._telem_lbl_car.setText(self._config.get("strategy", {}).get("car", "—") or "—")
-            self._telem_lbl_track.setText(evt.get("track", "—") if evt else "—")
+            self._telem_lbl_car.setText(ctx.car or "—")
+            self._telem_lbl_track.setText((ctx.track or "—") if evt else "—")
             connected = self._tracker is not None and getattr(self._tracker, "_connected", False)
             self._telem_lbl_connection.setText("Connected" if connected else "Disconnected")
             pkt_count = getattr(self._tracker, "_packet_count", 0) if self._tracker else 0
@@ -6534,7 +6715,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._lbl_fuel_burn_display.setText(
                 f"{self._loaded_session_avg_fuel:.2f} L/lap (loaded session)")
 
-        self._tabs.setCurrentIndex(4)
+        self.select_tab(TAB_PRACTICE_REVIEW)
         self._refresh_practice_summary()
 
     def _refresh_practice_summary(self) -> None:
@@ -6825,6 +7006,101 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             {}
         )
 
+    def _build_event_context(self):
+        """Canonical read model of the active event/race configuration.
+
+        State Consolidation 1: normalises the durable DB event record and the
+        legacy ``config["strategy"]`` snapshot into one immutable EventContext
+        (see ``data/event_context.py``). This is the preferred read path for
+        event/race truth; ``config["strategy"]`` remains as legacy compatibility.
+        Never raises — returns an EMPTY-source context if state is unavailable.
+        """
+        try:
+            from data.event_context import build_event_context
+            return build_event_context(
+                event=self._active_event() or None,
+                strategy=self._config.get("strategy", {}),
+                active_event_id=self._config.get("active_event_id"),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.event_context import empty_event_context
+            return empty_event_context()
+
+    def _build_strategy_context(self):
+        """Canonical read model of the active strategy plan.
+
+        State Consolidation 2: separates strategy-plan state (stint plan, stops,
+        fuel burn per lap, config_id, degradation assumptions, tolerances) from
+        the event/race configuration truth now owned by EventContext (see
+        ``data/strategy_context.py``). Reads strategy-specific fields from the
+        legacy ``config["strategy"]`` snapshot and event/race rules from
+        ``_build_event_context()``. ``config["strategy"]`` remains as legacy
+        compatibility. Never raises — returns an EMPTY-source context on failure.
+        """
+        try:
+            from data.strategy_context import build_strategy_context
+            return build_strategy_context(
+                strategy=self._config.get("strategy", {}),
+                event_context=self._build_event_context(),
+                tyre_degradation=getattr(self, "_tyre_degradation_cache", None),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.strategy_context import empty_strategy_context
+            return empty_strategy_context()
+
+    def _build_strategy_ai_snapshot(self, fuel_burn_override=None):
+        """Frozen AI-input snapshot for race-strategy analysis.
+
+        AI Snapshot Migration: freezes one consistent set of race parameters
+        from the canonical read models (EventContext race rules,
+        StrategyContext plan fields, TrackContext identity) instead of live
+        ``config["strategy"]`` reads at prompt time. Byte-identical to the
+        legacy expressions when the stores are in sync; returns the fresh DB
+        event values when the event was edited after "Set as Active" (the
+        intentional difference — see docs/AI_SNAPSHOT_MIGRATION.md). Never
+        raises; falls back to exact legacy expressions when no event context
+        exists (recorded as a snapshot warning).
+        """
+        try:
+            from data.ai_context_snapshot import build_strategy_ai_snapshot
+            return build_strategy_ai_snapshot(
+                event_context=self._build_event_context(),
+                strategy_context=self._build_strategy_context(),
+                track_context=self._build_track_context(),
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break AI calls
+            from data.ai_context_snapshot import build_strategy_ai_snapshot
+            return build_strategy_ai_snapshot(
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+
+    def _build_practice_ai_snapshot(self, fuel_burn_override=None):
+        """Frozen AI-input snapshot for practice analysis.
+
+        Same as ``_build_strategy_ai_snapshot`` but preserves the practice
+        path's DEF-P1-005 safe default (unknown tuning flag → locked).
+        ``fuel_burn_override`` carries ``_computed_fuel_burn_lpl()``
+        (telemetry-owned until a TelemetryContext sprint).
+        """
+        try:
+            from data.ai_context_snapshot import build_practice_analysis_snapshot
+            return build_practice_analysis_snapshot(
+                event_context=self._build_event_context(),
+                strategy_context=self._build_strategy_context(),
+                track_context=self._build_track_context(),
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break AI calls
+            from data.ai_context_snapshot import build_practice_analysis_snapshot
+            return build_practice_analysis_snapshot(
+                legacy_strategy=self._config.get("strategy", {}),
+                fuel_burn_override=fuel_burn_override,
+            )
+
     def _refresh_event_list(self) -> None:
         if not hasattr(self, "_event_list"):
             return
@@ -7098,6 +7374,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     self._lbl_fuel_burn_display.setText("— (complete practice laps to calibrate)")
             # Refresh saved plans combo for the newly active event
             self._sb_refresh_saved_plans_combo()
+            # Home Dashboard: keep an open Home tab current after the active
+            # event changes (display-only; no-op when Home is not visible).
+            self._home_refresh_if_visible()
         except Exception:
             import traceback; traceback.print_exc()
 
@@ -7371,7 +7650,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             QMessageBox.warning(self, "Load Failed", "Setup not found in database.")
             return
         self._fill_setup_fields(result["setup_dict"])
-        self._tabs.setCurrentIndex(3)
+        self.select_tab(TAB_SETUP_BUILDER)
 
     def _garage_on_track_selected(self, index: int) -> None:
         track = self._garage_track_combo.currentText()
@@ -7398,7 +7677,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()
             self._bridge.event_log_entry.emit(f"Active car set: {car_name}")
-            self._tabs.setCurrentIndex(1)  # return to Event Planner
+            self.select_tab(TAB_EVENT_PLANNER)  # return to Event Planner
         except Exception:
             pass
 

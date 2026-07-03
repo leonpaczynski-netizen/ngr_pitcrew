@@ -32,11 +32,15 @@ from ui.track_modelling_vm import (
     describe_seed_load_status, CALIBRATION_CAR_BOUNDARY_NOTE,
     format_segment_row       as _format_seg_row,
     format_review_summary    as _format_review_summary,
-    get_review_button_states as _get_review_btns,
     format_resolver_summary  as _format_resolver_summary,
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
     format_build_failure_diagnostics as _format_build_diag,
+    format_track_truth_status      as _format_track_truth_status,
+)
+from data.track_truth import (
+    resolve_track_truth_model   as _resolve_track_truth,
+    validate_track_truth_model  as _validate_track_truth,
 )
 from data.track_calibration import (
     audit_track_model_files      as _audit_track_files,
@@ -50,13 +54,6 @@ from data.track_segment_detection import (
 )
 from data.track_segment_review import (
     create_review_from_detection as _create_seg_review,
-    confirm_segment              as _seg_confirm,
-    rename_segment               as _seg_rename,
-    reject_segment               as _seg_reject,
-    mark_needs_more_laps         as _seg_needs_laps,
-    mark_split_required          as _seg_split,
-    mark_merge_required          as _seg_merge,
-    export_review_json           as _export_seg_review,
 )
 from data.track_model_resolver import resolve_best_track_model as _resolve_track_model
 from data.track_station_map import (
@@ -482,41 +479,12 @@ class TrackModellingMixin:
         )
         seg_rev_layout.addWidget(self._tm_seg_table)
 
-        # Manual review buttons — hidden in Group 17P (whole-model acceptance replaces per-segment workflow)
-        _rev_btn_s = (
-            f"QPushButton {{ background:#2A2A3A; color:#AAAAEE; border:1px solid #4A4A6A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#3A3A4A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_orange = (
-            f"QPushButton {{ background:#3A2A1A; color:#F5A623; border:1px solid #7A5A2A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#4A3A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_red = (
-            f"QPushButton {{ background:#3A1A1A; color:#EE8888; border:1px solid #6A3A3A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#4A2A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_green = (
-            f"QPushButton {{ background:#1A3A1A; color:#88EE88; border:1px solid #3A6A3A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#2A4A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-
-        # Hidden legacy per-segment buttons (references kept to avoid AttributeError in handler methods)
-        self._tm_btn_rev_confirm    = QPushButton("Confirm");    self._tm_btn_rev_confirm.hide()
-        self._tm_btn_rev_rename     = QPushButton("Rename");     self._tm_btn_rev_rename.hide()
-        self._tm_btn_rev_reject     = QPushButton("Reject");     self._tm_btn_rev_reject.hide()
-        self._tm_btn_rev_needs_laps = QPushButton("Needs More Laps"); self._tm_btn_rev_needs_laps.hide()
-        self._tm_btn_rev_split      = QPushButton("Split Required");  self._tm_btn_rev_split.hide()
-        self._tm_btn_rev_merge      = QPushButton("Merge Required");  self._tm_btn_rev_merge.hide()
-        self._tm_btn_rev_save       = QPushButton("Save Reviewed Model"); self._tm_btn_rev_save.hide()
-        self._tm_lbl_rev_save_path  = QLabel(""); self._tm_lbl_rev_save_path.hide()
+        # Diagnostic Tab Cleanup (2026-07-03): the hidden legacy per-segment
+        # review buttons (Confirm/Rename/Reject/Needs More Laps/Split/Merge/
+        # Save Reviewed Model) and their never-connected handler methods were
+        # DELETED — the whole-model acceptance workflow (Group 17P) replaced
+        # them. The pure review-action functions in data/track_segment_review.py
+        # and ui/track_modelling_vm.get_review_button_states remain (tested).
 
         _seg_detect_layout.addWidget(seg_rev_grp)
         right_layout.addWidget(_seg_detect_grp)
@@ -623,8 +591,10 @@ class TrackModellingMixin:
 
         _seg_review_layout.addWidget(approval_grp)
 
-        # ── Resolver Status Panel (Group 17G) ──────────────────────────────
-        resolver_grp = QGroupBox("Resolver Status")
+        # ── Track Model Status Panel (Group 17G; renamed from "Resolver
+        #    Status" in the Product Consolidation Sprint — "resolver" is an
+        #    internal term, not user language) ───────────────────────────────
+        resolver_grp = QGroupBox("Track Model Status")
         resolver_grp.setStyleSheet(self._group_style())
         resolver_form = QFormLayout(resolver_grp)
         resolver_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -760,14 +730,70 @@ class TrackModellingMixin:
 
         right_layout.addWidget(_seg_review_grp)
 
-        # ── Section 5: Track Model Alignment (Group 23A) ─────────────────────
-        _tm_align_section_grp = QGroupBox("5. Track Model Alignment")
+        # ── Section 5: Seed Geometry (Group 23A). Renamed from the misleading
+        #    "5. Track Model Alignment" (the alignment metrics live in Section 4;
+        #    this section only generates/saves/reloads seed geometry) during the
+        #    Product Consolidation Sprint. ─────────────────────────────────────
+        _tm_align_section_grp = QGroupBox("5. Seed Geometry")
         _tm_align_section_grp.setStyleSheet(self._group_style())
         _tm_align_section_layout = QVBoxLayout(_tm_align_section_grp)
         _tm_align_section_layout.setContentsMargins(6, 12, 6, 6)
         _tm_align_section_layout.setSpacing(6)
         _tm_align_section_layout.addWidget(seed_geo_grp)
         right_layout.addWidget(_tm_align_section_grp)
+
+        # ── Section 6: Track Truth / Mapping (Group 18A) ─────────────────────
+        _truth_section_grp = QGroupBox("6. Track Truth / Mapping")
+        _truth_section_grp.setStyleSheet(self._group_style())
+        _truth_section_layout = QVBoxLayout(_truth_section_grp)
+        _truth_section_layout.setContentsMargins(6, 12, 6, 6)
+        _truth_section_layout.setSpacing(6)
+
+        truth_grp = QGroupBox("Track Truth / Mapping")
+        truth_grp.setStyleSheet(self._group_style())
+        truth_form = QFormLayout(truth_grp)
+        truth_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        _tt_key_s = f"color: {_TEXT}; font-size: 11px;"
+        _tt_val_s = "color: #AAE4AA; font-size: 11px;"
+
+        def _tt_row(label: str, attr_name: str, wrap: bool = False) -> QLabel:
+            lbl = QLabel("—")
+            lbl.setStyleSheet(_tt_val_s)
+            if wrap:
+                lbl.setWordWrap(True)
+            lbl.setMinimumWidth(120)
+            truth_form.addRow(QLabel(f"{label}:", styleSheet=_tt_key_s), lbl)
+            setattr(self, attr_name, lbl)
+            return lbl
+
+        _tt_row("Track ID",           "_tm_truth_lbl_track_id")
+        _tt_row("Layout ID",          "_tm_truth_lbl_layout_id")
+        _tt_row("Library",            "_tm_truth_lbl_library_availability")
+        _tt_row("Seed geometry",      "_tm_truth_lbl_seed_geometry")
+        _tt_row("Corner metadata",    "_tm_truth_lbl_corner_metadata")
+        _tt_row("Complex metadata",   "_tm_truth_lbl_complex_metadata")
+        _tt_row("Geometry accepted",  "_tm_truth_lbl_geometry_acceptance")
+        _tt_row("Live Mapping",       "_tm_truth_lbl_live_mapping_ready")
+        _tt_row("AI context",         "_tm_truth_lbl_ai_context_ready")
+
+        self._tm_truth_lbl_blockers = QLabel("—")
+        self._tm_truth_lbl_blockers.setStyleSheet("color: #EE9955; font-size: 10px;")
+        self._tm_truth_lbl_blockers.setWordWrap(True)
+        truth_form.addRow(QLabel("Blockers:", styleSheet=_tt_key_s), self._tm_truth_lbl_blockers)
+
+        self._tm_truth_lbl_warnings = QLabel("—")
+        self._tm_truth_lbl_warnings.setStyleSheet("color: #CC9933; font-size: 10px;")
+        self._tm_truth_lbl_warnings.setWordWrap(True)
+        truth_form.addRow(QLabel("Warnings:", styleSheet=_tt_key_s), self._tm_truth_lbl_warnings)
+
+        self._tm_truth_lbl_status_label = QLabel("—")
+        self._tm_truth_lbl_status_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self._tm_truth_lbl_status_label.setWordWrap(True)
+        truth_form.addRow(QLabel("Status:", styleSheet=_tt_key_s), self._tm_truth_lbl_status_label)
+
+        _truth_section_layout.addWidget(truth_grp)
+        right_layout.addWidget(_truth_section_grp)
 
         right_layout.addStretch()
         splitter.addWidget(right_scroll)
@@ -873,6 +899,73 @@ class TrackModellingMixin:
         self._tm_try_load_station_map_from_disk(loc_id, lay_id)
         # Group 17P: load previously accepted alignment result if available
         self._tm_try_load_accepted_model(loc_id, lay_id)
+        # Group 18A: refresh Track Truth / Mapping panel
+        self._tm_refresh_track_truth_panel()
+
+    def _build_track_context(self):
+        """Canonical read model of the selected track/layout + model state.
+
+        State Consolidation 4: assembles the immutable TrackContext (see
+        ``data/track_context.py``) from state this tab already holds — the
+        combo selection, the loaded seed layout, the existing seed/file audits,
+        and the in-memory station map / alignment / lap-offset objects — keyed
+        to the active EventContext so track-vs-event mismatch and staleness are
+        detectable. Read-only: performs the same audits the tab already runs on
+        layout change; writes nothing. Never raises — returns an EMPTY-source
+        context on failure. Legacy files, loaders and attributes are unchanged.
+        """
+        try:
+            from data.track_context import build_track_context
+            loc_id = (getattr(getattr(self, "_tm_location_combo", None),
+                              "currentData", lambda: "")() or "").strip()
+            lay_id = (getattr(getattr(self, "_tm_layout_combo", None),
+                              "currentData", lambda: "")() or "").strip()
+
+            location_seed = None
+            layout_seed = None
+            _sr = getattr(self, "_tm_seed_result", None)
+            if _sr is not None and getattr(_sr, "success", False) and loc_id:
+                location_seed = get_selected_location(_sr, loc_id)
+                if lay_id:
+                    layout_seed = get_selected_layout(_sr, loc_id, lay_id)
+
+            seed_audit = None
+            file_audit = None
+            if loc_id and lay_id:
+                try:
+                    from data.track_intelligence import audit_layout_seed
+                    seed_audit = audit_layout_seed(layout_seed, loc_id, lay_id)
+                except Exception:
+                    seed_audit = None
+                try:
+                    from data.track_calibration import audit_track_model_files
+                    file_audit = audit_track_model_files(loc_id, lay_id)
+                except Exception:
+                    file_audit = None
+
+            event_ctx = None
+            if hasattr(self, "_build_event_context"):
+                try:
+                    event_ctx = self._build_event_context()
+                except Exception:
+                    event_ctx = None
+
+            return build_track_context(
+                selected_location_id=loc_id,
+                selected_layout_id=lay_id,
+                event_context=event_ctx,
+                strategy=self._config.get("strategy", {}) if hasattr(self, "_config") else None,
+                location_seed=location_seed,
+                layout_seed=layout_seed,
+                seed_audit=seed_audit,
+                file_audit=file_audit,
+                alignment=getattr(self, "_tm_alignment_result", None),
+                station_map=getattr(self, "_tm_station_map", None),
+                offset_calibration=getattr(self, "_tm_offset_calibration", None),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.track_context import empty_track_context
+            return empty_track_context()
 
     def _tm_clear_detail_panels(self) -> None:
         _muted = "color: #888; font-size: 11px;"
@@ -1180,17 +1273,21 @@ class TrackModellingMixin:
         result = ctrl.build_reference_path()
         self._tm_update_cal_buttons()
         self._tm_update_cal_status()
-        # Group 21B — show all-pit-laps warning prominently
-        pit_warns = [
-            w for w in (result.warnings or [])
-            if "pit" in w.lower() or "all calibration laps" in w.lower()
-        ]
-        if pit_warns and hasattr(self, "_tm_lbl_cal_status"):
-            warn_text = " | ".join(pit_warns)
-            self._tm_lbl_cal_status.setText(f"WARNING: {warn_text}")
-            self._tm_lbl_cal_status.setStyleSheet(
-                "color: #FF4444; font-size: 10px; font-weight: bold;"
-            )
+        # Group 21B — show all-pit-laps warning prominently, but ONLY when pit
+        # detection actually ran.  DEF-17U-UAT-007: with pit detection off (the
+        # default for Time Trial calibration) no pit warning may be surfaced, so
+        # clean laps are never mislabelled "pit-in".
+        if getattr(result, "pit_detection_enabled", False):
+            pit_warns = [
+                w for w in (result.warnings or [])
+                if "pit" in w.lower() or "all calibration laps" in w.lower()
+            ]
+            if pit_warns and hasattr(self, "_tm_lbl_cal_status"):
+                warn_text = " | ".join(pit_warns)
+                self._tm_lbl_cal_status.setText(f"WARNING: {warn_text}")
+                self._tm_lbl_cal_status.setStyleSheet(
+                    "color: #FF4444; font-size: 10px; font-weight: bold;"
+                )
         if result.success:
             self._tm_try_build_station_map()
         else:
@@ -1566,8 +1663,6 @@ class TrackModellingMixin:
             ]
             self._tm_selected_segment_id = None
             self._tm_refresh_seg_table()
-            self._tm_refresh_review_buttons()
-            self._tm_refresh_approval_panel()
         else:
             error_txt = "; ".join(result.errors) if result.errors else "Unknown error"
             self._tm_lbl_seg_summary.setText("Segments: — | Corners: —")
@@ -1671,33 +1766,6 @@ class TrackModellingMixin:
                 self._tm_set_map_highlight(start_p, end_p)
             else:
                 self._tm_clear_map_highlight()
-        self._tm_refresh_review_buttons()
-
-    def _tm_refresh_review_buttons(self) -> None:
-        """Update enabled/disabled state of all review action buttons."""
-        review = getattr(self, "_tm_review_result", None)
-        sel_id = getattr(self, "_tm_selected_segment_id", None)
-        states = _get_review_btns(review, sel_id)
-
-        btns = {
-            "confirm":        getattr(self, "_tm_btn_rev_confirm",    None),
-            "rename":         getattr(self, "_tm_btn_rev_rename",     None),
-            "reject":         getattr(self, "_tm_btn_rev_reject",     None),
-            "needs_more_laps": getattr(self, "_tm_btn_rev_needs_laps", None),
-            "split_required": getattr(self, "_tm_btn_rev_split",      None),
-            "merge_required": getattr(self, "_tm_btn_rev_merge",      None),
-            "save":           getattr(self, "_tm_btn_rev_save",       None),
-        }
-        for key, btn in btns.items():
-            if btn is not None:
-                btn.setEnabled(states.get(key, False))
-
-    def _tm_refresh_approval_panel(self) -> None:
-        """Update the approval panel labels from the current review result.
-
-        Legacy _tm_ap_* widgets have been removed (Group 23A). All information
-        is now displayed via _tm_al_* alignment panel widgets.
-        """
 
     # ── Group 17P: Track Model Alignment ─────────────────────────────────────
 
@@ -1719,6 +1787,7 @@ class TrackModellingMixin:
         result = _align_track_model(sm, layout)
         self._tm_alignment_result = result
         self._tm_refresh_alignment_panel(result)
+        self._tm_refresh_track_truth_panel()
 
     def _tm_refresh_alignment_panel(self, result) -> None:
         """Update the Track Model Alignment panel labels from result."""
@@ -1839,6 +1908,98 @@ class TrackModellingMixin:
         if reb_btn is not None:
             reb_btn.setEnabled(states.get("rebuild", False))
 
+    def _tm_refresh_track_truth_panel(self) -> None:
+        """Update the Track Truth / Mapping panel from the current track/layout selection.
+
+        Calls resolve_track_truth_model + validate_track_truth_model then applies
+        format_track_truth_status to every _tm_truth_lbl_* widget.
+        Safe to call when no track is selected — placeholder dict handles it.
+        """
+        # State Consolidation 4: track/layout identity is read through the
+        # canonical TrackContext instead of raw combo reads, and the context is
+        # captured so later sprints can surface staleness. Behaviour-preserving:
+        # only a combo-sourced identity is used (TrackContext also falls back to
+        # event/config ids, but this panel has always been driven by the combos
+        # alone — an empty selection must keep showing the empty state).
+        from data.track_context import TrackContextSource as _TCS
+        ctx = self._build_track_context()
+        self._last_track_context = ctx
+        if ctx.source == _TCS.TRACK_MODELLING_UI:
+            loc_id = ctx.identity.track_location_id
+            lay_id = ctx.identity.layout_id
+        else:
+            loc_id, lay_id = "", ""
+
+        model      = None
+        validation = None
+        try:
+            if loc_id and lay_id:
+                model = _resolve_track_truth(loc_id, lay_id)
+                if model is not None:
+                    validation = _validate_track_truth(model)
+        except Exception:
+            pass
+
+        try:
+            d = _format_track_truth_status(model, validation, loc_id or None, lay_id or None)
+        except Exception:
+            d = {
+                "track_id": "—", "layout_id": "—",
+                "library_availability": "—", "library_availability_color": "#888888",
+                "seed_geometry": "—", "seed_geometry_color": "#888888",
+                "corner_metadata": "—", "corner_metadata_color": "#888888",
+                "complex_metadata": "—", "complex_metadata_color": "#888888",
+                "geometry_acceptance": "—", "geometry_acceptance_color": "#888888",
+                "live_mapping_ready": "—", "live_mapping_ready_color": "#888888",
+                "ai_context_ready": "—", "ai_context_ready_color": "#888888",
+                "blockers": "—", "warnings": "—",
+                "status_label": "—", "status_color": "#888888",
+            }
+
+        # Simple value labels (value + color)
+        _simple_pairs = [
+            ("_tm_truth_lbl_track_id",            "track_id",           ""),
+            ("_tm_truth_lbl_layout_id",           "layout_id",          ""),
+            ("_tm_truth_lbl_library_availability","library_availability","library_availability_color"),
+            ("_tm_truth_lbl_seed_geometry",       "seed_geometry",       "seed_geometry_color"),
+            ("_tm_truth_lbl_corner_metadata",     "corner_metadata",     "corner_metadata_color"),
+            ("_tm_truth_lbl_complex_metadata",    "complex_metadata",    "complex_metadata_color"),
+            ("_tm_truth_lbl_geometry_acceptance", "geometry_acceptance", "geometry_acceptance_color"),
+            ("_tm_truth_lbl_live_mapping_ready",  "live_mapping_ready",  "live_mapping_ready_color"),
+            ("_tm_truth_lbl_ai_context_ready",    "ai_context_ready",    "ai_context_ready_color"),
+        ]
+        for attr, val_key, color_key in _simple_pairs:
+            lbl = getattr(self, attr, None)
+            if lbl is None:
+                continue
+            lbl.setText(d.get(val_key, "—"))
+            if color_key:
+                color = d.get(color_key, "#888888")
+                lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        # Blockers label
+        blk = getattr(self, "_tm_truth_lbl_blockers", None)
+        if blk is not None:
+            blk.setText(d.get("blockers", "—"))
+
+        # Warnings label
+        wrn = getattr(self, "_tm_truth_lbl_warnings", None)
+        if wrn is not None:
+            wrn.setText(d.get("warnings", "—"))
+
+        # Status label
+        sts = getattr(self, "_tm_truth_lbl_status_label", None)
+        if sts is not None:
+            sts.setText(d.get("status_label", "—"))
+            sts.setStyleSheet(
+                f"color: {d.get('status_color', '#888888')}; font-size: 11px;"
+            )
+
+        # Home Dashboard: a fresh track context was captured above — keep an
+        # open Home tab current (display-only; no-op when Home is not visible).
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _tm_accept_track_model(self) -> None:
         """Accept the whole-model alignment and persist to disk."""
         result = getattr(self, "_tm_alignment_result", None)
@@ -1857,6 +2018,7 @@ class TrackModellingMixin:
         except Exception:
             pass  # best-effort
         self._tm_refresh_alignment_panel(result)
+        self._tm_refresh_track_truth_panel()
 
     def _tm_rebuild_model(self) -> None:
         """Clear station map and alignment result — requires full recalibration.
@@ -1881,6 +2043,7 @@ class TrackModellingMixin:
 
         # Reset alignment panel to "Not built" state
         self._tm_refresh_alignment_panel(None)
+        self._tm_refresh_track_truth_panel()
 
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.information(
@@ -2066,92 +2229,9 @@ class TrackModellingMixin:
                 return
             self._tm_alignment_result = loaded
             self._tm_refresh_alignment_panel(loaded)
+            self._tm_refresh_track_truth_panel()
         except Exception:
             logging.debug("no accepted model for this layout", exc_info=True)
-
-    def _tm_review_confirm(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_confirm(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_rename(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        seg = next((s for s in review.segments if s.segment_id == seg_id), None)
-        if seg is None:
-            return
-        from PyQt6.QtWidgets import QInputDialog
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Segment", "New name:", text=seg.display_name
-        )
-        if ok and new_name.strip():
-            _seg_rename(review, seg_id, new_name.strip())
-            self._tm_refresh_seg_table()
-            self._tm_refresh_review_buttons()
-            self._tm_refresh_approval_panel()
-
-    def _tm_review_reject(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_reject(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_needs_laps(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_needs_laps(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_split(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_split(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_merge(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_merge(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_save(self) -> None:
-        """Export the reviewed segment model to JSON."""
-        review = getattr(self, "_tm_review_result", None)
-        if review is None:
-            return
-        try:
-            out = _export_seg_review(review)
-            lbl = getattr(self, "_tm_lbl_rev_save_path", None)
-            if lbl is not None:
-                lbl.setText(f"Saved: {out.name}")
-            # Refresh resolver to reflect the newly saved model
-            self._tm_refresh_resolver()
-        except Exception as exc:  # noqa: BLE001
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Save Failed", f"Could not save reviewed model:\n{exc}")
 
     def _tm_refresh_resolver(self) -> None:
         """Re-resolve the best available track model and update the resolver status panel."""

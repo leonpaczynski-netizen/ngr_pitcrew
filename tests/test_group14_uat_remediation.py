@@ -354,20 +354,24 @@ class TestAiLogAutoSelectQTimer(unittest.TestCase):
         self.assertIn("_ai_log_pending_select = True", body,
                       "_on_ai_log_entry must set _ai_log_pending_select flag")
 
-    def test_flush_checks_tab_index(self):
-        """DEF-P2-033: _flush_ai_log_pending_select must check currentIndex() == 11."""
+    def test_flush_checks_tab_visibility(self):
+        """DEF-P2-033: _flush_ai_log_pending_select must check the AI Log tab is
+        visible before selecting. (Tab Navigation Refactor 2026-07-03: the guard
+        compares the stable tab key TAB_AI_LOG via current_tab_key() instead of
+        the old hard-coded currentIndex() != 11 — same invariant.)"""
         body = _method_body(_dashboard_text(), "_flush_ai_log_pending_select")
-        self.assertIn("currentIndex()", body,
-                      "_flush_ai_log_pending_select must check currentIndex() before selecting")
-        self.assertIn("11", body,
-                      "_flush_ai_log_pending_select must compare against tab index 11")
+        self.assertIn("current_tab_key()", body,
+                      "_flush_ai_log_pending_select must check the current tab before selecting")
+        self.assertIn("TAB_AI_LOG", body,
+                      "_flush_ai_log_pending_select must compare against the AI Log tab key")
 
     def test_flush_leaves_flag_set_when_tab_not_visible(self):
         """DEF-P2-033: flush must return without clearing flag when not on AI Log tab."""
         body = _method_body(_dashboard_text(), "_flush_ai_log_pending_select")
         # The method must have a guard that returns BEFORE clearing the flag
-        # when the tab index is not 11
-        guard_pos = body.find("currentIndex()")
+        # when the AI Log tab is not the current tab (key-based since the
+        # Tab Navigation Refactor).
+        guard_pos = body.find("current_tab_key()")
         return_pos = body.find("return", guard_pos) if guard_pos != -1 else -1
         clear_pos  = body.find("_ai_log_pending_select = False")
         self.assertGreater(guard_pos, -1, "Tab visibility guard must exist")

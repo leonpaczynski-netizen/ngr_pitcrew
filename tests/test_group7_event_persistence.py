@@ -313,21 +313,31 @@ class TestPracticeAnalysisBoPContext(unittest.TestCase):
     def _body(self) -> str:
         return _method_body(_dashboard_text(), "_run_practice_analysis")
 
+    # AI Snapshot Migration: the derivations moved into
+    # build_practice_analysis_snapshot (data/ai_context_snapshot.py); the
+    # method now routes race_params through the frozen snapshot. Same
+    # DEF-P1-005 invariants, verified at the new home.
+
     def test_passes_tuning_locked_to_race_params(self):
         """tuning_locked derived from strategy config and forwarded to AI planner."""
         body = self._body()
-        self.assertIn('"tuning_locked"', body,
-                      '_run_practice_analysis must pass tuning_locked to race_params')
-        self.assertIn('_psc.get("tuning"', body,
-                      'tuning_locked must be derived from _config["strategy"]["tuning"]')
+        self.assertIn("_build_practice_ai_snapshot", body,
+                      '_run_practice_analysis must build race_params via the frozen snapshot')
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "tuning": False},
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertTrue(rp["tuning_locked"],
+                        'tuning_locked must be derived from config["strategy"]["tuning"]')
 
     def test_passes_allowed_tuning_to_race_params(self):
         """allowed_tuning derived from strategy config and forwarded to AI planner."""
-        body = self._body()
-        self.assertIn('"allowed_tuning"', body,
-                      '_run_practice_analysis must pass allowed_tuning to race_params')
-        self.assertIn('allowed_tuning_categories', body,
-                      'allowed_tuning must reference allowed_tuning_categories key')
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "allowed_tuning_categories": ["brake_balance"]},
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertEqual(rp["allowed_tuning"], ["brake_balance"],
+                         'allowed_tuning must reference allowed_tuning_categories')
 
 
 if __name__ == "__main__":

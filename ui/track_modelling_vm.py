@@ -499,6 +499,83 @@ def get_workflow_error_message(error_key: str) -> str:
     return _WORKFLOW_ERROR_MESSAGES.get(error_key, f"Unknown error state: {error_key}")
 
 
+# ---------------------------------------------------------------------------
+# DEF-17U-UAT-007 — accurate per-lap status labels and build diagnostics
+# ---------------------------------------------------------------------------
+
+#: Human-readable display labels for each CalibrationLapQuality string value.
+#: Partial start/stop laps are shown distinctly from generic "Rejected" and are
+#: NEVER labelled "Pit-in" (GT7 has no reliable pit-lane signal).
+_CAL_LAP_QUALITY_LABELS: dict[str, str] = {
+    "recording":      "Recording",
+    "usable":         "Usable",
+    "low_confidence": "Low confidence",
+    "rejected":       "Rejected",
+    "partial_start":  "Partial (start)",
+    "partial_stop":   "Partial (stop)",
+}
+
+
+def cal_lap_quality_label(quality: str) -> str:
+    """Return the display label for a lap-quality string (safe fallback)."""
+    return _CAL_LAP_QUALITY_LABELS.get(str(quality), str(quality).replace("_", " ").title())
+
+
+def format_no_usable_laps(result) -> str:
+    """Return an accurate, count-based 'no usable laps' message (DEF-17U-UAT-007).
+
+    Replaces the old blanket "All calibration laps appear to be pit-in laps …
+    Drive a clean lap first." wording, which was wrong for clean Time Trial data.
+    The message reports how many complete candidate laps existed, the breakdown of
+    why laps were excluded, and whether pit detection actually ran.
+
+    Accepts any object exposing the CalibrationBuildResult fields (duck-typed).
+    """
+    usable      = int(getattr(result, "usable_lap_count",         0))
+    rejected    = int(getattr(result, "rejected_lap_count",       0))
+    low_conf    = int(getattr(result, "low_confidence_lap_count", 0))
+    p_start     = int(getattr(result, "partial_start_count",      0))
+    p_stop      = int(getattr(result, "partial_stop_count",       0))
+    few_samples = int(getattr(result, "rejected_too_few_samples", 0))
+    path_out    = int(getattr(result, "rejected_path_length",     0))
+    pit_on      = bool(getattr(result, "pit_detection_enabled",   False))
+
+    # "Complete candidate" laps are the non-partial laps that were assessed.
+    complete_candidates = usable + rejected + low_conf
+
+    lines: list[str] = []
+    lines.append("No usable laps captured for the reference path.")
+    lines.append("")
+    lines.append(f"Complete candidate laps: {complete_candidates}")
+    lines.append(
+        f"  • rejected — too few samples: {few_samples}"
+    )
+    lines.append(
+        f"  • rejected — path-length outlier: {path_out}"
+    )
+    lines.append(
+        f"Excluded partial laps: {p_start} partial-start, {p_stop} partial-stop "
+        "(short first/last laps — not counted as rejected)"
+    )
+    lines.append(f"Pit detection: {'on' if pit_on else 'off'}")
+    lines.append("")
+
+    # Recommendation — never recommend "drive a clean lap first" when complete
+    # candidate laps existed but were rejected by a classifier.
+    if complete_candidates > 0:
+        lines.append(
+            "Recommended: complete laps were captured but rejected. "
+            "Check the lap-detection / build diagnostics above rather than re-driving."
+        )
+    else:
+        lines.append(
+            "Recommended: drive at least 2 complete laps "
+            "(cross the start/finish line so each full lap is captured), then Build again."
+        )
+
+    return "\n".join(lines)
+
+
 def get_calibration_button_states(
     ctrl_state: str,
     has_track: bool,
@@ -918,12 +995,19 @@ def format_build_failure_diagnostics(result, session=None) -> str:
     low_conf = int(getattr(result, "low_confidence_lap_count", 0))
     total    = usable + rejected + low_conf
 
+    # DEF-17U-UAT-007: precise, count-based breakdown fields.
+    p_start     = int(getattr(result, "partial_start_count",      0))
+    p_stop      = int(getattr(result, "partial_stop_count",       0))
+    few_samples = int(getattr(result, "rejected_too_few_samples", 0))
+    path_out    = int(getattr(result, "rejected_path_length",     0))
+    pit_on      = bool(getattr(result, "pit_detection_enabled",   False))
+
     # Lap quality breakdown
     lines.append("")
     if total > 0:
         lines.append(
             f"Lap quality:  {usable} usable  /  {rejected} rejected  /  "
-            f"{low_conf} low-confidence  ({total} total captured)"
+            f"{low_conf} low-confidence  ({total} complete candidates)"
         )
     elif session is not None and not getattr(session, "laps", None):
         lines.append("No lap segments were captured in this session.")
@@ -932,14 +1016,30 @@ def format_build_failure_diagnostics(result, session=None) -> str:
             "to create complete lap boundaries."
         )
     else:
-        lines.append("No laps assessed (session data unavailable).")
+        lines.append(f"Lap quality:  {usable} usable  /  {rejected} rejected  /  "
+                     f"{low_conf} low-confidence  ({total} complete candidates)")
 
-    # Per-lap rejection details from build warnings
+    # DEF-17U-UAT-007: rejected sub-reasons and partial-lap accounting.
+    if few_samples or path_out:
+        lines.append(
+            f"Rejected breakdown: {few_samples} too few samples, "
+            f"{path_out} path-length outlier"
+        )
+    if p_start or p_stop:
+        lines.append(
+            f"Excluded partial laps: {p_start} partial-start, {p_stop} partial-stop  "
+            "(short first/last laps — not counted in the rejected total)"
+        )
+    lines.append(f"Pit detection: {'on' if pit_on else 'off'}")
+
+    # Per-lap rejection details from build warnings.  When pit detection is off,
+    # any pit-related warning is suppressed so a false "pit-in" reason never shows.
     warnings = list(getattr(result, "warnings", None) or [])
-    if warnings:
+    warnings_display = warnings if pit_on else [w for w in warnings if "pit" not in w.lower()]
+    if warnings_display:
         lines.append("")
         lines.append("Rejection details:")
-        for w in warnings:
+        for w in warnings_display:
             lines.append(f"  • {w}")
 
     # Car ID
@@ -984,9 +1084,11 @@ def format_build_failure_diagnostics(result, session=None) -> str:
             "Recommended: Drive consistent laps at race pace. "
             "One very long or very short lap causes the others to be rejected as outliers."
         )
-        lines.append(
-            "Avoid pit stops or pauses mid-lap during calibration."
-        )
+        # Only mention pit stops when pit detection actually ran (DEF-17U-UAT-007).
+        if pit_on:
+            lines.append(
+                "Avoid pit stops or pauses mid-lap during calibration."
+            )
     elif usable == 1:
         lines.append(
             "Recommended: Drive 1 more clean lap. Minimum 2 usable laps are required."
@@ -1012,3 +1114,217 @@ def _min_samples() -> int:
         return MIN_CALIBRATION_SAMPLES
     except Exception:
         return 50
+
+
+# ---------------------------------------------------------------------------
+# Group 18A — Track Truth Foundation view-model helper
+# ---------------------------------------------------------------------------
+
+_TRUTH_STATUS_MAP: dict[str, tuple[str, str]] = {
+    "METADATA_ONLY":         ("Metadata only — no coordinate geometry",           "#888888"),
+    "CURVATURE_PROVISIONAL": ("Curvature-provisional — corner mapping unverified", "#F5A623"),
+    "ACCEPTED_SEED_MAP":     ("Track Truth accepted — Map Alignment ready",        "#4caf50"),
+    "ACCEPTED_LIVE_MAPPING": ("Track Truth accepted — Live Mapping Ready",         "#88EE88"),
+}
+
+_GREEN  = "#4caf50"
+_AMBER  = "#F5A623"
+_GREY   = "#888888"
+_PLACEHOLDER = "—"
+
+
+def format_track_truth_status(
+    model,
+    validation,
+    track_id: Optional[str] = None,
+    layout_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Return display dict for the Track Truth status panel.
+
+    ``model`` is a TrackTruthModel or None.
+    ``validation`` is a TrackTruthValidationResult or None.
+
+    All keys are always present in the returned dict.
+    When model is None every value is "—" and every color is "#888888".
+
+    Keys returned
+    -------------
+    track_id, layout_id,
+    library_availability, library_availability_color,
+    seed_geometry, seed_geometry_color,
+    corner_metadata, corner_metadata_color,
+    complex_metadata, complex_metadata_color,
+    geometry_acceptance, geometry_acceptance_color,
+    live_mapping_ready, live_mapping_ready_color,
+    ai_context_ready, ai_context_ready_color,
+    blockers,
+    warnings,
+    status_label, status_color
+    """
+    _ph = {
+        "track_id":                    _PLACEHOLDER,
+        "layout_id":                   _PLACEHOLDER,
+        "library_availability":        _PLACEHOLDER,
+        "library_availability_color":  _GREY,
+        "seed_geometry":               _PLACEHOLDER,
+        "seed_geometry_color":         _GREY,
+        "corner_metadata":             _PLACEHOLDER,
+        "corner_metadata_color":       _GREY,
+        "complex_metadata":            _PLACEHOLDER,
+        "complex_metadata_color":      _GREY,
+        "geometry_acceptance":         _PLACEHOLDER,
+        "geometry_acceptance_color":   _GREY,
+        "live_mapping_ready":          _PLACEHOLDER,
+        "live_mapping_ready_color":    _GREY,
+        "ai_context_ready":            _PLACEHOLDER,
+        "ai_context_ready_color":      _GREY,
+        "blockers":                    _PLACEHOLDER,
+        "warnings":                    _PLACEHOLDER,
+        "status_label":                _PLACEHOLDER,
+        "status_color":                _GREY,
+    }
+
+    if model is None:
+        return _ph
+
+    # ── IDs ──────────────────────────────────────────────────────────────────
+    try:
+        m = model.manifest
+        tid = track_id  if track_id  else getattr(m, "track_id",  "")
+        lid = layout_id if layout_id else getattr(m, "layout_id", "")
+    except Exception:
+        tid = track_id  or _PLACEHOLDER
+        lid = layout_id or _PLACEHOLDER
+
+    # ── seed_geometry_available ───────────────────────────────────────────────
+    try:
+        geo_avail = bool(getattr(model.manifest, "seed_geometry_available", False))
+    except Exception:
+        geo_avail = False
+
+    seed_geo_val   = "Available"     if geo_avail else "Not available"
+    seed_geo_color = _GREEN          if geo_avail else _GREY
+
+    # ── corner_windows ────────────────────────────────────────────────────────
+    try:
+        n_corners = len(list(model.corner_windows))
+    except Exception:
+        n_corners = 0
+
+    if n_corners > 0:
+        corner_val   = f"Yes ({n_corners} corners)"
+        corner_color = _GREEN
+    else:
+        corner_val   = "None"
+        corner_color = _GREY
+
+    # ── corner_complexes ──────────────────────────────────────────────────────
+    try:
+        n_complexes = len(list(model.corner_complexes))
+    except Exception:
+        n_complexes = 0
+
+    if n_complexes > 0:
+        complex_val   = f"Yes ({n_complexes} complexes)"
+        complex_color = _GREEN
+    else:
+        complex_val   = "None"
+        complex_color = _GREY
+
+    # ── validation-derived fields ─────────────────────────────────────────────
+    if validation is None:
+        # Model present but validation not run — treat as metadata-only / unknown
+        geo_accept_val   = "Unknown"
+        geo_accept_color = _GREY
+        live_val         = "Not ready"
+        live_color       = _GREY
+        ai_val           = "Blocked"
+        ai_color         = _GREY
+        blockers_str     = "—"
+        warnings_str     = "—"
+        status_label     = "Metadata only — no coordinate geometry"
+        status_color     = _GREY
+    else:
+        try:
+            is_accepted = bool(validation.is_accepted)
+        except Exception:
+            is_accepted = False
+
+        # geometry_acceptance
+        if is_accepted:
+            geo_accept_val   = "Accepted"
+            geo_accept_color = _GREEN
+        else:
+            # Amber if some metadata present (corners or complexes), grey otherwise
+            geo_accept_color = _AMBER if (n_corners > 0 or n_complexes > 0) else _GREY
+            geo_accept_val   = "Blocked"
+
+        # live_mapping_ready
+        try:
+            live_ready = bool(validation.is_usable_for_live_mapping)
+        except Exception:
+            live_ready = False
+
+        live_val   = "Ready"     if live_ready else "Not ready"
+        live_color = _GREEN      if live_ready else _GREY
+
+        # ai_context_ready
+        try:
+            ai_ready = bool(validation.is_usable_for_ai_corner_context)
+        except Exception:
+            ai_ready = False
+
+        if ai_ready:
+            ai_val   = "Ready"
+            ai_color = _GREEN
+        else:
+            ai_val   = "Blocked"
+            ai_color = _AMBER if is_accepted else _GREY
+
+        # blockers / warnings
+        try:
+            raw_blockers = list(validation.blockers) if validation.blockers else []
+        except Exception:
+            raw_blockers = []
+        blockers_str = "\n".join(raw_blockers) if raw_blockers else "None"
+
+        try:
+            raw_warnings = list(validation.warnings) if validation.warnings else []
+        except Exception:
+            raw_warnings = []
+        warnings_str = "\n".join(raw_warnings) if raw_warnings else "None"
+
+        # status_label / status_color
+        try:
+            status_val = str(validation.status.value)
+        except Exception:
+            status_val = ""
+
+        if status_val in _TRUTH_STATUS_MAP:
+            status_label, status_color = _TRUTH_STATUS_MAP[status_val]
+        else:
+            status_label = "No track truth data"
+            status_color = _GREY
+
+    return {
+        "track_id":                    str(tid),
+        "layout_id":                   str(lid),
+        "library_availability":        "Available",
+        "library_availability_color":  _GREEN,
+        "seed_geometry":               seed_geo_val,
+        "seed_geometry_color":         seed_geo_color,
+        "corner_metadata":             corner_val,
+        "corner_metadata_color":       corner_color,
+        "complex_metadata":            complex_val,
+        "complex_metadata_color":      complex_color,
+        "geometry_acceptance":         geo_accept_val,
+        "geometry_acceptance_color":   geo_accept_color,
+        "live_mapping_ready":          live_val,
+        "live_mapping_ready_color":    live_color,
+        "ai_context_ready":            ai_val,
+        "ai_context_ready_color":      ai_color,
+        "blockers":                    blockers_str,
+        "warnings":                    warnings_str,
+        "status_label":                status_label,
+        "status_color":                status_color,
+    }

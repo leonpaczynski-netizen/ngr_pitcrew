@@ -915,9 +915,87 @@ class SetupBuilderMixin:
             self._setup_load_combo.setCurrentIndex(0)   # show placeholder
         self._setup_load_combo.blockSignals(False)
 
+    def _build_setup_context(self, recommendation: dict | None = None,
+                             diagnosis: dict | None = None):
+        """Canonical read model of the active setup recommendation.
+
+        State Consolidation 3: separates setup-recommendation state (purpose,
+        source, adjustments, baseline/target setup, confidence, validation) from
+        the event truth (EventContext) and strategy truth (StrategyContext /
+        StrategyPromptSnapshot) it was built against, keying the setup to
+        ``EventContext.change_hash`` and ``StrategyPromptSnapshot.snapshot_id``
+        so stale setups are detectable (see ``data/setup_context.py``). Reads the
+        baseline from ``_current_setup_dict()`` and event/strategy keys from the
+        other context helpers. Never raises — returns an EMPTY-source context on
+        failure. Legacy config/DB setup storage is unchanged.
+        """
+        try:
+            from data.setup_context import build_setup_context
+            ev = self._build_event_context() if hasattr(self, "_build_event_context") else None
+            strat_snap = None
+            try:
+                from data.strategy_context import (
+                    build_strategy_context, build_strategy_prompt_snapshot,
+                )
+                sc = build_strategy_context(
+                    strategy=self._config.get("strategy", {}), event_context=ev)
+                strat_snap = build_strategy_prompt_snapshot(sc, ev)
+            except Exception:  # pragma: no cover - defensive
+                strat_snap = None
+            return build_setup_context(
+                setup=self._current_setup_dict(),
+                recommendation=recommendation,
+                event_context=ev,
+                strategy_snapshot=strat_snap,
+                diagnosis=diagnosis,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.setup_context import empty_setup_context
+            return empty_setup_context()
+
+    def _build_setup_ai_snapshot(self):
+        """Frozen AI-input snapshot for the setup AI paths.
+
+        AI Snapshot Migration: freezes the event/track fields the Build-Setup
+        and Analyse-Setup calls need (owners: EventContext race rules,
+        StrategyContext pit loss, TrackContext identity, SetupContext via the
+        last captured setup context) instead of live config["strategy"] reads.
+        Byte-identical to the legacy expressions when the stores are in sync
+        (proven by tests/test_ai_context_snapshot.py). Never raises; falls back
+        to exact legacy expressions when no event context exists.
+        """
+        try:
+            from data.ai_context_snapshot import build_setup_ai_snapshot
+            ev = self._build_event_context() if hasattr(self, "_build_event_context") else None
+            sc = self._build_strategy_context() if hasattr(self, "_build_strategy_context") else None
+            tc = self._build_track_context() if hasattr(self, "_build_track_context") else None
+            setup_snap = None
+            try:
+                last = getattr(self, "_last_setup_context", None)
+                if last is not None:
+                    from data.setup_context import build_setup_prompt_snapshot
+                    setup_snap = build_setup_prompt_snapshot(last)
+            except Exception:
+                setup_snap = None
+            return build_setup_ai_snapshot(
+                event_context=ev, strategy_context=sc,
+                setup_snapshot=setup_snap, track_context=tc,
+                legacy_strategy=self._config.get("strategy", {}))
+        except Exception:  # pragma: no cover - defensive; must never break AI calls
+            from data.ai_context_snapshot import build_setup_ai_snapshot
+            _legacy = self._config.get("strategy", {}) if hasattr(self, "_config") else None
+            return build_setup_ai_snapshot(legacy_strategy=_legacy)
+
     def _setup_type_prefix(self) -> str:
-        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo."""
-        return "Q" if "qual" in self._setup_type.currentText().lower() else "R"
+        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo.
+
+        State Consolidation 3: setup purpose classification is owned by
+        SetupContext — derive it via the canonical ``normalise_purpose`` rather
+        than an ad-hoc substring test (behaviour-preserving: "qual" → Q, else R).
+        """
+        from data.setup_context import normalise_purpose, SetupPurpose
+        purpose = normalise_purpose(self._setup_type.currentText())
+        return "Q" if purpose == SetupPurpose.QUALIFYING else "R"
 
     def _generate_setup_name(self) -> str | None:
         """Build '<Q|R> <event name> <number>' for the active event, or None if no event."""
@@ -1054,10 +1132,14 @@ class SetupBuilderMixin:
             self._btn_analyse_setup.setEnabled(False)
         import threading as _threading
 
-        _sc = self._config.get("strategy", {})
-        _allowed  = _sc.get("allowed_tuning_categories", []) or None
-        _locked   = not bool(_sc.get("tuning", True))
-        _compound = _sc.get("mandatory_compounds", "") or ""
+        # AI Snapshot Migration: event tuning-legality + mandatory compounds
+        # come from a frozen snapshot (owner: EventContext) instead of live
+        # config["strategy"] reads. Byte-identical when the stores are in sync
+        # (tests/test_ai_context_snapshot.py).
+        _ai_snap = self._build_setup_ai_snapshot()
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+        _compound = _ai_snap.mandatory_compounds_str
 
         def _worker():
             try:
@@ -1192,6 +1274,26 @@ class SetupBuilderMixin:
         if hasattr(self, "_btn_apply_ai_setup"):
             self._btn_apply_ai_setup.setVisible(bool(self._last_setup_ai_fields))
 
+        # State Consolidation 3: capture the canonical SetupContext for this
+        # displayed recommendation, keyed to EventContext.change_hash and the
+        # StrategyPromptSnapshot.snapshot_id it was built against, so a later
+        # sprint can detect a stale setup. Read-only and additive — it does not
+        # alter the displayed HTML, the history save, or the apply button.
+        try:
+            self._last_setup_context = self._build_setup_context(
+                recommendation={
+                    "analysis": analysis,
+                    "changes": changes,
+                    "setup_fields": setup_fields,
+                    "validation_errors": _validation_errors,
+                    "primary_issue": data.get("primary_issue", ""),
+                    "confidence": data.get("confidence", ""),
+                },
+                diagnosis=_diagnosis,
+            )
+        except Exception:  # pragma: no cover - defensive; never break the display
+            self._last_setup_context = None
+
         # Build HTML: engineering banner (highest priority) + diagnosis + event
         # restriction banner + validation warnings + analysis block + changes
         card = "background:#1C2A3A; border-radius:6px; padding:10px; margin-bottom:8px;"
@@ -1269,6 +1371,11 @@ class SetupBuilderMixin:
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 
+        # Home Dashboard: a new setup context was captured above — keep an open
+        # Home tab current (display-only; no-op when Home is not visible).
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _apply_and_save_ai_setup(self) -> None:
         """Apply AI-recommended setup_fields to the form and save as a new entry."""
         if not getattr(self, "_last_setup_ai_fields", {}):
@@ -1315,34 +1422,38 @@ class SetupBuilderMixin:
             self._build_setup_result.setVisible(True)
             return
 
-        car          = self._config.get("strategy", {}).get("car", "") or "Unknown"
-        track        = self._config.get("strategy", {}).get("track", "")
+        # AI Snapshot Migration: all event/track fields for build_car_setup come
+        # from one frozen snapshot (owners: EventContext race rules,
+        # StrategyContext pit loss, TrackContext identity) instead of scattered
+        # live config["strategy"] reads. Byte-identical when the stores are in
+        # sync (tests/test_ai_context_snapshot.py); the build-setup legacy
+        # defaults (refuel/pit-loss 0.0) are preserved exactly.
+        _ai_snap = self._build_setup_ai_snapshot()
+        car          = _ai_snap.car
+        track        = _ai_snap.track
         session_type = self._setup_type.currentText()
-        race_laps    = self._config.get("strategy", {}).get("total_laps", 25)
+        race_laps    = _ai_snap.race_laps
         min_weight   = self._setup_min_weight.value()
         max_power    = self._setup_max_power.value()
         actual_bhp   = self._setup_actual_bhp.value() if hasattr(self, "_setup_actual_bhp") else 0.0
         num_gears    = self._setup_num_gears.value() if hasattr(self, "_setup_num_gears") else 0
         drivetrain   = self._setup_drivetrain.currentData() if hasattr(self, "_setup_drivetrain") else ""
         bop_data     = self._get_bop_data_for_car()
-        # Hybrid event fields for build_car_setup
-        _sc_ev = self._config.get("strategy", {})
-        _duration_mins   = int(_sc_ev.get("race_duration_minutes", 0))
-        _mandatory_stops = int(_sc_ev.get("mandatory_stops", 0))
-        _refuel_rate_lps = float(_sc_ev.get("refuel_speed_lps", 0.0))
-        _pit_loss_secs   = float(_sc_ev.get("pit_loss_secs", 0.0))
+        _duration_mins   = _ai_snap.duration_mins
+        _mandatory_stops = _ai_snap.mandatory_stops
+        _refuel_rate_lps = _ai_snap.refuel_rate_lps
+        _pit_loss_secs   = _ai_snap.pit_loss_secs
         _re_brief        = self._re_brief_input.toPlainText().strip() if hasattr(self, "_re_brief_input") else ""
         _, _car_specs = self._load_car_specs_for_current()
-        _sc_build = self._config.get("strategy", {})
-        _allowed_tuning = _sc_build.get("allowed_tuning_categories", []) or None
-        _tuning_locked  = not bool(_sc_build.get("tuning", True))
-        _tyre_wear_mult  = float(_sc_build.get("tyre_wear_multiplier", 1.0))
-        _fuel_mult       = float(_sc_build.get("fuel_multiplier", 1.0))
-        _avail_tyres     = _sc_build.get("avail_tyres", []) or []
-        _req_tyres       = _sc_build.get("required_tyres", []) or []
-        _race_type_build = _sc_build.get("race_type", "lap")
-        _track_loc_id    = _sc_build.get("track_location_id", "")
-        _layout_id_build = _sc_build.get("layout_id", "")
+        _allowed_tuning = _ai_snap.allowed_tuning_or_none()
+        _tuning_locked  = _ai_snap.tuning_locked
+        _tyre_wear_mult  = _ai_snap.tyre_wear_multiplier
+        _fuel_mult       = _ai_snap.fuel_multiplier
+        _avail_tyres     = _ai_snap.avail_tyres_list()
+        _req_tyres       = _ai_snap.required_tyres_list()
+        _race_type_build = _ai_snap.race_type
+        _track_loc_id    = _ai_snap.track_location_id
+        _layout_id_build = _ai_snap.layout_id
         _last_lap = self._recorder.last_lap() if self._recorder else None
         _gearbox_analysis = _last_lap.gearbox_analysis if _last_lap else {}
         _car_id_build = self._db.get_car_id(car) if self._db and car and car != "Unknown" else 0
@@ -1408,8 +1519,12 @@ class SetupBuilderMixin:
                     ).fetchone()[0]
                 except Exception:
                     _ai_id_build = None
-                _build_track = self._config.get("strategy", {}).get("track", "")
-                _build_layout = self._config.get("strategy", {}).get("layout_id", "")
+                # AI Snapshot Migration: recommendation metadata uses the SAME
+                # frozen track identity the prompt was built with — no re-read
+                # of config["strategy"] inside the worker thread (which could
+                # have changed mid-flight).
+                _build_track = track
+                _build_layout = _layout_id_build
                 _recs_build = _parse_recs(
                     getattr(rec, "raw_response", ""),
                     "Build Car Setup",

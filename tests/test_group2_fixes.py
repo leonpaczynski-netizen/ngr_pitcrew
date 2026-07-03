@@ -430,12 +430,21 @@ class TestValidationGateLogic(unittest.TestCase):
 class TestTyreWearSource(unittest.TestCase):
 
     def test_source_reads_tyre_wear_from_psc(self):
-        """_run_practice_analysis must read tyre_wear_multiplier from _psc (strategy config)."""
+        """_run_practice_analysis must read tyre_wear_multiplier from the event config.
+
+        AI Snapshot Migration: the read moved into the frozen snapshot layer
+        (data/ai_context_snapshot.py) — verify the routing plus the value flow.
+        """
         src = pathlib.Path(__file__).parent.parent / "ui" / "dashboard.py"
         text = src.read_text(encoding="utf-8")
-        # Look for the specific pattern where tyre_wear is read freshly
-        self.assertIn('_psc.get("tyre_wear_multiplier"', text,
-                      "_psc must be the source for tyre_wear_multiplier")
+        self.assertIn("_build_practice_ai_snapshot", text,
+                      "practice analysis must build race_params via the frozen snapshot")
+        from data.ai_context_snapshot import build_practice_analysis_snapshot
+        rp = build_practice_analysis_snapshot(
+            legacy_strategy={"track": "T", "tyre_wear_multiplier": 5.0},
+            fuel_burn_override=2.5).race_params_dict()
+        self.assertEqual(rp["tyre_wear_multiplier"], 5.0,
+                         "strategy config must be the source for tyre_wear_multiplier")
 
     def test_source_logs_tyre_wear(self):
         """Debug log for tyre_wear_multiplier must be present."""

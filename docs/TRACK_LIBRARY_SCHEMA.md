@@ -307,3 +307,102 @@ To migrate a legacy seed map to the library:
 1. Move/copy the file to the appropriate `geometry.seed_map.json` location.
 2. Set `availability.seed_geometry: true` in `manifest.json`.
 3. The legacy file can remain in place; the library version takes priority.
+
+---
+
+## Track Truth Model Schema (Group 18A, 2026-07-03)
+
+Group 18A adds a **runtime** data model — the Track Truth model — on top of the
+library files above. It is defined in `data/track_truth.py` and is the app's new
+authoritative description of a track's corner/sector/station geometry.
+
+**Important:** `track_truth_model_v1` is **not a new stored file in the library.**
+`resolve_track_truth_model(track_id, layout_id, base_dir=None)` builds the model at
+runtime from the existing `manifest.json` + `semantic_model.json` (and the coordinate
+`geometry.seed_map.json` when it exists). The dict/JSON schema below exists so the model
+can be exported/imported for testing and future persistence — it is not authored by hand.
+
+### Schema versions
+
+| Object | Schema string |
+|--------|---------------|
+| Track Truth model envelope | `track_truth_model_v1` (`TRUTH_MODEL_SCHEMA`) |
+| Nested manifest | `track_truth_manifest_v1` (`TRUTH_MANIFEST_SCHEMA`) |
+
+`track_truth_model_from_dict()` returns `None` on a schema mismatch (never raises).
+
+### Envelope — `track_truth_model_v1`
+
+```json
+{
+  "schema": "track_truth_model_v1",
+  "manifest": { "...": "track_truth_manifest_v1 (see below)" },
+  "corner_windows":   [ "...CornerWindow..." ],
+  "corner_complexes": [ "...CornerComplex..." ],
+  "sectors":          [ "...SectorMarker..." ],
+  "stations":         [ "...TrackStation..." ],
+  "pit_lane":         null
+}
+```
+
+### `manifest` — `track_truth_manifest_v1`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `schema` | str | `track_truth_manifest_v1` |
+| `track_id`, `layout_id`, `display_name` | str | identity |
+| `lap_length_m` | float | must be > 0 or validation blocks |
+| `corners_expected` | int | if > 0 and no corner windows → blocker |
+| `seed_geometry_available` | bool | **default `false`**; gates AI corner context |
+| `corners_are_seed_verified` | bool | **default `false`**; explicit growth field, gates live mapping |
+| `source` | str | `estimated` / `telemetry_captured` / `engineer_validated` |
+| `confidence` | str | `none` / `low` / `medium` / `high` |
+
+### `TrackStation`
+
+`station_id`, `station_m`, `progress_pct`, `x`, `y`, `z`, `heading_rad`, `curvature`,
+`left_width_m`, `right_width_m`, `corner_id`, `corner_phase`, `complex_id`, `sector_id`,
+`pit_context`. Stations are the primary geometry unit; they come only from a coordinate
+seed map. **No stations ⇒ `NO_COORDINATE_GEOMETRY` blocker.**
+
+### `CornerWindow`
+
+`corner_id`, `display_name`, `start_progress_pct`, `apex_progress_pct`, `end_progress_pct`,
+`corner_type`, `expected_gear_min`, `expected_gear_max`, `direction`, `sector_id`, `source`,
+`confidence`, `notes`. Apex must fall inside `[start, end]` or validation blocks
+(`APEX_OUTSIDE_WINDOW`).
+
+### `CornerComplex`
+
+`complex_id`, `display_name`, `corner_ids` (list), `start_progress_pct`, `end_progress_pct`,
+`coaching_name`, `sector_id`, `notes`. Every member `corner_id` must resolve to a real
+corner window (`COMPLEX_MISSING_MEMBER` blocker otherwise). A single-member complex is a
+**warning**, not a blocker. Daytona's `Horseshoe`/`T10T11` (T10+T11) proves the app can
+represent one coaching section as one complex instead of two separate detected corners.
+
+### `SectorMarker`
+
+`sector_id`, `start_progress_pct`, `end_progress_pct`, `display_name`, `source`,
+`confidence`. Progress out of 0–100 → `SECTOR_PROGRESS_OUT_RANGE` blocker.
+
+### `PitLaneDefinition`
+
+`entry_start/end_progress_pct`, `lane_start/end_progress_pct`, `exit_start/end_progress_pct`,
+`notes`. Optional (`pit_lane` may be `null`).
+
+### Runtime resolution & AI guard
+
+- `resolve_track_truth_model(track_id, layout_id, base_dir=None)` — builds the model from
+  the existing library manifest + semantic model; no new file is read or written.
+- `validate_track_truth_model(model) -> TrackTruthValidationResult` — computes
+  `is_accepted` / `is_usable_for_live_mapping` / `is_usable_for_ai_corner_context`, plus
+  `blockers`, `warnings`, `issues`, and a `status` (`TrackTruthStatus`) + `summary`.
+- `can_use_track_truth_for_ai_corner_context(result)` — the AI guard; `True` only when the
+  model is accepted **and** usable for AI corner context; `None` → `False`.
+
+See `docs/TRACK_INTELLIGENCE_STARTER_MODEL.md` (Group 18A) for the validation gates and how
+this supersedes curvature-only corner detection as the source of corner truth.
+
+**Daytona today:** because Daytona has no `geometry.seed_map.json`, its runtime Track Truth
+model has **zero stations** → `NO_COORDINATE_GEOMETRY` blocker → `is_accepted = False` and AI
+corner context is BLOCKED. `availability.seed_geometry` stays `false` — no code flips it.
