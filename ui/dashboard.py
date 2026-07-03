@@ -2787,22 +2787,29 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # Race config ID + Practice Lap Bank helpers
     # ------------------------------------------------------------------
 
-    def _compute_race_config_id(self) -> str:
-        """Derive a short hash from track + car + race-type + length.
+    def _working_race_config(self):
+        """Canonical read model of the race config being worked on.
 
-        The hash is stable: same inputs always give the same 10-char ID.
-        It is stored in config so main.py can tag live sessions with it.
+        Working Race Config sprint (2026-07-04, retirement-map item 3 readers):
+        names the concept Phase 6b identified — the working race identity that
+        usually mirrors the active event but deliberately holds a restored
+        historical session's config during a lap-bank restore (which is why the
+        match-key hash could not move to DB-first EventContext). The single
+        bridge read of the legacy dict for this concept; consumers read the
+        model. Never raises.
         """
-        sc        = self._config.get("strategy", {})
-        track     = sc.get("track", "")
-        car       = sc.get("car", "")
-        race_type = sc.get("race_type", "lap")
-        if race_type == "timed":
-            length_key = f"t{int(sc.get('race_duration_minutes', 60))}"
-        else:
-            length_key = f"l{int(sc.get('total_laps', 25))}"
-        raw = f"{track}|{car}|{length_key}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:10]
+        from data.working_race_config import WorkingRaceConfig
+        return WorkingRaceConfig.from_strategy(self._config.get("strategy", {}))
+
+    def _compute_race_config_id(self) -> str:
+        """Derive the 10-char session match key from the working race config.
+
+        The ALGORITHM lives in WorkingRaceConfig.compute_config_id() and is
+        frozen by golden vectors (tests/test_race_config_id_hash.py) — same
+        inputs always give the same ID; it is stored in config so live sessions
+        are tagged with it.
+        """
+        return self._working_race_config().compute_config_id()
 
     def _computed_fuel_burn_lpl(self) -> float:
         # SessionContext sprint: the 3-tier fuel-burn fallback (loaded historical
@@ -2828,17 +2835,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """Recompute the race config ID, update the label, persist to config, refresh lap bank."""
         if not hasattr(self, "_lbl_config_id"):
             return
-        config_id = self._compute_race_config_id()
-        sc        = self._config.get("strategy", {})
-        track     = sc.get("track", "")
-        car       = sc.get("car", "")
-        race_type = sc.get("race_type", "lap")
-        race_duration = sc.get("race_duration_minutes", 60)
-        total_laps    = sc.get("total_laps", 25)
-        if race_type == "timed":
-            length_str = f"{int(race_duration)} min"
-        else:
-            length_str = f"{int(total_laps)} laps"
+        # Working Race Config sprint: label + snapshot values come from the
+        # canonical WorkingRaceConfig read model (same bridge source, verbatim
+        # semantics incl. the 25/60 defaults — byte-identical).
+        wrc       = self._working_race_config()
+        config_id = wrc.compute_config_id()
+        track     = wrc.track
+        car       = wrc.car
+        race_type = wrc.race_type
+        race_duration = wrc.race_duration_minutes
+        total_laps    = wrc.total_laps
+        length_str = wrc.length_text()
         parts = [p for p in [track, car, length_str] if p]
         detail = "  ·  " + " / ".join(parts) if parts else ""
         self._lbl_config_id.setText(f"{config_id}{detail}")
@@ -3246,10 +3253,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             return
 
         # --- No live session: create a new one and write all laps ---
-        strat     = self._config.get("strategy", {})
-        car_name  = strat.get("car", "")
-        track     = strat.get("track", "")
-        config_id = strat.get("config_id", "")
+        # Working Race Config sprint: session tagging reads the named working-
+        # config model (same bridge source — the session must be tagged with
+        # what it was actually run under, incl. a restored historical config).
+        wrc       = self._working_race_config()
+        car_name  = wrc.car
+        track     = wrc.track
+        config_id = wrc.config_id
         car_id    = 0
         if self._dispatcher is not None:
             try:
@@ -6189,13 +6199,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     def _sync_strategy_from_event(self) -> None:
         try:
             evt = self._active_event()
-            sc  = self._config.get("strategy", {})
             if not evt:
                 if hasattr(self, "_lbl_strategy_event_ctx"):
+                    # Working Race Config sprint: the no-event missing checks
+                    # read the named working-config model (same bridge source;
+                    # falsiness semantics identical to the raw dict reads).
+                    wrc = self._working_race_config()
                     missing = []
-                    if not sc.get("track"):
+                    if not wrc.track:
                         missing.append("✗ No track — set in Event Planner")
-                    if not sc.get("car"):
+                    if not wrc.car:
                         missing.append("✗ No car — select from Garage")
                     msg = ("No active event — set one in Event Planner first."
                            + ("\n" + "\n".join(missing) if missing else ""))

@@ -39,6 +39,11 @@ def _bind(strategy: dict):
     from ui import dashboard as _dash_mod
     stub = MagicMock()
     stub._config = {"strategy": strategy}
+    # Working Race Config sprint: the hash delegates through the model builder,
+    # so bind the REAL builder too — the vectors still exercise the full
+    # dashboard path end-to-end.
+    stub._working_race_config = types.MethodType(
+        _dash_mod.MainWindow._working_race_config, stub)
     stub._compute_race_config_id = types.MethodType(
         _dash_mod.MainWindow._compute_race_config_id, stub)
     return stub
@@ -116,20 +121,37 @@ class TestGoldenVectors:
 # 2. Source-level algorithm pin
 # --------------------------------------------------------------------------- #
 class TestAlgorithmPinnedInSource:
+    # Working Race Config sprint (2026-07-04): the algorithm moved verbatim
+    # into data/working_race_config.WorkingRaceConfig.compute_config_id()
+    # (same invariant, new home); the dashboard method delegates. The golden
+    # vectors above still exercise the REAL dashboard method end-to-end.
     def test_algorithm_fragments_unchanged(self):
+        src = (ROOT / "data" / "working_race_config.py").read_text(encoding="utf-8")
+        # The raw-string format, hash, truncation, and defaults are the key —
+        # any of these changing re-keys all history.
+        assert 'f"{self.track}|{self.car}|{self.length_key}"' in src
+        assert "hashlib.sha256(self.hash_raw.encode()).hexdigest()[:10]" in src
+        assert 'f"t{int(self.race_duration_minutes)}"' in src
+        assert 'f"l{int(self.total_laps)}"' in src
+        # The absent-key defaults (25/60) live in the field defaults +
+        # from_strategy reads.
+        assert 'strategy.get("total_laps", 25), 25' in src
+        assert 'strategy.get("race_duration_minutes", 60), 60' in src
+
+    def test_dashboard_delegates_to_the_model(self):
         src = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
         m = re.search(r"\n    def _compute_race_config_id\(.*?(?=\n    def )",
                       src, re.DOTALL)
         assert m, "_compute_race_config_id not found"
         body = m.group(0)
-        # The raw-string format, hash, truncation, and defaults are the key —
-        # any of these changing re-keys all history.
-        assert 'raw = f"{track}|{car}|{length_key}"' in body
-        assert "hashlib.sha256(raw.encode()).hexdigest()[:10]" in body
-        assert "f\"t{int(sc.get('race_duration_minutes', 60))}\"" in body
-        assert "f\"l{int(sc.get('total_laps', 25))}\"" in body
-        # Inputs remain the WORKING config (see the divergence proof below).
-        assert 'sc        = self._config.get("strategy", {})' in body
+        assert "self._working_race_config().compute_config_id()" in body
+        # No inline hash left in the dashboard.
+        assert "hashlib.sha256" not in body
+        # Inputs remain the WORKING config via the model's bridge builder
+        # (see the divergence proof below).
+        builder = re.search(r"\n    def _working_race_config\(.*?(?=\n    def )",
+                            src, re.DOTALL).group(0)
+        assert 'WorkingRaceConfig.from_strategy(self._config.get("strategy", {}))' in builder
 
 
 # --------------------------------------------------------------------------- #

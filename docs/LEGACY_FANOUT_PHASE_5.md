@@ -72,7 +72,12 @@ Deleting the Set-as-Active fan-out writer requires all of the following first:
    restore-divergence (`_load_session_config` deliberately desyncs the working
    config so the id follows the restored session) and folds into items 3/4.
    See `docs/LEGACY_FANOUT_PHASE_6B.md`.**
-3. **Restore writers** (`_load_session_config` ×3, `_strategy_apply_plan`,
+3. **Restore writers** — **reader half done (2026-07-04, Working Race Config
+   Read Model):** the concept is now named/typed (`data/working_race_config.py`,
+   owning the match-key algorithm under the golden vectors) and the remaining
+   working-config readers migrated. The WRITER half below stays, deferred with
+   item 4 — see `docs/WORKING_RACE_CONFIG.md`.
+   (`_load_session_config` ×3, `_strategy_apply_plan`,
    `_save_race_params`, `_update_race_config`, garage car writer) — they WRITE
    track/car/laps/config_id into the dict; the restore design must move to the
    contexts/DB before the event-rule fields can disappear.
