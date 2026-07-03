@@ -546,6 +546,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(self._build_history_tab(),          "History")          # 10
         self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
+        # Home Dashboard sprint: the Race Engineer Command Centre is APPENDED so
+        # the hard-coded indices 0-12 used by _on_tab_changed never move.
+        self._tabs.addTab(self._build_home_tab(),             "Home")             # 13
+        self._home_tab_index = self._tabs.count() - 1
         # Product Consolidation Sprint: flag advanced/diagnostic tool tabs so the
         # normal race-engineer workflow reads cleanly. Roles are owned by
         # ui/product_flow.py (single source of truth); this only decorates the
@@ -566,6 +570,146 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             return
         for i in range(self._tabs.count()):
             self._tabs.setTabText(i, product_flow.decorate_tab_title(self._tabs.tabText(i)))
+
+    # --- Home tab (Race Engineer Command Centre) -----------------------------
+    #
+    # Home Dashboard sprint (2026-07-03): the overview surface the audit found
+    # was never built (REQUIREMENTS.md §12.2, audit §1.1). Display-only — it
+    # renders ui/home_dashboard_vm.py state built from the canonical contexts
+    # and owns/mutates no domain state. Refreshes when shown (_on_tab_changed)
+    # and via _home_refresh_if_visible() hooks after key workflow actions.
+
+    def _build_home_tab(self) -> QWidget:
+        from ui.home_dashboard_vm import CARD_ORDER
+        w = QWidget()
+        root = QVBoxLayout(w)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        title = QLabel("Race Engineer Command Centre")
+        title.setStyleSheet(f"color: {_TEXT}; font-size: 16px; font-weight: bold;")
+        header_row.addWidget(title)
+        header_row.addStretch()
+        self._home_btn_refresh = QPushButton("Refresh")
+        self._home_btn_refresh.setStyleSheet(
+            f"QPushButton {{ background: {_DARK_CARD}; color: {_TEXT};"
+            " border: 1px solid #555; border-radius: 4px; padding: 4px 14px; }"
+            "QPushButton:hover { background: #3A3A3A; }"
+        )
+        self._home_btn_refresh.clicked.connect(self._home_refresh)
+        header_row.addWidget(self._home_btn_refresh)
+        root.addLayout(header_row)
+
+        self._home_next_action_lbl = QLabel("")
+        self._home_next_action_lbl.setWordWrap(True)
+        self._home_next_action_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._home_next_action_lbl.setStyleSheet(
+            f"background: {_DARK_CARD}; border-left: 4px solid #F5C542;"
+            " border-radius: 6px; padding: 10px 14px;"
+        )
+        root.addWidget(self._home_next_action_lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setSpacing(8)
+        self._home_card_labels = {}
+        for i, key in enumerate(CARD_ORDER):
+            lbl = QLabel("—")
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            lbl.setStyleSheet(
+                f"background: {_DARK_CARD}; border-radius: 6px; padding: 10px;")
+            self._home_card_labels[key] = lbl
+            grid.addWidget(lbl, i // 2, i % 2)
+        grid.setRowStretch(grid.rowCount(), 1)
+        scroll.setWidget(container)
+        root.addWidget(scroll, 1)
+        return w
+
+    def _build_home_dashboard_state(self):
+        """Assemble the Home Dashboard view-model state from the canonical
+        contexts. Read-only: every input comes from the existing context
+        builders (or captured contexts); nothing is written anywhere."""
+        from ui.home_dashboard_vm import build_home_dashboard_state
+        event_ctx = self._build_event_context()
+        strategy_ctx = self._build_strategy_context()
+        # The latest displayed setup recommendation (State Consolidation 3
+        # capture). None until a setup result has been displayed this session.
+        setup_ctx = getattr(self, "_last_setup_context", None)
+        track_ctx = self._build_track_context()
+        # Pure computation of what the AI-input snapshot would be right now —
+        # no AI call is made; this reports frozen-vs-legacy input status.
+        ai_snap = self._build_strategy_ai_snapshot()
+        has_laps = self._home_has_practice_laps(event_ctx)
+        live = self._tracker is not None and getattr(self._tracker, "_connected", False)
+        return build_home_dashboard_state(
+            event_context=event_ctx,
+            strategy_context=strategy_ctx,
+            setup_context=setup_ctx,
+            track_context=track_ctx,
+            ai_snapshot=ai_snap,
+            has_practice_laps=has_laps,
+            # Approximation until a SessionContext owns lap validity: recorded
+            # laps are treated as reviewable laps (documented in
+            # docs/HOME_DASHBOARD_BUILD.md).
+            has_valid_laps=has_laps,
+            live_active=bool(live),
+        )
+
+    def _home_has_practice_laps(self, event_ctx) -> bool:
+        """True when saved sessions with laps exist for the active car/track.
+        Read-only DB query; defensive — returns False on any failure."""
+        try:
+            if self._db is None:
+                return False
+            car = getattr(event_ctx, "car", "") or ""
+            track = getattr(event_ctx, "track", "") or ""
+            if not car and not track:
+                return False
+            for s in self._db.get_all_sessions(limit=60):
+                if car and (s.get("car_name") or "") != car:
+                    continue
+                if track and (s.get("track") or "") != track:
+                    continue
+                if int(s.get("total_laps") or 0) > 0:
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _home_refresh(self) -> None:
+        """Rebuild and render the Home Dashboard. Display-only; never raises."""
+        if not hasattr(self, "_home_card_labels"):
+            return
+        try:
+            from ui import home_dashboard_vm as hdvm
+            state = self._build_home_dashboard_state()
+            self._home_next_action_lbl.setText(
+                hdvm.format_next_action_html(state.next_action))
+            for key, lbl in self._home_card_labels.items():
+                card = state.card(key)
+                if card is not None:
+                    lbl.setText(hdvm.format_card_html(card))
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            pass
+
+    def _home_refresh_if_visible(self) -> None:
+        """Refresh the Home Dashboard only when it is the current tab — the
+        cheap hook workflow actions call so an open Home tab stays current
+        without adding polling or background work."""
+        try:
+            if not hasattr(self, "_tabs") or not hasattr(self, "_home_card_labels"):
+                return
+            if self._tabs.currentIndex() != getattr(self, "_home_tab_index", -1):
+                return
+            self._home_refresh()
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     # --- Live tab -----------------------------------------------------------
 
@@ -2647,6 +2791,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         self._persist_config()
         self._refresh_lap_bank()
+        # Home Dashboard: strategy inputs changed — keep an open Home tab
+        # current (display-only; no-op when Home is not visible).
+        self._home_refresh_if_visible()
 
     def _get_mandatory_compounds(self) -> list[str]:
         """Return mandatory compounds from the active event config."""
@@ -5898,6 +6045,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         elif index == 6:  self._refresh_telemetry_context()
         elif index == 11: self._flush_ai_log_pending_select()
         elif index == 12: self._tm_on_tab_shown()
+        elif index == getattr(self, "_home_tab_index", 13): self._home_refresh()  # Home (appended)
 
     def _flush_ai_log_pending_select(self) -> None:
         """Flush deferred AI Log selection — setCurrentRow on a hidden widget has no visual effect.
@@ -7172,6 +7320,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     self._lbl_fuel_burn_display.setText("— (complete practice laps to calibrate)")
             # Refresh saved plans combo for the newly active event
             self._sb_refresh_saved_plans_combo()
+            # Home Dashboard: keep an open Home tab current after the active
+            # event changes (display-only; no-op when Home is not visible).
+            self._home_refresh_if_visible()
         except Exception:
             import traceback; traceback.print_exc()
 

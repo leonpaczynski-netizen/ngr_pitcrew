@@ -1371,6 +1371,11 @@ class SetupBuilderMixin:
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 
+        # Home Dashboard: a new setup context was captured above — keep an open
+        # Home tab current (display-only; no-op when Home is not visible).
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _apply_and_save_ai_setup(self) -> None:
         """Apply AI-recommended setup_fields to the form and save as a new entry."""
         if not getattr(self, "_last_setup_ai_fields", {}):

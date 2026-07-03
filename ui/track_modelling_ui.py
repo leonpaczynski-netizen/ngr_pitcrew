@@ -2061,6 +2061,11 @@ class TrackModellingMixin:
                 f"color: {d.get('status_color', '#888888')}; font-size: 11px;"
             )
 
+        # Home Dashboard: a fresh track context was captured above — keep an
+        # open Home tab current (display-only; no-op when Home is not visible).
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _tm_accept_track_model(self) -> None:
         """Accept the whole-model alignment and persist to disk."""
         result = getattr(self, "_tm_alignment_result", None)

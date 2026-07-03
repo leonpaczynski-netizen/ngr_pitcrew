@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
+> Last updated: 2026-07-03 (**Home Dashboard Build — Race Engineer Command Centre** — the missing home/overview surface (REQUIREMENTS.md §12.2, audit §1.1) is now built. New `ui/home_dashboard_vm.py` (pure Python — `HomeDashboardState`/`HomeDashboardCard`/`HomeDashboardStatus`/`HomeDashboardWarning`/`HomeDashboardNextAction`; `build_home_dashboard_state()` never raises; six sections: Race Setup / Track Intelligence / Setup Brain / Strategy Brain / AI Input Safety / Next Best Action, all read from the four canonical contexts + the AI snapshot core + `build_flow_state_summary()`). New **Home tab APPENDED at index 13** (`_build_home_tab` — indices 0–12 and `_on_tab_changed` dispatches unchanged; no tab reordered/renamed/removed); refresh on tab-shown + guarded `_home_refresh_if_visible()` hooks after event set-active / `_update_race_config` / setup result display / track-truth refresh — no polling, no new workers. Display-only: source-scans prove the home methods write nothing (no config["strategy"], no persist, no DB/file writes). Stale indicators surfaced in plain English (setup-vs-event, setup-vs-strategy, strategy-vs-event, track mismatch, AI legacy fallback). New tests `test_home_dashboard_vm.py` (52). **Full suite: 4454 pass / 6 skip / 0 fail.** See "Home Dashboard Build" at the end of this file.)
+> Prior: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 2 — StrategyContext** — canonical strategy-plan read model `data/strategy_context.py` owning stint plan / stops / fuel burn / `config_id` / degradation assumptions / tolerances, reading event/race rules from EventContext (never duplicating them); `StrategyPromptSnapshot` freezes a consistent event+strategy state for AI prompts; `docs/STRATEGY_CONTEXT_MIGRATION.md` registers every strategy-specific dependency; one low-risk consumer migrated (`_refresh_lap_bank` config_id ★). `config["strategy"]` retained as legacy compatibility. New tests `test_strategy_context.py` (53). **Full suite: 4226 pass / 6 skip / 0 fail.** See "State Consolidation 2 — StrategyContext" at the end of this file.)
@@ -4301,3 +4302,88 @@ now-available staleness indicators (`AIContextSnapshot.stale_warnings`,
 Afterwards: TelemetryContext (fuel-burn/lap-stats ownership), then remove the
 `_on_event_set_active` + Track Modelling combo fan-outs once every consumer
 reads a context.
+
+---
+
+## Home Dashboard Build — Race Engineer Command Centre (2026-07-03)
+
+> Branch `home-dashboard-command-centre` (from `ai-snapshot-migration-context-freeze`
+> @ `f8e9a9d`). Full doc: `docs/HOME_DASHBOARD_BUILD.md`.
+> **Full suite: 4454 pass / 6 skip / 0 fail** (52 new tests).
+
+### What was built
+The Dashboard/home tab specified in `REQUIREMENTS.md §12.2` and found missing by
+the Product Consolidation Audit (§1.1). **Display-only** — it reads the four
+canonical contexts and owns/mutates no domain state; no race/setup/strategy/
+track-mapping/calibration/AI-prompt/PTT/voice logic changed; no tab reordered
+or removed.
+
+- **`ui/home_dashboard_vm.py` (NEW, pure Python)** — no PyQt6/AI/DB/network/
+  file-I/O (source-scanned). `build_home_dashboard_state()` (never raises;
+  garbage-safe per section) → `HomeDashboardState` with five cards
+  (Race Setup, Track Intelligence, Setup Brain, Strategy Brain, AI Input
+  Safety) + `HomeDashboardNextAction` from `product_flow.build_flow_state_summary()`.
+  `build_flow_flags()` derives the gate booleans from the contexts
+  (event/car/track/tuning from EventContext + TrackContext identity override;
+  `has_setup` = SetupContext active; `has_strategy` = a stint plan exists —
+  a bare config does not satisfy the gate; telemetry flags caller-supplied).
+  `format_card_html()`/`format_next_action_html()` pure renderers with escaping.
+- **`ui/dashboard.py`** — Home tab **appended at index 13** (indices 0–12 and
+  every `_on_tab_changed` dispatch unchanged — pinned by source-scan);
+  `_build_home_tab` (next-action banner + five card labels + Refresh button),
+  `_build_home_dashboard_state` (reads `_build_event_context` /
+  `_build_strategy_context` / `_build_track_context` / `_last_setup_context` /
+  `_build_strategy_ai_snapshot` — the snapshot build is pure computation, no
+  AI call), `_home_has_practice_laps` (read-only DB query), `_home_refresh`,
+  `_home_refresh_if_visible` (no-op unless Home is the current tab).
+- **Refresh hooks (no polling / workers / signals)** — tab-shown; Refresh
+  button; end of `_on_event_set_active`; end of `_update_race_config`; end of
+  `_display_setup_result` (setup_builder_ui, hasattr-guarded); end of
+  `_tm_refresh_track_truth_panel` (track_modelling_ui, hasattr-guarded).
+- **`ui/product_flow.py`** — "Home" registered as a workflow tab (diagnostic
+  set unchanged).
+- Documented approximations: `has_valid_laps` = recorded laps exist;
+  `live_active` = telemetry connected (proper truth deferred to a
+  SessionContext/TelemetryContext sprint).
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_home_dashboard_vm.py` (NEW) | 52 | empty state; event-only; incomplete event warnings; fresh/stale strategy vs event; plan-less strategy; uncalibrated fuel; fresh setup matching current event; stale setup vs event; stale setup vs strategy snapshot; setup missing identity; full track data ready; missing track identity; seed metadata without geometry; station map unavailable → live mapping blocked; track-vs-event mismatch; AI snapshot clean / legacy fallback / stale / bare-core / missing; next-best-action ordering across the whole journey + progress partition + plan-required strategy gate; no developer jargon in any display string; stale wording matches the spec examples; never-raises on garbage in every slot incl. attribute-raising objects; HTML escaping; source-scans (Home appended after tab 12, original addTab lines + `_on_tab_changed` dispatches unchanged, diagnostic tabs present, home reads from canonical contexts, home methods write no state, hooks guarded, no QTimer/QThread/worker, VM import purity) |
+
+### Acceptance criteria — status
+- Full test suite passes — **yes (4454/6/0)**.
+- Home Dashboard visible in the app — **yes (Home tab, index 13)**.
+- Built from canonical contexts + `build_flow_state_summary()` — **yes**.
+- Shows event / strategy / setup / track / AI snapshot / warnings / next action — **yes**.
+- Display-only, owns/mutates no domain state — **yes (source-scanned)**.
+- No tab reordered / diagnostic tab removed — **yes (source-scanned)**.
+- No setup/strategy/track-mapping/AI-prompt/PTT/voice/live change — **yes**.
+- View-model tests + safe UI integration tests — **yes (52)**.
+- `docs/HOME_DASHBOARD_BUILD.md` exists and is specific — **yes**.
+- Clear next-sprint recommendation — **yes (Diagnostic Tab Cleanup, or Legacy
+  Fan-Out Removal Phase 1 as the higher-risk alternative)**.
+
+### Manual UAT steps
+1. Launch the app → open the **Home** tab (last tab). Cards render; with no
+   active event every card reads "Not set up yet" and the banner suggests
+   creating an event in Event Planner.
+2. Set an event active in Event Planner → return to Home (or keep it open):
+   Race Setup card shows the event summary; next action advances.
+3. Edit the active event (e.g. laps) and re-save WITHOUT rebuilding the
+   strategy → Home shows "Strategy plan was built before the current event
+   settings changed." once a plan exists.
+4. Display a setup recommendation in Setup Builder → Setup Brain card shows
+   label/purpose/source/changes; change the event → stale warning appears.
+5. Confirm tab order: all 13 original tabs unchanged, Home appended last;
+   Telemetry/Diagnostics/AI Log/Track Modelling still present with ⚙ markers.
+6. Confirm the Home tab never blocks any workflow (informational only).
+
+### Next sprint
+**Diagnostic Tab Cleanup** (audit §9 items 1–4: delete the 7 hidden legacy
+per-segment buttons + handlers, Strategy Builder API-key defers to Settings,
+hide/rename "Race Config ID", move the Guide's telemetry byte reference,
+Diagnostics wording pass) — or **Legacy Fan-Out Removal Phase 1** (begin
+retiring the `_on_event_set_active` → `config["strategy"]` fan-out behind the
+now-complete context layer) as the higher-value / higher-risk alternative.
