@@ -316,6 +316,13 @@ CREATE INDEX IF NOT EXISTS idx_setup_recs_car_track
 
 _DDL_V6 = ""  # Schema changes applied via ALTER TABLE in _migrate_v6
 
+# Columns added in schema version 9 — OFR-1 scoring fields on setup_recommendations.
+_V9_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("setup_recommendations", "score_confidence REAL NOT NULL DEFAULT -1.0"),
+    ("setup_recommendations", "score_verdict    TEXT NOT NULL DEFAULT ''"),
+    ("setup_recommendations", "score_details    TEXT NOT NULL DEFAULT '{}'"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,6 +410,10 @@ class SessionDB:
             self._migrate_v8()
             self._conn.execute("PRAGMA user_version = 8")
             self._conn.commit()
+        if version < 9:
+            self._migrate_v9()
+            self._conn.execute("PRAGMA user_version = 9")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -442,6 +453,20 @@ class SessionDB:
     def _migrate_v8(self) -> None:
         """Create race_plans table (schema version 8)."""
         self._conn.executescript(_DDL_V8)
+
+    def _migrate_v9(self) -> None:
+        """Add OFR-1 scoring columns to setup_recommendations (schema version 9).
+
+        score_confidence: sentinel -1.0 means unscored.
+        score_verdict:    '' means unscored; values: improved/worsened/neutral/insufficient_data.
+        score_details:    JSON blob with lap-delta, per-event rates, assumptions.
+        """
+        for table, col_def in _V9_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _migrate_v6(self) -> None:
         try:
@@ -1272,6 +1297,152 @@ class SessionDB:
             parts.append("\n".join(lines))
 
         return "\n\n---\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # OFR-1 Between-Race Learning Loop (schema v9)
+    # ------------------------------------------------------------------
+
+    def get_applied_unverified_recs(
+        self, car_id: int, track: str, layout_id: str
+    ) -> list[dict]:
+        """Return applied, unscored recommendations for this car+track+layout.
+
+        Only rows where status='applied' AND score_verdict='' AND the layout_id
+        matches exactly (cross-layout scoring excluded; empty-string matches
+        empty-string rows).
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM setup_recommendations
+                       WHERE car_id = ? AND track = ? AND layout_id = ?
+                         AND status = 'applied'
+                         AND score_verdict = ''
+                       ORDER BY id ASC""",
+                    (car_id, track, layout_id),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def get_laps_for_scoring(self, session_id: int) -> list[dict]:
+        """Return lap_records fields needed for OFR-1 scoring for a session.
+
+        Includes pit/out-lap flags so the caller can filter; never raises.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT id, lap_num, lap_time_ms, is_pit_lap, is_out_lap,
+                              compound, lock_up_count, wheelspin_count,
+                              oversteer_count, oversteer_throttle_on,
+                              bottoming_count, brake_consistency_m
+                       FROM lap_records
+                       WHERE session_id = ? AND lap_time_ms > 0
+                       ORDER BY lap_num ASC""",
+                    (session_id,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def get_previous_session_id(
+        self, car_id: int, track: str, before_session_id: int
+    ) -> int:
+        """Return the most recent session id for car+track with id < before_session_id.
+
+        Returns 0 when no such session exists.  Used by the UI trigger to
+        resolve the creation ("before") session for a just-finished session.
+        """
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    """SELECT MAX(s.id)
+                       FROM sessions s
+                       WHERE s.car_id = ? AND s.track = ? AND s.id < ?""",
+                    (car_id, track, before_session_id),
+                ).fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+            return 0
+        except Exception:
+            return 0
+
+    def persist_score(
+        self,
+        rec_id: int,
+        verdict: str,
+        confidence: float,
+        details: dict,
+    ) -> bool:
+        """Write score columns for one recommendation — write-once guard.
+
+        Returns True if the row was written, False if it already had a verdict
+        (write-once: first caller wins).  Never raises outward.
+        """
+        try:
+            with self._lock:
+                existing = self._conn.execute(
+                    "SELECT score_verdict FROM setup_recommendations WHERE id = ?",
+                    (rec_id,),
+                ).fetchone()
+                if existing is None:
+                    return False
+                if existing[0] not in ("", None):
+                    # Already scored — skip.
+                    return False
+                self._conn.execute(
+                    """UPDATE setup_recommendations
+                       SET score_verdict = ?, score_confidence = ?, score_details = ?
+                       WHERE id = ?""",
+                    (verdict, float(confidence), json.dumps(details), rec_id),
+                )
+                self._conn.commit()
+            return True
+        except Exception:
+            return False
+
+    def has_learning_for_car_track(self, car_id: int, track: str) -> bool:
+        """True if any scored recommendation exists for this car+track.
+
+        'Scored' means score_verdict is not '' and not 'insufficient_data'.
+        """
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    """SELECT 1 FROM setup_recommendations
+                       WHERE car_id = ? AND track = ?
+                         AND score_verdict NOT IN ('', 'insufficient_data')
+                       LIMIT 1""",
+                    (car_id, track),
+                ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def get_scored_recs_for_prompt(
+        self, car_id: int, track: str, layout_id: str
+    ) -> list[dict]:
+        """Return high-confidence, layout-matched scored recs for prompt injection.
+
+        Filters: score_confidence >= 0.5, score_verdict not '' or
+        'insufficient_data', layout_id exact match.  Returns newest-first,
+        limited to 5 rows for prompt economy.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM setup_recommendations
+                       WHERE car_id = ? AND track = ? AND layout_id = ?
+                         AND score_confidence >= 0.5
+                         AND score_verdict != ''
+                         AND score_verdict != 'insufficient_data'
+                       ORDER BY id DESC LIMIT 5""",
+                    (car_id, track, layout_id),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
 
     # ------------------------------------------------------------------
     # Write API

@@ -384,11 +384,11 @@ def test_car_setup_recommendation_has_raw_response():
 # Additional tests — gaps identified by test-verifier
 # ---------------------------------------------------------------------------
 
-# AC1 — schema version must be 8 after migration (v8 adds race_plans table)
+# AC1 — schema version must be 9 after migration (v9 adds OFR-1 scoring columns)
 def test_schema_version_is_5(db):
-    """PRAGMA user_version must equal 8 after opening a fresh DB (v8 migration added)."""
+    """PRAGMA user_version must equal 9 after opening a fresh DB (v9 migration added)."""
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 8, f"Expected schema version 8, got {version}"
+    assert version == 9, f"Expected schema version 9, got {version}"
 
 
 # AC3 — setup_recommendations table has correct columns
