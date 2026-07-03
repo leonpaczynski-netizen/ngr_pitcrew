@@ -199,7 +199,10 @@ def test_five_qgroupbox_sections_present():
         "2. Calibration",
         "3. Segment Detection",
         "4. Segment Review",
-        "5. Track Model Alignment",
+        # Renamed from "5. Track Model Alignment" in the Product Consolidation
+        # Sprint — the section only builds seed geometry; alignment metrics live
+        # in Section 4.
+        "5. Seed Geometry",
     ]
     missing = [t for t in expected_titles if t not in src]
     assert not missing, f"QGroupBox titles missing from Track Modelling UI: {missing}"

@@ -628,8 +628,10 @@ class TrackModellingMixin:
 
         _seg_review_layout.addWidget(approval_grp)
 
-        # ── Resolver Status Panel (Group 17G) ──────────────────────────────
-        resolver_grp = QGroupBox("Resolver Status")
+        # ── Track Model Status Panel (Group 17G; renamed from "Resolver
+        #    Status" in the Product Consolidation Sprint — "resolver" is an
+        #    internal term, not user language) ───────────────────────────────
+        resolver_grp = QGroupBox("Track Model Status")
         resolver_grp.setStyleSheet(self._group_style())
         resolver_form = QFormLayout(resolver_grp)
         resolver_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -765,8 +767,11 @@ class TrackModellingMixin:
 
         right_layout.addWidget(_seg_review_grp)
 
-        # ── Section 5: Track Model Alignment (Group 23A) ─────────────────────
-        _tm_align_section_grp = QGroupBox("5. Track Model Alignment")
+        # ── Section 5: Seed Geometry (Group 23A). Renamed from the misleading
+        #    "5. Track Model Alignment" (the alignment metrics live in Section 4;
+        #    this section only generates/saves/reloads seed geometry) during the
+        #    Product Consolidation Sprint. ─────────────────────────────────────
+        _tm_align_section_grp = QGroupBox("5. Seed Geometry")
         _tm_align_section_grp.setStyleSheet(self._group_style())
         _tm_align_section_layout = QVBoxLayout(_tm_align_section_grp)
         _tm_align_section_layout.setContentsMargins(6, 12, 6, 6)

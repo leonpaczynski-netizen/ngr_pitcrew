@@ -540,14 +540,32 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(self._build_practice_review_tab(),  "Practice Review")  # 4
         self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 5
         self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 6
-        self._tabs.addTab(self._build_debug_tab(),            "Debug")            # 7
+        self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 7
         self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 8
         self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
         self._tabs.addTab(self._build_history_tab(),          "History")          # 10
         self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
+        # Product Consolidation Sprint: flag advanced/diagnostic tool tabs so the
+        # normal race-engineer workflow reads cleanly. Roles are owned by
+        # ui/product_flow.py (single source of truth); this only decorates the
+        # tab titles and never changes tab order or indices.
+        self._apply_product_flow_tab_markers()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self._tabs)
+
+    def _apply_product_flow_tab_markers(self) -> None:
+        """Prefix advanced/diagnostic tabs with a tool marker (see product_flow).
+
+        Idempotent and display-only — tab indices used by _on_tab_changed are
+        unaffected. Kept defensive so a UI import issue can never block startup.
+        """
+        try:
+            from ui import product_flow
+        except Exception:  # pragma: no cover - defensive; UI must still launch
+            return
+        for i in range(self._tabs.count()):
+            self._tabs.setTabText(i, product_flow.decorate_tab_title(self._tabs.tabText(i)))
 
     # --- Live tab -----------------------------------------------------------
 
@@ -2719,7 +2737,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             and (not sel_car or s.get("car_name") == sel_car)
         ]
 
-        current_config_id = self._config.get("strategy", {}).get("config_id", "")
+        # State Consolidation 2: the active config_id is strategy-plan state —
+        # read it from the canonical StrategyContext, not raw config["strategy"].
+        current_config_id = self._build_strategy_context().config_id
         current_id = self._lap_bank_combo.currentData()
         self._lap_bank_combo.blockSignals(True)
         self._lap_bank_combo.clear()
@@ -6014,11 +6034,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             if not hasattr(self, "_telem_lbl_event"):
                 return
             evt = self._active_event()
+            # State Consolidation 1: read event/car/track from the canonical
+            # EventContext read model instead of reaching into config["strategy"].
+            ctx = self._build_event_context()
             self._telem_lbl_event.setText(
-                evt.get("name", "None — set in Event Planner") if evt else "—"
+                (ctx.event_name or "None — set in Event Planner") if evt else "—"
             )
-            self._telem_lbl_car.setText(self._config.get("strategy", {}).get("car", "—") or "—")
-            self._telem_lbl_track.setText(evt.get("track", "—") if evt else "—")
+            self._telem_lbl_car.setText(ctx.car or "—")
+            self._telem_lbl_track.setText((ctx.track or "—") if evt else "—")
             connected = self._tracker is not None and getattr(self._tracker, "_connected", False)
             self._telem_lbl_connection.setText("Connected" if connected else "Disconnected")
             pkt_count = getattr(self._tracker, "_packet_count", 0) if self._tracker else 0
@@ -6824,6 +6847,48 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             (e for e in self._config.get("events", []) if e.get("name") == aid),
             {}
         )
+
+    def _build_event_context(self):
+        """Canonical read model of the active event/race configuration.
+
+        State Consolidation 1: normalises the durable DB event record and the
+        legacy ``config["strategy"]`` snapshot into one immutable EventContext
+        (see ``data/event_context.py``). This is the preferred read path for
+        event/race truth; ``config["strategy"]`` remains as legacy compatibility.
+        Never raises — returns an EMPTY-source context if state is unavailable.
+        """
+        try:
+            from data.event_context import build_event_context
+            return build_event_context(
+                event=self._active_event() or None,
+                strategy=self._config.get("strategy", {}),
+                active_event_id=self._config.get("active_event_id"),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.event_context import empty_event_context
+            return empty_event_context()
+
+    def _build_strategy_context(self):
+        """Canonical read model of the active strategy plan.
+
+        State Consolidation 2: separates strategy-plan state (stint plan, stops,
+        fuel burn per lap, config_id, degradation assumptions, tolerances) from
+        the event/race configuration truth now owned by EventContext (see
+        ``data/strategy_context.py``). Reads strategy-specific fields from the
+        legacy ``config["strategy"]`` snapshot and event/race rules from
+        ``_build_event_context()``. ``config["strategy"]`` remains as legacy
+        compatibility. Never raises — returns an EMPTY-source context on failure.
+        """
+        try:
+            from data.strategy_context import build_strategy_context
+            return build_strategy_context(
+                strategy=self._config.get("strategy", {}),
+                event_context=self._build_event_context(),
+                tyre_degradation=getattr(self, "_tyre_degradation_cache", None),
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.strategy_context import empty_strategy_context
+            return empty_strategy_context()
 
     def _refresh_event_list(self) -> None:
         if not hasattr(self, "_event_list"):

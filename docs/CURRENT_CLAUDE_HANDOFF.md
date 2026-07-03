@@ -1,6 +1,63 @@
 # Current Claude Handoff
 
 ## Current Objective
+**State Consolidation 2 — StrategyContext — COMPLETE (2026-07-03).** Full suite: **4226 pass / 6 skip / 0 fail** (53 new tests). No feature added, no backend capability removed, no UI rebuilt, no tab reordered. `config["strategy"]` retained as legacy compatibility.
+
+**Why it exists:** `config["strategy"]` mixes event/race configuration (now owned by EventContext) with strategy-plan state (stint plan, planned stops, fuel burn per lap, the derived `config_id`, degradation assumptions, analysis tolerances). This sprint adds a canonical **StrategyContext** read model that owns *only* the strategy-plan half and **reads event/race rules from EventContext** so the two can't drift.
+
+**Deliverables:**
+- **`data/strategy_context.py` (NEW, pure Python, no PyQt6/DB)** — `StrategyContext` (immutable, normalised), `StintPlanEntry` (round-trips to the legacy `stops` dict shape), `StrategyContextSource` (EMPTY/LEGACY_STRATEGY/GENERATED), `StrategyContextValidationResult` (keeps `strategy_*` warnings separate from `event_*` warnings), `StrategyPromptSnapshot` + `build_strategy_prompt_snapshot()` (value-copied freeze of a consistent EventContext race config + StrategyContext plan, stable even if `config["strategy"]` mutates later; `snapshot_id` = hash of event+strategy change markers); `build_strategy_context(strategy, event_context, tyre_degradation, source)` (never raises; ignores event fields in the strategy dict), `validate_strategy_context()`, `compute_change_hash()` (strategy fields only — event tracked via `event_change_hash`).
+- **`docs/STRATEGY_CONTEXT_MIGRATION.md` (NEW)** — ownership boundary table (rate-vs-number split: `mandatory_stops`/`refuel_rate_lps` stay EventContext; *planned* stops + pit laps are StrategyContext), every strategy-specific `config["strategy"]` field with writer/readers, what was migrated, deferred consumers, risks, and the SetupContext next-step plan.
+- **`ui/dashboard.py`** — `_build_strategy_context()` helper (config["strategy"] + `_build_event_context()` + `_tyre_degradation_cache` → StrategyContext, defensive); **one low-risk consumer migrated**: `_refresh_lap_bank()` reads the active `config_id` from StrategyContext for the practice-lap-bank ★ marker.
+
+**Tests:** `tests/test_strategy_context.py` (NEW, 53 — build sources, strategy fields preserved, ownership boundary (no event fields), stint-plan parse + planned-stops/pit-laps derivation, degradation fields, change markers (strategy hash ignores event fields; event hash changes independently), malformed-input safety, validation strategy-vs-event separation, frozen prompt snapshot stability under later config mutation, serialisation/immutability, legacy round-trip, dashboard source-scans).
+
+**Intentionally NOT changed:** the AI-input path (`_assemble_strategy_inputs`, `_run_ai_analysis`, `_launch_replan_worker`) still reads `config["strategy"]` — highest-risk, migrate as a unit with a frozen `StrategyPromptSnapshot` per call (see migration doc §6). All writers unchanged. **Next sprint: SetupContext** keyed on `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` (migration doc §9).
+
+Full detail: `docs/STRATEGY_CONTEXT_MIGRATION.md`, `docs/EVENT_CONTEXT_MIGRATION.md`, `MASTER_TESTING_REGISTER.md` (State Consolidation 2 — StrategyContext).
+
+---
+
+## Prior Objective (historical)
+**State Consolidation 1 — EventContext — COMPLETE (2026-07-03).** Full suite: **4173 pass / 6 skip / 0 fail** (38 new tests). No feature added, no backend capability removed, no UI rebuilt, no tab reordered. `config["strategy"]` retained as legacy compatibility.
+
+**Why it exists:** the audit found the worst single-source-of-truth violation is `_on_event_set_active()` fanning the active event into `config["strategy"]` — a god-object snapshot that can drift from the durable DB event record (which even uses different field names: `tyre_wear`/`duration_mins`/`refuel_rate_lps` vs `tyre_wear_multiplier`/`race_duration_minutes`/`refuel_speed_lps`). This sprint adds a canonical **EventContext** read model without changing behaviour.
+
+**Deliverables:**
+- **`data/event_context.py` (NEW, pure Python, no PyQt6/DB)** — `EventContext` (immutable, normalised), `EventContextSource` (EMPTY/DB_EVENT/LEGACY_STRATEGY/MERGED), `EventContextValidationResult`; `build_event_context(event, strategy, active_event_id)` (DB-event-first resolution, overlays car + track ids from strategy, falls back to strategy; never raises); `validate_event_context()` (warnings not crashes); `compute_change_hash()` (stable 12-char change marker); `flow_flags()` bridge to `ui/product_flow.py`; `to_dict`/`summary_line`/`to_summary_lines`.
+- **`docs/EVENT_CONTEXT_MIGRATION.md` (NEW)** — every `config["strategy"]` read site (~35) with enclosing method, fields, risk, and EVENT-CONFIG vs NON-EVENT classification; the single fan-out writer (`_on_event_set_active`); the migration plan and the StrategyContext/SetupContext next-step plan.
+- **`ui/dashboard.py`** — `_build_event_context()` helper (DB event + `config["strategy"]` + `active_event_id` → EventContext, defensive); **one low-risk consumer migrated**: `_refresh_telemetry_context()` reads event/car/track from EventContext (DEF-P1-011 fuel-burn behaviour preserved).
+
+**Tests:** `tests/test_event_context.py` (NEW, 38 — build sources, field-name normalisation both schemas, timed-stays-timed / lap-stays-lap, BoP + tuning + multipliers + refuel preserved, DB-first beats stale strategy, change-hash detects edits, validation warnings without crashes, garbage-input safety, legacy strategy-only build, `flow_flags`→`product_flow` interop, immutability, dashboard source-scan).
+
+**Intentionally NOT changed:** `config["strategy"]` still written by `_on_event_set_active` and still read by the other ~34 sites (compatibility). `driving_advisor.set_event_context()`/`_event_ctx` left as-is (AI prompt behaviour untouched). **Next sprints: StrategyContext then SetupContext** (see migration doc §6–§7), then remove the fan-out and migrate the low-risk read-only consumers; also build the home/overview panel from `build_flow_state_summary(**flow_flags(ctx))`.
+
+Full detail: `docs/EVENT_CONTEXT_MIGRATION.md`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5/§7), `MASTER_TESTING_REGISTER.md` (State Consolidation 1 — EventContext).
+
+---
+
+## Prior Objective (historical)
+**Product Consolidation Sprint — audit + safe first-pass UI clean-up — COMPLETE (2026-07-03).** Full suite: **4135 pass / 6 skip / 0 fail** (27 new tests). No feature added, no backend capability removed, no tab reordered.
+
+**Why it exists:** the app reached 13 top-level tabs built patch-on-patch, mixing the core race-engineer workflow (6 tabs) with developer/diagnostic tooling (Telemetry, Debug, AI Log, Track Modelling) and accumulated jargon. `REQUIREMENTS.md §12` specified a **Dashboard/home** tab ("suggested next action") that was never built. This sprint audited the whole product against the intended 13-step journey and implemented only low-risk clean-up.
+
+**Deliverables:**
+- **`docs/PRODUCT_CONSOLIDATION_AUDIT.md` (NEW)** — the specific audit: per-tab KEEP/MOVE/RENAME/MERGE/DELETE/HIDE_UNTIL_READY verdicts (with `ui/dashboard.py` line refs), duplicate workflows, stale labels, diagnostic-controls-in-normal-flow, the 14-item single-source-of-truth ownership table + ranked violations, a 9-context target architecture (EventContext…DiagnosticsContext), what changed, and next-sprint plan.
+- **`ui/product_flow.py` (NEW, pure Python, no PyQt6)** — single source of truth for tab roles (workflow/support/diagnostic), the canonical 13-step journey, tab-title decoration, and `build_flow_state_summary()` (the logic behind the missing "suggested next action" home surface).
+
+**Safe UI changes implemented (display-only / additive):**
+- `ui/dashboard.py`: tab 7 renamed **"Debug" → "Diagnostics"**; new `_apply_product_flow_tab_markers()` prefixes the four tool tabs (Telemetry, Diagnostics, AI Log, Track Modelling) with a ⚙ marker sourced from `product_flow`. Idempotent, indices unchanged (tab order is hard-coded in `_on_tab_changed`).
+- `ui/track_modelling_ui.py`: misleading **"5. Track Model Alignment" → "5. Seed Geometry"** (that section only builds seed geometry; alignment metrics live in Section 4); **"Resolver Status" → "Track Model Status"**.
+
+**Tests:** `tests/test_consolidation_product_flow.py` (NEW, 27 tests — roles, decoration idempotency, 13-step journey integrity, flow-state gate logic, source-scans of the renames). Updated `tests/test_group23b_ui_cleanup.py` Section-5 assertion.
+
+**Intentionally NOT changed (higher-risk, documented in the audit §5/§8/§9):** the `config["strategy"]` event fan-out (worst SSOT violation), track/layout split three ways, setups dual-resident in config+DB, the 7 hidden legacy per-segment buttons (`track_modelling_ui.py:517–524`, still `getattr`-referenced), and the Track Modelling jargon glossary. **Recommended next sprint: "State Consolidation 1 — EventContext"** + build the home/overview panel from `build_flow_state_summary`.
+
+Full detail: `docs/PRODUCT_CONSOLIDATION_AUDIT.md`, `MASTER_TESTING_REGISTER.md` (Product Consolidation Sprint).
+
+---
+
+## Prior Objective (historical)
 **DEF-17U-UAT-007 — Time Trial calibration laps falsely classified as pit-in / unusable — FIXED (2026-07-03).** Branch `feature/group-18a-track-truth-foundation`.
 
 **Symptom (Post-Group-17U UAT):** In GT7 Time Trial the user drove 5 clean laps and never pitted. Building the reference path failed with *"Not enough usable laps to build reference path (0 usable, need 2)"*. Diagnostics wrongly reported 7 captured laps, rejected lap 1 as an outlier (18.1s / 749m vs session median 128.7s / 6171m), detected laps 2–6 as "pit-in laps", rejected lap 7 (40 samples < 50), and concluded *"All calibration laps appear to be pit-in laps."*
