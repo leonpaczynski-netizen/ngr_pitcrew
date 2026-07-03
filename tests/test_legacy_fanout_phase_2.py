@@ -155,19 +155,18 @@ class TestSetupSyncMigration:
                      "ev_ctx.track", "ev_ctx.car"):
             assert frag in body, f"setup label not migrated: {frag}"
 
-    def test_functional_gating_still_reads_fan_out(self, sbu_src):
+    def test_functional_gating_calls_intact(self, sbu_src):
+        # Phase 3 update: the gating INPUTS moved to EventContext (signed-off
+        # behaviour change — see tests/test_legacy_fanout_phase_3.py), but the
+        # gating CALLS themselves are unchanged.
         body = _method_body(sbu_src, "_sync_setup_builder_from_event")
-        # BoP/tuning/categories feeding the permission gating stay on config.
-        assert 'sc.get("bop"' in body
-        assert 'sc.get("tuning"' in body
-        assert 'sc.get("allowed_tuning_categories"' in body
         assert "self._apply_setup_permissions(" in body
         assert "self._on_bop_toggled(" in body
         assert "self._rebound_setup_spinboxes(" in body
 
-    def test_functional_gating_not_switched_to_context(self, sbu_src):
+    def test_permission_call_signature_unchanged(self, sbu_src):
         body = _method_body(sbu_src, "_sync_setup_builder_from_event")
-        # The permission call must still be fed the sc-derived _bop/_tuning/_cats.
+        # The permission call is still fed the _bop/_tuning/_cats trio.
         assert "self._apply_setup_permissions(_bop, _tuning, _cats)" in body
 
 

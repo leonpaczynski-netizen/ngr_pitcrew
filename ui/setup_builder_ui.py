@@ -1763,14 +1763,15 @@ class SetupBuilderMixin:
                         getattr(self, attr).setText(_warn)
                         getattr(self, attr).setStyleSheet("color: #F5C542; font-size: 11px;")
                 return
-            # Legacy Fan-Out Removal Phase 2 (display labels only): the READOUT
-            # labels below reflect the canonical EventContext (DB-event-first —
-            # consistent with what the strategy/setup AI already consumes since
-            # the AI Snapshot Migration). int() preserves the integer QSpinBox
-            # formatting so the labels are byte-identical when the DB event and
-            # the config["strategy"] fan-out are in sync. The FUNCTIONAL reads
-            # (BoP toggle, setup-permission gating, spinbox rebind) below still
-            # read the active config["strategy"] fan-out (see `sc`) — unchanged.
+            # Legacy Fan-Out Removal Phase 2: the READOUT labels below reflect
+            # the canonical EventContext (DB-event-first — consistent with what
+            # the strategy/setup AI already consumes since the AI Snapshot
+            # Migration). int() preserves the integer QSpinBox formatting so the
+            # labels are byte-identical when the DB event and the
+            # config["strategy"] fan-out are in sync. Phase 3 moved the
+            # FUNCTIONAL gating (BoP toggle + setup permissions) onto EventContext
+            # too (see below); the remaining `sc` reads (refuel/req/avail label
+            # fallbacks, car spinbox rebind) stay on the fan-out for now.
             ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
             track = ev_ctx.track or "?"
@@ -1831,9 +1832,16 @@ class SetupBuilderMixin:
             if hasattr(self, "_lbl_rc_tuning"):
                 self._lbl_rc_tuning.setText("Allowed" if ev_ctx.tuning_allowed else "Not Allowed")
                 self._lbl_rc_tuning.setStyleSheet(_green)
-            _bop    = bool(sc.get("bop", evt.get("bop", False)))
-            _tuning = bool(sc.get("tuning", evt.get("tuning", True)))
-            _cats   = sc.get("allowed_tuning_categories", [])
+            # Legacy Fan-Out Removal Phase 3 (functional gating): the BoP toggle
+            # and setup-permission gating now read the canonical EventContext
+            # (DB-event-first — consistent with the AI inputs, the Phase 2 labels,
+            # and the DEF-P3-012 validation). Byte-identical when the DB event and
+            # the config["strategy"] fan-out are in sync; when an event was edited
+            # + Saved but not re-activated, the editable fields now follow the
+            # fresh DB truth (the intended, signed-off behaviour change).
+            _bop    = ev_ctx.bop_enabled
+            _tuning = ev_ctx.tuning_allowed
+            _cats   = list(ev_ctx.allowed_tuning_categories)
             self._on_bop_toggled(_bop)
             self._apply_setup_permissions(_bop, _tuning, _cats)
             self._refresh_live_tyre_label()

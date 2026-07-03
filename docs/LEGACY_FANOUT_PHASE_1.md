@@ -133,10 +133,14 @@ phase that accepts/proves that change:
   deliberate, tested behaviour change) or keep strategy-first.
   **Update (2026-07-03, Phase 2):** the §3d *display labels*
   (`_sync_strategy_from_event`, `_sync_setup_builder_from_event`) were migrated
-  to DB-first EventContext (byte-identical in sync). The *functional* gating
-  (setup permissions/BoP) and the AI-response tuning/BoP validation were kept on
-  the fan-out pending product sign-off (Phase 3). See
+  to DB-first EventContext (byte-identical in sync). See
   `docs/LEGACY_FANOUT_PHASE_2.md`.
+  **Update (2026-07-03, Phase 3):** with product sign-off, the *functional*
+  gating (setup permissions/BoP) and the DEF-P3-012 tuning validation were also
+  migrated to DB-first EventContext — reader consistency complete. Remaining on
+  the fan-out: the writers, minor label fallbacks (refuel/req/avail), the car
+  rebind, `_get_mandatory_compounds`, and the context-builders' bridge inputs.
+  See `docs/LEGACY_FANOUT_PHASE_3.md`.
 
 ## 7. Next sprint recommendation
 

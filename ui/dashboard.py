@@ -3967,9 +3967,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _warn_html = ""
         try:
             from strategy.ai_planner import validate_ai_setup_response as _vld_strat
-            _sc_strat = self._config.get("strategy", {})
-            _strat_locked = not bool(_sc_strat.get("tuning", True))
-            _strat_allowed = _sc_strat.get("allowed_tuning_categories") or []
+            # Legacy Fan-Out Removal Phase 3: the tuning-rule validation reads
+            # the canonical EventContext (DB-event-first — consistent with the
+            # AI inputs it validates and the setup-permission gating). Byte-
+            # identical to the previous config["strategy"] reads when the DB
+            # event and the fan-out are in sync.
+            _ev_ctx = self._build_event_context()
+            _strat_locked = _ev_ctx.tuning_locked
+            _strat_allowed = list(_ev_ctx.allowed_tuning_categories)
             for _opt in options:
                 _check_text = " ".join(filter(None, [
                     getattr(_opt, "summary", ""),
