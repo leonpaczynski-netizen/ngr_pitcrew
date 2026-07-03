@@ -116,25 +116,30 @@ class TestOnEventSetActiveExceptionLogging(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestStratIsReference(unittest.TestCase):
-    """Verify _on_event_set_active() writes tuning into config via a reference."""
+    """Verify the Set-as-Active fan-out writes tuning into config via a reference.
+
+    Legacy Fan-Out Removal Phase 4 (2026-07-03): the strat-write block moved
+    verbatim from _on_event_set_active into _fanout_event_to_strategy (invoked
+    by both Set-as-Active and the save-path re-sync). Same invariants, new home.
+    """
 
     def setUp(self):
-        self._body = _method_body(_dashboard_text(), "_on_event_set_active")
+        self._body = _method_body(_dashboard_text(), "_fanout_event_to_strategy")
 
     def test_uses_setdefault_for_strat(self):
         """strat must be obtained via setdefault() so it IS a reference into _config."""
         self.assertIn('setdefault("strategy", {})', self._body,
-                      "_on_event_set_active must use setdefault to get a reference, not .get()")
+                      "the fan-out must use setdefault to get a reference, not .get()")
 
     def test_tuning_written_to_strat(self):
         """strat["tuning"] must be written so the key exists for _run_practice_analysis."""
         self.assertIn('strat["tuning"]', self._body,
-                      '_on_event_set_active must write strat["tuning"] so the key is present')
+                      'the fan-out must write strat["tuning"] so the key is present')
 
     def test_bop_written_to_strat(self):
         """strat["bop"] must be written alongside tuning."""
         self.assertIn('strat["bop"]', self._body,
-                      '_on_event_set_active must write strat["bop"]')
+                      'the fan-out must write strat["bop"]')
 
 
 # ---------------------------------------------------------------------------

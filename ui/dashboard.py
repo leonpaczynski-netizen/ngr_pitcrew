@@ -2834,13 +2834,25 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._home_refresh_if_visible()
 
     def _get_mandatory_compounds(self) -> list[str]:
-        """Return mandatory compounds from the active event config."""
-        raw = self._config.get("strategy", {}).get("mandatory_compounds", "")
-        if isinstance(raw, list):
-            return [c.strip().upper() for c in raw if c.strip()]
-        if isinstance(raw, str) and raw.strip():
-            return [c.strip().upper() for c in raw.split(",") if c.strip()]
-        return []
+        """Return mandatory compound display names (upper-cased) for the active
+        event.
+
+        Legacy Fan-Out Removal Phase 4: reads the canonical
+        ``EventContext.required_tyres`` (compound CODES, DB-event-first) and maps
+        them to display names via ``data.tyres.get_by_code`` — the same mapping
+        the fan-out writer used to build its ``mandatory_compounds`` string, so
+        the result is byte-identical when the DB event and the fan-out are in
+        sync. Display-only (feeds the strategy context label).
+        """
+        try:
+            from data.tyres import get_by_code
+            return [
+                get_by_code(c).name.upper()
+                for c in self._build_event_context().required_tyres
+                if get_by_code(c)
+            ]
+        except Exception:
+            return []
 
     def _refresh_lap_bank(self) -> None:
         """Populate Track/Car combos and session combo; update recording status label."""
@@ -7359,6 +7371,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     break
             else:
                 cfg_events.append(evt)
+            # Legacy Fan-Out Removal Phase 4: if the saved event IS the active
+            # event, re-sync the legacy config["strategy"] fan-out from the same
+            # widgets, so the DB record and the fan-out can no longer diverge
+            # (readers are already DB-first since Phases 2-3; this keeps the
+            # remaining fan-out readers fresh too). Config-dict only — the
+            # activation side effects (tracker race config, advisor context,
+            # tab syncs) remain exclusive to "Set as Active".
+            if name == self._config.get("active_event_id"):
+                self._fanout_event_to_strategy(name)
             self._persist_config()
             self._refresh_event_list()
             for i in range(self._event_list.count()):
@@ -7368,6 +7389,50 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             pass
 
+    def _fanout_event_to_strategy(self, evt_name: str) -> dict:
+        """Write the event-RULE fields from the Event Planner widgets into the
+        legacy ``config["strategy"]`` fan-out cache and return it.
+
+        Legacy Fan-Out Removal Phase 4: extracted verbatim from
+        ``_on_event_set_active`` so ``_on_event_save`` can re-sync the fan-out
+        when the saved event IS the active event — the DB record and the fan-out
+        can then no longer diverge. **Config-dict only**: no tracker / driving-
+        advisor / query-listener / UI-sync side effects (those stay activation-
+        only, owned by ``_on_event_set_active``) and no ``_persist_config``
+        (callers persist). Strategy-PLAN fields (``car``, ``config_id``,
+        ``stops``, fuel/tolerances) are never touched here.
+        """
+        strat = self._config.setdefault("strategy", {})
+        strat["track"]               = self._evt_track.currentText()
+        rt_str = self._evt_race_type.currentText()
+        strat["race_type"]           = "timed" if "timed" in rt_str.lower() else "lap"
+        strat["laps"]                = self._evt_laps.value()
+        strat["total_laps"]          = self._evt_laps.value()
+        strat["race_duration_minutes"] = self._evt_duration.value()
+        strat["tyre_wear_multiplier"]  = self._evt_tyre_wear.value()
+        strat["fuel_mult"]             = self._evt_fuel_mult.value()
+        strat["mandatory_stops"]       = self._evt_mand_pits.value()
+        strat["weather"]               = self._evt_weather.currentText()
+        strat["damage"]                = self._evt_damage.currentText()
+        if hasattr(self, "_evt_refuel_rate"):
+            strat["refuel_speed_lps"]  = self._evt_refuel_rate.value()
+        if hasattr(self, "_req_tyre_checks"):
+            from data.tyres import get_by_code as _gbc
+            _req_tyres = [code for code, cb in self._req_tyre_checks.items() if cb.isChecked()]
+            strat["required_tyres"] = _req_tyres
+            strat["mandatory_compounds"] = ", ".join(
+                _gbc(c).name for c in _req_tyres if _gbc(c)
+            ) or ""
+        if hasattr(self, "_avail_tyre_checks"):
+            strat["avail_tyres"] = [code for code, cb in self._avail_tyre_checks.items() if cb.isChecked()]
+        strat["bop"]    = self._evt_bop.isChecked()
+        strat["tuning"] = self._evt_tuning.isChecked()
+        strat["allowed_tuning_categories"] = [
+            code for code, cb in self._tuning_cat_checks.items() if cb.isChecked()
+        ] if hasattr(self, "_tuning_cat_checks") else []
+        strat["event_id"] = self._db.get_event_id(evt_name) if self._db is not None else 0
+        return strat
+
     def _on_event_set_active(self) -> None:
         try:
             self._on_event_save()
@@ -7376,35 +7441,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 return
             self._config["active_event_id"] = evt_name
 
-            strat = self._config.setdefault("strategy", {})
-            strat["track"]               = self._evt_track.currentText()
-            rt_str = self._evt_race_type.currentText()
-            strat["race_type"]           = "timed" if "timed" in rt_str.lower() else "lap"
-            strat["laps"]                = self._evt_laps.value()
-            strat["total_laps"]          = self._evt_laps.value()
-            strat["race_duration_minutes"] = self._evt_duration.value()
-            strat["tyre_wear_multiplier"]  = self._evt_tyre_wear.value()
-            strat["fuel_mult"]             = self._evt_fuel_mult.value()
-            strat["mandatory_stops"]       = self._evt_mand_pits.value()
-            strat["weather"]               = self._evt_weather.currentText()
-            strat["damage"]                = self._evt_damage.currentText()
-            if hasattr(self, "_evt_refuel_rate"):
-                strat["refuel_speed_lps"]  = self._evt_refuel_rate.value()
-            if hasattr(self, "_req_tyre_checks"):
-                from data.tyres import get_by_code as _gbc
-                _req_tyres = [code for code, cb in self._req_tyre_checks.items() if cb.isChecked()]
-                strat["required_tyres"] = _req_tyres
-                strat["mandatory_compounds"] = ", ".join(
-                    _gbc(c).name for c in _req_tyres if _gbc(c)
-                ) or ""
-            if hasattr(self, "_avail_tyre_checks"):
-                strat["avail_tyres"] = [code for code, cb in self._avail_tyre_checks.items() if cb.isChecked()]
-            strat["bop"]    = self._evt_bop.isChecked()
-            strat["tuning"] = self._evt_tuning.isChecked()
-            strat["allowed_tuning_categories"] = [
-                code for code, cb in self._tuning_cat_checks.items() if cb.isChecked()
-            ] if hasattr(self, "_tuning_cat_checks") else []
-            strat["event_id"] = self._db.get_event_id(evt_name) if self._db is not None else 0
+            # Phase 4: the fan-out block lives in _fanout_event_to_strategy so
+            # the save path can re-sync it; activation keeps all its side
+            # effects (tracker push, advisor context, syncs) below.
+            strat = self._fanout_event_to_strategy(evt_name)
 
             if self._tracker is not None:
                 from telemetry.state import RaceType

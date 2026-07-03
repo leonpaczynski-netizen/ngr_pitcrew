@@ -4979,3 +4979,80 @@ legacy-bridge inputs.
 `_get_mandatory_compounds`, car rebind); (3) retire the Set-as-Active fan-out
 writer (keep `config["strategy"]` only as the context-builders' input).
 Alternative: wire the real UDP-listener connection signal into `SessionContext`.
+
+---
+
+## Legacy Fan-Out Removal Phase 4 — Divergence Elimination + Last Readers (2026-07-03)
+
+> Branch `legacy-fanout-removal-phase-4` (from `master` @ `e356879`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_4.md`.
+> **Full suite: 4667 pass / 6 skip / 0 fail** (18 new tests; 11 legacy pins
+> updated in place).
+
+### What was done
+- **`dashboard._fanout_event_to_strategy(evt_name)` (NEW)** — the Set-as-Active
+  fan-out block extracted **verbatim** (event-RULE fields only: track /
+  race-type / length / wear / fuel / stops / weather / damage / refuel /
+  required+available tyres + the `mandatory_compounds` names string / bop /
+  tuning / cats / event_id). **Config-dict only** — no tracker / advisor /
+  query-listener / sync / persist side effects; never touches the strategy-PLAN
+  fields (`car`, `config_id`, `stops`, fuel/tolerances). `_on_event_set_active`
+  behaviour unchanged (save → helper → all its activation side effects).
+- **Re-sync on Save** — `_on_event_save` calls the helper **only when the saved
+  event IS the active event**, before its existing `_persist_config()`. The DB
+  record and the fan-out can no longer diverge; after an edit+Save, DB-first
+  AND legacy readers agree immediately. Activation side effects (tracker race
+  config, advisor context) remain exclusive to "Set as Active" — unchanged from
+  before, where Save updated them never. Derived `config_id` still refreshes on
+  the next strategy-tab sync (same timing as before).
+- **Last readers migrated (byte-identical in-sync):**
+  `_get_mandatory_compounds` → `EventContext.required_tyres` codes mapped to
+  display names via `data.tyres.get_by_code` (the same mapping the fan-out
+  writer used to build its string); setup-tab refuel label
+  (`int(ev_ctx.refuel_rate_lps)` keeps the QSpinBox formatting), required /
+  available tyre labels (same codes), car spinbox rebind (`ev_ctx.car`).
+  **`_sync_setup_builder_from_event` no longer reads `config["strategy"]` at
+  all** (dead `sc` removed).
+- **Writer retirement investigated + deferred (§5 of the doc):** retiring the
+  Set-as-Active writer today breaks the app — `car` / `config_id` / the stint
+  plan live ONLY in the fan-out (events table stores none of them; the contexts
+  read them FROM it), and ~25 readers remain (live-session open, BoP checks,
+  degradation params, the `_compute_race_config_id` hash, restore paths,
+  AI-snapshot bridges). With re-sync the fan-out can no longer go stale, so
+  retirement is a mechanical Phase 5: re-home those fields, migrate the ~25
+  reads, delete the writer.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_4.py` (NEW) | 18 | The real `_fanout_event_to_strategy` bound to a widget stub (types.MethodType + MagicMock): writes ALL event-rule fields (incl. the compounds names string via the real `data.tyres` mapping and the timed/lap race-type normalisation both ways); NEVER touches `car`/`config_id`/`stops`/`fuel_burn_per_lap`; returns the live `config["strategy"]` dict; calls no persist/sync. Save-path source-scans: the guarded call (`if name == active_event_id`) sits BEFORE `_persist_config()`; `_on_event_save` stays config-only (no `set_race_config`/advisor/listener/sync/permission calls); `_on_event_set_active` keeps its side effects and carries NO inline fan-out. Reader migrations: `_get_mandatory_compounds` byte-identity vs the old string-parse (via the shared name mapping) + reads EventContext; refuel/req/avail/car label equivalence; `_sync_setup_builder_from_event` reads no `config["strategy"]`. Track-Modelling writer + Home-first + config-guardrail invariants. |
+| Updated in place (11 legacy pins) | — | The strat-write pins moved with the block (same invariants, new home): `test_group7_event_persistence` `TestEventSetActiveStratKeys` ×7 (incl. save-precedes-fan-out ordering, now vs the helper call), `test_group12a_bop_tuning_propagation` `TestStratIsReference` ×3, `test_group4_fixes` ×1, plus the Phase 1/2/3 writer-preserved pins (helper + Set-as-Active-invokes-it). |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4667/6/0)**.
+- DB event and fan-out can no longer diverge — **yes (re-sync on Save, guarded to the active event)**.
+- Re-sync is config-only; activation side effects unchanged — **yes (pinned)**.
+- Last named readers migrated byte-identically — **yes**; setup sync fully off the fan-out.
+- Writer retirement handled honestly — **deferred with a concrete dependency list (Phase 5)**; both writers still present and pinned.
+- No setup-logic/strategy-calc/track-mapping/AI-prompt/PTT/voice/tab-order change — **yes**.
+- No real config touched by tests — **yes**.
+- Clear next-sprint recommendation — **yes (Phase 5 writer retirement, or SessionContext connection signal)**.
+
+### Manual UAT steps
+1. Set an event active — identical behaviour to before (fan-out written, tracker/
+   advisor/syncs all fire).
+2. Edit the ACTIVE event (e.g. tyre wear, BoP) and click **Save** only — the
+   Strategy/Setup labels, gating, AND the legacy readers (e.g. session match key
+   detail after visiting the Strategy tab) all reflect the edit; no
+   re-activation needed. The tracker's race type still updates only on
+   "Set as Active" (as before).
+3. Edit and Save a NON-active event — the active race config is untouched.
+4. Mandatory-compound and available-tyre labels read exactly as before.
+
+### Next sprint
+**Legacy Fan-Out Removal Phase 5 — retire the writer:** re-home `car` /
+`config_id` / plan state (DB or the contexts), migrate the remaining ~25 fan-out
+reads, then delete the Set-as-Active writer and the compatibility dict.
+Alternative smaller job: wire the real UDP-listener connection signal into
+`SessionContext`.

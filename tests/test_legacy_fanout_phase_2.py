@@ -195,9 +195,13 @@ class TestStrategySyncMigration:
 # --------------------------------------------------------------------------- #
 class TestInvariantsUnchanged:
     def test_writers_and_fan_out_preserved(self, dash_src):
-        body = _method_body(dash_src, "_on_event_set_active")
-        assert 'strat = self._config.setdefault("strategy", {})' in body
-        assert 'strat["track"]' in body
+        # Phase 4 update: the fan-out block lives in _fanout_event_to_strategy,
+        # still invoked by Set-as-Active (same invariant, new home).
+        helper = _method_body(dash_src, "_fanout_event_to_strategy")
+        assert 'strat = self._config.setdefault("strategy", {})' in helper
+        assert 'strat["track"]' in helper
+        assert "self._fanout_event_to_strategy(evt_name)" in _method_body(
+            dash_src, "_on_event_set_active")
 
     def test_tab_order_home_first(self):
         from ui import tab_registry as tr

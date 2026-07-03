@@ -22,6 +22,14 @@
 > complete (AI inputs, labels, gating, validation). Only the fan-out writers,
 > minor label fallbacks, and the context-builders' bridge inputs remain on
 > `config["strategy"]`. See `docs/LEGACY_FANOUT_PHASE_3.md`.
+>
+> **Legacy Fan-Out Removal Phase 4 update (2026-07-03):** the divergence itself
+> is gone — `_on_event_save` re-syncs the fan-out (via the extracted
+> `_fanout_event_to_strategy`) when the saved event is the active event, and the
+> last minor readers (mandatory compounds, refuel/req/avail labels, car rebind)
+> moved to EventContext. Writer retirement deferred to Phase 5 (car/config_id/
+> stint plan live only in the fan-out; ~25 readers remain). See
+> `docs/LEGACY_FANOUT_PHASE_4.md`.
 
 > Sprint: **State Consolidation 1 — EventContext** · 2026-07-03
 > Companion: `data/event_context.py`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5, §7)

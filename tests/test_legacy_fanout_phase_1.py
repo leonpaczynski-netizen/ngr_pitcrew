@@ -132,12 +132,16 @@ class TestMigratedConsumers:
 # --------------------------------------------------------------------------- #
 class TestWritersPreserved:
     def test_event_planner_set_active_writer_intact(self, dash_src):
-        body = _method_body(dash_src, "_on_event_set_active")
-        # The fan-out still writes event/race fields into config["strategy"].
-        assert 'strat = self._config.setdefault("strategy", {})' in body
+        # Phase 4 update: the fan-out block moved verbatim into
+        # _fanout_event_to_strategy (so the save path can re-sync it); the
+        # writer still exists and Set-as-Active still invokes it.
+        helper = _method_body(dash_src, "_fanout_event_to_strategy")
+        assert 'strat = self._config.setdefault("strategy", {})' in helper
         for frag in ('strat["track"]', 'strat["bop"]', 'strat["tuning"]',
                      'strat["event_id"]'):
-            assert frag in body, f"Set-as-Active fan-out lost {frag}"
+            assert frag in helper, f"Set-as-Active fan-out lost {frag}"
+        body = _method_body(dash_src, "_on_event_set_active")
+        assert "self._fanout_event_to_strategy(evt_name)" in body
 
     def test_track_modelling_combo_writer_intact(self, tm_src):
         assert 'setdefault("strategy", {})["track_location_id"]' in tm_src

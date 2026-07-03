@@ -1,6 +1,21 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Legacy Fan-Out Removal Phase 4 — Divergence Elimination + Last Readers — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-4` (from `master` @ `e356879`). Full suite: **4667 pass / 6 skip / 0 fail** (18 new tests; 11 legacy pins updated in place). **The DB event record and the `config["strategy"]` fan-out can no longer diverge, and `_sync_setup_builder_from_event` no longer reads `config["strategy"]` at all. Writer retirement investigated and explicitly deferred to Phase 5 (would break the app today — see below).**
+
+**Deliverables:**
+- **`dashboard._fanout_event_to_strategy(evt_name)` (NEW)** — the Set-as-Active fan-out block extracted **verbatim** (event-RULE fields only; never touches `car`/`config_id`/`stops`/fuel). **Config-dict only** — no tracker/advisor/query-listener/sync/persist side effects (callers own those). `_on_event_set_active` behaviour unchanged (calls save → helper → all its activation side effects).
+- **Re-sync on Save** — `_on_event_save` calls the helper **only when the saved event IS the active event** (`name == active_event_id`), before its existing `_persist_config()`. Saving a non-active event changes nothing; activation side effects (tracker race config, advisor context) remain exclusive to "Set as Active" (unchanged from before, where Save updated them never). Result: after an edit+Save, ALL readers — DB-first and legacy — agree immediately.
+- **Last readers migrated (byte-identical in-sync):** `_get_mandatory_compounds` (→ `EventContext.required_tyres` codes mapped to display names via `data.tyres.get_by_code` — the same mapping the fan-out writer used to build its `mandatory_compounds` string); setup tab refuel label (`int(ev_ctx.refuel_rate_lps)` keeps QSpinBox formatting), required/available tyre labels (same codes), car spinbox rebind (`ev_ctx.car`). Dead `sc` variable removed — the setup sync method is fully off the fan-out.
+- **`docs/LEGACY_FANOUT_PHASE_4.md` (NEW)** — incl. §5's writer-retirement analysis: retiring the writer NOW would break the app (`car`/`config_id`/stint plan live ONLY in the fan-out; ~25 readers remain: live-session open, BoP ~L5400, degradation ~L5525, `_compute_race_config_id` hash, restore paths, AI-snapshot bridges). With re-sync the fan-out can't go stale, so retirement is a mechanical Phase 5 (re-home car/config_id/plan → migrate ~25 reads → delete writer).
+
+**Tests:** `tests/test_legacy_fanout_phase_4.py` (18 — the real helper bound to a widget stub: writes all rule fields incl. compounds names, preserves plan fields, returns the live dict, no persist/sync side effects, race-type normalisation; save-path scans: guarded call before persist, save stays config-only, Set-as-Active keeps side effects + no inline fan-out left; reader byte-identity + `_sync_setup_builder_from_event` reads no config["strategy"]; TM writer/Home-first/guardrail invariants). **11 legacy pins updated in place** (same invariants, new home — the strat writes moved to the helper): `test_group7_event_persistence` ×7, `test_group12a_bop_tuning_propagation` ×3, `test_group4_fixes` ×1, plus the Phase 1/2/3 writer pins.
+
+**Next sprint: Legacy Fan-Out Removal Phase 5 — retire the writer** (re-home `car`/`config_id`/plan state, migrate the remaining ~25 reads, delete the fan-out + compatibility dict), or the standing smaller job: **wire the real UDP connection signal into SessionContext**. Full detail: `docs/LEGACY_FANOUT_PHASE_4.md`, `MASTER_TESTING_REGISTER.md` (Legacy Fan-Out Removal Phase 4).
+
+---
+
+## Prior Objective (historical)
 **Legacy Fan-Out Removal Phase 3 — Functional Gating / Validation Migration — COMPLETE (2026-07-03).** Branch `legacy-fanout-removal-phase-3` (from `master` @ `4e6721b`). Full suite: **4649 pass / 6 skip / 0 fail** (20 new tests; 2 Phase 2 pins updated in place). **Scope (explicit product sign-off: "flip reads only"): the two remaining FUNCTIONAL `config["strategy"]` consumers now read DB-first EventContext; the fan-out writers are untouched (Phase 4's job).**
 
 **What was migrated:**
