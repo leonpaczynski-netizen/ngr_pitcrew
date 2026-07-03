@@ -5275,3 +5275,59 @@ wider latent-bug fix found during it.
 identical in-sync → migrate the hash inputs), or **return to product work**
 (deferred OFR-1 between-race learning loop) — the state architecture is
 consolidated and the Home Dashboard is now fully truthful.
+
+---
+
+## Legacy Fan-Out Removal Phase 6b — config_id Hash Byte-Stability Proof (2026-07-04)
+
+> Branch `legacy-fanout-phase-6b-hash-proof` (from `master` @ `8e9fcb6`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_6B.md`.
+> **Full suite: 4738 pass / 6 skip / 0 fail** (17 new tests; purely additive —
+> no production code changed).
+
+### What was done
+Retirement-map item 2 delivered as **proof + pins**; the migration half is
+provably **blocked** and folds into items 3/4.
+
+- **The blocker (restore-divergence):** `_load_session_config` (lap-bank "load
+  historical session") deliberately writes a historical session's track/car +
+  race params into the working `config["strategy"]` WITHOUT changing the active
+  event, then recomputes the id — the id must follow the RESTORED session.
+  `EventContext.track`/rules are DB-first → an EventContext-sourced hash would
+  pin the id to the active event mid-restore, silently breaking the feature.
+  Outside restores the two sources are provably identical (post-Phase-4 always
+  in sync — tested). `car` alone is always-safe (strategy-first), but hash
+  inputs must move together. **Corrected map:** item 2's migration merges into
+  item 3 (restore redesign) / item 4 (working-race-config home) — to be done
+  under the golden vectors added here.
+- **Golden vectors** — five literal (inputs → id) pairs frozen from the shipped
+  algorithm, exercised through the REAL `_compute_race_config_id` bound to a
+  widget-free stub; includes the empty/default `'||l25' → 05e6d2f288` (a real
+  id observed in the field on 2026-07-03). The test header forbids regenerating
+  vectors on failure — a mismatch means history re-keying; the CODE must be
+  fixed.
+
+### New test file
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_race_config_id_hash.py` (NEW) | 17 | Golden vectors ×5 through the real method; `DEFAULT_CONFIG` hashes to the empty vector; 10-char lowercase-hex shape + determinism; per-input sensitivity (track/car/race-type/length each change the id); the algorithm's own `l25`/`t60` absent-key defaults pinned (explicitly distinct from EventContext's 0 defaults); unknown race-type tokens hash as lap; source-level verbatim pin (raw-string format, `sha256(...)[:10]`, the 25/60 defaults, the working-config input source); in-sync EventContext equivalence (a future migration is safe OUTSIDE restores) + the restore-divergence demonstration (the blocker) + car's strategy-first safety; Phase 5 frozen allowlist untouched; Home-first + config-guardrail invariants. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4738/6/0)**.
+- Hash algorithm + inputs tamper-evident — **yes (golden vectors + source pin)**.
+- EventContext equivalence proven where true; migration blocker demonstrated, not hand-waved — **yes**.
+- Retirement map corrected — **yes (item 2 → items 3/4)**.
+- Zero behaviour change; allowlist untouched — **yes**.
+- Clear next-sprint recommendation — **yes**.
+
+### Manual UAT steps
+None — no production code changed. (Regression safety: any future edit that
+would re-key the lap bank / setup history / session match keys now fails the
+golden-vector suite loudly.)
+
+### Next sprint
+**Retirement-map item 3 — restore-writer redesign** (a first-class "working
+race config" flow + home, item 4, so the hash inputs, restore writers, and
+plan-state persistence migrate together under the golden vectors), or
+**return to product work** (deferred OFR-1 between-race learning loop).

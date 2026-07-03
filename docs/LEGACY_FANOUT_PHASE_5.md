@@ -67,6 +67,11 @@ Deleting the Set-as-Active fan-out writer requires all of the following first:
    any source change risks silently re-keying every lap bank / history entry.
    Fix: byte-stability proof against EventContext (post-Phase-4 the inputs are
    always in sync) plus pinned hash-vector tests.
+   **Phase 6b (2026-07-04): proof + golden vectors delivered
+   (`tests/test_race_config_id_hash.py`); the MIGRATION half is blocked by the
+   restore-divergence (`_load_session_config` deliberately desyncs the working
+   config so the id follows the restored session) and folds into items 3/4.
+   See `docs/LEGACY_FANOUT_PHASE_6B.md`.**
 3. **Restore writers** (`_load_session_config` ×3, `_strategy_apply_plan`,
    `_save_race_params`, `_update_race_config`, garage car writer) — they WRITE
    track/car/laps/config_id into the dict; the restore design must move to the
