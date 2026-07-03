@@ -655,20 +655,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # Pure computation of what the AI-input snapshot would be right now —
         # no AI call is made; this reports frozen-vs-legacy input status.
         ai_snap = self._build_strategy_ai_snapshot()
+        # SessionContext sprint: route the live/practice flags through the
+        # canonical SessionContext instead of reaching into tracker internals.
+        # `has_valid_laps` still approximates "recorded laps are reviewable"
+        # (the DB query is owned by _home_has_practice_laps); SessionContext now
+        # carries both flags plus live_active. Byte-identical to the prior reads.
         has_laps = self._home_has_practice_laps(event_ctx)
-        live = self._tracker is not None and getattr(self._tracker, "_connected", False)
+        session_ctx = self._build_session_context(
+            has_practice_laps=has_laps, has_valid_laps=has_laps)
         return build_home_dashboard_state(
             event_context=event_ctx,
             strategy_context=strategy_ctx,
             setup_context=setup_ctx,
             track_context=track_ctx,
             ai_snapshot=ai_snap,
-            has_practice_laps=has_laps,
-            # Approximation until a SessionContext owns lap validity: recorded
-            # laps are treated as reviewable laps (documented in
-            # docs/HOME_DASHBOARD_BUILD.md).
-            has_valid_laps=has_laps,
-            live_active=bool(live),
+            has_practice_laps=session_ctx.has_practice_laps,
+            has_valid_laps=session_ctx.has_valid_laps,
+            live_active=session_ctx.live_active,
         )
 
     def _home_has_practice_laps(self, event_ctx) -> bool:
@@ -2772,13 +2775,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         return hashlib.sha256(raw.encode()).hexdigest()[:10]
 
     def _computed_fuel_burn_lpl(self) -> float:
-        # Historical session loaded: use its average, not the live tracker's
-        _loaded = getattr(self, "_loaded_session_avg_fuel", 0.0)
-        if _loaded > 0:
-            return float(_loaded)
-        if self._tracker and getattr(self._tracker, "avg_fuel_per_lap", 0) > 0:
-            return float(self._tracker.avg_fuel_per_lap)
-        return float(self._config.get("strategy", {}).get("fuel_burn_per_lap", 2.0))
+        # SessionContext sprint: the 3-tier fuel-burn fallback (loaded historical
+        # session average → live telemetry average → config fallback 2.0) is now
+        # owned by SessionContext. Byte-identical to the previous inline logic
+        # (proven in tests/test_session_context.py); the config["strategy"] fuel
+        # read moves into the context builder (the single legacy bridge).
+        return self._build_session_context().fuel_burn_per_lap
 
     def _save_race_params(self) -> None:
         """Persist editable race analysis parameters (pit loss, tolerances) to config."""
@@ -6203,16 +6205,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             )
             self._telem_lbl_car.setText(ctx.car or "—")
             self._telem_lbl_track.setText((ctx.track or "—") if evt else "—")
-            connected = self._tracker is not None and getattr(self._tracker, "_connected", False)
-            self._telem_lbl_connection.setText("Connected" if connected else "Disconnected")
-            pkt_count = getattr(self._tracker, "_packet_count", 0) if self._tracker else 0
-            self._telem_lbl_packets.setText(str(pkt_count))
-            sid = getattr(self, "_active_session_id", None)
-            self._telem_lbl_recording.setText("Yes" if sid is not None else "No")
+            # SessionContext sprint: connection / packet / recording / telemetry
+            # fuel now come from the canonical SessionContext read model instead
+            # of reaching into tracker internals. Byte-identical labels.
+            sctx = self._build_session_context()
+            self._telem_lbl_connection.setText(sctx.connection_text())
+            self._telem_lbl_packets.setText(str(sctx.packet_count))
+            self._telem_lbl_recording.setText(sctx.recording_text())
             if hasattr(self, "_lbl_fuel_burn_display"):
-                avg = getattr(self._tracker, "avg_fuel_per_lap", 0) if self._tracker else 0
-                if avg > 0:
-                    self._lbl_fuel_burn_display.setText(f"{avg:.2f} L/lap (from telemetry)")
+                if sctx.telemetry_avg_fuel_per_lap > 0:
+                    self._lbl_fuel_burn_display.setText(
+                        f"{sctx.telemetry_avg_fuel_per_lap:.2f} L/lap (from telemetry)")
             self._update_telemetry_labels()
         except Exception:
             pass
@@ -7062,6 +7065,39 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         tests/test_legacy_fanout_phase_1.py). Never raises.
         """
         return self._build_strategy_context().config_id
+
+    def _build_session_context(self, *, has_practice_laps: bool = False,
+                               has_valid_laps: bool = False):
+        """Canonical read model of live telemetry / session status.
+
+        SessionContext sprint: normalises the volatile tracker/session reads
+        (connection, packet count, laps recorded, active session id, live mode)
+        and the fuel-burn 3-tier fallback into one immutable snapshot, so
+        consumers stop reaching into ``self._tracker`` internals and the legacy
+        ``config["strategy"]`` fuel fallback. Byte-identical to the expressions
+        it replaces (see data/session_context.py). The DB-derived practice-lap
+        flags are caller-supplied (that query is owned by the dashboard/DB).
+        Never raises.
+        """
+        try:
+            from data.session_context import build_session_context
+            tracker = self._tracker
+            return build_session_context(
+                connected=bool(tracker is not None and getattr(tracker, "_connected", False)),
+                packet_count=getattr(tracker, "_packet_count", 0) if tracker is not None else 0,
+                laps_recorded=getattr(tracker, "laps_recorded", 0) if tracker is not None else 0,
+                telemetry_avg_fuel_per_lap=(
+                    getattr(tracker, "avg_fuel_per_lap", 0.0) if tracker is not None else 0.0),
+                active_session_id=getattr(self, "_active_session_id", None),
+                loaded_session_avg_fuel=getattr(self, "_loaded_session_avg_fuel", 0.0),
+                config_fuel_burn_per_lap=self._config.get("strategy", {}).get("fuel_burn_per_lap", 2.0),
+                live_mode=self._config.get("live", {}).get("mode", "Race"),
+                has_practice_laps=has_practice_laps,
+                has_valid_laps=has_valid_laps,
+            )
+        except Exception:  # pragma: no cover - defensive; must never break the UI
+            from data.session_context import empty_session_context
+            return empty_session_context()
 
     def _build_strategy_ai_snapshot(self, fuel_burn_override=None):
         """Frozen AI-input snapshot for race-strategy analysis.

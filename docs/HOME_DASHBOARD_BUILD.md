@@ -137,10 +137,13 @@ Qt/DB/network/AI imports and no file I/O.
 Approximations (documented, honest):
 
 * `has_valid_laps` is currently supplied as `has_practice_laps` (recorded
-  laps are treated as reviewable laps). Proper lap-validity truth belongs to
-  a future SessionContext/TelemetryContext.
-* `live_active` = telemetry tracker connected. "Racing right now" truth also
-  belongs to a future SessionContext.
+  laps are treated as reviewable laps). **Update (2026-07-03, SessionContext):**
+  both flags + `live_active` now flow through `SessionContext` (byte-identical);
+  a true lap-validity owner is still future work. See
+  `docs/SESSION_CONTEXT_MIGRATION.md`.
+* `live_active` = telemetry tracker connected — now read from
+  `SessionContext.live_active` (byte-identical; a real connection signal can be
+  wired into SessionContext in one place later).
 * The Setup Brain card shows the **last displayed** setup recommendation
   (`_last_setup_context`); a setup applied in an earlier app run is not
   reconstructed from the DB (deferred — see §5).
@@ -190,9 +193,12 @@ Dashboard Build).
   `docs/HOME_DASHBOARD_PROMOTION.md`.
 * **Per-panel stale badges** on the Strategy/Setup tabs themselves (the AI
   snapshot migration doc's §8 note) — Home surfaces them centrally first.
-* **Telemetry-derived flags** (`has_valid_laps`, `live_active`) owned by a
+* ~~**Telemetry-derived flags** (`has_valid_laps`, `live_active`) owned by a
   proper SessionContext/TelemetryContext instead of the current
-  approximations.
+  approximations.~~ **DONE (2026-07-03, SessionContext)** — both flags +
+  `live_active` now flow through `SessionContext` (byte-identical); a true
+  lap-validity owner + real connection signal remain future work. See
+  `docs/SESSION_CONTEXT_MIGRATION.md`.
 * **AI-call capture** — showing "the LAST AI call used snapshot X" requires
   capturing the snapshot at call time in the AI paths; Home currently shows
   what a call made *now* would use, which never touches the migrated
