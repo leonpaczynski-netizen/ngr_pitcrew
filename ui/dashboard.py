@@ -7489,17 +7489,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             pass
 
     def _fanout_event_to_strategy(self, evt_name: str) -> dict:
-        """Write the event-RULE fields from the Event Planner widgets into the
-        legacy ``config["strategy"]`` fan-out cache and return it.
+        """Write the WORKING-CONFIG core from the Event Planner widgets into
+        ``config["strategy"]`` and return it.
 
-        Legacy Fan-Out Removal Phase 4: extracted verbatim from
-        ``_on_event_set_active`` so ``_on_event_save`` can re-sync the fan-out
-        when the saved event IS the active event — the DB record and the fan-out
-        can then no longer diverge. **Config-dict only**: no tracker / driving-
-        advisor / query-listener / UI-sync side effects (those stay activation-
-        only, owned by ``_on_event_set_active``) and no ``_persist_config``
-        (callers persist). Strategy-PLAN fields (``car``, ``config_id``,
-        ``stops``, fuel/tolerances) are never touched here.
+        Fan-Out Rule-Cache Deletion (2026-07-04): the 12 event-RULE cache
+        fields this helper used to duplicate (tyre wear, fuel mult, mandatory
+        stops, weather, damage, refuel rate, required/available tyres,
+        mandatory_compounds, bop, tuning, allowed categories) are **no longer
+        written** — every consumer reads them DB-first through the canonical
+        contexts (Phases 1–5 + Working Race Config), with ``config["events"]``
+        covering the no-DB fallback. What remains is the legitimate
+        working-config core: **track, race format/lengths (the match-key hash +
+        lap-bank restore inputs) and event_id (session tagging)**.
+
+        Phase 4 contract unchanged: config-dict only — no tracker / advisor /
+        query-listener / UI-sync side effects, no persist (callers own those);
+        strategy-PLAN fields (car, config_id, stops, fuel/tolerances) never
+        touched.
         """
         strat = self._config.setdefault("strategy", {})
         strat["track"]               = self._evt_track.currentText()
@@ -7508,27 +7514,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         strat["laps"]                = self._evt_laps.value()
         strat["total_laps"]          = self._evt_laps.value()
         strat["race_duration_minutes"] = self._evt_duration.value()
-        strat["tyre_wear_multiplier"]  = self._evt_tyre_wear.value()
-        strat["fuel_mult"]             = self._evt_fuel_mult.value()
-        strat["mandatory_stops"]       = self._evt_mand_pits.value()
-        strat["weather"]               = self._evt_weather.currentText()
-        strat["damage"]                = self._evt_damage.currentText()
-        if hasattr(self, "_evt_refuel_rate"):
-            strat["refuel_speed_lps"]  = self._evt_refuel_rate.value()
-        if hasattr(self, "_req_tyre_checks"):
-            from data.tyres import get_by_code as _gbc
-            _req_tyres = [code for code, cb in self._req_tyre_checks.items() if cb.isChecked()]
-            strat["required_tyres"] = _req_tyres
-            strat["mandatory_compounds"] = ", ".join(
-                _gbc(c).name for c in _req_tyres if _gbc(c)
-            ) or ""
-        if hasattr(self, "_avail_tyre_checks"):
-            strat["avail_tyres"] = [code for code, cb in self._avail_tyre_checks.items() if cb.isChecked()]
-        strat["bop"]    = self._evt_bop.isChecked()
-        strat["tuning"] = self._evt_tuning.isChecked()
-        strat["allowed_tuning_categories"] = [
-            code for code, cb in self._tuning_cat_checks.items() if cb.isChecked()
-        ] if hasattr(self, "_tuning_cat_checks") else []
         strat["event_id"] = self._db.get_event_id(evt_name) if self._db is not None else 0
         return strat
 
@@ -7554,16 +7539,20 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 )
             self._persist_config()
             self._bridge.event_log_entry.emit(f"Active event set: {evt_name}")
-            # Push event context to driving advisor so AI prompts have full event details
+            # Push event context to driving advisor so AI prompts have full event
+            # details. Rule-Cache Deletion: the strategy dict no longer carries
+            # the rules, so the no-DB fallback goes through _active_event()
+            # (which reads the config["events"] mirror — full rules).
             if hasattr(self, "_driving_advisor") and self._driving_advisor is not None:
                 _evt_full = self._db.get_event(evt_name) if self._db is not None else {}
-                self._driving_advisor.set_event_context(_evt_full or strat)
+                self._driving_advisor.set_event_context(
+                    _evt_full or self._active_event() or strat)
+            # Rule-Cache Deletion: the explicit _apply_setup_permissions call
+            # that followed this sync was REDUNDANT since Phase 3 — the sync
+            # itself applies permissions from the just-saved DB event
+            # (EventContext, identical values) — and its bop/tuning/categories
+            # inputs are no longer cached in the strategy dict. Deleted.
             self._sync_setup_builder_from_event()
-            self._apply_setup_permissions(
-                strat.get("bop", False),
-                strat.get("tuning", True),
-                strat.get("allowed_tuning_categories", []),
-            )
             self._sync_strategy_from_event()
             if self._query_listener is not None:
                 _ql_name, _ql_specs = self._load_car_specs_for_current()

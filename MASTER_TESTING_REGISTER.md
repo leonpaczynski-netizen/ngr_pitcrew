@@ -5400,3 +5400,76 @@ derived — is deferred with item 4).
 compatibility; plan-state gets a durable home — the actual fan-out deletion,
 now guarded end-to-end by the golden vectors + the frozen allowlist. Or
 **product work** (deferred OFR-1 between-race learning loop).
+
+---
+
+## Fan-Out Rule-Cache Deletion (2026-07-04)
+
+> Branch `fanout-rule-cache-deletion` (from `master` @ `8d7c500`).
+> Full doc: `docs/FANOUT_RULE_CACHE_DELETION.md`.
+> **Full suite: 4777 pass / 6 skip / 0 fail** (16 new tests; 12 legacy pins
+> updated in place).
+
+### What was done
+**The Product Consolidation audit's original SSOT violation is deleted**
+(explicit product decision: "delete the rule cache"; the full schema migration
+was declined as the highest-risk option).
+
+- `_fanout_event_to_strategy` no longer writes the 12 event-RULE fields
+  (`tyre_wear_multiplier`, `fuel_mult`, `mandatory_stops`, `weather`, `damage`,
+  `refuel_speed_lps`, `required_tyres`, `mandatory_compounds`, `avail_tyres`,
+  `bop`, `tuning`, `allowed_tuning_categories`). It now writes only the
+  legitimate **working-config core**: track, race_type, laps/total_laps,
+  race_duration_minutes (match-key hash + lap-bank restore inputs) and
+  event_id (session tagging). Existing configs keep old rule keys as harmless
+  unread leftovers (pinned: neither refreshed nor removed).
+- **Invisibility proofs (the sprint's evidence, all tested):** EventContext
+  resolves every rule DB-event-first per field (fallback fires only on `None`
+  fields; the DB record AND the `config["events"]` mirror that `_active_event()`
+  falls back to carry all rules) → rules identical with fresh/stale/no cache,
+  field-by-field. The AI snapshots' CONTEXTS source yields identical frozen
+  `race_params` with/without the legacy rule keys (LEGACY_ONLY fires only with
+  no active event — a state where the fan-out never ran anyway). The match-key
+  hash reads core fields only (golden vectors green).
+- **Touch-ups:** `_on_event_set_active`'s writer-internal
+  `_apply_setup_permissions` call DELETED — redundant since Phase 3 (the
+  activation sync applies permissions from the just-saved DB event via
+  EventContext with identical values), and its cached inputs no longer exist.
+  Driving-advisor fallback hardened: `set_event_context(_evt_full or
+  self._active_event() or strat)` — the no-DB path now gets full rules via the
+  events mirror.
+- **Residual edge (accepted at scoping):** an ancient DB event row with NULL
+  rule columns would fall back to frozen-stale leftovers instead of a fresh
+  cache; any event re-save writes full records and heals the row.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_fanout_rule_cache_deletion.py` (NEW) | 16 | The shrunk helper on a widget stub (core-only writes; plan state never touched; stale leftover keys left alone); the invisibility proofs (EventContext rules identical core-vs-stale-cache + sourced from the DB event + the `config["events"]` mirror covers the no-DB fallback; AI snapshot CONTEXTS `race_params` identity; match key unaffected); source-scans (zero rule writes in the helper + the core pinned; the redundant permission call gone with the sync intact; the advisor fallback hardened; activation side effects intact); frozen-allowlist exactness + a golden-vector spot check + Home-first + config-guardrail invariants. |
+| Updated in place (12 pins) | — | Invariant evolved from "the fan-out writes the rules (so downstream sees them)" to "the rules are NOT cached — DB-only via EventContext; the working-config core IS written": `test_group7_event_persistence` `TestEventSetActiveStratKeys` ×6 flipped to deletion pins (+1 new core-writes pin); `test_group12a_bop_tuning_propagation` ×2 (the "key must exist for _run_practice_analysis" reason is obsolete — snapshots' CONTEXTS source; LEGACY_ONLY requires no event); `test_group4_fixes` ×1; `test_legacy_fanout_phase_1` writer pin (core fields); `test_legacy_fanout_phase_3` gating pin (redundant-call deletion; invariant holds via the sync); `test_legacy_fanout_phase_4` helper stub test (core-only + rules absent). |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4777/6/0)**.
+- The event-rule cache deleted; working-config core + plan state preserved — **yes**.
+- Invisibility proven (not asserted) — **yes (field-by-field EventContext, AI race_params identity, mirror fallback, hash spot-check)**.
+- Gating at activation unchanged (redundant call removed, sync carries it) — **yes (pinned)**.
+- No behaviour change for any active-event workflow; residual edge documented — **yes**.
+- Allowlist exact; golden vectors green; no new consumers — **yes**.
+- Clear next-sprint recommendation — **yes (product work / OFR-1)**.
+
+### Manual UAT steps
+1. Set an event active — Setup Builder lock state, BoP gating, all labels, AI
+   analyses, and the Session Match Key behave exactly as before.
+2. Edit the active event's rules and Save — gating/labels/AI still follow the
+   edit (DB-first), as since Phase 3.
+3. Inspect config.json after activation — the strategy section now gains only
+   track/race-format/event_id (+ plan state); the old rule keys linger
+   untouched from previous versions (harmless).
+4. Lap-bank restore and session saving still key/tag exactly as before.
+
+### Next sprint
+**Return to product work (recommended)** — the consolidation series has reached
+its goal. Standing item: **OFR-1 between-race learning loop**. Optional
+architectural tail: the plan-state schema migration (item 4 remainder), only
+if/when a feature needs it.

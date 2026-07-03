@@ -90,14 +90,15 @@ class TestBoPSourceOfTruth(unittest.TestCase):
         self.assertIn("_lbl_rc_tuning", body)
 
     def test_on_event_set_active_writes_bop_to_strat(self):
-        """The Set-as-Active fan-out must write strat['bop'] from _evt_bop.
-
-        Legacy Fan-Out Removal Phase 4 (2026-07-03): the strat-write block moved
-        verbatim into _fanout_event_to_strategy, invoked by _on_event_set_active
-        (and the save-path re-sync). Same invariant, new home."""
+        """Rule-cache deletion pin (2026-07-04): bop is NO LONGER cached in
+        config['strategy'] — it is DB-only, read through EventContext
+        (bop_enabled) by every consumer incl. the setup-permission gating.
+        The BoP source-of-truth invariant (event state, never a widget) holds
+        stronger than ever; Set-as-Active still invokes the (shrunk,
+        working-config-core) fan-out helper."""
         body = _method_body(_dashboard_text(), "_fanout_event_to_strategy")
-        self.assertIn('strat["bop"]', body)
-        self.assertIn('_evt_bop', body)
+        self.assertNotIn('strat["bop"]', body)
+        self.assertNotIn('_evt_bop', body)
         self.assertIn("self._fanout_event_to_strategy(evt_name)",
                       _method_body(_dashboard_text(), "_on_event_set_active"))
 

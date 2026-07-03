@@ -90,25 +90,21 @@ def _make_fanout_stub():
 
 class TestFanoutHelper:
     def test_writes_all_event_rule_fields(self):
+        # Rule-Cache Deletion (2026-07-04): the helper now writes ONLY the
+        # working-config core; the 12 event-rule cache fields are deleted
+        # (DB-only via EventContext). This test pins both halves.
         stub = _make_fanout_stub()
         strat = stub._fanout_event_to_strategy("Race A")
         assert strat["track"] == "Spa"
         assert strat["race_type"] == "timed"          # normalised token
         assert strat["laps"] == 12 and strat["total_laps"] == 12
         assert strat["race_duration_minutes"] == 30
-        assert strat["tyre_wear_multiplier"] == 2
-        assert strat["fuel_mult"] == 3
-        assert strat["mandatory_stops"] == 1
-        assert strat["weather"] == "Fixed Dry"
-        assert strat["damage"] == "Light"
-        assert strat["refuel_speed_lps"] == 5
-        assert strat["required_tyres"] == ["RM"]
-        assert strat["mandatory_compounds"] == get_by_code("RM").name
-        assert strat["avail_tyres"] == ["RM", "RH"]
-        assert strat["bop"] is True
-        assert strat["tuning"] is False
-        assert strat["allowed_tuning_categories"] == ["suspension"]
         assert strat["event_id"] == 0                 # db is None
+        for gone in ("tyre_wear_multiplier", "fuel_mult", "mandatory_stops",
+                     "weather", "damage", "refuel_speed_lps", "required_tyres",
+                     "mandatory_compounds", "avail_tyres", "bop", "tuning",
+                     "allowed_tuning_categories"):
+            assert gone not in strat, f"rule-cache field {gone} written again"
 
     def test_never_touches_strategy_plan_fields(self):
         stub = _make_fanout_stub()
