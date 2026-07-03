@@ -37,6 +37,11 @@ from ui.track_modelling_vm import (
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
     format_build_failure_diagnostics as _format_build_diag,
+    format_track_truth_status      as _format_track_truth_status,
+)
+from data.track_truth import (
+    resolve_track_truth_model   as _resolve_track_truth,
+    validate_track_truth_model  as _validate_track_truth,
 )
 from data.track_calibration import (
     audit_track_model_files      as _audit_track_files,
@@ -769,6 +774,59 @@ class TrackModellingMixin:
         _tm_align_section_layout.addWidget(seed_geo_grp)
         right_layout.addWidget(_tm_align_section_grp)
 
+        # ── Section 6: Track Truth / Mapping (Group 18A) ─────────────────────
+        _truth_section_grp = QGroupBox("6. Track Truth / Mapping")
+        _truth_section_grp.setStyleSheet(self._group_style())
+        _truth_section_layout = QVBoxLayout(_truth_section_grp)
+        _truth_section_layout.setContentsMargins(6, 12, 6, 6)
+        _truth_section_layout.setSpacing(6)
+
+        truth_grp = QGroupBox("Track Truth / Mapping")
+        truth_grp.setStyleSheet(self._group_style())
+        truth_form = QFormLayout(truth_grp)
+        truth_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        _tt_key_s = f"color: {_TEXT}; font-size: 11px;"
+        _tt_val_s = "color: #AAE4AA; font-size: 11px;"
+
+        def _tt_row(label: str, attr_name: str, wrap: bool = False) -> QLabel:
+            lbl = QLabel("—")
+            lbl.setStyleSheet(_tt_val_s)
+            if wrap:
+                lbl.setWordWrap(True)
+            lbl.setMinimumWidth(120)
+            truth_form.addRow(QLabel(f"{label}:", styleSheet=_tt_key_s), lbl)
+            setattr(self, attr_name, lbl)
+            return lbl
+
+        _tt_row("Track ID",           "_tm_truth_lbl_track_id")
+        _tt_row("Layout ID",          "_tm_truth_lbl_layout_id")
+        _tt_row("Library",            "_tm_truth_lbl_library_availability")
+        _tt_row("Seed geometry",      "_tm_truth_lbl_seed_geometry")
+        _tt_row("Corner metadata",    "_tm_truth_lbl_corner_metadata")
+        _tt_row("Complex metadata",   "_tm_truth_lbl_complex_metadata")
+        _tt_row("Geometry accepted",  "_tm_truth_lbl_geometry_acceptance")
+        _tt_row("Live Mapping",       "_tm_truth_lbl_live_mapping_ready")
+        _tt_row("AI context",         "_tm_truth_lbl_ai_context_ready")
+
+        self._tm_truth_lbl_blockers = QLabel("—")
+        self._tm_truth_lbl_blockers.setStyleSheet("color: #EE9955; font-size: 10px;")
+        self._tm_truth_lbl_blockers.setWordWrap(True)
+        truth_form.addRow(QLabel("Blockers:", styleSheet=_tt_key_s), self._tm_truth_lbl_blockers)
+
+        self._tm_truth_lbl_warnings = QLabel("—")
+        self._tm_truth_lbl_warnings.setStyleSheet("color: #CC9933; font-size: 10px;")
+        self._tm_truth_lbl_warnings.setWordWrap(True)
+        truth_form.addRow(QLabel("Warnings:", styleSheet=_tt_key_s), self._tm_truth_lbl_warnings)
+
+        self._tm_truth_lbl_status_label = QLabel("—")
+        self._tm_truth_lbl_status_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self._tm_truth_lbl_status_label.setWordWrap(True)
+        truth_form.addRow(QLabel("Status:", styleSheet=_tt_key_s), self._tm_truth_lbl_status_label)
+
+        _truth_section_layout.addWidget(truth_grp)
+        right_layout.addWidget(_truth_section_grp)
+
         right_layout.addStretch()
         splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 0)
@@ -873,6 +931,8 @@ class TrackModellingMixin:
         self._tm_try_load_station_map_from_disk(loc_id, lay_id)
         # Group 17P: load previously accepted alignment result if available
         self._tm_try_load_accepted_model(loc_id, lay_id)
+        # Group 18A: refresh Track Truth / Mapping panel
+        self._tm_refresh_track_truth_panel()
 
     def _tm_clear_detail_panels(self) -> None:
         _muted = "color: #888; font-size: 11px;"
@@ -1719,6 +1779,7 @@ class TrackModellingMixin:
         result = _align_track_model(sm, layout)
         self._tm_alignment_result = result
         self._tm_refresh_alignment_panel(result)
+        self._tm_refresh_track_truth_panel()
 
     def _tm_refresh_alignment_panel(self, result) -> None:
         """Update the Track Model Alignment panel labels from result."""
@@ -1839,6 +1900,81 @@ class TrackModellingMixin:
         if reb_btn is not None:
             reb_btn.setEnabled(states.get("rebuild", False))
 
+    def _tm_refresh_track_truth_panel(self) -> None:
+        """Update the Track Truth / Mapping panel from the current track/layout selection.
+
+        Calls resolve_track_truth_model + validate_track_truth_model then applies
+        format_track_truth_status to every _tm_truth_lbl_* widget.
+        Safe to call when no track is selected — placeholder dict handles it.
+        """
+        loc_id = (getattr(self._tm_location_combo, "currentData", lambda: "")() or "").strip()
+        lay_id = (getattr(self._tm_layout_combo, "currentData", lambda: "")() or "").strip()
+
+        model      = None
+        validation = None
+        try:
+            if loc_id and lay_id:
+                model = _resolve_track_truth(loc_id, lay_id)
+                if model is not None:
+                    validation = _validate_track_truth(model)
+        except Exception:
+            pass
+
+        try:
+            d = _format_track_truth_status(model, validation, loc_id or None, lay_id or None)
+        except Exception:
+            d = {
+                "track_id": "—", "layout_id": "—",
+                "library_availability": "—", "library_availability_color": "#888888",
+                "seed_geometry": "—", "seed_geometry_color": "#888888",
+                "corner_metadata": "—", "corner_metadata_color": "#888888",
+                "complex_metadata": "—", "complex_metadata_color": "#888888",
+                "geometry_acceptance": "—", "geometry_acceptance_color": "#888888",
+                "live_mapping_ready": "—", "live_mapping_ready_color": "#888888",
+                "ai_context_ready": "—", "ai_context_ready_color": "#888888",
+                "blockers": "—", "warnings": "—",
+                "status_label": "—", "status_color": "#888888",
+            }
+
+        # Simple value labels (value + color)
+        _simple_pairs = [
+            ("_tm_truth_lbl_track_id",            "track_id",           ""),
+            ("_tm_truth_lbl_layout_id",           "layout_id",          ""),
+            ("_tm_truth_lbl_library_availability","library_availability","library_availability_color"),
+            ("_tm_truth_lbl_seed_geometry",       "seed_geometry",       "seed_geometry_color"),
+            ("_tm_truth_lbl_corner_metadata",     "corner_metadata",     "corner_metadata_color"),
+            ("_tm_truth_lbl_complex_metadata",    "complex_metadata",    "complex_metadata_color"),
+            ("_tm_truth_lbl_geometry_acceptance", "geometry_acceptance", "geometry_acceptance_color"),
+            ("_tm_truth_lbl_live_mapping_ready",  "live_mapping_ready",  "live_mapping_ready_color"),
+            ("_tm_truth_lbl_ai_context_ready",    "ai_context_ready",    "ai_context_ready_color"),
+        ]
+        for attr, val_key, color_key in _simple_pairs:
+            lbl = getattr(self, attr, None)
+            if lbl is None:
+                continue
+            lbl.setText(d.get(val_key, "—"))
+            if color_key:
+                color = d.get(color_key, "#888888")
+                lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        # Blockers label
+        blk = getattr(self, "_tm_truth_lbl_blockers", None)
+        if blk is not None:
+            blk.setText(d.get("blockers", "—"))
+
+        # Warnings label
+        wrn = getattr(self, "_tm_truth_lbl_warnings", None)
+        if wrn is not None:
+            wrn.setText(d.get("warnings", "—"))
+
+        # Status label
+        sts = getattr(self, "_tm_truth_lbl_status_label", None)
+        if sts is not None:
+            sts.setText(d.get("status_label", "—"))
+            sts.setStyleSheet(
+                f"color: {d.get('status_color', '#888888')}; font-size: 11px;"
+            )
+
     def _tm_accept_track_model(self) -> None:
         """Accept the whole-model alignment and persist to disk."""
         result = getattr(self, "_tm_alignment_result", None)
@@ -1857,6 +1993,7 @@ class TrackModellingMixin:
         except Exception:
             pass  # best-effort
         self._tm_refresh_alignment_panel(result)
+        self._tm_refresh_track_truth_panel()
 
     def _tm_rebuild_model(self) -> None:
         """Clear station map and alignment result — requires full recalibration.
@@ -1881,6 +2018,7 @@ class TrackModellingMixin:
 
         # Reset alignment panel to "Not built" state
         self._tm_refresh_alignment_panel(None)
+        self._tm_refresh_track_truth_panel()
 
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.information(
@@ -2066,6 +2204,7 @@ class TrackModellingMixin:
                 return
             self._tm_alignment_result = loaded
             self._tm_refresh_alignment_panel(loaded)
+            self._tm_refresh_track_truth_panel()
         except Exception:
             logging.debug("no accepted model for this layout", exc_info=True)
 

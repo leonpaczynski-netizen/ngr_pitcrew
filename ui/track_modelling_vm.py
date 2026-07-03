@@ -1012,3 +1012,217 @@ def _min_samples() -> int:
         return MIN_CALIBRATION_SAMPLES
     except Exception:
         return 50
+
+
+# ---------------------------------------------------------------------------
+# Group 18A — Track Truth Foundation view-model helper
+# ---------------------------------------------------------------------------
+
+_TRUTH_STATUS_MAP: dict[str, tuple[str, str]] = {
+    "METADATA_ONLY":         ("Metadata only — no coordinate geometry",           "#888888"),
+    "CURVATURE_PROVISIONAL": ("Curvature-provisional — corner mapping unverified", "#F5A623"),
+    "ACCEPTED_SEED_MAP":     ("Track Truth accepted — Map Alignment ready",        "#4caf50"),
+    "ACCEPTED_LIVE_MAPPING": ("Track Truth accepted — Live Mapping Ready",         "#88EE88"),
+}
+
+_GREEN  = "#4caf50"
+_AMBER  = "#F5A623"
+_GREY   = "#888888"
+_PLACEHOLDER = "—"
+
+
+def format_track_truth_status(
+    model,
+    validation,
+    track_id: Optional[str] = None,
+    layout_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Return display dict for the Track Truth status panel.
+
+    ``model`` is a TrackTruthModel or None.
+    ``validation`` is a TrackTruthValidationResult or None.
+
+    All keys are always present in the returned dict.
+    When model is None every value is "—" and every color is "#888888".
+
+    Keys returned
+    -------------
+    track_id, layout_id,
+    library_availability, library_availability_color,
+    seed_geometry, seed_geometry_color,
+    corner_metadata, corner_metadata_color,
+    complex_metadata, complex_metadata_color,
+    geometry_acceptance, geometry_acceptance_color,
+    live_mapping_ready, live_mapping_ready_color,
+    ai_context_ready, ai_context_ready_color,
+    blockers,
+    warnings,
+    status_label, status_color
+    """
+    _ph = {
+        "track_id":                    _PLACEHOLDER,
+        "layout_id":                   _PLACEHOLDER,
+        "library_availability":        _PLACEHOLDER,
+        "library_availability_color":  _GREY,
+        "seed_geometry":               _PLACEHOLDER,
+        "seed_geometry_color":         _GREY,
+        "corner_metadata":             _PLACEHOLDER,
+        "corner_metadata_color":       _GREY,
+        "complex_metadata":            _PLACEHOLDER,
+        "complex_metadata_color":      _GREY,
+        "geometry_acceptance":         _PLACEHOLDER,
+        "geometry_acceptance_color":   _GREY,
+        "live_mapping_ready":          _PLACEHOLDER,
+        "live_mapping_ready_color":    _GREY,
+        "ai_context_ready":            _PLACEHOLDER,
+        "ai_context_ready_color":      _GREY,
+        "blockers":                    _PLACEHOLDER,
+        "warnings":                    _PLACEHOLDER,
+        "status_label":                _PLACEHOLDER,
+        "status_color":                _GREY,
+    }
+
+    if model is None:
+        return _ph
+
+    # ── IDs ──────────────────────────────────────────────────────────────────
+    try:
+        m = model.manifest
+        tid = track_id  if track_id  else getattr(m, "track_id",  "")
+        lid = layout_id if layout_id else getattr(m, "layout_id", "")
+    except Exception:
+        tid = track_id  or _PLACEHOLDER
+        lid = layout_id or _PLACEHOLDER
+
+    # ── seed_geometry_available ───────────────────────────────────────────────
+    try:
+        geo_avail = bool(getattr(model.manifest, "seed_geometry_available", False))
+    except Exception:
+        geo_avail = False
+
+    seed_geo_val   = "Available"     if geo_avail else "Not available"
+    seed_geo_color = _GREEN          if geo_avail else _GREY
+
+    # ── corner_windows ────────────────────────────────────────────────────────
+    try:
+        n_corners = len(list(model.corner_windows))
+    except Exception:
+        n_corners = 0
+
+    if n_corners > 0:
+        corner_val   = f"Yes ({n_corners} corners)"
+        corner_color = _GREEN
+    else:
+        corner_val   = "None"
+        corner_color = _GREY
+
+    # ── corner_complexes ──────────────────────────────────────────────────────
+    try:
+        n_complexes = len(list(model.corner_complexes))
+    except Exception:
+        n_complexes = 0
+
+    if n_complexes > 0:
+        complex_val   = f"Yes ({n_complexes} complexes)"
+        complex_color = _GREEN
+    else:
+        complex_val   = "None"
+        complex_color = _GREY
+
+    # ── validation-derived fields ─────────────────────────────────────────────
+    if validation is None:
+        # Model present but validation not run — treat as metadata-only / unknown
+        geo_accept_val   = "Unknown"
+        geo_accept_color = _GREY
+        live_val         = "Not ready"
+        live_color       = _GREY
+        ai_val           = "Blocked"
+        ai_color         = _GREY
+        blockers_str     = "—"
+        warnings_str     = "—"
+        status_label     = "Metadata only — no coordinate geometry"
+        status_color     = _GREY
+    else:
+        try:
+            is_accepted = bool(validation.is_accepted)
+        except Exception:
+            is_accepted = False
+
+        # geometry_acceptance
+        if is_accepted:
+            geo_accept_val   = "Accepted"
+            geo_accept_color = _GREEN
+        else:
+            # Amber if some metadata present (corners or complexes), grey otherwise
+            geo_accept_color = _AMBER if (n_corners > 0 or n_complexes > 0) else _GREY
+            geo_accept_val   = "Blocked"
+
+        # live_mapping_ready
+        try:
+            live_ready = bool(validation.is_usable_for_live_mapping)
+        except Exception:
+            live_ready = False
+
+        live_val   = "Ready"     if live_ready else "Not ready"
+        live_color = _GREEN      if live_ready else _GREY
+
+        # ai_context_ready
+        try:
+            ai_ready = bool(validation.is_usable_for_ai_corner_context)
+        except Exception:
+            ai_ready = False
+
+        if ai_ready:
+            ai_val   = "Ready"
+            ai_color = _GREEN
+        else:
+            ai_val   = "Blocked"
+            ai_color = _AMBER if is_accepted else _GREY
+
+        # blockers / warnings
+        try:
+            raw_blockers = list(validation.blockers) if validation.blockers else []
+        except Exception:
+            raw_blockers = []
+        blockers_str = "\n".join(raw_blockers) if raw_blockers else "None"
+
+        try:
+            raw_warnings = list(validation.warnings) if validation.warnings else []
+        except Exception:
+            raw_warnings = []
+        warnings_str = "\n".join(raw_warnings) if raw_warnings else "None"
+
+        # status_label / status_color
+        try:
+            status_val = str(validation.status.value)
+        except Exception:
+            status_val = ""
+
+        if status_val in _TRUTH_STATUS_MAP:
+            status_label, status_color = _TRUTH_STATUS_MAP[status_val]
+        else:
+            status_label = "No track truth data"
+            status_color = _GREY
+
+    return {
+        "track_id":                    str(tid),
+        "layout_id":                   str(lid),
+        "library_availability":        "Available",
+        "library_availability_color":  _GREEN,
+        "seed_geometry":               seed_geo_val,
+        "seed_geometry_color":         seed_geo_color,
+        "corner_metadata":             corner_val,
+        "corner_metadata_color":       corner_color,
+        "complex_metadata":            complex_val,
+        "complex_metadata_color":      complex_color,
+        "geometry_acceptance":         geo_accept_val,
+        "geometry_acceptance_color":   geo_accept_color,
+        "live_mapping_ready":          live_val,
+        "live_mapping_ready_color":    live_color,
+        "ai_context_ready":            ai_val,
+        "ai_context_ready_color":      ai_color,
+        "blockers":                    blockers_str,
+        "warnings":                    warnings_str,
+        "status_label":                status_label,
+        "status_color":                status_color,
+    }

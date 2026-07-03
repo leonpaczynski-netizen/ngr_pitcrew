@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite, merged to `master` via `integration/setup-brain-strategy-overhaul` — merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`. Merged after automated tests passed; **runtime UAT still pending** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master` at merge commit `7254835`). See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
+> Last updated: 2026-07-03 (Group 18A: Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation — **4053 pass / 6 skip / 0 fail** — 45 new tests across `test_group18a_track_truth.py` (26), `test_group18a_track_truth_matcher.py` (9), `test_group18a_track_truth_calibration.py` (10). Foundation only — Setup/Strategy/Live-Engineer not yet rewired to consume `TrackTruthModel`. See "Group 18A — Track Truth Foundation" at the end of this file.
+> Prior: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite, merged to `master` via `integration/setup-brain-strategy-overhaul` — merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`. Merged after automated tests passed; **runtime UAT still pending** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master` at merge commit `7254835`). See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
 > Read PROJECT_STATE.md first, then this file, before touching any code.
 >
 > Note: detailed session notes for Groups 17P–25 live in `docs/CURRENT_CLAUDE_HANDOFF.md`. Groups 26–38 and the lettered groups (A/B/C/D/E) + Qualifying Mode are summarised at the end of this file under "Groups 26–38 + Lettered Groups (Strategy / Race-Engineer / Setup Overhaul)".
@@ -3611,3 +3612,89 @@ listing stints.
   post-AI validation/regenerate loop (no telemetry at build time) — deferred.
 - Strategy finishing-position prediction needs rival telemetry not in the pipeline
   today — deferred.
+
+---
+
+## Group 18A — Track Truth Foundation (2026-07-03)
+
+Builds the foundation for a proper **Track Truth** system so the app stops treating
+curvature-only detected corners as authoritative track truth. Product principle:
+**no mapped-corner confidence ⇒ no high-confidence setup/strategy recommendation.**
+Foundation only — no Setup/Strategy/Live-Engineer rewrite. **45 new tests. Full suite:
+4053 pass / 6 skip / 0 fail.**
+
+### Files added
+- `data/track_truth.py` (new) — pure-Python Track Truth data model + validation + AI guard.
+  Enums `TrackTruthStatus` / `TrackTruthConfidence` / `TrackTruthSource` /
+  `TrackTruthValidationIssue`; dataclasses `TrackStation`, `CornerWindow`, `CornerComplex`,
+  `SectorMarker`, `PitLaneDefinition`, `TrackTruthManifest`, `TrackTruthModel`,
+  `TrackTruthValidationResult`; schema constants `track_truth_model_v1` /
+  `track_truth_manifest_v1`; functions `track_truth_model_to_dict` /
+  `track_truth_model_from_dict` (None on schema mismatch, never raises) /
+  `export_track_truth_model_json` / `import_track_truth_model_json` /
+  `resolve_track_truth_model(track_id, layout_id, base_dir=None)` /
+  `validate_track_truth_model(model)` / `can_use_track_truth_for_ai_corner_context(result)`.
+- `data/track_truth_matcher.py` (new) — station-based live map-matching foundation.
+  `TrackTruthMatchInput`, `TrackTruthMatchResult`,
+  `match_track_truth_position(inp, model, validation=None)` (never raises). Weighted
+  `_score_candidate` (spatial + heading + monotonic-progress + lap-wrap +
+  max-plausible-movement + pit awareness), swappable for HMM/Viterbi later. Confidence bands
+  mirror `track_map_matching.py` (≤5 m HIGH / ≤20 m MEDIUM / ≤60 m LOW / else NONE).
+- `data/track_truth_calibration.py` (new) — calibration wizard foundation.
+  `TrackTruthWizardStage` (NOT_STARTED → CAPTURE_CENTRELINE → CAPTURE_LEFT_EDGE →
+  CAPTURE_RIGHT_EDGE → OPTIONAL_HOT_LAP → BUILD_PROPOSED → VALIDATE → ACCEPT),
+  `TrackTruthWizardState`, `TrackTruthCalibrationWizard`. Illegal transitions are no-ops
+  setting `state.error`; `accept()` is the only route to ACCEPT and persists via
+  `save_seed_geometry_to_library`; geometry building delegated through a defensive wrapper
+  around `data/track_geometry_builder.build_seed_geometry` (no duplicate algorithm);
+  `abandon()` resets and writes no file.
+
+### Files modified (additive only)
+- `ui/track_modelling_vm.py` — `format_track_truth_status(model, validation, track_id=None,
+  layout_id=None) -> dict` (20-key value+`_color` dict; `"—"`/`"#888888"` placeholder for
+  None; four display states; uses "Track Truth" / "Map Alignment" / "Live Mapping Ready").
+- `ui/track_modelling_ui.py` — "Track Truth / Mapping" QGroupBox panel +
+  `_tm_refresh_track_truth_panel()` wired into `_tm_on_layout_changed`, `_tm_run_alignment`,
+  `_tm_accept_track_model`, `_tm_rebuild_model`, `_tm_try_load_accepted_model`. Headless-VM
+  tests only (no Qt test, per project convention) — needs manual UAT.
+
+### New schema
+`track_truth_model_v1` (envelope with nested `track_truth_manifest_v1` + corner_windows /
+corner_complexes / sectors / stations / pit_lane). **Runtime-built** from the existing library
+manifest + semantic_model — **no new JSON file added to the library.** Full field list in
+`docs/TRACK_LIBRARY_SCHEMA.md`.
+
+### Validation gates
+- `is_accepted` = no blockers. Blockers: non-monotonic stations, progress out of 0–100,
+  `lap_length ≤ 0`, apex outside window, complex referencing a missing corner ID, sector out
+  of range, `corners_expected > 0` with no windows, and `NO_COORDINATE_GEOMETRY` (exact text
+  *"Coordinate geometry unavailable — high-confidence corner mapping is blocked"*).
+- `is_usable_for_live_mapping` = `is_accepted` AND stations present AND
+  `manifest.corners_are_seed_verified` (explicit growth field, default False).
+- `is_usable_for_ai_corner_context` = `is_usable_for_live_mapping` AND
+  `manifest.seed_geometry_available`.
+- AI guard `can_use_track_truth_for_ai_corner_context()` returns True only when accepted AND
+  usable for AI corner context; None → False.
+- Single-member complex is a **warning**, not a blocker. `summary` never says "accepted" when
+  not accepted; a rejected model with geometry gets `status = NO_DATA`.
+
+### Daytona status
+Runtime Track Truth built from Daytona's existing manifest + semantic model (12 corners, 3
+sectors, 2 complexes incl. Horseshoe/T10T11). Because Daytona has no `geometry.seed_map.json`,
+the model has zero stations → `NO_COORDINATE_GEOMETRY` blocker → `is_accepted = False` → AI
+corner context BLOCKED. `availability.seed_geometry` stays `false`. Acceptance stays blocked
+until a real seed geometry exists.
+
+### Test coverage (45 tests)
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_group18a_track_truth.py` | 26 | Model, dict/JSON round-trip (None on schema mismatch), runtime resolve, all validation gates, blockers/warnings, AI guard, Daytona-blocked case |
+| `tests/test_group18a_track_truth_matcher.py` | 9 | Candidate scoring, confidence bands, monotonic-progress/lap-wrap, pit awareness, never-raises |
+| `tests/test_group18a_track_truth_calibration.py` | 10 | Wizard stage machine, illegal-transition no-ops, delegated build wrapper, accept-only-to-ACCEPT, abandon resets |
+
+### Deferred
+Wiring `TrackTruthModel` into Setup Brain / Strategy Brain / Live Race Engineer; full
+HMM/Viterbi matcher (scaffold only); a real Daytona `geometry.seed_map.json`; non-Daytona
+tracks; automated boundary generation; deep AI prompt integration; automatic track ID.
+
+**Full suite result after Group 18A: 4053 pass / 6 skip / 0 fail**

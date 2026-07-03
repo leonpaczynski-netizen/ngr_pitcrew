@@ -1,7 +1,13 @@
 # GT7 VR Dashboard — Project State
 
-> Last updated: 2026-06-26 (Group 17U — Track Library Schema and Seed Data Registry — 2329 pass / 5 skip / 0 fail — 83 tests in test_group17u_track_library_schema.py)
+> Last updated: 2026-07-03 (Group 18A — Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation — 4053 pass / 6 skip / 0 fail — 45 new tests across three test_group18a_*.py files)
 > Read this file first, then MASTER_TESTING_REGISTER.md, before touching any code.
+>
+> Note: this file's group table below was authored through Group 17U. Groups 17V–38, the
+> lettered groups (A/B/C/D/E), Qualifying Mode, and the Setup Brain + Strategy Outcome
+> integration are catalogued in `MASTER_TESTING_REGISTER.md` (see its "Groups 26–38 +
+> Lettered Groups" and "Integration" sections) and in `docs/CURRENT_CLAUDE_HANDOFF.md`.
+> The build-status total below is current (4053).
 
 ---
 
@@ -9,9 +15,9 @@
 
 | Metric | Value |
 |--------|-------|
-| Automated tests | 2329 pass / 5 skip / 0 fail (2334 collected) |
-| Test files | 51 (Groups 1–18, 17A–17O, 17M-UAT, 17N-UAT, 17N-UAT-005, 17O-UAT, 17P-alignment, 17Q-seed-corner, 17R-seed-overlay, 17S-seed-authoring, 17T-seed-coordinate-map, 17U-track-library-schema, 15A + session_db, strategy, fuel, grip, lap_delta, defects_batch_a) |
-| Last test run | 2026-06-26, Group 17U — 83 tests added (test_group17u_track_library_schema.py) |
+| Automated tests | 4053 pass / 6 skip / 0 fail |
+| Latest group | Group 18A — Track Truth foundation (`data/track_truth.py`, `track_truth_matcher.py`, `track_truth_calibration.py`) — 45 new tests |
+| Last test run | 2026-07-03, Group 18A — 45 tests added (test_group18a_track_truth.py 26, _matcher.py 9, _calibration.py 10) |
 | App launches | Yes (no startup crash) |
 
 ---
@@ -63,6 +69,8 @@
 | Group 17S | Seed Track Definition Authoring, Corner Complexes, True Alignment Gate: `data/track_intelligence.py` — `SeedSectorDefinition`, `CornerComplexDefinition`, `SeedAuditResult` dataclasses, `audit_layout_seed()`, `_parse_sector_def()`, `_parse_complex_def()`, `TrackLayoutSeed.sector_definitions/corner_complexes` fields; `docs/track_modelling_seed/track_modelling_seed.yaml` — Daytona Road Course enriched with 12 corner windows (T1–T12, source:estimated), 3 sector_definitions (S1/S2/S3), 2 corner_complexes (BusStop=T1+T2, T10T11=T10+T11/Horseshoe); `data/track_model_alignment.py` — lap delta > 5% is now a BLOCKER (was a warning); `ui/track_model_alignment_vm.py` — `format_seed_audit_summary()`, `format_alignment_summary(layout_seed=None)` optional param, `seed_audit` key; `ui/dashboard.py` — "Seed data available" alignment row, `_tm_refresh_alignment_panel()` resolves layout_seed for audit, seed-window-based turn assignment in `_tm_refresh_seg_table()`, `_tm_refresh_seg_diagnostics_labels()` called on station map load/build; `tests/test_group17s_seed_definition_authoring.py` (NEW) — 36 tests | **Complete 2026-06-26 — 36 tests pass** | DEF-17S-001/002/003/004/005/006 ✅ |
 | Group 17T | Seed Coordinate Map Import and Full-Lap Geometry Alignment: `data/track_seed_coordinate_map.py` (NEW) — `SeedMapStation`, `SeedCoordinateMap`, find/load/export/import/resample; `data/track_map_geometry_alignment.py` (NEW) — `TrackMapGeometryAlignmentResult`, `align_maps_geometry()`, transform estimation, missing-section detection, corner/sector coordinate matching; `ui/track_map_vm.py` — `seed_centreline` defaulted field; `ui/track_model_alignment_vm.py` — `format_geometry_alignment_summary()`, `format_alignment_summary()` accepts `geo_result`; `ui/dashboard.py` — "Geometry match" row, `_tm_refresh_alignment_panel()` computes geometry alignment; `tests/test_group17t_seed_coordinate_map.py` (NEW) — 55 tests | **Complete 2026-06-26 — 55 tests pass** | — |
 | Group 17U | Track Library Schema and Seed Data Registry: `data/track_library.py` (NEW) — full dataclass hierarchy + resolver/loader/audit functions; `data/track_library/` directory (NEW) — `index.json`, Daytona track metadata, layout manifest with 12 corners/3 sectors/2 complexes, validation rules, source manifest; `data/track_intelligence.py` — `SeedAuditResult` extended with `seed_source/library_manifest_loaded/validation_rules_loaded`; `ui/track_model_alignment_vm.py` — `"seed_source"` key in `format_alignment_summary()`; `ui/dashboard.py` — "Seed source" row, library-first `resolve_seed_coordinate_map()`; `docs/TRACK_LIBRARY_SCHEMA.md` (NEW); `tests/test_group17u_track_library_schema.py` (NEW) — 83 tests | **Complete 2026-06-26 — 83 tests pass** | — |
+| _(Groups 17V–38, A–E, Qualifying Mode, Setup Brain + Strategy Outcome integration)_ | Catalogued in `MASTER_TESTING_REGISTER.md` ("Groups 26–38 + Lettered Groups" and "Integration — Setup Brain + Strategy Outcome") and `docs/CURRENT_CLAUDE_HANDOFF.md`, not re-tabulated here | **Complete — see register** | — |
+| Group 18A | Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation: builds a proper Track Truth spine so the app stops treating curvature-only corners as authoritative (principle: no mapped-corner confidence ⇒ no high-confidence rec). `data/track_truth.py` (NEW) — 4 str-Enums, 8 dataclasses (`TrackStation`/`CornerWindow`/`CornerComplex`/`SectorMarker`/`PitLaneDefinition`/`TrackTruthManifest`/`TrackTruthModel`/`TrackTruthValidationResult`), schema `track_truth_model_v1`+`track_truth_manifest_v1` (runtime-built from existing library manifest+semantic_model — no new file), `resolve_track_truth_model()`, `validate_track_truth_model()` (tiered gates is_accepted → is_usable_for_live_mapping → is_usable_for_ai_corner_context; NO_COORDINATE_GEOMETRY blocker), `can_use_track_truth_for_ai_corner_context()` AI guard; `data/track_truth_matcher.py` (NEW) — `match_track_truth_position()` weighted station scoring scaffold (swappable for HMM/Viterbi), confidence bands mirror `track_map_matching.py`; `data/track_truth_calibration.py` (NEW) — `TrackTruthWizardStage` (8) + `TrackTruthCalibrationWizard`, illegal transitions are no-ops, geometry DELEGATED to Group 17V's `data/track_geometry_builder.build_seed_geometry` (no duplicate algorithm), accept persists via `save_seed_geometry_to_library`; `ui/track_modelling_vm.py` — `format_track_truth_status()` (20-key display dict); `ui/track_modelling_ui.py` — "Track Truth / Mapping" panel + `_tm_refresh_track_truth_panel()`; `tests/test_group18a_track_truth*.py` (NEW ×3) — 45 tests. Daytona stays AI-BLOCKED (no seed_map → zero stations → NO_COORDINATE_GEOMETRY). Setup/Strategy/Live-Engineer rewiring deferred. | **Complete 2026-07-03 — 45 tests pass** | — |
 
 ---
 
