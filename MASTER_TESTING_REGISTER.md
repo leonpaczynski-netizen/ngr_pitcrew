@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**Home Dashboard Build — Race Engineer Command Centre** — the missing home/overview surface (REQUIREMENTS.md §12.2, audit §1.1) is now built. New `ui/home_dashboard_vm.py` (pure Python — `HomeDashboardState`/`HomeDashboardCard`/`HomeDashboardStatus`/`HomeDashboardWarning`/`HomeDashboardNextAction`; `build_home_dashboard_state()` never raises; six sections: Race Setup / Track Intelligence / Setup Brain / Strategy Brain / AI Input Safety / Next Best Action, all read from the four canonical contexts + the AI snapshot core + `build_flow_state_summary()`). New **Home tab APPENDED at index 13** (`_build_home_tab` — indices 0–12 and `_on_tab_changed` dispatches unchanged; no tab reordered/renamed/removed); refresh on tab-shown + guarded `_home_refresh_if_visible()` hooks after event set-active / `_update_race_config` / setup result display / track-truth refresh — no polling, no new workers. Display-only: source-scans prove the home methods write nothing (no config["strategy"], no persist, no DB/file writes). Stale indicators surfaced in plain English (setup-vs-event, setup-vs-strategy, strategy-vs-event, track mismatch, AI legacy fallback). New tests `test_home_dashboard_vm.py` (52). **Full suite: 4454 pass / 6 skip / 0 fail.** See "Home Dashboard Build" at the end of this file.)
+> Last updated: 2026-07-03 (**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal** — executes the Product Consolidation Audit's §9 items 1/3/4. DELETED: the 7 hidden, never-signal-connected legacy per-segment review buttons + their unreachable `_tm_review_*` handlers + `_tm_refresh_review_buttons`/no-op `_tm_refresh_approval_panel` + 8 dead imports + 4 never-applied style strings (`ui/track_modelling_ui.py`; pure review functions in `data/track_segment_review.py` retained); the dead, never-rendered `_TELEMETRY_REFERENCE_HTML` constant. RENAMED: "Race Config ID" → **"Session Match Key"**; Diagnostics "Rem(clk)"/"rem_ms(raw)"/"Ann queue" → "Time left:"/"remaining_time_ms:"/"Voice queue:"; window title + Guide h1 → **"Next Gear Racing Pit Crew"**. GUIDE FIXED: stale Step 8 (described a "Dashboard" tab with quick-links that never existed) now describes the real Home tab; API-key bullet now points at the Strategy Builder field (audit's "Settings duplicate" claim corrected — no Settings key field exists); new "Tool tabs (⚙) … safe to ignore" note; "pip install" tooltip line removed. NO CHANGE to tab order, `_on_tab_changed` indices, Home Dashboard, diagnostic tabs, any logic/prompt/mapping/PTT/voice/persistence, or the two `config["strategy"]` fan-outs (pinned by test). New tests `test_diagnostic_tab_cleanup.py` (25); `test_group24` `_tm_` floor 54→46 (9 deleted methods enumerated). **Full suite: 4479 pass / 6 skip / 0 fail.** See "Diagnostic Tab Cleanup" at the end of this file.)
+> Prior: 2026-07-03 (**Home Dashboard Build — Race Engineer Command Centre** — the missing home/overview surface (REQUIREMENTS.md §12.2, audit §1.1) is now built. New `ui/home_dashboard_vm.py` (pure Python — `HomeDashboardState`/`HomeDashboardCard`/`HomeDashboardStatus`/`HomeDashboardWarning`/`HomeDashboardNextAction`; `build_home_dashboard_state()` never raises; six sections: Race Setup / Track Intelligence / Setup Brain / Strategy Brain / AI Input Safety / Next Best Action, all read from the four canonical contexts + the AI snapshot core + `build_flow_state_summary()`). New **Home tab APPENDED at index 13** (`_build_home_tab` — indices 0–12 and `_on_tab_changed` dispatches unchanged; no tab reordered/renamed/removed); refresh on tab-shown + guarded `_home_refresh_if_visible()` hooks after event set-active / `_update_race_config` / setup result display / track-truth refresh — no polling, no new workers. Display-only: source-scans prove the home methods write nothing (no config["strategy"], no persist, no DB/file writes). Stale indicators surfaced in plain English (setup-vs-event, setup-vs-strategy, strategy-vs-event, track mismatch, AI legacy fallback). New tests `test_home_dashboard_vm.py` (52). **Full suite: 4454 pass / 6 skip / 0 fail.** See "Home Dashboard Build" at the end of this file.)
 > Prior: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 4 — TrackContext** — canonical track/layout read model `data/track_context.py` owning identity (ids/display names/combined id, priority TM-combos → EventContext → config ids → seed) + model-artefact availability (seed metadata/corner windows/coordinate geometry/reference path/calibration laps/station map/reviewed+accepted model/lap offset — flags echo the existing audits, no geometry truth invented) + modelling/alignment/lap-offset status, keyed to `EventContext.change_hash` with tri-state `matches_event` / `mismatches_event` / `is_stale_for_event` / live-mapping gate helpers; `docs/TRACK_CONTEXT_MIGRATION.md` registers all 16 track state stores with duplication verdicts; migrated `_tm_refresh_track_truth_panel` identity (combo-sourced, behaviour-preserving) + `_last_track_context` captured. All legacy track files/loaders/resolver/calibration code retained. New tests `test_track_context.py` (68). **Full suite: 4361 pass / 6 skip / 0 fail.** See "State Consolidation 4 — TrackContext" at the end of this file.)
 > Prior: 2026-07-03 (**State Consolidation 3 — SetupContext** — canonical setup-recommendation read model `data/setup_context.py` owning purpose / source / adjustments / baseline+target setup / confidence / validation, keyed to `EventContext.change_hash` + `StrategyPromptSnapshot.snapshot_id` so stale setups are detectable (reads event/strategy only as keys, never duplicating them); `SetupPromptSnapshot` freezes a consistent setup+event+strategy state for a future AI prompt; `docs/SETUP_CONTEXT_MIGRATION.md` registers every setup store; migrated `_setup_type_prefix` (purpose) + `_display_setup_result` captures the context. Legacy setup config/DB storage retained. New tests `test_setup_context.py` (67). **Full suite: 4293 pass / 6 skip / 0 fail.** See "State Consolidation 3 — SetupContext" at the end of this file.)
@@ -4387,3 +4388,87 @@ hide/rename "Race Config ID", move the Guide's telemetry byte reference,
 Diagnostics wording pass) — or **Legacy Fan-Out Removal Phase 1** (begin
 retiring the `_on_event_set_active` → `config["strategy"]` fan-out behind the
 now-complete context layer) as the higher-value / higher-risk alternative.
+
+---
+
+## Diagnostic Tab Cleanup — Low-Risk UI Dags Removal (2026-07-03)
+
+> Branch `diagnostic-tab-cleanup-ui-dags` (from `home-dashboard-command-centre`
+> @ `d96b967`). Full doc: `docs/DIAGNOSTIC_TAB_CLEANUP.md`.
+> **Full suite: 4479 pass / 6 skip / 0 fail** (25 new tests).
+
+### What was done
+Low-risk UI cleanup executing the audit's §9 items 1/3/4. The entire diff is
+deletions of dead UI, label text and Guide HTML — **no logic, prompt, mapping,
+PTT/voice, persistence, tab-order or fan-out change** (pinned by source-scans).
+
+- **7 legacy per-segment review buttons DELETED** (`ui/track_modelling_ui.py`):
+  the Confirm/Rename/Reject/Needs More Laps/Split Required/Merge Required/
+  Save Reviewed Model buttons were hidden at creation AND never
+  `clicked.connect`-ed, so the 7 `_tm_review_*` handlers were unreachable.
+  Deleted: widgets + save-path label, 4 never-applied style strings,
+  `_tm_refresh_review_buttons` (+2 call sites), the no-op
+  `_tm_refresh_approval_panel` (+1 call site), the 7 handlers, and 8
+  now-unused imports. **Retained:** the pure review-action functions in
+  `data/track_segment_review.py` + `ui/track_modelling_vm.get_review_button_states`
+  (own coverage in `test_group17f`/`test_group17m`; import test proves intact).
+- **`_TELEMETRY_REFERENCE_HTML` DELETED** (`ui/dashboard.py`, ~143 lines):
+  dead code — defined but never rendered anywhere (the audit thought it was
+  embedded in the Guide; it wasn't).
+- **Renames:** "Race Config ID:" → **"Session Match Key:"** (+ plain-English
+  tooltip; value/`config_id` mechanics untouched); Diagnostics "Rem(clk):" →
+  "Time left:", "rem_ms(raw):" → "remaining_time_ms:" (matches the raw-field
+  row's real field names), "Ann queue:" → "Voice queue:" (creation + setText
+  sites together); window title + Guide h1 "GT7 VR Dashboard" → **"Next Gear
+  Racing Pit Crew"** (product renamed 2026-06-23; only user-facing sites).
+- **Guide fixes:** Step 8 no longer describes a phantom "Dashboard" tab with
+  quick-link buttons — it now describes the real Home tab; the API-key bullet
+  points at `api_key.txt` or the **Strategy Builder** field (the audit's
+  "Settings duplicate" claim was wrong — no Settings key field exists; the
+  editable field + all `self._ai_api_key` AI callers untouched, relocation
+  deferred); new "Tool tabs (⚙) … safe to ignore during a normal race weekend"
+  note; "pip install requests beautifulsoup4" removed from the web-refresh
+  tooltip.
+- **Deferred (documented in the cleanup doc §2.9):** Track Modelling jargon
+  glossary, Telemetry raw-row hiding, API-key relocation to Settings, and the
+  two `config["strategy"]` fan-outs (out of scope; a test pins they still exist).
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_diagnostic_tab_cleanup.py` (NEW) | 25 | all 8 deleted widgets / 9 deleted methods / 8 dead imports gone with zero string or getattr references remaining in either UI module; backend review functions still importable (UI-only removal); renames present + stale labels absent (Session Match Key, Time left, remaining_time_ms, Voice queue, product name, no pip install); Guide fixed (no phantom Dashboard step, Home step + Command Centre present, API-key bullet → Strategy Builder, tool-tab note, dead telemetry constant gone); tab order pinned incl. Home at 13; `_on_tab_changed` dispatches unchanged; diagnostic tabs still built; product_flow diagnostic set unchanged; Home Dashboard wiring intact; both legacy fan-outs untouched; no strategy writes in touched areas; API-key field still exists |
+| `tests/test_group24_track_modelling_extraction.py` (updated) | — | `_tm_` method-count floor 54 → 46; the 9 deleted methods enumerated in the test comment |
+
+### Acceptance criteria — status
+- Full test suite passes — **yes (4479/6/0)**.
+- Cleanup document exists and is specific — **yes (`docs/DIAGNOSTIC_TAB_CLEANUP.md`,
+  per-item verdict/risk/action tables incl. corrected audit findings)**.
+- 7 legacy buttons safely removed — **yes (deleted; unreachability proven)**.
+- Developer-only labels hidden/renamed — **yes**.
+- Tab order unchanged / Home Dashboard functional / diagnostics available — **yes (source-scanned)**.
+- No setup/strategy/track-mapping/AI-prompt/AI-plumbing/PTT/voice change — **yes**.
+- No legacy fan-out removal attempted — **yes (pinned by test)**.
+- Clear next-sprint recommendation — **yes (Tab Navigation Refactor — Named
+  Tab Lookup, then move Home Dashboard to index 0)**.
+
+### Manual UAT steps
+1. Launch the app: window title reads "Next Gear Racing Pit Crew".
+2. Guide tab: title updated; intro explains the ⚙ tool tabs; Step 8 describes
+   the Home tab; API-key bullet names the Strategy Builder tab.
+3. Strategy Builder: the row under the separator reads "Session Match Key:"
+   and still shows the hash + track/car/length detail; lap bank unaffected.
+4. Diagnostics tab: rows read "Time left:", "remaining_time_ms:",
+   "Voice queue:" and update live as before.
+5. Track Modelling: Segment Detection → Segment Diagnostics table and the
+   whole-model Accept workflow behave exactly as before (nothing visible
+   changed — the deleted controls were already invisible).
+6. Confirm tab order and the Home tab are unchanged.
+
+### Next sprint
+**Tab Navigation Refactor — Named Tab Lookup** — replace the hard-coded tab
+indices in `_on_tab_changed` (0–12 + `_home_tab_index`) with
+lookup-by-title/object so tabs can finally be reordered safely; then **move
+Home Dashboard to index 0** and enable its deferred click-to-navigate
+(`docs/HOME_DASHBOARD_BUILD.md` §5). Alternative higher-risk track: **Legacy
+Fan-Out Removal Phase 1**.

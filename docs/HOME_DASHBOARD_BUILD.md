@@ -206,6 +206,12 @@ Dashboard Build).
 
 ## 7. Next sprint recommendation
 
+> **Executed (2026-07-03):** the Diagnostic Tab Cleanup sprint ran next — see
+> `docs/DIAGNOSTIC_TAB_CLEANUP.md`. The Guide now also explains the ⚙ tool
+> tabs and its Step 8 describes this Home tab (replacing a stale description
+> of a "Dashboard" tab that never existed). The recommendation after it is
+> **Tab Navigation Refactor — Named Tab Lookup**, then moving Home to index 0.
+
 **Diagnostic Tab Cleanup** (audit §9 items 1–4): delete the 7 hidden legacy
 per-segment buttons + their `getattr` handlers, make Strategy Builder's API
 key defer to Settings, hide/rename the "Race Config ID" hash, move the

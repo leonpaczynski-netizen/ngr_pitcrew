@@ -1,6 +1,26 @@
 # Current Claude Handoff
 
 ## Current Objective
+**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal — COMPLETE (2026-07-03).** Branch `diagnostic-tab-cleanup-ui-dags` (from `home-dashboard-command-centre` @ `d96b967`). Full suite: **4479 pass / 6 skip / 0 fail** (25 new tests). The whole diff is deletions of dead UI, label text and Guide HTML — **no logic, prompt, mapping, PTT/voice, persistence, tab-order, Home-Dashboard, or fan-out change** (all pinned by source-scans).
+
+**Why it exists:** executes the Product Consolidation Audit's remaining low-risk cleanup items (§9 1/3/4) now that the Home Dashboard exists to carry the user-facing overview.
+
+**Deliverables:**
+- **7 legacy per-segment review buttons DELETED** (`ui/track_modelling_ui.py`) — Confirm/Rename/Reject/Needs More Laps/Split Required/Merge Required/Save Reviewed Model were hidden at creation AND never `clicked.connect`-ed, so the 7 `_tm_review_*` handlers were unreachable. Also deleted: the save-path label, 4 never-applied `_rev_btn_*` style strings, `_tm_refresh_review_buttons` (+2 call sites), the no-op `_tm_refresh_approval_panel` (+1 call site), and 8 dead imports. **Retained:** the pure review-action functions in `data/track_segment_review.py` and `ui/track_modelling_vm.get_review_button_states` (own coverage; import test proves intact). `test_group24` `_tm_` method floor 54→46 (deleted methods enumerated in the test comment).
+- **Dead `_TELEMETRY_REFERENCE_HTML` DELETED** (`ui/dashboard.py`, ~143 lines) — the audit thought the 72-field packet reference was embedded in the Guide; it was actually dead code, defined but never rendered anywhere.
+- **Renames:** "Race Config ID:" → **"Session Match Key:"** (plain-English tooltip; the `config_id` value/mechanics and lap-bank behaviour untouched); Diagnostics tab "Rem(clk):" → "Time left:", "rem_ms(raw):" → "remaining_time_ms:" (real packet-field name, consistent with the raw row), "Ann queue:" → "Voice queue:" — creation defaults and `setText` sites updated together; window title + Guide h1 "GT7 VR Dashboard" → **"Next Gear Racing Pit Crew"** (the only two user-facing old-brand sites).
+- **Guide fixes (`_GUIDE_HTML`):** Step 8 described a **"Dashboard" tab with quick-link buttons that never existed** — rewritten to describe the real Home tab (Race Engineer Command Centre); the API-key bullet said the key could be pasted in Settings — **corrected finding: no Settings key field exists**, the Strategy Builder `self._ai_api_key` field is the single editable entry every AI caller reads (audit §4 corrected; relocation to Settings deferred); new intro note "Tool tabs (⚙) … are advanced tools … safe to ignore during a normal race weekend"; "pip install requests beautifulsoup4" removed from the web-refresh tooltip.
+- **`docs/DIAGNOSTIC_TAB_CLEANUP.md` (NEW)** — per-item audit tables (control, file, purpose, reachability, verdict, risk, action), the corrected API-key/telemetry-reference findings, and the deferred list (TM jargon glossary, Telemetry raw-row hiding, API-key relocation, both `config["strategy"]` fan-outs — the fan-outs are pinned-still-present by test).
+
+**Tests (`tests/test_diagnostic_tab_cleanup.py`, 25):** deleted widgets/methods/imports gone with zero string/getattr references remaining in either UI module; backend review functions importable; renames present + stale labels absent; Guide fixed; tab order pinned (incl. Home appended at 13); `_on_tab_changed` dispatches unchanged; diagnostic tabs still built; product_flow diagnostic set unchanged; Home Dashboard wiring intact; both legacy fan-outs untouched; no strategy writes in touched areas; the API-key field still exists.
+
+**Next sprint: Tab Navigation Refactor — Named Tab Lookup** — replace the hard-coded indices in `_on_tab_changed` with lookup-by-title/object so tabs can be reordered safely; then **move Home Dashboard to index 0** and enable its deferred click-to-navigate. Alternative higher-risk track: **Legacy Fan-Out Removal Phase 1**.
+
+Full detail: `docs/DIAGNOSTIC_TAB_CLEANUP.md`, `MASTER_TESTING_REGISTER.md` (Diagnostic Tab Cleanup).
+
+---
+
+## Prior Objective (historical)
 **Home Dashboard Build — Race Engineer Command Centre — COMPLETE (2026-07-03).** Branch `home-dashboard-command-centre` (from `ai-snapshot-migration-context-freeze` @ `f8e9a9d`). Full suite: **4454 pass / 6 skip / 0 fail** (52 new tests). **Display-only: no race/setup/strategy/track-mapping/calibration/AI-prompt/PTT/voice change, no tab reordered/renamed/removed, no legacy store touched, no polling/workers added.**
 
 **Why it exists:** `REQUIREMENTS.md §12.2` specified a Dashboard/home tab ("Suggested next action") that was never built (audit §1.1). The five prior sprints delivered everything it needs — the four canonical read models, the AI snapshot layer, and `build_flow_state_summary()` — so this sprint is the rendering job those sprints deferred, including surfacing the staleness indicators that until now only appeared in GT7_AI_DEBUG stdout.

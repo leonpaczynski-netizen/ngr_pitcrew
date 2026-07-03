@@ -40,10 +40,15 @@ class TestAC1MixinStructure:
             "TrackModellingMixin class not found in track_modelling_ui.py"
         )
 
-    def test_tm_method_count_at_least_54(self):
+    def test_tm_method_count_at_least_46(self):
+        # Floor was 54 at extraction time (Group 24). Diagnostic Tab Cleanup
+        # (2026-07-03) deleted 9 unreachable legacy methods — the 7 hidden
+        # per-segment review handlers (_tm_review_confirm/rename/reject/
+        # needs_laps/split/merge/save), _tm_refresh_review_buttons, and the
+        # no-op _tm_refresh_approval_panel — lowering the floor to 46.
         hits = re.findall(r"^\s+def _tm_", MIXIN_SRC, re.MULTILINE)
-        assert len(hits) >= 54, (
-            f"Expected >= 54 _tm_ methods in mixin, found {len(hits)}"
+        assert len(hits) >= 46, (
+            f"Expected >= 46 _tm_ methods in mixin, found {len(hits)}"
         )
 
     def test_build_track_modelling_tab_in_mixin(self):

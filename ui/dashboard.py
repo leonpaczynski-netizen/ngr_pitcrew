@@ -94,9 +94,14 @@ _GUIDE_HTML = """
   .step { color:#F5C542; font-weight:bold; }
 </style>
 
-<h1>GT7 VR Dashboard — User Guide</h1>
+<h1>Next Gear Racing Pit Crew — User Guide</h1>
 <p class="note">Real-time race engineer for Gran Turismo 7. Reads UDP telemetry from your PS5,
 gives voice alerts, and uses the Claude AI API as your personal race engineer.</p>
+
+<p class="note"><b>Tool tabs (⚙):</b> tabs whose name starts with a gear symbol —
+<b>⚙ Telemetry</b>, <b>⚙ Diagnostics</b>, <b>⚙ AI Log</b> and <b>⚙ Track Modelling</b> —
+are advanced tools for checking raw data and troubleshooting. They are safe to
+ignore during a normal race weekend; the workflow below never requires them.</p>
 
 <h2>How to use this app — 10-step workflow</h2>
 <p>The app is event-centred: every tab draws its context from the <b>active event</b>.
@@ -165,9 +170,11 @@ are pre-populated from your active event — no manual re-entry needed.</p>
 </ul>
 <p class="note">If you miss a pit stop, the engineer detects it and announces a revised window immediately — no manual update needed.</p>
 
-<h3><span class="step">Step 8</span> &nbsp; Dashboard — event and session overview</h3>
-<p>The <b>Dashboard</b> tab shows your active event summary, current strategy status,
-recent session history, and quick-link buttons to jump to any tab in one click.
+<h3><span class="step">Step 8</span> &nbsp; Home — race engineer overview</h3>
+<p>The <b>Home</b> tab (last tab) is the Race Engineer Command Centre. It shows your
+active event, track data status, latest setup, strategy plan, and whether the AI
+is working from up-to-date inputs — plus the single suggested <b>next step</b> and
+which tab to do it on. Anything stale or missing is flagged in plain English.
 Good for checking overall state before and after a race weekend.</p>
 
 <h3><span class="step">Step 9</span> &nbsp; History — browse past sessions</h3>
@@ -179,7 +186,8 @@ Use <b>Load to Practice Review</b> to pull old laps back into the analysis workf
 <p>Configure once and leave:</p>
 <ul>
   <li><b>Connection</b> — PS5 IP address and UDP port (default 33741). Must match GT7 "Send Data" settings.</li>
-  <li><b>API Key</b> — Anthropic API key for AI features. Store in <b>api_key.txt</b> or paste it here.</li>
+  <li><b>API Key</b> — Anthropic API key for AI features. Store it in <b>api_key.txt</b>
+      next to config.json, or paste it into the key field on the <b>Strategy Builder</b> tab.</li>
   <li><b>Voice Alerts</b> — enable/disable categories, set push-to-talk key.</li>
   <li><b>Driver Profile</b> — click <b>Refresh Stats</b> after each race weekend (free, instant).
       Run <b>Propose Profile Update</b> every 3–5 weekends to keep the AI's model of your driving current.</li>
@@ -234,150 +242,10 @@ Also accepts full names: Soft, Medium, Hard, Inter, Wet, Racing Soft, etc.</p>
 </table>
 """
 
-_TELEMETRY_REFERENCE_HTML = """
-<style>
-  body  { background:#2A2A2A; color:#E0E0E0; font-family:'Segoe UI',sans-serif; font-size:11px; }
-  h1    { color:#2EA043; font-size:16px; margin-bottom:4px; }
-  h2    { color:#AAE4AA; font-size:13px; margin-top:16px; margin-bottom:4px;
-          border-bottom:1px solid #3A3A3A; padding-bottom:2px; }
-  table { border-collapse:collapse; width:100%; margin-top:4px; }
-  th    { background:#1F4E78; color:white; padding:4px 8px; text-align:left; font-size:11px; }
-  td    { padding:3px 8px; border-bottom:1px solid #333; vertical-align:top; font-size:11px; }
-  tr:nth-child(even) td { background:#252525; }
-  .yes  { color:#8BC34A; font-weight:bold; }
-  .log  { color:#F5C542; }
-  .no   { color:#888; }
-  .sug  { color:#79C7E3; font-style:italic; }
-</style>
-
-<h1>GT7 Telemetry Field Reference</h1>
-<p style="color:#888; font-size:11px;">
-  All 72 fields parsed from the GT7 UDP packet (368 bytes, decrypted with IV 0xDEADBEEF).
-  Status: <span class="yes">&#9679; Active</span> = used in race logic &nbsp;
-  <span class="log">&#9679; Logged</span> = recorded to DB / frame log, not analysed &nbsp;
-  <span class="no">&#9679; Unused</span> = parsed but not currently used.
-</p>
-
-<h2>Position &amp; Motion (12 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>pos_x / pos_y / pos_z</td><td>World-space XYZ position (metres)</td><td class="no">Unused</td><td class="sug">Track-map display, corner identification for sector analysis</td></tr>
-<tr><td>vel_x / vel_y</td><td>Lateral and longitudinal velocity (m/s)</td><td class="log">Logged</td><td class="sug">Per-lap velocity profile; combined with angvel_z for lateral G calculation</td></tr>
-<tr><td>vel_z</td><td>Vertical velocity (m/s)</td><td class="no">Unused</td><td class="sug">Kerb impact detection (vertical spike)</td></tr>
-<tr><td>rot_pitch / rot_yaw / rot_roll</td><td>Euler angles (radians)</td><td class="no">Unused</td><td class="sug">Kerb-riding detection (roll spike), instability warning, attitude display</td></tr>
-<tr><td>angvel_z</td><td>Yaw angular velocity (rad/s) — positive = turning left</td><td class="yes">Active</td><td>Real-time oversteer audio alert (&gt;1.8 rad/s, sustained 0.3 s, 8 s cooldown); per-lap oversteer event count; peak lateral G; AI coaching and setup prompts</td></tr>
-<tr><td>angvel_x / angvel_y</td><td>Pitch and roll angular velocity (rad/s)</td><td class="no">Unused</td><td class="sug">Roll-rate spikes at kerbs; pitch instability under heavy braking</td></tr>
-</table>
-
-<h2>Engine &amp; Powertrain (14 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>engine_rpm</td><td>Engine speed (RPM)</td><td class="yes">Active</td><td>Shift beep, rev-limit alert</td></tr>
-<tr><td>gear_raw / current_gear / suggested_gear</td><td>Current gear (nibble), suggested gear (nibble)</td><td class="yes">Active</td><td>Gear display, downshift detection</td></tr>
-<tr><td>throttle_raw</td><td>Throttle pedal position (0–255)</td><td class="yes">Active</td><td>Snap-throttle detection (delta &gt;60% in one frame); wheelspin alert threshold; AI coaching prompt</td></tr>
-<tr><td>brake_raw</td><td>Brake pedal position (0–255)</td><td class="yes">Active</td><td>Lock-up detection; real-time brake-release alert; braking consistency analysis; AI coaching</td></tr>
-<tr><td>clutch / clutch_engagement / clutch_gearbox_rpm</td><td>Clutch position, engagement, gearbox RPM</td><td class="no">Unused</td><td class="sug">Launch control monitoring, clutch slip detection</td></tr>
-<tr><td>gear_ratio_1–8</td><td>Individual gear ratios</td><td class="yes">Active</td><td>Setup capture, AI setup prompt</td></tr>
-<tr><td>transmission_max_speed</td><td>Top speed target (km/h)</td><td class="yes">Active</td><td>Setup capture</td></tr>
-<tr><td>turbo_boost</td><td>Turbo boost pressure</td><td class="no">Unused</td><td class="sug">Boost map monitoring, under-boost detection (worn engine)</td></tr>
-</table>
-
-<h2>Fuel System (2 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>fuel_level</td><td>Current fuel (litres)</td><td class="yes">Active</td><td>Fuel bar, pit fuel target, strategy</td></tr>
-<tr><td>fuel_capacity</td><td>Tank capacity (litres)</td><td class="yes">Active</td><td>Fuel bar fill percentage</td></tr>
-</table>
-
-<h2>Tyres &amp; Handling (17 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>tyre_temp_fl/fr/rl/rr</td><td>Tyre surface temperature (°C)</td><td class="yes">Active</td><td>Tyre widgets, state alerts, driving advice</td></tr>
-<tr><td>wheel_rps_fl/fr/rl/rr</td><td>Wheel rotation speed (rev/s)</td><td class="yes">Active</td><td>Per-lap wheelspin and lock-up event counts (no audio — data fed to AI driving advice); oversteer detection; AI coaching prompt</td></tr>
-<tr><td>tyre_radius_fl/fr/rl/rr</td><td>Effective tyre radius (m)</td><td class="yes">Active</td><td>Used with wheel_rps to compute linear wheel speed for slip detection. Also potential tyre wear proxy (radius shrinks).</td></tr>
-<tr><td>suspension_fl/fr/rl/rr</td><td>Suspension travel (m)</td><td class="yes">Active</td><td>Kerb event detection (&gt;40 mm travel triggers count); logged per lap; fed to AI setup and coaching prompts</td></tr>
-<tr><td>oil_pressure</td><td>Engine oil pressure (bar)</td><td class="no">Unused</td><td class="sug">Low oil pressure alert (engine damage indicator)</td></tr>
-<tr><td>water_temp</td><td>Coolant temperature (°C)</td><td class="no">Unused</td><td class="sug">Overheating alert after damage or long slow laps</td></tr>
-<tr><td>oil_temp</td><td>Oil temperature (°C)</td><td class="no">Unused</td><td class="sug">Warm-up monitoring, abnormal heat after damage</td></tr>
-<tr><td>body_height</td><td>Chassis height above ground (m)</td><td class="yes">Active</td><td>Bottoming event detection (&lt;40 mm triggers count); logged per lap; fed to AI setup prompt as "bottoming" metric</td></tr>
-</table>
-
-<h2>Road &amp; Track (4 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>road_distance</td><td>Distance along road surface (m, resets per lap)</td><td class="yes">Active</td><td>Qualifying lap-fraction / projected time calculation</td></tr>
-<tr><td>road_plane_x/y/z</td><td>Road surface normal vector</td><td class="no">Unused</td><td class="sug">Banking / camber detection; surface grip estimation on gravel/grass</td></tr>
-</table>
-
-<h2>Lap &amp; Race Timing (6 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>best_lap_ms</td><td>Session best lap (ms, −1 = none)</td><td class="yes">Active</td><td>Delta display, strategy reference</td></tr>
-<tr><td>last_lap_ms</td><td>Most recent completed lap (ms, −1 = none)</td><td class="yes">Active</td><td>Lap display, lap recording</td></tr>
-<tr><td>laps_completed</td><td>Laps counter from packet (unreliable in GT7)</td><td class="yes">Active</td><td>Change-detection only; actual count tracked by RaceStateTracker</td></tr>
-<tr><td>laps_in_race</td><td>Total laps in race (−1 timed, 0 unlimited, N = lap race)</td><td class="yes">Active</td><td>Countdown, strategy total-lap setting</td></tr>
-<tr><td>remaining_time_ms</td><td>Time remaining (timed sessions, −1 otherwise)</td><td class="yes">Active</td><td>Countdown display, fuel strategy for timed races</td></tr>
-<tr><td>time_of_day_ms</td><td>Session elapsed clock (ms)</td><td class="yes">Active</td><td>Qualifying intra-lap elapsed time tracking</td></tr>
-</table>
-
-<h2>Game State &amp; Flags (7 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>car_on_track</td><td>Car is on the circuit surface</td><td class="yes">Active</td><td>Guards shift beep; off-track event detection</td></tr>
-<tr><td>paused / loading</td><td>Game pause / loading screen flags</td><td class="yes">Active</td><td>Suppresses events during non-race states</td></tr>
-<tr><td>in_gear</td><td>Transmission is in gear</td><td class="yes">Active</td><td>Available for gear-change detection</td></tr>
-<tr><td>rev_limiter_active</td><td>Rev limiter engaged</td><td class="no">Unused</td><td class="sug">Alert when driver holds limiter too long (shift point reminder)</td></tr>
-<tr><td>rpm_alert_min / rpm_alert_max</td><td>In-game RPM alert thresholds set by player</td><td class="no">Unused</td><td class="sug">Auto-seed the shift beep threshold from the player's in-game setting</td></tr>
-</table>
-
-<h2>Position &amp; Cars (3 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>current_position</td><td>Race position (1-based; 0 = unknown)</td><td class="yes">Active</td><td>Position display, position-change events</td></tr>
-<tr><td>total_cars / cars_in_race</td><td>Total cars on grid</td><td class="yes">Active</td><td>Position display (P3/18), session detection</td></tr>
-<tr><td>unused_0xD4</td><td>Undocumented field (may encode race position)</td><td class="no">Unused</td><td class="sug">Cross-reference with current_position for reliability improvement</td></tr>
-</table>
-
-<h2>Car Identity (2 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>car_id</td><td>GT7 car model ID</td><td class="yes">Active</td><td>Car-specific AI prompt injection, BOP lookup</td></tr>
-<tr><td>car_max_speed_raw</td><td>Top-speed limiter value</td><td class="no">Unused</td><td class="sug">Could derive maximum attainable speed for gear ratio advice</td></tr>
-</table>
-
-<h2>Computed / Derived (9 fields)</h2>
-<table>
-<tr><th>Field</th><th>Description</th><th>Status</th><th>Possible use</th></tr>
-<tr><td>speed_kmh / speed_ms</td><td>Vehicle speed (km/h and m/s)</td><td class="yes">Active</td><td>Speed display, pre-race detection</td></tr>
-<tr><td>tyre_temps (tuple)</td><td>All four tyre temperatures grouped</td><td class="yes">Active</td><td>Tyre widget updates</td></tr>
-<tr><td>wheel_rps (tuple)</td><td>All four wheel speeds grouped</td><td class="log">Logged</td><td class="sug">Wheel-slip delta: (wheel_rps × tyre_radius × 2π) vs speed_ms</td></tr>
-<tr><td>suspension (tuple)</td><td>All four suspension values grouped</td><td class="log">Logged</td><td class="sug">Bump severity histogram, bottoming events per lap</td></tr>
-<tr><td>tyre_radius (tuple)</td><td>All four tyre radii grouped</td><td class="log">Logged</td><td class="sug">Long-run wear proxy: compare start-of-stint vs end-of-stint radii</td></tr>
-<tr><td>gear_ratios (list)</td><td>Gears 1–8 as a list (None for unused)</td><td class="yes">Active</td><td>Setup capture for AI prompts</td></tr>
-<tr><td>transmission_max_speed_kmh</td><td>Max speed in km/h</td><td class="yes">Active</td><td>Setup capture</td></tr>
-<tr><td>packet_id</td><td>Sequence number (for duplicate / drop detection)</td><td class="yes">Active</td><td>Already used to detect race reset</td></tr>
-<tr><td>start_pos_and_cars (raw byte)</td><td>Packed position + car count</td><td class="yes">Active</td><td>Decoded into current_position / total_cars</td></tr>
-</table>
-
-<h2>Key Gaps &amp; Suggestions</h2>
-<table>
-<tr><th>Gap</th><th>Fields needed</th><th>What to build</th></tr>
-<tr><td><b>&#9679; Wheel-slip / lock-up tracking</b> <span style="color:#8BC34A">(Implemented)</span></td><td>wheel_rps, tyre_radius, speed_ms</td>
-    <td>Per-lap wheelspin and lock-up event counts. No audio alert — data is fed to the AI driving advice panel in Practice mode. Sustain gate prevents single-frame spikes.</td></tr>
-<tr><td><b>&#9679; Oversteer audio alert</b> <span style="color:#8BC34A">(Implemented)</span></td><td>angvel_z, throttle_raw</td>
-    <td>Real-time voice alert when yaw &gt;1.8 rad/s with rear slip, sustained 0.3 s. 8 s cooldown. Per-lap count also fed to AI coaching.</td></tr>
-<tr><td>Auto shift-point seeding</td><td>rpm_alert_min / rpm_alert_max</td>
-    <td class="sug">When the player sets an RPM alert in GT7, mirror it to the app's shift beep without needing to type it in Settings.</td></tr>
-<tr><td>Tyre wear estimation</td><td>tyre_radius (already logged)</td>
-    <td class="sug">Track tyre_radius at stint start vs. end. Shrinkage of &gt;2mm = measurable wear. Plot as "virtual tyre life" alongside lap times.</td></tr>
-<tr><td>Throttle / brake coaching</td><td>throttle_raw, brake_raw (already logged)</td>
-    <td class="sug">Detect over-braking (100% brake into slow corners) and snap throttle on exit. Combine with oversteer data for targeted advice.</td></tr>
-<tr><td>Engine / thermal alerts</td><td>oil_pressure, water_temp, oil_temp</td>
-    <td class="sug">Alert on abnormal values after a collision. Low oil pressure = potential engine damage; high water temp = cooling problem / long slow lap.</td></tr>
-<tr><td>Kerb / bottoming analysis</td><td>suspension, body_height</td>
-    <td class="sug">Count suspension hits &gt; threshold per lap. High count = aggressive kerb usage. Correlate with lap time to see if it helps or hurts.</td></tr>
-</table>
-"""
+# Diagnostic Tab Cleanup (2026-07-03): the _TELEMETRY_REFERENCE_HTML constant
+# (the 72-field GT7 UDP packet reference) was dead code - defined but never
+# rendered anywhere - and was deleted. The packet format is documented in
+# telemetry/parser.py and docs/.
 
 
 class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
@@ -484,7 +352,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._saved_setups = list(config.get("car_setup", {}).get("setups", []))
             self._migrate_setup_ids()
 
-        self.setWindowTitle("GT7 VR Dashboard")
+        self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
         self._setup_ui()
@@ -1176,11 +1044,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._btn_refresh_web = QPushButton("Refresh Data from Web")
         self._btn_refresh_web.setFixedHeight(28)
         self._btn_refresh_web.setToolTip(
-            "Scrapes the latest car list, track list, and BOP settings from:\n"
+            "Downloads the latest car list, track list, and BOP settings from:\n"
             "  • gran-turismo.com/gb/gt7/carlist\n"
             "  • gran-turismo.com/sg/gt7/tracklist\n"
             "  • dg-edge.com/database/bop\n"
-            "Requires: pip install requests beautifulsoup4"
+            "Needs an internet connection; the status line below reports progress."
         )
         self._btn_refresh_web.clicked.connect(self._refresh_data_from_web)
         self._btn_open_extra = QPushButton("Edit Extra JSON")
@@ -1674,7 +1542,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lbl_dbg_race_type = _sl("RaceType: —")
         self._lbl_dbg_session   = _sl("Session: —")
         self._lbl_dbg_laps      = _sl("Laps: —/—")
-        self._lbl_dbg_rem_comp  = _sl("Rem(clk): —")
+        self._lbl_dbg_rem_comp  = _sl("Time left: —")
         for lbl in (self._lbl_dbg_phase, self._lbl_dbg_race_type,
                     self._lbl_dbg_session, self._lbl_dbg_laps,
                     self._lbl_dbg_rem_comp):
@@ -1686,7 +1554,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         r3 = QHBoxLayout(); r3.setSpacing(16)
         self._lbl_dbg_cars_raw = _sl("cars_in_race: —")
         self._lbl_dbg_laps_raw = _sl("laps_in_race: —")
-        self._lbl_dbg_rem_raw  = _sl("rem_ms(raw): —")
+        self._lbl_dbg_rem_raw  = _sl("remaining_time_ms: —")
         self._lbl_dbg_ontrack  = _sl("on_track: —")
         self._lbl_dbg_loading  = _sl("loading: —")
         self._lbl_dbg_pos_raw  = _sl("pos: —")
@@ -1699,7 +1567,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         # ── Row 4: announcer state ───────────────────────────────────────
         r4 = QHBoxLayout(); r4.setSpacing(16)
-        self._lbl_dbg_ann_q    = _sl("Ann queue: —")
+        self._lbl_dbg_ann_q    = _sl("Voice queue: —")
         self._lbl_dbg_ann_mute = _sl("Muted: No")
         for lbl in (self._lbl_dbg_ann_q, self._lbl_dbg_ann_mute):
             r4.addWidget(lbl)
@@ -4324,15 +4192,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "Keys look like 'sk-ant-api03-...' — stored locally in config.json only."
         )
 
-        # Race Config ID — derived from track + car + race length
+        # Session match key (internally: race config_id) — derived from
+        # track + car + race length. Diagnostic Tab Cleanup (2026-07-03):
+        # relabelled from the developer-facing "Race Config ID".
         self._lbl_config_id = QLabel(
             "—",
             styleSheet="color: #64B5F6; font-family: monospace; font-size: 10px;",
         )
         self._lbl_config_id.setToolTip(
-            "Unique identifier for this specific race configuration (track + car + length).\n"
-            "The Practice Lap Bank only shows sessions recorded under the same config.\n"
-            "Changes automatically when you update track, car, or race length."
+            "Identifies this exact race configuration (track + car + race length).\n"
+            "The Practice Lap Bank only shows sessions recorded under the same configuration.\n"
+            "Updates automatically when you change track, car, or race length."
         )
 
         param_form.addRow(QLabel("Fuel Multiplier:", styleSheet=lbl_style), self._lbl_fuel_mult_display)
@@ -4343,7 +4213,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _sep.setFrameShape(QFrame.Shape.HLine)
         _sep.setStyleSheet("color: #444;")
         param_form.addRow(_sep)
-        param_form.addRow(QLabel("Race Config ID:", styleSheet=lbl_style), self._lbl_config_id)
+        param_form.addRow(QLabel("Session Match Key:", styleSheet=lbl_style), self._lbl_config_id)
         ai_layout.addLayout(param_form)
 
         ai_btn_row = QHBoxLayout()
@@ -5959,14 +5829,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._lbl_dbg_race_type.setText(f"RaceType: {tr.race_type.value}")
             self._lbl_dbg_session.setText(f"Session: {tr.session_type.value}")
             self._lbl_dbg_laps.setText(f"Laps: {tr.laps_recorded}/{tr.laps_in_race}")
-            self._lbl_dbg_rem_comp.setText(f"Rem(clk): {rem_str}")
+            self._lbl_dbg_rem_comp.setText(f"Time left: {rem_str}")
 
         # ── Raw packet fields ────────────────────────────────────────────
         p = self._last_packet
         if p is not None:
             self._lbl_dbg_cars_raw.setText(f"cars_in_race: {p.cars_in_race}")
             self._lbl_dbg_laps_raw.setText(f"laps_in_race: {p.laps_in_race}")
-            self._lbl_dbg_rem_raw.setText(f"rem_ms(raw): {p.remaining_time_ms}")
+            self._lbl_dbg_rem_raw.setText(f"remaining_time_ms: {p.remaining_time_ms}")
             self._lbl_dbg_ontrack.setText(f"on_track: {p.car_on_track}")
             self._lbl_dbg_loading.setText(f"loading: {p.loading}")
             self._lbl_dbg_pos_raw.setText(f"pos: {p.current_position}/{p.cars_in_race}")
@@ -5976,7 +5846,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             q = self._announcer.queue_depth
             mu = self._announcer.muted_until
             mute_str = f"{mu - time.time():.1f}s" if mu > time.time() else "No"
-            self._lbl_dbg_ann_q.setText(f"Ann queue: {q}")
+            self._lbl_dbg_ann_q.setText(f"Voice queue: {q}")
             self._lbl_dbg_ann_mute.setText(f"Muted: {mute_str}")
 
     def closeEvent(self, event: QCloseEvent) -> None:

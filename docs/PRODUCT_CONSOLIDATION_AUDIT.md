@@ -236,17 +236,24 @@ Mapping.
 
 1. **Hidden legacy per-segment review buttons** (`track_modelling_ui.py:517–524`)
    — dead workflow replaced by whole-model acceptance; still instantiated.
+   (**fixed 2026-07-03, Diagnostic Tab Cleanup** — buttons, never-connected
+   handlers and dead imports DELETED; the pure review functions in
+   `data/track_segment_review.py` retained.)
 2. **"Debug" tab name** — developer word in the top-level nav (**fixed** →
    Diagnostics).
 3. **Section 5 "Track Model Alignment"** mislabelled — it builds seed geometry,
    not alignment (**fixed** → "5. Seed Geometry").
 4. **"Resolver Status"** — internal term (**fixed** → "Track Model Status").
 5. **"Race Config ID" hash** in Strategy Builder (4206) — internal identity leaked.
+   (**fixed 2026-07-03** → "Session Match Key" with a plain-English tooltip.)
 6. **Embedded 368-byte/IV-0xDEADBEEF telemetry reference** inside the user Guide.
+   (**fixed 2026-07-03** — the constant turned out to be dead code, never
+   rendered anywhere; DELETED.)
 7. **Inconsistent abbreviations** on the Diagnostics tab ("Rem(clk)" vs
-   "rem_ms(raw)", "Ann queue").
+   "rem_ms(raw)", "Ann queue"). (**fixed 2026-07-03** → "Time left:",
+   "remaining_time_ms:", "Voice queue:".)
 8. **Track Modelling jargon wall** — Seed / Station Map / peaks / lap offset /
-   truth source with no in-UI glossary.
+   truth source with no in-UI glossary. (Still deferred.)
 
 ---
 
@@ -255,7 +262,7 @@ Mapping.
 | Duplicate | Where | Recommendation |
 |-----------|-------|----------------|
 | **Fuel burn per lap** | Telemetry "Fuel burn avg" (1335); Practice Review "Avg Fuel/Lap" (6083); Strategy Builder "Fuel Burn (auto)" (4173) | One owner (telemetry/recorder) → all three are read-only views. Standardise the source suffix wording; don't show "(last session)" next to a live value |
-| **Anthropic API key entry** | Settings (canonical); Strategy Builder field (4194) | Settings owns it; Strategy Builder should show status ("key loaded ✓"), not a second editable field |
+| **Anthropic API key entry** | Strategy Builder field only — **correction (2026-07-03, Diagnostic Tab Cleanup): no Settings key entry exists**; the Guide wrongly claimed one and has been fixed | The original recommendation stands as future work: move the editable field to Settings and leave a status line in Strategy Builder (control relocation — deferred) |
 | **Compound tagging** | Practice Review lap table; History detail table | Acceptable (edit vs read) — document, don't merge |
 | **Session history listing** | History tab; Garage "Session History" (7193) | Acceptable car-scoped view; note overlap |
 | **Track/layout selection** | Event Planner (track name) **and** Track Modelling combos (`_tm_location_combo`/`_tm_layout_combo`) **and** `config["strategy"]` IDs | Real SSOT problem — see §5 SSOT-2 |
@@ -390,12 +397,17 @@ capability removed. No feature added. No tab reordered.**
 ## 9. Remaining clean-up, risks, and next sprint
 
 ### Remaining clean-up (recommended order)
-1. Delete the 7 hidden legacy per-segment buttons + their `getattr` handlers
-   (`track_modelling_ui.py:517–524` and the review-action map).
-2. Make Strategy Builder's API-key field defer to Settings (status only).
-3. HIDE/RENAME "Race Config ID"; move the Guide's telemetry reference to
-   Diagnostics/docs; move the "pip install" tooltip.
-4. Diagnostics-tab wording pass ("Rem(clk)", "Ann queue", raw field labels).
+1. ~~Delete the 7 hidden legacy per-segment buttons + their `getattr` handlers~~
+   **DONE (2026-07-03, Diagnostic Tab Cleanup)** — see
+   `docs/DIAGNOSTIC_TAB_CLEANUP.md` §2.1.
+2. Make Strategy Builder's API-key field defer to Settings (status only) —
+   **corrected 2026-07-03**: there is no Settings field today, so this is a
+   relocation, not a dedup; still deferred (`DIAGNOSTIC_TAB_CLEANUP.md` §2.2).
+3. ~~HIDE/RENAME "Race Config ID"; move the Guide's telemetry reference; move
+   the "pip install" tooltip.~~ **DONE (2026-07-03)** — renamed "Session Match
+   Key"; the telemetry reference was dead code and was deleted; tooltip fixed.
+4. ~~Diagnostics-tab wording pass ("Rem(clk)", "Ann queue", raw field labels).~~
+   **DONE (2026-07-03)** — "Time left:", "remaining_time_ms:", "Voice queue:".
 5. Track Modelling jargon glossary + merge Sections 4/5/6 into ~3 panels.
 6. ~~Build the actual **home/overview panel** rendering `build_flow_state_summary`.~~
    **DONE (2026-07-03)** — Home Dashboard Build sprint; see §1.1 and

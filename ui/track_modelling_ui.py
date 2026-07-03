@@ -32,7 +32,6 @@ from ui.track_modelling_vm import (
     describe_seed_load_status, CALIBRATION_CAR_BOUNDARY_NOTE,
     format_segment_row       as _format_seg_row,
     format_review_summary    as _format_review_summary,
-    get_review_button_states as _get_review_btns,
     format_resolver_summary  as _format_resolver_summary,
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
@@ -55,13 +54,6 @@ from data.track_segment_detection import (
 )
 from data.track_segment_review import (
     create_review_from_detection as _create_seg_review,
-    confirm_segment              as _seg_confirm,
-    rename_segment               as _seg_rename,
-    reject_segment               as _seg_reject,
-    mark_needs_more_laps         as _seg_needs_laps,
-    mark_split_required          as _seg_split,
-    mark_merge_required          as _seg_merge,
-    export_review_json           as _export_seg_review,
 )
 from data.track_model_resolver import resolve_best_track_model as _resolve_track_model
 from data.track_station_map import (
@@ -487,41 +479,12 @@ class TrackModellingMixin:
         )
         seg_rev_layout.addWidget(self._tm_seg_table)
 
-        # Manual review buttons — hidden in Group 17P (whole-model acceptance replaces per-segment workflow)
-        _rev_btn_s = (
-            f"QPushButton {{ background:#2A2A3A; color:#AAAAEE; border:1px solid #4A4A6A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#3A3A4A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_orange = (
-            f"QPushButton {{ background:#3A2A1A; color:#F5A623; border:1px solid #7A5A2A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#4A3A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_red = (
-            f"QPushButton {{ background:#3A1A1A; color:#EE8888; border:1px solid #6A3A3A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#4A2A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-        _rev_btn_green = (
-            f"QPushButton {{ background:#1A3A1A; color:#88EE88; border:1px solid #3A6A3A;"
-            f" border-radius:3px; padding:3px 8px; font-size:11px; }}"
-            f"QPushButton:hover {{ background:#2A4A2A; }}"
-            f"QPushButton:disabled {{ background:#222; color:#555; border-color:#333; }}"
-        )
-
-        # Hidden legacy per-segment buttons (references kept to avoid AttributeError in handler methods)
-        self._tm_btn_rev_confirm    = QPushButton("Confirm");    self._tm_btn_rev_confirm.hide()
-        self._tm_btn_rev_rename     = QPushButton("Rename");     self._tm_btn_rev_rename.hide()
-        self._tm_btn_rev_reject     = QPushButton("Reject");     self._tm_btn_rev_reject.hide()
-        self._tm_btn_rev_needs_laps = QPushButton("Needs More Laps"); self._tm_btn_rev_needs_laps.hide()
-        self._tm_btn_rev_split      = QPushButton("Split Required");  self._tm_btn_rev_split.hide()
-        self._tm_btn_rev_merge      = QPushButton("Merge Required");  self._tm_btn_rev_merge.hide()
-        self._tm_btn_rev_save       = QPushButton("Save Reviewed Model"); self._tm_btn_rev_save.hide()
-        self._tm_lbl_rev_save_path  = QLabel(""); self._tm_lbl_rev_save_path.hide()
+        # Diagnostic Tab Cleanup (2026-07-03): the hidden legacy per-segment
+        # review buttons (Confirm/Rename/Reject/Needs More Laps/Split/Merge/
+        # Save Reviewed Model) and their never-connected handler methods were
+        # DELETED — the whole-model acceptance workflow (Group 17P) replaced
+        # them. The pure review-action functions in data/track_segment_review.py
+        # and ui/track_modelling_vm.get_review_button_states remain (tested).
 
         _seg_detect_layout.addWidget(seg_rev_grp)
         right_layout.addWidget(_seg_detect_grp)
@@ -1700,8 +1663,6 @@ class TrackModellingMixin:
             ]
             self._tm_selected_segment_id = None
             self._tm_refresh_seg_table()
-            self._tm_refresh_review_buttons()
-            self._tm_refresh_approval_panel()
         else:
             error_txt = "; ".join(result.errors) if result.errors else "Unknown error"
             self._tm_lbl_seg_summary.setText("Segments: — | Corners: —")
@@ -1805,33 +1766,6 @@ class TrackModellingMixin:
                 self._tm_set_map_highlight(start_p, end_p)
             else:
                 self._tm_clear_map_highlight()
-        self._tm_refresh_review_buttons()
-
-    def _tm_refresh_review_buttons(self) -> None:
-        """Update enabled/disabled state of all review action buttons."""
-        review = getattr(self, "_tm_review_result", None)
-        sel_id = getattr(self, "_tm_selected_segment_id", None)
-        states = _get_review_btns(review, sel_id)
-
-        btns = {
-            "confirm":        getattr(self, "_tm_btn_rev_confirm",    None),
-            "rename":         getattr(self, "_tm_btn_rev_rename",     None),
-            "reject":         getattr(self, "_tm_btn_rev_reject",     None),
-            "needs_more_laps": getattr(self, "_tm_btn_rev_needs_laps", None),
-            "split_required": getattr(self, "_tm_btn_rev_split",      None),
-            "merge_required": getattr(self, "_tm_btn_rev_merge",      None),
-            "save":           getattr(self, "_tm_btn_rev_save",       None),
-        }
-        for key, btn in btns.items():
-            if btn is not None:
-                btn.setEnabled(states.get(key, False))
-
-    def _tm_refresh_approval_panel(self) -> None:
-        """Update the approval panel labels from the current review result.
-
-        Legacy _tm_ap_* widgets have been removed (Group 23A). All information
-        is now displayed via _tm_al_* alignment panel widgets.
-        """
 
     # ── Group 17P: Track Model Alignment ─────────────────────────────────────
 
@@ -2298,90 +2232,6 @@ class TrackModellingMixin:
             self._tm_refresh_track_truth_panel()
         except Exception:
             logging.debug("no accepted model for this layout", exc_info=True)
-
-    def _tm_review_confirm(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_confirm(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_rename(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        seg = next((s for s in review.segments if s.segment_id == seg_id), None)
-        if seg is None:
-            return
-        from PyQt6.QtWidgets import QInputDialog
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Segment", "New name:", text=seg.display_name
-        )
-        if ok and new_name.strip():
-            _seg_rename(review, seg_id, new_name.strip())
-            self._tm_refresh_seg_table()
-            self._tm_refresh_review_buttons()
-            self._tm_refresh_approval_panel()
-
-    def _tm_review_reject(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_reject(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_needs_laps(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_needs_laps(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_split(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_split(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_merge(self) -> None:
-        review = getattr(self, "_tm_review_result", None)
-        seg_id = getattr(self, "_tm_selected_segment_id", None)
-        if review is None or seg_id is None:
-            return
-        _seg_merge(review, seg_id)
-        self._tm_refresh_seg_table()
-        self._tm_refresh_review_buttons()
-        self._tm_refresh_approval_panel()
-
-    def _tm_review_save(self) -> None:
-        """Export the reviewed segment model to JSON."""
-        review = getattr(self, "_tm_review_result", None)
-        if review is None:
-            return
-        try:
-            out = _export_seg_review(review)
-            lbl = getattr(self, "_tm_lbl_rev_save_path", None)
-            if lbl is not None:
-                lbl.setText(f"Saved: {out.name}")
-            # Refresh resolver to reflect the newly saved model
-            self._tm_refresh_resolver()
-        except Exception as exc:  # noqa: BLE001
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Save Failed", f"Could not save reviewed model:\n{exc}")
 
     def _tm_refresh_resolver(self) -> None:
         """Re-resolve the best available track model and update the resolver status panel."""
