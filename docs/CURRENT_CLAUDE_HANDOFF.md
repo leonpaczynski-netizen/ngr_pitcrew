@@ -1,6 +1,34 @@
 # Current Claude Handoff
 
 ## Current Objective
+**DEF-17U-UAT-007 — Time Trial calibration laps falsely classified as pit-in / unusable — FIXED (2026-07-03).** Branch `feature/group-18a-track-truth-foundation`.
+
+**Symptom (Post-Group-17U UAT):** In GT7 Time Trial the user drove 5 clean laps and never pitted. Building the reference path failed with *"Not enough usable laps to build reference path (0 usable, need 2)"*. Diagnostics wrongly reported 7 captured laps, rejected lap 1 as an outlier (18.1s / 749m vs session median 128.7s / 6171m), detected laps 2–6 as "pit-in laps", rejected lap 7 (40 samples < 50), and concluded *"All calibration laps appear to be pit-in laps."*
+
+**Root cause:**
+1. GT7 Custom UDP telemetry has **no reliable per-sample pit-lane flag** (`TelemetrySample.is_in_pit_lane` is always `None`). Pit-in was inferred by `detect_pit_lap_raw()` purely from XZ-centroid geometry (a contiguous run > 60 m from lap centroid for > 10 s), which **false-positives on normal Time Trial laps**.
+2. Short partial first/last laps (captured when Start/Stop is pressed mid-lap) poisoned the session median and were mislabelled as generic outliers.
+
+**The fix (`data/track_calibration.py`, `ui/track_modelling_vm.py`, `ui/track_modelling_ui.py`, `data/track_segment_detection.py`):**
+- **Pit-in detection is DISABLED BY DEFAULT.** `build_reference_path(session, *, pit_detection_enabled=False)`. `detect_pit_lap_raw()` is not called and no "pit-in" wording is emitted unless a caller explicitly opts in. The "All calibration laps appear to be pit-in laps / Drive a clean lap first" message only appears when pit detection actually ran.
+- **New `CalibrationLapQuality` values `PARTIAL_START` / `PARTIAL_STOP`.** The first/last lap of a session is classified as a partial start/stop lap when its path length is below `PARTIAL_LAP_PATH_FRACTION` (0.5) of the interior (complete-lap) median AND it has ≥ `MIN_CALIBRATION_SAMPLES` (50). Guarded to sessions with > 2 laps. Partial laps carry exactly one reason ("partial start lap" / "partial stop lap"), are excluded from the build, and are **NOT** counted in `rejected_lap_count`.
+- **Session median duration/path is computed from complete (non-partial) laps only**, so partials can't drag full laps into "outlier" rejection.
+- `CalibrationBuildResult` gained `partial_start_count`, `partial_stop_count`, `rejected_too_few_samples`, `rejected_path_length`, `pit_detection_enabled`. `diagnose_calibration_session()` surfaces `partial_start_count` / `partial_stop_count` / `pit_detection_enabled` and per-lap `"partial_start"` / `"partial_stop"` quality strings.
+- **UI:** `format_no_usable_laps()` gives a count-based failure message ("Pit detection: off", complete-candidate count, partial / too-few-samples / path-length breakdown) and never says "pit-in" or "Drive a clean lap first" when complete candidates existed but were rejected. `format_build_failure_diagnostics()` shows the new breakdown, filters pit warnings when pit detection is off, and only recommends "Avoid pit stops" when pit detection ran. `_CAL_LAP_QUALITY_LABELS` maps `partial_start`→"Partial (start)", `partial_stop`→"Partial (stop)". The Track Modelling build handler only shows the prominent pit warning label when `result.pit_detection_enabled` is True.
+- **Segment-detection** no-usable-laps summary now also reports an "N partial" count so the numbers reconcile with the total captured.
+
+**Tests:**
+- New: `tests/test_def17u_uat007_calibration_build.py` (data/build layer, ~35 tests incl. the exact UAT 7-lap regression) and `tests/test_def17u_uat007_partial_laps.py` (UI formatters/labels, 44 tests).
+- Updated: `tests/test_group21b_missing_coverage.py` — 2 opt-in pit tests now pass `pit_detection_enabled=True`.
+- Full suite: 4200+ passed. The only failing test (`test_group28_analyse_prompt_ranges`) is a **pre-existing** failure in unrelated in-progress "setup ranges" work (`strategy/driving_advisor.py`) and is **not** part of this fix.
+
+**Acceptance criteria met:** a clean Time Trial 5-lap (captured as 7 slices) session builds a reference path; clean laps are never marked pit-in; first/last partial laps no longer block the valid middle laps; build diagnostics are accurate and count-based; no unrelated features changed.
+
+Full detail: `docs/TRACK_MODELLING_RUNTIME_UAT.md` (DEF-17U-UAT-007), `MASTER_TESTING_REGISTER.md` (DEF-17U-UAT-007 remediation).
+
+---
+
+## Prior Objective (historical)
 **Group 18A — Track Truth Library, Calibration Wizard, and Station-Based Map Matching Foundation — COMPLETE.** Full suite: **4053 pass / 6 skip / 0 fail** (45 new tests). No automated-test blockers.
 
 **Why it exists:** the app was still treating **curvature-only detected corners** as authoritative track truth. Group 18A lays the foundation for a proper Track Truth system. Product principle: **no mapped-corner confidence ⇒ no high-confidence setup/strategy recommendation.** **Foundation only** — the Setup Brain, Strategy Brain, and Live Race Engineer are NOT yet rewired to consume it.

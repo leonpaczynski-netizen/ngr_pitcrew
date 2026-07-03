@@ -48,6 +48,11 @@ N_PROGRESS_BUCKETS: int = 200
 #: Minimum usable laps needed to build a reference path.
 MIN_USABLE_LAPS_FOR_PATH: int = 2
 
+#: DEF-17U-UAT-007: a first/last (boundary) lap whose path length is below this
+#: fraction of the complete-lap median is treated as a partial start/stop lap
+#: (captured when Start/Stop was pressed mid-lap) rather than a generic outlier.
+PARTIAL_LAP_PATH_FRACTION: float = 0.5
+
 #: Road-normal Y threshold below which a sample is considered off-track.
 OFF_TRACK_ROAD_PLANE_Y_THRESHOLD: float = 0.5
 
@@ -67,6 +72,11 @@ class CalibrationLapQuality(str, Enum):
     USABLE         = "usable"
     LOW_CONFIDENCE = "low_confidence"
     REJECTED       = "rejected"
+    # DEF-17U-UAT-007: boundary laps captured when Start/Stop is pressed mid-lap.
+    # These are excluded from the reference path but are NOT rejected outliers and
+    # NOT pit-in laps — they are simply incomplete first/last laps of a session.
+    PARTIAL_START  = "partial_start"
+    PARTIAL_STOP   = "partial_stop"
 
 
 class CalibrationSource(str, Enum):
@@ -234,6 +244,12 @@ class CalibrationBuildResult:
     low_confidence_lap_count: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # DEF-17U-UAT-007: precise, count-based build diagnostics.
+    partial_start_count: int = 0        # boundary laps excluded as partial start
+    partial_stop_count: int = 0         # boundary laps excluded as partial stop
+    rejected_too_few_samples: int = 0   # subset of rejected_lap_count
+    rejected_path_length: int = 0       # subset of rejected_lap_count (path outlier)
+    pit_detection_enabled: bool = False # whether pit-in classification actually ran
 
 
 # ---------------------------------------------------------------------------
@@ -452,29 +468,82 @@ def assess_session_laps(session: CalibrationSession) -> list[LapQualityResult]:
     """Evaluate all laps in a session, computing session-level medians first.
 
     Returns one LapQualityResult per lap (same order as session.laps).
+
+    DEF-17U-UAT-007: the first and last laps of a session are frequently partial
+    slices captured when the driver presses Start or Stop mid-lap.  These are
+    identified as PARTIAL_START / PARTIAL_STOP (not generic outliers, not pit-in
+    laps) and are excluded before the session median is computed, so they cannot
+    poison the median used to judge the complete laps.
     """
-    if not session.laps:
+    laps = session.laps
+    if not laps:
         return []
 
-    # First pass: compute path lengths and durations for median calculation
-    path_lengths: list[float] = []
-    durations: list[int] = []
-    for lap in session.laps:
-        path_lengths.append(estimate_path_length(lap.samples))
-        durations.append(lap.lap_time_ms)
+    n_laps = len(laps)
+    path_lengths_all = [estimate_path_length(lap.samples) for lap in laps]
 
-    median_path = statistics.median(path_lengths) if path_lengths else None
-    median_dur  = statistics.median(durations)  if durations  else None
+    # ── Detect partial boundary laps (only meaningful for > 2 laps) ──────────
+    # Guard: with <= 2 laps, index 0 and index -1 would overlap/consume the whole
+    # session, so partial detection is skipped and every lap is evaluated normally.
+    partial_quality: dict[int, CalibrationLapQuality] = {}
+    if n_laps > 2:
+        # Reference length comes from the interior (candidate complete) laps only,
+        # so short boundary slices cannot drag the reference down onto themselves.
+        interior_paths = [
+            path_lengths_all[i]
+            for i in range(1, n_laps - 1)
+            if path_lengths_all[i] > 0
+        ]
+        interior_median = statistics.median(interior_paths) if interior_paths else None
+        if interior_median and interior_median > 0:
+            threshold = interior_median * PARTIAL_LAP_PATH_FRACTION
+            for idx in (0, n_laps - 1):
+                lap = laps[idx]
+                # A genuinely truncated boundary lap with too few samples is left to
+                # normal evaluation (it will be rejected as "too few samples").
+                if (
+                    len(lap.samples) >= MIN_CALIBRATION_SAMPLES
+                    and 0 < path_lengths_all[idx] < threshold
+                ):
+                    partial_quality[idx] = (
+                        CalibrationLapQuality.PARTIAL_START if idx == 0
+                        else CalibrationLapQuality.PARTIAL_STOP
+                    )
 
-    # Second pass: full quality evaluation with session context
+    # ── Session medians from complete (non-partial) laps only ────────────────
+    complete_paths: list[float] = []
+    complete_durs: list[int] = []
+    for i, lap in enumerate(laps):
+        if i in partial_quality:
+            continue
+        complete_paths.append(path_lengths_all[i])
+        complete_durs.append(lap.lap_time_ms)
+
+    median_path = statistics.median(complete_paths) if complete_paths else None
+    median_dur  = statistics.median(complete_durs)  if complete_durs  else None
+
+    # ── Evaluate each lap ────────────────────────────────────────────────────
     results: list[LapQualityResult] = []
-    for lap in session.laps:
-        result = evaluate_lap_quality(
-            lap,
-            session_median_duration_ms=median_dur,
-            session_median_path_m=median_path,
-        )
-        results.append(result)
+    for i, lap in enumerate(laps):
+        if i in partial_quality:
+            q = partial_quality[i]
+            reason = (
+                "partial start lap" if q == CalibrationLapQuality.PARTIAL_START
+                else "partial stop lap"
+            )
+            results.append(LapQualityResult(
+                quality=q,
+                reasons=[reason],
+                sample_count=len(lap.samples),
+                path_length_m=path_lengths_all[i],
+                duration_ms=lap.lap_time_ms,
+            ))
+        else:
+            results.append(evaluate_lap_quality(
+                lap,
+                session_median_duration_ms=median_dur,
+                session_median_path_m=median_path,
+            ))
     return results
 
 
@@ -498,6 +567,9 @@ def diagnose_calibration_session(session: "CalibrationSession") -> dict:
         "usable_count": 0,
         "rejected_count": 0,
         "low_confidence_count": 0,
+        "partial_start_count": 0,
+        "partial_stop_count": 0,
+        "pit_detection_enabled": False,
         "total_samples": 0,
         "per_lap": [],
         "all_reasons": [],
@@ -512,6 +584,7 @@ def diagnose_calibration_session(session: "CalibrationSession") -> dict:
 
         quality_results = assess_session_laps(session)
         usable = rejected = low_conf = total_samples = 0
+        partial_start = partial_stop = 0
         per_lap: list[dict] = []
         all_reasons: list[str] = []
 
@@ -530,6 +603,10 @@ def diagnose_calibration_session(session: "CalibrationSession") -> dict:
             elif qr.quality == CalibrationLapQuality.LOW_CONFIDENCE:
                 low_conf += 1
                 all_reasons.extend(qr.reasons)
+            elif qr.quality == CalibrationLapQuality.PARTIAL_START:
+                partial_start += 1
+            elif qr.quality == CalibrationLapQuality.PARTIAL_STOP:
+                partial_stop += 1
             else:
                 rejected += 1
                 all_reasons.extend(qr.reasons)
@@ -545,6 +622,9 @@ def diagnose_calibration_session(session: "CalibrationSession") -> dict:
             "usable_count":         usable,
             "rejected_count":       rejected,
             "low_confidence_count": low_conf,
+            "partial_start_count":  partial_start,
+            "partial_stop_count":   partial_stop,
+            "pit_detection_enabled": False,
             "total_samples":        total_samples,
             "per_lap":              per_lap,
             "all_reasons":          all_reasons,
@@ -648,11 +728,16 @@ def compute_corrected_lap_length(points: list) -> float:
     return closest.distance_along_lap_m
 
 
-def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
+def build_reference_path(
+    session: CalibrationSession,
+    *,
+    pit_detection_enabled: bool = False,
+) -> CalibrationBuildResult:
     """Build a reference path from usable calibration laps in a session.
 
     Algorithm:
-    1.  Evaluate quality of every lap (session-aware medians).
+    1.  Evaluate quality of every lap (session-aware medians; boundary laps that
+        are partial start/stop slices are excluded — DEF-17U-UAT-007).
     2.  Select only USABLE laps.
     3.  Normalise each usable lap to [0.0, 1.0] lap progress.
     4.  Divide each lap into N_PROGRESS_BUCKETS buckets.
@@ -660,12 +745,22 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
     6.  Assign distance_along_lap_m from cumulative averaged distances.
     7.  Compute confidence from source_lap_count and bucket fill rate.
 
+    Parameters
+    ----------
+    pit_detection_enabled : bool, default False
+        DEF-17U-UAT-007: GT7 Custom UDP telemetry provides no reliable pit-lane
+        signal, so automatic pit-in classification is OFF by default.  When False,
+        detect_pit_lap_raw() is never called, no lap is flagged as a pit-in lap,
+        and no "pit-in" wording appears in the diagnostics.  Pass True to opt back
+        into geometry-based pit detection for a data source that supports it.
+
     Raises no exceptions — all failure modes return success=False.
     """
     if not session.track_location_id or not session.layout_id:
         return CalibrationBuildResult(
             success=False,
             errors=["CalibrationSession is missing track_location_id or layout_id"],
+            pit_detection_enabled=pit_detection_enabled,
         )
 
     quality_results = assess_session_laps(session)
@@ -679,12 +774,28 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
     usable_laps: list[CalibrationLap] = []
     rejected_count = 0
     low_conf_count = 0
+    partial_start_count = 0
+    partial_stop_count = 0
+    rejected_too_few_samples = 0
+    rejected_path_length = 0
     all_warnings: list[str] = []
     pit_lap_count = 0
 
     for lap, qr in zip(session.laps, quality_results):
-        if qr.quality == CalibrationLapQuality.USABLE:
-            if detect_pit_lap_raw(lap.samples):
+        if qr.quality == CalibrationLapQuality.PARTIAL_START:
+            partial_start_count += 1
+            all_warnings.append(
+                f"Lap {lap.lap_number} excluded: partial start lap "
+                "captured before the first full lap"
+            )
+        elif qr.quality == CalibrationLapQuality.PARTIAL_STOP:
+            partial_stop_count += 1
+            all_warnings.append(
+                f"Lap {lap.lap_number} excluded: partial stop lap "
+                "captured after recording stopped mid-lap"
+            )
+        elif qr.quality == CalibrationLapQuality.USABLE:
+            if pit_detection_enabled and detect_pit_lap_raw(lap.samples):
                 lap.is_pit_lap = True
                 pit_lap_count += 1
                 all_warnings.append(
@@ -699,6 +810,10 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
             )
         else:
             rejected_count += 1
+            if any("Too few telemetry samples" in r for r in qr.reasons):
+                rejected_too_few_samples += 1
+            if any(("Path length" in r and "major outlier" in r) for r in qr.reasons):
+                rejected_path_length += 1
             all_warnings.append(
                 f"Lap {lap.lap_number} rejected: {'; '.join(qr.reasons)}"
             )
@@ -708,7 +823,10 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
             f"Not enough usable laps to build reference path "
             f"({len(usable_laps)} usable, need {MIN_USABLE_LAPS_FOR_PATH})"
         ]
-        if pit_lap_count > 0 and len(usable_laps) == 0:
+        # Only claim "all laps are pit-in" when pit detection actually ran and
+        # was the reason no usable laps remain — never for Time Trial data where
+        # pit detection is disabled (DEF-17U-UAT-007).
+        if pit_detection_enabled and pit_lap_count > 0 and len(usable_laps) == 0:
             all_warnings.append(
                 "All calibration laps appear to be pit-in laps. "
                 "No reference path built. Drive a clean lap first."
@@ -720,6 +838,11 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
             low_confidence_lap_count=low_conf_count,
             warnings=all_warnings,
             errors=errors_list,
+            partial_start_count=partial_start_count,
+            partial_stop_count=partial_stop_count,
+            rejected_too_few_samples=rejected_too_few_samples,
+            rejected_path_length=rejected_path_length,
+            pit_detection_enabled=pit_detection_enabled,
         )
 
     # ── Per-lap bucketing ────────────────────────────────────────────────────
@@ -775,6 +898,11 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
             low_confidence_lap_count=low_conf_count,
             warnings=all_warnings,
             errors=["No reference path points could be computed from usable laps"],
+            partial_start_count=partial_start_count,
+            partial_stop_count=partial_stop_count,
+            rejected_too_few_samples=rejected_too_few_samples,
+            rejected_path_length=rejected_path_length,
+            pit_detection_enabled=pit_detection_enabled,
         )
 
     # ── Lap closure correction ────────────────────────────────────────────────
@@ -819,6 +947,11 @@ def build_reference_path(session: CalibrationSession) -> CalibrationBuildResult:
         rejected_lap_count      = rejected_count,
         low_confidence_lap_count= low_conf_count,
         warnings                = list(all_warnings),
+        partial_start_count     = partial_start_count,
+        partial_stop_count      = partial_stop_count,
+        rejected_too_few_samples= rejected_too_few_samples,
+        rejected_path_length    = rejected_path_length,
+        pit_detection_enabled   = pit_detection_enabled,
     )
 
 

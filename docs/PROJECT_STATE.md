@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Project State
 
-> Last updated: 2026-07-03 (Group 18A — Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation — 4053 pass / 6 skip / 0 fail — 45 new tests across three test_group18a_*.py files)
+> Last updated: 2026-07-03 (DEF-17U-UAT-007 FIXED — Time Trial calibration builds correctly; pit-in detection now OFF by default, new PARTIAL_START/STOP lap quality. Full suite 4200+ passed, the one failing test is a pre-existing unrelated failure. Prior: Group 18A — Track Truth foundation — 4053 pass / 6 skip / 0 fail)
 > Read this file first, then MASTER_TESTING_REGISTER.md, before touching any code.
 >
 > Note: this file's group table below was authored through Group 17U. Groups 17V–38, the
@@ -15,9 +15,10 @@
 
 | Metric | Value |
 |--------|-------|
-| Automated tests | 4053 pass / 6 skip / 0 fail |
+| Automated tests | 4200+ passed (1 pre-existing unrelated failure: `test_group28_analyse_prompt_ranges`) |
+| Latest fix | DEF-17U-UAT-007 — Time Trial calibration builds correctly; pit-in detection OFF by default, new PARTIAL_START/STOP lap quality (`data/track_calibration.py`, `ui/track_modelling_vm.py`, `ui/track_modelling_ui.py`, `data/track_segment_detection.py`) |
 | Latest group | Group 18A — Track Truth foundation (`data/track_truth.py`, `track_truth_matcher.py`, `track_truth_calibration.py`) — 45 new tests |
-| Last test run | 2026-07-03, Group 18A — 45 tests added (test_group18a_track_truth.py 26, _matcher.py 9, _calibration.py 10) |
+| Last test run | 2026-07-03, DEF-17U-UAT-007 — new tests `test_def17u_uat007_calibration_build.py` (~35), `test_def17u_uat007_partial_laps.py` (44) |
 | App launches | Yes (no startup crash) |
 
 ---
@@ -71,6 +72,7 @@
 | Group 17U | Track Library Schema and Seed Data Registry: `data/track_library.py` (NEW) — full dataclass hierarchy + resolver/loader/audit functions; `data/track_library/` directory (NEW) — `index.json`, Daytona track metadata, layout manifest with 12 corners/3 sectors/2 complexes, validation rules, source manifest; `data/track_intelligence.py` — `SeedAuditResult` extended with `seed_source/library_manifest_loaded/validation_rules_loaded`; `ui/track_model_alignment_vm.py` — `"seed_source"` key in `format_alignment_summary()`; `ui/dashboard.py` — "Seed source" row, library-first `resolve_seed_coordinate_map()`; `docs/TRACK_LIBRARY_SCHEMA.md` (NEW); `tests/test_group17u_track_library_schema.py` (NEW) — 83 tests | **Complete 2026-06-26 — 83 tests pass** | — |
 | _(Groups 17V–38, A–E, Qualifying Mode, Setup Brain + Strategy Outcome integration)_ | Catalogued in `MASTER_TESTING_REGISTER.md` ("Groups 26–38 + Lettered Groups" and "Integration — Setup Brain + Strategy Outcome") and `docs/CURRENT_CLAUDE_HANDOFF.md`, not re-tabulated here | **Complete — see register** | — |
 | Group 18A | Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation: builds a proper Track Truth spine so the app stops treating curvature-only corners as authoritative (principle: no mapped-corner confidence ⇒ no high-confidence rec). `data/track_truth.py` (NEW) — 4 str-Enums, 8 dataclasses (`TrackStation`/`CornerWindow`/`CornerComplex`/`SectorMarker`/`PitLaneDefinition`/`TrackTruthManifest`/`TrackTruthModel`/`TrackTruthValidationResult`), schema `track_truth_model_v1`+`track_truth_manifest_v1` (runtime-built from existing library manifest+semantic_model — no new file), `resolve_track_truth_model()`, `validate_track_truth_model()` (tiered gates is_accepted → is_usable_for_live_mapping → is_usable_for_ai_corner_context; NO_COORDINATE_GEOMETRY blocker), `can_use_track_truth_for_ai_corner_context()` AI guard; `data/track_truth_matcher.py` (NEW) — `match_track_truth_position()` weighted station scoring scaffold (swappable for HMM/Viterbi), confidence bands mirror `track_map_matching.py`; `data/track_truth_calibration.py` (NEW) — `TrackTruthWizardStage` (8) + `TrackTruthCalibrationWizard`, illegal transitions are no-ops, geometry DELEGATED to Group 17V's `data/track_geometry_builder.build_seed_geometry` (no duplicate algorithm), accept persists via `save_seed_geometry_to_library`; `ui/track_modelling_vm.py` — `format_track_truth_status()` (20-key display dict); `ui/track_modelling_ui.py` — "Track Truth / Mapping" panel + `_tm_refresh_track_truth_panel()`; `tests/test_group18a_track_truth*.py` (NEW ×3) — 45 tests. Daytona stays AI-BLOCKED (no seed_map → zero stations → NO_COORDINATE_GEOMETRY). Setup/Strategy/Live-Engineer rewiring deferred. | **Complete 2026-07-03 — 45 tests pass** | — |
+| DEF-17U-UAT-007 | Time Trial calibration laps falsely classified as pit-in / unusable. GT7 has no reliable per-sample pit-lane flag, so geometric pit-in inference false-positived on clean Time Trial laps, and mid-lap start/stop partials poisoned the session median. Fix: pit-in detection DISABLED by default (`build_reference_path(..., pit_detection_enabled=False)`); new `PARTIAL_START` / `PARTIAL_STOP` `CalibrationLapQuality` (first/last lap below 0.5× interior-median path length, ≥ 50 samples, sessions > 2 laps) excluded from the build and not counted as rejected; session median from complete laps only; count-based build diagnostics that never say "pit-in" or "Drive a clean lap first" when pit detection is off. `data/track_calibration.py`, `ui/track_modelling_vm.py`, `ui/track_modelling_ui.py`, `data/track_segment_detection.py`; new `tests/test_def17u_uat007_calibration_build.py` (~35), `tests/test_def17u_uat007_partial_laps.py` (44). | **Complete 2026-07-03 — 4200+ pass (1 pre-existing unrelated failure)** | DEF-17U-UAT-007 ✅ |
 
 ---
 

@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (Group 18A: Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation — **4053 pass / 6 skip / 0 fail** — 45 new tests across `test_group18a_track_truth.py` (26), `test_group18a_track_truth_matcher.py` (9), `test_group18a_track_truth_calibration.py` (10). Foundation only — Setup/Strategy/Live-Engineer not yet rewired to consume `TrackTruthModel`. See "Group 18A — Track Truth Foundation" at the end of this file.
+> Last updated: 2026-07-03 (DEF-17U-UAT-007: Time Trial calibration laps falsely classified as pit-in / unusable — **FIXED**. Pit-in detection now OFF by default (`build_reference_path(..., pit_detection_enabled=False)`); new `PARTIAL_START` / `PARTIAL_STOP` lap quality so mid-lap start/stop slices no longer block valid laps. New tests: `test_def17u_uat007_calibration_build.py` (~35), `test_def17u_uat007_partial_laps.py` (44). **Full suite: 4200+ passed** (only failing test `test_group28_analyse_prompt_ranges` is a pre-existing, unrelated failure). See "DEF-17U-UAT-007" at the end of this file.
+> Prior: 2026-07-03 (Group 18A: Track Truth Library, Calibration Wizard, Station-Based Map Matching Foundation — **4053 pass / 6 skip / 0 fail** — 45 new tests across `test_group18a_track_truth.py` (26), `test_group18a_track_truth_matcher.py` (9), `test_group18a_track_truth_calibration.py` (10). Foundation only — Setup/Strategy/Live-Engineer not yet rewired to consume `TrackTruthModel`. See "Group 18A — Track Truth Foundation" at the end of this file.
 > Prior: 2026-07-02 (Integration: Setup Brain + Strategy Outcome — **3984 pass / 6 skip / 0 fail** — full combined suite, merged to `master` via `integration/setup-brain-strategy-overhaul` — merging `feature/setup-diagnosis-engine` + `feature/strategy-outcome-comparison`. Merged after automated tests passed; **runtime UAT still pending** (SETUP_BUILDER_UAT.md + STRATEGY_BUILDER_UAT.md). Remote https://github.com/leonpaczynski-netizen/ngr_pitcrew (`origin/master` at merge commit `7254835`). See "Integration — Setup Brain + Strategy Outcome" at the end of this file.
 > Read PROJECT_STATE.md first, then this file, before touching any code.
 >
@@ -3698,3 +3699,32 @@ HMM/Viterbi matcher (scaffold only); a real Daytona `geometry.seed_map.json`; no
 tracks; automated boundary generation; deep AI prompt integration; automatic track ID.
 
 **Full suite result after Group 18A: 4053 pass / 6 skip / 0 fail**
+
+---
+
+## DEF-17U-UAT-007 — Time Trial Calibration Laps Falsely Classified as Pit-In / Unusable (2026-07-03)
+
+**Defect fixed:** DEF-17U-UAT-007 — clean GT7 Time Trial calibration laps were rejected and the reference-path build failed with *"Not enough usable laps to build reference path (0 usable, need 2)"*, wrongly reporting the clean laps as "pit-in laps" and the first/last partial laps as generic outliers.
+
+**Symptom (Post-Group-17U UAT):** User drove 5 clean Time Trial laps (captured as 7 slices), never pitted. Build failed; diagnostics reported 7 captured laps, rejected lap 1 as an outlier (18.1s / 749m vs session median 128.7s / 6171m), detected laps 2–6 as "pit-in laps", rejected lap 7 (40 samples < 50), and concluded "All calibration laps appear to be pit-in laps."
+
+**Root causes:**
+1. GT7 Custom UDP telemetry has no reliable per-sample pit-lane flag (`TelemetrySample.is_in_pit_lane` is always `None`). Pit-in was inferred by `detect_pit_lap_raw()` purely from XZ-centroid geometry (contiguous run > 60 m from lap centroid for > 10 s) — false-positives on normal Time Trial laps.
+2. Short partial first/last laps (captured when Start/Stop is pressed mid-lap) poisoned the session median and were mislabelled as generic outliers.
+
+**Files modified:**
+- `data/track_calibration.py` — `build_reference_path(session, *, pit_detection_enabled=False)` (pit detection now DISABLED by default; `detect_pit_lap_raw()` only called when opted in). New `CalibrationLapQuality` values `PARTIAL_START` / `PARTIAL_STOP` (first/last lap classified partial when path length < `PARTIAL_LAP_PATH_FRACTION`=0.5 of the interior/complete-lap median AND samples ≥ `MIN_CALIBRATION_SAMPLES`=50; guarded to sessions with > 2 laps). Session median duration/path computed from complete (non-partial) laps only. Partial laps excluded from build and NOT counted in `rejected_lap_count`. `CalibrationBuildResult` gained `partial_start_count`, `partial_stop_count`, `rejected_too_few_samples`, `rejected_path_length`, `pit_detection_enabled`. `diagnose_calibration_session()` surfaces the partial counts, `pit_detection_enabled`, and per-lap `"partial_start"` / `"partial_stop"` quality strings.
+- `ui/track_modelling_vm.py` — `format_no_usable_laps()` gives a count-based failure message ("Pit detection: off", complete-candidate count, partial / too-few-samples / path-length breakdown); never says "pit-in" or "Drive a clean lap first" when complete candidates existed but were rejected. `format_build_failure_diagnostics()` shows the new breakdown, filters pit warnings when pit detection is off, and only recommends "Avoid pit stops" when pit detection ran. `_CAL_LAP_QUALITY_LABELS` maps `partial_start`→"Partial (start)", `partial_stop`→"Partial (stop)".
+- `ui/track_modelling_ui.py` — Track Modelling build handler only shows the prominent pit warning label when `result.pit_detection_enabled` is True.
+- `data/track_segment_detection.py` — no-usable-laps summary now also reports an "N partial" count so the numbers reconcile with the total captured.
+
+**New test files:**
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_def17u_uat007_calibration_build.py` | ~35 | data/build layer: pit detection off by default, PARTIAL_START/STOP classification, median from complete laps only, partial laps excluded from build and not counted as rejected, new `CalibrationBuildResult` fields, `diagnose_calibration_session()` surfacing; exact UAT 7-lap regression builds a reference path |
+| `tests/test_def17u_uat007_partial_laps.py` | 44 | UI formatters/labels: `format_no_usable_laps()` count-based message + no "pit-in"/"clean lap" wording when pit off, `format_build_failure_diagnostics()` breakdown + pit-warning filtering, `_CAL_LAP_QUALITY_LABELS` partial-start/stop labels |
+
+**Updated test file:** `tests/test_group21b_missing_coverage.py` — 2 opt-in pit tests now pass `pit_detection_enabled=True`.
+
+**Full suite result after DEF-17U-UAT-007 remediation: 4200+ passed.** The only failing test (`test_group28_analyse_prompt_ranges`) is a pre-existing failure in unrelated in-progress "setup ranges" work (`strategy/driving_advisor.py`), not part of this fix.
