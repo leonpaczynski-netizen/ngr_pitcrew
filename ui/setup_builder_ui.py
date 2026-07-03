@@ -718,18 +718,26 @@ class SetupBuilderMixin:
         return setup_box
 
     def _current_setup_dict(self) -> dict:
-        """Read all manual fields including editable gear ratios."""
+        """Read all manual fields including editable gear ratios.
+
+        Phase 5: the event-identity fields (car/track/weather/bop) come from
+        the canonical EventContext (DB-first) instead of the legacy fan-out —
+        byte-identical in sync. Safe off the UI thread too (the voice query
+        listener holds this as its setup getter): SessionDB is
+        check_same_thread=False with an internal lock.
+        """
         gear_ratios = [s.value() for s in self._gear_ratio_spins if s.value() > 0.0]
+        _ev_ctx = self._build_event_context()
         return {
-            "name":      self._config.get("strategy", {}).get("car", "Unknown Car") or "Unknown Car",
-            "car":       self._config.get("strategy", {}).get("car", "Unknown Car") or "Unknown Car",
+            "name":      _ev_ctx.car or "Unknown Car",
+            "car":       _ev_ctx.car or "Unknown Car",
             "setup_label": self._setup_label.text().strip() or "Setup 1",
-            "track":     self._config.get("strategy", {}).get("track", ""),
+            "track":     _ev_ctx.track,
             "condition": {
                 "Fixed Dry": "Dry", "Dry": "Dry", "Random Weather": "Dry",
                 "Fixed Wet": "Wet", "Wet": "Wet", "Heavy Rain": "Wet",
                 "Light Rain": "Damp", "Wet Risk": "Damp", "Damp": "Damp",
-            }.get(self._config.get("strategy", {}).get("weather", ""), "Dry"),
+            }.get(_ev_ctx.weather, "Dry"),
             "setup_type": self._setup_type.currentText(),
             "ride_height_front": self._setup_rh_f.value(),
             "ride_height_rear":  self._setup_rh_r.value(),
@@ -768,7 +776,7 @@ class SetupBuilderMixin:
             "nitrous_output": self._setup_nitrous_output.value(),
             "notes":          self._setup_notes.text().strip(),
             "ecu_recommendation": self._lbl_ecu_rec.text() if hasattr(self, "_lbl_ecu_rec") else "",
-            "bop_race":       bool(self._config.get("strategy", {}).get("bop", False)),
+            "bop_race":       _ev_ctx.bop_enabled,
             "gear_ratios":    gear_ratios,
             "final_drive":    self._spin_final_drive.value(),
             "transmission_max_speed_kmh": int(self._spin_top_speed.value()),
@@ -1073,7 +1081,9 @@ class SetupBuilderMixin:
             _meta_keys = {"name", "setup_label", "setup_id", "captured_at", "ai_notes"}
             _car_name = d.get("name", "")
             _car_id = self._db.get_car_id(_car_name) if _car_name else 0
-            _event_id = int(self._config.get("strategy", {}).get("event_id", 0))
+            # Phase 5: event id from the canonical EventContext (DB-first;
+            # byte-identical in sync — the fan-out stored the same DB id).
+            _event_id = int(self._build_event_context().event_id or 0)
             _label = d.get("setup_label", "Setup")
             _fields = {k: v for k, v in d.items() if k not in _meta_keys}
             _existing_db_id = d.get("setup_id") if existing is not None else 0

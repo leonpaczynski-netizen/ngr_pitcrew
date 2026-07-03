@@ -5056,3 +5056,83 @@ Alternative: wire the real UDP-listener connection signal into `SessionContext`.
 reads, then delete the Set-as-Active writer and the compatibility dict.
 Alternative smaller job: wire the real UDP-listener connection signal into
 `SessionContext`.
+
+---
+
+## Legacy Fan-Out Removal Phase 5 — Functional Readers + Frozen Allowlist Guard (2026-07-03)
+
+> Branch `legacy-fanout-removal-phase-5` (from `master` @ `b58545e`).
+> Full doc: `docs/LEGACY_FANOUT_PHASE_5.md`.
+> **Full suite: 4682 pass / 6 skip / 0 fail** (15 new tests; 2 legacy pins
+> updated in place).
+
+### What was done
+Scope was set by an explicit product decision — **"Functional + guard"** — after
+the sprint-opening audit found full writer retirement **blocked**: telemetry-path
+reads in `main.py _dispatch` (per-lap DB tagging + fallback race-session open —
+an EventContext there means a DB query per lap event), the
+`_compute_race_config_id` **hash** (byte-stability paramount), the restore
+writers, plan-state persistence (stops/fuel/tolerances/config_id have no DB
+home), and the context-builder bridges. All mapped in the doc's **Phase 6
+retirement plan** (dispatcher session-tag snapshot → hash proof + pinned
+vectors → restore redesign → plan-state home → reshape bridges).
+
+**Functional readers migrated (byte-identical in-sync; post-Phase-4 always in
+sync):**
+- `dashboard._on_live_mode_changed` live-session open tagging — `EventContext`
+  `track`/`car`/`event_id` + `_active_config_id()` (StrategyContext).
+- Degradation params — `tyre_wear_multiplier` (EventContext) +
+  `degradation_consecutive_laps` (StrategyContext); still read on the UI thread
+  before the worker spawns.
+- BoP checks — `_get_bop_data_for_car` + the reload-BoP gate →
+  `EventContext.bop_enabled` / `.car`.
+- `setup_builder._current_setup_dict` event-identity fields — car (with the
+  `or "Unknown Car"` fallback preserved), track, weather (feeding the same
+  condition map), bop — via one `_ev_ctx`. Voice-thread-safe (the query
+  listener's setup getter): SessionDB is `check_same_thread=False` + locked.
+- Setup-save `event_id` — `int(_build_event_context().event_id or 0)`.
+
+**No product decision reads the legacy dict any more.**
+
+**Frozen allowlist:** `tests/test_legacy_fanout_phase_5.py::FROZEN_ALLOWLIST`
+pins all **41 remaining `config["strategy"]` access sites** across 40
+`(file, method)` entries (dashboard 29, setup_builder 14/9 methods,
+track_modelling 3, main.py 2), each annotated (writer / bridge / hash / plan /
+restore / cosmetic / telemetry-path). The scan requires exact equality: a NEW
+consumer fails with a pointer to the contexts; a silent removal fails until the
+allowlist is shrunk in the same commit.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_legacy_fanout_phase_5.py` (NEW) | 15 | Frozen-allowlist exact match + the no-new/no-silently-removed guard; byte-identity for every migrated read (session-tagging fields incl. empty defaults; degradation params incl. the 1.0/2 defaults; BoP gate + car incl. empty→closed; setup-dict identity fields incl. the "Unknown Car" fallback); source-scans that the five migrated methods read the contexts with zero raw reads left; fan-out writer + Phase 4 save re-sync + Home-first + config-guardrail invariants. |
+| `tests/test_group4_fixes.py` (updated ×2) | — | `TestBoPSourceOfTruth` — the invariant was "BoP from event state, never a widget"; the event-state source is now the canonical EventContext (`bop_enabled`), the never-a-widget assertion unchanged. |
+
+### Acceptance criteria — status
+- Full suite passes — **yes (4682/6/0)**.
+- Functional readers on canonical contexts; byte-identical in-sync — **yes (tested)**.
+- Frozen allowlist blocks new consumers and silent removals — **yes (exact-equality scan)**.
+- Writer retirement handled honestly — **blocked items mapped for Phase 6; writer + re-sync + TM combo writer preserved and pinned**.
+- No setup-logic/strategy-calc/track-mapping/AI-prompt/PTT/voice/tab-order change — **yes**.
+- No real config touched by tests — **yes**.
+- Clear next-sprint recommendation — **yes (SessionContext connection signal, Phase 6a dispatcher snapshot, or product work)**.
+
+### Manual UAT steps
+1. Start a Practice/Qualifying/Race session with an active event — the session
+   row in History carries the same track/car/session-match-key/event linkage as
+   before.
+2. Run Analyse Degradation — identical parameters/results (wear multiplier and
+   consecutive-lap window unchanged).
+3. With a BoP event active, the BoP data/label behave exactly as before; with
+   BoP off, `_get_bop_data_for_car` still returns nothing.
+4. Save a setup — it links to the same event id; voice queries about the current
+   setup still work (getter now context-backed).
+
+### Next sprint
+The fan-out series is at its natural pause (staleness impossible since Phase 4;
+no functional decision on the dict; guard in place). Options: **wire the real
+UDP-listener connection signal into SessionContext** (one-place change,
+user-visible), **Phase 6a — dispatcher session-tag snapshot** (first concrete
+writer-retirement step), or **return to product work** (e.g. deferred OFR-1
+between-race learning loop).

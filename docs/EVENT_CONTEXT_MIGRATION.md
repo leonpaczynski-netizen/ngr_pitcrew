@@ -30,6 +30,15 @@
 > moved to EventContext. Writer retirement deferred to Phase 5 (car/config_id/
 > stint plan live only in the fan-out; ~25 readers remain). See
 > `docs/LEGACY_FANOUT_PHASE_4.md`.
+>
+> **Legacy Fan-Out Removal Phase 5 update (2026-07-03):** the remaining
+> FUNCTIONAL readers (live-session tagging, degradation params, BoP checks,
+> `_current_setup_dict` identity fields, setup-save event_id) migrated to the
+> contexts — **no product decision reads the legacy dict any more** — and a
+> frozen allowlist (`tests/test_legacy_fanout_phase_5.py`) pins all 41 remaining
+> access sites. Full writer retirement mapped for Phase 6 (telemetry-path
+> dispatcher reads, the config_id hash, restore writers, plan persistence,
+> bridges). See `docs/LEGACY_FANOUT_PHASE_5.md`.
 
 > Sprint: **State Consolidation 1 — EventContext** · 2026-07-03
 > Companion: `data/event_context.py`, `docs/PRODUCT_CONSOLIDATION_AUDIT.md` (§5, §7)

@@ -116,6 +116,12 @@ invariants. **11 legacy pins updated in place** (same invariants, new home:
 
 ## 8. Next sprint recommendation
 
+> **Executed (2026-07-03):** Phase 5 ran next with a re-scoped goal ("Functional
+> + guard" — full retirement confirmed blocked per §5): the remaining functional
+> readers were migrated, a frozen allowlist now pins all 41 remaining access
+> sites, and the Phase 6 retirement map was written. See
+> `docs/LEGACY_FANOUT_PHASE_5.md`.
+
 **Legacy Fan-Out Removal Phase 5 — retire the writer** (per §5: re-home
 `car`/`config_id`/plan state, migrate the remaining ~25 reads, delete the
 fan-out), or the standing smaller job: **wire the real UDP-listener connection
