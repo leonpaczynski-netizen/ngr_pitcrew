@@ -971,7 +971,10 @@ class SetupBuilderMixin:
         Byte-identical to the legacy expressions when the stores are in sync
         (proven by tests/test_ai_context_snapshot.py). Never raises; falls back
         to exact legacy expressions when no event context exists.
+        OFR-2: session_type is passed so SetupAISnapshot.discipline is real.
         """
+        # OFR-2: read session_type defensively — combo may not exist yet.
+        _stype = self._setup_type.currentText() if hasattr(self, "_setup_type") else None
         try:
             from data.ai_context_snapshot import build_setup_ai_snapshot
             ev = self._build_event_context() if hasattr(self, "_build_event_context") else None
@@ -988,11 +991,12 @@ class SetupBuilderMixin:
             return build_setup_ai_snapshot(
                 event_context=ev, strategy_context=sc,
                 setup_snapshot=setup_snap, track_context=tc,
-                legacy_strategy=self._config.get("strategy", {}))
+                legacy_strategy=self._config.get("strategy", {}),
+                session_type=_stype)
         except Exception:  # pragma: no cover - defensive; must never break AI calls
             from data.ai_context_snapshot import build_setup_ai_snapshot
             _legacy = self._config.get("strategy", {}) if hasattr(self, "_config") else None
-            return build_setup_ai_snapshot(legacy_strategy=_legacy)
+            return build_setup_ai_snapshot(legacy_strategy=_legacy, session_type=_stype)
 
     def _setup_type_prefix(self) -> str:
         """'Q' for a qualifying setup, 'R' for a race setup, from the type combo.
@@ -1421,6 +1425,28 @@ class SetupBuilderMixin:
             self._btn_apply_ai_setup.setVisible(False)
         self._last_setup_ai_fields = {}
 
+    def _resolve_recent_laps(self, car_id: int, track: str) -> list:
+        """Return per-lap telemetry rows for the most recent session of car+track.
+
+        OFR-2: feeds per_lap_telemetry into build_car_setup so the discipline
+        block in the setup-build prompt is real.  Always returns a list (empty
+        on any error, missing DB, zero car_id, or no previous session).
+        Fetches on the UI thread so the worker closure captures a plain list.
+        """
+        # OFR-2: guard — no db, no car, no track → nothing to resolve.
+        if not (self._db and car_id > 0 and track):
+            return []
+        try:
+            sid = self._db.get_previous_session_id(car_id, track, 99_999_999)
+            if not sid:
+                return []
+            return self._db.get_session_laps(
+                sid, exclude_pit=True, exclude_out=True, limit=5
+            )
+        except Exception as _ofr2_err:  # pragma: no cover - defensive
+            print(f"[OFR-2] _resolve_recent_laps failed: {_ofr2_err}")
+            return []
+
     def _run_build_setup(self) -> None:
         """Ask AI to generate a complete from-scratch car setup and auto-fill all fields."""
         import threading as _threading
@@ -1468,6 +1494,10 @@ class SetupBuilderMixin:
         _gearbox_analysis = _last_lap.gearbox_analysis if _last_lap else {}
         _car_id_build = self._db.get_car_id(car) if self._db and car and car != "Unknown" else 0
         self._car_id_build = _car_id_build
+
+        # OFR-2: resolve most-recent-session laps on the UI thread so the worker
+        # closure captures a plain list (no DB access inside the thread needed).
+        _ofr2_laps = self._resolve_recent_laps(_car_id_build, track)
 
         self._btn_build_setup.setEnabled(False)
         self._btn_build_setup.setText("Building…")
@@ -1521,7 +1551,8 @@ class SetupBuilderMixin:
                                       mandatory_stops=_mandatory_stops,
                                       refuel_rate_lps=_refuel_rate_lps,
                                       pit_loss_secs=_pit_loss_secs,
-                                      race_engineer_brief=_re_brief)
+                                      race_engineer_brief=_re_brief,
+                                      per_lap_telemetry=_ofr2_laps or None)
                 from strategy._rec_parser import parse_recommendations_from_response as _parse_recs
                 try:
                     _ai_id_build = self._db._conn.execute(
