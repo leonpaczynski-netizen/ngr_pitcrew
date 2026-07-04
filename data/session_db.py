@@ -1741,6 +1741,7 @@ class SessionDB:
             f" oversteer_throttle_on, kerb_count, max_lat_g,"
             f" tyre_temp_fl_avg, tyre_temp_fr_avg,"
             f" tyre_temp_rl_avg, tyre_temp_rr_avg,"
+            f" snap_throttle_count, brake_consistency_m,"
             f" event_positions_json"
             f" FROM lap_records"
             f" WHERE {where}"
@@ -1751,6 +1752,27 @@ class SessionDB:
         with self._lock:
             rows = self._conn.execute(sql, (session_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_session_type(self, session_id: int) -> str:
+        """Return the session_type stored for the given session.
+
+        Returns '' when session_id is 0, missing, or the query fails.  An
+        empty string is treated as UNKNOWN by normalise_purpose, matching the
+        documented defensive contract ('' → UNKNOWN → generic block).
+        """
+        if not session_id:
+            return ""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT session_type FROM sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+            if row is None:
+                return ""
+            return str(row[0] or "")
+        except Exception:
+            return ""
 
     def get_recent_fuel_sequence(self, car_id: int, track: str, limit: int = 15) -> list:
         """Return per-lap fuel consumption values (L/lap) for this car+track.
