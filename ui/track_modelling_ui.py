@@ -840,6 +840,9 @@ class TrackModellingMixin:
         self._tm_search_btn.clicked.connect(self._tm_do_search)
         self._tm_search_input.returnPressed.connect(self._tm_do_search)
         self._tm_search_results.itemDoubleClicked.connect(self._tm_on_search_result_selected)
+        # Clicking a segment row highlights it on the map (this was never wired,
+        # so selecting a segment did nothing).
+        self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
         return outer
 
@@ -1224,6 +1227,15 @@ class TrackModellingMixin:
             match_result = _map_match(x, y, z, sm, speed_kph=spd)
             if self._tm_cached_draw_data is None:
                 self._tm_cached_draw_data = _build_map_draw_data(sm, match_result=match_result)
+                # Re-apply any selected-segment highlight so a live-packet rebuild
+                # doesn't wipe it (the "highlight only flashes" bug).
+                if getattr(self, "_tm_highlight_start_p", None) is not None:
+                    import dataclasses as _dc
+                    self._tm_cached_draw_data = _dc.replace(
+                        self._tm_cached_draw_data,
+                        highlight_start_progress=self._tm_highlight_start_p,
+                        highlight_end_progress=self._tm_highlight_end_p,
+                    )
             else:
                 # Only recompute the car dot; full geometry is unchanged
                 if match_result is not None and not match_result.is_pit_likely:
@@ -2044,15 +2056,32 @@ class TrackModellingMixin:
         # Export the reviewed segments — this is what makes the model AI-ready.
         review = getattr(self, "_tm_review_result", None)
         if review is not None:
+            # Accept = confirm every detected segment. There is no per-segment
+            # review UI (those buttons were removed), so is_ai_ready would never
+            # pass while apex segments sat UNREVIEWED. Alignment already reported
+            # a good match, so accepting confirms the detected segments as-is;
+            # detection warnings are preserved and still shown.
+            from data.track_segment_review import SegmentReviewStatus as _SRS
+            for _seg in review.segments:
+                if _seg.review_status == _SRS.UNREVIEWED:
+                    _seg.review_status = _SRS.CONFIRMED
+            # Stamp the review with the SAME ids the resolver queries with (the
+            # combo selection). find_reviewed_models_for_layout globs on
+            # "<loc>__<lay>__reviewed_segments__" using the combo ids, so the
+            # exported filename MUST use those exact ids — the station map's ids
+            # can be a shorter form and silently miss (Candidates: 0 after accept).
+            _loc = ((self._tm_location_combo.currentData() or "").strip()
+                    if hasattr(self, "_tm_location_combo") else "")
+            _lay = ((self._tm_layout_combo.currentData() or "").strip()
+                    if hasattr(self, "_tm_layout_combo") else "")
+            review.track_location_id = _loc or review.track_location_id or sm.track_location_id
+            review.layout_id = _lay or review.layout_id or sm.layout_id
             try:
-                if not getattr(review, "track_location_id", ""):
-                    review.track_location_id = sm.track_location_id
-                if not getattr(review, "layout_id", ""):
-                    review.layout_id = sm.layout_id
                 from data.track_segment_review import export_review_json
-                export_review_json(review)
-            except Exception:
-                pass  # best-effort
+                _out = export_review_json(review)
+                print(f"[TrackModel] reviewed segments saved: {_out}")
+            except Exception as _exc:
+                print(f"[TrackModel] reviewed-segments export failed: {_exc}")
         self._tm_refresh_alignment_panel(result)
         self._tm_refresh_track_truth_panel()
         # Re-resolve so the Track Model Status panel flips off "seed only".
@@ -2122,6 +2151,14 @@ class TrackModellingMixin:
             highlight_end_progress   = end_progress,
         )
         w.set_draw_data(dd_updated)
+        # Keep the cached draw data (reused by the 60Hz live redraw) in sync, so
+        # the next telemetry packet doesn't overwrite the highlight.
+        if getattr(self, "_tm_cached_draw_data", None) is not None:
+            self._tm_cached_draw_data = dataclasses.replace(
+                self._tm_cached_draw_data,
+                highlight_start_progress = start_progress,
+                highlight_end_progress   = end_progress,
+            )
 
     def _tm_clear_map_highlight(self) -> None:
         """Clear the highlight band from the track map."""
@@ -2138,6 +2175,12 @@ class TrackModellingMixin:
             highlight_end_progress   = None,
         )
         w.set_draw_data(dd_cleared)
+        if getattr(self, "_tm_cached_draw_data", None) is not None:
+            self._tm_cached_draw_data = dataclasses.replace(
+                self._tm_cached_draw_data,
+                highlight_start_progress = None,
+                highlight_end_progress   = None,
+            )
 
     def _tm_run_ai_corner_verify(self) -> None:
         """Button handler: run AI corner verification on the current station map."""

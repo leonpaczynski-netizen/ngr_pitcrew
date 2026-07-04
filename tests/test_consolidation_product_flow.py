@@ -235,3 +235,14 @@ class TestTrackModellingRenames:
         # Accept enables on alignment quality alone; the old extra seed_available
         # requirement forced an unrelated 'Generate Seed Geometry' workflow.
         assert 'states.get("accept", False) and seed_available' not in tm_src
+
+    def test_accept_bulk_confirms_segments(self, tm_src):
+        # There is no per-segment review UI, so Accept must confirm the detected
+        # segments (UNREVIEWED -> CONFIRMED) or is_ai_ready can never pass.
+        body = _method_body(tm_src, "_tm_accept_track_model")
+        assert "SegmentReviewStatus" in body and "CONFIRMED" in body
+
+    def test_segment_row_click_is_wired_for_map_highlight(self, tm_src):
+        # The segment table click must be connected so selecting a segment
+        # highlights it on the map (it was never wired).
+        assert "self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)" in tm_src
