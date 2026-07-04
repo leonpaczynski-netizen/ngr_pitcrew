@@ -143,6 +143,27 @@ def test_wheel_filter_installed_on_window(window):
     assert hasattr(window, "_no_wheel_filter")
 
 
+def test_live_mode_drives_shift_threshold_and_syncs_setup_combo(window):
+    # Unified live-session mode: picking Qualifying/Race on the Live tab now also
+    # sets the practice qual/race shift-beep threshold and mirrors the Setup
+    # Builder "Live beep uses:" combo, so the two controls can't disagree.
+    window._live_mode_ref = ["Race"]
+    window._practice_is_qual_ref = [False]
+
+    window._on_live_mode_changed("Qualifying")
+    assert window._practice_is_qual_ref[0] is True
+    assert window._setup_type.currentText() == "Qualifying Setup"
+
+    window._on_live_mode_changed("Race")
+    assert window._practice_is_qual_ref[0] is False
+    assert window._setup_type.currentText() == "Race Setup"
+
+    # Practice is ambiguous — it must NOT clobber the finer selection.
+    window._practice_is_qual_ref[0] = True
+    window._on_live_mode_changed("Practice")
+    assert window._practice_is_qual_ref[0] is True
+
+
 def test_loading_a_setup_updates_home_setup_context(window):
     # UAT: loading a saved setup must register on the Home Setup Brain card,
     # which reads _last_setup_context. Loading previously left it stale.

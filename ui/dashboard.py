@@ -1284,6 +1284,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             import main
             with main._state_lock:
                 self._live_mode_ref[0] = mode
+                # Unify the qual/race shift-beep threshold with the live mode:
+                # Qualifying -> qual RPM, Race -> race RPM. Practice is ambiguous
+                # (could be qual- or race-pace running), so it leaves the finer
+                # Setup Builder "Live beep uses:" selection untouched.
+                if (mode in ("Race", "Qualifying")
+                        and hasattr(self, "_practice_is_qual_ref")
+                        and self._practice_is_qual_ref is not None):
+                    self._practice_is_qual_ref[0] = (mode == "Qualifying")
+        # Mirror the Setup Builder "Live beep uses:" combo so both controls agree
+        # (blockSignals avoids a re-entrant _on_setup_type_changed).
+        if mode in ("Race", "Qualifying") and hasattr(self, "_setup_type"):
+            self._setup_type.blockSignals(True)
+            self._setup_type.setCurrentText(
+                "Qualifying Setup" if mode == "Qualifying" else "Race Setup")
+            self._setup_type.blockSignals(False)
         # Open a new session immediately so laps (including the first outlap) are linked
         if self._db is not None and self._dispatcher is not None:
             try:
