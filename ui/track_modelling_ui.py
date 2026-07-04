@@ -1896,15 +1896,30 @@ class TrackModellingMixin:
 
         acc_btn = getattr(self, "_tm_btn_accept", None)
         if acc_btn is not None:
-            # Enable purely on alignment quality (good/acceptable match, no
-            # blockers, not already accepted). The old extra `seed_available`
-            # requirement forced an unrelated "Generate Seed Geometry" workflow
-            # and left users unable to promote a perfectly-aligned model.
-            accept_enabled = states.get("accept", False)
+            # Enable on alignment quality alone (good/acceptable match, no
+            # blockers). Two deliberate departures from the old gate:
+            #  - dropped the unrelated `seed_available` requirement (it forced a
+            #    separate "Generate Seed Geometry" workflow), and
+            #  - allow RE-accepting an already-accepted model: an earlier accept
+            #    may not have produced an AI-ready reviewed file, so the user must
+            #    be able to run it again without a full Rebuild/Recalibrate.
+            #    Re-accept is idempotent.
+            _mname = (
+                result.match_status.name
+                if result is not None and hasattr(result.match_status, "name")
+                else ""
+            )
+            accept_enabled = (
+                has_map
+                and result is not None
+                and _mname in ("GOOD_MATCH", "ACCEPTABLE_MATCH")
+                and not result.blockers
+            )
             acc_btn.setEnabled(accept_enabled)
             acc_btn.setToolTip(
                 "Accept the aligned model and save the reviewed segments — "
-                "promotes this track from seed-only to AI-ready."
+                "promotes this track from seed-only to AI-ready. Safe to click "
+                "again if a previous accept didn't take."
             )
             # Style the button to reflect match quality:
             # GOOD_MATCH → amber border (lower-quality acceptance hint)
