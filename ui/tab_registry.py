@@ -49,7 +49,6 @@ TAB_PRACTICE_REVIEW = "practice_review"
 TAB_STRATEGY_BUILDER = "strategy_builder"
 TAB_TELEMETRY = "telemetry"
 TAB_DIAGNOSTICS = "diagnostics"
-TAB_GUIDE = "guide"
 TAB_SETTINGS = "settings"
 TAB_HISTORY = "history"
 TAB_AI_LOG = "ai_log"
@@ -76,11 +75,10 @@ DEFAULT_TAB_ORDER: Tuple[str, ...] = (
     TAB_STRATEGY_BUILDER,  # 6  Strategy Builder
     TAB_TELEMETRY,         # 7  Telemetry (⚙ tool)
     TAB_DIAGNOSTICS,       # 8  Diagnostics (⚙ tool)
-    TAB_GUIDE,             # 9  Guide
-    TAB_SETTINGS,          # 10 Settings
-    TAB_HISTORY,           # 11 History
-    TAB_AI_LOG,            # 12 AI Log (⚙ tool)
-    TAB_TRACK_MODELLING,   # 13 Track Modelling (⚙ tool)
+    TAB_SETTINGS,          # 9  Settings
+    TAB_HISTORY,           # 10 History
+    TAB_AI_LOG,            # 11 AI Log (⚙ tool)
+    TAB_TRACK_MODELLING,   # 12 Track Modelling (⚙ tool)
 )
 
 
@@ -97,7 +95,6 @@ TAB_BASE_TITLES: Dict[str, str] = {
     TAB_STRATEGY_BUILDER: "Strategy Builder",
     TAB_TELEMETRY: "Telemetry",
     TAB_DIAGNOSTICS: "Diagnostics",
-    TAB_GUIDE: "Guide",
     TAB_SETTINGS: "Settings",
     TAB_HISTORY: "History",
     TAB_AI_LOG: "AI Log",

@@ -33,6 +33,7 @@ from ui.track_modelling_vm import (
     format_segment_row       as _format_seg_row,
     format_review_summary    as _format_review_summary,
     format_resolver_summary  as _format_resolver_summary,
+    format_next_step               as _format_next_step,
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
     format_build_failure_diagnostics as _format_build_diag,
@@ -601,6 +602,15 @@ class TrackModellingMixin:
 
         _rs_val_s = "color: #AAE4AA; font-size: 11px;"
         _rs_key_s = f"color: {_TEXT}; font-size: 11px;"
+
+        # Prominent "what to do next" line so a track that has good calibration
+        # laps but no reviewed model (the Fuji UAT case) tells the user exactly
+        # how to promote it to AI-ready instead of silently reading "seed only".
+        self._tm_rs_next_step = QLabel("")
+        self._tm_rs_next_step.setStyleSheet(
+            "color: #F5C542; font-size: 11px; font-weight: bold; padding: 2px 0 6px 0;")
+        self._tm_rs_next_step.setWordWrap(True)
+        resolver_form.addRow(self._tm_rs_next_step)
 
         def _rs_row(label: str, attr_name: str) -> QLabel:
             lbl = QLabel("—")
@@ -2270,6 +2280,11 @@ class TrackModellingMixin:
         warn = getattr(self, "_tm_rs_warnings", None)
         if warn is not None:
             warn.setText(summary.get("warnings", ""))
+
+        nxt = getattr(self, "_tm_rs_next_step", None)
+        if nxt is not None:
+            has_station_map = getattr(self, "_tm_station_map", None) is not None
+            nxt.setText(_format_next_step(self._tm_resolver_result, has_station_map))
 
     # ── Group 17M: lap offset calibration helpers ────────────────────────────
 

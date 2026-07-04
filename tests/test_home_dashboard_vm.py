@@ -587,7 +587,7 @@ class TestHomeTabWiring:
     def test_home_tab_leads_before_track_modelling(self, dash_src):
         # Home Dashboard Promotion (2026-07-03): Home now LEADS the tab bar.
         home = dash_src.index('self._build_home_tab(),             "Home")             # 0')
-        tm = dash_src.index('self._build_track_modelling_tab(), "Track Modelling")  # 13')
+        tm = dash_src.index('self._build_track_modelling_tab(), "Track Modelling")  # 12')
         assert home < tm, "Home tab must lead, before the other tabs"
 
     def test_tab_indices_after_home_promotion(self, dash_src):
@@ -598,8 +598,8 @@ class TestHomeTabWiring:
             '"Event Planner")   # 2',
             '"Telemetry")        # 7',
             '"Diagnostics")      # 8',
-            '"AI Log")           # 12',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
+            '"AI Log")           # 11',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 

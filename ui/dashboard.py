@@ -47,7 +47,7 @@ from ui.tab_registry import (
     build_default_registry,
     TAB_LIVE, TAB_EVENT_PLANNER, TAB_GARAGE, TAB_SETUP_BUILDER,
     TAB_PRACTICE_REVIEW, TAB_STRATEGY_BUILDER, TAB_TELEMETRY, TAB_DIAGNOSTICS,
-    TAB_GUIDE, TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
+    TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
     TAB_HOME,
 )
 
@@ -440,11 +440,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 6
         self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 7
         self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 8
-        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 9
-        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 10
-        self._tabs.addTab(self._build_history_tab(),          "History")          # 11
-        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 12
-        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 13
+        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
+        self._tabs.addTab(self._build_history_tab(),          "History")          # 10
+        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
+        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -652,6 +651,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         grid.setRowStretch(grid.rowCount(), 1)
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
+
+        # User Guide + reference, folded in from the old Guide tab (collapsed by
+        # default). Keeps the how-to where the workflow starts.
+        root.addWidget(self._build_guide_reference_widget())
         return w
 
     def _build_home_dashboard_state(self):
@@ -853,6 +856,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         root = QVBoxLayout(w)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
+
+        root.addWidget(self._tab_intro_header(
+            "Live Race Engineer",
+            "Real-time coaching during a session — fuel, tyres, pit windows and "
+            "voice alerts. Next: pick Practice or Race mode and start driving; "
+            "alerts and push-to-talk queries run automatically."))
 
         # Row 1: Race info bar
         info_row = QHBoxLayout()
@@ -1785,20 +1794,57 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             logging.warning("telemetry label update failed", exc_info=True)
 
-    # --- Guide tab ----------------------------------------------------------
+    # --- Per-tab guidance header (post-UAT clarity overhaul) ----------------
 
-    def _build_guide_tab(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+    def _tab_intro_header(self, title: str, subtitle: str) -> QWidget:
+        """A consistent 'what this tab is for + your next step' band for the top
+        of a tab. Part of the clarity overhaul so every tab explains itself and
+        points at the next action, instead of relying on a separate Guide tab."""
+        band = QWidget()
+        band.setStyleSheet(
+            f"background: {_DARK_CARD}; border-left: 4px solid #2EA043;"
+            " border-radius: 6px;")
+        lay = QVBoxLayout(band)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
+        t = QLabel(title)
+        t.setStyleSheet(
+            f"color: {_TEXT}; font-size: 13px; font-weight: bold; background: transparent;")
+        s = QLabel(subtitle)
+        s.setWordWrap(True)
+        s.setStyleSheet("color: #9FB0A6; font-size: 11px; background: transparent;")
+        lay.addWidget(t)
+        lay.addWidget(s)
+        return band
+
+    # --- User Guide (folded into Home) --------------------------------------
+
+    def _build_guide_reference_widget(self) -> QWidget:
+        """Collapsible User Guide + reference section, embedded at the bottom of
+        the Home tab. The standalone Guide tab was removed — help now lives on
+        Home, where the workflow starts, instead of a separate tab. Starts
+        collapsed so it never crowds the status cards."""
+        box = QGroupBox("\U0001F4D6  User Guide & Reference  —  click to expand")
+        box.setCheckable(True)
+        box.setChecked(False)
+        try:
+            box.setStyleSheet(self._group_style())
+        except Exception:
+            pass
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 6, 6, 6)
         txt = QTextEdit()
         txt.setReadOnly(True)
+        txt.setMinimumHeight(420)
         txt.setStyleSheet(
             f"QTextEdit {{ background: {_DARK_BG}; color: {_TEXT}; "
             f"border: none; padding: 12px; font-size: 12px; }}"
         )
         txt.setHtml(_GUIDE_HTML)
-        scroll.setWidget(txt)
-        return scroll
+        txt.setVisible(False)
+        lay.addWidget(txt)
+        box.toggled.connect(txt.setVisible)
+        return box
 
     # --- Debug tab ----------------------------------------------------------
 
@@ -6425,6 +6471,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(10, 10, 10, 10)
 
+        layout.addWidget(self._tab_intro_header(
+            "Practice Review",
+            "Review your practice laps, tag which setup and compound you ran per "
+            "lap, analyse tyre degradation, and log how each stint felt. "
+            "Next: tag your laps, click Analyse Degradation, then submit "
+            "Driver Feedback after the stint."))
+
         summary_group = QGroupBox("Session Summary")
         summary_group.setStyleSheet(self._group_style())
         summary_h = QHBoxLayout(summary_group)
@@ -6987,9 +7040,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     def _build_event_planner_tab(self) -> QWidget:
         widget = QWidget()
-        main_layout = QHBoxLayout(widget)
+        outer_layout = QVBoxLayout(widget)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.setSpacing(6)
+        outer_layout.addWidget(self._tab_intro_header(
+            "Event Planner",
+            "Create a profile for each race — track, car, format, tyres, fuel. "
+            "This is the workflow's starting point. Next: fill the fields and "
+            "click Set as Active; every other tab fills in from here."))
+        main_layout = QHBoxLayout()
         main_layout.setSpacing(8)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.addLayout(main_layout, 1)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -7707,9 +7768,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     def _build_garage_tab(self) -> QWidget:
         widget = QWidget()
-        main_layout = QHBoxLayout(widget)
+        outer_layout = QVBoxLayout(widget)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.setSpacing(6)
+        outer_layout.addWidget(self._tab_intro_header(
+            "Garage",
+            "Browse cars, specs and BOP data. Next: find the car for your event "
+            "and click Load to Event to send it to the active event and Setup "
+            "Builder."))
+        main_layout = QHBoxLayout()
         main_layout.setSpacing(8)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.addLayout(main_layout, 1)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)

@@ -97,7 +97,13 @@ _BUILD_KWARGS = dict(
 # Helper: load setup_builder_ui.py source text without importing (avoids Qt)
 # ---------------------------------------------------------------------------
 
-_SETUP_BUILDER_SRC = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+# Setup builder UI now spans two files: the mixin and the extracted form widget.
+# Source-scan tests search the combined text to preserve coverage after refactor.
+_SETUP_BUILDER_SRC = (
+    (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+    + "\n"
+    + (ROOT / "ui" / "setup_form_widget.py").read_text(encoding="utf-8")
+)
 _AI_PLANNER_SRC    = (ROOT / "strategy" / "ai_planner.py").read_text(encoding="utf-8")
 
 

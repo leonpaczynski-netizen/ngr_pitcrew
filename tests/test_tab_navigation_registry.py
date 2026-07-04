@@ -39,8 +39,9 @@ def _method_body(src: str, name: str) -> str:
 # --------------------------------------------------------------------------- #
 class TestRegistryKeys:
     def test_every_current_tab_has_a_stable_key(self):
-        assert len(tr.DEFAULT_TAB_ORDER) == 14
-        assert len(set(tr.DEFAULT_TAB_ORDER)) == 14, "duplicate tab keys"
+        # 13 tabs since the Guide tab was folded into Home (post-UAT overhaul).
+        assert len(tr.DEFAULT_TAB_ORDER) == 13
+        assert len(set(tr.DEFAULT_TAB_ORDER)) == 13, "duplicate tab keys"
         for key in tr.DEFAULT_TAB_ORDER:
             assert key in tr.TAB_BASE_TITLES, f"no base title for {key}"
 
@@ -58,7 +59,7 @@ class TestRegistryKeys:
             tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
             tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
-            tr.TAB_GUIDE, tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
+            tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
             tr.TAB_TRACK_MODELLING,
         )
         assert tr.DEFAULT_TAB_ORDER == expected
@@ -75,7 +76,7 @@ class TestRegistryKeys:
             tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
             tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
-            tr.TAB_GUIDE, tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
+            tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
             tr.TAB_TRACK_MODELLING,
         )
 
@@ -243,8 +244,8 @@ class TestNavigationHelpers:
         assert reg.index_of(tr.TAB_EVENT_PLANNER) == 2
         assert reg.index_of(tr.TAB_SETUP_BUILDER) == 4
         assert reg.index_of(tr.TAB_PRACTICE_REVIEW) == 5
-        assert reg.index_of(tr.TAB_AI_LOG) == 12
-        assert reg.index_of(tr.TAB_TRACK_MODELLING) == 13
+        assert reg.index_of(tr.TAB_AI_LOG) == 11
+        assert reg.index_of(tr.TAB_TRACK_MODELLING) == 12
 
 
 # --------------------------------------------------------------------------- #
@@ -264,18 +265,17 @@ class TestNothingElseChanged:
             '"Strategy Builder") # 6',
             '"Telemetry")        # 7',
             '"Diagnostics")      # 8',
-            '"Guide")            # 9',
-            '"Settings")         # 10',
-            '"History")          # 11',
-            '"AI Log")           # 12',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
+            '"Settings")         # 9',
+            '"History")          # 10',
+            '"AI Log")           # 11',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 
     def test_home_now_leads_before_every_other_tab(self, dash_src):
         home = dash_src.index('self._build_home_tab(),             "Home")             # 0')
         live = dash_src.index('"Live Race Engineer") # 1')
-        tm = dash_src.index('"Track Modelling")  # 13')
+        tm = dash_src.index('"Track Modelling")  # 12')
         assert home < live < tm
 
     def test_diagnostic_tabs_still_built_and_marked(self, dash_src):

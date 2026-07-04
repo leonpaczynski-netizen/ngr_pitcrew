@@ -45,7 +45,8 @@ class TestTabRoles:
         }
 
     def test_support_tabs(self):
-        assert set(pf.support_tabs()) == {"Guide", "Settings"}
+        # Guide tab removed (folded into Home) in the post-UAT overhaul.
+        assert set(pf.support_tabs()) == {"Settings"}
 
     def test_is_diagnostic_tab(self):
         assert pf.is_diagnostic_tab("Track Modelling") is True
@@ -191,8 +192,8 @@ class TestDashboardWiring:
     def test_tab_indices_preserved(self, dash_src):
         # Home Dashboard Promotion (2026-07-03): Home leads at index 0, so the
         # tool tabs shifted down one — Track Modelling index 13, AI Log index 12.
-        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 13' in dash_src
-        assert '"AI Log")           # 12' in dash_src
+        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 12' in dash_src
+        assert '"AI Log")           # 11' in dash_src
 
 
 # --------------------------------------------------------------------------- #

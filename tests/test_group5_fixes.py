@@ -31,7 +31,13 @@ def _dashboard_text() -> str:
     return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
 
 def _setup_builder_text() -> str:
-    return (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+    # Setup builder UI now spans two files: the mixin and the extracted form widget.
+    # Source-scan tests search the combined text to preserve coverage after refactor.
+    return (
+        (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+        + "\n"
+        + (_SRC / "ui" / "setup_form_widget.py").read_text(encoding="utf-8")
+    )
 
 
 def _state_text() -> str:

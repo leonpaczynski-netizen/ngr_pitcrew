@@ -171,8 +171,8 @@ class TestNothingElseChanged:
             '"Event Planner")   # 2',
             '"Telemetry")        # 7',
             '"Diagnostics")      # 8',
-            '"AI Log")           # 12',
-            'self._build_track_modelling_tab(), "Track Modelling")  # 13',
+            '"AI Log")           # 11',
+            'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 
@@ -219,7 +219,9 @@ class TestNothingElseChanged:
     def test_no_new_strategy_writes_in_touched_areas(self, dash_src):
         # The areas this sprint touched are display-only; none may write
         # config["strategy"].
-        for name in ("_build_guide_tab", "_build_debug_tab"):
+        # _build_guide_tab was folded into Home as _build_guide_reference_widget
+        # (post-UAT overhaul); still display-only.
+        for name in ("_build_guide_reference_widget", "_build_debug_tab"):
             body = _method_body(dash_src, name)
             assert 'setdefault("strategy"' not in body
             assert re.search(r'config\[.strategy.\]\s*\[', body) is None
