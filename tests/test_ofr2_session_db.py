@@ -165,6 +165,63 @@ class TestGetSessionType:
 
 
 # ---------------------------------------------------------------------------
+# get_session_laps latest= parameter (I1)
+# ---------------------------------------------------------------------------
+
+class TestGetSessionLapsLatest:
+    """latest=True returns the LAST limit laps in ascending order;
+    latest=False (default) returns the FIRST limit laps unchanged."""
+
+    def _make_12_lap_session(self):
+        db = _make_db()
+        sid = db.open_session(car_id=0, track="Suzuka", session_type="Race")
+        for lap in range(1, 13):
+            _insert_lap_direct(db, sid, lap, 90_000 + lap * 100)
+        return db, sid
+
+    def test_latest_true_returns_last_5_laps_ascending(self):
+        db, sid = self._make_12_lap_session()
+        rows = db.get_session_laps(sid, limit=5, latest=True)
+        assert len(rows) == 5
+        lap_nums = [r["lap_num"] for r in rows]
+        assert lap_nums == [8, 9, 10, 11, 12], (
+            f"latest=True limit=5 on 12 laps should return laps 8-12 ascending, got {lap_nums}"
+        )
+
+    def test_latest_false_default_returns_first_5_laps(self):
+        db, sid = self._make_12_lap_session()
+        rows = db.get_session_laps(sid, limit=5, latest=False)
+        assert len(rows) == 5
+        lap_nums = [r["lap_num"] for r in rows]
+        assert lap_nums == [1, 2, 3, 4, 5], (
+            f"latest=False limit=5 on 12 laps should return laps 1-5 ascending, got {lap_nums}"
+        )
+
+    def test_default_omitting_latest_returns_first_5_laps(self):
+        """Omitting latest= entirely must be byte-identical to latest=False."""
+        db, sid = self._make_12_lap_session()
+        rows = db.get_session_laps(sid, limit=5)
+        lap_nums = [r["lap_num"] for r in rows]
+        assert lap_nums == [1, 2, 3, 4, 5]
+
+    def test_latest_true_ascending_order_preserved(self):
+        """Rows returned by latest=True must be in strictly ascending lap order."""
+        db, sid = self._make_12_lap_session()
+        rows = db.get_session_laps(sid, limit=5, latest=True)
+        lap_nums = [r["lap_num"] for r in rows]
+        assert lap_nums == sorted(lap_nums), (
+            "latest=True rows must be returned in ascending lap order"
+        )
+
+    def test_latest_true_no_limit_behaves_as_latest_false(self):
+        """When limit=0 (no limit), latest=True has no effect — all laps returned ascending."""
+        db, sid = self._make_12_lap_session()
+        rows_latest = db.get_session_laps(sid, limit=0, latest=True)
+        rows_normal = db.get_session_laps(sid, limit=0, latest=False)
+        assert [r["lap_num"] for r in rows_latest] == [r["lap_num"] for r in rows_normal]
+
+
+# ---------------------------------------------------------------------------
 # OFR-1 non-collision: recommendation_scoring.py byte-unchanged
 # ---------------------------------------------------------------------------
 

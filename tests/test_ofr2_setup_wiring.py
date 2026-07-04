@@ -144,6 +144,15 @@ class TestResolveRecentLapsBody:
             "_resolve_recent_laps must be wrapped in try/except so it "
             "can never raise")
 
+    def test_passes_latest_true_to_get_session_laps(self, sbu_src):
+        """I1: _resolve_recent_laps must pass latest=True to get_session_laps
+        so it fetches the most recent laps rather than the earliest ones."""
+        body = _method_body(sbu_src, "_resolve_recent_laps")
+        assert "latest=True" in body, (
+            "_resolve_recent_laps must pass latest=True to get_session_laps "
+            "(I1: avoid returning early full-fuel laps instead of recent stint)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 4. Behavioural stub tests for _resolve_recent_laps
@@ -180,7 +189,7 @@ class TestResolveRecentLapsBehaviour:
 
         stub._db.get_previous_session_id.assert_called_once_with(7, "Suzuka", 99_999_999)
         stub._db.get_session_laps.assert_called_once_with(
-            42, exclude_pit=True, exclude_out=True, limit=5
+            42, exclude_pit=True, exclude_out=True, limit=5, latest=True
         )
         assert result == _fake_laps
 

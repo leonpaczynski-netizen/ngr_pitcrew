@@ -361,6 +361,58 @@ class TestAC3PracticeOrchestratrorRF1:
         prompt = _practice_prompt(laps=_laps(3), purpose="Race")
         assert "RACE" in prompt
 
+    def test_ac3_practice_session_type_in_db_yields_generic_block(self):
+        """M3 / C1 guard: a real :memory: session stored with session_type='practice'
+        → get_session_type returns 'practice' → normalise_purpose resolves to
+        PRACTICE → build_discipline_telemetry_block returns None sentinel
+        → the practice prompt embeds the GENERIC _build_per_lap_telemetry_block
+        output byte-for-byte (no QUALIFYING or RACE discipline block injected)."""
+        from data.session_db import SessionDB
+        from data.setup_context import normalise_purpose, SetupPurpose
+        from strategy.ai_planner import _build_practice_prompt, _build_per_lap_telemetry_block
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+
+        db = SessionDB(":memory:")
+        sid = db.open_session(car_id=0, track="Suzuka", session_type="practice")
+        session_type = db.get_session_type(sid)
+        assert session_type == "practice"
+
+        # normalise_purpose → PRACTICE, not RACE
+        disc = normalise_purpose(session_type)
+        assert disc == SetupPurpose.PRACTICE
+
+        # discipline block must be None (sentinel → callers keep generic block)
+        laps = _laps(3)
+        assert bdt(laps, session_type) is None, (
+            "PRACTICE session must return None sentinel from "
+            "build_discipline_telemetry_block, not a RACE block"
+        )
+
+        # End-to-end: practice prompt with PRACTICE purpose must embed the generic
+        # block byte-for-byte, identical to passing purpose=None
+        params = _make_params()
+        lap_data = {"RM": [90_000, 90_200]}
+        generic_block = _build_per_lap_telemetry_block(laps)
+
+        prompt_practice = _build_practice_prompt(
+            params, lap_data, {}, {},
+            per_lap_telemetry=laps,
+            session_purpose=session_type,
+        )
+        prompt_none = _build_practice_prompt(
+            params, lap_data, {}, {},
+            per_lap_telemetry=laps,
+            session_purpose=None,
+        )
+        assert generic_block in prompt_practice, (
+            "Practice-session prompt must contain the generic per-lap block "
+            "byte-for-byte when session_type='practice' (AC5 / C1)"
+        )
+        assert prompt_practice == prompt_none, (
+            "practice session_purpose must produce byte-identical output to "
+            "session_purpose=None (generic block preserved)"
+        )
+
 
 # ===========================================================================
 # AC4 — [measured]/[calculated]/[estimated] labels + estimated derivation notes
@@ -485,6 +537,18 @@ class TestAC5UnknownByteIdentical:
         assert bdt(_laps(3), "unknown") is None
         assert bdt(_laps(3), None) is None
         assert bdt(_laps(3), "") is None
+
+    def test_ac5_setup_unknown_with_real_laps_equals_none_laps(self):
+        """I2: UNKNOWN purpose + 3 real lap dicts must produce byte-identical
+        output to UNKNOWN purpose + per_lap_telemetry=None.
+        Pins that UNKNOWN + non-empty laps still renders the empty section."""
+        laps = _laps(3)
+        prompt_with_laps = _setup_prompt("unknown", laps=laps)
+        prompt_with_none = _setup_prompt("unknown", laps=None)
+        assert prompt_with_laps == prompt_with_none, (
+            "UNKNOWN purpose with real laps must be byte-identical to UNKNOWN "
+            "purpose with per_lap_telemetry=None — discipline block must not appear"
+        )
 
 
 # ===========================================================================

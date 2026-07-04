@@ -1722,18 +1722,46 @@ class SessionDB:
         exclude_pit: bool = False,
         exclude_out: bool = False,
         limit: int = 0,
+        latest: bool = False,
     ) -> list:
         """Return valid lap records for a session, ordered by lap number.
 
         When exclude_pit/exclude_out are True the respective lap types are
         filtered out.  limit=0 means no limit.  Returns telemetry fields used
         by the per-lap AI prompt table (Phase 2-A / Group 16).
+
+        latest=False (default): ORDER BY lap_num ASC — first ``limit`` laps.
+        latest=True: select the LAST ``limit`` laps (ORDER BY lap_num DESC
+        LIMIT ?) then reverse so the returned slice is in ascending lap order.
+        All existing callers pass no ``latest`` keyword so their behaviour is
+        byte-identical.
         """
         where = "session_id = ? AND lap_time_ms > 0"
         if exclude_pit:
             where += " AND is_pit_lap = 0"
         if exclude_out:
             where += " AND is_out_lap = 0"
+
+        if latest and limit > 0:
+            # Fetch the last `limit` laps in DESC order, then reverse for display.
+            sql = (
+                f"SELECT lap_num, lap_time_ms, compound, fuel_used,"
+                f" is_pit_lap, is_out_lap, fuel_start, fuel_end,"
+                f" lock_up_count, wheelspin_count, oversteer_count,"
+                f" oversteer_throttle_on, kerb_count, max_lat_g,"
+                f" tyre_temp_fl_avg, tyre_temp_fr_avg,"
+                f" tyre_temp_rl_avg, tyre_temp_rr_avg,"
+                f" snap_throttle_count, brake_consistency_m,"
+                f" event_positions_json"
+                f" FROM lap_records"
+                f" WHERE {where}"
+                f" ORDER BY lap_num DESC"
+                f" LIMIT {int(limit)}"
+            )
+            with self._lock:
+                rows = self._conn.execute(sql, (session_id,)).fetchall()
+            return list(reversed([dict(r) for r in rows]))
+
         sql = (
             f"SELECT lap_num, lap_time_ms, compound, fuel_used,"
             f" is_pit_lap, is_out_lap, fuel_start, fuel_end,"

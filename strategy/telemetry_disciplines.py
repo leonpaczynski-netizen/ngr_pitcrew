@@ -141,8 +141,13 @@ def build_discipline_telemetry_block(
 
     if disc == SetupPurpose.QUALIFYING:
         return _build_qualifying_block(clean, fmt)
-    else:  # RACE (PRACTICE/TEST not reachable from brief but handled gracefully)
+    if disc == SetupPurpose.RACE:
         return _build_race_block(clean, fmt)
+    # PRACTICE, TEST, and any future purpose deliberately return None so callers
+    # keep the generic per-lap telemetry block byte-for-byte unchanged (AC5).
+    # Real free-practice sessions ARE stored with session_type='practice', so
+    # falling through to a RACE block here would corrupt those prompts.
+    return None
 
 
 # ---------------------------------------------------------------------------

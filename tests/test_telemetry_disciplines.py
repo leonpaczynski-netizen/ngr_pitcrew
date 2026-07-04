@@ -139,6 +139,29 @@ class TestUnknownReturnsNone:
         # Empty list + UNKNOWN → None: means no-params call produces byte-identical prompt
         assert bdt([], None) is None
 
+    # C1 sentinel tests: PRACTICE and TEST must return None, not a RACE block
+    def test_practice_lowercase_returns_sentinel(self):
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+        assert bdt(_make_race_rows(), "practice") is None
+
+    def test_practice_mixed_case_returns_sentinel(self):
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+        assert bdt(_make_race_rows(), "Practice") is None
+
+    def test_test_string_returns_sentinel(self):
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+        assert bdt(_make_race_rows(), "test") is None
+
+    def test_setup_purpose_practice_enum_returns_sentinel(self):
+        from data.setup_context import SetupPurpose
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+        assert bdt(_make_race_rows(), SetupPurpose.PRACTICE) is None
+
+    def test_setup_purpose_test_enum_returns_sentinel(self):
+        from data.setup_context import SetupPurpose
+        from strategy.telemetry_disciplines import build_discipline_telemetry_block as bdt
+        assert bdt(_make_race_rows(), SetupPurpose.TEST) is None
+
 
 # ---------------------------------------------------------------------------
 # normalise_purpose routing

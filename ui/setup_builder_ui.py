@@ -1441,7 +1441,7 @@ class SetupBuilderMixin:
             if not sid:
                 return []
             return self._db.get_session_laps(
-                sid, exclude_pit=True, exclude_out=True, limit=5
+                sid, exclude_pit=True, exclude_out=True, limit=5, latest=True
             )
         except Exception as _ofr2_err:  # pragma: no cover - defensive
             print(f"[OFR-2] _resolve_recent_laps failed: {_ofr2_err}")
