@@ -5568,3 +5568,92 @@ edge cases (multi-rec split, cross-layout, compounds recorded, own-session skip)
 Drive sessions to accumulate scores. Build candidates: **OFR-2** (race vs
 qualifying telemetry disciplines) or a History-tab surface for scored
 recommendations.
+
+---
+
+## OFR-2 — Separate Race vs Qualifying Telemetry Disciplines, Core Split (2026-07-04)
+
+> Branch `ofr2-quali-race-disciplines` (from `master` @ `82ca7c3`).
+> Full doc: `docs/OFR2_SEPARATE_DISCIPLINES.md`. Roadmap spec:
+> `docs/SMART_RACE_ENGINEER_ROADMAP.md` OFR-2 / §2 / §3.
+> **Full suite: 5217 pass / 6 skip / 0 fail** (269 new tests; pre-feature
+> baseline 4948). Feature-factory run with approval gates; checkpoints
+> committed before every verifier stage.
+
+### What was built
+The setup-BUILD and practice-analysis prompts now feed **discipline-aware
+telemetry** (the objective text has branched since Group 26; the telemetry now
+matches). QUALIFYING = peak metrics: best lap [measured], peak lateral G
+[estimated] + derivation note, lock-up count, brake consistency (m), oversteer
+rotation split (throttle-on vs entry) + an explicit "steering corrections and
+rival traffic/dirty-air are not measured signals" line. RACE = consistency/
+efficiency: fuel/lap [measured], lock-up / wheelspin / snap-throttle rates,
+lap-time std-dev ("N/A (1 lap)"), per-corner tyre temps ("— not recorded" when
+absent). **Every other purpose — unknown, practice, test — keeps today's
+generic block BYTE-FOR-BYTE** (the None-sentinel contract).
+
+- **`strategy/telemetry_disciplines.py` (NEW, pure)** — the block builder;
+  canonical `normalise_purpose()` routing (strings/enums/None); zero-clean-laps
+  honesty; no tyre-radius; [measured]/[calculated]/[estimated] labels.
+- **`strategy/ai_planner.py`** — `_build_practice_prompt(session_purpose=None)`
+  (discipline block replaces the generic table only when non-None; exact
+  fallback otherwise); `_build_setup_from_scratch_prompt(per_lap_telemetry=None)`
+  with a `{_telem_section}` that renders "" for unknown/no-laps (prompt
+  byte-identical); param threading through `build_car_setup` /
+  `analyse_practice_session`. Strategy prompts untouched.
+- **RF1 (approved brief correction):** `practice_orchestrator` resolves the
+  discipline ITSELF via new `db.get_session_type(session_id)` — the analysed
+  session's stored type is the single source; the UI passes nothing (the
+  live-mode combo would be wrong for historical sessions).
+- **RF2 (approved brief correction):** `ui/setup_builder_ui._resolve_recent_laps`
+  fetches the most recent car+track session's laps on the UI thread and wires
+  them into `build_car_setup` — without this the story's headline surface was
+  inert. Setup combo's session type also threads into the setup snapshot.
+- **`data/session_db.py`** — `get_session_laps` +`snap_throttle_count`
+  +`brake_consistency_m` and `latest: bool = False` (True → the LAST `limit`
+  laps in ascending order); new `get_session_type`.
+- **`data/ai_context_snapshot.py`** — `discipline: str = "unknown"` on
+  SetupAISnapshot + PracticeAnalysisSnapshot only (hash-excluded, defensive).
+
+### Factory verification + fix round
+114-test acceptance suite: **all 11 ACs + 6 edge classes PASS** (real prompt
+builders; RF1 by source-scan + live DB round-trip; AC5 byte-identity both
+paths; AC7 objective strings + strategy signatures + the pre-existing
+byte-identity suite). Validator findings, all fixed + re-verified:
+**C1 (CRITICAL)** — PRACTICE/TEST purposes fell through to the RACE block
+(free-practice sessions ARE stored as "practice") → only quali/race branch,
+everything else returns the sentinel, real-DB practice byte-identity test
+added; **I1 (MAJOR)** — `limit=5` returned the EARLIEST laps (full-fuel opening
+stint) → `latest=True` semantics, RF2 wiring updated, ordering tests added;
+I2/M3 coverage gaps + M1/M2 polish.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_telemetry_disciplines.py` (NEW) | 48 | both blocks' full content incl. labels/derivation/disclaimer/oversteer split/std-dev/"N/A (1 lap)"/temps rules; zero-clean-laps; the None sentinel for unknown/practice/test/enum inputs; purity scans |
+| `tests/test_ofr2_prompts.py` (NEW) | 28 | prompt-level integration: quali/race blocks present; UNKNOWN byte-identity; objective strings unchanged; strategy prompt signatures unchanged |
+| `tests/test_ofr2_snapshot.py` (NEW) | 26 | discipline defaults + derivations; StrategyAISnapshot negative |
+| `tests/test_ofr2_session_db.py` (NEW) | 30 | new columns; get_session_type round-trip; latest=True ordering (8–12 vs 1–5) |
+| `tests/test_ofr2_setup_wiring.py` (NEW) | 23 | `_resolve_recent_laps` scans + behavioural stubs incl. latest=True |
+| `tests/test_ofr2_acceptance.py` (NEW) | 114 | one end-to-end test per AC + edge classes incl. declared-purpose-wins and the practice→generic byte-identity |
+
+### Acceptance criteria — status
+All 11 story ACs + 6 edge-case classes verified PASS by the independent
+acceptance suite; frozen allowlist and prompt byte-identity suites unchanged
+and green.
+
+### Manual UAT steps
+1. Build a **Qualifying Setup** with recent laps on the car/track — the AI Log
+   prompt shows the peak-metrics block + the not-measured disclaimer; advice
+   reads one-lap-focused.
+2. Build a **Race Setup** — the prompt shows fuel/lap, event rates, lap-time
+   consistency, tyre temps; advice reads stint-focused.
+3. Run Full Practice Analysis on a saved **qualifying** session — quali block;
+   on a **practice** session — the familiar generic table, unchanged.
+4. No car/track history yet → prompts render exactly as pre-OFR-2.
+
+### Next
+Drive quali + race sessions and compare the advice. Build candidates:
+History-tab surface for OFR-1's scored recommendations; Phase 2-B/2-C strategy
+telemetry; plan-state schema migration.

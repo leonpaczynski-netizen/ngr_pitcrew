@@ -511,12 +511,17 @@ class PracticeAnalysisSnapshot:
     """
     core: AIContextSnapshot
     race_params: Tuple[Tuple[str, Any], ...]
+    discipline: str = "unknown"   # OFR-2: resolved session discipline
 
     def race_params_dict(self) -> dict:
         return _thaw_params(self.race_params)
 
     def to_dict(self) -> dict:
-        return {"core": self.core.to_dict(), "race_params": self.race_params_dict()}
+        return {
+            "core": self.core.to_dict(),
+            "race_params": self.race_params_dict(),
+            "discipline": self.discipline,
+        }
 
 
 def build_practice_analysis_snapshot(
@@ -527,9 +532,12 @@ def build_practice_analysis_snapshot(
     track_context=None,
     legacy_strategy: Optional[dict] = None,
     fuel_burn_override: Optional[float] = None,
+    session_purpose: Optional[str] = None,
 ) -> PracticeAnalysisSnapshot:
     """Freeze the practice-analysis inputs. Never raises. ``fuel_burn_override``
-    should carry ``_computed_fuel_burn_lpl()`` (telemetry-owned)."""
+    should carry ``_computed_fuel_burn_lpl()`` (telemetry-owned).
+    ``session_purpose`` is optional — when supplied it is normalised to a
+    discipline string; absent/unknown → "unknown" (OFR-2 AC8)."""
     legacy = legacy_strategy if isinstance(legacy_strategy, dict) else {}
     warnings: list = []
     source = _resolve_source(event_context, legacy, warnings)
@@ -546,9 +554,17 @@ def build_practice_analysis_snapshot(
             fuel_burn_override=fuel_burn_override,
         )
 
+    # Resolve discipline from session_purpose (OFR-2 AC8).
+    try:
+        from data.setup_context import normalise_purpose as _np
+        _disc = _np(session_purpose).value
+    except Exception:  # pragma: no cover - defensive
+        _disc = "unknown"
+
     core = _build_core(params, source, event_context, strategy_context,
                        setup_snapshot, track_context, warnings)
-    return PracticeAnalysisSnapshot(core=core, race_params=_freeze_params(params))
+    return PracticeAnalysisSnapshot(
+        core=core, race_params=_freeze_params(params), discipline=_disc)
 
 
 # --------------------------------------------------------------------------- #
@@ -583,6 +599,7 @@ class SetupAISnapshot:
     track_location_id: str
     layout_id: str
     mandatory_compounds_str: str
+    discipline: str = "unknown"   # OFR-2: resolved setup discipline
 
     def allowed_tuning_or_none(self):
         """Legacy call shape: ``allowed_tuning_categories or None``."""
@@ -610,8 +627,11 @@ def build_setup_ai_snapshot(
     setup_snapshot=None,
     track_context=None,
     legacy_strategy: Optional[dict] = None,
+    session_type: Optional[str] = None,
 ) -> SetupAISnapshot:
-    """Freeze the setup-AI event/track inputs. Never raises."""
+    """Freeze the setup-AI event/track inputs. Never raises.
+    ``session_type`` is optional — when supplied (the setup's declared purpose)
+    it is normalised to a discipline string; absent/unknown → "unknown" (OFR-2)."""
     legacy = legacy_strategy if isinstance(legacy_strategy, dict) else {}
     warnings: list = []
     source = _resolve_source(event_context, legacy, warnings)
@@ -663,6 +683,14 @@ def build_setup_ai_snapshot(
             "mandatory_compounds_str": _as_str(legacy.get("mandatory_compounds")) or "",
         }
 
+    # Resolve discipline from session_type (OFR-2 AC8).
+    # session_type is the setup's declared purpose — it wins over anything else.
+    try:
+        from data.setup_context import normalise_purpose as _np
+        _disc = _np(session_type).value
+    except Exception:  # pragma: no cover - defensive
+        _disc = "unknown"
+
     core = _build_core(payload, source, event_context, strategy_context,
                        setup_snapshot, track_context, warnings)
-    return SetupAISnapshot(core=core, **payload)
+    return SetupAISnapshot(core=core, discipline=_disc, **payload)

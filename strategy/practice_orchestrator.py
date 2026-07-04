@@ -24,6 +24,7 @@ def run_practice_analysis(
     car_id: int,
     session_id: int,
     model_name: str,
+    session_purpose: str = "",
 ) -> PracticeAnalysis:
     """Run a full practice session analysis and persist results to DB.
 
@@ -62,6 +63,12 @@ def run_practice_analysis(
             per_lap_telem = db.get_session_laps(
                 session_id, exclude_pit=True, exclude_out=True, limit=5
             )
+        # Resolve session_purpose from DB when the caller did not supply one.
+        # The UI will NOT pass anything — the analysed session's stored type
+        # is the single source of truth (RF1 approved amendment).
+        # Absent / unknown → normalise_purpose yields UNKNOWN → generic block.
+        if not session_purpose and session_id > 0:
+            session_purpose = db.get_session_type(session_id)
     except Exception:
         hist = {}
 
@@ -107,6 +114,7 @@ def run_practice_analysis(
         model=model_name or None,
         car_id=car_id,
         session_id=session_id,
+        session_purpose=session_purpose,
     )
 
     # ------------------------------------------------------------------ #

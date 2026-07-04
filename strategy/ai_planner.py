@@ -393,6 +393,7 @@ def analyse_practice_session(
     model: str | None = None,
     car_id: int = 0,
     session_id: int = 0,
+    session_purpose: str | None = None,
 ) -> PracticeAnalysis:
     """Analyse a practice session and return strategies + setup advice + further practice."""
     from strategy.track_context_prompt import get_track_context_for_ai as _get_tc
@@ -404,7 +405,8 @@ def analyse_practice_session(
                                     prev_ai_str=prev_ai_str,
                                     per_lap_telemetry=per_lap_telemetry or [],
                                     corner_issues_summary=corner_issues_summary,
-                                    track_context=_track_ctx)
+                                    track_context=_track_ctx,
+                                    session_purpose=session_purpose)
     _warnings: list = []
     if not params.track:
         _warnings.append("Track missing — recommendation may be inaccurate")
@@ -575,6 +577,7 @@ def build_car_setup(
     refuel_rate_lps: float = 0.0,
     pit_loss_secs: float = 0.0,
     race_engineer_brief: str = "",
+    per_lap_telemetry: list | None = None,
 ) -> CarSetupRecommendation:
     """Ask Claude to generate a complete from-scratch car setup."""
     # Resolve per-car parameter ranges near the top so both prompt builder and
@@ -617,6 +620,7 @@ def build_car_setup(
         refuel_rate_lps=refuel_rate_lps,
         pit_loss_secs=_pit_loss,
         race_engineer_brief=race_engineer_brief,
+        per_lap_telemetry=per_lap_telemetry,
     )
     _api_kwargs = dict(
         api_key=api_key,
@@ -1287,6 +1291,7 @@ def _build_practice_prompt(
     per_lap_telemetry: list | None = None,
     corner_issues_summary: str = "",
     track_context: str = "",
+    session_purpose: str | None = None,
 ) -> str:
     car_specs = car_specs or {}
     gt7_ref = load_gt7_reference()
@@ -1359,7 +1364,10 @@ def _build_practice_prompt(
         f"\n## Previous AI Recommendations (Practice Analysis)\n{prev_ai_str}\n"
         if prev_ai_str.strip() else ""
     )
-    per_lap_section = _build_per_lap_telemetry_block(per_lap_telemetry or [])
+    from data.session_db import ms_to_str as _ms_to_str_inner
+    from strategy.telemetry_disciplines import build_discipline_telemetry_block as _bdt
+    _disc = _bdt(per_lap_telemetry or [], session_purpose, ms_to_str=_ms_to_str_inner)
+    per_lap_section = _disc if _disc is not None else _build_per_lap_telemetry_block(per_lap_telemetry or [])
     corner_issues_section = (
         f"\n{corner_issues_summary}\n" if corner_issues_summary.strip() else ""
     )
@@ -1555,6 +1563,7 @@ def _build_setup_from_scratch_prompt(
     refuel_rate_lps: float = 0.0,
     pit_loss_secs: float = 0.0,
     race_engineer_brief: str = "",
+    per_lap_telemetry: "list | None" = None,
 ) -> str:
     car_specs = car_specs or {}
     gt7_ref = load_gt7_reference()
@@ -1742,6 +1751,14 @@ For transmission fields:
         if setup_comparison else ""
     )
 
+    # Discipline-aware telemetry block (OFR-2).
+    # session_type is the setup's declared purpose — it wins over any session
+    # the laps came from.  UNKNOWN → _disc_block is None → empty string.
+    from strategy.telemetry_disciplines import build_discipline_telemetry_block as _bdt_s
+    from data.session_db import ms_to_str as _ms_to_str_s
+    _disc_block = _bdt_s(per_lap_telemetry or [], session_type, ms_to_str=_ms_to_str_s)
+    _telem_section = _disc_block if _disc_block is not None else ""
+
     # Build the valid-ranges text block from resolved per-car ranges
     def _fmt_range(lo, hi):
         if isinstance(lo, float) or isinstance(hi, float):
@@ -1803,7 +1820,7 @@ Build a complete from-scratch car setup optimised for:
   Session: {session_desc}
 {weight_line}
 {power_line}{_race_ctx_block}{_hybrid_block}
-{(track_context + chr(10) + chr(10)) if track_context else ""}{_history_block}{_comparison_block}{bop_block}{car_specs_block}
+{(track_context + chr(10) + chr(10)) if track_context else ""}{_history_block}{_comparison_block}{_telem_section}{bop_block}{car_specs_block}
 {_ranges_block}
 
 GT7 has TWO power-limiting mechanisms — advise on both when max_power is specified:

@@ -16,7 +16,10 @@
 > larger than a prompt edit and overlap the learning/telemetry phases below.
 > **Status: OFR-1 DELIVERED (2026-07-04)** — Loop 1 setup self-scoring built via
 > feature-factory on branch `ofr1-between-race-learning`; see
-> `docs/OFR1_BETWEEN_RACE_LEARNING.md`. **OFR-2: still to be scoped.**
+> `docs/OFR1_BETWEEN_RACE_LEARNING.md`. **OFR-2 DELIVERED (2026-07-04)** — Core
+> split (discipline-aware telemetry in setup-build + practice-analysis prompts)
+> on branch `ofr2-quali-race-disciplines`; see `docs/OFR2_SEPARATE_DISCIPLINES.md`.
+> Strategy-prompt telemetry (Phase 2-B/2-C) remains deferred.
 
 ### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
 
