@@ -505,7 +505,7 @@ class SetupBuilderMixin:
         for s in self._saved_setups:
             setup_lbl = s.get("setup_label") or "Setup"
             car_name  = s.get("name", "Unnamed")
-            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('session', '')}]"
+            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('setup_type', s.get('session', ''))}]"
             self._setup_load_combo.addItem(label)
         # select_index is relative to _saved_setups; shift by 1 for the placeholder
         if 0 <= select_index < len(self._saved_setups):
@@ -525,7 +525,7 @@ class SetupBuilderMixin:
         for s in self._saved_setups:
             setup_lbl = s.get("setup_label") or "Setup"
             car_name  = s.get("name", "Unnamed")
-            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('session', '')}]"
+            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('setup_type', s.get('session', ''))}]"
             combo.addItem(label)
         if 0 <= select_index < len(self._saved_setups):
             combo.setCurrentIndex(select_index + 1)

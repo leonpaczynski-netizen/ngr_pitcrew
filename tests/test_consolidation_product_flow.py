@@ -207,3 +207,10 @@ class TestTrackModellingRenames:
     def test_section5_renamed_from_misleading_alignment_title(self, tm_src):
         assert 'QGroupBox("5. Seed Geometry")' in tm_src
         assert 'QGroupBox("5. Track Model Alignment")' not in tm_src
+
+    def test_corner_verify_api_key_not_read_from_nonexistent_ai_section(self, tm_src):
+        # Field-consistency fix: the AI corner-verify key must come from the
+        # editable field / config["anthropic"], never config["ai"] (which never
+        # exists, so the old read always yielded an empty key).
+        assert 'self._config.get("ai", {}).get("api_key"' not in tm_src
+        assert "self._ai_api_key.text().strip()" in tm_src

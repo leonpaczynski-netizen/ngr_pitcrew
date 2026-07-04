@@ -2162,8 +2162,14 @@ class TrackModellingMixin:
                 for pt in ref_path.points:
                     speed_profile.append((pt.lap_progress * 100.0, pt.speed_kph_avg))
 
-        # API key from config
-        api_key = self._config.get("ai", {}).get("api_key", "")
+        # API key — same source every other UI AI caller uses (the editable
+        # field, auto-loaded from api_key.txt / config["anthropic"]). The old
+        # config.get("ai", ...) read a section that never exists, so corner
+        # verification always ran with an empty key.
+        if hasattr(self, "_ai_api_key"):
+            api_key = self._ai_api_key.text().strip()
+        else:
+            api_key = self._config.get("anthropic", {}).get("api_key", "")
 
         # Track name from current layout selection
         lay_id_str = (self._tm_layout_combo.currentData() or "").strip()

@@ -6735,7 +6735,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         if self._db is not None:
             try:
-                config_id = self._config.get("config_id", "")
+                # config_id lives at config["strategy"]["config_id"] — read it via
+                # the canonical accessor. The old top-level self._config["config_id"]
+                # never exists, so feedback rows were stored with an empty config_id.
+                config_id = self._active_config_id()
                 # Session id from the dispatcher matches the id used when tagging
                 # laps with a setup, so the dominant-setup lookup lines up.
                 _sid = 0
