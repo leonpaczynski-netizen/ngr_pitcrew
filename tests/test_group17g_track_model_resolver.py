@@ -709,7 +709,7 @@ class TestFormatNextStep:
     def test_seed_only_with_station_map_says_detect_segments(self):
         from ui.track_modelling_vm import format_next_step
         msg = format_next_step(self._result("seed_only"), has_station_map=True)
-        assert "Detect Segments" in msg and "Save Reviewed Model" in msg
+        assert "Detect Segments" in msg and "Accept Track Model" in msg
 
     def test_seed_only_without_station_map_says_calibrate(self):
         from ui.track_modelling_vm import format_next_step

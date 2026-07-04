@@ -657,12 +657,8 @@ class SetupBuilderMixin:
         if not getattr(form, "last_ai_fields", {}):
             return
         form.apply_ai_fields(form.last_ai_fields)
-        car = (self._build_setup_ai_snapshot().car or "Unknown") if hasattr(self, "_build_setup_ai_snapshot") else "Unknown"
-        ai_count = sum(
-            1 for s in self._saved_setups
-            if s.get("name") == car and str(s.get("setup_label", "")).startswith("AI Fix")
-        )
-        form._setup_label.setText(f"AI Fix {ai_count + 1}")
+        # Keep the form's structured Q/R setup name — do NOT rename to "AI Fix N".
+        # Save advances the structured name to the next numbered attempt.
         form.last_ai_fields = {}
         form._btn_apply_ai_setup.setVisible(False)
 
@@ -1294,12 +1290,11 @@ class SetupBuilderMixin:
         current = self._current_setup_dict()
         current.update(self._last_setup_ai_fields)
         self._fill_setup_fields(current)
-        car = self._config.get("strategy", {}).get("car", "") or "Unknown"
-        ai_count = sum(
-            1 for s in self._saved_setups
-            if s.get("name") == car and str(s.get("setup_label", "")).startswith("AI Fix")
-        )
-        self._setup_label.setText(f"AI Fix {ai_count + 1}")
+        # Keep the structured R/Q setup name (e.g. "R NGR Porsche Cup Rd7 2")
+        # instead of overwriting it with "AI Fix N" — on Save, resolve_save_name
+        # advances it to the next numbered attempt for the event, so the naming
+        # convention is preserved. The AI-fix linkage for learning is recorded in
+        # the DB (apply_recommendation_for_car_track) and setup_history, not here.
         # Highlight changed fields so the user can see what was modified.
         # The save is intentionally deferred — click Save Setup to persist.
         self._highlight_changed_fields(list(self._last_setup_ai_fields.keys()))

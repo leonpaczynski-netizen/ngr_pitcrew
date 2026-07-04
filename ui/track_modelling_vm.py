@@ -448,18 +448,19 @@ def format_next_step(resolver_result: Optional[object], has_station_map: bool) -
     if source in ("ai_ready_reviewed_model", "engineer_validated_model"):
         return "✓ This track is AI-ready — no action needed."
     if source == "reviewed_model":
-        return ("Next: finish the segment review — resolve any 'needs more laps', "
-                "split, or merge flags (see Blockers), then Save Reviewed Model.")
+        return ("Next: in Segment Review, resolve any 'needs more laps', split, or "
+                "merge flags (see Blockers), then click Accept Track Model.")
     if source == "detected_unreviewed":
-        return ("Next: open Segment Review, confirm or adjust each corner, then "
-                "Save Reviewed Model to make this track AI-ready.")
+        return ("Next: in Segment Review, click Accept Track Model to promote this "
+                "to an AI-ready reviewed model.")
     # seed_only, missing, or nothing resolved yet.
     if has_station_map:
-        return ("Next: click Detect Segments, review the detected corners, then "
-                "Save Reviewed Model. Your calibration is done — the model just "
-                "needs promoting (it is seed-only now, which the AI won't use).")
+        return ("Next: click Detect Segments, then in section 4 (Segment Review) "
+                "click Accept Track Model. Your calibration is done — the model is "
+                "still seed-only (which the AI won't use) until it's accepted.")
     return ("Next: start Calibration and drive 2–3 clean laps across the "
-            "start/finish line to build the track model.")
+            "start/finish line to build the track model. Tip: use Time Trial — a "
+            "lobby's pit lane can corrupt the calibration laps.")
 
 
 def get_review_button_states(

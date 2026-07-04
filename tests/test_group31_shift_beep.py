@@ -601,13 +601,19 @@ class TestDrivingGate:
         assert driving_gate(car_on_track=False, paused=False, loading=False,
                             in_gear=False, speed_kmh=90.0) is False
 
-    def test_formation_lap_still_beeps(self):
-        # GT7 clears car_on_track on formation/pre-race laps, but the car is
-        # moving and in gear — those laps must keep beeping.
+    def test_pit_lane_moving_in_gear_muted(self):
+        # In the pit lane / a lobby out-lap the car moves in gear but
+        # car_on_track is False — must NOT beep (the reported off-track case).
         assert driving_gate(car_on_track=False, paused=False, loading=False,
-                            in_gear=True, speed_kmh=80.0) is True
+                            in_gear=True, speed_kmh=80.0) is False
 
-    def test_crawling_in_gear_below_threshold_muted(self):
-        # In gear but barely moving (e.g. rolling in a menu preview) stays muted.
+    def test_off_track_moving_muted(self):
+        # Any off-track motion (replay, spun off, formation) stays muted — the
+        # gate is strictly on car_on_track per the user requirement.
         assert driving_gate(car_on_track=False, paused=False, loading=False,
                             in_gear=True, speed_kmh=5.0) is False
+
+    def test_on_track_slow_still_beeps(self):
+        # On track counts even at low speed — gating is on car_on_track, not speed.
+        assert driving_gate(car_on_track=True, paused=False, loading=False,
+                            in_gear=True, speed_kmh=8.0) is True

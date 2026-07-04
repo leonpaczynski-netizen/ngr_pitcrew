@@ -129,17 +129,20 @@ def driving_gate(
     in_gear: bool,
     speed_kmh: float,
 ) -> bool:
-    """Return True when the car is actually being driven (beep-worthy).
+    """Return True only when the car is on track — the beep-worthy state.
 
-    Mutes the shift beep in the garage, menus, replays, and while paused or
-    loading (the off-track false positives reported in UAT).  GT7 clears
-    ``car_on_track`` during formation / pre-race laps while the engine still
-    runs, so a car that is moving and in gear is also treated as driving —
-    keeping those laps beeping as the user previously wanted.
+    The user's requirement is explicit: the shift beep must fire ONLY when on
+    track. So this gates strictly on ``car_on_track`` (and never while paused or
+    loading), muting the beep everywhere else — garage, menus, replays, the PIT
+    LANE, and formation / roll-out laps. An earlier version also allowed any
+    moving, in-gear car through; that let the beep fire in the pit lane and
+    replays, which is exactly the off-track beeping being reported. ``in_gear``
+    and ``speed_kmh`` are kept in the signature (call site / future use) but no
+    longer widen the gate.
     """
     if paused or loading:
         return False
-    return bool(car_on_track or (in_gear and speed_kmh > 30))
+    return bool(car_on_track)
 
 
 def should_shift_beep(

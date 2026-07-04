@@ -93,7 +93,7 @@ FROZEN_ALLOWLIST = {
     ("ui/dashboard.py", "_update_telemetry_labels"): 1,      # cosmetic
     ("ui/dashboard.py", "_worker"): 1,                       # degradation worker (plan)
     # -- ui/setup_builder_ui.py --------------------------------------------- #
-    ("ui/setup_builder_ui.py", "_apply_and_save_ai_setup"): 2,   # cosmetic car/track
+    ("ui/setup_builder_ui.py", "_apply_and_save_ai_setup"): 1,   # cosmetic track (car read removed with the AI-Fix rename)
     ("ui/setup_builder_ui.py", "_apply_build_setup_result"): 1,  # cosmetic
     ("ui/setup_builder_ui.py", "_build_setup_ai_snapshot"): 2,   # bridge input
     ("ui/setup_builder_ui.py", "_build_setup_context"): 1,       # bridge input

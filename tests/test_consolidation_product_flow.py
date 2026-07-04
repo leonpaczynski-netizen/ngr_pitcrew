@@ -7,6 +7,7 @@ Two kinds of tests, both following the project's no-Qt convention:
      intended (no QApplication required).
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,13 @@ from ui import product_flow as pf
 
 
 ROOT = Path(__file__).parent.parent
+
+
+def _method_body(src: str, name: str) -> str:
+    m = re.search(rf"\n    def {name}\(.*?(?=\n    def |\n(?:class |# ---)|\Z)",
+                  src, re.DOTALL)
+    assert m, f"method {name} not found"
+    return m.group(0)
 
 
 @pytest.fixture(scope="module")
@@ -214,3 +222,16 @@ class TestTrackModellingRenames:
         # exists, so the old read always yielded an empty key).
         assert 'self._config.get("ai", {}).get("api_key"' not in tm_src
         assert "self._ai_api_key.text().strip()" in tm_src
+
+    def test_accept_exports_reviewed_segments(self, tm_src):
+        # The Accept button must write the reviewed-segments file — without it the
+        # track stays seed-only / not AI-ready no matter how good the alignment
+        # (the Fuji UAT case). It must also re-resolve so the status flips.
+        body = _method_body(tm_src, "_tm_accept_track_model")
+        assert "export_review_json" in body, "Accept must export the reviewed segments"
+        assert "_tm_refresh_resolver" in body, "Accept must re-resolve the model status"
+
+    def test_accept_not_gated_on_unrelated_seed_geometry(self, tm_src):
+        # Accept enables on alignment quality alone; the old extra seed_available
+        # requirement forced an unrelated 'Generate Seed Geometry' workflow.
+        assert 'states.get("accept", False) and seed_available' not in tm_src

@@ -366,9 +366,16 @@ class TrackModellingMixin:
         self._tm_btn_ai_corner_verify.setStyleSheet(_btn_style)
         self._tm_btn_ai_corner_verify.setEnabled(False)
         self._tm_btn_ai_corner_verify.setToolTip(
-            "Run AI verification of corner assignments against the station map"
+            "Optional: ask the AI to sanity-check the detected corner positions "
+            "against the racing line. Confirmed corners are marked AI-verified; "
+            "the result appears in the status line just below."
         )
         cal_layout.addWidget(self._tm_btn_ai_corner_verify)
+        # Persistent AI-verify status (the run used to only flash a 5s status-bar
+        # message, so users couldn't tell if it did anything).
+        self._tm_lbl_ai_verify_status = QLabel("AI corner verify: not run yet")
+        self._tm_lbl_ai_verify_status.setStyleSheet("color: #888; font-size: 10px;")
+        cal_layout.addWidget(self._tm_lbl_ai_verify_status)
 
         self._tm_btn_detect_segs = QPushButton("Detect Segments")
         self._tm_btn_detect_segs.setStyleSheet(_btn_style)
@@ -1877,15 +1884,16 @@ class TrackModellingMixin:
 
         acc_btn = getattr(self, "_tm_btn_accept", None)
         if acc_btn is not None:
-            seed_available = getattr(self, "_tm_seed_geometry_available", False)
-            accept_enabled = states.get("accept", False) and seed_available
+            # Enable purely on alignment quality (good/acceptable match, no
+            # blockers, not already accepted). The old extra `seed_available`
+            # requirement forced an unrelated "Generate Seed Geometry" workflow
+            # and left users unable to promote a perfectly-aligned model.
+            accept_enabled = states.get("accept", False)
             acc_btn.setEnabled(accept_enabled)
-            if not seed_available:
-                acc_btn.setToolTip("Seed geometry required before acceptance")
-            else:
-                acc_btn.setToolTip(
-                    "Accept the whole-model alignment result and save this track model as official"
-                )
+            acc_btn.setToolTip(
+                "Accept the aligned model and save the reviewed segments — "
+                "promotes this track from seed-only to AI-ready."
+            )
             # Style the button to reflect match quality:
             # GOOD_MATCH → amber border (lower-quality acceptance hint)
             # ACCEPTABLE_MATCH → green (normal acceptance)
@@ -2011,7 +2019,13 @@ class TrackModellingMixin:
             self._home_refresh_if_visible()
 
     def _tm_accept_track_model(self) -> None:
-        """Accept the whole-model alignment and persist to disk."""
+        """Accept the whole-model alignment and persist to disk.
+
+        Critically, this also exports the REVIEWED SEGMENTS file. That file is
+        what resolve_best_track_model looks for — without it the track stays
+        "seed only / not AI-ready" no matter how good the alignment is (the exact
+        Fuji UAT confusion). Accept = promote to a reviewed, AI-ready model.
+        """
         result = getattr(self, "_tm_alignment_result", None)
         sm     = getattr(self, "_tm_station_map", None)
         if result is None or sm is None:
@@ -2027,8 +2041,23 @@ class TrackModellingMixin:
             )
         except Exception:
             pass  # best-effort
+        # Export the reviewed segments — this is what makes the model AI-ready.
+        review = getattr(self, "_tm_review_result", None)
+        if review is not None:
+            try:
+                if not getattr(review, "track_location_id", ""):
+                    review.track_location_id = sm.track_location_id
+                if not getattr(review, "layout_id", ""):
+                    review.layout_id = sm.layout_id
+                from data.track_segment_review import export_review_json
+                export_review_json(review)
+            except Exception:
+                pass  # best-effort
         self._tm_refresh_alignment_panel(result)
         self._tm_refresh_track_truth_panel()
+        # Re-resolve so the Track Model Status panel flips off "seed only".
+        if hasattr(self, "_tm_refresh_resolver"):
+            self._tm_refresh_resolver()
 
     def _tm_rebuild_model(self) -> None:
         """Clear station map and alignment result — requires full recalibration.
@@ -2116,6 +2145,9 @@ class TrackModellingMixin:
             return
         self._tm_btn_ai_corner_verify.setEnabled(False)
         self._tm_btn_ai_corner_verify.setText("Verifying…")
+        if hasattr(self, "_tm_lbl_ai_verify_status"):
+            self._tm_lbl_ai_verify_status.setText("AI corner verify: running…")
+            self._tm_lbl_ai_verify_status.setStyleSheet("color: #E4D0AA; font-size: 10px;")
 
         # Build peaks from station map seeded corners
         stations = self._tm_station_map.stations
@@ -2193,8 +2225,12 @@ class TrackModellingMixin:
         )
         self._tm_btn_ai_corner_verify.setText("AI Corner Verify")
 
+        _vlbl = getattr(self, "_tm_lbl_ai_verify_status", None)
         if result is None:
             reason = error_msg or "Unknown error"
+            if _vlbl is not None:
+                _vlbl.setText(f"AI corner verify failed: {reason}")
+                _vlbl.setStyleSheet("color: #EE5555; font-size: 10px;")
             self.statusBar().showMessage(
                 f"AI corner verification failed: {reason}", 5000
             )
@@ -2224,7 +2260,12 @@ class TrackModellingMixin:
             1 for c in sm.seeded_corners
             if c.verification_source == "ai_verified"
         ) if sm is not None else 0
+        n_total = len(sm.seeded_corners) if sm is not None else 0
 
+        if _vlbl is not None:
+            _vlbl.setText(
+                f"AI corner verify: {n_updated} of {n_total} corners confirmed ✓")
+            _vlbl.setStyleSheet("color: #6A9A6A; font-size: 10px;")
         self.statusBar().showMessage(
             f"AI corner verification complete — {n_updated} corners updated", 5000
         )
