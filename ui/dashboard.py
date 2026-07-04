@@ -1722,8 +1722,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             _car_now = self._config.get("strategy", {}).get("car", "")
             _matching = [s for s in _setups if
                          s.get("car", "") == _car_now or s.get("name", "") == _car_now]
+            from ui.setup_name_helper import setup_display_label
             self._telem_lbl_setup.setText(
-                _matching[-1].get("setup_label", _matching[-1].get("name", "Unknown")) if _matching else "—"
+                (setup_display_label(_matching[-1]) or "Unknown") if _matching else "—"
             )
 
             if p is None:
@@ -2735,10 +2736,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         event_id = self._db.get_event_id(event_name) if event_name else 0
         _meta_keys = {"name", "setup_label", "setup_id", "captured_at", "ai_notes"}
         changed = False
+        from ui.setup_name_helper import setup_display_label
         for s in self._saved_setups:
             car_name = s.get("name", "")
             car_id = self._db.get_car_id(car_name) if car_name else 0
-            label = s.get("setup_label", s.get("name", "Setup"))
+            label = setup_display_label(s) or "Setup"
             setup_fields = {k: v for k, v in s.items() if k not in _meta_keys}
             db_id = self._db.save_setup(car_id, event_id, label, setup_fields,
                                         ai_notes=s.get("ai_notes", ""))
@@ -2770,11 +2772,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         return best_id
 
     def _setup_id_options(self) -> list[str]:
+        from ui.setup_name_helper import setup_display_label
         seen: dict[int, str] = {}
         for s in self._saved_setups:
             sid = s.get("setup_id")
             if sid:
-                seen[sid] = s.get("name", "")
+                seen[sid] = setup_display_label(s) or s.get("name", "")
         return [""] + [f"{sid} — {name}" for sid, name in sorted(seen.items())]
 
     def _make_setup_combo(self, row: int, current_id: int = 0) -> "QComboBox":
@@ -2847,8 +2850,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             db.close()
             if not rows:
                 return ""
+            from ui.setup_name_helper import setup_display_label
             id_to_name: dict[int, str] = {
-                s["setup_id"]: s.get("name", f"Setup {s['setup_id']}")
+                s["setup_id"]: setup_display_label(s) or f"Setup {s['setup_id']}"
                 for s in self._saved_setups if s.get("setup_id")
             }
             lines = ["## Setup comparison (session history)"]
@@ -3429,9 +3433,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             except Exception as exc:
                 print(f"[Setup] DB snapshot failed: {exc}")
         if hasattr(self, "_lbl_bank_status"):
+            from ui.setup_name_helper import setup_display_label
             d = self._current_setup_dict()
             self._set_bank_status(
-                f"Setup saved: {d.get('name', '')} (ID {d.get('setup_id', '?')})")
+                f"Setup saved: {setup_display_label(d)} (ID {d.get('setup_id', '?')})")
 
     def _wipe_all_sessions(self) -> None:
         """Ask for confirmation then delete every session and lap record from the DB."""
@@ -6590,6 +6595,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             lbl_widget.setStyleSheet(f"color: {_TEXT};")
             form.addRow(lbl_widget, combo)
 
+        # Overall subjective take on the setup run this stint. Moved here from
+        # the Setup Builder so the "did I like it?" rating sits with the rest of
+        # the per-run feedback; it is attributed to the setup that was running.
+        rating_lbl = QLabel("How did this setup feel?:")
+        rating_lbl.setStyleSheet(f"color: {_TEXT};")
+        self._feedback_rating_combo = QComboBox()
+        self._feedback_rating_combo.addItems(["—", "Liked", "Hated", "Neutral"])
+        self._feedback_rating_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; "
+            "border-radius: 3px; padding: 2px 6px; }"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._feedback_rating_combo.setToolTip(
+            "Your overall take on the setup you ran this stint — the app learns "
+            "from this to shape future setup advice.")
+        form.addRow(rating_lbl, self._feedback_rating_combo)
+
         notes_lbl = QLabel("Notes:")
         notes_lbl.setStyleSheet(f"color: {_TEXT};")
         self._feedback_notes = QTextEdit()
@@ -6632,7 +6654,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if notes:
             parts.append(f"Notes: {notes}")
 
-        if not parts:
+        rating = ""
+        if hasattr(self, "_feedback_rating_combo"):
+            _rt = self._feedback_rating_combo.currentText()
+            rating = {"Liked": "liked", "Hated": "hated", "Neutral": "neutral"}.get(_rt, "")
+
+        # Submit if there's any structured feedback, notes, or at least a rating.
+        if not parts and not rating:
             return
 
         feedback_str = "\n".join(parts)
@@ -6655,11 +6683,28 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if self._db is not None:
             try:
                 config_id = self._config.get("config_id", "")
+                # Session id from the dispatcher matches the id used when tagging
+                # laps with a setup, so the dominant-setup lookup lines up.
+                _sid = 0
+                if getattr(self, "_dispatcher", None) is not None:
+                    _sid = getattr(self._dispatcher, "_session_id", 0) or 0
+                if not _sid:
+                    _sid = getattr(self, "_session_id", 0) or 0
+                # Attribute the feedback to the setup actually driven this stint;
+                # fall back to the most-recently-saved setup when no laps tagged.
+                _setup_id = self._db.get_dominant_setup_id(_sid)
+                if not _setup_id:
+                    try:
+                        _setup_id = self._resolve_setup_id_for_lap()
+                    except Exception:
+                        _setup_id = 0
                 self._db.write_feedback(
-                    session_id=getattr(self, "_session_id", 0),
+                    session_id=_sid,
                     lap_num=self._logger.lap_count() if self._logger else 0,
                     feedback=feedback_dict,
                     config_id=config_id,
+                    setup_id=_setup_id,
+                    rating=rating,
                 )
             except Exception:
                 pass
@@ -7833,10 +7878,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             setups = self._config.get("car_setup", {}).get("setups", [])
             car_setups = [s for s in setups if s.get("name", "") == car_name or s.get("car", "") == car_name]
             self._garage_setups_table.setRowCount(0)
+            from ui.setup_name_helper import setup_display_label
             for setup in car_setups:
                 r = self._garage_setups_table.rowCount()
                 self._garage_setups_table.insertRow(r)
-                name_item = QTableWidgetItem(str(setup.get("setup_label", setup.get("name", ""))))
+                name_item = QTableWidgetItem(setup_display_label(setup))
                 name_item.setData(Qt.ItemDataRole.UserRole, setup.get("id"))
                 self._garage_setups_table.setItem(r, 0, name_item)
                 for col, val in enumerate([setup.get("track", ""), setup.get("captured_at", setup.get("date", ""))], start=1):

@@ -122,6 +122,26 @@ def resolve_threshold(
     return key, thresh
 
 
+def driving_gate(
+    car_on_track: bool,
+    paused: bool,
+    loading: bool,
+    in_gear: bool,
+    speed_kmh: float,
+) -> bool:
+    """Return True when the car is actually being driven (beep-worthy).
+
+    Mutes the shift beep in the garage, menus, replays, and while paused or
+    loading (the off-track false positives reported in UAT).  GT7 clears
+    ``car_on_track`` during formation / pre-race laps while the engine still
+    runs, so a car that is moving and in gear is also treated as driving —
+    keeping those laps beeping as the user previously wanted.
+    """
+    if paused or loading:
+        return False
+    return bool(car_on_track or (in_gear and speed_kmh > 30))
+
+
 def should_shift_beep(
     prev_gear: int,
     cur_gear: int,
@@ -503,9 +523,6 @@ def main() -> None:
         # Shift-beep: check RPM crossing on every packet (60 Hz), independent of
         # the event system.  Re-arms when RPM drops below 95 % of threshold so a
         # single gear-change produces exactly one beep.
-        # Shift-beep fires on RPM alone — no car_on_track guard needed.
-        # GT7 sets car_on_track=False during formation laps / pre-race while
-        # the engine is fully running; suppressing there felt broken to the user.
         sb = config.get("shift_beep", {})
         with _state_lock:
             _shift_muted_snap            = _shift_muted_until[0]
@@ -529,7 +546,16 @@ def main() -> None:
             downshift_muted_until=_downshift_muted_snap,
             now=_now_wall,
         )
-        if beep:
+        # Only sound the beep when the car is actually being driven — not in the
+        # garage, menus, replays, or while paused/loading (see driving_gate).
+        driving_now = driving_gate(
+            car_on_track=packet.car_on_track,
+            paused=packet.paused,
+            loading=packet.loading,
+            in_gear=packet.in_gear,
+            speed_kmh=packet.speed_kmh,
+        )
+        if beep and driving_now:
             print(f"[ShiftBeep] fired — engine {packet.engine_rpm:.0f} >= thresh {thresh:.0f} "
                   f"({thresh_key}) gear {cur_gear}")
             # Play directly via winsound (WASAPI shared mode — always warm, no queue delay).

@@ -1718,13 +1718,16 @@ class TestC2MaxTokensBehavioural:
         adv._tracker = None
         return adv
 
-    def test_build_combined_setup_response_max_tokens_1500(self, monkeypatch):
+    def test_build_combined_setup_response_max_tokens_2500(self, monkeypatch):
+        # Raised from 1500 → 2500: the combined-setup JSON (analysis + changes +
+        # setup_fields + diagnosis) was overrunning 1500 and truncating mid-JSON,
+        # which dumped raw text at the user (UAT: analyse button "returned jargon").
         captured: list = []
         adv = self._make_base_advisor(monkeypatch, captured)
         adv.build_combined_setup_response(setup_dict={}, car_name="")
         assert captured, "call_api was not invoked"
-        assert captured[0] == 1500, (
-            f"build_combined_setup_response must use max_tokens=1500, got {captured[0]}"
+        assert captured[0] == 2500, (
+            f"build_combined_setup_response must use max_tokens=2500, got {captured[0]}"
         )
 
     def test_build_setup_advice_response_max_tokens_1500(self, monkeypatch):

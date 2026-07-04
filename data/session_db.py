@@ -108,7 +108,9 @@ CREATE TABLE IF NOT EXISTS driver_feedback (
     tyre_condition  TEXT    NOT NULL DEFAULT '',
     fuel_use        TEXT    NOT NULL DEFAULT '',
     notes           TEXT    NOT NULL DEFAULT '',
-    config_id       TEXT    NOT NULL DEFAULT ''
+    config_id       TEXT    NOT NULL DEFAULT '',
+    setup_id        INTEGER NOT NULL DEFAULT 0,
+    rating          TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS grip_alerts (
@@ -323,6 +325,13 @@ _V9_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("setup_recommendations", "score_details    TEXT NOT NULL DEFAULT '{}'"),
 ]
 
+# v10: attribute per-stint driver feedback to the setup that was running and
+# carry the driver's subjective rating (moved out of the Setup Builder).
+_V10_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("driver_feedback", "setup_id INTEGER NOT NULL DEFAULT 0"),
+    ("driver_feedback", "rating   TEXT    NOT NULL DEFAULT ''"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,6 +423,10 @@ class SessionDB:
             self._migrate_v9()
             self._conn.execute("PRAGMA user_version = 9")
             self._conn.commit()
+        if version < 10:
+            self._migrate_v10()
+            self._conn.execute("PRAGMA user_version = 10")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -476,6 +489,21 @@ class SessionDB:
         except Exception as e:
             if "duplicate column" not in str(e).lower():
                 raise
+
+    def _migrate_v10(self) -> None:
+        """Add setup_id + rating to driver_feedback (schema version 10).
+
+        setup_id: which saved setup was running for the stint (0 = unattributed).
+        rating:   driver's subjective take on that setup ('' | liked | hated | neutral),
+                  moved here from the Setup Builder's rate-this-result control.
+        Existing rows backfill via DEFAULT and are treated as unrated.
+        """
+        for table, col_def in _V10_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _migrate_v5(self) -> None:
         try:
@@ -2146,6 +2174,8 @@ class SessionDB:
         lap_num: int,
         feedback: dict,
         config_id: str = "",
+        setup_id: int = 0,
+        rating: str = "",
     ) -> int:
         submitted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
@@ -2154,8 +2184,8 @@ class SessionDB:
                        (session_id, lap_num, submitted_at,
                         corner_entry, mid_corner, exit_stability,
                         rear_braking, tyre_condition, fuel_use,
-                        notes, config_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        notes, config_id, setup_id, rating)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id, lap_num, submitted_at,
                     feedback.get("corner_entry", ""),
@@ -2166,10 +2196,44 @@ class SessionDB:
                     feedback.get("fuel_use", ""),
                     feedback.get("notes", ""),
                     config_id,
+                    int(setup_id or 0),
+                    rating or "",
                 ),
             )
             self._conn.commit()
             return cur.lastrowid or 0
+
+    def get_lap_count_for_setup(self, setup_id: int) -> int:
+        """Number of laps (any session) tagged with this setup_id.
+
+        This is the "was it actually driven?" signal that replaces the old
+        manual 'Applied' checkbox: a setup with >=1 tagged lap was applied.
+        """
+        if not setup_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM lap_records WHERE setup_id = ?",
+                (int(setup_id),),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_dominant_setup_id(self, session_id: int) -> int:
+        """Return the most-frequently tagged non-zero setup_id for a session.
+
+        Used to attribute a per-stint feedback submission to the setup the
+        driver was actually running. Returns 0 when no laps are tagged yet.
+        """
+        if not session_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT setup_id, COUNT(*) AS c FROM lap_records
+                   WHERE session_id = ? AND setup_id > 0
+                   GROUP BY setup_id ORDER BY c DESC, setup_id DESC LIMIT 1""",
+                (int(session_id),),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def get_recent_feedback(
         self,

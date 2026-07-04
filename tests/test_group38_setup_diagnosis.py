@@ -1586,3 +1586,41 @@ class TestRSRFujiArtifacts:
         assert "Driver Tuning Model" in prompt
         written = out_path.read_text(encoding="utf-8")
         assert len(written) > 500, "Prompt appears too short"
+
+
+# ===========================================================================
+# Section 19 — Truncated-response guard (UAT: analyse button dumped raw JSON)
+# ===========================================================================
+
+
+class TestSetupResponseCompletenessGuard:
+    """A response cut off at the API token cap must be detected so the UI shows
+    a friendly retry message instead of dumping raw/partial JSON."""
+
+    @pytest.fixture(autouse=True)
+    def _import_fn(self):
+        from ui.setup_builder_ui import _setup_response_looks_complete
+        self._fn = _setup_response_looks_complete
+
+    def test_complete_json_passes(self):
+        payload = '{"analysis": "x", "changes": [], "setup_fields": {"springs_rear": 4.7}}'
+        assert self._fn(payload) is True
+
+    def test_truncated_midvalue_fails(self):
+        # The exact UAT symptom: cut off mid-string, no closing brace.
+        payload = '{"analysis": "x", "changes": [{"why": "bottoming addressed via springs, not'
+        assert self._fn(payload) is False
+
+    def test_missing_setup_fields_fails(self):
+        payload = '{"analysis": "x", "changes": []}'
+        assert self._fn(payload) is False
+
+    def test_empty_string_fails(self):
+        assert self._fn("") is False
+
+    def test_none_fails(self):
+        assert self._fn(None) is False
+
+    def test_trailing_whitespace_tolerated(self):
+        payload = '{"setup_fields": {"a": 1}}   \n'
+        assert self._fn(payload) is True

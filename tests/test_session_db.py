@@ -136,6 +136,79 @@ def test_write_feedback_empty_ok(db):
 
 
 # ---------------------------------------------------------------------------
+# v10: driver_feedback setup_id + rating, and lap-tag derived signals
+# ---------------------------------------------------------------------------
+
+def test_schema_version_is_v10(db):
+    version = db._conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == 10
+
+
+def test_driver_feedback_has_setup_id_and_rating_columns(db):
+    cols = [c[1] for c in db._conn.execute("PRAGMA table_info(driver_feedback)").fetchall()]
+    assert "setup_id" in cols
+    assert "rating" in cols
+
+
+def test_write_feedback_persists_setup_id_and_rating(db):
+    sid = db.open_session(car_id=7, track="Fuji", session_type="Practice")
+    row_id = db.write_feedback(session_id=sid, lap_num=5, feedback={"notes": "n"},
+                               config_id="c", setup_id=42, rating="liked")
+    assert row_id > 0
+    row = dict(db._conn.execute(
+        "SELECT * FROM driver_feedback WHERE id=?", (row_id,)).fetchone())
+    assert row["setup_id"] == 42
+    assert row["rating"] == "liked"
+
+
+def test_write_feedback_defaults_setup_id_and_rating(db):
+    # Existing call sites that don't pass the new args backfill to 0 / ''.
+    row_id = db.write_feedback(session_id=0, lap_num=0, feedback={})
+    row = dict(db._conn.execute(
+        "SELECT * FROM driver_feedback WHERE id=?", (row_id,)).fetchone())
+    assert row["setup_id"] == 0
+    assert row["rating"] == ""
+
+
+def test_get_recent_feedback_exposes_new_columns(db):
+    sid = db.open_session(car_id=9, track="Suzuka", session_type="Practice")
+    db.write_feedback(session_id=sid, lap_num=1, feedback={"notes": "x"},
+                      setup_id=3, rating="hated")
+    rows = db.get_recent_feedback(car_id=9, track="Suzuka", limit=5)
+    assert rows and rows[0]["setup_id"] == 3
+    assert rows[0]["rating"] == "hated"
+
+
+def test_get_lap_count_for_setup(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    _insert_lap_direct(db, sid, 1, 92_000)
+    _insert_lap_direct(db, sid, 2, 91_500)
+    db.update_lap_setup_id(sid, 1, 55)
+    db.update_lap_setup_id(sid, 2, 55)
+    assert db.get_lap_count_for_setup(55) == 2
+    assert db.get_lap_count_for_setup(999) == 0
+    assert db.get_lap_count_for_setup(0) == 0
+
+
+def test_get_dominant_setup_id(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    for n, t in enumerate((92_000, 91_800, 91_600), start=1):
+        _insert_lap_direct(db, sid, n, t)
+    # Two laps on setup 7, one on setup 8 → dominant is 7.
+    db.update_lap_setup_id(sid, 1, 7)
+    db.update_lap_setup_id(sid, 2, 7)
+    db.update_lap_setup_id(sid, 3, 8)
+    assert db.get_dominant_setup_id(sid) == 7
+
+
+def test_get_dominant_setup_id_no_tags_returns_zero(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    _insert_lap_direct(db, sid, 1, 92_000)  # setup_id defaults to 0
+    assert db.get_dominant_setup_id(sid) == 0
+    assert db.get_dominant_setup_id(0) == 0
+
+
+# ---------------------------------------------------------------------------
 # write_grip_alert
 # ---------------------------------------------------------------------------
 

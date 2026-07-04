@@ -9,7 +9,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QGroupBox, QLabel, QPushButton, QCheckBox,
+    QGroupBox, QLabel, QPushButton,
     QDoubleSpinBox, QSpinBox, QAbstractSpinBox, QLineEdit, QTextEdit,
     QComboBox, QScrollArea,
 )
@@ -67,6 +67,18 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
         f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
         "</div>"
     )
+
+
+def _setup_response_looks_complete(payload: str) -> bool:
+    """Heuristic: does the advisor payload look like a complete setup JSON?
+
+    A response truncated at the API token cap ends mid-value (no closing brace)
+    or omits the ``setup_fields`` key entirely.  Detecting that lets the UI show
+    a clear "try again" message instead of dumping raw/partial JSON at the user
+    (UAT: analyse button "returned jargon to text box").
+    """
+    s = (payload or "").strip()
+    return s.endswith("}") and '"setup_fields"' in s
 
 
 def _set_spin_readonly(spin, readonly: bool) -> None:
@@ -599,29 +611,10 @@ class SetupBuilderMixin:
         self._last_setup_ai_fields: dict = {}
         self._highlighted_fields: set = set()
 
-        # ── Driver Feedback Controls ───────────────────────────────────────────
-        # Rating combo + Applied checkbox shown below the AI result; values are
-        # translated into labels and passed to save_entry when saving to history.
-        _feedback_row = QHBoxLayout()
-        _feedback_row.setContentsMargins(0, 2, 0, 0)
-        _feedback_lbl = QLabel("Rate this result:", styleSheet=f"color: {_TEXT}; font-size: 11px;")
-        self._setup_rating_combo = QComboBox()
-        self._setup_rating_combo.addItems(["—", "Liked", "Hated", "Neutral"])
-        self._setup_rating_combo.setFixedWidth(90)
-        self._setup_rating_combo.setStyleSheet(
-            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; "
-            f"border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }}"
-            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
-        )
-        self._setup_applied_check = QCheckBox("Applied")
-        self._setup_applied_check.setStyleSheet(f"color: {_TEXT}; font-size: 11px;")
-        self._setup_applied_check.setToolTip(
-            "Tick if you applied this recommendation to the car setup.")
-        _feedback_row.addWidget(_feedback_lbl)
-        _feedback_row.addWidget(self._setup_rating_combo)
-        _feedback_row.addSpacing(8)
-        _feedback_row.addWidget(self._setup_applied_check)
-        _feedback_row.addStretch()
+        # NOTE: the old "Rate this result" combo + "Applied" checkbox were removed
+        # here. Rating a setup now lives with the per-run feedback on the Practice
+        # Review tab ("How did this setup feel?"), and "applied" is derived from
+        # which setup the driver tagged their laps with — no manual checkbox.
 
         setup_btn_row.addWidget(btn_save_setup)
         setup_btn_row.addWidget(QLabel("Load:", styleSheet=lbl_s))
@@ -637,7 +630,6 @@ class SetupBuilderMixin:
         setup_layout.addWidget(self._lbl_setup_save_status)
         setup_layout.addWidget(self._setup_result_text)
         setup_layout.addWidget(self._btn_apply_ai_setup)
-        setup_layout.addLayout(_feedback_row)
 
         # Build Setup with AI + Set Car Ranges
         _build_row = QHBoxLayout()
@@ -1202,34 +1194,18 @@ class SetupBuilderMixin:
                 f"changes to locked areas: <b>{_vc}</b>. Review before applying.</div>"
             )
 
-        # Snapshot driver feedback controls before resetting them.
-        # The user may have rated the PREVIOUS result; capture that rating so it
-        # can be saved with the previous entry's history record, then reset so the
-        # new result starts fresh.
-        _prev_rating_text = ""
-        _prev_hist_labels: list[str] = []
-        if hasattr(self, "_setup_rating_combo"):
-            _prev_rating_text = self._setup_rating_combo.currentText()
-            if _prev_rating_text == "Liked":
-                _prev_hist_labels.append("liked")
-            elif _prev_rating_text == "Hated":
-                _prev_hist_labels.append("hated")
-            elif _prev_rating_text == "Neutral":
-                _prev_hist_labels.append("neutral")
-        if hasattr(self, "_setup_applied_check"):
-            if self._setup_applied_check.isChecked():
-                _prev_hist_labels.append("applied")
-            else:
-                _prev_hist_labels.append("not_applied")
+        # Rating/applied labels are no longer captured here — the rate control
+        # moved to the Practice Review per-run feedback and "applied" is derived
+        # from lap setup tags. History entries save without subjective labels.
 
-        # Reset controls for the incoming fresh result
-        if hasattr(self, "_setup_rating_combo"):
-            self._setup_rating_combo.setCurrentIndex(0)
-        if hasattr(self, "_setup_applied_check"):
-            self._setup_applied_check.setChecked(False)
-
-        # Try to parse structured JSON from the advisor
+        # Try to parse structured JSON from the advisor.  A truncated response
+        # (the model hit the token cap mid-JSON) or a non-JSON reply must NEVER
+        # dump raw text at the user — guard for completeness first, then show a
+        # clear, actionable message instead of leaking JSON.
         try:
+            if not _setup_response_looks_complete(payload):
+                raise _json.JSONDecodeError(
+                    "response appears truncated or non-JSON", (payload or "").strip() or " ", 0)
             data = json.loads(payload)
             analysis = str(data.get("analysis", ""))
             changes: list = data.get("changes", [])
@@ -1239,13 +1215,17 @@ class SetupBuilderMixin:
             _eng_validation_errors: list = data.get("engineering_validation_errors", [])
             _diagnosis: dict = data.get("diagnosis") or {}
         except (_json.JSONDecodeError, AttributeError):
-            # Fallback: display raw text, no changes section
-            if _violation_banner:
-                self._setup_result_text.setHtml(
-                    _violation_banner
-                    + f"<pre style='color:#E0E0E0; white-space:pre-wrap;'>{payload}</pre>")
-            else:
-                self._setup_result_text.setPlainText(payload)
+            # Friendly fallback — never surface raw JSON to the user.
+            _err_html = (
+                "<div style='background:#2A1A1A; border:1px solid #C0453B; "
+                "border-radius:4px; padding:10px; color:#E8A9A3;'>"
+                "<b style='color:#E86A5E;'>Couldn't read the setup analysis</b><br>"
+                "The AI response looks incomplete — it was likely cut off. "
+                "Click <b>Analyse &amp; Get Setup Fix</b> again to retry. "
+                "If it keeps happening, shorten the driver-feeling text and try once more."
+                "</div>"
+            )
+            self._setup_result_text.setHtml(_violation_banner + _err_html)
             if hasattr(self, "_btn_apply_ai_setup"):
                 self._btn_apply_ai_setup.setVisible(False)
             return
@@ -1370,18 +1350,15 @@ class SetupBuilderMixin:
         if config_id:
             try:
                 from data.setup_history import save_entry
-                # Use the labels snapshot captured from the controls before they
-                # were reset.  These reflect what the user rated on the PREVIOUS
-                # result (or the first-ever run defaults if this is the first result).
-                # driver_feedback: prefer the feeling text; fall back to rating word.
-                _hist_feedback = feeling or _prev_rating_text or ""
+                # Subjective labels (liked/hated/applied) are no longer written
+                # from here — that signal now comes from the Practice Review
+                # per-run rating. Still record the feeling text for context.
                 save_entry(config_id, car, track, {
                     "type": entry_type,
                     "feeling": feeling or "",
                     "analysis": analysis,
                     "changes": changes,
-                }, labels=_prev_hist_labels if _prev_hist_labels else None,
-                   driver_feedback=_hist_feedback)
+                }, driver_feedback=feeling or "")
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 

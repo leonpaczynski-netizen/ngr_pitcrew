@@ -1061,7 +1061,7 @@ class DrivingAdvisor:
         )
         _track_da = self._config.get("strategy", {}).get("track", "")
         try:
-            _response_text = call_api(prompt, api_key, max_tokens=1500,
+            _response_text = call_api(prompt, api_key, max_tokens=2500,
                                       feature="Combined Setup",
                                       structured_payload={"lap_count": len(recent),
                                                           "car": car_name,
@@ -1327,9 +1327,31 @@ class DrivingAdvisor:
                     val = row.get(field, "")
                     if val and val != "neutral":
                         parts.append(f"{field.replace('_', ' ')}: {val}")
-                free = (row.get("free_text") or "").strip()
-                if free:
-                    parts.append(f'"{free}"')
+                # Column is 'notes' (the old 'free_text' key never existed, so
+                # this text was silently dropped from the prompt before the fix).
+                notes = (row.get("notes") or "").strip()
+                if notes:
+                    parts.append(f'"{notes}"')
+                # Subjective rating, moved here from the Setup Builder. Annotate
+                # with whether the setup was actually driven (derived from lap
+                # tags) so the AI weighs applied feedback more heavily.
+                rating = (row.get("rating") or "").strip().lower()
+                if rating in ("liked", "hated"):
+                    setup_id = int(row.get("setup_id") or 0)
+                    applied_note = ""
+                    if setup_id:
+                        try:
+                            n = self._db.get_lap_count_for_setup(setup_id)
+                        except Exception:
+                            n = 0
+                        if n > 0:
+                            applied_note = f" (applied — driven {n} lap{'s' if n != 1 else ''})"
+                    if rating == "liked":
+                        parts.append(
+                            f"DRIVER LIKED this setup{applied_note} — prefer keeping changes like these.")
+                    else:
+                        parts.append(
+                            f"DRIVER HATED this setup{applied_note} — do not repeat these changes.")
                 if parts:
                     lines.append("- " + ", ".join(parts))
             return "\n".join(lines) if len(lines) > 1 else ""

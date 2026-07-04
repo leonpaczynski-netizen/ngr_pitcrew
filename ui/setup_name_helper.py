@@ -9,6 +9,20 @@ from __future__ import annotations
 import re
 
 
+def setup_display_label(s: dict) -> str:
+    """Return the user-facing name for a saved setup.
+
+    The user's setup name is stored in ``setup_label`` (e.g. "R NGR Porsche
+    Cup Rd7 2"); the legacy ``name`` field actually holds the *car* name. Any
+    place that shows a setup to the user must prefer ``setup_label`` so the
+    displayed name matches what was typed in the Setup Builder. Falls back to
+    ``name`` (then empty) for pre-label records.
+    """
+    if not isinstance(s, dict):
+        return ""
+    return (s.get("setup_label") or s.get("name") or "").strip()
+
+
 def build_setup_name(prefix: str, event_name: str, n: int) -> str:
     """Build the structured setup name, e.g. 'Q NGR Enduro Rd1 3'."""
     return f"{prefix} {event_name} {n}"
