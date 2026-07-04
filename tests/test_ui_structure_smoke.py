@@ -103,3 +103,56 @@ def test_guidance_helpers_exist(window):
     # Per-tab header helper + the folded-in guide reference widget.
     assert callable(getattr(window, "_tab_intro_header", None))
     assert callable(getattr(window, "_build_guide_reference_widget", None))
+
+
+class _WheelEvt:
+    """Stand-in for a QWheelEvent — only .type()/.ignore() are used."""
+    def __init__(self):
+        from PyQt6.QtCore import QEvent
+        self._t = QEvent.Type.Wheel
+        self.ignored = False
+
+    def type(self):
+        return self._t
+
+    def ignore(self):
+        self.ignored = True
+
+
+def test_wheel_filter_consumes_wheel_on_spin_and_combo(qapp):
+    # UAT: scrolling must not change spin/combo values.
+    from ui.dashboard import _NoWheelFilter
+    from PyQt6.QtWidgets import QSpinBox, QDoubleSpinBox, QComboBox
+    f = _NoWheelFilter()
+    for widget in (QSpinBox(), QDoubleSpinBox(), QComboBox()):
+        ev = _WheelEvt()
+        assert f.eventFilter(widget, ev) is True   # consumed → value untouched
+        assert ev.ignored is True
+
+
+def test_wheel_filter_passes_wheel_on_other_widgets(qapp):
+    from ui.dashboard import _NoWheelFilter
+    from PyQt6.QtWidgets import QLabel, QScrollArea
+    f = _NoWheelFilter()
+    for widget in (QLabel("x"), QScrollArea()):
+        # Non-spin/combo widgets keep normal wheel behaviour (e.g. page scroll).
+        assert f.eventFilter(widget, _WheelEvt()) is False
+
+
+def test_wheel_filter_installed_on_window(window):
+    assert hasattr(window, "_no_wheel_filter")
+
+
+def test_loading_a_setup_updates_home_setup_context(window):
+    # UAT: loading a saved setup must register on the Home Setup Brain card,
+    # which reads _last_setup_context. Loading previously left it stale.
+    window._last_setup_context = None
+    window._saved_setups = [{
+        "name": "Porsche 911 RSR", "car": "Porsche 911 RSR",
+        "setup_label": "R Smoke 1", "setup_type": "Race Setup",
+        "track": "Fuji", "setup_id": 1,
+    }]
+    window._refresh_setup_combo()
+    window._setup_load_combo.setCurrentIndex(1)  # index 0 is the placeholder
+    window._setup_load_selected()
+    assert window._last_setup_context is not None

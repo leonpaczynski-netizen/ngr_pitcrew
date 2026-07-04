@@ -135,26 +135,17 @@ class SetupBuilderMixin:
                 "set Min Weight and Max Power, then Build Setup with AI — or "
                 "describe a handling issue and click Analyse."))
 
-        # ── Tab-level "Live Session Mode" row ─────────────────────────────────
-        # self._setup_type stays on self (required by main.py + tests).
-        # It represents which setup type is active in the current LIVE session
-        # (used for shift-RPM threshold selection in on_packet).  It is NOT a
-        # form-selector — both forms are always visible side-by-side.
+        # self._setup_type stays on self (required by main.py + tests). It picks
+        # which shift-RPM threshold the live beep uses during Practice telemetry.
+        # It is NOT a form-selector — both forms are always visible side-by-side —
+        # so it lives in the Shift RPM box below (next to the two RPM values it
+        # chooses between) rather than as a prominent row at the top of the tab.
         self._setup_type = QComboBox()
         self._setup_type.addItems(["Race Setup", "Qualifying Setup"])
         self._setup_type.setToolTip(
-            "Live session mode — controls which shift-RPM threshold is used during "
-            "Practice telemetry.\n"
+            "Which shift-RPM threshold the live beep uses during Practice telemetry.\n"
             "Race Setup: use race shift RPM.  Qualifying Setup: use qualifying shift RPM."
         )
-        live_mode_row = QHBoxLayout()
-        live_mode_row.addWidget(
-            QLabel("Live Session Mode:", styleSheet="color: #E0E0E0; font-weight: bold;")
-        )
-        live_mode_row.addWidget(self._setup_type)
-        live_mode_row.addStretch()
-        outer_layout.addLayout(live_mode_row)
-
         # Connect session-type signals (required by tests + main.py sync)
         self._setup_type.currentTextChanged.connect(self._on_setup_type_changed)
         self._on_setup_type_changed(self._setup_type.currentText())
@@ -267,7 +258,7 @@ class SetupBuilderMixin:
         splitter.addWidget(race_scroll)
         splitter.addWidget(qual_scroll)
         splitter.setSizes([1, 1])  # equal initial split
-        outer_layout.addWidget(splitter)
+        outer_layout.addWidget(splitter, 1)  # the splitter takes all extra height
 
         # ── Shift RPM display (shared, below the splitter) ────────────────────
         _sb = self._config.get("shift_beep", {})
@@ -298,6 +289,9 @@ class SetupBuilderMixin:
         _set_spin_readonly(self._spin_shift_rpm_race, True)
         shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
         shift_rpm_form.addRow("Race:", self._spin_shift_rpm_race)
+        # The live shift-beep threshold selector (formerly the top-of-tab "Live
+        # Session Mode" row) sits here next to the two RPM values it chooses.
+        shift_rpm_form.addRow("Live beep uses:", self._setup_type)
         outer_layout.addWidget(shift_rpm_box)
 
         self._refresh_setup_combo()
@@ -617,6 +611,7 @@ class SetupBuilderMixin:
         real_idx = idx - 1
         if 0 <= real_idx < len(self._saved_setups):
             form.fill_setup_fields(self._saved_setups[real_idx])
+            self._after_setup_load()
 
     def _setup_analyse_ai_for_form(self, form: "SetupFormWidget") -> None:
         """Run the AI setup-analysis for ``form`` and put results in that form's result text."""
@@ -1003,12 +998,27 @@ class SetupBuilderMixin:
                 self._lbl_setup_save_status.setText("") if hasattr(self, "_lbl_setup_save_status") else None
             ))
 
+    def _after_setup_load(self) -> None:
+        """Refresh the Home Setup card after a setup is loaded into a form.
+
+        Loading only filled the form widgets; unlike Save and AI-apply it never
+        rebuilt the canonical SetupContext (`_last_setup_context`) or refreshed
+        Home, so the Home 'Setup Brain' card stayed stale after a load.
+        """
+        try:
+            self._last_setup_context = self._build_setup_context()
+        except Exception:
+            pass
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _setup_load_selected(self) -> None:
         idx = self._setup_load_combo.currentIndex()
         # index 0 is the placeholder; real setups start at index 1
         real_idx = idx - 1
         if 0 <= real_idx < len(self._saved_setups):
             self._fill_setup_fields(self._saved_setups[real_idx])
+            self._after_setup_load()
 
     def _setup_analyse_ai(self) -> None:
         if self._driving_advisor is None:

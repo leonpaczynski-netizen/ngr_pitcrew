@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional, Callable
 
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QEvent, QPointF, QRectF
 from PyQt6.QtGui import (
     QColor, QPalette, QFont, QCloseEvent, QPixmap,
     QPainter, QPen, QBrush, QPolygonF,
@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QSlider, QSpinBox, QDoubleSpinBox, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QFileDialog, QScrollArea, QComboBox, QSplitter, QTextEdit,
     QStatusBar, QFrame, QSizePolicy, QDialog, QStackedWidget, QListWidget,
-    QListWidgetItem, QPlainTextEdit, QMessageBox,
+    QListWidgetItem, QPlainTextEdit, QMessageBox, QAbstractSpinBox,
 )
 
 from telemetry.packet import (
@@ -255,6 +255,23 @@ Also accepts full names: Soft, Medium, Hard, Inter, Wet, Racing Soft, etc.</p>
 # telemetry/parser.py and docs/.
 
 
+class _NoWheelFilter(QObject):
+    """App-wide event filter that stops the mouse wheel from changing spin box
+    and combo box values. UAT request: values must change only by typing or by
+    clicking the spin buttons, never by an accidental scroll over the control.
+
+    The wheel event is consumed on the control so its value is untouched; scroll
+    over the surrounding page (labels, gaps, group boxes) still works normally.
+    """
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt signature)
+        if (event.type() == QEvent.Type.Wheel
+                and isinstance(obj, (QAbstractSpinBox, QComboBox))):
+            event.ignore()
+            return True
+        return False
+
+
 class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     _TUNING_CATEGORIES: list[tuple[str, str]] = [
@@ -316,6 +333,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         udp_listener=None,
     ) -> None:
         super().__init__()
+        # Stop the mouse wheel from changing spin/combo values anywhere in the
+        # app (values change only by typing or the spin buttons). Kept as an
+        # attribute so the filter is not garbage-collected.
+        self._no_wheel_filter = _NoWheelFilter(self)
+        _app = QApplication.instance()
+        if _app is not None:
+            _app.installEventFilter(self._no_wheel_filter)
         self._config          = config
         self._logger          = logger
         self._announcer       = announcer
@@ -1804,6 +1828,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         band.setStyleSheet(
             f"background: {_DARK_CARD}; border-left: 4px solid #2EA043;"
             " border-radius: 6px;")
+        # Hug the content — never let a parent layout stretch the band tall.
+        band.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         lay = QVBoxLayout(band)
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(2)
