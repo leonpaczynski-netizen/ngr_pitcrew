@@ -1,6 +1,6 @@
-# Rule-First Setup Brain — Architecture (Group 42)
+# Rule-First Setup Brain — Architecture (Group 42 + Group 43)
 
-> Author: Rule-First Setup Brain sprint · Date: 2026-07-05
+> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43)
 > Branch: `ofr2-quali-race-disciplines` (built on top of Group 41)
 >
 > Companion docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 changelog),
@@ -105,8 +105,10 @@ serialisable and inspectable — a rule is data, not code.
 * **Pack A (A1–A8) — safety invariants.** These protect fields and block unsafe
   deltas. Pack A is why the engine can guarantee it will not, for example, cut a
   field a driver protects or exceed a safe delta on a sensitive setting.
+  **Group 43 re-keyed A2, A3, A4, A5 to fire on real diagnosis signals** (see §3a).
 * **Pack B (B1–B6) — driver-style adaptation.** These rank candidate changes and
   contraindicate against the driver profile (§5).
+  **Group 43 re-keyed B5** to fire on real diagnosis signals + real gearbox gate (see §3a).
 * **Pack C/D — handling-phase starter set (8 rules):**
   `C1_entry_lsd_decel`, `C2_entry_brake_bias`, `C3_mid_arb_rear`,
   `C4_mid_rear_aero`, `C5_exit_lsd_accel`, `C6_exit_rear_aero`,
@@ -114,6 +116,67 @@ serialisable and inspectable — a rule is data, not code.
   handling phases. **The remaining per-setting Pack C rules are deferred** — the
   catalogue is deliberately **extensible via `register_pack`**, so additional
   packs can be registered without touching the engine.
+
+---
+
+## 3a. Group 43 — re-keyed rules (real diagnosis signals)
+
+Group 42 shipped with A2/A3/A4/A5/B5 wired to fictional `*_evidence` or
+`"too_short"` keys that `build_setup_diagnosis` never emits.  Group 43 re-keys
+all five to the **actual signals** the diagnosis dict produces.
+
+### A2 — protect `aero_rear`
+Preconditions (re-keyed, Group 43): fires when
+`driver_feel_flags.rear_loose_on_exit` is True **OR**
+`driver_feel_flags.snap_oversteer_exit` is True (via `__any__` list form).
+Firing yields a `rejected_candidate` for `aero_rear` — rear downforce
+must not be cut under instability.
+No distinct high-speed-oversteer diagnosis signal exists in the current output;
+that leg is omitted (deferred).
+
+### A3/A4 — conditional protect `ride_height_front` / `ride_height_rear`
+Precondition (unchanged): `bottoming_band == "minor"`.
+Contraindications (re-keyed, Group 43): suppress the protection when
+`bottoming_confidence.band` ∈ `{"consider","required"}` (via
+`__in_consider_required__`) **OR** `compliance_priority` is True.
+When the protection fires the field is added to `protected_fields`, preventing
+any other rule from proposing a ride-height increase.
+When a contraindication matches, the protection is suppressed and C8 may
+propose the raise.
+No real `aero_platform_evidence` key exists; that leg is omitted (deferred).
+
+### A5 — protect `brake_bias`
+Preconditions (re-keyed, Group 43): fires when
+`driver_feel_flags.braking_instability` is True **OR** `avg_lockups > 0`
+(via `__any__` truthiness — 0/0.0 is falsy, so no fire on clean laps).
+Firing yields a `rejected_candidate` for `brake_bias` (rearward move blocked).
+`driver_feel_flags.braking_instability` is the available proxy for both entry
+and rear-brake instability; a distinct entry-oversteer signal is deferred.
+
+### B5 — propose `final_drive` (gear_too_short path)
+Preconditions (re-keyed, Group 43): fires when **both** of the following match:
+- `gearing_diagnosis_category == "gear_too_short"` (telemetry confirms rev-limiter
+  hits in the top gear on straights)
+- `gearbox_flag == "may_change"` (engineering gate allows gearbox edits;
+  `None` / `"preserve"` / other values do not match this exact precondition)
+
+Delta resolver: `final_drive_down` (returns **−0.05**). Lower final_drive ratio
+number = taller/longer gearing = higher top speed. Direction is correct for
+`gear_too_short`.
+
+Self-consistency: `gear_too_short` is **not** in the engineering validator's
+preserve set `{"insufficient_data", "gear_too_long", "limiter_limited"}`, so
+a `final_drive` change on this diagnosis + `gearbox_flag="may_change"` passes
+the `gearbox_category_mismatch` validator.
+
+### "Build Setup with AI" button — disabled (Group 43)
+The **"Build Setup with AI"** button in the Setup Builder tab is **disabled**
+(frontend parallel change). The reason: the ungated AI path — where AI authors
+a setup without a rule-first baseline — is pending replacement. Since Group 42,
+the AI is **audit-only** and cannot author setup changes. Until the rule-first
+baseline is the stable default path for all setup requests, the "Build" button
+is disabled to prevent the old AI-authoring flow from being reached accidentally.
+The "Analyse" button (rule-first path) remains active.
 
 ---
 
@@ -340,13 +403,29 @@ driver can always see which is which.
 * **`RuleOutcomeStore` live wiring + cross-session persistence.** The learning
   hook is implemented and tested but not wired live
   (`rule_outcome_store=None`) and does not persist across sessions yet.
+  `RuleOutcomeStore` live wiring and cross-session persistence are deferred to
+  a future sprint.
+* **Individual `gear_1..gear_6` proposing rules.** B5 now proposes `final_drive`
+  on `gear_too_short`; rules for individual `gear_1..gear_6` slots are
+  deferred. The resolver foundation (`final_drive_down` / `final_drive_up`) is
+  in place and extensible via `register_pack`.
+* **Tyre signals.** `tyre`-compound / tyre-wear / fuel signals are not read by
+  any rule (deferred; no dedicated tyre telemetry diagnosis keys exist today).
+* **`applies_session` / `applies_drivetrain` scope enforcement.** These fields
+  are set on rules but the engine does not yet filter by them at runtime
+  (deferred; the fields are ready for the engine to honour once the scope
+  enforcement work is scoped).
+* **Voice path.** The voice path is constrained to narration-only; a full
+  rule-first rebuild of the voice path so it too is authored by the rule engine
+  is deferred.
 * **Remaining per-setting Pack C rules.** Pack C/D is a handling-phase starter
   set (C1–C8); more per-setting rules are deferred. The catalogue is extensible
   via `register_pack`.
 * **Full DB migration off the JSON blob.** The 8 v11 columns are populated, but
   `recommendation_text` is still the primary store.
-* **Full voice-path rule-first rebuild.** The voice path is constrained to
-  narration-only for now.
+* **No car-specific / drivetrain-specific rule packs.** Currently all rules
+  default to `applies_drivetrain=any` / `applies_car_class=any` (deferred;
+  per-car specificity once more data is in).
 * **Pre-existing track-modelling failures.** The 8 frozen-allowlist guard tests
   (`ui/track_modelling_ui.py::_tm_restore_last_track`) are unrelated
   track-modelling tech debt and remain for the track-modelling owner.
@@ -363,6 +442,13 @@ rewritten tests (`test_group38` TestRegenerateOnceOrchestration, `test_group40`
 TestAC9DeterministicFallback, `test_group41` ×2, `test_group27` ×1). All green,
 zero new regressions. See `MASTER_TESTING_REGISTER.md` (Rule-First Setup Brain
 (Group 42)) for the per-file coverage table.
+
+**Group 43 note:** The B5 re-key changes the precondition from `gearbox_flag="too_short"`
+to `gearing_diagnosis_category="gear_too_short" + gearbox_flag="may_change"`.
+The Group 42 `TestB5GearingTooShortRule` tests inject the old `gearbox_flag="too_short"` value
+and will need updating by the test-verifier to inject both new keys instead.
+All Group 42 tests for A2/A3/A4/A5 that relied on the fictional `*_evidence` keys will
+now correctly fire (or correctly not fire) on the real diagnosis signals.
 
 **Test-run note (Windows / Python 3.14):** run the suite in halves to avoid a
 flaky native PyQt teardown segfault — an environmental test-isolation artifact,

@@ -1,4 +1,4 @@
-"""Setup rule knowledge base — Group 42: Rule-First Setup Brain.
+"""Setup rule knowledge base — Group 43: Rule-First Setup Brain Completion.
 
 Defines the canonical rule catalogue (Packs A, B, C/D) consumed by
 setup_rule_engine.run_rule_engine.
@@ -13,10 +13,40 @@ Design principles
 - Architecture is extensible via register_pack() — third-party packs can
   add rules without touching this file.
 
+Group 43 changes
+----------------
+- A2 re-keyed to real diagnosis signals: driver_feel_flags.rear_loose_on_exit
+  OR driver_feel_flags.snap_oversteer_exit (was fictional *_evidence keys).
+- A3/A4 re-keyed: contraindications now use bottoming_confidence.band in
+  {"consider","required"} OR compliance_priority=True (was fictional *_evidence keys).
+- A5 re-keyed: preconditions now driver_feel_flags.braking_instability OR
+  avg_lockups>0 via __any__ truthiness (was fictional *_evidence keys).
+- B5 re-keyed: preconditions now gearing_diagnosis_category=="gear_too_short"
+  AND gearbox_flag=="may_change" (was fictional "too_short" enum value).
+- Delta resolvers renamed for clarity: _delta_final_drive_down (returns -0.05,
+  numeric effect: lower ratio = taller/longer gearing = higher top speed) and
+  _delta_final_drive_up (returns +0.05, foundation only — no firing rule this
+  sprint). Legacy key "shorten_final_drive" aliased for backwards compatibility.
+- "Build Setup with AI" button is DISABLED in the UI (frontend parallel change)
+  because the ungated AI path is pending a rule-first baseline; the AI is now
+  audit-only and cannot author setup changes.
+
 Deferred
 --------
-- Remaining per-setting Pack C rules for every diagnosis key (only a starter
-  set is defined here; the architecture supports unlimited growth).
+- Individual gear_1..gear_6 proposing rules: deferred (foundation in place via
+  _delta_final_drive_down/_delta_final_drive_up; per-gear rules need more
+  diagnosis signal resolution).
+- RuleOutcomeStore live wiring and cross-session persistence: deferred
+  (implemented and tested in isolation, ready to activate once persistence
+  is in place).
+- Tyre-compound / tyre-wear / fuel signals: not read by any rule (deferred;
+  no dedicated tyre telemetry diagnosis keys exist today).
+- applies_session / applies_drivetrain scope enforcement: not enforced by the
+  engine (deferred; scope fields are set on rules but the engine does not yet
+  filter by them at runtime).
+- Voice path: narration-only (deferred; a full rule-first rebuild of the voice
+  path so it too is authored by the rule engine is deferred).
+- No car-specific / drivetrain-specific rule packs (deferred).
 - Per-car DrivetrainType / CarClass scoping (currently all rules default to
   'any' for those axes — add specificity once more data is in).
 """
@@ -235,16 +265,36 @@ def _delta_brake_bias_front(setup: dict, ranges: dict, diagnosis: dict) -> float
     return -0.5
 
 
-def _delta_shorten_final_drive(setup: dict, ranges: dict, diagnosis: dict) -> float:
-    """Lengthen gearing by decreasing the final drive ratio.
+def _delta_final_drive_down(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Decrease the final_drive ratio value by 0.05.
 
-    In GT7 a lower final_drive value means a longer (taller) ratio, which
-    raises top speed and reduces acceleration.  B5 fires when gearing is too
-    short (rev limiter hit on straights) so we apply a negative delta to
-    lengthen the ratio.  The magnitude -0.05 is a conservative one-step
-    change that moves the final drive noticeably without being aggressive.
+    Numeric effect: lower final_drive ratio number.
+    Physical consequence: lower ratio = taller/longer gearing = higher top speed.
+    Used by B5 (gear_too_short): lengthen gearing to stop bouncing off the rev
+    limiter on straights.  The magnitude 0.05 is a conservative one-step change.
     """
     return -0.05
+
+
+def _delta_final_drive_up(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Increase the final_drive ratio value by 0.05.
+
+    Numeric effect: higher final_drive ratio number.
+    Physical consequence: higher ratio = shorter/lower gearing = more acceleration,
+    lower top speed.
+    Foundation only — no firing rule this sprint.  A future gear_too_long rule
+    (or a traction-deficit-on-exit rule) will point delta_fn at this resolver.
+    """
+    return 0.05
+
+
+def _delta_shorten_final_drive(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Legacy alias for _delta_final_drive_down — kept for backwards compatibility.
+
+    Any existing reference to the 'shorten_final_drive' key in _DELTA_RESOLVERS
+    continues to work.  New rules should use 'final_drive_down' instead.
+    """
+    return _delta_final_drive_down(setup, ranges, diagnosis)
 
 
 def _delta_noop(setup: dict, ranges: dict, diagnosis: dict) -> float:
@@ -270,7 +320,9 @@ _DELTA_RESOLVERS: dict[str, object] = {
     "decrease_front_arb": _delta_decrease_front_arb,
     "brake_bias_rear": _delta_brake_bias_rear,
     "brake_bias_front": _delta_brake_bias_front,
-    "shorten_final_drive": _delta_shorten_final_drive,
+    "final_drive_down": _delta_final_drive_down,     # preferred key (Group 43+)
+    "final_drive_up": _delta_final_drive_up,         # foundation only — no firing rule this sprint
+    "shorten_final_drive": _delta_shorten_final_drive,  # legacy alias for final_drive_down
     "noop": _delta_noop,
 }
 
@@ -344,22 +396,25 @@ _PACK_A: list[SetupRule] = [
         rule_id="A2",
         pack="A",
         phase=RulePhase.safety,
+        # Re-keyed (Group 43): fire on REAL diagnosis signals from build_setup_diagnosis.
+        # __any__ form: fires if EITHER flag is truthy (OR semantics).
+        # Note: no distinct high-speed-oversteer diagnosis signal exists in the
+        # current diagnosis output, so that leg is omitted (deferred).
         preconditions={
             "__any__": [
-                "rear_instability_evidence",
-                "snap_exit_evidence",
-                "high_speed_oversteer_evidence",
+                "driver_feel_flags.rear_loose_on_exit",
+                "driver_feel_flags.snap_oversteer_exit",
             ]
         },
         contraindications={},
         field="aero_rear",
         delta_fn="decrease_rear_aero",
-        title="Rear downforce cut — blocked under rear instability",
-        symptom="Cutting rear aero during rear instability / snap exit / high-speed oversteer.",
+        title="Rear downforce cut — blocked under rear instability / snap exit",
+        symptom="Cutting rear aero during rear loose on exit or snap oversteer exit.",
         rationale=(
             "Rear aero is a traction and stability tool first. Cutting it while "
-            "rear instability, snap exit, or high-speed oversteer is present "
-            "is a hard safety invariant."
+            "rear instability or snap exit is present is a hard safety invariant. "
+            "High-speed-oversteer guard deferred (no distinct diagnosis signal exists)."
         ),
         risk=RiskLevel.high,
         base_confidence=ConfidenceLevel.high,
@@ -369,23 +424,29 @@ _PACK_A: list[SetupRule] = [
         rule_id="A3",
         pack="A",
         phase=RulePhase.safety,
+        # Re-keyed (Group 43): precondition unchanged (bottoming_band=="minor").
+        # Contraindications now use REAL diagnosis keys:
+        #   - bottoming_confidence.band in {"consider","required"} → __in_consider_required__
+        #   - compliance_priority=True
+        # The aero-platform leg is omitted (no real aero_platform_evidence key; deferred).
+        # Logic: precondition fires (minor bottoming) → field protected UNLESS
+        # a contraindication matches (in which case protection is suppressed and
+        # another rule may propose the raise).
         preconditions={"bottoming_band": "minor"},
         contraindications={
-            "__any__": [
-                "bottoming_evidence",
-                "kerb_evidence",
-                "compression_evidence",
-                "aero_platform_evidence",
-            ]
+            "bottoming_confidence.band": "__in_consider_required__",
+            "compliance_priority": True,
+            # Note: aero_platform_evidence leg removed — no real key; deferred.
         },
         field="ride_height_front",
         delta_fn="raise_front_rh",
-        title="Front ride-height raise — blocked without evidence",
-        symptom="Raising front ride-height without bottoming/kerb/compression/aero-platform evidence.",
+        title="Front ride-height raise — blocked for minor bottoming without escalated confidence",
+        symptom="Raising front ride-height when bottoming is only minor with no escalated bottoming confidence.",
         rationale=(
-            "Minor bottoming does not justify a ride-height increase. "
-            "Raising ride-height without evidence increases CoG and reduces "
-            "aero efficiency unnecessarily."
+            "Minor bottoming does not justify a ride-height increase unless "
+            "bottoming_confidence is 'consider' or 'required', or compliance_priority "
+            "is active (which unlocks C8). Raising ride-height without escalated "
+            "evidence increases CoG and reduces aero efficiency unnecessarily."
         ),
         risk=RiskLevel.med,
         base_confidence=ConfidenceLevel.high,
@@ -395,22 +456,23 @@ _PACK_A: list[SetupRule] = [
         rule_id="A4",
         pack="A",
         phase=RulePhase.safety,
+        # Re-keyed (Group 43): same approach as A3 — identical contraindications.
+        # bottoming_confidence.band in {"consider","required"} OR compliance_priority=True
+        # suppresses the protection, allowing C8 to propose the rear ride-height raise.
         preconditions={"bottoming_band": "minor"},
         contraindications={
-            "__any__": [
-                "bottoming_evidence",
-                "kerb_evidence",
-                "compression_evidence",
-                "aero_platform_evidence",
-            ]
+            "bottoming_confidence.band": "__in_consider_required__",
+            "compliance_priority": True,
+            # Note: aero_platform_evidence leg removed — no real key; deferred.
         },
         field="ride_height_rear",
         delta_fn="raise_rear_rh",
-        title="Rear ride-height raise — blocked without evidence",
-        symptom="Raising rear ride-height without bottoming/kerb/compression/aero-platform evidence.",
+        title="Rear ride-height raise — blocked for minor bottoming without escalated confidence",
+        symptom="Raising rear ride-height when bottoming is only minor with no escalated bottoming confidence.",
         rationale=(
             "Same principle as A3 applied to the rear. "
-            "Premature rear ride-height increases upset rear aero platform."
+            "Premature rear ride-height increases upset rear aero platform. "
+            "Suppressed when bottoming_confidence escalates or compliance_priority is active."
         ),
         risk=RiskLevel.med,
         base_confidence=ConfidenceLevel.high,
@@ -420,21 +482,29 @@ _PACK_A: list[SetupRule] = [
         rule_id="A5",
         pack="A",
         phase=RulePhase.safety,
+        # Re-keyed (Group 43): fire on REAL diagnosis signals from build_setup_diagnosis.
+        # __any__ form: fires if EITHER condition is truthy (OR semantics).
+        #   - driver_feel_flags.braking_instability: True (driver-reported braking issue)
+        #   - avg_lockups: non-zero (telemetry-confirmed lock-ups; 0/0.0 is falsy → no fire)
+        # Note: driver_feel_flags.braking_instability is the available proxy for both
+        # entry instability and rear-brake instability. A distinct entry-oversteer
+        # signal (separate from braking_instability) is deferred — no dedicated key exists.
         preconditions={
             "__any__": [
-                "entry_oversteer_evidence",
-                "rear_brake_instability_evidence",
-                "lockup_evidence",
+                "driver_feel_flags.braking_instability",
+                "avg_lockups",
             ]
         },
         contraindications={},
         field="brake_bias",
         delta_fn="brake_bias_rear",
-        title="Brake bias rearward — blocked under entry oversteer / rear instability",
-        symptom="Moving brake bias rearward during entry oversteer, rear brake instability, or lock-ups.",
+        title="Brake bias rearward — blocked under braking instability / lock-ups",
+        symptom="Moving brake bias rearward during braking instability or confirmed lock-ups.",
         rationale=(
-            "Rearward brake bias during rear instability/entry oversteer amplifies "
-            "the problem. This is an absolute safety invariant."
+            "Rearward brake bias during braking instability or lock-ups amplifies "
+            "the problem. This is an absolute safety invariant. "
+            "driver_feel_flags.braking_instability covers entry/rear-brake instability; "
+            "avg_lockups provides telemetry confirmation."
         ),
         risk=RiskLevel.high,
         base_confidence=ConfidenceLevel.high,
@@ -596,18 +666,34 @@ _PACK_B: list[SetupRule] = [
         rule_id="B5",
         pack="B",
         phase=RulePhase.straight,
+        # Re-keyed (Group 43): fire on REAL diagnosis signals from build_setup_diagnosis.
+        # Two exact-match preconditions (ALL must match — AND semantics):
+        #   - gearing_diagnosis_category == "gear_too_short": telemetry confirms rev-limiter
+        #     hits in top gear indicating the ratio is too short for the track's straights.
+        #   - gearbox_flag == "may_change": engineering validation allows gearbox edits.
+        #     None / "preserve" will not match this exact precondition, so B5 cannot fire
+        #     when the gearbox is locked (no __not_equal__ token exists in the engine;
+        #     the exact-match precondition alone handles None/preserve/other values).
+        # Self-consistency: gear_too_short is NOT in the validator's preserve set
+        # {insufficient_data, gear_too_long, limiter_limited}, so a final_drive change
+        # on gear_too_short + may_change passes the gearbox_category_mismatch validator.
+        # Delta: final_drive_down returns -0.05 (lower ratio number = taller/longer gearing
+        # = higher top speed), which is the correct direction to fix gear_too_short.
         preconditions={
-            "gearbox_flag": "too_short",
+            "gearing_diagnosis_category": "gear_too_short",
+            "gearbox_flag": "may_change",
         },
         contraindications={},
         field="final_drive",
-        delta_fn="shorten_final_drive",
-        title="Lengthen gearing — too short on straights",
-        symptom="Rev limiter hit on straights — gearing too short.",
+        delta_fn="final_drive_down",
+        title="Lengthen gearing — gear too short on straights",
+        symptom="Rev limiter hit on straights — gearing too short, top speed limited.",
         rationale=(
             "Driver values lap speed over raw acceleration. "
-            "Lengthening the final drive extracts more top-end speed "
-            "when the car is bouncing off the rev limiter."
+            "Decreasing the final_drive ratio (final_drive_down, delta=-0.05) "
+            "lengthens the gearing, raising top speed. "
+            "Only fires when telemetry diagnosis confirms gear_too_short AND "
+            "the engineering gate allows gearbox changes (gearbox_flag=may_change)."
         ),
         risk=RiskLevel.low,
         base_confidence=ConfidenceLevel.med,
