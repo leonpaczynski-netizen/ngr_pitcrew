@@ -33,6 +33,7 @@ from ui.track_modelling_vm import (
     format_segment_row       as _format_seg_row,
     format_review_summary    as _format_review_summary,
     format_resolver_summary  as _format_resolver_summary,
+    format_next_step               as _format_next_step,
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
     format_build_failure_diagnostics as _format_build_diag,
@@ -365,9 +366,16 @@ class TrackModellingMixin:
         self._tm_btn_ai_corner_verify.setStyleSheet(_btn_style)
         self._tm_btn_ai_corner_verify.setEnabled(False)
         self._tm_btn_ai_corner_verify.setToolTip(
-            "Run AI verification of corner assignments against the station map"
+            "Optional: ask the AI to sanity-check the detected corner positions "
+            "against the racing line. Confirmed corners are marked AI-verified; "
+            "the result appears in the status line just below."
         )
         cal_layout.addWidget(self._tm_btn_ai_corner_verify)
+        # Persistent AI-verify status (the run used to only flash a 5s status-bar
+        # message, so users couldn't tell if it did anything).
+        self._tm_lbl_ai_verify_status = QLabel("AI corner verify: not run yet")
+        self._tm_lbl_ai_verify_status.setStyleSheet("color: #888; font-size: 10px;")
+        cal_layout.addWidget(self._tm_lbl_ai_verify_status)
 
         self._tm_btn_detect_segs = QPushButton("Detect Segments")
         self._tm_btn_detect_segs.setStyleSheet(_btn_style)
@@ -602,6 +610,15 @@ class TrackModellingMixin:
         _rs_val_s = "color: #AAE4AA; font-size: 11px;"
         _rs_key_s = f"color: {_TEXT}; font-size: 11px;"
 
+        # Prominent "what to do next" line so a track that has good calibration
+        # laps but no reviewed model (the Fuji UAT case) tells the user exactly
+        # how to promote it to AI-ready instead of silently reading "seed only".
+        self._tm_rs_next_step = QLabel("")
+        self._tm_rs_next_step.setStyleSheet(
+            "color: #F5C542; font-size: 11px; font-weight: bold; padding: 2px 0 6px 0;")
+        self._tm_rs_next_step.setWordWrap(True)
+        resolver_form.addRow(self._tm_rs_next_step)
+
         def _rs_row(label: str, attr_name: str) -> QLabel:
             lbl = QLabel("—")
             lbl.setStyleSheet(_rs_val_s)
@@ -739,6 +756,15 @@ class TrackModellingMixin:
         _tm_align_section_layout = QVBoxLayout(_tm_align_section_grp)
         _tm_align_section_layout.setContentsMargins(6, 12, 6, 6)
         _tm_align_section_layout.setSpacing(6)
+        _tm_seed_geo_help = QLabel(
+            "Optional — not needed for AI-ready (that's section 4). This saves the "
+            "track's coordinate shape, rebuilt from your calibration laps, into the "
+            "reusable track library. Steps: Generate Seed Geometry → Save to Library "
+            "→ Reload Seed. Works from your saved laps, so you don't need to re-drive."
+        )
+        _tm_seed_geo_help.setStyleSheet("color: #8892A0; font-size: 10px;")
+        _tm_seed_geo_help.setWordWrap(True)
+        _tm_align_section_layout.addWidget(_tm_seed_geo_help)
         _tm_align_section_layout.addWidget(seed_geo_grp)
         right_layout.addWidget(_tm_align_section_grp)
 
@@ -748,6 +774,15 @@ class TrackModellingMixin:
         _truth_section_layout = QVBoxLayout(_truth_section_grp)
         _truth_section_layout.setContentsMargins(6, 12, 6, 6)
         _truth_section_layout.setSpacing(6)
+        _tm_truth_help = QLabel(
+            "Read-only. Mirrors what the track library holds for this layout. It stays "
+            "blank (—) until you Save seed geometry in section 5 — the AI-ready model "
+            "from section 4 is stored separately, so an AI-ready track can still show "
+            "nothing here until its geometry is saved to the library."
+        )
+        _tm_truth_help.setStyleSheet("color: #8892A0; font-size: 10px;")
+        _tm_truth_help.setWordWrap(True)
+        _truth_section_layout.addWidget(_tm_truth_help)
 
         truth_grp = QGroupBox("Track Truth / Mapping")
         truth_grp.setStyleSheet(self._group_style())
@@ -814,6 +849,11 @@ class TrackModellingMixin:
         self._tm_seed_build_result: Optional["GeometryBuildResult"] = None   # Group 17V
         self._tm_seed_save_result:  Optional["GeometrySaveResult"]  = None   # Group 17V
         self._tm_seed_geometry_available: bool = False                        # Group 17V
+        # Calibration session rehydrated from persisted laps on layout-select, so
+        # Section 5 (Seed Geometry) works on a previously-modelled track after a
+        # restart without re-driving. None until restored; the LIVE controller
+        # session always takes precedence (see _tm_effective_seed_session).
+        self._tm_restored_session = None
         self._tm_highlight_start_p: float | None = None   # Group 23A — highlight persistence
         self._tm_highlight_end_p:   float | None = None   # Group 23A — highlight persistence
 
@@ -823,6 +863,9 @@ class TrackModellingMixin:
         self._tm_search_btn.clicked.connect(self._tm_do_search)
         self._tm_search_input.returnPressed.connect(self._tm_do_search)
         self._tm_search_results.itemDoubleClicked.connect(self._tm_on_search_result_selected)
+        # Clicking a segment row highlights it on the map (this was never wired,
+        # so selecting a segment did nothing).
+        self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
         return outer
 
@@ -841,9 +884,40 @@ class TrackModellingMixin:
             if result.success:
                 self._tm_populate_location_combo()
                 self._tm_populate_calibration_car()
+                # Restore the last-modelled track so the AI-ready status is visible
+                # on open without the user having to re-select (or re-Accept) it.
+                self._tm_restore_last_track()
         except Exception as exc:
             self._tm_seed_status_lbl.setText(f"Error loading seed: {exc}")
             self._tm_seed_status_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
+
+    def _tm_restore_last_track(self) -> None:
+        """Reselect the last-used track/layout from config on first tab show.
+
+        The reviewed track model persists to disk, but the Track Model Status
+        panel only re-resolves when a track is (re)selected. Nothing restored the
+        selection on startup, so a fully AI-ready track looked un-modelled until
+        the user manually re-selected it (or re-Accepted). Selecting the combos
+        here fires the normal currentIndexChanged handlers, which populate the
+        layout list and run _tm_refresh_resolver — showing AI-ready with no clicks.
+        """
+        strategy = self._config.get("strategy") or {}
+        loc_id = (strategy.get("track_location_id") or "").strip()
+        lay_id = (strategy.get("layout_id") or "").strip()
+        if not loc_id or not lay_id:
+            return
+        # Select the location — this fires _tm_on_location_changed, which rebuilds
+        # the layout combo for this location.
+        loc_idx = self._tm_location_combo.findData(loc_id)
+        if loc_idx < 0:
+            return
+        self._tm_location_combo.setCurrentIndex(loc_idx)
+        # Now select the layout in the freshly-populated combo — this fires
+        # _tm_on_layout_changed, which runs the resolver and loads saved state.
+        lay_idx = self._tm_layout_combo.findData(lay_id)
+        if lay_idx < 0:
+            return
+        self._tm_layout_combo.setCurrentIndex(lay_idx)
 
     def _tm_populate_location_combo(self) -> None:
         if self._tm_seed_result is None:
@@ -899,6 +973,9 @@ class TrackModellingMixin:
         self._tm_try_load_station_map_from_disk(loc_id, lay_id)
         # Group 17P: load previously accepted alignment result if available
         self._tm_try_load_accepted_model(loc_id, lay_id)
+        # Rehydrate a calibration session from persisted laps so Section 5 (Seed
+        # Geometry) is usable after a restart without re-driving calibration.
+        self._tm_try_restore_calibration_session(loc_id, lay_id)
         # Group 18A: refresh Track Truth / Mapping panel
         self._tm_refresh_track_truth_panel()
 
@@ -1207,6 +1284,15 @@ class TrackModellingMixin:
             match_result = _map_match(x, y, z, sm, speed_kph=spd)
             if self._tm_cached_draw_data is None:
                 self._tm_cached_draw_data = _build_map_draw_data(sm, match_result=match_result)
+                # Re-apply any selected-segment highlight so a live-packet rebuild
+                # doesn't wipe it (the "highlight only flashes" bug).
+                if getattr(self, "_tm_highlight_start_p", None) is not None:
+                    import dataclasses as _dc
+                    self._tm_cached_draw_data = _dc.replace(
+                        self._tm_cached_draw_data,
+                        highlight_start_progress=self._tm_highlight_start_p,
+                        highlight_end_progress=self._tm_highlight_end_p,
+                    )
             else:
                 # Only recompute the car dot; full geometry is unchanged
                 if match_result is not None and not match_result.is_pit_likely:
@@ -1867,15 +1953,31 @@ class TrackModellingMixin:
 
         acc_btn = getattr(self, "_tm_btn_accept", None)
         if acc_btn is not None:
-            seed_available = getattr(self, "_tm_seed_geometry_available", False)
-            accept_enabled = states.get("accept", False) and seed_available
+            # Enable on alignment quality alone (good/acceptable match, no
+            # blockers). Two deliberate departures from the old gate:
+            #  - dropped the unrelated `seed_available` requirement (it forced a
+            #    separate "Generate Seed Geometry" workflow), and
+            #  - allow RE-accepting an already-accepted model: an earlier accept
+            #    may not have produced an AI-ready reviewed file, so the user must
+            #    be able to run it again without a full Rebuild/Recalibrate.
+            #    Re-accept is idempotent.
+            _mname = (
+                result.match_status.name
+                if result is not None and hasattr(result.match_status, "name")
+                else ""
+            )
+            accept_enabled = (
+                has_map
+                and result is not None
+                and _mname in ("GOOD_MATCH", "ACCEPTABLE_MATCH")
+                and not result.blockers
+            )
             acc_btn.setEnabled(accept_enabled)
-            if not seed_available:
-                acc_btn.setToolTip("Seed geometry required before acceptance")
-            else:
-                acc_btn.setToolTip(
-                    "Accept the whole-model alignment result and save this track model as official"
-                )
+            acc_btn.setToolTip(
+                "Accept the aligned model and save the reviewed segments — "
+                "promotes this track from seed-only to AI-ready. Safe to click "
+                "again if a previous accept didn't take."
+            )
             # Style the button to reflect match quality:
             # GOOD_MATCH → amber border (lower-quality acceptance hint)
             # ACCEPTABLE_MATCH → green (normal acceptance)
@@ -2001,7 +2103,13 @@ class TrackModellingMixin:
             self._home_refresh_if_visible()
 
     def _tm_accept_track_model(self) -> None:
-        """Accept the whole-model alignment and persist to disk."""
+        """Accept the whole-model alignment and persist to disk.
+
+        Critically, this also exports the REVIEWED SEGMENTS file. That file is
+        what resolve_best_track_model looks for — without it the track stays
+        "seed only / not AI-ready" no matter how good the alignment is (the exact
+        Fuji UAT confusion). Accept = promote to a reviewed, AI-ready model.
+        """
         result = getattr(self, "_tm_alignment_result", None)
         sm     = getattr(self, "_tm_station_map", None)
         if result is None or sm is None:
@@ -2017,8 +2125,40 @@ class TrackModellingMixin:
             )
         except Exception:
             pass  # best-effort
+        # Export the reviewed segments — this is what makes the model AI-ready.
+        review = getattr(self, "_tm_review_result", None)
+        if review is not None:
+            # Accept = confirm every detected segment. There is no per-segment
+            # review UI (those buttons were removed), so is_ai_ready would never
+            # pass while apex segments sat UNREVIEWED. Alignment already reported
+            # a good match, so accepting confirms the detected segments as-is;
+            # detection warnings are preserved and still shown.
+            from data.track_segment_review import SegmentReviewStatus as _SRS
+            for _seg in review.segments:
+                if _seg.review_status == _SRS.UNREVIEWED:
+                    _seg.review_status = _SRS.CONFIRMED
+            # Stamp the review with the SAME ids the resolver queries with (the
+            # combo selection). find_reviewed_models_for_layout globs on
+            # "<loc>__<lay>__reviewed_segments__" using the combo ids, so the
+            # exported filename MUST use those exact ids — the station map's ids
+            # can be a shorter form and silently miss (Candidates: 0 after accept).
+            _loc = ((self._tm_location_combo.currentData() or "").strip()
+                    if hasattr(self, "_tm_location_combo") else "")
+            _lay = ((self._tm_layout_combo.currentData() or "").strip()
+                    if hasattr(self, "_tm_layout_combo") else "")
+            review.track_location_id = _loc or review.track_location_id or sm.track_location_id
+            review.layout_id = _lay or review.layout_id or sm.layout_id
+            try:
+                from data.track_segment_review import export_review_json
+                _out = export_review_json(review)
+                print(f"[TrackModel] reviewed segments saved: {_out}")
+            except Exception as _exc:
+                print(f"[TrackModel] reviewed-segments export failed: {_exc}")
         self._tm_refresh_alignment_panel(result)
         self._tm_refresh_track_truth_panel()
+        # Re-resolve so the Track Model Status panel flips off "seed only".
+        if hasattr(self, "_tm_refresh_resolver"):
+            self._tm_refresh_resolver()
 
     def _tm_rebuild_model(self) -> None:
         """Clear station map and alignment result — requires full recalibration.
@@ -2083,6 +2223,14 @@ class TrackModellingMixin:
             highlight_end_progress   = end_progress,
         )
         w.set_draw_data(dd_updated)
+        # Keep the cached draw data (reused by the 60Hz live redraw) in sync, so
+        # the next telemetry packet doesn't overwrite the highlight.
+        if getattr(self, "_tm_cached_draw_data", None) is not None:
+            self._tm_cached_draw_data = dataclasses.replace(
+                self._tm_cached_draw_data,
+                highlight_start_progress = start_progress,
+                highlight_end_progress   = end_progress,
+            )
 
     def _tm_clear_map_highlight(self) -> None:
         """Clear the highlight band from the track map."""
@@ -2099,6 +2247,12 @@ class TrackModellingMixin:
             highlight_end_progress   = None,
         )
         w.set_draw_data(dd_cleared)
+        if getattr(self, "_tm_cached_draw_data", None) is not None:
+            self._tm_cached_draw_data = dataclasses.replace(
+                self._tm_cached_draw_data,
+                highlight_start_progress = None,
+                highlight_end_progress   = None,
+            )
 
     def _tm_run_ai_corner_verify(self) -> None:
         """Button handler: run AI corner verification on the current station map."""
@@ -2106,6 +2260,9 @@ class TrackModellingMixin:
             return
         self._tm_btn_ai_corner_verify.setEnabled(False)
         self._tm_btn_ai_corner_verify.setText("Verifying…")
+        if hasattr(self, "_tm_lbl_ai_verify_status"):
+            self._tm_lbl_ai_verify_status.setText("AI corner verify: running…")
+            self._tm_lbl_ai_verify_status.setStyleSheet("color: #E4D0AA; font-size: 10px;")
 
         # Build peaks from station map seeded corners
         stations = self._tm_station_map.stations
@@ -2152,8 +2309,14 @@ class TrackModellingMixin:
                 for pt in ref_path.points:
                     speed_profile.append((pt.lap_progress * 100.0, pt.speed_kph_avg))
 
-        # API key from config
-        api_key = self._config.get("ai", {}).get("api_key", "")
+        # API key — same source every other UI AI caller uses (the editable
+        # field, auto-loaded from api_key.txt / config["anthropic"]). The old
+        # config.get("ai", ...) read a section that never exists, so corner
+        # verification always ran with an empty key.
+        if hasattr(self, "_ai_api_key"):
+            api_key = self._ai_api_key.text().strip()
+        else:
+            api_key = self._config.get("anthropic", {}).get("api_key", "")
 
         # Track name from current layout selection
         lay_id_str = (self._tm_layout_combo.currentData() or "").strip()
@@ -2177,8 +2340,12 @@ class TrackModellingMixin:
         )
         self._tm_btn_ai_corner_verify.setText("AI Corner Verify")
 
+        _vlbl = getattr(self, "_tm_lbl_ai_verify_status", None)
         if result is None:
             reason = error_msg or "Unknown error"
+            if _vlbl is not None:
+                _vlbl.setText(f"AI corner verify failed: {reason}")
+                _vlbl.setStyleSheet("color: #EE5555; font-size: 10px;")
             self.statusBar().showMessage(
                 f"AI corner verification failed: {reason}", 5000
             )
@@ -2208,7 +2375,12 @@ class TrackModellingMixin:
             1 for c in sm.seeded_corners
             if c.verification_source == "ai_verified"
         ) if sm is not None else 0
+        n_total = len(sm.seeded_corners) if sm is not None else 0
 
+        if _vlbl is not None:
+            _vlbl.setText(
+                f"AI corner verify: {n_updated} of {n_total} corners confirmed ✓")
+            _vlbl.setStyleSheet("color: #6A9A6A; font-size: 10px;")
         self.statusBar().showMessage(
             f"AI corner verification complete — {n_updated} corners updated", 5000
         )
@@ -2270,6 +2442,11 @@ class TrackModellingMixin:
         warn = getattr(self, "_tm_rs_warnings", None)
         if warn is not None:
             warn.setText(summary.get("warnings", ""))
+
+        nxt = getattr(self, "_tm_rs_next_step", None)
+        if nxt is not None:
+            has_station_map = getattr(self, "_tm_station_map", None) is not None
+            nxt.setText(_format_next_step(self._tm_resolver_result, has_station_map))
 
     # ── Group 17M: lap offset calibration helpers ────────────────────────────
 
@@ -2415,12 +2592,58 @@ class TrackModellingMixin:
 
     # ── Group 17V: Seed Geometry ─────────────────────────────────────────────
 
+    def _tm_effective_seed_session(self):
+        """Session to build seed geometry from: the live controller session if one
+        exists, else a session rehydrated from persisted calibration laps.
+
+        The live session always wins so an in-progress recording is never masked
+        by stale disk data; the restored session only fills the post-restart gap.
+        """
+        ctrl = getattr(self, "_tm_controller", None)
+        live = getattr(ctrl, "_session", None) if ctrl is not None else None
+        if live is not None:
+            return live
+        return getattr(self, "_tm_restored_session", None)
+
+    def _tm_try_restore_calibration_session(self, loc_id: str, lay_id: str) -> None:
+        """Rehydrate a calibration session from persisted laps for Section 5.
+
+        The reference path and station map persist to disk, but the live in-memory
+        calibration session does not — so after a restart Section 5 (Seed Geometry)
+        stayed greyed out even though the raw laps were saved. This loads those
+        laps back into a session (the same data Detect Segments already reloads)
+        so Generate Seed Geometry works without re-driving calibration.
+
+        Never clobbers a live recording session, and clears any stale restored
+        session when the selected track has no persisted laps.
+        """
+        self._tm_restored_session = None
+        if not loc_id or not lay_id:
+            return
+        # A live controller session (recording/stopped/built) is authoritative —
+        # don't shadow it with disk data.
+        ctrl = getattr(self, "_tm_controller", None)
+        if ctrl is not None and getattr(ctrl, "_session", None) is not None:
+            return
+        try:
+            audit = _audit_track_files(loc_id, lay_id)
+            if not audit.can_detect_segments:
+                return  # no ref path + usable laps on disk for this layout
+            from pathlib import Path as _Path
+            self._tm_restored_session = _import_cal_laps(_Path(audit.calibration_laps_file))
+        except Exception:
+            logging.debug("calibration session restore failed", exc_info=True)
+            self._tm_restored_session = None
+        finally:
+            # Reflect the (possibly) newly-available session in Section 5's buttons.
+            if hasattr(self, "_tm_refresh_seed_geometry_panel"):
+                self._tm_refresh_seed_geometry_panel()
+
     def _tm_generate_seed_geometry(self) -> None:
         """Button handler: build seed coordinate map from the active calibration session."""
         try:
             from data.track_geometry_builder import build_seed_geometry as _build_seed_geo
-            ctrl = getattr(self, "_tm_controller", None)
-            session = getattr(ctrl, "_session", None) if ctrl is not None else None
+            session = self._tm_effective_seed_session()
             loc_id = (self._tm_location_combo.currentData() or "").strip()
             lay_id = (self._tm_layout_combo.currentData() or "").strip()
             layout = None
@@ -2449,8 +2672,9 @@ class TrackModellingMixin:
                     _existing = lbl.text()
                     lbl.setText(
                         (_existing + "\n\n" if _existing else "")
-                        + "Not enough clean laps to build the map. Drive more full laps"
-                        " starting and finishing on the grid, not from the pits."
+                        + "Not enough clean laps to build the map. Drive more full,"
+                        " uninterrupted laps (Time Trial works well) — the first lap"
+                        " is always skipped as a warm-up."
                     )
                 return
             from data.track_geometry_builder import CLOSURE_GAP_WARN_M as _CLOSURE_GAP_WARN_M
@@ -2537,8 +2761,9 @@ class TrackModellingMixin:
             )
             from data.track_geometry_builder import LapGeometryFilterResult
 
-            ctrl = getattr(self, "_tm_controller", None)
-            session = getattr(ctrl, "_session", None) if ctrl is not None else None
+            # Live controller session, or one rehydrated from persisted laps so
+            # Generate is usable on a previously-modelled track after a restart.
+            session = self._tm_effective_seed_session()
 
             states = get_geometry_button_states(
                 self._tm_seed_build_result,

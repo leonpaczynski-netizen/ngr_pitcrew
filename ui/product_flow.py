@@ -48,7 +48,6 @@ TAB_ROLES: Dict[str, str] = {
     "Practice Review": ROLE_WORKFLOW,
     "Strategy Builder": ROLE_WORKFLOW,
     "History": ROLE_WORKFLOW,
-    "Guide": ROLE_SUPPORT,
     "Settings": ROLE_SUPPORT,
     "Telemetry": ROLE_DIAGNOSTIC,
     "Diagnostics": ROLE_DIAGNOSTIC,

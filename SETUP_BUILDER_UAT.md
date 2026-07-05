@@ -217,6 +217,23 @@ at least a few recorded laps for the active car+track (so telemetry exists to di
 
 ---
 
+---
+
+## 13. Group 40 — Setup Diagnosis Hardening (Porsche 911 RSR at Fuji)
+
+Manual UAT checklist for Group 40 hardening features.
+Car: Porsche 911 RSR '17, Track: Fuji International Speedway
+
+| # | Scenario | Expected Result | Pass | Fail | Notes |
+|---|---|---|---|---|---|
+| 13a | Low bottoming (avg < 0.5/lap) — run a few laps with minimal bottoming | No ride-height increase is recommended; bottoming_confidence shows "low" / "insufficient_data" | | | |
+| 13b | 4+ laps with scraping (bottoming flag in driver feel) and speed-loss in top gear WOT | bottoming_confidence shows "high" / "floor_contact"; any AI ride-height increase is <= 4mm | | | |
+| 13c | Fuji RSR with gearing diagnosis = top_gear_power_band_limited | Diagnosis shows gearing_diagnosis_category=top_gear_power_band_limited; AI may recommend transmission_max_speed_kmh change (not blocked by gearbox_category_mismatch) | | | |
+| 13d | aero_rear = 620 on car with range [400, 700] | Diagnosis prompt contains "Rear aero status: HEALTHY"; AI does NOT describe rear downforce as low; rear aero is NOT listed as primary priority | | | |
+| 13e | All tuning fields locked (BoP ON + Tuning OFF) + engineering validation fails after retry | Response contains fallback_used:true; engineering_validation_failed:true; safe analysis text is returned; no crash | | | |
+
+---
+
 ## Tester Notes
 
 _Free-form observations, environment details, GT7 version, car used, track used:_

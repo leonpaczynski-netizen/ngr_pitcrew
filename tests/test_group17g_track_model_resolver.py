@@ -693,3 +693,53 @@ class TestRegressionImports:
     def test_resolution_status_values_are_strings(self):
         for rs in TrackModelResolutionStatus:
             assert isinstance(rs, str)
+
+
+# --------------------------------------------------------------------------- #
+# format_next_step — the "what to do next" guidance line (UAT: Fuji stalled at
+# seed-only with no hint about the remaining Detect/Review/Save step)
+# --------------------------------------------------------------------------- #
+class TestFormatNextStep:
+    @staticmethod
+    def _result(source_value):
+        from types import SimpleNamespace
+        st = SimpleNamespace(value=source_value)
+        return SimpleNamespace(resolved_model=SimpleNamespace(source_type=st))
+
+    def test_seed_only_with_station_map_says_detect_segments(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("seed_only"), has_station_map=True)
+        assert "Detect Segments" in msg and "Accept Track Model" in msg
+
+    def test_seed_only_without_station_map_says_calibrate(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("seed_only"), has_station_map=False)
+        assert "Calibration" in msg
+
+    def test_no_resolver_result_without_map_says_calibrate(self):
+        from ui.track_modelling_vm import format_next_step
+        assert "Calibration" in format_next_step(None, has_station_map=False)
+
+    def test_no_resolver_result_with_map_says_detect(self):
+        from ui.track_modelling_vm import format_next_step
+        assert "Detect Segments" in format_next_step(None, has_station_map=True)
+
+    def test_reviewed_not_ai_ready_says_finish_review(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("reviewed_model"), has_station_map=True)
+        assert "Blockers" in msg or "finish the segment review" in msg
+
+    def test_detected_unreviewed_says_review(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("detected_unreviewed"), has_station_map=True)
+        assert "Segment Review" in msg
+
+    def test_ai_ready_says_no_action(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("ai_ready_reviewed_model"), has_station_map=True)
+        assert "AI-ready" in msg and "no action" in msg.lower()
+
+    def test_engineer_validated_says_no_action(self):
+        from ui.track_modelling_vm import format_next_step
+        msg = format_next_step(self._result("engineer_validated_model"), has_station_map=True)
+        assert "no action" in msg.lower()

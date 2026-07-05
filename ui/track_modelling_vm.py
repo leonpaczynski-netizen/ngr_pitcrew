@@ -429,6 +429,40 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
     }
 
 
+def format_next_step(resolver_result: Optional[object], has_station_map: bool) -> str:
+    """One-line 'what to do next' for the Track Model Status panel.
+
+    Walks the user through calibrate -> detect -> review -> save so a track with
+    good calibration laps does not silently sit at 'seed only'. This is the Fuji
+    UAT case: the reference path and station map built at full confidence, but
+    the model was never promoted to a reviewed model, so the resolver falls back
+    to seed-only and the AI ignores it — with no on-screen hint about the
+    remaining manual step.
+    """
+    resolved = getattr(resolver_result, "resolved_model", None) if resolver_result is not None else None
+    source = None
+    if resolved is not None:
+        st = getattr(resolved, "source_type", None)
+        source = st.value if hasattr(st, "value") else (str(st) if st is not None else None)
+
+    if source in ("ai_ready_reviewed_model", "engineer_validated_model"):
+        return "✓ This track is AI-ready — no action needed."
+    if source == "reviewed_model":
+        return ("Next: in Segment Review, resolve any 'needs more laps', split, or "
+                "merge flags (see Blockers), then click Accept Track Model.")
+    if source == "detected_unreviewed":
+        return ("Next: in Segment Review, click Accept Track Model to promote this "
+                "to an AI-ready reviewed model.")
+    # seed_only, missing, or nothing resolved yet.
+    if has_station_map:
+        return ("Next: click Detect Segments, then in section 4 (Segment Review) "
+                "click Accept Track Model. Your calibration is done — the model is "
+                "still seed-only (which the AI won't use) until it's accepted.")
+    return ("Next: start Calibration and drive 2–3 clean laps across the "
+            "start/finish line to build the track model. Tip: use Time Trial — a "
+            "lobby's pit lane can corrupt the calibration laps.")
+
+
 def get_review_button_states(
     review: Optional[object],
     selected_segment_id: Optional[str],

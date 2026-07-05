@@ -147,13 +147,24 @@ class TestSetupSyncMigration:
         assert "ev_ctx = self._build_event_context()" in body
 
     def test_display_labels_read_event_context(self, sbu_src):
+        # Amendment B (Setup Builder Engineering Validation Gate sprint): the
+        # Race Conditions group (12 _lbl_rc_* labels) was removed from the tab.
+        # The display-only label reads (tyre_wear_multiplier, fuel_multiplier, etc.)
+        # that were part of the Phase 2 migration are now also gone.
+        # The functional EventContext reads (bop_enabled, tuning_allowed, car, track)
+        # are still present for gating purposes.
         body = _method_body(sbu_src, "_sync_setup_builder_from_event")
-        for frag in ("int(ev_ctx.tyre_wear_multiplier)",
-                     "int(ev_ctx.fuel_multiplier)",
-                     "ev_ctx.mandatory_stops", "ev_ctx.weather", "ev_ctx.damage",
-                     "ev_ctx.bop_enabled", "ev_ctx.tuning_allowed",
+        for frag in ("ev_ctx.bop_enabled", "ev_ctx.tuning_allowed",
                      "ev_ctx.track", "ev_ctx.car"):
             assert frag in body, f"setup label not migrated: {frag}"
+        # Confirm display-only RC label reads are gone (Amendment B)
+        for gone_frag in ("int(ev_ctx.tyre_wear_multiplier)",
+                          "int(ev_ctx.fuel_multiplier)",
+                          "ev_ctx.mandatory_stops", "ev_ctx.weather"):
+            assert gone_frag not in body, (
+                f"Amendment B: {gone_frag!r} should no longer be in "
+                "_sync_setup_builder_from_event (RC labels removed)"
+            )
 
     def test_functional_gating_calls_intact(self, sbu_src):
         # Phase 3 update: the gating INPUTS moved to EventContext (signed-off

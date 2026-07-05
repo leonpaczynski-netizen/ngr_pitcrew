@@ -9,13 +9,14 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QGroupBox, QLabel, QPushButton, QCheckBox,
+    QGroupBox, QLabel, QPushButton,
     QDoubleSpinBox, QSpinBox, QAbstractSpinBox, QLineEdit, QTextEdit,
-    QComboBox, QScrollArea,
+    QComboBox, QScrollArea, QSplitter,
 )
 
 from strategy.setup_ranges import resolve_ranges, save_car_ranges, GENERIC_DEFAULTS
 from ui.car_ranges_dialog import CarRangesDialog  # noqa: F401 — used in _open_car_ranges_dialog
+from ui.setup_form_widget import SetupFormWidget
 
 # Module-level display constants — must match dashboard.py
 _DARK_CARD = "#2A2A2A"
@@ -48,8 +49,7 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
 
     Distinct from the standard validation-errors banner — uses a red border
     to signal a higher-severity warning: the AI retry did not resolve the
-    engineering contradiction and the recommendation should not be applied
-    without manual review.
+    engineering contradiction and the recommendation should not be applied.
     Returns "" when there are no errors to display.
     """
     if not eng_errors:
@@ -61,12 +61,82 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
         "<div style='background:#2A0A0A; border:2px solid #E05050; "
         "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
         "&#9940; <b>Engineering validation failed after AI retry — review before applying.</b>"
-        "<br><span style='font-size:11px; color:#CC6060;'>"
-        "The recommendation below survived a correction attempt but still contains "
-        "engineering contradictions. Do NOT apply blindly.</span>"
         f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
         "</div>"
     )
+
+
+def _format_status_banner(status: str, validation_warnings: list) -> str:
+    """Return an HTML banner for the recommendation lifecycle status.
+
+    Returns "" when status is "approved" (no banner needed).
+    Banner text follows the frontend contract in the sprint brief.
+    """
+    if status == "approved":
+        return ""
+    if status == "approved_with_warnings":
+        if validation_warnings:
+            items = "".join(
+                f"<li style='margin:2px 0;'>{w}</li>" for w in validation_warnings
+            )
+            return (
+                "<div style='background:#1A1A00; border:1px solid #C8A020; "
+                "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+                "&#9888; <b>Setup approved with notes:</b>"
+                f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{items}</ul>"
+                "</div>"
+            )
+        return ""
+    if status == "fallback_generated":
+        return (
+            "<div style='background:#1A2A1A; border:1px solid #4CAF50; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#88BB88;'>"
+            "&#10003; <b>Safe fallback generated. Use only the fallback changes below.</b>"
+            "</div>"
+        )
+    if status == "blocked_no_safe_recommendation":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>No safe setup recommendation generated. Run more laps or review "
+            "telemetry before changing setup.</b>"
+            "</div>"
+        )
+    if status == "validation_failed":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>Recommendation rejected by engineering validation. "
+            "No setup changes from this AI response are approved.</b>"
+            "</div>"
+        )
+    if status == "retry_failed":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>AI recommendation rejected after retry. "
+            "No AI setup changes are approved.</b>"
+            "</div>"
+        )
+    # Default: show status text for any other/unknown status
+    return (
+        "<div style='background:#1A1A00; border:1px solid #888; "
+        "border-radius:4px; padding:8px; margin-bottom:8px; color:#AAA;'>"
+        f"Status: {status}"
+        "</div>"
+    )
+
+
+def _setup_response_looks_complete(payload: str) -> bool:
+    """Heuristic: does the advisor payload look like a complete setup JSON?
+
+    A response truncated at the API token cap ends mid-value (no closing brace)
+    or omits the ``setup_fields`` key entirely.  Detecting that lets the UI show
+    a clear "try again" message instead of dumping raw/partial JSON at the user
+    (UAT: analyse button "returned jargon to text box").
+    """
+    s = (payload or "").strip()
+    return s.endswith("}") and '"setup_fields"' in s
 
 
 def _set_spin_readonly(spin, readonly: bool) -> None:
@@ -86,581 +156,168 @@ def _set_spin_readonly(spin, readonly: bool) -> None:
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
 
-    def _build_car_setup_group(self) -> QGroupBox:
-        setup_box = QGroupBox("Car Setup")
-        setup_layout = QVBoxLayout(setup_box)
+    def _active_form(self) -> "SetupFormWidget":
+        """Return the currently-active setup form (Race form by default).
 
-        setup_layout.addWidget(QLabel(
-            "Enter your current car setup below.  Gear ratios auto-fill from live telemetry "
-            "and remain editable.  Final drive must be entered manually.  "
-            "Use  Analyse Setup with AI  to get setup change recommendations.",
-            styleSheet="color: #999;",
-            wordWrap=True,
-        ))
+        The Race form's widgets are aliased to ``self._setup_*`` attributes, so
+        all legacy mixin methods (``_current_setup_dict``, ``_fill_setup_fields``,
+        ``_apply_build_setup_result``, etc.) continue to work unchanged.
+        Exposed as a method so callers can be parameterised by form in the future.
+        """
+        return self._race_form
 
-        # Transmission sub-section — auto-filled from UDP but fully editable
-        auto_grp = QGroupBox("Transmission")
-        auto_grp.setStyleSheet(f"QGroupBox {{ color: #AAE4AA; }}")
-        auto_inner = QVBoxLayout(auto_grp)
-        auto_inner.setSpacing(4)
+    def _build_car_setup_group(self) -> QWidget:
+        """Build the side-by-side Race + Qualifying setup panel.
 
-        def _gear_spin() -> QDoubleSpinBox:
-            w = QDoubleSpinBox()
-            w.setRange(0.0, 6.999)
-            w.setDecimals(3)
-            w.setSingleStep(0.001)
-            w.setSpecialValueText("—")
-            w.setValue(0.0)
-            return w
+        Returns a QWidget that contains:
+        - A tab-level "Live Session Mode" row (self._setup_type combo)
+        - A QSplitter with Race form on the left and Qualifying form on the right
+        - Shared Shift RPM display box below the splitter
 
-        gear_grid = QGridLayout()
-        gear_grid.setHorizontalSpacing(4)
-        gear_grid.setVerticalSpacing(2)
-        self._gear_ratio_spins: list[QDoubleSpinBox] = []
-        for i in range(8):
-            col = (i % 4) * 2
-            row = i // 4
-            lbl = QLabel(f"G{i+1}:")
-            lbl.setStyleSheet(f"color: {_TEXT};")
-            spin = _gear_spin()
-            self._gear_ratio_spins.append(spin)
-            gear_grid.addWidget(lbl,  row, col)
-            gear_grid.addWidget(spin, row, col + 1)
-        auto_inner.addLayout(gear_grid)
-
-        fd_row = QHBoxLayout()
-        fd_row.setSpacing(6)
-        fd_lbl = QLabel("Final Drive:")
-        fd_lbl.setStyleSheet(f"color: {_TEXT};")
-        fd_row.addWidget(fd_lbl)
-        self._spin_final_drive = QDoubleSpinBox()
-        self._spin_final_drive.setRange(0.0, 7.0)
-        self._spin_final_drive.setDecimals(3)
-        self._spin_final_drive.setSingleStep(0.001)
-        self._spin_final_drive.setSpecialValueText("—")
-        self._spin_final_drive.setValue(0.0)
-        self._spin_final_drive.setToolTip("Final drive ratio — not in UDP telemetry, enter manually")
-        fd_row.addWidget(self._spin_final_drive)
-        fd_row.addSpacing(20)
-        ts_lbl = QLabel("Top Speed:")
-        ts_lbl.setStyleSheet(f"color: {_TEXT};")
-        fd_row.addWidget(ts_lbl)
-        self._spin_top_speed = QDoubleSpinBox()
-        self._spin_top_speed.setRange(0, 500)
-        self._spin_top_speed.setDecimals(0)
-        self._spin_top_speed.setSingleStep(1)
-        self._spin_top_speed.setSuffix(" km/h")
-        self._spin_top_speed.setSpecialValueText("—")
-        self._spin_top_speed.setValue(0)
-        self._spin_top_speed.setToolTip("Transmission top speed target — auto-filled from UDP")
-        fd_row.addWidget(self._spin_top_speed)
-        fd_row.addStretch()
-        auto_inner.addLayout(fd_row)
-
-        self._btn_reread_gears = QPushButton("Re-read from Telemetry")
-        self._btn_reread_gears.setToolTip(
-            "Pull the latest gear ratios and top speed from the live UDP stream.\n"
-            "Gear values are captured once on first valid packet — use this to refresh."
-        )
-        self._btn_reread_gears.setFixedHeight(24)
-        self._btn_reread_gears.clicked.connect(self._reread_gear_ratios)
-        auto_inner.addWidget(self._btn_reread_gears)
-        setup_layout.addWidget(auto_grp)
-
-        # Manual entry sub-section
-        manual_form = QFormLayout()
-        manual_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        All self._setup_* widget attributes are aliased to the Race form's widgets
+        so that every existing mixin method (AI, save, load, highlight, rebound)
+        continues to operate on the Race form through self.
+        """
         lbl_s = f"color: {_TEXT};"
+        container = QWidget()
+        outer_layout = QVBoxLayout(container)
+        outer_layout.setSpacing(8)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
 
+        if hasattr(self, "_tab_intro_header"):
+            outer_layout.addWidget(self._tab_intro_header(
+                "Setup Builder",
+                "Build and tune your qualifying and race setups side by side. Ask "
+                "AI for a full setup or a targeted fix, then Apply and Save. Next: "
+                "set Min Weight and Max Power, then Build Setup with AI — or "
+                "describe a handling issue and click Analyse."))
 
-        self._lbl_car_specs_info = QLabel(
-            "",
-            styleSheet="color: #AAAAAA; font-size: 10px;",
-        )
-        self._lbl_car_specs_info.setVisible(False)
-        self._lbl_car_specs_info.setToolTip(
-            "Stock car specifications from car_specs.json (PP rating, drivetrain, aspiration, power, weight).\n"
-            "Run 'Refresh Data from Web' in Settings to populate these values."
-        )
-
+        # self._setup_type stays on self (required by main.py + tests). It picks
+        # which shift-RPM threshold the live beep uses during Practice telemetry.
+        # It is NOT a form-selector — both forms are always visible side-by-side —
+        # so it lives in the Shift RPM box below (next to the two RPM values it
+        # chooses between) rather than as a prominent row at the top of the tab.
         self._setup_type = QComboBox()
         self._setup_type.addItems(["Race Setup", "Qualifying Setup"])
         self._setup_type.setToolTip(
-            "Race Setup: optimise for consistency, tyre life, and fuel efficiency.\n"
-            "Qualifying Setup: optimise for single-lap peak pace and tyre warm-up."
+            "Which shift-RPM threshold the live beep uses during Practice telemetry.\n"
+            "Race Setup: use race shift RPM.  Qualifying Setup: use qualifying shift RPM."
         )
-
-
-        self._lbl_bop_info = QLabel("")
-        self._lbl_bop_info.setStyleSheet("color: #88CCFF; font-style: italic;")
-        self._lbl_bop_info.setVisible(False)
-
-        self._btn_bop_edit = QPushButton("Edit BOP File")
-        self._btn_bop_edit.setFixedHeight(22)
-        self._btn_bop_edit.setToolTip("Open data/bop_data.json in default editor, then click Reload.")
-        self._btn_bop_edit.clicked.connect(self._open_bop_file)
-        self._btn_bop_edit.setVisible(False)
-
-        self._btn_bop_reload = QPushButton("Reload BOP")
-        self._btn_bop_reload.setFixedHeight(22)
-        self._btn_bop_reload.setToolTip("Re-read bop_data.json and refresh the BOP weight/power display.")
-        self._btn_bop_reload.clicked.connect(self._reload_bop_data)
-        self._btn_bop_reload.setVisible(False)
-
-        def _dbl(lo, hi, step=0.5, dec=1, val=0.0):
-            w = QDoubleSpinBox(); w.setRange(lo, hi); w.setSingleStep(step)
-            w.setDecimals(dec); w.setValue(val); return w
-        def _int(lo, hi, val=1):
-            w = QSpinBox(); w.setRange(lo, hi); w.setValue(val); return w
-
-        self._setup_rh_f       = _int(60, 200, 80)               # ride height front mm
-        self._setup_rh_r       = _int(60, 200, 80)               # ride height rear mm
-        self._setup_spr_f      = _dbl(1.00, 20.00, 0.10, 2, 3.50)
-        self._setup_spr_f.setToolTip(
-            "Spring natural frequency in Hz — GT7's suspension stiffness unit.\n"
-            "Higher = stiffer. Stiffer front → more understeer on corner entry.\n"
-            "Road cars: 1.5–3 Hz  |  Sport: 3–5 Hz  |  Race (GT3): 4–8 Hz")
-        self._setup_spr_r      = _dbl(1.00, 20.00, 0.10, 2, 3.00)
-        self._setup_spr_r.setToolTip(
-            "Spring natural frequency in Hz — GT7's suspension stiffness unit.\n"
-            "Higher = stiffer. Stiffer rear → more oversteer on corner entry.\n"
-            "Road cars: 1.5–3 Hz  |  Sport: 3–5 Hz  |  Race (GT3): 4–8 Hz")
-        self._setup_dmp_f_comp = _int(1, 100, 30); self._setup_dmp_f_comp.setSuffix(" %")
-        self._setup_dmp_f_ext  = _int(1, 100, 40); self._setup_dmp_f_ext.setSuffix(" %")
-        self._setup_dmp_r_comp = _int(1, 100, 25); self._setup_dmp_r_comp.setSuffix(" %")
-        self._setup_dmp_r_ext  = _int(1, 100, 35); self._setup_dmp_r_ext.setSuffix(" %")
-        self._setup_arb_f      = _int(1, 7, 5)
-        self._setup_arb_r      = _int(1, 7, 4)
-        self._setup_cam_f      = _dbl(0.0, 6.0, 0.1, 1, 1.0)
-        self._setup_cam_r      = _dbl(0.0, 6.0, 0.1, 1, 1.5)
-        self._setup_toe_f      = _dbl(-2.0, 2.0, 0.01, 2, 0.00)
-        self._setup_toe_r      = _dbl(-2.0, 2.0, 0.01, 2, 0.05)
-        _cam_tip = (
-            "0 = no camber; higher values lean the tyre top inward (GT7 shows 0–6).\n"
-            "More camber improves cornering grip but reduces braking stability "
-            "and straight-line traction.\n"
-            "Less camber gives a flatter contact patch but reduces mid-corner grip."
-        )
-        self._setup_cam_f.setToolTip(_cam_tip)
-        self._setup_cam_r.setToolTip(_cam_tip)
-        self._setup_toe_f.setToolTip(
-            "Front toe-out (negative) sharpens steering response and corner entry.\n"
-            "Too much toe-out makes the car nervous on turn-in.\n"
-            "Toe-in (positive) increases straight-line stability but slows steering response."
-        )
-        self._setup_toe_r.setToolTip(
-            "Rear toe-in (positive) improves rear stability on throttle and braking.\n"
-            "Too much rear toe-in prevents rotation and adds drag.\n"
-            "Rear toe-out (negative) increases rotation but can cause snap oversteer."
-        )
-        self._setup_aero_f     = _int(0, 1000, 400)
-        self._setup_aero_r     = _int(0, 1000, 600)
-        self._setup_lsd_i      = _int(0, 60, 10)
-        self._setup_lsd_a      = _int(0, 60, 15)
-        self._setup_lsd_d      = _int(0, 60, 5)
-        self._setup_lsd_f_i    = _int(0, 60, 10)
-        self._setup_lsd_f_a    = _int(0, 60, 15)
-        self._setup_lsd_f_d    = _int(0, 60, 5)
-        self._setup_bb         = _int(-5, 5, 0)
-        self._setup_bb.setSingleStep(1)  # ensure 1-step increment regardless of Qt defaults
-
-        # Tyre compound selectors — populated from shared compound list
-        from data.tyres import compound_names as _cpd_names
-        _tyre_names = _cpd_names()
-        _rm_idx = _tyre_names.index("Racing Medium")
-        self._setup_tyre_f = QComboBox(); self._setup_tyre_f.addItems(_tyre_names)
-        self._setup_tyre_f.setCurrentIndex(_rm_idx)
-        self._setup_tyre_r = QComboBox(); self._setup_tyre_r.addItems(_tyre_names)
-        self._setup_tyre_r.setCurrentIndex(_rm_idx)
-
-        # Differential extras
-        self._setup_tvcd = QComboBox(); self._setup_tvcd.addItems(["None", "Active"])
-        self._setup_torque_dist = _int(0, 100, 50); self._setup_torque_dist.setSuffix(" (Rear %)")
-
-        # ECU settings (GT7 in-game)
-        self._setup_ecu = QComboBox(); self._setup_ecu.addItems(["Stock", "Fully Customisable"])
-        self._setup_ecu_output = _dbl(0.0, 100.0, 1.0, 1, 100.0); self._setup_ecu_output.setSuffix(" %")
-
-        # Transmission type
-        self._setup_trans_type = QComboBox()
-        for _tt in ["Stock", "Fully Customisable", "Fully Customisable: Racing",
-                    "Fully Customisable: Close-Ratio", "Fully Customisable: Wide-Ratio"]:
-            self._setup_trans_type.addItem(_tt)
-
-        # Nitrous / Overtake
-        self._setup_nitrous = QComboBox(); self._setup_nitrous.addItems(["None", "Nitrous", "Overtake"])
-        self._setup_nitrous_output = _dbl(0.0, 100.0, 1.0, 1, 0.0); self._setup_nitrous_output.setSuffix(" %")
-
-        # Performance envelope (used as context for Build Setup AI)
-        self._setup_min_weight = _dbl(0.0, 1500.0, 1.0, 0, 0.0)
-        self._setup_min_weight.setToolTip(
-            "Car's minimum weight regulation in kg.\n"
-            "0 = no regulation, use car's base weight.\n"
-            "AI uses this to recommend how much ballast to add.")
-        self._setup_max_power  = _dbl(0.0, 2000.0, 1.0, 0, 0.0)
-        self._setup_max_power.setToolTip(
-            "Car's maximum allowed power in hp.\n"
-            "0 = no regulation, use car's full power.\n"
-            "AI uses this to recommend power restrictor setting.")
-
-        # Weight / power management
-        self._setup_ballast_kg  = _dbl(0.0, 150.0, 0.5, 1, 0.0)
-        self._setup_ballast_kg.setToolTip("Kilograms of ballast added to the car.")
-        self._setup_ballast_pos = _int(-50, 50, 0)
-        self._setup_ballast_pos.setToolTip("Ballast position: −50 = full rear, +50 = full front, 0 = neutral.")
-        self._setup_power_rest  = _dbl(0.0, 100.0, 1.0, 1, 100.0)
-        self._setup_power_rest.setToolTip(
-            "Power restrictor as percentage of max power.\n"
-            "100% = fully unrestricted. Lower to reduce power output.")
-
-        # Car hardware specs (passed to AI for accurate setup generation)
-        self._setup_actual_bhp = _dbl(0.0, 2000.0, 1.0, 0, 0.0)
-        self._setup_actual_bhp.setSpecialValueText("Not specified")
-        self._setup_actual_bhp.setSuffix(" hp")
-        self._setup_actual_bhp.setToolTip(
-            "Car's actual installed power in hp AFTER all engine performance upgrades.\n"
-            "This is the real output the car makes — NOT the regulation cap.\n"
-            "e.g. fully upgraded 812 Superfast ≈ 1050 hp. AI uses this to correctly\n"
-            "calculate which ECU stage + Power Restrictor hits the max_power target.")
-
-        self._setup_num_gears = _int(0, 8, 0)
-        self._setup_num_gears.setSpecialValueText("Auto")
-        self._setup_num_gears.setToolTip(
-            "Number of forward gears in this car.\n"
-            "0 = AI will use its knowledge of the car.\n"
-            "Set this explicitly to ensure correct gear ratios (e.g. 812 = 7 gears).")
-
-        self._setup_drivetrain = QComboBox()
-        for _dt in ("Auto-detect", "FR", "FF", "MR", "RR", "AWD"):
-            self._setup_drivetrain.addItem(_dt, _dt if _dt != "Auto-detect" else "")
-        self._setup_drivetrain.setToolTip(
-            "Car's drivetrain layout. Sets up AI's handling philosophy.\n"
-            "FR = front-engine rear-drive, MR = mid-rear-drive, AWD = all-wheel drive.")
-
-        self._setup_label  = QLineEdit(); self._setup_label.setPlaceholderText("e.g. Race Baseline, Wet Setup…"); self._setup_label.setMaxLength(40)
-        self._setup_notes  = QLineEdit(); self._setup_notes.setPlaceholderText("Optional notes")
-
-        def _form_row(form, label, *widgets):
-            if len(widgets) == 1:
-                form.addRow(QLabel(label, styleSheet=lbl_s), widgets[0])
-            else:
-                w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
-                for ww in widgets:
-                    h.addWidget(ww)
-                h.addStretch()
-                form.addRow(QLabel(label, styleSheet=lbl_s), w)
-
-        def _section(title, color="#AAE4AA"):
-            grp = QGroupBox(title)
-            grp.setStyleSheet(
-                f"QGroupBox {{ color: {color}; font-weight: bold; "
-                f"border: 1px solid #333; border-radius: 4px; margin-top: 6px; padding-top: 6px; }}"
-                f"QGroupBox::title {{ subcontrol-origin: margin; left: 8px; }}"
-            )
-            return grp
-
-        def _fr_grid(grp, rows):
-            """Build a Front / Rear grid inside grp. rows = [(label, front_w, rear_w, unit?)]"""
-            inner = QGridLayout(grp)
-            inner.setContentsMargins(8, 4, 8, 4)
-            inner.setVerticalSpacing(3)
-            inner.setHorizontalSpacing(8)
-            hdr_style = f"color: #8BC34A; font-weight: bold;"
-            inner.addWidget(QLabel("Front", styleSheet=hdr_style), 0, 1)
-            inner.addWidget(QLabel("Rear",  styleSheet=hdr_style), 0, 2)
-            for r, row_data in enumerate(rows, 1):
-                lbl_text = row_data[0]
-                fw       = row_data[1]
-                rw       = row_data[2]
-                unit     = row_data[3] if len(row_data) > 3 else ""
-                inner.addWidget(QLabel(lbl_text, styleSheet=lbl_s, alignment=Qt.AlignmentFlag.AlignRight), r, 0)
-                inner.addWidget(fw, r, 1)
-                inner.addWidget(rw, r, 2)
-                if unit:
-                    inner.addWidget(QLabel(unit, styleSheet="color: #666;"), r, 3)
-            inner.setColumnStretch(0, 3)
-            inner.setColumnStretch(1, 2)
-            inner.setColumnStretch(2, 2)
-            inner.setColumnStretch(3, 1)
-
-        # ── Locked banner (shown when event tuning is disabled) ───────────────
-        self._setup_locked_banner = QLabel()
-        self._setup_locked_banner.setStyleSheet(
-            "color: #F5A623; background: #2A1A00; border: 1px solid #F5A623; "
-            "border-radius: 4px; padding: 8px; font-size: 12px;"
-        )
-        self._setup_locked_banner.setWordWrap(True)
-        self._setup_locked_banner.hide()
-        manual_form.addRow(self._setup_locked_banner)
-
-        # ── Session info ────────────────────────────────────────
-        _form_row(manual_form, "", self._lbl_car_specs_info)
-        _session_w = QWidget(); _session_h = QHBoxLayout(_session_w); _session_h.setContentsMargins(0, 0, 0, 0)
-        _session_h.addWidget(self._setup_type); _session_h.addStretch()
-        manual_form.addRow(QLabel("Setup Type:", styleSheet=lbl_s), _session_w)
-        _bop_info_w = QWidget(); _bop_ih = QHBoxLayout(_bop_info_w); _bop_ih.setContentsMargins(0, 0, 0, 0)
-        _bop_ih.addWidget(self._lbl_bop_info); _bop_ih.addStretch()
-        _bop_ih.addWidget(self._btn_bop_edit); _bop_ih.addWidget(self._btn_bop_reload)
-        self._bop_info_row_label = QLabel("BOP Data:", styleSheet=lbl_s)
-        self._bop_info_row_label.setVisible(False)
-        manual_form.addRow(self._bop_info_row_label, _bop_info_w)
-        setup_layout.addLayout(manual_form)
-
-        # ── Tyres ─────────────────────────────────────────────────────────────
-        tyre_grp = _section("Tyres")
-        _fr_grid(tyre_grp, [
-            ("Compound", self._setup_tyre_f, self._setup_tyre_r),
-        ])
-        setup_layout.addWidget(tyre_grp)
-        # Tyre compound drives default tagging in Lap Data tab
-        self._setup_tyre_f.currentTextChanged.connect(
-            lambda name: setattr(self, "_default_lap_compound",
-                                 self._TYRE_NAME_TO_CODE.get(name, ""))
-        )
-        self._setup_tyre_f.currentTextChanged.connect(
-            lambda _: self._refresh_live_tyre_label()
-        )
-
-        # ── Suspension ────────────────────────────────────────────────────────
-        susp_grp = _section("Suspension")
-        _fr_grid(susp_grp, [
-            ("Body Height Adjustment (mm)", self._setup_rh_f,       self._setup_rh_r),
-            ("Anti-Roll Bar (Lv.)",         self._setup_arb_f,      self._setup_arb_r),
-            ("Damping Ratio (Compression)", self._setup_dmp_f_comp, self._setup_dmp_r_comp),
-            ("Damping Ratio (Expansion)",   self._setup_dmp_f_ext,  self._setup_dmp_r_ext),
-            ("Natural Frequency",           self._setup_spr_f,      self._setup_spr_r,    "Hz"),
-            ("Camber Angle (°)",             self._setup_cam_f,      self._setup_cam_r,    "°"),
-            ("Toe Angle (°)",               self._setup_toe_f,      self._setup_toe_r,    "°"),
-        ])
-        setup_layout.addWidget(susp_grp)
-
-        # ── Differential Gear ─────────────────────────────────────────────────
-        diff_grp = _section("Differential Gear")
-        diff_inner = QFormLayout(diff_grp)
-        diff_inner.setContentsMargins(8, 4, 8, 4)
-        diff_inner.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        _lsd_w = QWidget(); _lsd_h = QHBoxLayout(_lsd_w); _lsd_h.setContentsMargins(0, 0, 0, 0)
-        for lbl_txt, spin in (("Initial Torque", self._setup_lsd_i), ("Accel Sensitivity", self._setup_lsd_a), ("Braking Sensitivity", self._setup_lsd_d)):
-            _lsd_h.addWidget(QLabel(lbl_txt + ":", styleSheet="color: #888; font-size: 10px;"))
-            _lsd_h.addWidget(spin)
-        _lsd_h.addStretch()
-        diff_inner.addRow(QLabel("LSD (Rear):", styleSheet=lbl_s), _lsd_w)
-        _lsd_f_w = QWidget(); _lsd_f_h = QHBoxLayout(_lsd_f_w); _lsd_f_h.setContentsMargins(0, 0, 0, 0)
-        for _lt, _sp in (("Initial Torque", self._setup_lsd_f_i),
-                         ("Accel Sensitivity", self._setup_lsd_f_a),
-                         ("Braking Sensitivity", self._setup_lsd_f_d)):
-            _lsd_f_h.addWidget(QLabel(_lt + ":", styleSheet="color: #888; font-size: 10px;"))
-            _lsd_f_h.addWidget(_sp)
-        _lsd_f_h.addStretch()
-        self._lbl_lsd_front = QLabel("LSD (Front):", styleSheet=lbl_s)
-        diff_inner.addRow(self._lbl_lsd_front, _lsd_f_w)
-        self._lsd_front_widget = _lsd_f_w
-        _is_awd = self._setup_drivetrain.currentText() == "AWD"
-        self._lbl_lsd_front.setVisible(_is_awd)
-        self._lsd_front_widget.setVisible(_is_awd)
-        self._setup_drivetrain.currentTextChanged.connect(self._update_lsd_visibility)
-        diff_inner.addRow(QLabel("Torque-Vectoring Centre Diff:", styleSheet=lbl_s), self._setup_tvcd)
-        diff_inner.addRow(QLabel("Front/Rear Torque Distribution:", styleSheet=lbl_s), self._setup_torque_dist)
-        diff_inner.addRow(QLabel("Brake Bias (−5F … +5R):", styleSheet=lbl_s), self._setup_bb)
-        setup_layout.addWidget(diff_grp)
-
-        # ── Aerodynamics ──────────────────────────────────────────────────────
-        aero_grp = _section("Aerodynamics")
-        _fr_grid(aero_grp, [
-            ("Downforce (kg)", self._setup_aero_f, self._setup_aero_r),
-        ])
-        setup_layout.addWidget(aero_grp)
-
-        # ── Performance Adjustment ────────────────────────────────────────────
-        perf_grp = _section("Performance Adjustment", "#CCAAFF")
-        perf_inner = QFormLayout(perf_grp)
-        perf_inner.setContentsMargins(8, 4, 8, 4)
-        perf_inner.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        _bal_w = QWidget(); _bal_h = QHBoxLayout(_bal_w); _bal_h.setContentsMargins(0, 0, 0, 0)
-        _bal_h.addWidget(self._setup_ballast_kg)
-        _bal_h.addWidget(QLabel("kg  pos:", styleSheet="color:#888; font-size:10px;"))
-        _bal_h.addWidget(self._setup_ballast_pos)
-        _bal_h.addStretch()
-        perf_inner.addRow(QLabel("Ballast:", styleSheet=lbl_s), _bal_w)
-        perf_inner.addRow(QLabel("Power Restrictor (%):", styleSheet=lbl_s), self._setup_power_rest)
-        _wt_w = QWidget(); _wt_h = QHBoxLayout(_wt_w); _wt_h.setContentsMargins(0, 0, 0, 0)
-        _wt_h.addWidget(self._setup_min_weight)
-        _wt_h.addWidget(QLabel("kg  /  max:", styleSheet="color:#888; font-size:10px;"))
-        _wt_h.addWidget(self._setup_max_power)
-        _wt_h.addWidget(QLabel("hp", styleSheet="color:#888; font-size:10px;"))
-        _wt_h.addStretch()
-        perf_inner.addRow(QLabel("Min Weight / Max Power:", styleSheet=lbl_s), _wt_w)
-        setup_layout.addWidget(perf_grp)
-
-        # ── Engine / ECU ──────────────────────────────────────────────────────
-        ecu_grp = _section("Engine / ECU", "#88CCFF")
-        ecu_inner = QFormLayout(ecu_grp)
-        ecu_inner.setContentsMargins(8, 4, 8, 4)
-        ecu_inner.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        ecu_inner.addRow(QLabel("Installed BHP:", styleSheet=lbl_s), self._setup_actual_bhp)
-        ecu_inner.addRow(QLabel("Number of Gears:", styleSheet=lbl_s), self._setup_num_gears)
-        ecu_inner.addRow(QLabel("Drivetrain:", styleSheet=lbl_s), self._setup_drivetrain)
-        self._lbl_ecu_rec = QLabel(
-            "—",
-            wordWrap=True,
-            styleSheet=(
-                "color: #F5C542; background: #1A1A00; border: 1px solid #555;"
-                " padding: 4px 6px; border-radius: 3px;"
-            ),
-        )
-        self._lbl_ecu_rec.setToolTip(
-            "AI recommendation for ECU stage and/or Power Restrictor to hit the target power.\n"
-            "Fill in Max Power above then click 'Build Setup with AI' to generate."
-        )
-        ecu_inner.addRow(QLabel("ECU / Power Advice:", styleSheet=lbl_s), self._lbl_ecu_rec)
-        ecu_inner.addRow(QLabel("ECU (in-game):", styleSheet=lbl_s), self._setup_ecu)
-        _ecu_out_w = QWidget(); _ecu_out_h = QHBoxLayout(_ecu_out_w); _ecu_out_h.setContentsMargins(0, 0, 0, 0)
-        _ecu_out_h.addWidget(self._setup_ecu_output); _ecu_out_h.addStretch()
-        ecu_inner.addRow(QLabel("ECU Output Adjustment:", styleSheet=lbl_s), _ecu_out_w)
-        setup_layout.addWidget(ecu_grp)
-
-        # ── Transmission ──────────────────────────────────────────────────────
-        trans_grp = _section("Transmission", "#FFCC88")
-        trans_inner = QFormLayout(trans_grp)
-        trans_inner.setContentsMargins(8, 4, 8, 4)
-        trans_inner.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        trans_inner.addRow(QLabel("Transmission Type:", styleSheet=lbl_s), self._setup_trans_type)
-        setup_layout.addWidget(trans_grp)
-
-        # ── Nitrous / Overtake ────────────────────────────────────────────────
-        nitrous_grp = _section("Nitrous / Overtake", "#FF8844")
-        nitrous_inner = QFormLayout(nitrous_grp)
-        nitrous_inner.setContentsMargins(8, 4, 8, 4)
-        nitrous_inner.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        nitrous_inner.addRow(QLabel("Type:", styleSheet=lbl_s), self._setup_nitrous)
-        _nos_out_w = QWidget(); _nos_out_h = QHBoxLayout(_nos_out_w); _nos_out_h.setContentsMargins(0, 0, 0, 0)
-        _nos_out_h.addWidget(self._setup_nitrous_output); _nos_out_h.addStretch()
-        nitrous_inner.addRow(QLabel("Output Adjustment:", styleSheet=lbl_s), _nos_out_w)
-        setup_layout.addWidget(nitrous_grp)
-
-        # ── Notes ─────────────────────────────────────────────────────────────
-        notes_row = QFormLayout()
-        notes_row.addRow(QLabel("Setup Label:", styleSheet=lbl_s), self._setup_label)
-        notes_row.addRow(QLabel("Notes:", styleSheet=lbl_s), self._setup_notes)
-        setup_layout.addLayout(notes_row)
-
-        # ── Race Engineer Brief ───────────────────────────────────────────────
-        self._re_brief_label = QLabel("Race Engineer Brief:", styleSheet=lbl_s)
-        self._re_brief_input = QTextEdit()
-        self._re_brief_input.setMaximumHeight(80)
-        self._re_brief_input.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #555;")
-        self._re_brief_input.setPlaceholderText(
-            "Optional race engineer notes — injected verbatim into the AI prompt "
-            "(strategy preference, tyre targets, acceptable compromises, traffic, etc.)")
-        re_brief_row = QHBoxLayout()
-        re_brief_row.addWidget(self._re_brief_label)
-        re_brief_row.addWidget(self._re_brief_input)
-        setup_layout.addLayout(re_brief_row)
-        # Visibility controlled by session type — shown for Race, hidden for Qualifying
-        self._setup_type.currentTextChanged.connect(self._update_re_brief_visibility)
-        self._update_re_brief_visibility(self._setup_type.currentText())
-        # Write practice_is_qual ref whenever session type changes
+        # Connect session-type signals (required by tests + main.py sync)
         self._setup_type.currentTextChanged.connect(self._on_setup_type_changed)
         self._on_setup_type_changed(self._setup_type.currentText())
 
-        # Save / Load / Analyse row
-        setup_btn_row = QHBoxLayout()
-        btn_save_setup   = QPushButton("Save Setup")
-        self._setup_load_combo = QComboBox()
-        self._setup_load_combo.setMinimumWidth(200)
-        btn_load_setup   = QPushButton("Load Selected")
-        self._btn_analyse_setup = QPushButton("Analyse & Get Setup Fix")
-        self._btn_analyse_setup.setStyleSheet(
-            "background: #1F4E78; color: white; font-weight: bold; padding: 6px 12px;")
-        self._btn_analyse_setup.setToolTip(
-            "Analyse all laps tagged with this setup using AI.\n"
-            "If you've described a handling issue below, that's included in the analysis too.")
-        self._setup_result_text = QTextEdit()
-        self._setup_result_text.setReadOnly(True)
-        self._setup_result_text.setMinimumHeight(220)
-        self._setup_result_text.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
-        self._setup_result_text.setPlaceholderText(
-            "AI setup suggestions will appear here after analysis.")
+        # ── Create Race and Qualifying form widgets ────────────────────────────
+        self._race_form = SetupFormWidget("Race", self)
+        self._qual_form = SetupFormWidget("Qualifying", self)
 
-        btn_save_setup.clicked.connect(self._setup_save)
-        btn_load_setup.clicked.connect(self._setup_load_selected)
-        self._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
+        # ── Alias self._setup_* to Race form widgets ──────────────────────────
+        # Every legacy mixin method that accesses self._setup_rh_f etc. will
+        # transparently read/write the Race form's widgets.
+        _RACE_ALIASES = [
+            "_setup_rh_f", "_setup_rh_r",
+            "_setup_spr_f", "_setup_spr_r",
+            "_setup_dmp_f_comp", "_setup_dmp_f_ext",
+            "_setup_dmp_r_comp", "_setup_dmp_r_ext",
+            "_setup_arb_f", "_setup_arb_r",
+            "_setup_cam_f", "_setup_cam_r",
+            "_setup_toe_f", "_setup_toe_r",
+            "_setup_aero_f", "_setup_aero_r",
+            "_setup_lsd_i", "_setup_lsd_a", "_setup_lsd_d",
+            "_setup_lsd_f_i", "_setup_lsd_f_a", "_setup_lsd_f_d",
+            "_setup_tvcd", "_setup_torque_dist", "_setup_bb",
+            "_setup_tyre_f", "_setup_tyre_r",
+            "_setup_ecu", "_setup_ecu_output",
+            "_setup_trans_type",
+            "_setup_nitrous", "_setup_nitrous_output",
+            "_setup_min_weight", "_setup_max_power",
+            "_setup_ballast_kg", "_setup_ballast_pos", "_setup_power_rest",
+            "_setup_actual_bhp", "_setup_num_gears", "_setup_drivetrain",
+            "_setup_label", "_setup_notes",
+            "_gear_ratio_spins", "_spin_final_drive", "_spin_top_speed",
+            "_lbl_ecu_rec",
+            # UI-state widgets referenced by dashboard.py helpers
+            "_lbl_car_specs_info",
+            "_lbl_bop_info", "_btn_bop_edit", "_btn_bop_reload", "_bop_info_row_label",
+            "_lbl_lsd_front", "_lsd_front_widget",
+            "_setup_locked_banner",
+            # Action/result widgets for existing mixin methods
+            "_setup_result_text", "_btn_analyse_setup",
+            "_btn_apply_ai_setup",
+            "_setup_feeling_input",
+            "_build_setup_result", "_btn_build_setup", "_btn_set_car_ranges",
+            "_setup_load_combo", "_lbl_setup_save_status",
+            "_re_brief_label", "_re_brief_input",
+            "_btn_reread_gears",
+        ]
+        for _attr in _RACE_ALIASES:
+            setattr(self, _attr, getattr(self._race_form, _attr))
 
-        self._btn_apply_ai_setup = QPushButton("Apply to Setup")
-        self._btn_apply_ai_setup.setStyleSheet(
-            "background: #2E6A4A; color: white; font-weight: bold; padding: 6px 12px;")
-        self._btn_apply_ai_setup.setToolTip(
-            "Apply the AI's recommended changes to the setup form.\n"
-            "Changed fields are highlighted until you click Save Setup to persist them.")
-        self._btn_apply_ai_setup.setVisible(False)
-        self._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
+        # State attributes that live on self (not on the form widget)
         self._last_setup_ai_fields: dict = {}
         self._highlighted_fields: set = set()
 
-        # ── Driver Feedback Controls ───────────────────────────────────────────
-        # Rating combo + Applied checkbox shown below the AI result; values are
-        # translated into labels and passed to save_entry when saving to history.
-        _feedback_row = QHBoxLayout()
-        _feedback_row.setContentsMargins(0, 2, 0, 0)
-        _feedback_lbl = QLabel("Rate this result:", styleSheet=f"color: {_TEXT}; font-size: 11px;")
-        self._setup_rating_combo = QComboBox()
-        self._setup_rating_combo.addItems(["—", "Liked", "Hated", "Neutral"])
-        self._setup_rating_combo.setFixedWidth(90)
-        self._setup_rating_combo.setStyleSheet(
-            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; "
-            f"border: 1px solid #555; padding: 2px 4px; border-radius: 3px; }}"
-            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        # ── Wire Race form buttons to existing mixin methods ──────────────────
+        self._race_form._btn_save_setup.clicked.connect(self._setup_save)
+        self._race_form._btn_load_setup.clicked.connect(self._setup_load_selected)
+        self._race_form._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
+        self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
+        self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
+        self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
+        self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
+        self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
+
+        # ── Wire Qualifying form buttons to per-form handlers ─────────────────
+        qf = self._qual_form
+        qf._btn_save_setup.clicked.connect(
+            lambda: self._setup_save_for_form(self._qual_form)
         )
-        self._setup_applied_check = QCheckBox("Applied")
-        self._setup_applied_check.setStyleSheet(f"color: {_TEXT}; font-size: 11px;")
-        self._setup_applied_check.setToolTip(
-            "Tick if you applied this recommendation to the car setup.")
-        _feedback_row.addWidget(_feedback_lbl)
-        _feedback_row.addWidget(self._setup_rating_combo)
-        _feedback_row.addSpacing(8)
-        _feedback_row.addWidget(self._setup_applied_check)
-        _feedback_row.addStretch()
+        qf._btn_load_setup.clicked.connect(
+            lambda: self._setup_load_selected_for_form(self._qual_form)
+        )
+        qf._btn_analyse_setup.clicked.connect(
+            lambda: self._setup_analyse_ai_for_form(self._qual_form)
+        )
+        qf._btn_apply_ai_setup.clicked.connect(
+            lambda: self._apply_ai_setup_for_form(self._qual_form)
+        )
+        qf._btn_build_setup.clicked.connect(
+            lambda: self._run_build_setup_for_form(self._qual_form)
+        )
+        qf._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
+        qf._btn_bop_edit.clicked.connect(self._open_bop_file)
+        qf._btn_bop_reload.clicked.connect(self._reload_bop_data)
 
-        setup_btn_row.addWidget(btn_save_setup)
-        setup_btn_row.addWidget(QLabel("Load:", styleSheet=lbl_s))
-        setup_btn_row.addWidget(self._setup_load_combo)
-        setup_btn_row.addWidget(btn_load_setup)
-        setup_btn_row.addStretch()
-        setup_btn_row.addWidget(self._btn_analyse_setup)
-        self._lbl_setup_save_status = QLabel("")
-        self._lbl_setup_save_status.setStyleSheet(
-            "color: #8BC34A; font-size: 10px; font-style: italic; padding: 2px 0;")
+        # ── Tyre compound → Lap Data tab default compound (Race form only) ────
+        self._race_form._setup_tyre_f.currentTextChanged.connect(
+            lambda name: setattr(self, "_default_lap_compound",
+                                 self._TYRE_NAME_TO_CODE.get(name, ""))
+        )
+        self._race_form._setup_tyre_f.currentTextChanged.connect(
+            lambda _: self._refresh_live_tyre_label()
+        )
 
-        setup_layout.addLayout(setup_btn_row)
-        setup_layout.addWidget(self._lbl_setup_save_status)
-        setup_layout.addWidget(self._setup_result_text)
-        setup_layout.addWidget(self._btn_apply_ai_setup)
-        setup_layout.addLayout(_feedback_row)
+        # ── QSplitter — Race left, Qualifying right ───────────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
-        # Build Setup with AI + Set Car Ranges
-        _build_row = QHBoxLayout()
-        self._btn_build_setup = QPushButton("Build Setup with AI")
-        self._btn_build_setup.setStyleSheet(
-            "background: #1A5C2A; color: white; font-weight: bold; padding: 6px 16px;")
-        self._btn_build_setup.setToolTip(
-            "AI generates a complete from-scratch car setup for this car, track, and session.\n"
-            "Uses GT7 physics knowledge + your personal driving style profile.\n"
-            "Fill in Min Weight and Max Power above first — all fields will be auto-filled.\n"
-            "You can adjust any value after the AI fills them.")
-        self._btn_build_setup.clicked.connect(self._run_build_setup)
-        self._btn_set_car_ranges = QPushButton("Set Car Ranges…")
-        self._btn_set_car_ranges.setToolTip(
-            "Define per-car min/max bounds for every setup parameter.\n"
-            "These bounds constrain the spinboxes and the AI output for this car.")
-        self._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
-        _build_row.addWidget(self._btn_build_setup)
-        _build_row.addWidget(self._btn_set_car_ranges)
-        _build_row.addStretch()
-        setup_layout.addLayout(_build_row)
+        # Wrap each form in a QScrollArea so it scrolls independently
+        race_scroll = QScrollArea()
+        race_scroll.setWidgetResizable(True)
+        race_scroll.setWidget(self._race_form)
+        race_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Shift RPM — auto-filled by AI Build Setup, used by the live shift beep
+        qual_scroll = QScrollArea()
+        qual_scroll.setWidgetResizable(True)
+        qual_scroll.setWidget(self._qual_form)
+        qual_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        splitter.addWidget(race_scroll)
+        splitter.addWidget(qual_scroll)
+        splitter.setSizes([1, 1])  # equal initial split
+        outer_layout.addWidget(splitter, 1)  # the splitter takes all extra height
+
+        # ── Shift RPM display (shared, below the splitter) ────────────────────
         _sb = self._config.get("shift_beep", {})
         shift_rpm_box = QGroupBox("Shift RPM (auto-set by AI Build Setup)")
         shift_rpm_box.setStyleSheet(self._group_style())
@@ -689,33 +346,14 @@ class SetupBuilderMixin:
         _set_spin_readonly(self._spin_shift_rpm_race, True)
         shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
         shift_rpm_form.addRow("Race:", self._spin_shift_rpm_race)
-        setup_layout.addWidget(shift_rpm_box)
+        # The live shift-beep threshold selector (formerly the top-of-tab "Live
+        # Session Mode" row) sits here next to the two RPM values it chooses.
+        shift_rpm_form.addRow("Live beep uses:", self._setup_type)
+        outer_layout.addWidget(shift_rpm_box)
 
-        self._build_setup_result = QTextEdit()
-        self._build_setup_result.setReadOnly(True)
-        self._build_setup_result.setMinimumHeight(320)
-        self._build_setup_result.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444; "
-            f"border-left: 3px solid #3A8C4A;")
-        self._build_setup_result.setVisible(False)
-        setup_layout.addWidget(self._build_setup_result)
-
-        # Optional driver feeling — combined with telemetry by the merged analyse button above
-        feeling_label = QLabel("Handling notes:", styleSheet=lbl_s)
-        self._setup_feeling_input = QTextEdit()
-        self._setup_feeling_input.setMaximumHeight(70)
-        self._setup_feeling_input.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #555;")
-        self._setup_feeling_input.setPlaceholderText(
-            "Optional: describe any handling issues to include in the AI analysis above.\n"
-            "e.g.  \"rear is loose on acceleration\"  |  \"locks on braking at T6\"  |  "
-            "\"front pushes in fast corners\"")
-        feeling_row = QHBoxLayout()
-        feeling_row.addWidget(feeling_label)
-        feeling_row.addWidget(self._setup_feeling_input)
-        setup_layout.addLayout(feeling_row)
         self._refresh_setup_combo()
-        return setup_box
+        self._refresh_qual_setup_combo()
+        return container
 
     def _current_setup_dict(self) -> dict:
         """Read all manual fields including editable gear ratios.
@@ -738,7 +376,11 @@ class SetupBuilderMixin:
                 "Fixed Wet": "Wet", "Wet": "Wet", "Heavy Rain": "Wet",
                 "Light Rain": "Damp", "Wet Risk": "Damp", "Damp": "Damp",
             }.get(_ev_ctx.weather, "Dry"),
-            "setup_type": self._setup_type.currentText(),
+            "setup_type": (
+                self._race_form.purpose + " Setup"
+                if hasattr(self, "_race_form")
+                else self._setup_type.currentText()
+            ),
             "ride_height_front": self._setup_rh_f.value(),
             "ride_height_rear":  self._setup_rh_r.value(),
             "springs_front": self._setup_spr_f.value(),
@@ -791,11 +433,10 @@ class SetupBuilderMixin:
         # range overrides take effect and values are not silently truncated.
         # NOTE: _rebound_setup_spinboxes must NOT trigger an AI/build call.
         self._rebound_setup_spinboxes(car or None)
-        _st_map = {"Race": "Race Setup", "Qualifying": "Qualifying Setup", "Practice": "Race Setup"}
-        _st_raw = d.get("setup_type", _st_map.get(d.get("session", ""), "Race Setup"))
-        idx = self._setup_type.findText(_st_raw)
-        if idx >= 0:
-            self._setup_type.setCurrentIndex(idx)
+        # The setup type is now spatial (two side-by-side forms with fixed purposes).
+        # Loading a saved setup does NOT switch the tab-level live-session combo
+        # (self._setup_type) — that combo controls shift-RPM threshold selection,
+        # not which form panel is active.  The form panel is fixed by its purpose.
         self._setup_rh_f.setValue(d.get("ride_height_front", 80))
         self._setup_rh_r.setValue(d.get("ride_height_rear", 80))
         self._setup_spr_f.setValue(d.get("springs_front", 3.50))
@@ -906,6 +547,7 @@ class SetupBuilderMixin:
                 w.setEnabled(True)
 
     def _refresh_setup_combo(self, select_index: int = -1) -> None:
+        """Refresh the Race form's load combo (filters to Race setups)."""
         if not hasattr(self, "_setup_load_combo"):
             return
         self._setup_load_combo.blockSignals(True)
@@ -914,7 +556,7 @@ class SetupBuilderMixin:
         for s in self._saved_setups:
             setup_lbl = s.get("setup_label") or "Setup"
             car_name  = s.get("name", "Unnamed")
-            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('session', '')}]"
+            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('setup_type', s.get('session', ''))}]"
             self._setup_load_combo.addItem(label)
         # select_index is relative to _saved_setups; shift by 1 for the placeholder
         if 0 <= select_index < len(self._saved_setups):
@@ -922,6 +564,271 @@ class SetupBuilderMixin:
         else:
             self._setup_load_combo.setCurrentIndex(0)   # show placeholder
         self._setup_load_combo.blockSignals(False)
+
+    def _refresh_qual_setup_combo(self, select_index: int = -1) -> None:
+        """Refresh the Qualifying form's load combo (all setups; filter to Q if desired)."""
+        if not hasattr(self, "_qual_form"):
+            return
+        combo = self._qual_form._setup_load_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("— select to load —")
+        for s in self._saved_setups:
+            setup_lbl = s.get("setup_label") or "Setup"
+            car_name  = s.get("name", "Unnamed")
+            label = f"{setup_lbl} ({car_name}) — {s.get('track', '')} [{s.get('setup_type', s.get('session', ''))}]"
+            combo.addItem(label)
+        if 0 <= select_index < len(self._saved_setups):
+            combo.setCurrentIndex(select_index + 1)
+        else:
+            combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Per-form handlers for the Qualifying panel
+    # ------------------------------------------------------------------
+
+    def _setup_save_for_form(self, form: "SetupFormWidget") -> None:
+        """Save the setup from ``form`` (used for the Qualifying panel)."""
+        from PyQt6.QtWidgets import QMessageBox
+        _evt_name = ""
+        if hasattr(self, "_active_event"):
+            _evt_name = (self._active_event() or {}).get("name", "") or ""
+        if not _evt_name:
+            QMessageBox.warning(
+                self,
+                "No Active Event",
+                "Please select an active event in the Event Planner before saving a setup.",
+            )
+            return
+        from ui.setup_name_helper import resolve_save_name
+        _prefix = form.purpose_prefix()
+        form._setup_label.setText(
+            resolve_save_name(
+                form._setup_label.text(),
+                _prefix,
+                _evt_name,
+                self._saved_setups,
+            )
+        )
+        form.clear_highlights()
+        if form.purpose == "Race":
+            self._save_re_brief_to_active_event()
+        d = form.current_setup_dict()
+        ca = self._config.setdefault("car_setup", {})
+        existing = next(
+            (i for i, s in enumerate(self._saved_setups)
+             if s.get("name") == d["name"] and s.get("setup_label") == d["setup_label"]),
+            None,
+        )
+        if existing is not None:
+            d["setup_id"] = self._saved_setups[existing].get("setup_id") or d.get("setup_id")
+            self._saved_setups[existing] = d
+            target_idx = existing
+        else:
+            if not d.get("setup_id"):
+                next_id = ca.get("next_setup_id", 1)
+                d["setup_id"] = next_id
+                ca["next_setup_id"] = next_id + 1
+            self._saved_setups.append(d)
+            target_idx = len(self._saved_setups) - 1
+
+        if self._db is not None:
+            _meta_keys = {"name", "setup_label", "setup_id", "captured_at", "ai_notes"}
+            _car_name = d.get("name", "")
+            _car_id = self._db.get_car_id(_car_name) if _car_name else 0
+            _event_id = int(self._build_event_context().event_id or 0)
+            _label = d.get("setup_label", "Setup")
+            _fields = {k: v for k, v in d.items() if k not in _meta_keys}
+            _existing_db_id = d.get("setup_id") if existing is not None else 0
+            if _existing_db_id:
+                self._db.update_setup(_existing_db_id, _label, _fields)
+            else:
+                _new_id = self._db.save_setup(_car_id, _event_id, _label, _fields)
+                d["setup_id"] = _new_id
+                self._saved_setups[target_idx]["setup_id"] = _new_id
+
+        ca["setups"] = self._saved_setups
+        self._persist_config()
+        self._refresh_setup_combo(select_index=target_idx)
+        self._refresh_qual_setup_combo(select_index=target_idx)
+        self._refresh_all_setup_combos()
+        self._bridge.event_log_entry.emit(f"[Setup] saved: {d['name']} (ID {d.get('setup_id', '?')})")
+        lbl = d.get("setup_label", "") or "Setup"
+        form._lbl_setup_save_status.setText(f"Saved: {lbl}  (ID {d.get('setup_id', '?')})")
+        from PyQt6.QtCore import QTimer as _QTimer
+        _QTimer.singleShot(4000, lambda: (
+            form._lbl_setup_save_status.setText("")
+            if hasattr(form, "_lbl_setup_save_status") else None
+        ))
+
+    def _setup_load_selected_for_form(self, form: "SetupFormWidget") -> None:
+        """Load the selected setup into ``form``."""
+        idx = form._setup_load_combo.currentIndex()
+        real_idx = idx - 1
+        if 0 <= real_idx < len(self._saved_setups):
+            form.fill_setup_fields(self._saved_setups[real_idx])
+            self._after_setup_load()
+
+    def _setup_analyse_ai_for_form(self, form: "SetupFormWidget") -> None:
+        """Run the AI setup-analysis for ``form`` and put results in that form's result text."""
+        if self._driving_advisor is None:
+            form._setup_result_text.setPlainText("Driving advisor not available.")
+            return
+        d = form.current_setup_dict()
+        _car_name, _car_specs = self._load_car_specs_for_current()
+        setup_id = d.get("setup_id")
+        n_laps = 5
+        if setup_id:
+            count = sum(
+                1 for r in range(self._lap_table.rowCount())
+                if (w := self._lap_table.cellWidget(r, 14)) is not None
+                and w.currentText().startswith(f"{setup_id} —")
+            )
+            if count > 0:
+                n_laps = count
+        feeling = form._setup_feeling_input.toPlainText().strip()
+        form._setup_result_text.setPlainText("Analysing setup… please wait.")
+        form._btn_analyse_setup.setEnabled(False)
+        import threading as _threading
+        _ai_snap = self._build_setup_ai_snapshot()
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+        _compound = _ai_snap.mandatory_compounds_str
+
+        def _worker():
+            try:
+                resp = self._driving_advisor.build_combined_setup_response(
+                    d, n_laps=n_laps, car_name=_car_name, car_specs=_car_specs,
+                    feeling=feeling or None,
+                    allowed_tuning=_allowed, tuning_locked=_locked,
+                    compound=_compound)
+                self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None, form))
+            except Exception as exc:
+                self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_ai_setup_for_form(self, form: "SetupFormWidget") -> None:
+        """Apply AI-recommended fields to ``form`` (per-form apply button handler)."""
+        if not getattr(form, "last_ai_fields", {}):
+            return
+        form.apply_ai_fields(form.last_ai_fields)
+        # Keep the form's structured Q/R setup name — do NOT rename to "AI Fix N".
+        # Save advances the structured name to the next numbered attempt.
+        form.last_ai_fields = {}
+        form._btn_apply_ai_setup.setVisible(False)
+
+    def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
+        """Build a complete setup with AI for the given form (Qualifying panel)."""
+        # Delegates to the main _run_build_setup but uses the form's purpose as session_type.
+        # We temporarily proxy self._setup_type to match the form's purpose so the existing
+        # _run_build_setup reads the correct session type.
+        # The session_type is captured at call time from the form's purpose.
+        import threading as _threading
+        from strategy.ai_planner import build_car_setup
+
+        api_key = self._ai_api_key.text().strip()
+        if not api_key:
+            form._build_setup_result.setPlainText(
+                "No API key configured. Add your Anthropic API key in the AI Race Analysis section.")
+            form._build_setup_result.setVisible(True)
+            return
+
+        _ai_snap = self._build_setup_ai_snapshot()
+        car          = _ai_snap.car
+        track        = _ai_snap.track
+        session_type = f"{form.purpose} Setup"
+        race_laps    = _ai_snap.race_laps
+        min_weight   = form._setup_min_weight.value()
+        max_power    = form._setup_max_power.value()
+        actual_bhp   = form._setup_actual_bhp.value()
+        num_gears    = form._setup_num_gears.value()
+        drivetrain   = form._setup_drivetrain.currentData()
+        bop_data     = self._get_bop_data_for_car()
+        _duration_mins   = _ai_snap.duration_mins
+        _mandatory_stops = _ai_snap.mandatory_stops
+        _refuel_rate_lps = _ai_snap.refuel_rate_lps
+        _pit_loss_secs   = _ai_snap.pit_loss_secs
+        _re_brief        = (
+            form._re_brief_input.toPlainText().strip()
+            if hasattr(form, "_re_brief_input") and form._re_brief_input.isVisible()
+            else ""
+        )
+        _, _car_specs = self._load_car_specs_for_current()
+        _allowed_tuning = _ai_snap.allowed_tuning_or_none()
+        _tuning_locked  = _ai_snap.tuning_locked
+        _tyre_wear_mult  = _ai_snap.tyre_wear_multiplier
+        _fuel_mult       = _ai_snap.fuel_multiplier
+        _avail_tyres     = _ai_snap.avail_tyres_list()
+        _req_tyres       = _ai_snap.required_tyres_list()
+        _race_type_build = _ai_snap.race_type
+        _track_loc_id    = _ai_snap.track_location_id
+        _layout_id_build = _ai_snap.layout_id
+        _last_lap = self._recorder.last_lap() if self._recorder else None
+        _gearbox_analysis = _last_lap.gearbox_analysis if _last_lap else {}
+        _car_id_build = self._db.get_car_id(car) if self._db and car and car != "Unknown" else 0
+        self._car_id_build = _car_id_build
+        _ofr2_laps = self._resolve_recent_laps(_car_id_build, track)
+
+        form._btn_build_setup.setEnabled(False)
+        form._btn_build_setup.setText("Building…")
+        form._build_setup_result.setPlainText(
+            "Asking AI for complete car setup — this takes 20–30 seconds…")
+        form._build_setup_result.setVisible(True)
+
+        _session_id_build = (
+            int(self._dispatcher._session_id)
+            if hasattr(self, "_dispatcher") and self._dispatcher is not None
+            else 0
+        )
+
+        def _worker():
+            try:
+                _setup_history_str = ""
+                _setup_comparison_str = ""
+                if self._db and _car_id_build > 0 and track:
+                    try:
+                        _setup_history_str = self._db.get_setup_history_for_car_track(
+                            _car_id_build, track, limit=10)
+                    except Exception:
+                        pass
+                    try:
+                        _setup_comparison_str = self._build_setup_comparison_text(track)
+                    except Exception:
+                        pass
+                rec = build_car_setup(car, track, session_type, race_laps,
+                                      min_weight, max_power, api_key,
+                                      bop_data=bop_data,
+                                      actual_bhp=actual_bhp, num_gears=num_gears,
+                                      drivetrain=drivetrain,
+                                      car_specs=_car_specs,
+                                      allowed_tuning=_allowed_tuning,
+                                      tuning_locked=_tuning_locked,
+                                      gearbox_analysis=_gearbox_analysis or None,
+                                      tyre_wear_multiplier=_tyre_wear_mult,
+                                      fuel_multiplier=_fuel_mult,
+                                      avail_tyres=_avail_tyres or None,
+                                      req_tyres=_req_tyres or None,
+                                      race_type=_race_type_build,
+                                      model=self._config.get("anthropic", {}).get("model") or None,
+                                      car_id=_car_id_build,
+                                      track_location_id=_track_loc_id,
+                                      layout_id=_layout_id_build,
+                                      session_id=_session_id_build,
+                                      setup_history=_setup_history_str,
+                                      setup_comparison=_setup_comparison_str,
+                                      duration_mins=_duration_mins,
+                                      mandatory_stops=_mandatory_stops,
+                                      refuel_rate_lps=_refuel_rate_lps,
+                                      pit_loss_secs=_pit_loss_secs,
+                                      race_engineer_brief=_re_brief,
+                                      per_lap_telemetry=_ofr2_laps or None)
+                self._build_setup_queue.put(("ok", rec, session_type, form))
+            except Exception as exc:
+                self._build_setup_queue.put(("err", str(exc), session_type, form))
+
+        _threading.Thread(target=_worker, daemon=True).start()
 
     def _build_setup_context(self, recommendation: dict | None = None,
                              diagnosis: dict | None = None):
@@ -999,37 +906,60 @@ class SetupBuilderMixin:
             return build_setup_ai_snapshot(legacy_strategy=_legacy, session_type=_stype)
 
     def _setup_type_prefix(self) -> str:
-        """'Q' for a qualifying setup, 'R' for a race setup, from the type combo.
+        """'Q' for a qualifying setup, 'R' for a race setup.
 
         State Consolidation 3: setup purpose classification is owned by
         SetupContext — derive it via the canonical ``normalise_purpose`` rather
         than an ad-hoc substring test (behaviour-preserving: "qual" → Q, else R).
+
+        After the side-by-side refactor: reads self._setup_type.currentText() so
+        that the tab-level "Live Session Mode" combo (and test stubs that set it)
+        still drive the prefix.  When the Race form is active (mixin default),
+        this returns "R"; when a stub sets it to "Qualifying Setup" the tests
+        still get "Q" as expected.
         """
         from data.setup_context import normalise_purpose, SetupPurpose
         purpose = normalise_purpose(self._setup_type.currentText())
         return "Q" if purpose == SetupPurpose.QUALIFYING else "R"
 
-    def _generate_setup_name(self) -> str | None:
-        """Build '<Q|R> <event name> <number>' for the active event, or None if no event."""
+    def _generate_setup_name(self, prefix: str | None = None) -> str | None:
+        """Build '<Q|R> <event name> <number>' for the active event, or None if no event.
+
+        ``prefix`` defaults to ``_setup_type_prefix()`` (reads the tab-level combo,
+        so test stubs that set ``self._setup_type`` keep working).  Callers that
+        want the prefix fixed to a specific form purpose pass it explicitly.
+        """
         from ui.setup_name_helper import build_setup_name, next_setup_number
         event_name = ""
         if hasattr(self, "_active_event"):
             event_name = (self._active_event() or {}).get("name", "") or ""
         if not event_name:
             return None
-        prefix = self._setup_type_prefix()
-        n = next_setup_number(self._saved_setups, prefix, event_name)
-        return build_setup_name(prefix, event_name, n)
+        _prefix = prefix if prefix is not None else self._setup_type_prefix()
+        n = next_setup_number(self._saved_setups, _prefix, event_name)
+        return build_setup_name(_prefix, event_name, n)
 
     def _prefill_setup_label(self) -> None:
         """Pre-fill the editable setup-label field with the auto-generated name.
 
-        Fires when the setup type or active event changes. No-op when there is no
-        active event (the user can still type a name; the save guard handles it).
+        Fires when the active event changes.  Uses the Race form's purpose prefix
+        ("R") so the Race panel label matches correctly regardless of the Live
+        Session Mode combo state.  No-op when there is no active event.
         """
-        name = self._generate_setup_name()
+        _prefix = (
+            self._race_form.purpose_prefix()
+            if hasattr(self, "_race_form")
+            else self._setup_type_prefix()
+        )
+        name = self._generate_setup_name(prefix=_prefix)
         if name:
             self._setup_label.setText(name)
+        # Also prefill the Qualifying form label
+        if hasattr(self, "_qual_form"):
+            _q_prefix = self._qual_form.purpose_prefix()
+            _q_name = self._generate_setup_name(prefix=_q_prefix)
+            if _q_name:
+                self._qual_form._setup_label.setText(_q_name)
 
     def _setup_save(self) -> None:
         # Require an active event so setups are always named/grouped by event.
@@ -1049,10 +979,19 @@ class SetupBuilderMixin:
         # saving a loaded/previously-saved structured setup creates a NEW number
         # instead of overwriting. Manual/freeform names are kept exactly as typed.
         from ui.setup_name_helper import resolve_save_name
+        # Side-by-side refactor: the Race form's mixin save path always uses "R"
+        # prefix.  _setup_type_prefix() now reads from the Live Session Mode
+        # toggle (tab-level combo) which is independent of the form purpose.
+        # Use the Race form's purpose_prefix() directly so the label is correct.
+        _save_prefix = (
+            self._race_form.purpose_prefix()
+            if hasattr(self, "_race_form")
+            else self._setup_type_prefix()
+        )
         self._setup_label.setText(
             resolve_save_name(
                 self._setup_label.text(),
-                self._setup_type_prefix(),
+                _save_prefix,
                 _evt_name,
                 self._saved_setups,
             )
@@ -1112,12 +1051,27 @@ class SetupBuilderMixin:
                 self._lbl_setup_save_status.setText("") if hasattr(self, "_lbl_setup_save_status") else None
             ))
 
+    def _after_setup_load(self) -> None:
+        """Refresh the Home Setup card after a setup is loaded into a form.
+
+        Loading only filled the form widgets; unlike Save and AI-apply it never
+        rebuilt the canonical SetupContext (`_last_setup_context`) or refreshed
+        Home, so the Home 'Setup Brain' card stayed stale after a load.
+        """
+        try:
+            self._last_setup_context = self._build_setup_context()
+        except Exception:
+            pass
+        if hasattr(self, "_home_refresh_if_visible"):
+            self._home_refresh_if_visible()
+
     def _setup_load_selected(self) -> None:
         idx = self._setup_load_combo.currentIndex()
         # index 0 is the placeholder; real setups start at index 1
         real_idx = idx - 1
         if 0 <= real_idx < len(self._saved_setups):
             self._fill_setup_fields(self._saved_setups[real_idx])
+            self._after_setup_load()
 
     def _setup_analyse_ai(self) -> None:
         if self._driving_advisor is None:
@@ -1175,12 +1129,18 @@ class SetupBuilderMixin:
         payload = result[1]
         entry_type = result[2] if len(result) > 2 else "analyse_setup"
         feeling = result[3] if len(result) > 3 else None
+        # Per-form routing: if a SetupFormWidget is in position 4, use its result
+        # text and buttons instead of the (Race-aliased) self attrs.
+        _form = result[4] if len(result) > 4 else None
+        _result_text   = _form._setup_result_text   if _form else self._setup_result_text
+        _btn_analyse   = _form._btn_analyse_setup   if _form else getattr(self, "_btn_analyse_setup", None)
+        _btn_apply     = _form._btn_apply_ai_setup  if _form else getattr(self, "_btn_apply_ai_setup", None)
 
-        if hasattr(self, "_btn_analyse_setup"):
-            self._btn_analyse_setup.setEnabled(True)
+        if _btn_analyse:
+            _btn_analyse.setEnabled(True)
 
         if status == "error":
-            self._setup_result_text.setHtml(
+            _result_text.setHtml(
                 f"<span style='color:#F55;'>Analysis failed:</span> {payload}")
             return
 
@@ -1202,62 +1162,86 @@ class SetupBuilderMixin:
                 f"changes to locked areas: <b>{_vc}</b>. Review before applying.</div>"
             )
 
-        # Snapshot driver feedback controls before resetting them.
-        # The user may have rated the PREVIOUS result; capture that rating so it
-        # can be saved with the previous entry's history record, then reset so the
-        # new result starts fresh.
-        _prev_rating_text = ""
-        _prev_hist_labels: list[str] = []
-        if hasattr(self, "_setup_rating_combo"):
-            _prev_rating_text = self._setup_rating_combo.currentText()
-            if _prev_rating_text == "Liked":
-                _prev_hist_labels.append("liked")
-            elif _prev_rating_text == "Hated":
-                _prev_hist_labels.append("hated")
-            elif _prev_rating_text == "Neutral":
-                _prev_hist_labels.append("neutral")
-        if hasattr(self, "_setup_applied_check"):
-            if self._setup_applied_check.isChecked():
-                _prev_hist_labels.append("applied")
-            else:
-                _prev_hist_labels.append("not_applied")
+        # Rating/applied labels are no longer captured here — the rate control
+        # moved to the Practice Review per-run feedback and "applied" is derived
+        # from lap setup tags. History entries save without subjective labels.
 
-        # Reset controls for the incoming fresh result
-        if hasattr(self, "_setup_rating_combo"):
-            self._setup_rating_combo.setCurrentIndex(0)
-        if hasattr(self, "_setup_applied_check"):
-            self._setup_applied_check.setChecked(False)
-
-        # Try to parse structured JSON from the advisor
+        # Try to parse structured JSON from the advisor.  A truncated response
+        # (the model hit the token cap mid-JSON) or a non-JSON reply must NEVER
+        # dump raw text at the user — guard for completeness first, then show a
+        # clear, actionable message instead of leaking JSON.
         try:
+            if not _setup_response_looks_complete(payload):
+                raise _json.JSONDecodeError(
+                    "response appears truncated or non-JSON", (payload or "").strip() or " ", 0)
             data = json.loads(payload)
             analysis = str(data.get("analysis", ""))
-            changes: list = data.get("changes", [])
-            setup_fields: dict = data.get("setup_fields", {})
+            # approved_changes and approved_fields are already gated by _finalise_recommendation:
+            # data["changes"] = approved_changes, data["setup_fields"] = approved_fields.
+            approved_changes: list = data.get("changes", [])
+            approved_fields: dict = data.get("setup_fields", {})
+            rejected_changes: list = data.get("rejected_changes", [])
             _validation_errors: list = data.get("validation_errors", [])
-            _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
+            _validation_warnings: list = data.get("validation_warnings", []) or []
             _eng_validation_errors: list = data.get("engineering_validation_errors", [])
+            _rec_status: str = data.get("recommendation_status", "")
             _diagnosis: dict = data.get("diagnosis") or {}
         except (_json.JSONDecodeError, AttributeError):
-            # Fallback: display raw text, no changes section
-            if _violation_banner:
-                self._setup_result_text.setHtml(
-                    _violation_banner
-                    + f"<pre style='color:#E0E0E0; white-space:pre-wrap;'>{payload}</pre>")
-            else:
-                self._setup_result_text.setPlainText(payload)
-            if hasattr(self, "_btn_apply_ai_setup"):
-                self._btn_apply_ai_setup.setVisible(False)
+            # Friendly fallback — never surface raw JSON to the user.
+            _err_html = (
+                "<div style='background:#2A1A1A; border:1px solid #C0453B; "
+                "border-radius:4px; padding:10px; color:#E8A9A3;'>"
+                "<b style='color:#E86A5E;'>Couldn't read the setup analysis</b><br>"
+                "The AI response looks incomplete — it was likely cut off. "
+                "Click <b>Analyse &amp; Get Setup Fix</b> again to retry. "
+                "If it keeps happening, shorten the driver-feeling text and try once more."
+                "</div>"
+            )
+            _result_text.setHtml(_violation_banner + _err_html)
+            if _btn_apply:
+                _btn_apply.setVisible(False)
             return
 
-        # Build an engineering-validation-failed banner (distinct, red) when the
-        # AI retry did not resolve the engineering contradiction.
-        _eng_banner = ""
-        if _eng_validation_failed:
-            _eng_banner = _format_engineering_validation_banner(_eng_validation_errors)
+        # Group 42: extract new optional keys (defensive — absent on legacy/fallback responses).
+        _protected_fields: list = data.get("protected_fields") or []
+        _ai_audit: dict | None = data.get("ai_audit") or None
+        # deterministic_plan is informational only — not rendered in this sprint.
 
-        # Build a validation-errors banner when the server-side validator flagged issues.
-        _validation_banner = _format_validation_errors_banner(_validation_errors)
+        # Determine whether this recommendation is approved for display/apply.
+        # AC17: absent/empty/None/unrecognised recommendation_status MUST resolve to
+        # legacy_unknown = display-only.  is_legacy_unknown already handles all of
+        # these cases (empty string and None both return True at the first guard).
+        # Call it unconditionally — no falsy short-circuit.
+        from strategy._setup_constants import APPROVED_STATUSES as _APPROVED_STATUSES
+        from data.setup_history import is_legacy_unknown as _is_legacy_unknown, LEGACY_UNKNOWN as _LEGACY_UNKNOWN
+        _is_legacy: bool = _is_legacy_unknown(_rec_status)  # True for "", None, unrecognised
+        _status_approved: bool = (not _is_legacy) and (_rec_status in _APPROVED_STATUSES)
+
+        # Build status banner (replaces old eng_banner + validation_banner logic).
+        # For known non-approved statuses (validation_failed, blocked_no_safe_recommendation,
+        # etc.) _rec_status is truthy and non-empty — render the status banner normally.
+        # For legacy/absent status _is_legacy is True — skip the status banner and fall
+        # through to legacy-banner rendering in the HTML block below.
+        if _rec_status and not _is_legacy:
+            _status_banner = _format_status_banner(_rec_status, _validation_warnings)
+            _eng_banner = ""
+            _validation_banner = ""
+        elif _rec_status and _is_legacy:
+            # Present but unrecognised status: render the status banner so the user
+            # sees the raw status string, then the legacy banner explains it cannot apply.
+            _status_banner = _format_status_banner(_rec_status, _validation_warnings)
+            _eng_banner = ""
+            _validation_banner = ""
+        else:
+            # Absent/empty status (old-format JSON from before the validation gate).
+            # AC17: display-only — no status banner, show legacy-specific banners instead.
+            _status_banner = ""
+            _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
+            _eng_banner = (
+                _format_engineering_validation_banner(_eng_validation_errors)
+                if _eng_validation_failed else ""
+            )
+            _validation_banner = _format_validation_errors_banner(_validation_errors)
 
         # Build a compact diagnosis summary when the backend diagnosis is present.
         _diagnosis_html = ""
@@ -1280,13 +1264,24 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
-        # Store parsed fields so the apply button can use them
-        self._last_setup_ai_fields = {
-            k: v for k, v in setup_fields.items()
+        # Store APPROVED fields only so the apply button can use them.
+        # _parsed_ai_fields comes from approved_fields (already gated by backend).
+        # Route to the per-form storage when a form widget is in the result tuple.
+        _parsed_ai_fields = {
+            k: v for k, v in approved_fields.items()
             if isinstance(v, (int, float))
         }
-        if hasattr(self, "_btn_apply_ai_setup"):
-            self._btn_apply_ai_setup.setVisible(bool(self._last_setup_ai_fields))
+        # Apply button: VISIBLE only when status is in APPROVED_STATUSES and NOT legacy.
+        # AC17: _is_legacy is True for absent/empty/unrecognised statuses — those NEVER show Apply.
+        # _status_approved already incorporates _is_legacy (see above), so `and not _is_legacy`
+        # is a belt-and-suspenders guard that makes the constraint visible at the call site.
+        _show_apply = _status_approved and bool(_parsed_ai_fields) and not _is_legacy
+        if _form is not None:
+            _form.last_ai_fields = _parsed_ai_fields if _show_apply else {}
+        else:
+            self._last_setup_ai_fields = _parsed_ai_fields if _show_apply else {}
+        if _btn_apply:
+            _btn_apply.setVisible(_show_apply)
 
         # State Consolidation 3: capture the canonical SetupContext for this
         # displayed recommendation, keyed to EventContext.change_hash and the
@@ -1297,8 +1292,8 @@ class SetupBuilderMixin:
             self._last_setup_context = self._build_setup_context(
                 recommendation={
                     "analysis": analysis,
-                    "changes": changes,
-                    "setup_fields": setup_fields,
+                    "changes": approved_changes,
+                    "setup_fields": approved_fields,
                     "validation_errors": _validation_errors,
                     "primary_issue": data.get("primary_issue", ""),
                     "confidence": data.get("confidence", ""),
@@ -1308,32 +1303,63 @@ class SetupBuilderMixin:
         except Exception:  # pragma: no cover - defensive; never break the display
             self._last_setup_context = None
 
-        # Build HTML: engineering banner (highest priority) + diagnosis + event
-        # restriction banner + validation warnings + analysis block + changes
+        # Build HTML — Group 42 section hierarchy (AC22):
+        #   0. Status banner + legacy banners + event-restriction banner
+        #   1. Pit Crew diagnosis block
+        #   2. Analysis card
+        #   3. Pit Crew recommendation (approved changes only, with per-change explainability)
+        #   4. Protected fields (collapsed)
+        #   5. Rejected candidate changes (collapsed, rule-engine rejects — distinct from Rejected AI output)
+        #   6. AI audit result (only when present)
+        #   7. Engineering gate failures (for rejected statuses)
+        #   8. Rejected AI text (existing collapsed block, validation_failed / retry_failed statuses)
         card = "background:#1C2A3A; border-radius:6px; padding:10px; margin-bottom:8px;"
         chg_hdr = "background:#2A3A1C; border-left:4px solid #8BC34A; border-radius:4px; " \
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
+        # Legacy-unknown banner — rendered when a response's status is absent, None, or
+        # unrecognised. All such cases resolve to _is_legacy=True and _status_approved=False
+        # (via is_legacy_unknown), so the banner shows and Apply stays hidden. Absent status
+        # is NEVER treated as approved (AC17 — closes the previous sprint's default-approved hole).
+        _legacy_banner = ""
+        if _is_legacy:
+            _legacy_banner = (
+                "<div style='background:#1A1A2A; border:1px solid #8888CC; "
+                "border-radius:4px; padding:8px; margin-bottom:8px; color:#AAAAEE;'>"
+                "&#9432; <b>Legacy recommendation — display only, cannot apply</b><br>"
+                "<span style='font-size:11px;'>This recommendation was saved before the "
+                "engineering validation gate and has no verified status. "
+                "It is shown for reference only and cannot be applied.</span>"
+                "</div>"
+            )
+
         html = (
-            _eng_banner
+            _status_banner
+            + _eng_banner
+            + _legacy_banner
             + _diagnosis_html
             + _violation_banner
             + _validation_banner
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
         )
 
-        if changes:
-            html += f"<div style='{chg_hdr}'>" \
-                    "<b style='color:#8BC34A;'>&#9745; CHANGES TO MAKE IN CAR SETUP</b></div>"
-            for ch in changes:
-                s       = ch.get("setting", "?")
-                frm     = ch.get("from", "?")
-                to_raw  = ch.get("to", "?")
+        # --- Section 3: Pit Crew recommendation ---
+        # ONLY shown when status is approved and changes exist.
+        if _status_approved and approved_changes:
+            html += (
+                f"<div style='{chg_hdr}'>"
+                "<b style='color:#8BC34A;'>&#9745; Pit Crew recommendation</b>"
+                "</div>"
+            )
+            for ch in approved_changes:
+                s        = ch.get("setting", "?")
+                frm      = ch.get("from", "?")
+                to_raw   = ch.get("to", "?")
                 # Backend supplies to_clamped (value already within the car's allowed range).
                 # Falls back to raw to when field is None or to is non-numeric.
                 _clamped_val = ch.get("to_clamped", to_raw)
-                why     = ch.get("why", "")
+                why      = ch.get("why", "")
                 # Prefer the clamped value when the param field was resolved by the backend.
                 # field is None when the backend could not identify the param — show raw value.
                 _field = ch.get("field")
@@ -1350,7 +1376,9 @@ class SetupBuilderMixin:
                 else:
                     # Field unresolvable — acceptable degradation: show raw value as-is.
                     to_display = to_raw
-                html += (
+
+                # Base change line (always shown).
+                _ch_html = (
                     f"<div style='{chg_row}'>"
                     f"<b style='color:#E0E0E0;'>{s}</b>&nbsp;&nbsp;"
                     f"<span style='color:#F5A623;'>{frm}</span>"
@@ -1358,10 +1386,234 @@ class SetupBuilderMixin:
                     f"<span style='color:#8BC34A;'>{to_display}</span>"
                     + (f"<span style='color:#AAA; font-size:10px;'>{_clamp_note}</span>" if _clamp_note else "")
                     + (f"<br><span style='color:#888;font-size:11px;'>&nbsp;&nbsp;&nbsp;{why}</span>" if why else "")
-                    + "</div>"
                 )
 
-        self._setup_result_text.setHtml(html)
+                # Per-change explainability sub-row (Group 42, AC22).
+                # Only rendered when rule_id is present — absent on legacy/fallback changes.
+                _rule_id = ch.get("rule_id", "")
+                if _rule_id:
+                    _symptom    = ch.get("symptom", "")
+                    _rationale  = ch.get("rationale", "")
+                    _evidence   = ch.get("evidence") or []
+                    _rej_alts   = ch.get("rejected_alternatives") or []
+                    _risk       = ch.get("risk_level", "")
+                    _conf       = ch.get("confidence_level", "")
+                    _align      = ch.get("driver_style_alignment", "")
+
+                    # Badge colours for risk and confidence.
+                    _risk_colour = {"low": "#8BC34A", "med": "#F5A623", "high": "#E86A5E"}.get(
+                        str(_risk).lower(), "#AAAAAA")
+                    _align_colour = {"aligned": "#8BC34A", "neutral": "#AAAAAA", "caution": "#F5A623"}.get(
+                        str(_align).lower(), "#AAAAAA")
+
+                    _ev_text   = "; ".join(_evidence) if _evidence else "—"
+                    _alt_text  = "; ".join(_rej_alts) if _rej_alts else "none"
+
+                    _detail_rows = ""
+                    if _symptom:
+                        _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Symptom</td><td style='color:#CCC;'>{_symptom}</td></tr>"
+                    if _rationale:
+                        _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Rationale</td><td style='color:#CCC;'>{_rationale}</td></tr>"
+                    _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Evidence</td><td style='color:#CCC;'>{_ev_text}</td></tr>"
+                    _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Considered alternatives</td><td style='color:#CCC;'>{_alt_text}</td></tr>"
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Risk</td>"
+                        f"<td style='color:{_risk_colour};'>{_risk or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Confidence</td>"
+                        f"<td style='color:#CCC;'>{_conf or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Driver style</td>"
+                        f"<td style='color:{_align_colour};'>{_align or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Rule</td>"
+                        f"<td style='color:#888; font-size:10px;'>{_rule_id}</td></tr>"
+                    )
+
+                    _ch_html += (
+                        "<details style='margin-top:4px; margin-left:8px;'>"
+                        "<summary style='color:#7AB3D4; font-size:11px; cursor:pointer;'>"
+                        "Why Pit Crew recommended this</summary>"
+                        "<div style='margin-top:4px; padding:4px 6px; "
+                        "background:#1A2A3A; border-radius:3px;'>"
+                        f"<table style='font-size:11px; border-collapse:collapse;'>{_detail_rows}</table>"
+                        "</div>"
+                        "</details>"
+                    )
+
+                _ch_html += "</div>"
+                html += _ch_html
+
+        # --- Section 4: Protected fields (collapsed) ---
+        if _protected_fields:
+            _pf_items = "".join(
+                f"<li style='margin:2px 0; color:#CCC; font-size:11px;'><code>{f}</code></li>"
+                for f in _protected_fields
+            )
+            html += (
+                "<div style='background:#1A1A2A; border:1px solid #555588; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px;'>"
+                "<details>"
+                "<summary style='color:#AAAACC; font-size:11px; cursor:pointer;'>"
+                "Protected fields (Pit Crew will not change these)</summary>"
+                f"<ul style='margin:6px 0 2px 0; padding-left:16px;'>{_pf_items}</ul>"
+                "</details>"
+                "</div>"
+            )
+
+        # --- Section 5: Rejected candidate changes (rule-engine rejects) ---
+        # Distinct from section 8 ("Rejected AI output") — these are rule-engine
+        # candidates that were evaluated and rejected before the AI saw the plan.
+        # Shown regardless of status (informational — never actionable).
+        _rule_rejects = [
+            r for r in rejected_changes
+            if r.get("rule_id")  # rule-engine rejects carry rule_id
+        ]
+        if _rule_rejects:
+            _rj_rows = ""
+            for _rch in _rule_rejects:
+                _rf  = _rch.get("field", _rch.get("setting", "?"))
+                _rrule = _rch.get("rule_id", "")
+                _rreason = _rch.get("reason", _rch.get("why", ""))
+                _rsymp   = _rch.get("symptom", "")
+                _rrisk   = _rch.get("risk_level", "")
+                _rconf   = _rch.get("confidence_level", "")
+                _ralign  = _rch.get("driver_style_alignment", "")
+                _rj_rows += (
+                    f"<div style='padding:3px 0 3px 8px; border-bottom:1px solid #2A2A1A;'>"
+                    f"<b style='color:#C8AA66;'>{_rf}</b>"
+                    + (f"&nbsp;<span style='color:#777; font-size:10px;'>[{_rrule}]</span>" if _rrule else "")
+                    + (f"<br><span style='color:#AAA;font-size:11px;'>{_rreason}</span>" if _rreason else "")
+                    + (f"<br><span style='color:#888;font-size:10px;'>"
+                       f"symptom: {_rsymp} &nbsp;|&nbsp; risk: {_rrisk} &nbsp;|&nbsp; "
+                       f"confidence: {_rconf} &nbsp;|&nbsp; alignment: {_ralign}"
+                       f"</span>" if (_rsymp or _rrisk or _rconf or _ralign) else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#1A1A0A; border:1px solid #665533; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px;'>"
+                "<details>"
+                "<summary style='color:#C8AA66; font-size:11px; cursor:pointer;'>"
+                "Rejected candidate changes (not applied)</summary>"
+                f"<div style='margin-top:6px;'>{_rj_rows}</div>"
+                "</details>"
+                "</div>"
+            )
+
+        # --- Section 6: AI audit result ---
+        # Rendered ONLY when ai_audit is present in the response.
+        # Makes clear the AI audited (did not author) the plan.
+        if _ai_audit:
+            _aud_status = _ai_audit.get("status", "")
+            _aud_warnings    = _ai_audit.get("warnings") or []
+            _aud_contradictions = _ai_audit.get("contradictions") or []
+            _aud_missing     = _ai_audit.get("missing_evidence") or []
+            _aud_notes       = _ai_audit.get("explanation_notes", "")
+            _aud_stripped    = _ai_audit.get("stripped_fields") or []
+
+            # Status badge colour.
+            _aud_colour = {
+                "APPROVED":               "#8BC34A",
+                "APPROVED_WITH_WARNINGS": "#F5A623",
+                "REJECTED":               "#E86A5E",
+                "NEEDS_MORE_DATA":        "#AAAAAA",
+            }.get(str(_aud_status).upper(), "#AAAAAA")
+
+            _aud_body = ""
+            if _aud_notes:
+                _aud_body += (
+                    f"<p style='margin:4px 0; color:#CCC; font-size:11px;'>{_aud_notes}</p>"
+                )
+            for _label, _items in (
+                ("Warnings", _aud_warnings),
+                ("Contradictions", _aud_contradictions),
+                ("Missing evidence", _aud_missing),
+            ):
+                if _items:
+                    _li = "".join(f"<li style='margin:2px 0;'>{i}</li>" for i in _items)
+                    _aud_body += (
+                        f"<p style='margin:4px 0 0 0; color:#AAA; font-size:11px;'><b>{_label}:</b></p>"
+                        f"<ul style='margin:2px 0 4px 0; padding-left:16px; color:#CCC; font-size:11px;'>{_li}</ul>"
+                    )
+            if _aud_stripped:
+                _stripped_str = ", ".join(f"<code>{f}</code>" for f in _aud_stripped)
+                _aud_body += (
+                    f"<p style='margin:4px 0; color:#888; font-size:10px;'>"
+                    f"Stripped AI fields: {_stripped_str}</p>"
+                )
+
+            html += (
+                "<div style='background:#1A2A1A; border:1px solid #336633; "
+                "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+                "<div style='margin-bottom:4px;'>"
+                "<b style='color:#88BB88; font-size:12px;'>AI audit</b>"
+                f"&nbsp;&nbsp;<span style='color:{_aud_colour}; font-weight:bold; font-size:12px;'>"
+                f"{_aud_status}</span>"
+                "<span style='color:#777; font-size:10px; margin-left:8px;'>"
+                "(AI checked the plan — it did not author the setup changes)</span>"
+                "</div>"
+                + (_aud_body or "<p style='margin:0; color:#888; font-size:11px;'>No details available.</p>")
+                + "</div>"
+            )
+
+        # --- Section 7: Engineering gate failures (for rejected statuses) ---
+        if _rec_status in {"validation_failed", "retry_failed"} and _eng_validation_errors:
+            _err_items = "".join(
+                f"<li style='margin:2px 0;'>{e}</li>" for e in _eng_validation_errors
+            )
+            html += (
+                "<div style='background:#2A0A0A; border:1px solid #883333; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px; color:#CC8888; font-size:11px;'>"
+                "<b>Engineering gate failures:</b>"
+                f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{_err_items}</ul>"
+                "</div>"
+            )
+
+        # --- Section 8: Rejected AI text (existing collapsed block) ---
+        # For validation_failed / retry_failed / blocked_no_safe_recommendation
+        # when rejected_changes is non-empty (AI-format rejects without rule_id).
+        # Visually distinct: muted/red, no apply path, no green header.
+        # Only show changes that are NOT rule-engine candidates (no rule_id) so
+        # there is no overlap with section 5.
+        # NOTE: blocked_no_safe_recommendation does NOT enable the CHANGES section or
+        # the Apply button — those remain gated on _status_approved (APPROVED_STATUSES only).
+        _ai_text_rejects = [
+            r for r in rejected_changes
+            if not r.get("rule_id")  # AI-format or old-format rejects lack rule_id
+        ]
+        if _rec_status in {"validation_failed", "retry_failed", "blocked_no_safe_recommendation"} and _ai_text_rejects:
+            _rej_rows = ""
+            for _rch in _ai_text_rejects:
+                _rs = _rch.get("setting", "?")
+                _rfr = _rch.get("from", "?")
+                _rto = _rch.get("to", "?")
+                _rwhy = _rch.get("why", "")
+                _rej_rows += (
+                    f"<div style='padding:3px 0 3px 8px; border-bottom:1px solid #3A1A1A;'>"
+                    f"<b style='color:#AA8888;'>{_rs}</b>&nbsp;&nbsp;"
+                    f"<span style='color:#CC8888;'>{_rfr}</span>"
+                    f"&nbsp;&#8594;&nbsp;"
+                    f"<span style='color:#AA6666;'>{_rto}</span>"
+                    + (f"<br><span style='color:#777;font-size:10px;'>&nbsp;&nbsp;&nbsp;{_rwhy}</span>"
+                       if _rwhy else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#1A0A0A; border:1px solid #663333; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details>"
+                "<summary style='color:#CC6666; font-size:11px; cursor:pointer;'>"
+                "Rejected AI output — not for use</summary>"
+                f"<div style='margin-top:6px;'>{_rej_rows}</div>"
+                "</details>"
+                "</div>"
+            )
+
+        _result_text.setHtml(html)
 
         # Save to history
         config_id = self._active_config_id()  # Phase 1: StrategyContext, not raw config["strategy"]
@@ -1370,18 +1622,16 @@ class SetupBuilderMixin:
         if config_id:
             try:
                 from data.setup_history import save_entry
-                # Use the labels snapshot captured from the controls before they
-                # were reset.  These reflect what the user rated on the PREVIOUS
-                # result (or the first-ever run defaults if this is the first result).
-                # driver_feedback: prefer the feeling text; fall back to rating word.
-                _hist_feedback = feeling or _prev_rating_text or ""
+                # Subjective labels (liked/hated/applied) are no longer written
+                # from here — that signal now comes from the Practice Review
+                # per-run rating. Still record the feeling text for context.
                 save_entry(config_id, car, track, {
                     "type": entry_type,
                     "feeling": feeling or "",
                     "analysis": analysis,
-                    "changes": changes,
-                }, labels=_prev_hist_labels if _prev_hist_labels else None,
-                   driver_feedback=_hist_feedback)
+                    "changes": approved_changes,
+                }, driver_feedback=feeling or "",
+                   validation_status=_rec_status)
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 
@@ -1391,18 +1641,26 @@ class SetupBuilderMixin:
             self._home_refresh_if_visible()
 
     def _apply_and_save_ai_setup(self) -> None:
-        """Apply AI-recommended setup_fields to the form and save as a new entry."""
+        """Apply approved AI setup fields to the form.
+
+        Only writes from self._last_setup_ai_fields which is populated exclusively
+        from approved_fields (never from raw setup_fields or rejected changes).
+        The Apply button is only shown when status is in APPROVED_STATUSES, so
+        this method is only reachable for approved recommendations.
+        """
         if not getattr(self, "_last_setup_ai_fields", {}):
             return
-        current = self._current_setup_dict()
-        current.update(self._last_setup_ai_fields)
-        self._fill_setup_fields(current)
-        car = self._config.get("strategy", {}).get("car", "") or "Unknown"
-        ai_count = sum(
-            1 for s in self._saved_setups
-            if s.get("name") == car and str(s.get("setup_label", "")).startswith("AI Fix")
-        )
-        self._setup_label.setText(f"AI Fix {ai_count + 1}")
+        # Route through SetupFormWidget.apply_ai_fields so that:
+        #   - transmission_max_speed_kmh is stripped (display-only, must not write spinbox)
+        #   - gear_1..gear_6 keys are mapped to the gear_ratios list
+        # This makes the Race-form path consistent with _apply_ai_setup_for_form
+        # which calls form.apply_ai_fields() on the Qualifying form.
+        self._race_form.apply_ai_fields(self._last_setup_ai_fields)
+        # Keep the structured R/Q setup name (e.g. "R NGR Porsche Cup Rd7 2")
+        # instead of overwriting it with "AI Fix N" — on Save, resolve_save_name
+        # advances it to the next numbered attempt for the event, so the naming
+        # convention is preserved. The AI-fix linkage for learning is recorded in
+        # the DB (apply_recommendation_for_car_track) and setup_history, not here.
         # Highlight changed fields so the user can see what was modified.
         # The save is intentionally deferred — click Save Setup to persist.
         self._highlight_changed_fields(list(self._last_setup_ai_fields.keys()))
@@ -1599,14 +1857,21 @@ class SetupBuilderMixin:
         _threading.Thread(target=_worker, daemon=True).start()
 
     def _display_build_setup_result(self, result: tuple) -> None:
-        self._btn_build_setup.setEnabled(True)
-        self._btn_build_setup.setText("Build Setup with AI")
         status, payload, *rest = result
         session_type = rest[0] if rest else "Race"
+        # Per-form routing: position 3 (rest[1]) may hold a SetupFormWidget
+        _form = rest[1] if len(rest) > 1 and hasattr(rest[1], "purpose") else None
+        _btn_build    = _form._btn_build_setup    if _form else self._btn_build_setup
+        _build_result = _form._build_setup_result if _form else self._build_setup_result
+        _btn_build.setEnabled(True)
+        _btn_build.setText("Build Setup with AI")
         if status == "err":
-            self._build_setup_result.setPlainText(f"Build Setup failed: {payload}")
+            _build_result.setPlainText(f"Build Setup failed: {payload}")
             return
-        self._apply_build_setup_result(payload, session_type)
+        if _form is not None:
+            self._apply_build_setup_result_for_form(payload, session_type, _form)
+        else:
+            self._apply_build_setup_result(payload, session_type)
 
     def _apply_build_setup_result(self, rec, session_type: str = "Race") -> None:
         """Fill all Car Setup form fields from an AI CarSetupRecommendation."""
@@ -1786,7 +2051,112 @@ class SetupBuilderMixin:
             except Exception as _e:
                 print(f"[SetupHistory] build save failed: {_e}")
 
+    def _apply_build_setup_result_for_form(
+        self, rec, session_type: str, form: "SetupFormWidget"
+    ) -> None:
+        """Fill a specific form's fields from an AI CarSetupRecommendation.
+
+        Mirrors ``_apply_build_setup_result`` but targets ``form``'s widgets
+        instead of the aliased ``self._setup_*`` attrs (which always point to
+        the Race form).  Used when the Qualifying panel's Build button fires.
+        """
+        from strategy.setup_ranges import resolve_ranges
+        _car_name = (self._build_setup_ai_snapshot().car or "") if hasattr(self, "_build_setup_ai_snapshot") else ""
+        _ranges = resolve_ranges(_car_name)
+
+        def _set_int(spin, param, val):
+            lo, hi = _ranges.get(param, (spin.minimum(), spin.maximum()))
+            spin.setRange(int(lo), int(hi))
+            _set_spin_readonly(spin, lo >= hi)
+            spin.setValue(max(int(lo), min(int(hi), int(round(val)))))
+
+        def _set_dbl(spin, param, val):
+            lo, hi = _ranges.get(param, (spin.minimum(), spin.maximum()))
+            spin.setRange(float(lo), float(hi))
+            _set_spin_readonly(spin, lo >= hi)
+            spin.setValue(max(float(lo), min(float(hi), float(val))))
+
+        _set_int(form._setup_rh_f,       "ride_height_front",  rec.ride_height_front)
+        _set_int(form._setup_rh_r,       "ride_height_rear",   rec.ride_height_rear)
+        _set_dbl(form._setup_spr_f,      "springs_front",      rec.springs_front)
+        _set_dbl(form._setup_spr_r,      "springs_rear",       rec.springs_rear)
+        _set_int(form._setup_dmp_f_comp, "dampers_front_comp", rec.dampers_front_comp)
+        _set_int(form._setup_dmp_f_ext,  "dampers_front_ext",  rec.dampers_front_ext)
+        _set_int(form._setup_dmp_r_comp, "dampers_rear_comp",  rec.dampers_rear_comp)
+        _set_int(form._setup_dmp_r_ext,  "dampers_rear_ext",   rec.dampers_rear_ext)
+        _set_int(form._setup_arb_f,      "arb_front",          rec.arb_front)
+        _set_int(form._setup_arb_r,      "arb_rear",           rec.arb_rear)
+        _set_dbl(form._setup_cam_f,      "camber_front",       rec.camber_front)
+        _set_dbl(form._setup_cam_r,      "camber_rear",        rec.camber_rear)
+        _set_dbl(form._setup_toe_f,      "toe_front",          rec.toe_front)
+        _set_dbl(form._setup_toe_r,      "toe_rear",           rec.toe_rear)
+        _set_int(form._setup_aero_f,     "aero_front",         rec.aero_front)
+        _set_int(form._setup_aero_r,     "aero_rear",          rec.aero_rear)
+        _set_int(form._setup_lsd_i,      "lsd_initial",        rec.lsd_initial)
+        _set_int(form._setup_lsd_a,      "lsd_accel",          rec.lsd_accel)
+        _set_int(form._setup_lsd_d,      "lsd_decel",          rec.lsd_decel)
+        _set_int(form._setup_lsd_f_i,    "lsd_front_initial",  rec.lsd_front_initial)
+        _set_int(form._setup_lsd_f_a,    "lsd_front_accel",    rec.lsd_front_accel)
+        _set_int(form._setup_lsd_f_d,    "lsd_front_decel",    rec.lsd_front_decel)
+        _set_int(form._setup_bb,         "brake_bias",         rec.brake_bias)
+        _set_dbl(form._setup_ballast_kg, "ballast_kg",         rec.ballast_kg)
+        _set_int(form._setup_ballast_pos,"ballast_position",   rec.ballast_position)
+        _set_dbl(form._setup_power_rest, "power_restrictor",   rec.power_restrictor)
+        if hasattr(rec, "ecu_recommendation") and rec.ecu_recommendation:
+            form._lbl_ecu_rec.setText(rec.ecu_recommendation)
+        else:
+            form._lbl_ecu_rec.setText("—")
+        if rec.final_drive > 0.0:
+            form._spin_final_drive.setValue(rec.final_drive)
+        for i, spin in enumerate(form._gear_ratio_spins):
+            spin.setValue(rec.gear_ratios[i] if i < len(rec.gear_ratios) else 0.0)
+        if rec.transmission_max_speed_kmh > 0:
+            form._spin_top_speed.setValue(rec.transmission_max_speed_kmh)
+        form._build_setup_result.setHtml(
+            f"<b>AI Setup Reasoning ({form.purpose})</b><br>"
+            f"<p style='line-height:1.5;'>{rec.reasoning}</p>"
+        )
+        form._build_setup_result.setVisible(True)
+
+    def _sync_qual_form_ui_state(self) -> None:
+        """Sync the Qualifying form's BOP/locked/permissions state from the Race form.
+
+        Called from ``_sync_setup_builder_from_event`` after the Race-form state
+        is updated via the aliased self attrs.  Ensures the Qualifying panel's
+        UI widgets reflect the same event constraints.
+        """
+        if not hasattr(self, "_qual_form"):
+            return
+        qf = self._qual_form
+        rf = self._race_form
+        # BOP row visibility (controlled by _on_bop_toggled which only updates
+        # the aliased Race-form widgets through self)
+        for _src, _dst in (
+            ("_lbl_bop_info",       "_lbl_bop_info"),
+            ("_btn_bop_edit",       "_btn_bop_edit"),
+            ("_btn_bop_reload",     "_btn_bop_reload"),
+            ("_bop_info_row_label", "_bop_info_row_label"),
+        ):
+            src_w = getattr(rf, _src, None)
+            dst_w = getattr(qf, _dst, None)
+            if src_w is not None and dst_w is not None:
+                dst_w.setVisible(src_w.isVisible())
+                if hasattr(src_w, "text"):
+                    dst_w.setText(src_w.text())
+        # Locked banner
+        if hasattr(rf, "_setup_locked_banner") and hasattr(qf, "_setup_locked_banner"):
+            qf._setup_locked_banner.setText(rf._setup_locked_banner.text())
+            if rf._setup_locked_banner.isVisible():
+                qf._setup_locked_banner.show()
+            else:
+                qf._setup_locked_banner.hide()
+
     def _sync_setup_builder_from_event(self) -> None:
+        # Amendment B: _lbl_rc_* readout labels were removed from _build_setup_builder_tab.
+        # This method now only updates _lbl_setup_event_ctx and runs all functional
+        # side effects (BoP toggle, setup permissions, spinbox rebind, RE brief, qual sync).
+        # The _lbl_rc_* hasattr guards below are retained as defensive checks so older
+        # widget trees (e.g. tests that instantiate a partial UI) are not broken.
         try:
             evt = self._active_event()
             if not evt:
@@ -1794,35 +2164,14 @@ class SetupBuilderMixin:
                     self._lbl_setup_event_ctx.setText(
                         "No active event — go to Event Planner and click 'Set as Active' first."
                     )
-                _warn = "— (set active event first) —"
-                for attr in ("_lbl_rc_race_type", "_lbl_rc_race_length", "_lbl_rc_fuel_mult",
-                             "_lbl_rc_tyre_wear", "_lbl_rc_refuel_rate", "_lbl_rc_req_tyre",
-                             "_lbl_rc_avail_tyres", "_lbl_rc_mand_pits", "_lbl_rc_weather",
-                             "_lbl_rc_damage", "_lbl_rc_bop", "_lbl_rc_tuning"):
-                    if hasattr(self, attr):
-                        getattr(self, attr).setText(_warn)
-                        getattr(self, attr).setStyleSheet("color: #F5C542; font-size: 11px;")
                 return
-            # Legacy Fan-Out Removal Phase 2: the READOUT labels below reflect
-            # the canonical EventContext (DB-event-first — consistent with what
-            # the strategy/setup AI already consumes since the AI Snapshot
-            # Migration). int() preserves the integer QSpinBox formatting so the
-            # labels are byte-identical when the DB event and the
-            # config["strategy"] fan-out are in sync. Phase 3 moved the
-            # FUNCTIONAL gating (BoP toggle + setup permissions) onto
-            # EventContext; Phase 4 moved the remaining labels (refuel/req/
-            # avail) and the car spinbox rebind — this method no longer reads
-            # config["strategy"] at all.
+            # Legacy Fan-Out Removal Phase 2+: the READOUT labels that were in
+            # the (now-removed) Race Conditions group are gone. The canonical
+            # EventContext is still read here for all functional gating.
             ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
             track = ev_ctx.track or "?"
             car   = ev_ctx.car or "—"
-            tw    = int(ev_ctx.tyre_wear_multiplier)
-            fm    = int(ev_ctx.fuel_multiplier)
-            rt    = ev_ctx.race_type
-            laps  = ev_ctx.laps
-            dur   = ev_ctx.race_duration_minutes
-            length_str = f"{dur} min" if rt == "timed" else f"{laps} laps"
 
             if hasattr(self, "_lbl_setup_event_ctx"):
                 self._lbl_setup_event_ctx.setText(
@@ -1832,49 +2181,6 @@ class SetupBuilderMixin:
             if hasattr(self, "_setup_label"):
                 self._prefill_setup_label()
 
-            _green = "color: #AAE4AA; font-size: 11px;"
-            if hasattr(self, "_lbl_rc_race_type"):
-                self._lbl_rc_race_type.setText("Timed Race" if rt == "timed" else "Lap Race")
-                self._lbl_rc_race_type.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_race_length"):
-                self._lbl_rc_race_length.setText(length_str)
-                self._lbl_rc_race_length.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_fuel_mult"):
-                self._lbl_rc_fuel_mult.setText(f"×{int(fm)}")
-                self._lbl_rc_fuel_mult.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_tyre_wear"):
-                self._lbl_rc_tyre_wear.setText(f"×{int(tw)}")
-                self._lbl_rc_tyre_wear.setStyleSheet(_green)
-            # Phase 4: the last three readout labels (refuel/required/available
-            # tyres) join the rest on EventContext — int() keeps the integer
-            # QSpinBox refuel formatting; the tyre labels join the same compound
-            # CODES the fan-out carried. Byte-identical in sync.
-            if hasattr(self, "_lbl_rc_refuel_rate"):
-                self._lbl_rc_refuel_rate.setText(f"{int(ev_ctx.refuel_rate_lps)} L/s")
-                self._lbl_rc_refuel_rate.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_req_tyre"):
-                _rq_str = ", ".join(ev_ctx.required_tyres)
-                self._lbl_rc_req_tyre.setText(_rq_str or "—")
-                self._lbl_rc_req_tyre.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_avail_tyres"):
-                _at_str = ", ".join(ev_ctx.available_tyres)
-                self._lbl_rc_avail_tyres.setText(_at_str or "—")
-                self._lbl_rc_avail_tyres.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_mand_pits"):
-                self._lbl_rc_mand_pits.setText(str(ev_ctx.mandatory_stops))
-                self._lbl_rc_mand_pits.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_weather"):
-                self._lbl_rc_weather.setText(ev_ctx.weather or "—")
-                self._lbl_rc_weather.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_damage"):
-                self._lbl_rc_damage.setText(ev_ctx.damage or "—")
-                self._lbl_rc_damage.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_bop"):
-                self._lbl_rc_bop.setText("Yes" if ev_ctx.bop_enabled else "No")
-                self._lbl_rc_bop.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_tuning"):
-                self._lbl_rc_tuning.setText("Allowed" if ev_ctx.tuning_allowed else "Not Allowed")
-                self._lbl_rc_tuning.setStyleSheet(_green)
             # Legacy Fan-Out Removal Phase 3 (functional gating): the BoP toggle
             # and setup-permission gating now read the canonical EventContext
             # (DB-event-first — consistent with the AI inputs, the Phase 2 labels,
@@ -1893,59 +2199,37 @@ class SetupBuilderMixin:
             # never store a car — byte-identical, proven in Phase 1 tests).
             self._rebound_setup_spinboxes(ev_ctx.car or "")
             self._load_re_brief_from_active_event()
+            # Sync the Qualifying form's BOP/locked state from the Race-aliased widgets
+            self._sync_qual_form_ui_state()
         except Exception:
             pass
 
     def _build_setup_builder_tab(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(10)
-        layout.setContentsMargins(10, 10, 10, 10)
+        # Outer container: VBox holding the header strip (scrollable) + the
+        # side-by-side form panel (expands to fill the tab, scrolls per-form).
+        tab_widget = QWidget()
+        tab_layout = QVBoxLayout(tab_widget)
+        tab_layout.setSpacing(6)
+        tab_layout.setContentsMargins(6, 6, 6, 6)
+
+        # ── Header strip (event ctx banner + history) — scrollable ──
+        # Amendment B: the "Race Conditions (from Event Planner)" group box was
+        # removed (12 _lbl_rc_* QLabels deleted).  The _lbl_setup_event_ctx
+        # one-line banner and the Setup History group are retained.
+        header_scroll = QScrollArea()
+        header_scroll.setWidgetResizable(True)
+        # Amendment B: removed setMaximumHeight(320) cap — reclaimed space flows
+        # to the setup panel below.
+        header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        header_container = QWidget()
+        layout = QVBoxLayout(header_container)
+        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         self._lbl_setup_event_ctx = QLabel("No active event — go to Event Planner and click 'Set as Active' first.")
         self._lbl_setup_event_ctx.setWordWrap(True)
         self._lbl_setup_event_ctx.setStyleSheet("color: #F5C542; font-size: 11px; padding: 4px;")
         layout.addWidget(self._lbl_setup_event_ctx)
-
-        _rc_group = QGroupBox("Race Conditions (from Event Planner)")
-        _rc_group.setStyleSheet(self._group_style())
-        _rc_form = QFormLayout(_rc_group)
-        _rc_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        _rc_lbl_s = "color: #AAE4AA; font-size: 11px;"
-        _rc_key_s = f"color: {_TEXT}; font-size: 11px;"
-
-        self._lbl_rc_race_type   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_race_length = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_fuel_mult   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_tyre_wear   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_refuel_rate = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_req_tyre    = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_avail_tyres = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_mand_pits   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_weather     = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_damage      = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_bop         = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_tuning      = QLabel("—", styleSheet=_rc_lbl_s)
-
-        _rc_form.addRow(QLabel("Race Type:",        styleSheet=_rc_key_s), self._lbl_rc_race_type)
-        _rc_form.addRow(QLabel("Race Length:",      styleSheet=_rc_key_s), self._lbl_rc_race_length)
-        _rc_form.addRow(QLabel("Fuel Multiplier:",  styleSheet=_rc_key_s), self._lbl_rc_fuel_mult)
-        _rc_form.addRow(QLabel("Tyre Wear:",        styleSheet=_rc_key_s), self._lbl_rc_tyre_wear)
-        _rc_form.addRow(QLabel("Refuel Rate:",      styleSheet=_rc_key_s), self._lbl_rc_refuel_rate)
-        _rc_form.addRow(QLabel("Required Tyres:",   styleSheet=_rc_key_s), self._lbl_rc_req_tyre)
-        _rc_form.addRow(QLabel("Available Tyres:",  styleSheet=_rc_key_s), self._lbl_rc_avail_tyres)
-        _rc_form.addRow(QLabel("Mandatory Pits:",   styleSheet=_rc_key_s), self._lbl_rc_mand_pits)
-        _rc_form.addRow(QLabel("Weather:",          styleSheet=_rc_key_s), self._lbl_rc_weather)
-        _rc_form.addRow(QLabel("Damage:",           styleSheet=_rc_key_s), self._lbl_rc_damage)
-        _rc_form.addRow(QLabel("BoP:",              styleSheet=_rc_key_s), self._lbl_rc_bop)
-        _rc_form.addRow(QLabel("Tuning Allowed:",   styleSheet=_rc_key_s), self._lbl_rc_tuning)
-        _rc_note = QLabel("To change these, update the active event in Event Planner.")
-        _rc_note.setStyleSheet("color: #888; font-size: 10px;")
-        _rc_note.setWordWrap(True)
-        _rc_form.addRow(_rc_note)
-        layout.addWidget(_rc_group)
 
         history_group = QGroupBox("Setup History")
         history_group.setStyleSheet(self._group_style())
@@ -1965,12 +2249,16 @@ class SetupBuilderMixin:
         history_h.addWidget(btn_refresh_hist)
         history_h.addStretch()
         layout.addWidget(history_group)
-
-        layout.addWidget(self._build_car_setup_group())
         layout.addStretch()
 
-        scroll.setWidget(container)
-        return scroll
+        header_scroll.setWidget(header_container)
+        tab_layout.addWidget(header_scroll, 0)  # fixed height
+
+        # ── Side-by-side setup panel — expands to fill remaining space ─────────
+        setup_panel = self._build_car_setup_group()
+        tab_layout.addWidget(setup_panel, 1)  # stretch factor 1
+
+        return tab_widget
 
     def _refresh_setup_history_combo(self) -> None:
         try:

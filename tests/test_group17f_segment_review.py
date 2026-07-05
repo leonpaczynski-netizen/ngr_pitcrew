@@ -714,14 +714,17 @@ class TestAIReadyMissingTypes:
         assert ready is False
         assert any("straight" in b for b in blockers)
 
-    def test_missing_braking_zone_blocks(self):
+    def test_missing_braking_zone_does_not_block(self):
+        # braking_zone is no longer a required AI-ready type — it is inferred from
+        # a speed-drop threshold and is the least reliably detected, so its
+        # absence must NOT block an otherwise-good model.
         result = _make_detection_result(include_braking=False)
         review = create_review_from_detection(result)
         for seg in review.segments:
             confirm_segment(review, seg.segment_id)
         ready, blockers = is_ai_ready(review)
-        assert ready is False
-        assert any("braking_zone" in b for b in blockers)
+        assert ready is True
+        assert not any("braking_zone" in b for b in blockers)
 
     def test_missing_corner_exit_blocks(self):
         result = _make_detection_result(include_exit=False)

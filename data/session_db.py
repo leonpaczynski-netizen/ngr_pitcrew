@@ -108,7 +108,9 @@ CREATE TABLE IF NOT EXISTS driver_feedback (
     tyre_condition  TEXT    NOT NULL DEFAULT '',
     fuel_use        TEXT    NOT NULL DEFAULT '',
     notes           TEXT    NOT NULL DEFAULT '',
-    config_id       TEXT    NOT NULL DEFAULT ''
+    config_id       TEXT    NOT NULL DEFAULT '',
+    setup_id        INTEGER NOT NULL DEFAULT 0,
+    rating          TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS grip_alerts (
@@ -323,6 +325,29 @@ _V9_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("setup_recommendations", "score_details    TEXT NOT NULL DEFAULT '{}'"),
 ]
 
+# v10: attribute per-stint driver feedback to the setup that was running and
+# carry the driver's subjective rating (moved out of the Setup Builder).
+_V10_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("driver_feedback", "setup_id INTEGER NOT NULL DEFAULT 0"),
+    ("driver_feedback", "rating   TEXT    NOT NULL DEFAULT ''"),
+]
+
+# v11: Group 42 — Rule-First Setup Brain.
+# Additive nullable columns on setup_recommendations for the new deterministic
+# pipeline.  recommendation_text is preserved; these are foundation-only columns
+# (no existing query breaks).  All new columns are nullable TEXT so old rows
+# survive as NULL without constraint violations.
+_V11_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("setup_recommendations", "deterministic_plan_json  TEXT"),
+    ("setup_recommendations", "ai_audit_json            TEXT"),
+    ("setup_recommendations", "validation_status        TEXT"),
+    ("setup_recommendations", "approved_changes_json    TEXT"),
+    ("setup_recommendations", "rejected_changes_json    TEXT"),
+    ("setup_recommendations", "diagnosis_json           TEXT"),
+    ("setup_recommendations", "driver_profile_version   TEXT"),
+    ("setup_recommendations", "rule_engine_version      TEXT"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,6 +439,14 @@ class SessionDB:
             self._migrate_v9()
             self._conn.execute("PRAGMA user_version = 9")
             self._conn.commit()
+        if version < 10:
+            self._migrate_v10()
+            self._conn.execute("PRAGMA user_version = 10")
+            self._conn.commit()
+        if version < 11:
+            self._migrate_v11()
+            self._conn.execute("PRAGMA user_version = 11")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -476,6 +509,46 @@ class SessionDB:
         except Exception as e:
             if "duplicate column" not in str(e).lower():
                 raise
+
+    def _migrate_v10(self) -> None:
+        """Add setup_id + rating to driver_feedback (schema version 10).
+
+        setup_id: which saved setup was running for the stint (0 = unattributed).
+        rating:   driver's subjective take on that setup ('' | liked | hated | neutral),
+                  moved here from the Setup Builder's rate-this-result control.
+        Existing rows backfill via DEFAULT and are treated as unrated.
+        """
+        for table, col_def in _V10_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
+    def _migrate_v11(self) -> None:
+        """Group 42 — Rule-First Setup Brain additive columns (schema version 11).
+
+        Adds 8 nullable TEXT columns to setup_recommendations:
+          deterministic_plan_json  — JSON summary of the SetupPlan (proposed_count,
+                                     rejected_candidate_count, protected_fields).
+          ai_audit_json            — JSON of the AuditResult._asdict().
+          validation_status        — SetupRecommendationResult.status string.
+          approved_changes_json    — JSON list of approved changes.
+          rejected_changes_json    — JSON list of rejected candidates.
+          diagnosis_json           — JSON of the diagnosis dict.
+          driver_profile_version   — e.g. "v1.0-hardcoded".
+          rule_engine_version      — e.g. "42.0".
+
+        All are nullable TEXT (no DEFAULT) so existing rows keep NULL without
+        constraint violation and no back-fill is needed.
+        A "duplicate column" guard follows the V9 pattern.
+        """
+        for table, col_def in _V11_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _migrate_v5(self) -> None:
         try:
@@ -1039,14 +1112,39 @@ class SessionDB:
     def insert_setup_recommendations(self, recs: list[dict]) -> None:
         if not recs:
             return
+        # Ensure each rec has a status key so the column is written explicitly
+        # (SQLite default is 'proposed', but callers that provide a final validated
+        # status must have it stored rather than defaulting to the pre-validation value).
+        # v11 (Group 42): also populate the 8 new structured columns when present
+        # in the rec dict (best-effort; old callers that lack the keys get NULL).
+        recs_with_status = []
+        for rec in recs:
+            r = dict(rec)
+            r.setdefault("status", "proposed")
+            # v11 defaults — ensures named params never raise KeyError for old callers
+            r.setdefault("deterministic_plan_json", None)
+            r.setdefault("ai_audit_json", None)
+            r.setdefault("validation_status", None)
+            r.setdefault("approved_changes_json", None)
+            r.setdefault("rejected_changes_json", None)
+            r.setdefault("diagnosis_json", None)
+            r.setdefault("driver_profile_version", None)
+            r.setdefault("rule_engine_version", None)
+            recs_with_status.append(r)
         with self._lock:
             self._conn.executemany(
                 """INSERT INTO setup_recommendations
                    (ai_interaction_id, session_id, car_id, track, layout_id,
-                    feature, recommendation_text, created_at)
+                    feature, recommendation_text, status, created_at,
+                    deterministic_plan_json, ai_audit_json, validation_status,
+                    approved_changes_json, rejected_changes_json, diagnosis_json,
+                    driver_profile_version, rule_engine_version)
                    VALUES (:ai_interaction_id, :session_id, :car_id, :track,
-                           :layout_id, :feature, :recommendation_text, :created_at)""",
-                recs,
+                           :layout_id, :feature, :recommendation_text, :status, :created_at,
+                           :deterministic_plan_json, :ai_audit_json, :validation_status,
+                           :approved_changes_json, :rejected_changes_json, :diagnosis_json,
+                           :driver_profile_version, :rule_engine_version)""",
+                recs_with_status,
             )
             self._conn.commit()
 
@@ -2146,6 +2244,8 @@ class SessionDB:
         lap_num: int,
         feedback: dict,
         config_id: str = "",
+        setup_id: int = 0,
+        rating: str = "",
     ) -> int:
         submitted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
@@ -2154,8 +2254,8 @@ class SessionDB:
                        (session_id, lap_num, submitted_at,
                         corner_entry, mid_corner, exit_stability,
                         rear_braking, tyre_condition, fuel_use,
-                        notes, config_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        notes, config_id, setup_id, rating)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id, lap_num, submitted_at,
                     feedback.get("corner_entry", ""),
@@ -2166,10 +2266,44 @@ class SessionDB:
                     feedback.get("fuel_use", ""),
                     feedback.get("notes", ""),
                     config_id,
+                    int(setup_id or 0),
+                    rating or "",
                 ),
             )
             self._conn.commit()
             return cur.lastrowid or 0
+
+    def get_lap_count_for_setup(self, setup_id: int) -> int:
+        """Number of laps (any session) tagged with this setup_id.
+
+        This is the "was it actually driven?" signal that replaces the old
+        manual 'Applied' checkbox: a setup with >=1 tagged lap was applied.
+        """
+        if not setup_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM lap_records WHERE setup_id = ?",
+                (int(setup_id),),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_dominant_setup_id(self, session_id: int) -> int:
+        """Return the most-frequently tagged non-zero setup_id for a session.
+
+        Used to attribute a per-stint feedback submission to the setup the
+        driver was actually running. Returns 0 when no laps are tagged yet.
+        """
+        if not session_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT setup_id, COUNT(*) AS c FROM lap_records
+                   WHERE session_id = ? AND setup_id > 0
+                   GROUP BY setup_id ORDER BY c DESC, setup_id DESC LIMIT 1""",
+                (int(session_id),),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def get_recent_feedback(
         self,

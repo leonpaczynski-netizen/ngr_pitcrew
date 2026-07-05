@@ -7,6 +7,7 @@ Two kinds of tests, both following the project's no-Qt convention:
      intended (no QApplication required).
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,13 @@ from ui import product_flow as pf
 
 
 ROOT = Path(__file__).parent.parent
+
+
+def _method_body(src: str, name: str) -> str:
+    m = re.search(rf"\n    def {name}\(.*?(?=\n    def |\n(?:class |# ---)|\Z)",
+                  src, re.DOTALL)
+    assert m, f"method {name} not found"
+    return m.group(0)
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +53,8 @@ class TestTabRoles:
         }
 
     def test_support_tabs(self):
-        assert set(pf.support_tabs()) == {"Guide", "Settings"}
+        # Guide tab removed (folded into Home) in the post-UAT overhaul.
+        assert set(pf.support_tabs()) == {"Settings"}
 
     def test_is_diagnostic_tab(self):
         assert pf.is_diagnostic_tab("Track Modelling") is True
@@ -191,8 +200,8 @@ class TestDashboardWiring:
     def test_tab_indices_preserved(self, dash_src):
         # Home Dashboard Promotion (2026-07-03): Home leads at index 0, so the
         # tool tabs shifted down one — Track Modelling index 13, AI Log index 12.
-        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 13' in dash_src
-        assert '"AI Log")           # 12' in dash_src
+        assert 'self._build_track_modelling_tab(), "Track Modelling")  # 12' in dash_src
+        assert '"AI Log")           # 11' in dash_src
 
 
 # --------------------------------------------------------------------------- #
@@ -206,3 +215,90 @@ class TestTrackModellingRenames:
     def test_section5_renamed_from_misleading_alignment_title(self, tm_src):
         assert 'QGroupBox("5. Seed Geometry")' in tm_src
         assert 'QGroupBox("5. Track Model Alignment")' not in tm_src
+
+    def test_corner_verify_api_key_not_read_from_nonexistent_ai_section(self, tm_src):
+        # Field-consistency fix: the AI corner-verify key must come from the
+        # editable field / config["anthropic"], never config["ai"] (which never
+        # exists, so the old read always yielded an empty key).
+        assert 'self._config.get("ai", {}).get("api_key"' not in tm_src
+        assert "self._ai_api_key.text().strip()" in tm_src
+
+    def test_accept_exports_reviewed_segments(self, tm_src):
+        # The Accept button must write the reviewed-segments file — without it the
+        # track stays seed-only / not AI-ready no matter how good the alignment
+        # (the Fuji UAT case). It must also re-resolve so the status flips.
+        body = _method_body(tm_src, "_tm_accept_track_model")
+        assert "export_review_json" in body, "Accept must export the reviewed segments"
+        assert "_tm_refresh_resolver" in body, "Accept must re-resolve the model status"
+
+    def test_accept_not_gated_on_unrelated_seed_geometry(self, tm_src):
+        # Accept enables on alignment quality alone; the old extra seed_available
+        # requirement forced an unrelated 'Generate Seed Geometry' workflow.
+        assert 'states.get("accept", False) and seed_available' not in tm_src
+
+    def test_accept_bulk_confirms_segments(self, tm_src):
+        # There is no per-segment review UI, so Accept must confirm the detected
+        # segments (UNREVIEWED -> CONFIRMED) or is_ai_ready can never pass.
+        body = _method_body(tm_src, "_tm_accept_track_model")
+        assert "SegmentReviewStatus" in body and "CONFIRMED" in body
+
+    def test_segment_row_click_is_wired_for_map_highlight(self, tm_src):
+        # The segment table click must be connected so selecting a segment
+        # highlights it on the map (it was never wired).
+        assert "self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)" in tm_src
+
+    def test_tab_show_restores_last_track(self, tm_src):
+        # The reviewed model persists, but the status panel only re-resolves on
+        # (re)selection. On first tab show we must restore the last-used track so
+        # an AI-ready track shows as such without the user re-selecting/re-Accepting.
+        body = _method_body(tm_src, "_tm_on_tab_shown")
+        assert "_tm_restore_last_track" in body, (
+            "Tab show must restore the last-used track so its AI-ready status is "
+            "visible on open without a manual re-select."
+        )
+
+    def test_restore_last_track_reselects_both_combos_from_config(self, tm_src):
+        # Restore must read the persisted ids and drive both combos, so the normal
+        # currentIndexChanged handlers run the resolver (no separate refresh path).
+        body = _method_body(tm_src, "_tm_restore_last_track")
+        assert 'get("track_location_id"' in body and 'get("layout_id"' in body
+        assert "self._tm_location_combo.setCurrentIndex" in body
+        assert "self._tm_layout_combo.setCurrentIndex" in body
+
+    def test_layout_change_restores_calibration_session(self, tm_src):
+        # Section 5 (Seed Geometry) needs a calibration session; on layout-select we
+        # rehydrate one from persisted laps so it works after a restart without
+        # re-driving. Must run on layout change.
+        body = _method_body(tm_src, "_tm_on_layout_changed")
+        assert "_tm_try_restore_calibration_session" in body
+
+    def test_restore_calibration_session_loads_persisted_laps(self, tm_src):
+        # Restore must reuse the persisted laps file (via the audit) and import it,
+        # not require a live session.
+        body = _method_body(tm_src, "_tm_try_restore_calibration_session")
+        assert "can_detect_segments" in body, "must gate on persisted ref-path + laps"
+        assert "_import_cal_laps" in body, "must import the saved calibration laps"
+
+    def test_restore_calibration_session_never_clobbers_live(self, tm_src):
+        # A live recording/built controller session is authoritative — restore must
+        # early-return instead of shadowing it with disk data.
+        body = _method_body(tm_src, "_tm_try_restore_calibration_session")
+        assert 'getattr(ctrl, "_session", None) is not None' in body
+
+    def test_seed_geometry_uses_effective_session(self, tm_src):
+        # Both the Generate handler and the panel refresh must go through the
+        # effective-session helper (live-or-restored), not read ctrl._session direct.
+        gen = _method_body(tm_src, "_tm_generate_seed_geometry")
+        panel = _method_body(tm_src, "_tm_refresh_seed_geometry_panel")
+        assert "self._tm_effective_seed_session()" in gen
+        assert "self._tm_effective_seed_session()" in panel
+
+    def test_effective_seed_session_prefers_live_over_restored(self, tm_src):
+        body = _method_body(tm_src, "_tm_effective_seed_session")
+        assert "_tm_restored_session" in body and "_session" in body
+
+    def test_sections_5_and_6_have_inline_guidance(self, tm_src):
+        # The optional "save geometry to library" workflow was unclear; each section
+        # must carry inline guidance text so the workflow reads correctly.
+        assert "not needed for AI-ready" in tm_src, "Section 5 must explain it's optional"
+        assert "Mirrors what the track library holds" in tm_src, "Section 6 must explain it's a read-only library mirror"

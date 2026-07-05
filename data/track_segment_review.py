@@ -49,10 +49,15 @@ REVIEW_MODELS_DIR: Path = SEGMENT_MODELS_DIR
 
 _REVIEW_SCHEMA: str = "track_model_review_result_v1"
 
-# Segment types that must all be present (or explicitly all-rejected) for AI-ready
+# Segment types that must all be present (or explicitly all-rejected) for AI-ready.
+# BRAKING_ZONE is intentionally NOT required: it is inferred from a speed-drop
+# threshold and is the least-reliably-detected type, so requiring it blocked
+# otherwise-good models (real UAT case: straights + apexes + corner-exits all
+# detected, braking zones not). A model without explicit braking segments is
+# still useful to the AI (braking is implied by corner entry -> apex). Missing
+# braking zones remain a detection WARNING, just not an AI-ready blocker.
 _AI_READY_REQUIRED_TYPES: frozenset[TrackSegmentType] = frozenset({
     TrackSegmentType.STRAIGHT,
-    TrackSegmentType.BRAKING_ZONE,
     TrackSegmentType.APEX_ZONE,
     TrackSegmentType.CORNER_EXIT,
 })

@@ -5,6 +5,10 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-05 — Group 40 Delivered)
+
+**Group 40 — Setup Diagnosis Hardening** DELIVERED (2026-07-05). Pure Python backend sprint on top of Group 39. Key additions: `bottoming_confidence` (band/subtype/confidence), `driver_feel_traction_status`, `aero_rear_healthy` (0.80×hi fraction-of-max threshold). New validation rules: `rh_increment_exceeds_confidence`, `rh_rake_risk`, `lsd_large_change_gated`, `lsd_blocked_driver_feel`. Hardened `lsd_reversal_without_evidence` (delta >= 5 guard). Deterministic fallback (`_build_deterministic_fallback`) for post-retry engineering failures. **Full suite: 5359 pass / 6 skip / 8 fail** (8 pre-existing frozen-allowlist failures, unchanged). Branch: `ofr2-quali-race-disciplines`.
+
 ## Repository / Build Status (2026-07-02)
 
 - **Full test suite:** 3984 pass / 6 skip / 0 fail (6 skips require a Qt display).

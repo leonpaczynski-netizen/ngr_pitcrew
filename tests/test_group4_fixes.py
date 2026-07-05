@@ -72,22 +72,25 @@ class TestBoPSourceOfTruth(unittest.TestCase):
         self.assertIn("bop_enabled", body)
         self.assertNotIn("_chk_bop", body)
 
-    def test_lbl_rc_bop_exists_in_race_conditions_group(self):
-        """Race Conditions group must have a _lbl_rc_bop read-only label."""
+    def test_lbl_rc_bop_absent_after_amendment_b(self):
+        """Amendment B: Race Conditions group was removed — _lbl_rc_bop must NOT exist."""
         src = _setup_builder_text()
-        self.assertIn("_lbl_rc_bop", src,
-                      "Race Conditions group must display BoP status from active Event")
+        self.assertNotIn("self._lbl_rc_bop", src,
+                         "Amendment B: Race Conditions group deleted — _lbl_rc_bop must be absent")
 
-    def test_lbl_rc_tuning_exists_in_race_conditions_group(self):
-        """Race Conditions group must have a _lbl_rc_tuning read-only label."""
+    def test_lbl_rc_tuning_absent_after_amendment_b(self):
+        """Amendment B: Race Conditions group was removed — _lbl_rc_tuning must NOT exist."""
         src = _setup_builder_text()
-        self.assertIn("_lbl_rc_tuning", src)
+        self.assertNotIn("self._lbl_rc_tuning", src,
+                         "Amendment B: Race Conditions group deleted — _lbl_rc_tuning must be absent")
 
-    def test_sync_setup_builder_populates_rc_bop(self):
-        """_sync_setup_builder_from_event must populate _lbl_rc_bop."""
+    def test_sync_setup_builder_no_rc_bop(self):
+        """Amendment B: _sync_setup_builder_from_event must NOT write _lbl_rc_bop/_lbl_rc_tuning."""
         body = _method_body(_setup_builder_text(), "_sync_setup_builder_from_event")
-        self.assertIn("_lbl_rc_bop", body)
-        self.assertIn("_lbl_rc_tuning", body)
+        self.assertNotIn("_lbl_rc_bop", body,
+                         "_sync_setup_builder_from_event must not reference removed _lbl_rc_bop")
+        self.assertNotIn("_lbl_rc_tuning", body,
+                         "_sync_setup_builder_from_event must not reference removed _lbl_rc_tuning")
 
     def test_on_event_set_active_writes_bop_to_strat(self):
         """Rule-cache deletion pin (2026-07-04): bop is NO LONGER cached in

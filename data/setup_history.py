@@ -5,6 +5,21 @@ fixes keyed by config_id.  Entries are fed back into AI prompts so every
 call is aware of what has been tried for this specific car/track/race-length
 combination — preventing the AI from recommending changes that were already
 applied and helping it build on previous iterations.
+
+Group 42 — legacy_unknown treatment
+-------------------------------------
+Entries with a validation_status that is absent, None, or unrecognised
+(not in APPROVED_STATUSES and not a known non-approved status) are labelled
+LEGACY_UNKNOWN.  These are display-only — they must never be applied as
+actionable recommendations.
+
+Backend hook: is_legacy_unknown(validation_status) -> bool
+  Returns True when the status indicates an unknown/pre-validation-gate entry.
+  Frontend-builder wires this to the UI; the backend only exposes the hook.
+
+Known non-approved statuses (routed to _rejected_ bucket but recognised):
+  "ai_audit_rejected_advisory", "validation_failed", "retry_failed",
+  "blocked_no_safe_recommendation".
 """
 from __future__ import annotations
 
@@ -13,9 +28,83 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+# Import APPROVED_STATUSES from _setup_constants to avoid duplicating the frozenset.
+# setup_history is a data-layer module with no dependency on strategy/, so this
+# import is clean (no circular risk).
+from strategy._setup_constants import APPROVED_STATUSES  # noqa: F401 — re-exported
+
 _HISTORY_PATH = Path(__file__).parent / "setup_history.json"
 _lock = threading.Lock()
 _MAX_ENTRIES_PER_CONFIG = 20
+
+# Key prefix for the rejected/diagnostic bucket — entries with non-approved statuses
+# are written here so they never appear as the current recommendation but are still
+# visible for debugging.
+_REJECTED_KEY_PREFIX = "_rejected_"
+
+# ---------------------------------------------------------------------------
+# Group 42 — legacy_unknown treatment
+# ---------------------------------------------------------------------------
+
+# Statuses that are explicitly non-approved but recognised (routed to _rejected_).
+_KNOWN_NON_APPROVED_STATUSES: frozenset[str] = frozenset({
+    "ai_audit_rejected_advisory",
+    "validation_failed",
+    "retry_failed",
+    "blocked_no_safe_recommendation",
+    "generated",
+    "retry_requested",
+    # Group 41 status strings
+    "proposed",
+})
+
+# Sentinel string for entries with absent/unrecognised validation_status.
+LEGACY_UNKNOWN: str = "legacy_unknown"
+
+
+def is_legacy_unknown(validation_status: "str | None") -> bool:
+    """Return True when validation_status is absent, None, or unrecognised.
+
+    An entry is legacy_unknown when it was saved before the engineering-
+    validation-gate (Group 41) or before the rule-first pipeline (Group 42)
+    and therefore has no reliable status to act on.
+
+    legacy_unknown entries are DISPLAY-ONLY — they must never be applied as
+    actionable recommendations.
+
+    Frontend hook: call this function when rendering history entries to decide
+    whether to surface an 'apply' button or a 'legacy — cannot apply' banner.
+    """
+    if not validation_status:
+        return True
+    if validation_status in APPROVED_STATUSES:
+        return False
+    if validation_status in _KNOWN_NON_APPROVED_STATUSES:
+        return False
+    # Unknown / unrecognised status → treat as legacy
+    return True
+
+
+def normalise_validation_status(entry: dict) -> str:
+    """Return the effective validation_status for a history entry.
+
+    Applies the legacy_unknown treatment: entries with absent or unrecognised
+    status are returned as LEGACY_UNKNOWN.  All other statuses are returned
+    as-is.
+
+    Parameters
+    ----------
+    entry : A history entry dict (as stored by save_entry).
+
+    Returns
+    -------
+    str — one of: LEGACY_UNKNOWN, an APPROVED_STATUSES value, or a known
+          non-approved status string.
+    """
+    vs = entry.get("validation_status") or ""
+    if is_legacy_unknown(vs):
+        return LEGACY_UNKNOWN
+    return vs
 
 
 def _load_all() -> dict:
@@ -47,6 +136,7 @@ def save_entry(
     entry: dict,
     labels: "list[str] | None" = None,
     driver_feedback: str = "",
+    validation_status: str = "",
 ) -> None:
     """Append one history entry for this config_id.
 
@@ -62,8 +152,13 @@ def save_entry(
       feeling      : str (driver description, for feeling_fix type)
 
     New optional params (backward-compatible):
-      labels         : list of label strings from VALID_LABELS (any invalid labels silently dropped)
-      driver_feedback: free-text driver outcome description (empty = not provided)
+      labels            : list of label strings from VALID_LABELS (any invalid labels silently dropped)
+      driver_feedback   : free-text driver outcome description (empty = not provided)
+      validation_status : SetupRecommendationResult.status string.
+                          When provided AND not in APPROVED_STATUSES, the entry is written
+                          to a separate diagnostic bucket (key prefix "_rejected_") so it
+                          never appears as the current recommendation.  Approved statuses
+                          write to the primary bucket as before.
     """
     if not config_id:
         return
@@ -71,15 +166,24 @@ def save_entry(
     entry["ts"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     # Attach labels (filter to valid vocabulary)
     if labels:
-        valid = [l for l in labels if l in VALID_LABELS]
+        valid = [lbl for lbl in labels if lbl in VALID_LABELS]
         if valid:
             entry["labels"] = valid
     # Attach driver feedback
     if driver_feedback:
         entry["driver_feedback"] = driver_feedback.strip()
+    # Attach validation status for audit trail
+    if validation_status:
+        entry["validation_status"] = validation_status
+
+    # Route non-approved statuses to the rejected diagnostic bucket
+    _use_config_id = config_id
+    if validation_status and validation_status not in APPROVED_STATUSES:
+        _use_config_id = f"{_REJECTED_KEY_PREFIX}{config_id}"
+
     with _lock:
         data = _load_all()
-        cfg = data.setdefault(config_id, {"car": car, "track": track, "entries": []})
+        cfg = data.setdefault(_use_config_id, {"car": car, "track": track, "entries": []})
         cfg["car"] = car
         cfg["track"] = track
         cfg.setdefault("entries", []).append(entry)

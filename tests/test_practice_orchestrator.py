@@ -86,6 +86,34 @@ def test_calls_ai_once():
     assert result is expected_result
 
 
+def test_driver_notes_reach_the_analysis_prompt():
+    # Regression: the driver_feedback 'notes' column was read as the
+    # non-existent 'free_text' key, so notes were silently dropped from the
+    # practice-analysis prompt (same class of bug as driving_advisor, fixed
+    # separately). Notes must now flow through.
+    params = _RaceParams()
+    db = _make_db()
+    db.get_recent_feedback.return_value = [{
+        "corner_entry": "", "mid_corner": "", "exit_stability": "",
+        "rear_braking": "", "tyre_condition": "", "fuel_use": "",
+        "notes": "rear snaps on exit",
+    }]
+
+    with patch("strategy.practice_orchestrator.analyse_practice_session",
+               return_value=_PracticeAnalysis()) as mock_ai, \
+         patch("strategy._rec_parser.parse_recommendations_from_response",
+               return_value=[]):
+        from strategy.practice_orchestrator import run_practice_analysis
+        run_practice_analysis(
+            params, {"Soft": [90_000.0]}, {}, "GR86", {}, "", "key",
+            db, car_id=1, session_id=0, model_name="claude-3",
+        )
+
+    assert "rear snaps on exit" in str(mock_ai.call_args), (
+        "driver notes (notes column) must reach the practice-analysis prompt"
+    )
+
+
 def test_writes_recs_to_db():
     params = _RaceParams()
     db = _make_db()

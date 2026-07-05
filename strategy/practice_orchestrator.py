@@ -50,7 +50,7 @@ def run_practice_analysis(
                     parts = []
                     for k in (
                         "corner_entry", "mid_corner", "exit_stability",
-                        "rear_braking", "tyre_condition", "fuel_use", "free_text",
+                        "rear_braking", "tyre_condition", "fuel_use", "notes",
                     ):
                         v = row.get(k, "")
                         if v:

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional, Callable
 
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QEvent, QPointF, QRectF
 from PyQt6.QtGui import (
     QColor, QPalette, QFont, QCloseEvent, QPixmap,
     QPainter, QPen, QBrush, QPolygonF,
@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QSlider, QSpinBox, QDoubleSpinBox, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QFileDialog, QScrollArea, QComboBox, QSplitter, QTextEdit,
     QStatusBar, QFrame, QSizePolicy, QDialog, QStackedWidget, QListWidget,
-    QListWidgetItem, QPlainTextEdit, QMessageBox,
+    QListWidgetItem, QPlainTextEdit, QMessageBox, QAbstractSpinBox,
 )
 
 from telemetry.packet import (
@@ -47,7 +47,7 @@ from ui.tab_registry import (
     build_default_registry,
     TAB_LIVE, TAB_EVENT_PLANNER, TAB_GARAGE, TAB_SETUP_BUILDER,
     TAB_PRACTICE_REVIEW, TAB_STRATEGY_BUILDER, TAB_TELEMETRY, TAB_DIAGNOSTICS,
-    TAB_GUIDE, TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
+    TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
     TAB_HOME,
 )
 
@@ -255,6 +255,23 @@ Also accepts full names: Soft, Medium, Hard, Inter, Wet, Racing Soft, etc.</p>
 # telemetry/parser.py and docs/.
 
 
+class _NoWheelFilter(QObject):
+    """App-wide event filter that stops the mouse wheel from changing spin box
+    and combo box values. UAT request: values must change only by typing or by
+    clicking the spin buttons, never by an accidental scroll over the control.
+
+    The wheel event is consumed on the control so its value is untouched; scroll
+    over the surrounding page (labels, gaps, group boxes) still works normally.
+    """
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt signature)
+        if (event.type() == QEvent.Type.Wheel
+                and isinstance(obj, (QAbstractSpinBox, QComboBox))):
+            event.ignore()
+            return True
+        return False
+
+
 class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     _TUNING_CATEGORIES: list[tuple[str, str]] = [
@@ -316,6 +333,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         udp_listener=None,
     ) -> None:
         super().__init__()
+        # Stop the mouse wheel from changing spin/combo values anywhere in the
+        # app (values change only by typing or the spin buttons). Kept as an
+        # attribute so the filter is not garbage-collected.
+        self._no_wheel_filter = _NoWheelFilter(self)
+        _app = QApplication.instance()
+        if _app is not None:
+            _app.installEventFilter(self._no_wheel_filter)
         self._config          = config
         self._logger          = logger
         self._announcer       = announcer
@@ -440,11 +464,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(_strategy_builder_widget,           "Strategy Builder") # 6
         self._tabs.addTab(self._build_telemetry_tab(),        "Telemetry")        # 7
         self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 8
-        self._tabs.addTab(self._build_guide_tab(),            "Guide")            # 9
-        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 10
-        self._tabs.addTab(self._build_history_tab(),          "History")          # 11
-        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 12
-        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 13
+        self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
+        self._tabs.addTab(self._build_history_tab(),          "History")          # 10
+        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
+        self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -652,6 +675,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         grid.setRowStretch(grid.rowCount(), 1)
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
+
+        # User Guide + reference, folded in from the old Guide tab (collapsed by
+        # default). Keeps the how-to where the workflow starts.
+        root.addWidget(self._build_guide_reference_widget())
         return w
 
     def _build_home_dashboard_state(self):
@@ -853,6 +880,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         root = QVBoxLayout(w)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
+
+        root.addWidget(self._tab_intro_header(
+            "Live Race Engineer",
+            "Real-time coaching during a session — fuel, tyres, pit windows and "
+            "voice alerts. Next: pick Practice or Race mode and start driving; "
+            "alerts and push-to-talk queries run automatically."))
 
         # Row 1: Race info bar
         info_row = QHBoxLayout()
@@ -1251,6 +1284,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             import main
             with main._state_lock:
                 self._live_mode_ref[0] = mode
+                # Unify the qual/race shift-beep threshold with the live mode:
+                # Qualifying -> qual RPM, Race -> race RPM. Practice is ambiguous
+                # (could be qual- or race-pace running), so it leaves the finer
+                # Setup Builder "Live beep uses:" selection untouched.
+                if (mode in ("Race", "Qualifying")
+                        and hasattr(self, "_practice_is_qual_ref")
+                        and self._practice_is_qual_ref is not None):
+                    self._practice_is_qual_ref[0] = (mode == "Qualifying")
+        # Mirror the Setup Builder "Live beep uses:" combo so both controls agree
+        # (blockSignals avoids a re-entrant _on_setup_type_changed).
+        if mode in ("Race", "Qualifying") and hasattr(self, "_setup_type"):
+            self._setup_type.blockSignals(True)
+            self._setup_type.setCurrentText(
+                "Qualifying Setup" if mode == "Qualifying" else "Race Setup")
+            self._setup_type.blockSignals(False)
         # Open a new session immediately so laps (including the first outlap) are linked
         if self._db is not None and self._dispatcher is not None:
             try:
@@ -1722,8 +1770,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             _car_now = self._config.get("strategy", {}).get("car", "")
             _matching = [s for s in _setups if
                          s.get("car", "") == _car_now or s.get("name", "") == _car_now]
+            from ui.setup_name_helper import setup_display_label
             self._telem_lbl_setup.setText(
-                _matching[-1].get("setup_label", _matching[-1].get("name", "Unknown")) if _matching else "—"
+                (setup_display_label(_matching[-1]) or "Unknown") if _matching else "—"
             )
 
             if p is None:
@@ -1784,20 +1833,59 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             logging.warning("telemetry label update failed", exc_info=True)
 
-    # --- Guide tab ----------------------------------------------------------
+    # --- Per-tab guidance header (post-UAT clarity overhaul) ----------------
 
-    def _build_guide_tab(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+    def _tab_intro_header(self, title: str, subtitle: str) -> QWidget:
+        """A consistent 'what this tab is for + your next step' band for the top
+        of a tab. Part of the clarity overhaul so every tab explains itself and
+        points at the next action, instead of relying on a separate Guide tab."""
+        band = QWidget()
+        band.setStyleSheet(
+            f"background: {_DARK_CARD}; border-left: 4px solid #2EA043;"
+            " border-radius: 6px;")
+        # Hug the content — never let a parent layout stretch the band tall.
+        band.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        lay = QVBoxLayout(band)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
+        t = QLabel(title)
+        t.setStyleSheet(
+            f"color: {_TEXT}; font-size: 13px; font-weight: bold; background: transparent;")
+        s = QLabel(subtitle)
+        s.setWordWrap(True)
+        s.setStyleSheet("color: #9FB0A6; font-size: 11px; background: transparent;")
+        lay.addWidget(t)
+        lay.addWidget(s)
+        return band
+
+    # --- User Guide (folded into Home) --------------------------------------
+
+    def _build_guide_reference_widget(self) -> QWidget:
+        """Collapsible User Guide + reference section, embedded at the bottom of
+        the Home tab. The standalone Guide tab was removed — help now lives on
+        Home, where the workflow starts, instead of a separate tab. Starts
+        collapsed so it never crowds the status cards."""
+        box = QGroupBox("\U0001F4D6  User Guide & Reference  —  click to expand")
+        box.setCheckable(True)
+        box.setChecked(False)
+        try:
+            box.setStyleSheet(self._group_style())
+        except Exception:
+            pass
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 6, 6, 6)
         txt = QTextEdit()
         txt.setReadOnly(True)
+        txt.setMinimumHeight(420)
         txt.setStyleSheet(
             f"QTextEdit {{ background: {_DARK_BG}; color: {_TEXT}; "
             f"border: none; padding: 12px; font-size: 12px; }}"
         )
         txt.setHtml(_GUIDE_HTML)
-        scroll.setWidget(txt)
-        return scroll
+        txt.setVisible(False)
+        lay.addWidget(txt)
+        box.toggled.connect(txt.setVisible)
+        return box
 
     # --- Debug tab ----------------------------------------------------------
 
@@ -2735,10 +2823,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         event_id = self._db.get_event_id(event_name) if event_name else 0
         _meta_keys = {"name", "setup_label", "setup_id", "captured_at", "ai_notes"}
         changed = False
+        from ui.setup_name_helper import setup_display_label
         for s in self._saved_setups:
             car_name = s.get("name", "")
             car_id = self._db.get_car_id(car_name) if car_name else 0
-            label = s.get("setup_label", s.get("name", "Setup"))
+            label = setup_display_label(s) or "Setup"
             setup_fields = {k: v for k, v in s.items() if k not in _meta_keys}
             db_id = self._db.save_setup(car_id, event_id, label, setup_fields,
                                         ai_notes=s.get("ai_notes", ""))
@@ -2770,11 +2859,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         return best_id
 
     def _setup_id_options(self) -> list[str]:
+        from ui.setup_name_helper import setup_display_label
         seen: dict[int, str] = {}
         for s in self._saved_setups:
             sid = s.get("setup_id")
             if sid:
-                seen[sid] = s.get("name", "")
+                seen[sid] = setup_display_label(s) or s.get("name", "")
         return [""] + [f"{sid} — {name}" for sid, name in sorted(seen.items())]
 
     def _make_setup_combo(self, row: int, current_id: int = 0) -> "QComboBox":
@@ -2847,8 +2937,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             db.close()
             if not rows:
                 return ""
+            from ui.setup_name_helper import setup_display_label
             id_to_name: dict[int, str] = {
-                s["setup_id"]: s.get("name", f"Setup {s['setup_id']}")
+                s["setup_id"]: setup_display_label(s) or f"Setup {s['setup_id']}"
                 for s in self._saved_setups if s.get("setup_id")
             }
             lines = ["## Setup comparison (session history)"]
@@ -3429,9 +3520,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             except Exception as exc:
                 print(f"[Setup] DB snapshot failed: {exc}")
         if hasattr(self, "_lbl_bank_status"):
+            from ui.setup_name_helper import setup_display_label
             d = self._current_setup_dict()
             self._set_bank_status(
-                f"Setup saved: {d.get('name', '')} (ID {d.get('setup_id', '?')})")
+                f"Setup saved: {setup_display_label(d)} (ID {d.get('setup_id', '?')})")
 
     def _wipe_all_sessions(self) -> None:
         """Ask for confirmation then delete every session and lap record from the DB."""
@@ -6420,6 +6512,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(10, 10, 10, 10)
 
+        layout.addWidget(self._tab_intro_header(
+            "Practice Review",
+            "Review your practice laps, tag which setup and compound you ran per "
+            "lap, analyse tyre degradation, and log how each stint felt. "
+            "Next: tag your laps, click Analyse Degradation, then submit "
+            "Driver Feedback after the stint."))
+
         summary_group = QGroupBox("Session Summary")
         summary_group.setStyleSheet(self._group_style())
         summary_h = QHBoxLayout(summary_group)
@@ -6590,6 +6689,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             lbl_widget.setStyleSheet(f"color: {_TEXT};")
             form.addRow(lbl_widget, combo)
 
+        # Overall subjective take on the setup run this stint. Moved here from
+        # the Setup Builder so the "did I like it?" rating sits with the rest of
+        # the per-run feedback; it is attributed to the setup that was running.
+        rating_lbl = QLabel("How did this setup feel?:")
+        rating_lbl.setStyleSheet(f"color: {_TEXT};")
+        self._feedback_rating_combo = QComboBox()
+        self._feedback_rating_combo.addItems(["—", "Liked", "Hated", "Neutral"])
+        self._feedback_rating_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; "
+            "border-radius: 3px; padding: 2px 6px; }"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._feedback_rating_combo.setToolTip(
+            "Your overall take on the setup you ran this stint — the app learns "
+            "from this to shape future setup advice.")
+        form.addRow(rating_lbl, self._feedback_rating_combo)
+
         notes_lbl = QLabel("Notes:")
         notes_lbl.setStyleSheet(f"color: {_TEXT};")
         self._feedback_notes = QTextEdit()
@@ -6632,7 +6748,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if notes:
             parts.append(f"Notes: {notes}")
 
-        if not parts:
+        rating = ""
+        if hasattr(self, "_feedback_rating_combo"):
+            _rt = self._feedback_rating_combo.currentText()
+            rating = {"Liked": "liked", "Hated": "hated", "Neutral": "neutral"}.get(_rt, "")
+
+        # Submit if there's any structured feedback, notes, or at least a rating.
+        if not parts and not rating:
             return
 
         feedback_str = "\n".join(parts)
@@ -6654,12 +6776,32 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         if self._db is not None:
             try:
-                config_id = self._config.get("config_id", "")
+                # config_id lives at config["strategy"]["config_id"] — read it via
+                # the canonical accessor. The old top-level self._config["config_id"]
+                # never exists, so feedback rows were stored with an empty config_id.
+                config_id = self._active_config_id()
+                # Session id from the dispatcher matches the id used when tagging
+                # laps with a setup, so the dominant-setup lookup lines up.
+                _sid = 0
+                if getattr(self, "_dispatcher", None) is not None:
+                    _sid = getattr(self._dispatcher, "_session_id", 0) or 0
+                if not _sid:
+                    _sid = getattr(self, "_session_id", 0) or 0
+                # Attribute the feedback to the setup actually driven this stint;
+                # fall back to the most-recently-saved setup when no laps tagged.
+                _setup_id = self._db.get_dominant_setup_id(_sid)
+                if not _setup_id:
+                    try:
+                        _setup_id = self._resolve_setup_id_for_lap()
+                    except Exception:
+                        _setup_id = 0
                 self._db.write_feedback(
-                    session_id=getattr(self, "_session_id", 0),
+                    session_id=_sid,
                     lap_num=self._logger.lap_count() if self._logger else 0,
                     feedback=feedback_dict,
                     config_id=config_id,
+                    setup_id=_setup_id,
+                    rating=rating,
                 )
             except Exception:
                 pass
@@ -6942,9 +7084,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     def _build_event_planner_tab(self) -> QWidget:
         widget = QWidget()
-        main_layout = QHBoxLayout(widget)
+        outer_layout = QVBoxLayout(widget)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.setSpacing(6)
+        outer_layout.addWidget(self._tab_intro_header(
+            "Event Planner",
+            "Create a profile for each race — track, car, format, tyres, fuel. "
+            "This is the workflow's starting point. Next: fill the fields and "
+            "click Set as Active; every other tab fills in from here."))
+        main_layout = QHBoxLayout()
         main_layout.setSpacing(8)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.addLayout(main_layout, 1)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -7662,9 +7812,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
     def _build_garage_tab(self) -> QWidget:
         widget = QWidget()
-        main_layout = QHBoxLayout(widget)
+        outer_layout = QVBoxLayout(widget)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.setSpacing(6)
+        outer_layout.addWidget(self._tab_intro_header(
+            "Garage",
+            "Browse cars, specs and BOP data. Next: find the car for your event "
+            "and click Load to Event to send it to the active event and Setup "
+            "Builder."))
+        main_layout = QHBoxLayout()
         main_layout.setSpacing(8)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.addLayout(main_layout, 1)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -7833,10 +7991,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             setups = self._config.get("car_setup", {}).get("setups", [])
             car_setups = [s for s in setups if s.get("name", "") == car_name or s.get("car", "") == car_name]
             self._garage_setups_table.setRowCount(0)
+            from ui.setup_name_helper import setup_display_label
             for setup in car_setups:
                 r = self._garage_setups_table.rowCount()
                 self._garage_setups_table.insertRow(r)
-                name_item = QTableWidgetItem(str(setup.get("setup_label", setup.get("name", ""))))
+                name_item = QTableWidgetItem(setup_display_label(setup))
                 name_item.setData(Qt.ItemDataRole.UserRole, setup.get("id"))
                 self._garage_setups_table.setItem(r, 0, name_item)
                 for col, val in enumerate([setup.get("track", ""), setup.get("captured_at", setup.get("date", ""))], start=1):

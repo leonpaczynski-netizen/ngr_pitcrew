@@ -25,6 +25,7 @@ from ui.setup_name_helper import (
     is_structured_name,
     next_setup_number,
     resolve_save_name,
+    setup_display_label,
 )
 from ui import setup_builder_ui as _sbu_mod
 import data.setup_history as _sh
@@ -213,3 +214,28 @@ class TestLocalTimestamp:
         data = json.loads((tmp_path / "hist.json").read_text(encoding="utf-8"))
         ts = data["cfgX"]["entries"][0]["ts"]
         assert ts == "2026-06-29T14:30:05"
+
+
+class TestSetupDisplayLabel:
+    """UAT: setup names in Practice Review must match the saved setup_label,
+    not the car name (which is what the legacy ``name`` field holds)."""
+
+    def test_prefers_setup_label(self):
+        s = {"name": "Porsche 911 RSR", "setup_label": "R NGR Porsche Cup Rd7 2"}
+        assert setup_display_label(s) == "R NGR Porsche Cup Rd7 2"
+
+    def test_falls_back_to_name_when_no_label(self):
+        assert setup_display_label({"name": "Mazda 787B"}) == "Mazda 787B"
+
+    def test_empty_label_falls_back_to_name(self):
+        s = {"name": "Mazda 787B", "setup_label": ""}
+        assert setup_display_label(s) == "Mazda 787B"
+
+    def test_empty_dict_returns_blank(self):
+        assert setup_display_label({}) == ""
+
+    def test_non_dict_returns_blank(self):
+        assert setup_display_label(None) == ""
+
+    def test_strips_whitespace(self):
+        assert setup_display_label({"setup_label": "  Q Fuji 1  "}) == "Q Fuji 1"

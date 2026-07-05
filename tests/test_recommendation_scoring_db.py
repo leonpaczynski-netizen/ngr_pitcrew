@@ -123,9 +123,10 @@ def test_v9_columns_exist(db):
 
 
 def test_v9_schema_version(db):
-    """Schema version must be 9 after opening a fresh DB."""
+    """Schema version must be 10 after opening a fresh DB (v10 = driver_feedback
+    setup_id + rating)."""
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 9
+    assert version == 10
 
 
 def test_v9_default_score_confidence(db):

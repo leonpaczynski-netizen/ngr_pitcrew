@@ -202,10 +202,11 @@ class TestMigrationV6(unittest.TestCase):
             ).fetchall()
         col_names = [c[1] for c in cols]
         self.assertIn("before_metrics", col_names)
-        # Check user_version — v9 is the current schema (OFR-1 scoring columns)
+        # Check user_version — v10 is the current schema (driver_feedback gained
+        # setup_id + rating on top of the OFR-1 scoring columns).
         with db._lock:
             version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 9)
+        self.assertEqual(version, 10)
 
 
 class TestBuildCarSetupSignature(unittest.TestCase):

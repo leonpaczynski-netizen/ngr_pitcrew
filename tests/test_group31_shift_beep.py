@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 # import time because only module-level names are accessed, not the Qt app).
 # ---------------------------------------------------------------------------
 
-from main import resolve_threshold, should_shift_beep  # noqa: E402
+from main import driving_gate, resolve_threshold, should_shift_beep  # noqa: E402
 
 from strategy.ai_planner import (  # noqa: E402
     _parse_setup_recommendation,
@@ -568,3 +568,52 @@ class TestPromptContainsBothShiftRpmFields:
         assert "energy" in prompt.lower() or "tyre saving" in prompt.lower(), (
             "Prompt should mention energy/tyre saving for shift_rpm_race"
         )
+
+
+# ---------------------------------------------------------------------------
+# Section E — driving_gate: off-track beep suppression (UAT: "RPM beeps
+# constantly without being on track")
+# ---------------------------------------------------------------------------
+
+
+class TestDrivingGate:
+    """The beep must only sound when the car is actually being driven."""
+
+    def test_on_track_beeps(self):
+        assert driving_gate(car_on_track=True, paused=False, loading=False,
+                            in_gear=True, speed_kmh=180.0) is True
+
+    def test_garage_idle_muted(self):
+        # Engine running in the garage: not on track, not moving.
+        assert driving_gate(car_on_track=False, paused=False, loading=False,
+                            in_gear=False, speed_kmh=0.0) is False
+
+    def test_paused_muted(self):
+        assert driving_gate(car_on_track=True, paused=True, loading=False,
+                            in_gear=True, speed_kmh=120.0) is False
+
+    def test_loading_muted(self):
+        assert driving_gate(car_on_track=True, paused=False, loading=True,
+                            in_gear=True, speed_kmh=0.0) is False
+
+    def test_replay_menu_muted(self):
+        # Replay: car_on_track False and (typically) not reported in-gear.
+        assert driving_gate(car_on_track=False, paused=False, loading=False,
+                            in_gear=False, speed_kmh=90.0) is False
+
+    def test_pit_lane_moving_in_gear_muted(self):
+        # In the pit lane / a lobby out-lap the car moves in gear but
+        # car_on_track is False — must NOT beep (the reported off-track case).
+        assert driving_gate(car_on_track=False, paused=False, loading=False,
+                            in_gear=True, speed_kmh=80.0) is False
+
+    def test_off_track_moving_muted(self):
+        # Any off-track motion (replay, spun off, formation) stays muted — the
+        # gate is strictly on car_on_track per the user requirement.
+        assert driving_gate(car_on_track=False, paused=False, loading=False,
+                            in_gear=True, speed_kmh=5.0) is False
+
+    def test_on_track_slow_still_beeps(self):
+        # On track counts even at low speed — gating is on car_on_track, not speed.
+        assert driving_gate(car_on_track=True, paused=False, loading=False,
+                            in_gear=True, speed_kmh=8.0) is True

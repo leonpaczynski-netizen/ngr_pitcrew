@@ -38,6 +38,15 @@ from data.track_library import _layout_dir, update_manifest_availability
 
 CLOSURE_GAP_WARN_M: float = 10.0
 
+# Loop-closure adjustment: the track is a known closed loop, but averaged laps
+# rarely close perfectly — each lap is cut a few metres from the start/finish
+# line and truncation to the shortest lap chops a little tail off the rest.
+# When the residual misclosure is a small fraction of the lap it is drift, not
+# bad data, so we rubber-band it out (distribute the error proportionally along
+# the stations). Above this fraction the gap signals a real problem (bad laps,
+# wrong start/finish) — leave it uncorrected so the closure warning still fires.
+CLOSURE_ADJUST_MAX_FRACTION: float = 0.02
+
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -101,6 +110,8 @@ def classify_lap_delta(delta_pct: float, consistent_short_count: int) -> str:
 def filter_full_laps(
     session: CalibrationSession,
     manifest_lap_length_m: float,
+    *,
+    pit_detection_enabled: bool = False,
 ) -> List[LapGeometryFilterResult]:
     """Filter laps by existing quality gates and full-lap threshold.
 
@@ -109,6 +120,17 @@ def filter_full_laps(
     manifest_lap_length_m to be accepted.
 
     Returns one LapGeometryFilterResult per lap in session.laps order.
+
+    Parameters
+    ----------
+    pit_detection_enabled : bool, default False
+        DEF-17U-UAT-007: GT7 Custom UDP telemetry provides no reliable pit-lane
+        signal, and the geometry-based fallback (detect_pit_lap_raw) uses an
+        absolute distance-from-centroid threshold that false-positives on every
+        normal lap of a real-size track (all of it lies well beyond the
+        threshold from the lap centroid).  So pit detection is OFF by default —
+        mirroring build_reference_path — and no lap is flagged "pit-in" unless a
+        caller explicitly opts in for a data source that supports it.
     """
     import statistics as _stats
 
@@ -137,8 +159,10 @@ def filter_full_laps(
         path_len = path_lengths[idx]
 
         # --- Gate 0a: OUT-LAP rejection ---
-        # Reject ONLY the first lap with the lowest lap_number (always starts from
-        # pits). If several laps share that lap_number (telemetry ties), reject just
+        # Reject ONLY the first lap with the lowest lap_number — the first
+        # calibration lap is a warm-up/out-lap (from the pits in a race, or a
+        # rolling/partial first lap in Time Trial) and is never a clean flying
+        # lap. If several laps share that lap_number (telemetry ties), reject just
         # the first occurrence so legitimate clean laps are not over-excluded.
         # Fall back to idx==0 if lap_number is unavailable/ambiguous.
         is_out_lap = not out_lap_rejected and (
@@ -150,14 +174,15 @@ def filter_full_laps(
             results.append(LapGeometryFilterResult(
                 lap_index=idx,
                 status="rejected",
-                reason="out-lap: first calibration lap excluded (always starts from pits)",
+                reason="out-lap: first calibration lap excluded (warm-up / not a full flying lap)",
                 delta_pct=0.0,
                 note="",
             ))
             continue
 
         # --- Gate 0b: PIT-IN lap rejection ---
-        if detect_pit_lap_raw(lap.samples):
+        # DEF-17U-UAT-007: off by default; see filter_full_laps docstring.
+        if pit_detection_enabled and detect_pit_lap_raw(lap.samples):
             results.append(LapGeometryFilterResult(
                 lap_index=idx,
                 status="rejected",
@@ -228,6 +253,8 @@ def build_seed_geometry(
     manifest_lap_length_m: float,
     track_location_id: str,
     layout_id: str,
+    *,
+    pit_detection_enabled: bool = False,
 ) -> GeometryBuildResult:
     """Build a SeedCoordinateMap from accepted laps in the session.
 
@@ -238,8 +265,13 @@ def build_seed_geometry(
     4.  Build and return a SeedCoordinateMap.
 
     Returns can_generate=False with seed_map=None if no laps pass filtering.
+
+    pit_detection_enabled is forwarded to filter_full_laps; OFF by default
+    (DEF-17U-UAT-007) so clean Time Trial laps are never mislabelled "pit-in".
     """
-    filter_results = filter_full_laps(session, manifest_lap_length_m)
+    filter_results = filter_full_laps(
+        session, manifest_lap_length_m, pit_detection_enabled=pit_detection_enabled
+    )
 
     accepted_indices: List[int] = []
     rejected_laps: List[LapGeometryFilterResult] = []
@@ -281,15 +313,34 @@ def build_seed_geometry(
         avg_z = sum(r[i][2] for r in truncated) / n_laps
         averaged.append((avg_x, avg_y, avg_z))
 
-    # Closure gap: XZ Euclidean distance between first and last averaged point
-    if len(averaged) >= 2:
-        import math as _math
-        closure_gap_m = _math.sqrt(
-            (averaged[-1][0] - averaged[0][0]) ** 2
-            + (averaged[-1][2] - averaged[0][2]) ** 2
+    import math as _math
+
+    def _xz_gap(path: List[tuple]) -> float:
+        return _math.sqrt(
+            (path[-1][0] - path[0][0]) ** 2 + (path[-1][2] - path[0][2]) ** 2
         )
-    else:
-        closure_gap_m = 0.0
+
+    # Loop-closure adjustment. The path is an open 1 m-station polyline of a known
+    # closed loop; for a clean loop station[-1] should sit ~1 m before station[0].
+    # If the raw misclosure is small (drift, not bad data), rubber-band it out:
+    # pin station[-1] onto station[0] by distributing the error vector along the
+    # path (station i shifts by error * i/(N-1)), then drop the now-duplicate last
+    # point so the final closing segment is a natural ~1 m step.
+    raw_gap = _xz_gap(averaged) if len(averaged) >= 2 else 0.0
+    if len(averaged) >= 3 and 0.0 < raw_gap <= manifest_lap_length_m * CLOSURE_ADJUST_MAX_FRACTION:
+        ex = averaged[-1][0] - averaged[0][0]
+        ey = averaged[-1][1] - averaged[0][1]
+        ez = averaged[-1][2] - averaged[0][2]
+        last = len(averaged) - 1
+        adjusted: List[tuple] = []
+        for i, (x, y, z) in enumerate(averaged):
+            f = i / last
+            adjusted.append((x - ex * f, y - ey * f, z - ez * f))
+        # adjusted[-1] now equals adjusted[0]; drop it so the loop isn't degenerate.
+        averaged = adjusted[:-1]
+
+    # Closure gap: XZ Euclidean distance between first and last averaged point
+    closure_gap_m = _xz_gap(averaged) if len(averaged) >= 2 else 0.0
 
     # Confidence tier
     n_accepted = len(accepted_indices)
