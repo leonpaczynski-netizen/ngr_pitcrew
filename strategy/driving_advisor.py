@@ -628,7 +628,7 @@ def _race_engineer_directives(
     # AC5 — issue classification
     directives.append(
         "AC5 ISSUE CLASSIFICATION: For each major issue, classify it as exactly one of: "
-        "setup-limited | driver-input-limited | mixed | insufficient-data. "
+        "setup-limited | driver-input-limited | mixed | insufficient-data | not-present. "
         "Use these exact strings in the issue_classification JSON key."
     )
 
@@ -866,6 +866,62 @@ class DrivingAdvisor:
             except Exception:
                 diagnosis = {}
 
+        # B4: resolve rec_history for lsd_reversal_without_evidence validation.
+        # config_id is read from _event_ctx (which is already set from the strategy
+        # dict upstream — no new config["strategy"] read here).
+        _rec_history_sa: dict | None = None
+        try:
+            import data.setup_history as _sh
+            import json as _json_inner
+            _config_id_sa = _event_ctx.get("config_id", "") or ""
+            _lsd_prior_value: float | None = None
+            _lsd_prior_direction: str | None = None
+            _lsd_worsened = False
+            if _config_id_sa:
+                _history_entries = _sh.load_history(_config_id_sa)
+                if _history_entries:
+                    _latest = _history_entries[-1]
+                    for _ch in (_latest.get("changes") or []):
+                        if _ch.get("field") == "lsd_accel":
+                            try:
+                                _to_v = float(_ch.get("to", 0))
+                                _from_v = float(_ch.get("from", 0))
+                                _lsd_prior_value = _to_v
+                                _lsd_prior_direction = "increase" if _to_v > _from_v else "decrease"
+                            except (TypeError, ValueError):
+                                pass
+                            break
+            # worsened verdict: look at scored_recs for lsd_accel
+            if self._db is not None:
+                try:
+                    _car_id_sa = int(self._car_id_ref[0]) or 0
+                    _track_sa = _event_ctx.get("track") or ""
+                    _scored = self._db.get_scored_recs_for_prompt(_car_id_sa, _track_sa, "")
+                    for _srec in _scored:
+                        _rec_text = _srec.get("recommendation_text") or ""
+                        try:
+                            _rec_data = _json_inner.loads(_rec_text)
+                            for _sch in (_rec_data.get("changes") or []):
+                                if _sch.get("field") == "lsd_accel":
+                                    if _srec.get("score_verdict") == "worsened":
+                                        _lsd_worsened = True
+                                    break
+                        except Exception:
+                            pass
+                        if _lsd_worsened:
+                            break
+                except Exception:
+                    pass
+            _rec_history_sa = {
+                "lsd_accel": {
+                    "prior_value":            _lsd_prior_value,
+                    "prior_direction":        _lsd_prior_direction,
+                    "worsened_verdict_exists": _lsd_worsened,
+                }
+            }
+        except Exception:
+            _rec_history_sa = None  # History failure must never break the response path
+
         history_str = self._get_history_context()
         prompt = self._build_setup_prompt(recent, setup_dict, history_str,
                                           car_name=car_name, car_specs=car_specs or {},
@@ -938,6 +994,7 @@ class DrivingAdvisor:
                     _eng_errors = validate_setup_engineering(
                         _data, diagnosis, setup_dict, _ranges, _event_ctx,
                         car_name=car_name,
+                        rec_history=_rec_history_sa,
                     )
                     if _eng_errors:
                         # Build a correction prompt and retry once
@@ -987,6 +1044,7 @@ class DrivingAdvisor:
                             _retry_eng = validate_setup_engineering(
                                 _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
                                 car_name=car_name,
+                                rec_history=_rec_history_sa,
                             )
                             if _retry_eng:
                                 # Still failing — surface but return
@@ -1048,6 +1106,59 @@ class DrivingAdvisor:
                 diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, feeling)
             except Exception:
                 diagnosis = {}
+
+        # B4: resolve rec_history for lsd_reversal_without_evidence validation.
+        _rec_history_cs: dict | None = None
+        try:
+            import data.setup_history as _sh_cs
+            import json as _json_cs
+            _config_id_cs = _event_ctx.get("config_id", "") or ""
+            _lsd_pv_cs: float | None = None
+            _lsd_pd_cs: str | None = None
+            _lsd_worsened_cs = False
+            if _config_id_cs:
+                _hist_cs = _sh_cs.load_history(_config_id_cs)
+                if _hist_cs:
+                    _latest_cs = _hist_cs[-1]
+                    for _ch_cs in (_latest_cs.get("changes") or []):
+                        if _ch_cs.get("field") == "lsd_accel":
+                            try:
+                                _to_cs = float(_ch_cs.get("to", 0))
+                                _from_cs = float(_ch_cs.get("from", 0))
+                                _lsd_pv_cs = _to_cs
+                                _lsd_pd_cs = "increase" if _to_cs > _from_cs else "decrease"
+                            except (TypeError, ValueError):
+                                pass
+                            break
+            if self._db is not None:
+                try:
+                    _car_id_cs = int(self._car_id_ref[0]) or 0
+                    _track_cs = _event_ctx.get("track") or ""
+                    _scored_cs = self._db.get_scored_recs_for_prompt(_car_id_cs, _track_cs, "")
+                    for _srec_cs in _scored_cs:
+                        _rt_cs = _srec_cs.get("recommendation_text") or ""
+                        try:
+                            _rd_cs = _json_cs.loads(_rt_cs)
+                            for _sch_cs in (_rd_cs.get("changes") or []):
+                                if _sch_cs.get("field") == "lsd_accel":
+                                    if _srec_cs.get("score_verdict") == "worsened":
+                                        _lsd_worsened_cs = True
+                                    break
+                        except Exception:
+                            pass
+                        if _lsd_worsened_cs:
+                            break
+                except Exception:
+                    pass
+            _rec_history_cs = {
+                "lsd_accel": {
+                    "prior_value":            _lsd_pv_cs,
+                    "prior_direction":        _lsd_pd_cs,
+                    "worsened_verdict_exists": _lsd_worsened_cs,
+                }
+            }
+        except Exception:
+            _rec_history_cs = None
 
         history_str = self._get_history_context()
         prompt = self._build_combined_prompt(
@@ -1126,6 +1237,7 @@ class DrivingAdvisor:
                     _eng_errors = validate_setup_engineering(
                         _data, diagnosis, setup_dict, _ranges, _event_ctx,
                         car_name=car_name,
+                        rec_history=_rec_history_cs,
                     )
                     if _eng_errors:
                         _correction = (
@@ -1173,6 +1285,7 @@ class DrivingAdvisor:
                             _retry_eng = validate_setup_engineering(
                                 _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
                                 car_name=car_name,
+                                rec_history=_rec_history_cs,
                             )
                             if _retry_eng:
                                 _retry_data["engineering_validation_failed"] = True
@@ -1310,31 +1423,96 @@ class DrivingAdvisor:
             lines.append(f"Notes: {notes}")
         return "\n".join(lines)
 
+    # Keywords that indicate positive progress / relief in a driver feedback field.
+    # Substring-matched case-insensitively, consistent with _FEEL_VOCABULARY style.
+    _IMPROVING_KEYWORDS: frozenset[str] = frozenset({
+        "better", "improved", "improving", "improves", "less", "reduced",
+        "more stable", "good", "gone", "fixed", "settling", "hooking up",
+    })
+
+    @staticmethod
+    def _feedback_trend_tag(rows: list[dict], field: str) -> str:
+        """Return a trend label for a single feedback field across multiple rows.
+
+        rows are newest-first (as returned by get_recent_feedback).
+        Labels: current | improving | worsening | resolved
+
+        Precedence (checked in order):
+          1. resolved  — newest value is neutral/absent AND at least one older
+                         value was non-neutral.
+          2. improving — newest value is non-empty AND contains positive/relief
+                         language (see _IMPROVING_KEYWORDS) AND at least one
+                         older value was a non-neutral complaint.
+          3. worsening — newest value is non-neutral AND all older values were
+                         neutral/absent (i.e. a fresh / escalating complaint).
+          4. current   — single entry, unchanged, or none of the above.
+
+        "neutral", "" and None are treated as absence of an issue.
+        """
+        _NEUTRAL = {"", "neutral", None}
+        if not rows or len(rows) == 0:
+            return "current"
+        vals = [r.get(field) for r in rows]
+        if len(rows) == 1:
+            return "current"
+
+        newest = vals[0]    # rows[0] is newest (newest-first order)
+        older_vals = vals[1:]
+
+        newest_is_neutral = newest in _NEUTRAL
+        any_older_non_neutral = any(v not in _NEUTRAL for v in older_vals)
+
+        # 1. Resolved: newest is neutral but something older was a complaint
+        if newest_is_neutral and any_older_non_neutral:
+            return "resolved"
+
+        # Newest is non-neutral from here on
+        if newest_is_neutral:
+            # All values are neutral — no issue to track
+            return "current"
+
+        # 2. Improving: newest has positive/relief language over a prior complaint
+        newest_lower = (newest or "").lower()
+        has_positive = any(kw in newest_lower for kw in DrivingAdvisor._IMPROVING_KEYWORDS)
+        if has_positive and any_older_non_neutral:
+            return "improving"
+
+        # 3. Worsening: newest is a (non-neutral, non-positive) complaint and
+        #    all older entries were neutral/absent
+        all_older_neutral = not any_older_non_neutral
+        if all_older_neutral:
+            return "worsening"
+
+        # 4. Current — unchanged value, or mixed non-neutral without positive language
+        return "current"
+
     def _get_driver_feedback_context(self) -> str:
         if self._db is None:
             return ""
         try:
             car_id = int(self._car_id_ref[0]) or 0
             track  = self._config.get("strategy", {}).get("track", "") or ""
+            # get_recent_feedback returns newest-first (ORDER BY submitted_at DESC)
             rows   = self._db.get_recent_feedback(car_id, track, limit=5)
             if not rows:
                 return ""
-            lines = ["## Recent Driver Feedback"]
-            for row in rows:
+
+            _FEEDBACK_FIELDS = (
+                "corner_entry", "mid_corner", "exit_stability",
+                "rear_braking", "tyre_condition", "fuel_use",
+            )
+
+            def _format_row(row: dict) -> list[str]:
+                """Format a single feedback row into a list of parts."""
                 parts: list[str] = []
-                for field in ("corner_entry", "mid_corner", "exit_stability",
-                              "rear_braking", "tyre_condition", "fuel_use"):
+                for field in _FEEDBACK_FIELDS:
                     val = row.get(field, "")
                     if val and val != "neutral":
-                        parts.append(f"{field.replace('_', ' ')}: {val}")
-                # Column is 'notes' (the old 'free_text' key never existed, so
-                # this text was silently dropped from the prompt before the fix).
+                        trend = self._feedback_trend_tag(rows, field)
+                        parts.append(f"{field.replace('_', ' ')}: {val} [{trend}]")
                 notes = (row.get("notes") or "").strip()
                 if notes:
                     parts.append(f'"{notes}"')
-                # Subjective rating, moved here from the Setup Builder. Annotate
-                # with whether the setup was actually driven (derived from lap
-                # tags) so the AI weighs applied feedback more heavily.
                 rating = (row.get("rating") or "").strip().lower()
                 if rating in ("liked", "hated"):
                     setup_id = int(row.get("setup_id") or 0)
@@ -1352,8 +1530,26 @@ class DrivingAdvisor:
                     else:
                         parts.append(
                             f"DRIVER HATED this setup{applied_note} — do not repeat these changes.")
-                if parts:
-                    lines.append("- " + ", ".join(parts))
+                return parts
+
+            lines: list[str] = ["## Driver Feedback"]
+
+            # B3: split into "Latest feedback" (index 0 = newest) and "Earlier feedback"
+            latest_parts = _format_row(rows[0])
+            if latest_parts:
+                lines.append("### Latest feedback (weight highest)")
+                lines.append("- " + ", ".join(latest_parts))
+
+            if len(rows) > 1:
+                earlier_lines: list[str] = []
+                for row in rows[1:]:
+                    ep = _format_row(row)
+                    if ep:
+                        earlier_lines.append("- " + ", ".join(ep))
+                if earlier_lines:
+                    lines.append("### Earlier feedback")
+                    lines.extend(earlier_lines)
+
             return "\n".join(lines) if len(lines) > 1 else ""
         except Exception:
             return ""
@@ -1933,11 +2129,11 @@ lsd_initial, lsd_accel, lsd_decel, brake_bias,
 transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
 
 Reply ONLY with valid JSON — no markdown fences, no extra text.
-issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data
+issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data | not-present
 {{
   "analysis": "2–3 sentence plain-English summary of what the telemetry shows and the primary issue.",
   "primary_issue": "single dominant problem in one phrase",
-  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not currently an issue"}},
+  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not-present"}},
   "changes": [
     {{"setting": "Rear Natural Frequency", "field": "springs_rear", "from": "3.50", "to": "3.75", "why": "one-sentence reason", "expected_validation": "bottoming events reduce without making exit traction worse"}}
   ],
@@ -2071,23 +2267,8 @@ In changes, "field" MUST be the exact canonical param key (e.g. arb_front, cambe
             else "(unmeasured)"
         )
 
-        # Gear / rev-limiter context
-        top_speed_target = float(setup.get("transmission_max_speed_kmh") or 0)
-        gear_note = ""
-        if top_speed_target > 0 and avg_top_spd > 0:
-            ratio = avg_top_spd / top_speed_target
-            if ratio < 0.93:
-                gear_note = (
-                    f"\n⚠ Observed top speed {avg_top_spd:.0f} km/h is "
-                    f"{100*(1-ratio):.0f}% below the transmission target "
-                    f"({top_speed_target:.0f} km/h) — car is NOT hitting the rev "
-                    f"limiter in top gear. Do NOT recommend lengthening gears."
-                )
-            elif ratio > 0.98:
-                gear_note = (
-                    f"\n✓ Car is at/near the rev limiter "
-                    f"(observed {avg_top_spd:.0f} km/h vs target {top_speed_target:.0f} km/h)."
-                )
+        # B1: gear_note block removed — gearing diagnosis is now handled by
+        # _classify_gearing in setup_diagnosis.py and emitted via format_diagnosis_for_prompt.
 
         # Aggregate position lists across all laps for directives
         _wsp_all = [p for l in laps for p in getattr(l, "wheelspin_positions", [])]
@@ -2185,7 +2366,7 @@ Kerb events per lap [measured]:                  {avg_kerb:.1f}
 Bottoming events per lap [measured]:             {avg_bottom:.1f}
 Snap throttle applications per lap [calculated]: {avg_snap:.1f}
 Peak lateral G (avg best per lap) [estimated]:   {avg_lat_g:.2f} G
-Average top speed per lap [measured]:            {avg_top_spd:.0f} km/h{gear_note}
+Average top speed per lap [measured]:            {avg_top_spd:.0f} km/h
 Braking consistency (std-dev) [calculated]:      {'n/a' if avg_consist < 0 else f'{avg_consist:.1f}m'} {consist_note}
 
 ## Advanced telemetry intelligence
@@ -2211,11 +2392,11 @@ lsd_initial, lsd_accel, lsd_decel, brake_bias,
 transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
 
 Reply ONLY with valid JSON — no markdown fences, no extra text.
-issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data
+issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data | not-present
 {{
   "analysis": "2–3 sentence plain-English summary of what the telemetry shows and the primary issue.",
   "primary_issue": "single dominant problem in one phrase",
-  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not currently an issue"}},
+  "issue_classification": {{"bottoming": "setup-limited", "wheelspin": "mixed", "braking_instability": "not-present"}},
   "changes": [
     {{"setting": "Rear Natural Frequency", "field": "springs_rear", "from": "3.50", "to": "3.75", "why": "one-sentence reason", "expected_validation": "bottoming events reduce without making exit traction worse"}}
   ],

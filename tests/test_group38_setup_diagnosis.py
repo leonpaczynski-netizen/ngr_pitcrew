@@ -324,12 +324,17 @@ class TestDriverHardConstraintsInPrompt:
             f"Telemetry summary (idx={telemetry_idx})"
         )
 
-    def test_nine_constraint_numbers_in_block(self):
-        """DRIVER_HARD_CONSTRAINTS must contain numbered items 1-9."""
-        for n in range(1, 10):
+    def test_eight_constraint_numbers_in_block(self):
+        """DRIVER_HARD_CONSTRAINTS must contain numbered items 1-8 (constraint #9 was
+        removed in the Setup Brain Upgrade — gearbox-preserve-on-telemetry is now
+        handled by gearbox_category_mismatch validation rule instead)."""
+        for n in range(1, 9):
             assert f"{n}." in DRIVER_HARD_CONSTRAINTS, (
                 f"Constraint #{n} not found in DRIVER_HARD_CONSTRAINTS"
             )
+        assert "9." not in DRIVER_HARD_CONSTRAINTS, (
+            "Constraint #9 should have been removed (now 8 constraints total)"
+        )
 
     def test_module_constants_importable(self):
         assert isinstance(PERSONAL_DRIVER_TUNING_MODEL, str) and len(PERSONAL_DRIVER_TUNING_MODEL) > 20
@@ -604,7 +609,10 @@ class TestGearboxPreservation:
         assert diag["gearbox_flag"] == "preserve"
 
     def test_gearbox_edit_rejected_when_preserve(self):
-        """validate_setup_engineering rejects transmission_max_speed_kmh change when preserve."""
+        """validate_setup_engineering rejects transmission_max_speed_kmh change using
+        gearbox_category_mismatch rule — fires when gearbox_good flag is set or when
+        gearing_diagnosis_category is in the preserve-set (insufficient_data, gear_too_long,
+        limiter_limited).  Here the driver says 'gearbox is good' which sets the flag."""
         laps = [_make_lap()]
         diag = build_setup_diagnosis(
             laps=laps,
@@ -626,12 +634,14 @@ class TestGearboxPreservation:
         ranges = resolve_ranges("")
         reasons = validate_setup_engineering(ai_resp, diag, setup, ranges, {})
         prefixes = [r.split(":")[0] for r in reasons]
-        assert "gearbox_edit_when_preserve" in prefixes, (
-            f"Expected 'gearbox_edit_when_preserve'; got:\n" + "\n".join(reasons)
+        assert "gearbox_category_mismatch" in prefixes, (
+            f"Expected 'gearbox_category_mismatch'; got:\n" + "\n".join(reasons)
         )
 
     def test_gear_ratio_change_rejected_when_preserve(self):
-        """Changes with field='gear_ratios' are rejected when gearbox_flag=='preserve'."""
+        """Changes with field='gear_ratios' are rejected with gearbox_category_mismatch
+        when gearing_diagnosis_category is in the preserve-set or driver says gearbox good.
+        With empty laps and no data, gearing_diagnosis_category = insufficient_data (preserve)."""
         laps = [_make_lap()]
         diag = build_setup_diagnosis(
             laps=laps,
@@ -650,8 +660,8 @@ class TestGearboxPreservation:
         ranges = resolve_ranges("")
         reasons = validate_setup_engineering(ai_resp, diag, {}, ranges, {})
         prefixes = [r.split(":")[0] for r in reasons]
-        assert "gearbox_edit_when_preserve" in prefixes, (
-            f"Expected 'gearbox_edit_when_preserve'; got:\n" + "\n".join(reasons)
+        assert "gearbox_category_mismatch" in prefixes, (
+            f"Expected 'gearbox_category_mismatch'; got:\n" + "\n".join(reasons)
         )
 
     def test_gearbox_flag_may_change_without_driver_good(self):
@@ -1082,8 +1092,10 @@ class TestRSRFujiRegression:
             f"Expected aero_cut_with_wheelspin; got:\n" + "\n".join(reasons)
         )
 
-    def test_ai_changing_gearbox_rejected_gearbox_edit_when_preserve(self):
-        """Mock AI changing transmission_max_speed_kmh -> gearbox_edit_when_preserve."""
+    def test_ai_changing_gearbox_rejected_gearbox_category_mismatch(self):
+        """Mock AI changing transmission_max_speed_kmh -> gearbox_category_mismatch.
+        The rule name changed from gearbox_edit_when_preserve to gearbox_category_mismatch
+        in the Setup Brain Upgrade.  Fires here because driver says 'gearbox is good'."""
         ai_resp = _minimal_ai_resp({
             "changes": [{"field": "transmission_max_speed_kmh", "from": 270.0, "to": 280.0,
                          "setting": "Transmission", "why": "test", "to_clamped": 280.0}],
@@ -1093,8 +1105,8 @@ class TestRSRFujiRegression:
         ranges = resolve_ranges("")
         reasons = validate_setup_engineering(ai_resp, self.diag, _RSR_SETUP, ranges, _RSR_EVENT_CTX)
         prefixes = [r.split(":")[0] for r in reasons]
-        assert "gearbox_edit_when_preserve" in prefixes, (
-            f"Expected gearbox_edit_when_preserve; got:\n" + "\n".join(reasons)
+        assert "gearbox_category_mismatch" in prefixes, (
+            f"Expected gearbox_category_mismatch; got:\n" + "\n".join(reasons)
         )
 
     def test_rsr_driver_feel_gearbox_good(self):
@@ -1315,7 +1327,7 @@ def _valid_ai_json(changes: list | None = None, setup_fields: dict | None = None
     payload = {
         "analysis": "Test analysis — no issues.",
         "primary_issue": "none",
-        "issue_classification": {"bottoming": "not currently an issue"},
+        "issue_classification": {"bottoming": "not-present"},
         "changes": changes or [],
         "setup_fields": setup_fields or {},
         "validation_targets": {"braking_stability": "must remain stable"},

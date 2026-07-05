@@ -19,7 +19,7 @@ _parse_driver_feel(feeling) -> dict[str, bool]
 Module-level constants (imported by driving_advisor.py and ai_planner.py)
 --------------------------------------------------------------------------
 PERSONAL_DRIVER_TUNING_MODEL  — compact block describing the driver's tuning style
-DRIVER_HARD_CONSTRAINTS       — 9 verbatim hard constraints for the AI
+DRIVER_HARD_CONSTRAINTS       — 8 verbatim hard constraints for the AI
 """
 from __future__ import annotations
 
@@ -27,6 +27,22 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from telemetry.recorder import LapStats
+
+# ---------------------------------------------------------------------------
+# Tunable module-level constants
+# ---------------------------------------------------------------------------
+
+_ACCEL_FADE_THROTTLE_HIGH_PCT = 0.85   # throttle threshold for "wide open" frames
+_ACCEL_FADE_MIN_SAMPLES       = 5      # minimum WOT frames needed to analyse fade
+_PEAK_POWER_RPM_FRACTION      = 0.90   # unused directly; reserved for future engine-map work
+_ACCEL_FADE_SPEED_DROP_PCT    = 0.05   # speed must fall ≥5% from a local peak to count as fade
+_KERB_PROXIMITY_WINDOW_M      = 50.0   # distance window (m) for kerb-proximity wheelspin cluster
+_COMPLIANCE_KERB_THRESHOLD    = 2      # avg kerb events/lap above which compliance is a priority
+_COMPLIANCE_FEEL_TERMS: list[str] = [
+    "stiff", "harsh", "jarring", "kerb upset", "kerb bump",
+    "undulation", "bouncy", "bounces", "skips", "jolts",
+    "crash", "crashing over",
+]
 
 # ---------------------------------------------------------------------------
 # Module-level prompt constants (single source of truth — import into
@@ -64,10 +80,7 @@ DRIVER_HARD_CONSTRAINTS: str = (
     "7. Don't ignore driver feel when telemetry supports it — if the driver reports "
     "floaty front and aero_front is near its minimum, that is a platform-limited "
     "diagnosis and must be addressed directly.\n"
-    "8. Preserve gearbox if driver says gearing is good unless telemetry proves the "
-    "gearing is wrong (limiter hits in a gear that has room, or top speed clearly "
-    "below 93% of the transmission target).\n"
-    "9. Treat 'feels bad' as first-class input — subjective driver confidence is a "
+    "8. Treat 'feels bad' as first-class input — subjective driver confidence is a "
     "performance variable; a setup the driver cannot trust is not a fast setup.\n"
 )
 
@@ -101,6 +114,9 @@ _FEEL_VOCABULARY: dict[str, list[str]] = {
     "braking_instability": [
         "locks", "lock-up", "dances on braking",
         "nervous under braking", "tail wags",
+    ],
+    "bottoming": [
+        "bottoming", "grounds out", "scrapes", "bottoms",
     ],
 }
 
@@ -202,9 +218,18 @@ def _derive_dominant_problem(
     ):
         issues.append("front_aero_platform_limited")
 
-    # Bottoming — only escalate to dominant when significant
-    if bottoming_band in ("consider", "required"):
+    # Bottoming — only escalate to dominant when significant.
+    # A9: when bottoming_band == "consider" AND wheelspin is in the severe-ish
+    # set ("major" or "severe"), bottoming does NOT take precedence — rear-traction
+    # issues should dominate.  Bottoming at "consider" is dominant only when
+    # wheelspin is "low"/"meaningful" OR the driver explicitly mentions bottoming.
+    _wheelspin_severe_ish = wheelspin_band in ("major", "severe")
+    _driver_mentions_bottoming = driver_feel_flags.get("bottoming", False)
+    if bottoming_band == "required":
         issues.append("bottoming")
+    elif bottoming_band == "consider":
+        if not _wheelspin_severe_ish or _driver_mentions_bottoming:
+            issues.append("bottoming")
 
     # Rear traction / aero
     if (
@@ -269,12 +294,17 @@ def _derive_tuning_priority(
     aero_front_near_min: bool,
     aero_rear_near_min: bool,
     location_evidence_usable: bool = True,
+    compliance_priority: bool = False,
 ) -> list[str]:
     """Return ordered list of tuning areas to address.
 
     When location_evidence_usable is False, ride_height is never placed near
     the top of the priority list, even for "required" bottoming — because
     the bottoming location data is unverified low-confidence track geometry.
+
+    When compliance_priority is True, "natural frequency / damping (compliance — kerb
+    and surface sensitivity)" is inserted at position 0 or 1 (after front aero if
+    present) so that suspension compliance work appears near the top.
     """
     priority: list[str] = []
 
@@ -327,6 +357,12 @@ def _derive_tuning_priority(
                 "low track model confidence)"
             )
 
+    # A10: compliance priority — insert at position 0 or 1 (after front aero if present)
+    if compliance_priority:
+        _compliance_entry = "natural frequency / damping (compliance — kerb and surface sensitivity)"
+        _insert_pos = 1 if priority and "aero (front" in priority[0] else 0
+        priority.insert(_insert_pos, _compliance_entry)
+
     # Fallback
     if not priority:
         priority.append("balance / aero (no dominant issue — refine overall balance)")
@@ -361,6 +397,238 @@ def _driver_feel_supported_by_telemetry(
     if driver_feel_flags.get("braking_instability") and avg_lockups > 0.3:
         return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Gearing / acceleration-fade helpers  (A2, A3, A4, A5)
+# ---------------------------------------------------------------------------
+
+def _derive_top_gear_frame_signals(frames: list, top_gear: int) -> dict:
+    """Analyse TelemetryFrame data for top-gear power-band signals.
+
+    Returns {"accel_fade_detected": bool, "peak_power_early": bool,
+             "top_gear_wot_sample": int}.
+
+    Algorithm:
+      1. Filter frames where gear == top_gear AND throttle >= _ACCEL_FADE_THROTTLE_HIGH_PCT.
+         throttle on TelemetryFrame is 0.0–1.0 (confirmed from recorder.py:24).
+      2. Fewer than _ACCEL_FADE_MIN_SAMPLES → all False / sample 0.
+      3. peak_power_early: the frame with max_rpm occurs in the first 40% of the sequence.
+      4. accel_fade_detected: speed drops ≥ _ACCEL_FADE_SPEED_DROP_PCT from a local
+         peak within the WOT sequence with no braking (brake < 0.05) intervening.
+    Degrades to all-False when frames is empty or top_gear is invalid.
+    """
+    if not frames or top_gear <= 0:
+        return {"accel_fade_detected": False, "peak_power_early": False,
+                "top_gear_wot_sample": 0}
+
+    # Filter to top-gear, high-throttle frames (defensive getattr for SimpleNamespace)
+    wot_frames = [
+        f for f in frames
+        if getattr(f, "gear", 0) == top_gear
+        and getattr(f, "throttle", 0.0) >= _ACCEL_FADE_THROTTLE_HIGH_PCT
+    ]
+
+    if len(wot_frames) < _ACCEL_FADE_MIN_SAMPLES:
+        return {"accel_fade_detected": False, "peak_power_early": False,
+                "top_gear_wot_sample": len(wot_frames)}
+
+    # peak_power_early: frame index of max RPM in the first 40% of the sequence
+    max_rpm_idx = max(range(len(wot_frames)),
+                      key=lambda i: getattr(wot_frames[i], "rpm", 0.0))
+    peak_power_early = max_rpm_idx < 0.40 * len(wot_frames)
+
+    # accel_fade_detected: speed falls ≥ _ACCEL_FADE_SPEED_DROP_PCT from a
+    # local peak with no braking (brake < 0.05) in between.
+    accel_fade_detected = False
+    local_peak_speed: float | None = None
+    for f in wot_frames:
+        spd = getattr(f, "speed_kmh", 0.0)
+        brk = getattr(f, "brake", 0.0)
+        if brk >= 0.05:
+            # Braking event — reset peak tracking; this is not an uninterrupted fade
+            local_peak_speed = None
+            continue
+        if local_peak_speed is None or spd > local_peak_speed:
+            local_peak_speed = spd
+        elif local_peak_speed > 0 and (local_peak_speed - spd) / local_peak_speed >= _ACCEL_FADE_SPEED_DROP_PCT:
+            accel_fade_detected = True
+            break
+
+    return {
+        "accel_fade_detected": accel_fade_detected,
+        "peak_power_early":    peak_power_early,
+        "top_gear_wot_sample": len(wot_frames),
+    }
+
+
+def _classify_gearing(
+    frames: list,
+    rev_limiter_by_gear: "dict | None",
+    avg_top_speed_kmh: float,
+    top_speed_target_kmh: float,
+    wheelspin_band: str,
+) -> str:
+    """Classify the gearing situation from telemetry signals.
+
+    Returns one of: gear_too_short | gear_too_long | top_gear_power_band_limited |
+    traction_limited_acceleration | drag_or_power_limited | limiter_limited |
+    insufficient_data.
+
+    Decision table (first match wins):
+      1. top_gear_limiter_hits > 0 AND speed_ratio < 0.93 → gear_too_short
+      2. top_gear_limiter_hits > 0 AND speed_ratio >= 0.93 → limiter_limited
+      3. speed_ratio < 0.93 AND wheelspin severe-ish AND no top-gear limiter
+         → traction_limited_acceleration
+      4. speed_ratio < 0.93 AND peak_power_early AND accel_fade_detected
+         → top_gear_power_band_limited
+      5. speed_ratio < 0.93 (uncovered) → drag_or_power_limited
+      6. speed_ratio >= 0.98 AND no top-gear limiter → gear_too_long
+      7. target 0 / no limiter data / frames empty AND no speed → insufficient_data
+
+    "severe-ish" wheelspin: "major" or "severe" (from _wheelspin_band).
+    """
+    _SEVERE_ISH = ("major", "severe")
+
+    # Resolve top gear
+    top_gear = 0
+    rlbg = rev_limiter_by_gear or {}
+    if rlbg:
+        top_gear = max(int(g) for g in rlbg)
+    if top_gear <= 0 and frames:
+        # Fallback: highest gear seen in frames
+        for f in frames:
+            g = getattr(f, "gear", 0)
+            if g > top_gear:
+                top_gear = g
+
+    top_gear_limiter_hits = float(rlbg.get(top_gear, 0)) if top_gear > 0 else 0.0
+
+    # Speed ratio — guard divide-by-zero
+    if top_speed_target_kmh <= 0:
+        # Cannot compute ratio — fall through to insufficient_data
+        speed_ratio: float | None = None
+    elif avg_top_speed_kmh <= 0:
+        speed_ratio = None
+    else:
+        speed_ratio = avg_top_speed_kmh / top_speed_target_kmh
+
+    # Derive acceleration-fade signals from frame data
+    _tgfs = _derive_top_gear_frame_signals(frames, top_gear)
+    peak_power_early  = _tgfs["peak_power_early"]
+    accel_fade_detected = _tgfs["accel_fade_detected"]
+
+    # Decision table (first match wins)
+    if speed_ratio is not None:
+        if top_gear_limiter_hits > 0 and speed_ratio < 0.93:
+            return "gear_too_short"
+        if top_gear_limiter_hits > 0 and speed_ratio >= 0.93:
+            return "limiter_limited"
+        if speed_ratio < 0.93 and wheelspin_band in _SEVERE_ISH and top_gear_limiter_hits == 0:
+            return "traction_limited_acceleration"
+        if speed_ratio < 0.93 and peak_power_early and accel_fade_detected:
+            return "top_gear_power_band_limited"
+        if speed_ratio < 0.93:
+            return "drag_or_power_limited"
+        if speed_ratio >= 0.98 and top_gear_limiter_hits == 0:
+            return "gear_too_long"
+    else:
+        # No speed target — can still classify from limiter signals alone.
+        # Top-gear limiter hits with no speed target = can't confirm gearing is good;
+        # treat as a "may_change" signal (gear_too_short is the most conservative
+        # classification when the driver might be hitting the limiter prematurely).
+        if top_gear_limiter_hits > 0:
+            return "gear_too_short"
+
+    return "insufficient_data"
+
+
+def _classify_wheelspin_subtype(
+    frames: list,
+    rev_limiter_by_gear: "dict | None",
+    wheelspin_band: str,
+    avg_snap: float,
+    aero_rear_near_min: bool,
+    laps: list,
+) -> str:
+    """Classify the wheelspin mechanism from available telemetry signals.
+
+    Returns one of: both_rear_spin | snap_throttle_induced | kerb_unload_spin |
+    gear_too_short_spin | aero_instability | mixed | insufficient_data.
+
+    NOTE: inside_wheel_spin is NEVER emitted — per-wheel slip data is not
+    available in GT7 telemetry at this level; the signal would require individual
+    wheel-slip deltas which are not in TelemetryFrame.
+
+    NOTE: rear_platform_stiffness requires a spring/damper baseline comparison
+    that the app does not currently track.  We emit "mixed" as a safe placeholder
+    and leave this as a future extension when spring data is captured.
+    # future extension: rear_platform_stiffness needs spring/damper baseline delta
+    """
+    _SEVERE_ISH = ("major", "severe")
+
+    # Insufficient data guard — only return early for low wheelspin;
+    # even with empty frames/laps we may still classify from avg_snap or aero signals.
+    if wheelspin_band in ("low",):
+        return "insufficient_data"
+
+    rlbg = rev_limiter_by_gear or {}
+    top_gear = max((int(g) for g in rlbg), default=0)
+
+    # Compute kerb_count across laps (no positional data — kerb proximity check
+    # simplified to: any kerb events present at all)
+    kerb_count = sum(getattr(l, "kerb_count", 0) for l in laps)
+
+    # Oversteer throttle-on counts
+    total_oversteer = sum(getattr(l, "oversteer_count", 0) for l in laps)
+    throttle_on_oversteer = sum(getattr(l, "oversteer_throttle_on_count", 0) for l in laps)
+
+    # gear_too_short_spin: limiter hits in gears strictly below top gear + severe-ish wheelspin
+    if wheelspin_band in _SEVERE_ISH and top_gear > 0:
+        lower_gear_hits = sum(
+            int(cnt) for g, cnt in rlbg.items() if int(g) < top_gear
+        )
+        if lower_gear_hits > 0:
+            return "gear_too_short_spin"
+
+    # snap_throttle_induced: high snap count + severe-ish wheelspin
+    if avg_snap > 5 and wheelspin_band in _SEVERE_ISH:
+        return "snap_throttle_induced"
+
+    # aero_instability: rear aero near min + wheelspin severe
+    if aero_rear_near_min and wheelspin_band == "severe":
+        return "aero_instability"
+
+    # kerb_unload_spin: kerb events present + wheelspin meaningful+.
+    # Full spatial proximity check requires kerb_positions which are not yet
+    # stored on LapStats; we use kerb count as a proxy for now.
+    # future extension: use _KERB_PROXIMITY_WINDOW_M once kerb_positions are tracked.
+    if kerb_count > 0 and wheelspin_band in ("meaningful",) + _SEVERE_ISH:
+        return "kerb_unload_spin"
+
+    # both_rear_spin: wheelspin severe-ish AND throttle-on oversteer dominant (>60%)
+    if wheelspin_band in _SEVERE_ISH and total_oversteer > 0:
+        throttle_fraction = throttle_on_oversteer / total_oversteer
+        if throttle_fraction > 0.60:
+            return "both_rear_spin"
+
+    # mixed: meaningful+ wheelspin but signals don't point to one cause
+    if wheelspin_band in ("meaningful",) + _SEVERE_ISH:
+        return "mixed"
+
+    return "insufficient_data"
+
+
+def _detect_compliance_priority(feeling: "str | None", avg_kerb: float) -> bool:
+    """Return True when the driver's feeling text contains compliance-related terms
+    AND average kerb events per lap exceed _COMPLIANCE_KERB_THRESHOLD.
+
+    Case-insensitive substring match against _COMPLIANCE_FEEL_TERMS.
+    """
+    if not feeling or avg_kerb <= _COMPLIANCE_KERB_THRESHOLD:
+        return False
+    text = feeling.lower()
+    return any(term in text for term in _COMPLIANCE_FEEL_TERMS)
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +737,10 @@ def _build_setup_diagnosis_conservative() -> dict:
         "recommended_tuning_priority": [],
         "location_confidence":        "low",
         "location_evidence_usable":   False,
+        # A7: new keys — safe defaults (conservative / no data)
+        "gearing_diagnosis_category": "insufficient_data",
+        "wheelspin_subtype":          "insufficient_data",
+        "compliance_priority":        False,
     }
 
 
@@ -614,24 +886,54 @@ def _build_setup_diagnosis_inner(
         top_speed_target_kmh = 0.0
 
     # ------------------------------------------------------------------
-    # Gearbox flag
+    # Gearbox flag and advanced gearing / wheelspin / compliance diagnosis
     # ------------------------------------------------------------------
-    # Start with "preserve"
     driver_feel_flags = _parse_driver_feel(feeling)
 
-    gearbox_flag = "preserve"
+    # A6: Collect all frames across laps for top-gear signal analysis
+    all_frames: list = []
+    for lap in laps:
+        all_frames.extend(getattr(lap, "frames", []))
 
-    # May change if: any gear has limiter hits
-    has_limiter_hits = bool(rev_limiter_by_gear)
-    if has_limiter_hits:
-        gearbox_flag = "may_change"
+    avg_kerb = sum(getattr(l, "kerb_count", 0) for l in laps) / len(laps) if laps else 0.0
 
-    # May change if: top speed clearly under-geared (< 93% of target)
-    if top_speed_target_kmh > 0 and avg_top_speed_kmh > 0:
-        if avg_top_speed_kmh < 0.93 * top_speed_target_kmh:
-            gearbox_flag = "may_change"
+    # Gearing diagnosis category (replaces the flat 93%-threshold logic)
+    gearing_diagnosis_category = _classify_gearing(
+        all_frames,
+        rev_limiter_by_gear,
+        avg_top_speed_kmh,
+        top_speed_target_kmh,
+        w_band,
+    )
 
-    # But if driver says gearbox is good, always force preserve
+    # Wheelspin subtype
+    wheelspin_subtype = _classify_wheelspin_subtype(
+        all_frames,
+        rev_limiter_by_gear,
+        w_band,
+        avg_snap,
+        aero_rear_near_min,
+        laps,
+    )
+
+    # Compliance priority
+    compliance_priority = _detect_compliance_priority(feeling, avg_kerb)
+
+    # Gearbox flag: derived from the gearing_diagnosis_category rather than
+    # the old flat 93%/limiter heuristic, so the AI block and the validation
+    # rule are consistent.
+    # "preserve" categories: insufficient_data, gear_too_long, limiter_limited
+    #   (limiter_limited = hitting the limiter at the right speed — gearbox correct)
+    # "may_change" categories: gear_too_short, top_gear_power_band_limited,
+    #   traction_limited_acceleration, drag_or_power_limited
+    _PRESERVE_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited"}
+    gearbox_flag = (
+        "preserve"
+        if gearing_diagnosis_category in _PRESERVE_CATEGORIES
+        else "may_change"
+    )
+
+    # Driver override: if driver says gearbox is good, always force preserve
     if driver_feel_flags.get("gearbox_good"):
         gearbox_flag = "preserve"
 
@@ -659,6 +961,7 @@ def _build_setup_diagnosis_inner(
     recommended_tuning_priority = _derive_tuning_priority(
         driver_feel_flags, b_band, w_band, aero_front_near_min, aero_rear_near_min,
         location_evidence_usable=loc_evidence_usable,
+        compliance_priority=compliance_priority,
     )
     feel_supported = _driver_feel_supported_by_telemetry(
         driver_feel_flags, w_band, aero_front_near_min, aero_rear_near_min, avg_lockups
@@ -700,6 +1003,10 @@ def _build_setup_diagnosis_inner(
         # Location confidence (new — addendum requirement)
         "location_confidence":        loc_conf,
         "location_evidence_usable":   loc_evidence_usable,
+        # A6: advanced gearing / wheelspin / compliance diagnosis
+        "gearing_diagnosis_category": gearing_diagnosis_category,
+        "wheelspin_subtype":          wheelspin_subtype,
+        "compliance_priority":        compliance_priority,
     }
 
 
@@ -714,6 +1021,7 @@ def validate_setup_engineering(
     ranges: dict,
     event_ctx: dict,
     car_name: str = "",
+    rec_history: "dict | None" = None,
 ) -> list[str]:
     """Validate an AI response dict against engineering rules derived from diagnosis.
 
@@ -732,6 +1040,11 @@ def validate_setup_engineering(
         Resolved per-car ranges dict from resolve_ranges().
     event_ctx:
         Event context dict.
+    rec_history:
+        Optional dict with shape:
+          {"lsd_accel": {"prior_value": float|None, "prior_direction": str|None,
+                         "worsened_verdict_exists": bool}}
+        When None, the lsd_reversal_without_evidence rule is skipped.
 
     Returns
     -------
@@ -740,13 +1053,14 @@ def validate_setup_engineering(
     """
     reasons: list[str] = []
 
-    bottoming_band          = diagnosis.get("bottoming_band", "minor")
-    wheelspin_band_v        = diagnosis.get("wheelspin_band", "low")
-    feel_flags              = diagnosis.get("driver_feel_flags") or {}
-    aero_front_nm           = diagnosis.get("aero_front_near_min", False)
-    gearbox_flag            = diagnosis.get("gearbox_flag", "preserve")
+    bottoming_band              = diagnosis.get("bottoming_band", "minor")
+    wheelspin_band_v            = diagnosis.get("wheelspin_band", "low")
+    feel_flags                  = diagnosis.get("driver_feel_flags") or {}
+    aero_front_nm               = diagnosis.get("aero_front_near_min", False)
+    gearbox_flag                = diagnosis.get("gearbox_flag", "preserve")
+    gearing_diagnosis_category  = diagnosis.get("gearing_diagnosis_category", "insufficient_data")
     # Location confidence — default to False (conservative) when key absent
-    loc_evidence_usable     = diagnosis.get("location_evidence_usable", False)
+    loc_evidence_usable         = diagnosis.get("location_evidence_usable", False)
 
     # Read AI-recommended setup_fields and changes
     ai_sf     = parsed_ai_response.get("setup_fields") or {}
@@ -879,26 +1193,61 @@ def validate_setup_engineering(
             )
 
     # ----------------------------------------------------------------
-    # RULE: gearbox_edit_when_preserve
+    # RULE: gearbox_category_mismatch (replaces gearbox_edit_when_preserve)
     # ----------------------------------------------------------------
-    if gearbox_flag == "preserve":
-        # Check transmission_max_speed_kmh
+    # Only block gear changes when the gearing diagnosis indicates no change is
+    # needed (insufficient_data or preserve categories) AND the driver has not
+    # flagged gearbox as good already.  For "may_change" categories the AI is
+    # allowed to adjust gearing — this is the primary difference from the old rule.
+    _PRESERVE_GEARBOX_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited"}
+    _gearbox_blocked = (
+        gearing_diagnosis_category in _PRESERVE_GEARBOX_CATEGORIES
+        or feel_flags.get("gearbox_good")
+    )
+    if _gearbox_blocked:
         if _ai_changes_field("transmission_max_speed_kmh"):
             ai_ts = _ai_value("transmission_max_speed_kmh")
             cur_ts = _current_value("transmission_max_speed_kmh")
             if ai_ts is not None and cur_ts is not None and ai_ts != cur_ts:
                 reasons.append(
-                    f"gearbox_edit_when_preserve: AI changes transmission_max_speed_kmh "
-                    f"({cur_ts} -> {ai_ts}) but gearbox_flag is 'preserve'."
+                    f"gearbox_category_mismatch: AI changes transmission_max_speed_kmh "
+                    f"({cur_ts} -> {ai_ts}) but gearing_diagnosis_category is "
+                    f"'{gearing_diagnosis_category}' (gearbox should be preserved)."
                 )
-        # Check gear_ratios (only in changes, not in setup_fields)
         for ch in ai_changes:
             if ch.get("field") == "gear_ratios" or "gear_ratio" in str(ch.get("field", "")).lower():
                 reasons.append(
-                    "gearbox_edit_when_preserve: AI recommends gear ratio change "
-                    "but gearbox_flag is 'preserve'."
+                    f"gearbox_category_mismatch: AI recommends gear ratio change but "
+                    f"gearing_diagnosis_category is '{gearing_diagnosis_category}' "
+                    "(gearbox should be preserved)."
                 )
                 break
+
+    # ----------------------------------------------------------------
+    # RULE: lsd_reversal_without_evidence
+    # ----------------------------------------------------------------
+    # If rec_history provides prior lsd_accel direction, and the AI now
+    # reverses that direction without a worsened verdict justifying it,
+    # flag the reversal.
+    if rec_history is not None:
+        _lsd_hist = rec_history.get("lsd_accel") or {}
+        _prior_value = _lsd_hist.get("prior_value")
+        _prior_direction = _lsd_hist.get("prior_direction")
+        _worsened = _lsd_hist.get("worsened_verdict_exists", False)
+        # Skip when prior data or worsened justification is missing
+        if _prior_value is not None and _prior_direction is not None and not _worsened:
+            _ai_lsd = _ai_value("lsd_accel")
+            _cur_lsd = _current_value("lsd_accel")
+            if _ai_lsd is not None and _cur_lsd is not None and _ai_lsd != _cur_lsd:
+                _new_direction = "increase" if _ai_lsd > _cur_lsd else "decrease"
+                if _new_direction != _prior_direction:
+                    reasons.append(
+                        f"lsd_reversal_without_evidence: AI reverses lsd_accel direction "
+                        f"(prior_value={_prior_value}, prior_direction='{_prior_direction}', "
+                        f"current={_cur_lsd}, new={_ai_lsd}, new_direction='{_new_direction}'). "
+                        f"reversal_reason: no worsened verdict on record — prior direction "
+                        f"has not been proven counterproductive."
+                    )
 
     # ----------------------------------------------------------------
     # RULE: malformed_schema
@@ -1025,6 +1374,13 @@ def format_diagnosis_for_prompt(diagnosis: dict) -> str:
     lines.append(
         f"Gearbox flag: {diagnosis.get('gearbox_flag', 'preserve')}"
     )
+    # A11: emit new gearing / wheelspin diagnosis fields
+    gearing_cat = diagnosis.get("gearing_diagnosis_category", "")
+    if gearing_cat:
+        lines.append(f"Gearing diagnosis: {gearing_cat}")
+    ws_subtype = diagnosis.get("wheelspin_subtype", "")
+    if ws_subtype:
+        lines.append(f"Wheelspin subtype: {ws_subtype}")
 
     feel_flags = diagnosis.get("driver_feel_flags") or {}
     active_flags = [k for k, v in feel_flags.items() if v]
@@ -1040,6 +1396,14 @@ def format_diagnosis_for_prompt(diagnosis: dict) -> str:
     priority = diagnosis.get("recommended_tuning_priority") or []
     if priority:
         lines.append(f"Recommended tuning priority: {' → '.join(priority[:3])}")
+
+    # A11: compliance priority directive
+    if diagnosis.get("compliance_priority"):
+        lines.append(
+            "Compliance priority: TRUE — natural frequency and damping must appear first "
+            "or second in tuning priority. Address kerb and surface compliance before "
+            "stability tuning."
+        )
 
     # Reiterate low-confidence ride-height constraint at the end so it frames the ask
     if not loc_usable:

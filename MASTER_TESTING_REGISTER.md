@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-03 (**Tab Navigation Refactor — Named Tab Lookup** — retires the hard-coded tab-index risk flagged since the Product Consolidation audit. New **`ui/tab_registry.py`** (pure, no PyQt6): one stable key per existing tab (`TAB_LIVE`…`TAB_HOME`), `DEFAULT_TAB_ORDER` = the current visual order 0–13 in one place (a source-scan test proves it mirrors the real addTab sequence; a runtime count check warns on drift), `TabRegistry` key↔index mapping that never raises on bad input, `key_for_title()` ⚙-decoration-safe reverse lookup, `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES`. `ui/dashboard.py`: **`_on_tab_changed` dispatches by stable key** (same 8 activation behaviours, zero `index == N` comparisons); navigation helpers `get_tab_index`/`has_tab`/`current_tab_key`/`select_tab` (all safe on unknown keys; `select_tab` holds the only remaining `_tabs.setCurrentIndex` call site); the 3 jump sites now `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`; visibility guards use `current_tab_key() != TAB_AI_LOG/TAB_HOME`; `_home_tab_index` retired. **Tab order byte-identical (all 14 addTab lines pinned), Home stays appended at 13, diagnostic tabs + ⚙ markers unchanged, no logic/prompt/mapping/PTT/voice/persistence/fan-out change.** New tests `test_tab_navigation_registry.py` (33); 6 legacy tests updated in place to the key-based home (group12c AI-Log dispatch, group14 DEF-P2-033 flush guard ×2, group3 history→Practice-Review jump, diagnostic-cleanup + home-dashboard dispatch scans). **Full suite: 4512 pass / 6 skip / 0 fail.** See "Tab Navigation Refactor" at the end of this file.)
+> Last updated: 2026-07-05 (**Setup Brain Upgrade — Professional Race Engineer Diagnosis** — the setup-diagnosis brain (`strategy/setup_diagnosis.py`) now reasons about WHY a symptom appears before the AI touches a setup; backend-only, no UI surface, branch `ofr2-quali-race-disciplines` (on top of OFR-2). Two production files: `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW app-side GEARING DIAGNOSIS `_classify_gearing(...)` → `gearing_diagnosis_category` (7 categories) via a priority decision table, fed by the new pure `_derive_top_gear_frame_signals(frames, top_gear)` over ~10Hz `LapStats.frames`. The flawed rule REMOVED (the `gear_note` "Do NOT lengthen gears" block, old `DRIVER_HARD_CONSTRAINTS` #8 → now 8, `gearbox_edit_when_preserve`) → replaced by `gearbox_category_mismatch` (Fuji RSR power-band now ALLOWS a gearbox change). NEW `_classify_wheelspin_subtype(...)` → `wheelspin_subtype` (7 values) with honest deferrals (`inside_wheel_spin` NEVER emitted — no per-wheel slip; `rear_platform_stiffness` folds into mixed; kerb_unload_spin is a kerb-count proxy). NEW `compliance_priority` bool (`_detect_compliance_priority`) raises natural-freq/damping UNPROMPTED. Dominant re-order (severe wheelspin > "consider" bottoming). LSD ANTI-OSCILLATION `validate_setup_engineering`+`rec_history`+rule `lsd_reversal_without_evidence` (rec_history resolved by the CALLER from STRUCTURED `data/setup_history.json` + DB `worsened` verdict — no new config["strategy"] read). FEEDBACK CHRONOLOGY: `_get_driver_feedback_context` splits Latest vs Earlier with trend tags via `DrivingAdvisor._feedback_trend_tag`. SCHEMA FIX: `not-present` added to `issue_classification`. New keys present on the conservative/error path too. New tests `tests/test_group39_setup_brain_upgrade.py` (~72, AC1–AC9 + frame-signal units); 4 re-pointed in `tests/test_group38_setup_diagnosis.py` (constraint 9→8, rule rename). `docs/SETUP_BRAIN_UPGRADE.md` (NEW). **Full suite: 5356 pass / 6 skip / 8 fail** — the 8 fails are ALL pre-existing frozen-allowlist guards from the already-committed `ui/track_modelling_ui.py::_tm_restore_last_track` config["strategy"] consumer (unrelated track-modelling tech debt, NOT this sprint); ~72 new tests green, zero regressions. See "Setup Brain Upgrade" at the end of this file.)
+> Prior: 2026-07-03 (**Tab Navigation Refactor — Named Tab Lookup** — retires the hard-coded tab-index risk flagged since the Product Consolidation audit. New **`ui/tab_registry.py`** (pure, no PyQt6): one stable key per existing tab (`TAB_LIVE`…`TAB_HOME`), `DEFAULT_TAB_ORDER` = the current visual order 0–13 in one place (a source-scan test proves it mirrors the real addTab sequence; a runtime count check warns on drift), `TabRegistry` key↔index mapping that never raises on bad input, `key_for_title()` ⚙-decoration-safe reverse lookup, `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES`. `ui/dashboard.py`: **`_on_tab_changed` dispatches by stable key** (same 8 activation behaviours, zero `index == N` comparisons); navigation helpers `get_tab_index`/`has_tab`/`current_tab_key`/`select_tab` (all safe on unknown keys; `select_tab` holds the only remaining `_tabs.setCurrentIndex` call site); the 3 jump sites now `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`; visibility guards use `current_tab_key() != TAB_AI_LOG/TAB_HOME`; `_home_tab_index` retired. **Tab order byte-identical (all 14 addTab lines pinned), Home stays appended at 13, diagnostic tabs + ⚙ markers unchanged, no logic/prompt/mapping/PTT/voice/persistence/fan-out change.** New tests `test_tab_navigation_registry.py` (33); 6 legacy tests updated in place to the key-based home (group12c AI-Log dispatch, group14 DEF-P2-033 flush guard ×2, group3 history→Practice-Review jump, diagnostic-cleanup + home-dashboard dispatch scans). **Full suite: 4512 pass / 6 skip / 0 fail.** See "Tab Navigation Refactor" at the end of this file.)
 > Prior: 2026-07-03 (**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal** — executes the Product Consolidation Audit's §9 items 1/3/4. DELETED: the 7 hidden, never-signal-connected legacy per-segment review buttons + their unreachable `_tm_review_*` handlers + `_tm_refresh_review_buttons`/no-op `_tm_refresh_approval_panel` + 8 dead imports + 4 never-applied style strings (`ui/track_modelling_ui.py`; pure review functions in `data/track_segment_review.py` retained); the dead, never-rendered `_TELEMETRY_REFERENCE_HTML` constant. RENAMED: "Race Config ID" → **"Session Match Key"**; Diagnostics "Rem(clk)"/"rem_ms(raw)"/"Ann queue" → "Time left:"/"remaining_time_ms:"/"Voice queue:"; window title + Guide h1 → **"Next Gear Racing Pit Crew"**. GUIDE FIXED: stale Step 8 (described a "Dashboard" tab with quick-links that never existed) now describes the real Home tab; API-key bullet now points at the Strategy Builder field (audit's "Settings duplicate" claim corrected — no Settings key field exists); new "Tool tabs (⚙) … safe to ignore" note; "pip install" tooltip line removed. NO CHANGE to tab order, `_on_tab_changed` indices, Home Dashboard, diagnostic tabs, any logic/prompt/mapping/PTT/voice/persistence, or the two `config["strategy"]` fan-outs (pinned by test). New tests `test_diagnostic_tab_cleanup.py` (25); `test_group24` `_tm_` floor 54→46 (9 deleted methods enumerated). **Full suite: 4479 pass / 6 skip / 0 fail.** See "Diagnostic Tab Cleanup" at the end of this file.)
 > Prior: 2026-07-03 (**Home Dashboard Build — Race Engineer Command Centre** — the missing home/overview surface (REQUIREMENTS.md §12.2, audit §1.1) is now built. New `ui/home_dashboard_vm.py` (pure Python — `HomeDashboardState`/`HomeDashboardCard`/`HomeDashboardStatus`/`HomeDashboardWarning`/`HomeDashboardNextAction`; `build_home_dashboard_state()` never raises; six sections: Race Setup / Track Intelligence / Setup Brain / Strategy Brain / AI Input Safety / Next Best Action, all read from the four canonical contexts + the AI snapshot core + `build_flow_state_summary()`). New **Home tab APPENDED at index 13** (`_build_home_tab` — indices 0–12 and `_on_tab_changed` dispatches unchanged; no tab reordered/renamed/removed); refresh on tab-shown + guarded `_home_refresh_if_visible()` hooks after event set-active / `_update_race_config` / setup result display / track-truth refresh — no polling, no new workers. Display-only: source-scans prove the home methods write nothing (no config["strategy"], no persist, no DB/file writes). Stale indicators surfaced in plain English (setup-vs-event, setup-vs-strategy, strategy-vs-event, track mismatch, AI legacy fallback). New tests `test_home_dashboard_vm.py` (52). **Full suite: 4454 pass / 6 skip / 0 fail.** See "Home Dashboard Build" at the end of this file.)
 > Prior: 2026-07-03 (**AI Snapshot Migration — Frozen Context Inputs** — `data/ai_context_snapshot.py` threads frozen, owner-documented snapshots of the four canonical contexts into the AI-input paths: `StrategyAISnapshot`/`PracticeAnalysisSnapshot` race-params (each path's exact legacy defaults preserved, incl. DEF-P1-005 practice tuning-absent→LOCKED) + `SetupAISnapshot` (build-setup 0.0 defaults); byte-identical to the verbatim legacy expressions when stores are in sync — proven incl. a byte-identical `_build_race_prompt` text test; documented intentional difference: fresh DB event values supersede stale fan-out copies; staleness (strategy/setup/track vs event) detected at build time and printed under GT7_AI_DEBUG. Migrated: `_assemble_strategy_inputs`, `_run_ai_analysis`, `_run_practice_analysis`, `_run_build_setup` (+ frozen worker-thread rec metadata), `_setup_analyse_ai`. No prompt wording/intelligence changed; all legacy stores retained. New tests `test_ai_context_snapshot.py` (41); 20 legacy source-scans updated in place. **Full suite: 4402 pass / 6 skip / 0 fail.** See "AI Snapshot Migration" at the end of this file.)
@@ -5657,3 +5658,106 @@ and green.
 Drive quali + race sessions and compare the advice. Build candidates:
 History-tab surface for OFR-1's scored recommendations; Phase 2-B/2-C strategy
 telemetry; plan-state schema migration.
+
+---
+
+## Setup Brain Upgrade — Professional Race Engineer Diagnosis (2026-07-05)
+
+> Branch `ofr2-quali-race-disciplines` (built on top of the OFR-2 work).
+> Backend-only — no UI surface. Two production files:
+> `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`.
+> Full doc: `docs/SETUP_BRAIN_UPGRADE.md`.
+> **Full suite: 5356 pass / 6 skip / 8 fail** — the 8 failures are ALL
+> pre-existing frozen-allowlist guard tests from the already-committed
+> `ui/track_modelling_ui.py::_tm_restore_last_track` `config["strategy"]`
+> consumer (unrelated track-modelling tech debt, NOT this sprint), left to the
+> track-modelling owner; ~72 new tests all green, zero regressions.
+
+### What was built
+The setup-diagnosis brain now reasons like a race engineer about **why** a
+symptom appears before the AI touches a setup.
+
+- **GEARING DIAGNOSIS (app-side).** `_classify_gearing(...)` →
+  `gearing_diagnosis_category` ∈ {gear_too_short, gear_too_long,
+  top_gear_power_band_limited, traction_limited_acceleration,
+  drag_or_power_limited, limiter_limited, insufficient_data} via a priority
+  decision table (top-gear limiter below/at target → gear_too_short/
+  limiter_limited; below-target + severe wheelspin + no top-gear limiter →
+  traction_limited; below-target + early-peak-power + accel-fade → power-band-
+  limited; else drag/long/insufficient). Fed by the new pure
+  `_derive_top_gear_frame_signals(frames, top_gear)` (accel_fade_detected,
+  peak_power_early over the ~10Hz `LapStats.frames`; degrades to
+  insufficient_data when frames absent; tunable module constants — accel-fade
+  throttle %, min samples, peak-power RPM fraction, speed-drop %, kerb-proximity
+  window).
+- **The flawed rule REMOVED.** The `gear_note` "Do NOT recommend lengthening
+  gears" block in `_build_combined_prompt`, old `DRIVER_HARD_CONSTRAINTS`
+  constraint #8 (now **8** constraints), and the `gearbox_edit_when_preserve`
+  validator rule are gone — replaced by `gearbox_category_mismatch`, which only
+  blocks gear changes for insufficient_data/gear_too_long/limiter_limited (or a
+  driver-flagged-good gearbox); the Fuji RSR power-band case now **ALLOWS** a
+  gearbox change.
+- **WHEELSPIN SUBTYPE.** `_classify_wheelspin_subtype(...)` →
+  `wheelspin_subtype` ∈ {both_rear_spin, snap_throttle_induced, kerb_unload_spin,
+  gear_too_short_spin, aero_instability, mixed, insufficient_data}. Honest
+  deferrals: `inside_wheel_spin` is NEVER emitted (no per-wheel slip ratio in the
+  GT7 packet); `rear_platform_stiffness` folds into `mixed` (no damper baseline);
+  kerb_unload_spin uses kerb_count>0 as a proximity proxy (no kerb-position
+  channel).
+- **COMPLIANCE PRIORITY.** `_detect_compliance_priority(feeling, avg_kerb)` →
+  `compliance_priority` bool — when the driver reports stiffness/kerb-upset/
+  undulation terms AND kerb events/lap > 2, natural frequency / damping is raised
+  to first-or-second in `_derive_tuning_priority` WITHOUT the driver asking, and
+  `format_diagnosis_for_prompt` emits an explicit compliance instruction.
+- **DOMINANT re-order.** `_derive_dominant_problem` — severe/major wheelspin now
+  outranks a "consider"-band bottoming call unless driver feel explicitly cites
+  bottoming (new `bottoming` entry in `_FEEL_VOCABULARY`).
+- **LSD ANTI-OSCILLATION.** `validate_setup_engineering` gains a `rec_history`
+  param + rule `lsd_reversal_without_evidence` — fires on an unevidenced LSD-accel
+  direction reversal; skips when a `worsened` verdict backs it, when there is no
+  prior/first rec, or when history is unavailable. The reversal reason carries
+  prior value, new value, both directions, and `reversal_reason`. rec_history is
+  resolved by the **CALLER** (`build_setup_advice_response`,
+  `build_combined_setup_response`) from STRUCTURED `data/setup_history.json`
+  changes + the DB `worsened` verdict — **no new `config["strategy"]` read**
+  (config_id sourced from `_event_ctx`).
+- **FEEDBACK CHRONOLOGY.** `_get_driver_feedback_context` splits "Latest feedback
+  (weight highest)" vs "Earlier feedback", with per-field trend tags
+  current/improving/worsening/resolved via `DrivingAdvisor._feedback_trend_tag`
+  (newest-first; keyword-based improving detection) — latest now dominates old.
+- **SCHEMA FIX.** `not-present` added to the allowed `issue_classification` values
+  in both prompt builders + `_race_engineer_directives`; the invalid
+  `"not currently an issue"` example removed.
+- All new keys (gearing_diagnosis_category, wheelspin_subtype,
+  compliance_priority) are present in **both** the normal and the conservative/
+  error-path diagnosis dicts.
+
+### New / updated test files
+
+| Test file | Count | Coverage |
+|-----------|------:|----------|
+| `tests/test_group39_setup_brain_upgrade.py` (NEW) | ~72 | AC1 Fuji RSR gearing; AC2 traction-limited; AC3 categories + error-path keys; AC4 compliance; AC5 wheelspin subtype (incl. never-inside-wheel-spin); AC6 LSD anti-oscillation; AC7 feedback trend + Scenario 5 latest-wins; AC8 dominant precedence; AC9 not-present schema; frame-signal unit tests |
+| `tests/test_group38_setup_diagnosis.py` (updated in place) | 4 | re-pointed: constraint count 9→8; rule rename `gearbox_edit_when_preserve` → `gearbox_category_mismatch` |
+
+### Acceptance criteria — status
+All story ACs (AC1–AC9) verified by the new suite; ~72 new tests green, zero
+regressions. The 8 pre-existing frozen-allowlist failures are unrelated
+track-modelling tech debt and remain for the track-modelling owner.
+
+### Manual UAT steps
+1. Build a **Race Setup** on a car/track with a wheelspin-heavy stint — the AI
+   Log prompt shows the wheelspin subtype + gearing category reasoning; the
+   Fuji RSR power-band case allows a gearbox change (no more blanket refusal).
+2. Give repeated driver feedback about a stiff car over kerbs — compliance is
+   raised in the tuning priority unprompted, with an explicit instruction.
+3. Give newer feedback contradicting older feedback — the Latest block dominates
+   and per-field trend tags read current/improving/worsening/resolved.
+
+### Deferred / limitations
+`inside_wheel_spin` & `rear_platform_stiffness` subtypes deferred (no
+per-wheel-slip / no damper baseline); `kerb_unload_spin` is a count-proxy, not
+true spatial proximity; the LSD `worsened`-verdict join matches the DB
+`recommendation_text` blob for `"lsd_accel"` (functional but the one fragile
+join — a structured follow-up candidate); no UI surface for the new diagnosis
+keys yet (a follow-on story); the 8 pre-existing track-modelling allowlist
+failures are not this sprint's.
