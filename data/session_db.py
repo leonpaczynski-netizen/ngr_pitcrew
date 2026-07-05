@@ -332,6 +332,22 @@ _V10_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("driver_feedback", "rating   TEXT    NOT NULL DEFAULT ''"),
 ]
 
+# v11: Group 42 — Rule-First Setup Brain.
+# Additive nullable columns on setup_recommendations for the new deterministic
+# pipeline.  recommendation_text is preserved; these are foundation-only columns
+# (no existing query breaks).  All new columns are nullable TEXT so old rows
+# survive as NULL without constraint violations.
+_V11_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("setup_recommendations", "deterministic_plan_json  TEXT"),
+    ("setup_recommendations", "ai_audit_json            TEXT"),
+    ("setup_recommendations", "validation_status        TEXT"),
+    ("setup_recommendations", "approved_changes_json    TEXT"),
+    ("setup_recommendations", "rejected_changes_json    TEXT"),
+    ("setup_recommendations", "diagnosis_json           TEXT"),
+    ("setup_recommendations", "driver_profile_version   TEXT"),
+    ("setup_recommendations", "rule_engine_version      TEXT"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -427,6 +443,10 @@ class SessionDB:
             self._migrate_v10()
             self._conn.execute("PRAGMA user_version = 10")
             self._conn.commit()
+        if version < 11:
+            self._migrate_v11()
+            self._conn.execute("PRAGMA user_version = 11")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -499,6 +519,31 @@ class SessionDB:
         Existing rows backfill via DEFAULT and are treated as unrated.
         """
         for table, col_def in _V10_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
+    def _migrate_v11(self) -> None:
+        """Group 42 — Rule-First Setup Brain additive columns (schema version 11).
+
+        Adds 8 nullable TEXT columns to setup_recommendations:
+          deterministic_plan_json  — JSON summary of the SetupPlan (proposed_count,
+                                     rejected_candidate_count, protected_fields).
+          ai_audit_json            — JSON of the AuditResult._asdict().
+          validation_status        — SetupRecommendationResult.status string.
+          approved_changes_json    — JSON list of approved changes.
+          rejected_changes_json    — JSON list of rejected candidates.
+          diagnosis_json           — JSON of the diagnosis dict.
+          driver_profile_version   — e.g. "v1.0-hardcoded".
+          rule_engine_version      — e.g. "42.0".
+
+        All are nullable TEXT (no DEFAULT) so existing rows keep NULL without
+        constraint violation and no back-fill is needed.
+        A "duplicate column" guard follows the V9 pattern.
+        """
+        for table, col_def in _V11_ALTER_COLUMNS:
             try:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
             except Exception as exc:

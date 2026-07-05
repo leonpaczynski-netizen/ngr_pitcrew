@@ -5,6 +5,21 @@ fixes keyed by config_id.  Entries are fed back into AI prompts so every
 call is aware of what has been tried for this specific car/track/race-length
 combination — preventing the AI from recommending changes that were already
 applied and helping it build on previous iterations.
+
+Group 42 — legacy_unknown treatment
+-------------------------------------
+Entries with a validation_status that is absent, None, or unrecognised
+(not in APPROVED_STATUSES and not a known non-approved status) are labelled
+LEGACY_UNKNOWN.  These are display-only — they must never be applied as
+actionable recommendations.
+
+Backend hook: is_legacy_unknown(validation_status) -> bool
+  Returns True when the status indicates an unknown/pre-validation-gate entry.
+  Frontend-builder wires this to the UI; the backend only exposes the hook.
+
+Known non-approved statuses (routed to _rejected_ bucket but recognised):
+  "ai_audit_rejected_advisory", "validation_failed", "retry_failed",
+  "blocked_no_safe_recommendation".
 """
 from __future__ import annotations
 
@@ -26,6 +41,71 @@ _MAX_ENTRIES_PER_CONFIG = 20
 # are written here so they never appear as the current recommendation but are still
 # visible for debugging.
 _REJECTED_KEY_PREFIX = "_rejected_"
+
+# ---------------------------------------------------------------------------
+# Group 42 — legacy_unknown treatment
+# ---------------------------------------------------------------------------
+
+# Statuses that are explicitly non-approved but recognised (routed to _rejected_).
+_KNOWN_NON_APPROVED_STATUSES: frozenset[str] = frozenset({
+    "ai_audit_rejected_advisory",
+    "validation_failed",
+    "retry_failed",
+    "blocked_no_safe_recommendation",
+    "generated",
+    "validation_failed",
+    "retry_requested",
+    # Group 41 status strings
+    "proposed",
+})
+
+# Sentinel string for entries with absent/unrecognised validation_status.
+LEGACY_UNKNOWN: str = "legacy_unknown"
+
+
+def is_legacy_unknown(validation_status: "str | None") -> bool:
+    """Return True when validation_status is absent, None, or unrecognised.
+
+    An entry is legacy_unknown when it was saved before the engineering-
+    validation-gate (Group 41) or before the rule-first pipeline (Group 42)
+    and therefore has no reliable status to act on.
+
+    legacy_unknown entries are DISPLAY-ONLY — they must never be applied as
+    actionable recommendations.
+
+    Frontend hook: call this function when rendering history entries to decide
+    whether to surface an 'apply' button or a 'legacy — cannot apply' banner.
+    """
+    if not validation_status:
+        return True
+    if validation_status in APPROVED_STATUSES:
+        return False
+    if validation_status in _KNOWN_NON_APPROVED_STATUSES:
+        return False
+    # Unknown / unrecognised status → treat as legacy
+    return True
+
+
+def normalise_validation_status(entry: dict) -> str:
+    """Return the effective validation_status for a history entry.
+
+    Applies the legacy_unknown treatment: entries with absent or unrecognised
+    status are returned as LEGACY_UNKNOWN.  All other statuses are returned
+    as-is.
+
+    Parameters
+    ----------
+    entry : A history entry dict (as stored by save_entry).
+
+    Returns
+    -------
+    str — one of: LEGACY_UNKNOWN, an APPROVED_STATUSES value, or a known
+          non-approved status string.
+    """
+    vs = entry.get("validation_status") or ""
+    if is_legacy_unknown(vs):
+        return LEGACY_UNKNOWN
+    return vs
 
 
 def _load_all() -> dict:

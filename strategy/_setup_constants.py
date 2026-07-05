@@ -49,3 +49,20 @@ APPROVED_STATUSES: frozenset[str] = frozenset({
     "approved_with_warnings",
     "fallback_generated",
 })
+
+# ---------------------------------------------------------------------------
+# Group 42 — Rule-First Setup Brain constants
+# ---------------------------------------------------------------------------
+
+# AC26: rule-engine version string — non-empty, bumped with each pack change.
+RULE_ENGINE_VERSION: str = "42.0"
+
+# AC21: minimum outcome samples before the success-rate gate fires.
+MIN_OUTCOME_SAMPLES: int = 3
+
+# AC21: success rate threshold below which confidence is downgraded one step.
+LOW_SUCCESS_RATE: float = 0.40
+
+# Status written to setup_history when the AI audit rejected the plan.
+# NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
+AI_AUDIT_REJECTED_ADVISORY: str = "ai_audit_rejected_advisory"

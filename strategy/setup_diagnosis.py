@@ -3,15 +3,33 @@
 Pure Python — no Qt, no network imports.
 All functions are safe to call in plain pytest without any running Qt app.
 
+Group 42 — Rule-First Setup Brain
+----------------------------------
+This module produces the diagnosis dict consumed by the rule engine
+(strategy/setup_rule_engine.py).  The AI is NO LONGER called to generate
+setup changes directly — it is called only for an audit step after the
+deterministic rule engine has produced a plan.
+
+Flow (canonical path — build_combined_setup_response in driving_advisor.py):
+  1. build_setup_diagnosis → structured diagnosis dict (this module).
+  2. build_driver_profile  → DriverProfile (setup_driver_profile.py).
+  3. run_rule_engine       → SetupPlan (setup_rule_engine.py).
+  4. plan_to_raw_data      → raw_data dict (setup_plan.py).
+  5. _normalise_changes + validate_setup_engineering_structured → validation.
+  6. Blocking failure → _build_deterministic_fallback (no AI retry).
+  7. api_key + no fallback → build_audit_prompt + call_api (audit only).
+  8. _finalise_recommendation → SetupRecommendationResult.
+
+Rule-pack registration: strategy/setup_knowledge_base.register_pack().
+
 Public API
 ----------
 build_setup_diagnosis(laps, setup, car_name, event_ctx, feeling) -> dict
     Aggregates LapStats telemetry + driver feel into a structured diagnosis dict.
 
 validate_setup_engineering(parsed_ai_response, diagnosis, setup, ranges, event_ctx) -> list[str]
-    Post-processes an AI JSON response dict against the diagnosis to detect
-    engineering-rule violations.  Returns a list of human-readable reason strings
-    with stable prefixes so tests can substring-match.
+    Post-processes a response dict against the diagnosis to detect engineering-rule
+    violations.  Returns human-readable reason strings with stable prefixes.
 
 _parse_driver_feel(feeling) -> dict[str, bool]
     Case-insensitive substring classifier for driver feeling text.
