@@ -246,3 +246,59 @@ class TestTrackModellingRenames:
         # The segment table click must be connected so selecting a segment
         # highlights it on the map (it was never wired).
         assert "self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)" in tm_src
+
+    def test_tab_show_restores_last_track(self, tm_src):
+        # The reviewed model persists, but the status panel only re-resolves on
+        # (re)selection. On first tab show we must restore the last-used track so
+        # an AI-ready track shows as such without the user re-selecting/re-Accepting.
+        body = _method_body(tm_src, "_tm_on_tab_shown")
+        assert "_tm_restore_last_track" in body, (
+            "Tab show must restore the last-used track so its AI-ready status is "
+            "visible on open without a manual re-select."
+        )
+
+    def test_restore_last_track_reselects_both_combos_from_config(self, tm_src):
+        # Restore must read the persisted ids and drive both combos, so the normal
+        # currentIndexChanged handlers run the resolver (no separate refresh path).
+        body = _method_body(tm_src, "_tm_restore_last_track")
+        assert 'get("track_location_id"' in body and 'get("layout_id"' in body
+        assert "self._tm_location_combo.setCurrentIndex" in body
+        assert "self._tm_layout_combo.setCurrentIndex" in body
+
+    def test_layout_change_restores_calibration_session(self, tm_src):
+        # Section 5 (Seed Geometry) needs a calibration session; on layout-select we
+        # rehydrate one from persisted laps so it works after a restart without
+        # re-driving. Must run on layout change.
+        body = _method_body(tm_src, "_tm_on_layout_changed")
+        assert "_tm_try_restore_calibration_session" in body
+
+    def test_restore_calibration_session_loads_persisted_laps(self, tm_src):
+        # Restore must reuse the persisted laps file (via the audit) and import it,
+        # not require a live session.
+        body = _method_body(tm_src, "_tm_try_restore_calibration_session")
+        assert "can_detect_segments" in body, "must gate on persisted ref-path + laps"
+        assert "_import_cal_laps" in body, "must import the saved calibration laps"
+
+    def test_restore_calibration_session_never_clobbers_live(self, tm_src):
+        # A live recording/built controller session is authoritative — restore must
+        # early-return instead of shadowing it with disk data.
+        body = _method_body(tm_src, "_tm_try_restore_calibration_session")
+        assert 'getattr(ctrl, "_session", None) is not None' in body
+
+    def test_seed_geometry_uses_effective_session(self, tm_src):
+        # Both the Generate handler and the panel refresh must go through the
+        # effective-session helper (live-or-restored), not read ctrl._session direct.
+        gen = _method_body(tm_src, "_tm_generate_seed_geometry")
+        panel = _method_body(tm_src, "_tm_refresh_seed_geometry_panel")
+        assert "self._tm_effective_seed_session()" in gen
+        assert "self._tm_effective_seed_session()" in panel
+
+    def test_effective_seed_session_prefers_live_over_restored(self, tm_src):
+        body = _method_body(tm_src, "_tm_effective_seed_session")
+        assert "_tm_restored_session" in body and "_session" in body
+
+    def test_sections_5_and_6_have_inline_guidance(self, tm_src):
+        # The optional "save geometry to library" workflow was unclear; each section
+        # must carry inline guidance text so the workflow reads correctly.
+        assert "not needed for AI-ready" in tm_src, "Section 5 must explain it's optional"
+        assert "Mirrors what the track library holds" in tm_src, "Section 6 must explain it's a read-only library mirror"

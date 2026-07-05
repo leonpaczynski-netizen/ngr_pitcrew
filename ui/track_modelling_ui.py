@@ -756,6 +756,15 @@ class TrackModellingMixin:
         _tm_align_section_layout = QVBoxLayout(_tm_align_section_grp)
         _tm_align_section_layout.setContentsMargins(6, 12, 6, 6)
         _tm_align_section_layout.setSpacing(6)
+        _tm_seed_geo_help = QLabel(
+            "Optional — not needed for AI-ready (that's section 4). This saves the "
+            "track's coordinate shape, rebuilt from your calibration laps, into the "
+            "reusable track library. Steps: Generate Seed Geometry → Save to Library "
+            "→ Reload Seed. Works from your saved laps, so you don't need to re-drive."
+        )
+        _tm_seed_geo_help.setStyleSheet("color: #8892A0; font-size: 10px;")
+        _tm_seed_geo_help.setWordWrap(True)
+        _tm_align_section_layout.addWidget(_tm_seed_geo_help)
         _tm_align_section_layout.addWidget(seed_geo_grp)
         right_layout.addWidget(_tm_align_section_grp)
 
@@ -765,6 +774,15 @@ class TrackModellingMixin:
         _truth_section_layout = QVBoxLayout(_truth_section_grp)
         _truth_section_layout.setContentsMargins(6, 12, 6, 6)
         _truth_section_layout.setSpacing(6)
+        _tm_truth_help = QLabel(
+            "Read-only. Mirrors what the track library holds for this layout. It stays "
+            "blank (—) until you Save seed geometry in section 5 — the AI-ready model "
+            "from section 4 is stored separately, so an AI-ready track can still show "
+            "nothing here until its geometry is saved to the library."
+        )
+        _tm_truth_help.setStyleSheet("color: #8892A0; font-size: 10px;")
+        _tm_truth_help.setWordWrap(True)
+        _truth_section_layout.addWidget(_tm_truth_help)
 
         truth_grp = QGroupBox("Track Truth / Mapping")
         truth_grp.setStyleSheet(self._group_style())
@@ -831,6 +849,11 @@ class TrackModellingMixin:
         self._tm_seed_build_result: Optional["GeometryBuildResult"] = None   # Group 17V
         self._tm_seed_save_result:  Optional["GeometrySaveResult"]  = None   # Group 17V
         self._tm_seed_geometry_available: bool = False                        # Group 17V
+        # Calibration session rehydrated from persisted laps on layout-select, so
+        # Section 5 (Seed Geometry) works on a previously-modelled track after a
+        # restart without re-driving. None until restored; the LIVE controller
+        # session always takes precedence (see _tm_effective_seed_session).
+        self._tm_restored_session = None
         self._tm_highlight_start_p: float | None = None   # Group 23A — highlight persistence
         self._tm_highlight_end_p:   float | None = None   # Group 23A — highlight persistence
 
@@ -861,9 +884,40 @@ class TrackModellingMixin:
             if result.success:
                 self._tm_populate_location_combo()
                 self._tm_populate_calibration_car()
+                # Restore the last-modelled track so the AI-ready status is visible
+                # on open without the user having to re-select (or re-Accept) it.
+                self._tm_restore_last_track()
         except Exception as exc:
             self._tm_seed_status_lbl.setText(f"Error loading seed: {exc}")
             self._tm_seed_status_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
+
+    def _tm_restore_last_track(self) -> None:
+        """Reselect the last-used track/layout from config on first tab show.
+
+        The reviewed track model persists to disk, but the Track Model Status
+        panel only re-resolves when a track is (re)selected. Nothing restored the
+        selection on startup, so a fully AI-ready track looked un-modelled until
+        the user manually re-selected it (or re-Accepted). Selecting the combos
+        here fires the normal currentIndexChanged handlers, which populate the
+        layout list and run _tm_refresh_resolver — showing AI-ready with no clicks.
+        """
+        strategy = self._config.get("strategy") or {}
+        loc_id = (strategy.get("track_location_id") or "").strip()
+        lay_id = (strategy.get("layout_id") or "").strip()
+        if not loc_id or not lay_id:
+            return
+        # Select the location — this fires _tm_on_location_changed, which rebuilds
+        # the layout combo for this location.
+        loc_idx = self._tm_location_combo.findData(loc_id)
+        if loc_idx < 0:
+            return
+        self._tm_location_combo.setCurrentIndex(loc_idx)
+        # Now select the layout in the freshly-populated combo — this fires
+        # _tm_on_layout_changed, which runs the resolver and loads saved state.
+        lay_idx = self._tm_layout_combo.findData(lay_id)
+        if lay_idx < 0:
+            return
+        self._tm_layout_combo.setCurrentIndex(lay_idx)
 
     def _tm_populate_location_combo(self) -> None:
         if self._tm_seed_result is None:
@@ -919,6 +973,9 @@ class TrackModellingMixin:
         self._tm_try_load_station_map_from_disk(loc_id, lay_id)
         # Group 17P: load previously accepted alignment result if available
         self._tm_try_load_accepted_model(loc_id, lay_id)
+        # Rehydrate a calibration session from persisted laps so Section 5 (Seed
+        # Geometry) is usable after a restart without re-driving calibration.
+        self._tm_try_restore_calibration_session(loc_id, lay_id)
         # Group 18A: refresh Track Truth / Mapping panel
         self._tm_refresh_track_truth_panel()
 
@@ -2535,12 +2592,58 @@ class TrackModellingMixin:
 
     # ── Group 17V: Seed Geometry ─────────────────────────────────────────────
 
+    def _tm_effective_seed_session(self):
+        """Session to build seed geometry from: the live controller session if one
+        exists, else a session rehydrated from persisted calibration laps.
+
+        The live session always wins so an in-progress recording is never masked
+        by stale disk data; the restored session only fills the post-restart gap.
+        """
+        ctrl = getattr(self, "_tm_controller", None)
+        live = getattr(ctrl, "_session", None) if ctrl is not None else None
+        if live is not None:
+            return live
+        return getattr(self, "_tm_restored_session", None)
+
+    def _tm_try_restore_calibration_session(self, loc_id: str, lay_id: str) -> None:
+        """Rehydrate a calibration session from persisted laps for Section 5.
+
+        The reference path and station map persist to disk, but the live in-memory
+        calibration session does not — so after a restart Section 5 (Seed Geometry)
+        stayed greyed out even though the raw laps were saved. This loads those
+        laps back into a session (the same data Detect Segments already reloads)
+        so Generate Seed Geometry works without re-driving calibration.
+
+        Never clobbers a live recording session, and clears any stale restored
+        session when the selected track has no persisted laps.
+        """
+        self._tm_restored_session = None
+        if not loc_id or not lay_id:
+            return
+        # A live controller session (recording/stopped/built) is authoritative —
+        # don't shadow it with disk data.
+        ctrl = getattr(self, "_tm_controller", None)
+        if ctrl is not None and getattr(ctrl, "_session", None) is not None:
+            return
+        try:
+            audit = _audit_track_files(loc_id, lay_id)
+            if not audit.can_detect_segments:
+                return  # no ref path + usable laps on disk for this layout
+            from pathlib import Path as _Path
+            self._tm_restored_session = _import_cal_laps(_Path(audit.calibration_laps_file))
+        except Exception:
+            logging.debug("calibration session restore failed", exc_info=True)
+            self._tm_restored_session = None
+        finally:
+            # Reflect the (possibly) newly-available session in Section 5's buttons.
+            if hasattr(self, "_tm_refresh_seed_geometry_panel"):
+                self._tm_refresh_seed_geometry_panel()
+
     def _tm_generate_seed_geometry(self) -> None:
         """Button handler: build seed coordinate map from the active calibration session."""
         try:
             from data.track_geometry_builder import build_seed_geometry as _build_seed_geo
-            ctrl = getattr(self, "_tm_controller", None)
-            session = getattr(ctrl, "_session", None) if ctrl is not None else None
+            session = self._tm_effective_seed_session()
             loc_id = (self._tm_location_combo.currentData() or "").strip()
             lay_id = (self._tm_layout_combo.currentData() or "").strip()
             layout = None
@@ -2657,8 +2760,9 @@ class TrackModellingMixin:
             )
             from data.track_geometry_builder import LapGeometryFilterResult
 
-            ctrl = getattr(self, "_tm_controller", None)
-            session = getattr(ctrl, "_session", None) if ctrl is not None else None
+            # Live controller session, or one rehydrated from persisted laps so
+            # Generate is usable on a previously-modelled track after a restart.
+            session = self._tm_effective_seed_session()
 
             states = get_geometry_button_states(
                 self._tm_seed_build_result,
