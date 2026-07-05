@@ -49,8 +49,7 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
 
     Distinct from the standard validation-errors banner — uses a red border
     to signal a higher-severity warning: the AI retry did not resolve the
-    engineering contradiction and the recommendation should not be applied
-    without manual review.
+    engineering contradiction and the recommendation should not be applied.
     Returns "" when there are no errors to display.
     """
     if not eng_errors:
@@ -62,10 +61,68 @@ def _format_engineering_validation_banner(eng_errors: list) -> str:
         "<div style='background:#2A0A0A; border:2px solid #E05050; "
         "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
         "&#9940; <b>Engineering validation failed after AI retry — review before applying.</b>"
-        "<br><span style='font-size:11px; color:#CC6060;'>"
-        "The recommendation below survived a correction attempt but still contains "
-        "engineering contradictions. Do NOT apply blindly.</span>"
         f"<ul style='margin:6px 0 0 0; padding-left:16px;'>{items}</ul>"
+        "</div>"
+    )
+
+
+def _format_status_banner(status: str, validation_warnings: list) -> str:
+    """Return an HTML banner for the recommendation lifecycle status.
+
+    Returns "" when status is "approved" (no banner needed).
+    Banner text follows the frontend contract in the sprint brief.
+    """
+    if status == "approved":
+        return ""
+    if status == "approved_with_warnings":
+        if validation_warnings:
+            items = "".join(
+                f"<li style='margin:2px 0;'>{w}</li>" for w in validation_warnings
+            )
+            return (
+                "<div style='background:#1A1A00; border:1px solid #C8A020; "
+                "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+                "&#9888; <b>Setup approved with notes:</b>"
+                f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{items}</ul>"
+                "</div>"
+            )
+        return ""
+    if status == "fallback_generated":
+        return (
+            "<div style='background:#1A2A1A; border:1px solid #4CAF50; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#88BB88;'>"
+            "&#10003; <b>Safe fallback generated. Use only the fallback changes below.</b>"
+            "</div>"
+        )
+    if status == "blocked_no_safe_recommendation":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>No safe setup recommendation generated. Run more laps or review "
+            "telemetry before changing setup.</b>"
+            "</div>"
+        )
+    if status == "validation_failed":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>Recommendation rejected by engineering validation. "
+            "No setup changes from this AI response are approved.</b>"
+            "</div>"
+        )
+    if status == "retry_failed":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>AI recommendation rejected after retry. "
+            "No AI setup changes are approved.</b>"
+            "</div>"
+        )
+    # Default: show status text for any other/unknown status
+    return (
+        "<div style='background:#1A1A00; border:1px solid #888; "
+        "border-radius:4px; padding:8px; margin-bottom:8px; color:#AAA;'>"
+        f"Status: {status}"
         "</div>"
     )
 
@@ -1119,11 +1176,15 @@ class SetupBuilderMixin:
                     "response appears truncated or non-JSON", (payload or "").strip() or " ", 0)
             data = json.loads(payload)
             analysis = str(data.get("analysis", ""))
-            changes: list = data.get("changes", [])
-            setup_fields: dict = data.get("setup_fields", {})
+            # approved_changes and approved_fields are already gated by _finalise_recommendation:
+            # data["changes"] = approved_changes, data["setup_fields"] = approved_fields.
+            approved_changes: list = data.get("changes", [])
+            approved_fields: dict = data.get("setup_fields", {})
+            rejected_changes: list = data.get("rejected_changes", [])
             _validation_errors: list = data.get("validation_errors", [])
-            _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
+            _validation_warnings: list = data.get("validation_warnings", []) or []
             _eng_validation_errors: list = data.get("engineering_validation_errors", [])
+            _rec_status: str = data.get("recommendation_status", "")
             _diagnosis: dict = data.get("diagnosis") or {}
         except (_json.JSONDecodeError, AttributeError):
             # Friendly fallback — never surface raw JSON to the user.
@@ -1141,14 +1202,27 @@ class SetupBuilderMixin:
                 _btn_apply.setVisible(False)
             return
 
-        # Build an engineering-validation-failed banner (distinct, red) when the
-        # AI retry did not resolve the engineering contradiction.
-        _eng_banner = ""
-        if _eng_validation_failed:
-            _eng_banner = _format_engineering_validation_banner(_eng_validation_errors)
+        # Determine whether this recommendation is approved for display/apply.
+        from strategy._setup_constants import APPROVED_STATUSES as _APPROVED_STATUSES
+        _status_approved = _rec_status in _APPROVED_STATUSES
 
-        # Build a validation-errors banner when the server-side validator flagged issues.
-        _validation_banner = _format_validation_errors_banner(_validation_errors)
+        # Build status banner (replaces old eng_banner + validation_banner logic).
+        # For old-format responses without recommendation_status, fall back to legacy banners.
+        if _rec_status:
+            _status_banner = _format_status_banner(_rec_status, _validation_warnings)
+            _eng_banner = ""
+            _validation_banner = ""
+        else:
+            # Legacy path: no recommendation_status in response (old-format JSON)
+            _status_banner = ""
+            _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
+            _eng_banner = (
+                _format_engineering_validation_banner(_eng_validation_errors)
+                if _eng_validation_failed else ""
+            )
+            _validation_banner = _format_validation_errors_banner(_validation_errors)
+            # Treat legacy responses as approved (old behaviour preserved)
+            _status_approved = True
 
         # Build a compact diagnosis summary when the backend diagnosis is present.
         _diagnosis_html = ""
@@ -1171,18 +1245,21 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
-        # Store parsed fields so the apply button can use them.
+        # Store APPROVED fields only so the apply button can use them.
+        # _parsed_ai_fields comes from approved_fields (already gated by backend).
         # Route to the per-form storage when a form widget is in the result tuple.
         _parsed_ai_fields = {
-            k: v for k, v in setup_fields.items()
+            k: v for k, v in approved_fields.items()
             if isinstance(v, (int, float))
         }
+        # Apply button: VISIBLE only when status is approved AND there are approved changes.
+        _show_apply = _status_approved and bool(_parsed_ai_fields)
         if _form is not None:
-            _form.last_ai_fields = _parsed_ai_fields
+            _form.last_ai_fields = _parsed_ai_fields if _show_apply else {}
         else:
-            self._last_setup_ai_fields = _parsed_ai_fields
+            self._last_setup_ai_fields = _parsed_ai_fields if _show_apply else {}
         if _btn_apply:
-            _btn_apply.setVisible(bool(_parsed_ai_fields))
+            _btn_apply.setVisible(_show_apply)
 
         # State Consolidation 3: capture the canonical SetupContext for this
         # displayed recommendation, keyed to EventContext.change_hash and the
@@ -1193,8 +1270,8 @@ class SetupBuilderMixin:
             self._last_setup_context = self._build_setup_context(
                 recommendation={
                     "analysis": analysis,
-                    "changes": changes,
-                    "setup_fields": setup_fields,
+                    "changes": approved_changes,
+                    "setup_fields": approved_fields,
                     "validation_errors": _validation_errors,
                     "primary_issue": data.get("primary_issue", ""),
                     "confidence": data.get("confidence", ""),
@@ -1204,25 +1281,28 @@ class SetupBuilderMixin:
         except Exception:  # pragma: no cover - defensive; never break the display
             self._last_setup_context = None
 
-        # Build HTML: engineering banner (highest priority) + diagnosis + event
-        # restriction banner + validation warnings + analysis block + changes
+        # Build HTML: status banner (highest priority) + legacy banners (old format)
+        # + diagnosis + event restriction banner + analysis block + changes (approved only)
+        # + rejected output (collapsed debug, non-approved statuses only)
         card = "background:#1C2A3A; border-radius:6px; padding:10px; margin-bottom:8px;"
         chg_hdr = "background:#2A3A1C; border-left:4px solid #8BC34A; border-radius:4px; " \
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
         html = (
-            _eng_banner
+            _status_banner
+            + _eng_banner
             + _diagnosis_html
             + _violation_banner
             + _validation_banner
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
         )
 
-        if changes:
+        # CHANGES TO MAKE section: ONLY shown when status is approved and changes exist.
+        if _status_approved and approved_changes:
             html += f"<div style='{chg_hdr}'>" \
                     "<b style='color:#8BC34A;'>&#9745; CHANGES TO MAKE IN CAR SETUP</b></div>"
-            for ch in changes:
+            for ch in approved_changes:
                 s       = ch.get("setting", "?")
                 frm     = ch.get("from", "?")
                 to_raw  = ch.get("to", "?")
@@ -1257,6 +1337,53 @@ class SetupBuilderMixin:
                     + "</div>"
                 )
 
+        # Engineering errors (bulleted) for rejected statuses
+        if _rec_status in {"validation_failed", "retry_failed"} and _eng_validation_errors:
+            _err_items = "".join(
+                f"<li style='margin:2px 0;'>{e}</li>" for e in _eng_validation_errors
+            )
+            html += (
+                "<div style='background:#2A0A0A; border:1px solid #883333; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px; color:#CC8888; font-size:11px;'>"
+                "<b>Engineering gate failures:</b>"
+                f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{_err_items}</ul>"
+                "</div>"
+            )
+
+        # Rejected AI output: collapsed <details> block for debug visibility.
+        # Rendered for validation_failed / retry_failed / blocked_no_safe_recommendation
+        # when rejected_changes is non-empty.
+        # Visually distinct: muted/red, no apply path, no green header.
+        # NOTE: blocked_no_safe_recommendation does NOT enable the CHANGES section or
+        # the Apply button — those remain gated on _status_approved (APPROVED_STATUSES only).
+        if _rec_status in {"validation_failed", "retry_failed", "blocked_no_safe_recommendation"} and rejected_changes:
+            _rej_rows = ""
+            for _rch in rejected_changes:
+                _rs = _rch.get("setting", "?")
+                _rfr = _rch.get("from", "?")
+                _rto = _rch.get("to", "?")
+                _rwhy = _rch.get("why", "")
+                _rej_rows += (
+                    f"<div style='padding:3px 0 3px 8px; border-bottom:1px solid #3A1A1A;'>"
+                    f"<b style='color:#AA8888;'>{_rs}</b>&nbsp;&nbsp;"
+                    f"<span style='color:#CC8888;'>{_rfr}</span>"
+                    f"&nbsp;&#8594;&nbsp;"
+                    f"<span style='color:#AA6666;'>{_rto}</span>"
+                    + (f"<br><span style='color:#777;font-size:10px;'>&nbsp;&nbsp;&nbsp;{_rwhy}</span>"
+                       if _rwhy else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#1A0A0A; border:1px solid #663333; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details>"
+                "<summary style='color:#CC6666; font-size:11px; cursor:pointer;'>"
+                "Rejected AI output — not for use</summary>"
+                f"<div style='margin-top:6px;'>{_rej_rows}</div>"
+                "</details>"
+                "</div>"
+            )
+
         _result_text.setHtml(html)
 
         # Save to history
@@ -1273,8 +1400,9 @@ class SetupBuilderMixin:
                     "type": entry_type,
                     "feeling": feeling or "",
                     "analysis": analysis,
-                    "changes": changes,
-                }, driver_feedback=feeling or "")
+                    "changes": approved_changes,
+                }, driver_feedback=feeling or "",
+                   validation_status=_rec_status)
             except Exception as _e:
                 print(f"[SetupHistory] save failed: {_e}")
 
@@ -1284,12 +1412,21 @@ class SetupBuilderMixin:
             self._home_refresh_if_visible()
 
     def _apply_and_save_ai_setup(self) -> None:
-        """Apply AI-recommended setup_fields to the form and save as a new entry."""
+        """Apply approved AI setup fields to the form.
+
+        Only writes from self._last_setup_ai_fields which is populated exclusively
+        from approved_fields (never from raw setup_fields or rejected changes).
+        The Apply button is only shown when status is in APPROVED_STATUSES, so
+        this method is only reachable for approved recommendations.
+        """
         if not getattr(self, "_last_setup_ai_fields", {}):
             return
-        current = self._current_setup_dict()
-        current.update(self._last_setup_ai_fields)
-        self._fill_setup_fields(current)
+        # Route through SetupFormWidget.apply_ai_fields so that:
+        #   - transmission_max_speed_kmh is stripped (display-only, must not write spinbox)
+        #   - gear_1..gear_6 keys are mapped to the gear_ratios list
+        # This makes the Race-form path consistent with _apply_ai_setup_for_form
+        # which calls form.apply_ai_fields() on the Qualifying form.
+        self._race_form.apply_ai_fields(self._last_setup_ai_fields)
         # Keep the structured R/Q setup name (e.g. "R NGR Porsche Cup Rd7 2")
         # instead of overwriting it with "AI Fix N" — on Save, resolve_save_name
         # advances it to the next numbered attempt for the event, so the naming
@@ -1786,6 +1923,11 @@ class SetupBuilderMixin:
                 qf._setup_locked_banner.hide()
 
     def _sync_setup_builder_from_event(self) -> None:
+        # Amendment B: _lbl_rc_* readout labels were removed from _build_setup_builder_tab.
+        # This method now only updates _lbl_setup_event_ctx and runs all functional
+        # side effects (BoP toggle, setup permissions, spinbox rebind, RE brief, qual sync).
+        # The _lbl_rc_* hasattr guards below are retained as defensive checks so older
+        # widget trees (e.g. tests that instantiate a partial UI) are not broken.
         try:
             evt = self._active_event()
             if not evt:
@@ -1793,35 +1935,14 @@ class SetupBuilderMixin:
                     self._lbl_setup_event_ctx.setText(
                         "No active event — go to Event Planner and click 'Set as Active' first."
                     )
-                _warn = "— (set active event first) —"
-                for attr in ("_lbl_rc_race_type", "_lbl_rc_race_length", "_lbl_rc_fuel_mult",
-                             "_lbl_rc_tyre_wear", "_lbl_rc_refuel_rate", "_lbl_rc_req_tyre",
-                             "_lbl_rc_avail_tyres", "_lbl_rc_mand_pits", "_lbl_rc_weather",
-                             "_lbl_rc_damage", "_lbl_rc_bop", "_lbl_rc_tuning"):
-                    if hasattr(self, attr):
-                        getattr(self, attr).setText(_warn)
-                        getattr(self, attr).setStyleSheet("color: #F5C542; font-size: 11px;")
                 return
-            # Legacy Fan-Out Removal Phase 2: the READOUT labels below reflect
-            # the canonical EventContext (DB-event-first — consistent with what
-            # the strategy/setup AI already consumes since the AI Snapshot
-            # Migration). int() preserves the integer QSpinBox formatting so the
-            # labels are byte-identical when the DB event and the
-            # config["strategy"] fan-out are in sync. Phase 3 moved the
-            # FUNCTIONAL gating (BoP toggle + setup permissions) onto
-            # EventContext; Phase 4 moved the remaining labels (refuel/req/
-            # avail) and the car spinbox rebind — this method no longer reads
-            # config["strategy"] at all.
+            # Legacy Fan-Out Removal Phase 2+: the READOUT labels that were in
+            # the (now-removed) Race Conditions group are gone. The canonical
+            # EventContext is still read here for all functional gating.
             ev_ctx = self._build_event_context()
             name  = evt.get("name", "?")
             track = ev_ctx.track or "?"
             car   = ev_ctx.car or "—"
-            tw    = int(ev_ctx.tyre_wear_multiplier)
-            fm    = int(ev_ctx.fuel_multiplier)
-            rt    = ev_ctx.race_type
-            laps  = ev_ctx.laps
-            dur   = ev_ctx.race_duration_minutes
-            length_str = f"{dur} min" if rt == "timed" else f"{laps} laps"
 
             if hasattr(self, "_lbl_setup_event_ctx"):
                 self._lbl_setup_event_ctx.setText(
@@ -1831,49 +1952,6 @@ class SetupBuilderMixin:
             if hasattr(self, "_setup_label"):
                 self._prefill_setup_label()
 
-            _green = "color: #AAE4AA; font-size: 11px;"
-            if hasattr(self, "_lbl_rc_race_type"):
-                self._lbl_rc_race_type.setText("Timed Race" if rt == "timed" else "Lap Race")
-                self._lbl_rc_race_type.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_race_length"):
-                self._lbl_rc_race_length.setText(length_str)
-                self._lbl_rc_race_length.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_fuel_mult"):
-                self._lbl_rc_fuel_mult.setText(f"×{int(fm)}")
-                self._lbl_rc_fuel_mult.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_tyre_wear"):
-                self._lbl_rc_tyre_wear.setText(f"×{int(tw)}")
-                self._lbl_rc_tyre_wear.setStyleSheet(_green)
-            # Phase 4: the last three readout labels (refuel/required/available
-            # tyres) join the rest on EventContext — int() keeps the integer
-            # QSpinBox refuel formatting; the tyre labels join the same compound
-            # CODES the fan-out carried. Byte-identical in sync.
-            if hasattr(self, "_lbl_rc_refuel_rate"):
-                self._lbl_rc_refuel_rate.setText(f"{int(ev_ctx.refuel_rate_lps)} L/s")
-                self._lbl_rc_refuel_rate.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_req_tyre"):
-                _rq_str = ", ".join(ev_ctx.required_tyres)
-                self._lbl_rc_req_tyre.setText(_rq_str or "—")
-                self._lbl_rc_req_tyre.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_avail_tyres"):
-                _at_str = ", ".join(ev_ctx.available_tyres)
-                self._lbl_rc_avail_tyres.setText(_at_str or "—")
-                self._lbl_rc_avail_tyres.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_mand_pits"):
-                self._lbl_rc_mand_pits.setText(str(ev_ctx.mandatory_stops))
-                self._lbl_rc_mand_pits.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_weather"):
-                self._lbl_rc_weather.setText(ev_ctx.weather or "—")
-                self._lbl_rc_weather.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_damage"):
-                self._lbl_rc_damage.setText(ev_ctx.damage or "—")
-                self._lbl_rc_damage.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_bop"):
-                self._lbl_rc_bop.setText("Yes" if ev_ctx.bop_enabled else "No")
-                self._lbl_rc_bop.setStyleSheet(_green)
-            if hasattr(self, "_lbl_rc_tuning"):
-                self._lbl_rc_tuning.setText("Allowed" if ev_ctx.tuning_allowed else "Not Allowed")
-                self._lbl_rc_tuning.setStyleSheet(_green)
             # Legacy Fan-Out Removal Phase 3 (functional gating): the BoP toggle
             # and setup-permission gating now read the canonical EventContext
             # (DB-event-first — consistent with the AI inputs, the Phase 2 labels,
@@ -1905,10 +1983,14 @@ class SetupBuilderMixin:
         tab_layout.setSpacing(6)
         tab_layout.setContentsMargins(6, 6, 6, 6)
 
-        # ── Header strip (event ctx + race conditions + history) — scrollable ──
+        # ── Header strip (event ctx banner + history) — scrollable ──
+        # Amendment B: the "Race Conditions (from Event Planner)" group box was
+        # removed (12 _lbl_rc_* QLabels deleted).  The _lbl_setup_event_ctx
+        # one-line banner and the Setup History group are retained.
         header_scroll = QScrollArea()
         header_scroll.setWidgetResizable(True)
-        header_scroll.setMaximumHeight(320)
+        # Amendment B: removed setMaximumHeight(320) cap — reclaimed space flows
+        # to the setup panel below.
         header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         header_container = QWidget()
         layout = QVBoxLayout(header_container)
@@ -1919,44 +2001,6 @@ class SetupBuilderMixin:
         self._lbl_setup_event_ctx.setWordWrap(True)
         self._lbl_setup_event_ctx.setStyleSheet("color: #F5C542; font-size: 11px; padding: 4px;")
         layout.addWidget(self._lbl_setup_event_ctx)
-
-        _rc_group = QGroupBox("Race Conditions (from Event Planner)")
-        _rc_group.setStyleSheet(self._group_style())
-        _rc_form = QFormLayout(_rc_group)
-        _rc_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        _rc_lbl_s = "color: #AAE4AA; font-size: 11px;"
-        _rc_key_s = f"color: {_TEXT}; font-size: 11px;"
-
-        self._lbl_rc_race_type   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_race_length = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_fuel_mult   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_tyre_wear   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_refuel_rate = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_req_tyre    = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_avail_tyres = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_mand_pits   = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_weather     = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_damage      = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_bop         = QLabel("—", styleSheet=_rc_lbl_s)
-        self._lbl_rc_tuning      = QLabel("—", styleSheet=_rc_lbl_s)
-
-        _rc_form.addRow(QLabel("Race Type:",        styleSheet=_rc_key_s), self._lbl_rc_race_type)
-        _rc_form.addRow(QLabel("Race Length:",      styleSheet=_rc_key_s), self._lbl_rc_race_length)
-        _rc_form.addRow(QLabel("Fuel Multiplier:",  styleSheet=_rc_key_s), self._lbl_rc_fuel_mult)
-        _rc_form.addRow(QLabel("Tyre Wear:",        styleSheet=_rc_key_s), self._lbl_rc_tyre_wear)
-        _rc_form.addRow(QLabel("Refuel Rate:",      styleSheet=_rc_key_s), self._lbl_rc_refuel_rate)
-        _rc_form.addRow(QLabel("Required Tyres:",   styleSheet=_rc_key_s), self._lbl_rc_req_tyre)
-        _rc_form.addRow(QLabel("Available Tyres:",  styleSheet=_rc_key_s), self._lbl_rc_avail_tyres)
-        _rc_form.addRow(QLabel("Mandatory Pits:",   styleSheet=_rc_key_s), self._lbl_rc_mand_pits)
-        _rc_form.addRow(QLabel("Weather:",          styleSheet=_rc_key_s), self._lbl_rc_weather)
-        _rc_form.addRow(QLabel("Damage:",           styleSheet=_rc_key_s), self._lbl_rc_damage)
-        _rc_form.addRow(QLabel("BoP:",              styleSheet=_rc_key_s), self._lbl_rc_bop)
-        _rc_form.addRow(QLabel("Tuning Allowed:",   styleSheet=_rc_key_s), self._lbl_rc_tuning)
-        _rc_note = QLabel("To change these, update the active event in Event Planner.")
-        _rc_note.setStyleSheet("color: #888; font-size: 10px;")
-        _rc_note.setWordWrap(True)
-        _rc_form.addRow(_rc_note)
-        layout.addWidget(_rc_group)
 
         history_group = QGroupBox("Setup History")
         history_group.setStyleSheet(self._group_style())

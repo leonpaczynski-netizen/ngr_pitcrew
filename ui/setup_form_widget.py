@@ -826,9 +826,57 @@ class SetupFormWidget(QWidget):
         return "Q" if self.purpose == "Qualifying" else "R"
 
     def apply_ai_fields(self, fields: dict) -> None:
-        """Merge AI-recommended numeric fields into this form's current dict and re-fill."""
+        """Merge AI-recommended numeric fields into this form's current dict and re-fill.
+
+        Handles the gear_1..gear_6 → gear_ratios list mapping so that approved
+        gearbox fields from the backend (which uses individual gear keys) are
+        correctly written into the Transmission spinboxes.
+
+        final_drive is applied directly via _spin_final_drive; it is also
+        written into the current setup dict so fill_setup_fields persists it.
+
+        transmission_max_speed_kmh is display-only — never applied here (the
+        backend strips it from approved_fields, but we guard defensively).
+        """
         current = self.current_setup_dict()
-        current.update(fields)
+
+        # Map individual gear_N keys back to the gear_ratios list that
+        # fill_setup_fields reads.  Merge into the existing list so un-changed
+        # gears are preserved.
+        _GEAR_KEYS = ("gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6")
+        _existing_ratios: list = list(current.get("gear_ratios", []))
+        _gear_updates: dict[int, float] = {}
+        for _gear_key in _GEAR_KEYS:
+            if _gear_key in fields:
+                _idx = int(_gear_key[-1]) - 1  # gear_1 → index 0
+                try:
+                    _gear_updates[_idx] = float(fields[_gear_key])
+                except (TypeError, ValueError):
+                    pass
+        if _gear_updates:
+            # Ensure the list is long enough to hold the highest updated index.
+            _max_idx = max(_gear_updates.keys())
+            while len(_existing_ratios) <= _max_idx:
+                _existing_ratios.append(0.0)
+            for _idx, _val in _gear_updates.items():
+                _existing_ratios[_idx] = _val
+            current["gear_ratios"] = _existing_ratios
+
+        # final_drive: apply directly to the spinbox (not via fill_setup_fields
+        # key lookup) and also write into current so the save path persists it.
+        if "final_drive" in fields:
+            try:
+                _fd_val = float(fields["final_drive"])
+                current["final_drive"] = _fd_val
+                if hasattr(self, "_spin_final_drive"):
+                    self._spin_final_drive.setValue(_fd_val)
+            except (TypeError, ValueError):
+                pass
+
+        # Strip display-only fields and already-applied gearbox keys before update.
+        _skip = frozenset(_GEAR_KEYS) | {"transmission_max_speed_kmh", "final_drive"}
+        _remaining = {k: v for k, v in fields.items() if k not in _skip}
+        current.update(_remaining)
         self.fill_setup_fields(current)
 
     def clear_highlights(self) -> None:

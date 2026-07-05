@@ -1,6 +1,7 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-05 (**Group 40 — Setup Diagnosis Hardening** — pure Python backend. `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW: `_classify_bottoming_confidence(...)` → `bottoming_confidence` dict (band/subtype/confidence); `_rh_permitted_increment(...)` — confidence-gated ride-height increment limiter; `_derive_driver_feel_traction_status(...)` → `driver_feel_traction_status` ("good"/"degraded"/"unknown"); `_build_deterministic_fallback(...)` — safe no-change response for engineering-retry failures; `aero_rear_healthy` bool (fraction-of-max threshold, 0.80*hi, no false positives on generic-range cars). NEW VALIDATION RULES: `rh_increment_exceeds_confidence` (composes with rh_for_minor_bottoming), `rh_rake_risk` (rear delta >= 4mm without front change), `lsd_large_change_gated` (subtype-gated LSD increase cap), `lsd_blocked_driver_feel` (traction good + LSD increase blocked). HARDENED: `lsd_reversal_without_evidence` now requires delta >= 5 AND includes `delta=N` in reason string. `_derive_dominant_problem` + `_derive_tuning_priority` both respect `aero_rear_healthy` (skip rear-aero priority when near-max). `format_diagnosis_for_prompt` renders all three new keys with AI-directive text. `_validate_setup_response` gains `rh_rake_risk` structural check (> 3mm rear-only). CONSERVATIVE DICT updated with all three new keys. New tests: `test_group40` (test-verifier, S1–S10 + AC9 fallback + key parity). **Full suite: 5359 pass / 6 skip / 8 fail** — same 8 pre-existing frozen-allowlist failures, zero new regressions.)
+> Last updated: 2026-07-05 (**Group 41 — Setup Builder Engineering Validation Gate** — backend + UI. `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py` + `strategy/_setup_constants.py` (NEW) + `strategy/_rec_parser.py` + `data/setup_history.py` + `ui/setup_builder_ui.py`. RECOMMENDATION LIFECYCLE with explicit statuses (generated, validation_failed, retry_requested, retry_failed, approved, approved_with_warnings, fallback_generated, blocked_no_safe_recommendation; `APPROVED_STATUSES = {approved, approved_with_warnings, fallback_generated}` in `_setup_constants.py`). SINGLE FINALISATION FUNNEL `_finalise_recommendation` in driving_advisor.py — BOTH AI paths (`build_setup_advice_response`, `build_combined_setup_response`) route through it, producing a frozen `SetupRecommendationResult` dataclass (status/approved_changes/approved_fields/rejected_changes/analysis/primary_issue/engineering_errors/validation_warnings/fallback_used/raw_json), embedded into the returned JSON (keys: recommendation_status, changes, setup_fields, rejected_changes, engineering_validation_errors, validation_warnings, fallback_used). DISPLAY SAFETY (`ui/setup_builder_ui.py::_display_setup_result`): "CHANGES TO MAKE IN CAR SETUP" renders ONLY when status ∈ APPROVED_STATUSES and approved_changes non-empty (iterates approved_changes only); Apply button HIDDEN (not disabled) unless approved-ish with non-empty approved_fields, applies approved_fields only via `SetupFormWidget.apply_ai_fields`; rejected output only in a collapsed "Rejected AI output — not for use" section (validation_failed/retry_failed/blocked_no_safe_recommendation), no apply path. VALIDATOR SEVERITY: `ValidationFailure(code, message, severity)` + `validate_setup_engineering_structured()` (legacy `validate_setup_engineering` still returns byte-identical prefixed strings); ANY blocking-severity failure (safety-prefix OR structural — malformed_schema/invalid_units/locked-field) forces validation_failed (retry_failed if retried) + approved_changes=[]; out-of-range is a WARNING (clamping forces the applied value back in range). NEW BLOCKING RULES: `snap_throttle_lsd_accel_gate` (snap_throttle_induced + lsd_accel > 4), `kerb_strike_rh_over_increment` (kerb_strike bottoming + rear RH increase > 3mm), `gearbox_fake_field` (transmission_max_speed_kmh used as actionable), `gearbox_ratio_inversion` (a gear ratio not strictly lower than the gear below). NEW WARNING: `gearbox_out_of_range` (final_drive outside 2.5–6.0 or any gear outside 0.5–4.0 — conservative invented constants pending per-car ranges). REAL GEARBOX FIELDS: final_drive + gear_1..gear_6 now actionable (added to `_CANONICAL_SETUP_PARAMS` + `_CAT_FIELDS["transmission"]`; `_normalise_changes` expands `gear_ratios:[...]` into gear_N keys; surfaced/applied via SetupFormWidget); transmission_max_speed_kmh DEMOTED to display-only (`_DISPLAY_ONLY_FIELDS`) — readable for diagnosis/top-speed classification, stripped from approved output, never an actionable change; `gearbox_category_mismatch` now also blocks final_drive/gear_1..6 on a preserve gearing category. STRICT RETRY CONTRACT: `_build_retry_prompt` lists each blocking failure code + max delta + forbidden fields + forbids repeating rejected changes; a retry with any blocking failure becomes retry_failed (never approved); banner reworded "AI recommendation rejected after retry" (was "survived a correction attempt"). DETERMINISTIC FALLBACK ENGINE (`_build_deterministic_fallback`) now emits 1–3 real conservative changes that pass the same validator (respecting RH-increment/LSD-subtype/rake gates); if nothing safe → blocked_no_safe_recommendation + "run more laps". PERSISTENCE respects validation state: `data/setup_history.py::save_entry` takes `validation_status` and routes non-approved to a `_rejected_<config_id>` diagnostic bucket; DB `setup_recommendations` row now carries the final lifecycle status (`_rec_parser.py` extracts recommendation_status, was default 'proposed'). WORDING/LOGIC FIXES: kerb_strike bottoming described distinctly from true floor contact (no longer forces RH "required"); snap_throttle_induced no longer asserts "inside rear spins" (no telemetry), classified mixed setup/driver; old "top speed below target ⇒ no gearing change" leakage removed (gearing can change on power-band/driver evidence, display-only caveat on transmission_max_speed_kmh). `_ENG_SAFETY_PREFIXES` deduplicated to shared `ENG_SAFETY_PREFIXES` in `_setup_constants.py` (imported by driving_advisor + setup_diagnosis). AMENDMENT B (UI real-estate): the redundant read-only "Race Conditions (from Event Planner)" group box removed from the Setup Builder header (duplicated Event Planner + Home Race Setup card, same EventContext); 320px header cap lifted; `_sync_setup_builder_from_event` retains all functional side effects (BoP toggle, permissions, spinbox rebind, RE-brief load, prefill, qual-form sync). AMENDMENT C: Home "Race Setup" card now shows a Damage line (sourced from `EventContext.damage`). New suite `tests/test_group41_validation_gate.py` (AC0–AC14). **Full suite: 5505 pass / 8 fail / 6 skip** — the 8 fails are the SAME pre-existing frozen-allowlist guards (`ui/track_modelling_ui.py::_tm_restore_last_track`, unrelated track-modelling tech debt, NOT this sprint), zero new regressions. NOTE: running the ENTIRE suite in one process can hit a flaky native PyQt teardown segfault on Windows/Python 3.14; running in two halves (or by group) completes clean at 5505 pass / 8 pre-existing fail — an environmental test-isolation artifact, not a product defect. See "Setup Builder Engineering Validation Gate (Group 41)" at the end of this file.)
+> Prior: 2026-07-05 (**Group 40 — Setup Diagnosis Hardening** — pure Python backend. `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW: `_classify_bottoming_confidence(...)` → `bottoming_confidence` dict (band/subtype/confidence); `_rh_permitted_increment(...)` — confidence-gated ride-height increment limiter; `_derive_driver_feel_traction_status(...)` → `driver_feel_traction_status` ("good"/"degraded"/"unknown"); `_build_deterministic_fallback(...)` — safe no-change response for engineering-retry failures; `aero_rear_healthy` bool (fraction-of-max threshold, 0.80*hi, no false positives on generic-range cars). NEW VALIDATION RULES: `rh_increment_exceeds_confidence` (composes with rh_for_minor_bottoming), `rh_rake_risk` (rear delta >= 4mm without front change), `lsd_large_change_gated` (subtype-gated LSD increase cap), `lsd_blocked_driver_feel` (traction good + LSD increase blocked). HARDENED: `lsd_reversal_without_evidence` now requires delta >= 5 AND includes `delta=N` in reason string. `_derive_dominant_problem` + `_derive_tuning_priority` both respect `aero_rear_healthy` (skip rear-aero priority when near-max). `format_diagnosis_for_prompt` renders all three new keys with AI-directive text. `_validate_setup_response` gains `rh_rake_risk` structural check (> 3mm rear-only). CONSERVATIVE DICT updated with all three new keys. New tests: `test_group40` (test-verifier, S1–S10 + AC9 fallback + key parity). **Full suite: 5359 pass / 6 skip / 8 fail** — same 8 pre-existing frozen-allowlist failures, zero new regressions.)
 > Prior: 2026-07-05 (**Setup Brain Upgrade — Professional Race Engineer Diagnosis** — the setup-diagnosis brain (`strategy/setup_diagnosis.py`) now reasons about WHY a symptom appears before the AI touches a setup; backend-only, no UI surface, branch `ofr2-quali-race-disciplines` (on top of OFR-2). Two production files: `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW app-side GEARING DIAGNOSIS `_classify_gearing(...)` → `gearing_diagnosis_category` (7 categories) via a priority decision table, fed by the new pure `_derive_top_gear_frame_signals(frames, top_gear)` over ~10Hz `LapStats.frames`. The flawed rule REMOVED (the `gear_note` "Do NOT lengthen gears" block, old `DRIVER_HARD_CONSTRAINTS` #8 → now 8, `gearbox_edit_when_preserve`) → replaced by `gearbox_category_mismatch` (Fuji RSR power-band now ALLOWS a gearbox change). NEW `_classify_wheelspin_subtype(...)` → `wheelspin_subtype` (7 values) with honest deferrals (`inside_wheel_spin` NEVER emitted — no per-wheel slip; `rear_platform_stiffness` folds into mixed; kerb_unload_spin is a kerb-count proxy). NEW `compliance_priority` bool (`_detect_compliance_priority`) raises natural-freq/damping UNPROMPTED. Dominant re-order (severe wheelspin > "consider" bottoming). LSD ANTI-OSCILLATION `validate_setup_engineering`+`rec_history`+rule `lsd_reversal_without_evidence` (rec_history resolved by the CALLER from STRUCTURED `data/setup_history.json` + DB `worsened` verdict — no new config["strategy"] read). FEEDBACK CHRONOLOGY: `_get_driver_feedback_context` splits Latest vs Earlier with trend tags via `DrivingAdvisor._feedback_trend_tag`. SCHEMA FIX: `not-present` added to `issue_classification`. New keys present on the conservative/error path too. New tests `tests/test_group39_setup_brain_upgrade.py` (~72, AC1–AC9 + frame-signal units); 4 re-pointed in `tests/test_group38_setup_diagnosis.py` (constraint 9→8, rule rename). `docs/SETUP_BRAIN_UPGRADE.md` (NEW). **Full suite: 5356 pass / 6 skip / 8 fail** — the 8 fails are ALL pre-existing frozen-allowlist guards from the already-committed `ui/track_modelling_ui.py::_tm_restore_last_track` config["strategy"] consumer (unrelated track-modelling tech debt, NOT this sprint); ~72 new tests green, zero regressions. See "Setup Brain Upgrade" at the end of this file.)
 > Prior: 2026-07-03 (**Tab Navigation Refactor — Named Tab Lookup** — retires the hard-coded tab-index risk flagged since the Product Consolidation audit. New **`ui/tab_registry.py`** (pure, no PyQt6): one stable key per existing tab (`TAB_LIVE`…`TAB_HOME`), `DEFAULT_TAB_ORDER` = the current visual order 0–13 in one place (a source-scan test proves it mirrors the real addTab sequence; a runtime count check warns on drift), `TabRegistry` key↔index mapping that never raises on bad input, `key_for_title()` ⚙-decoration-safe reverse lookup, `TAB_BASE_TITLES` cross-checked against `product_flow.TAB_ROLES`. `ui/dashboard.py`: **`_on_tab_changed` dispatches by stable key** (same 8 activation behaviours, zero `index == N` comparisons); navigation helpers `get_tab_index`/`has_tab`/`current_tab_key`/`select_tab` (all safe on unknown keys; `select_tab` holds the only remaining `_tabs.setCurrentIndex` call site); the 3 jump sites now `select_tab(TAB_PRACTICE_REVIEW/TAB_SETUP_BUILDER/TAB_EVENT_PLANNER)`; visibility guards use `current_tab_key() != TAB_AI_LOG/TAB_HOME`; `_home_tab_index` retired. **Tab order byte-identical (all 14 addTab lines pinned), Home stays appended at 13, diagnostic tabs + ⚙ markers unchanged, no logic/prompt/mapping/PTT/voice/persistence/fan-out change.** New tests `test_tab_navigation_registry.py` (33); 6 legacy tests updated in place to the key-based home (group12c AI-Log dispatch, group14 DEF-P2-033 flush guard ×2, group3 history→Practice-Review jump, diagnostic-cleanup + home-dashboard dispatch scans). **Full suite: 4512 pass / 6 skip / 0 fail.** See "Tab Navigation Refactor" at the end of this file.)
 > Prior: 2026-07-03 (**Diagnostic Tab Cleanup — Low-Risk UI Dags Removal** — executes the Product Consolidation Audit's §9 items 1/3/4. DELETED: the 7 hidden, never-signal-connected legacy per-segment review buttons + their unreachable `_tm_review_*` handlers + `_tm_refresh_review_buttons`/no-op `_tm_refresh_approval_panel` + 8 dead imports + 4 never-applied style strings (`ui/track_modelling_ui.py`; pure review functions in `data/track_segment_review.py` retained); the dead, never-rendered `_TELEMETRY_REFERENCE_HTML` constant. RENAMED: "Race Config ID" → **"Session Match Key"**; Diagnostics "Rem(clk)"/"rem_ms(raw)"/"Ann queue" → "Time left:"/"remaining_time_ms:"/"Voice queue:"; window title + Guide h1 → **"Next Gear Racing Pit Crew"**. GUIDE FIXED: stale Step 8 (described a "Dashboard" tab with quick-links that never existed) now describes the real Home tab; API-key bullet now points at the Strategy Builder field (audit's "Settings duplicate" claim corrected — no Settings key field exists); new "Tool tabs (⚙) … safe to ignore" note; "pip install" tooltip line removed. NO CHANGE to tab order, `_on_tab_changed` indices, Home Dashboard, diagnostic tabs, any logic/prompt/mapping/PTT/voice/persistence, or the two `config["strategy"]` fan-outs (pinned by test). New tests `test_diagnostic_tab_cleanup.py` (25); `test_group24` `_tm_` floor 54→46 (9 deleted methods enumerated). **Full suite: 4479 pass / 6 skip / 0 fail.** See "Diagnostic Tab Cleanup" at the end of this file.)
@@ -5762,3 +5763,140 @@ true spatial proximity; the LSD `worsened`-verdict join matches the DB
 join — a structured follow-up candidate); no UI surface for the new diagnosis
 keys yet (a follow-on story); the 8 pre-existing track-modelling allowlist
 failures are not this sprint's.
+
+---
+
+## Setup Builder Engineering Validation Gate (Group 41) (2026-07-05)
+
+> Branch `ofr2-quali-race-disciplines` (built on top of Group 40).
+> Backend + UI. Production files: `strategy/setup_diagnosis.py`,
+> `strategy/driving_advisor.py`, `strategy/_setup_constants.py` (NEW),
+> `strategy/_rec_parser.py`, `data/setup_history.py`, `ui/setup_builder_ui.py`.
+> Full docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 41),
+> `docs/UAT_SETUP_BRAIN.md` (manual checklist).
+> **Full suite: 5505 pass / 8 fail / 6 skip** — the 8 failures are the SAME
+> pre-existing frozen-allowlist guard tests
+> (`ui/track_modelling_ui.py::_tm_restore_last_track`, unrelated track-modelling
+> tech debt, NOT this sprint), zero new regressions.
+
+### What was built
+A hard gate between the AI's raw setup output and what the driver can see or
+apply. Unsafe or malformed recommendations are blocked; only validator-approved
+changes reach the "CHANGES TO MAKE" section and the Apply button.
+
+- **RECOMMENDATION LIFECYCLE.** Explicit statuses — generated,
+  validation_failed, retry_requested, retry_failed, approved,
+  approved_with_warnings, fallback_generated, blocked_no_safe_recommendation.
+  `APPROVED_STATUSES = {approved, approved_with_warnings, fallback_generated}`
+  in `strategy/_setup_constants.py`.
+- **SINGLE FINALISATION FUNNEL.** `_finalise_recommendation` in
+  `driving_advisor.py` — both AI paths (`build_setup_advice_response`,
+  `build_combined_setup_response`) route through it, producing a frozen
+  `SetupRecommendationResult` dataclass (status, approved_changes,
+  approved_fields, rejected_changes, analysis, primary_issue,
+  engineering_errors, validation_warnings, fallback_used, raw_json). Fields are
+  embedded into the returned JSON (keys: recommendation_status, changes,
+  setup_fields, rejected_changes, engineering_validation_errors,
+  validation_warnings, fallback_used).
+- **DISPLAY SAFETY** (`ui/setup_builder_ui.py::_display_setup_result`). The
+  "CHANGES TO MAKE IN CAR SETUP" section renders ONLY when status ∈
+  APPROVED_STATUSES and approved_changes is non-empty (iterating
+  approved_changes only). The Apply button is HIDDEN (not just disabled) unless
+  approved-ish with non-empty approved_fields, and applies approved_fields only
+  (via `SetupFormWidget.apply_ai_fields`). Rejected AI output appears only in a
+  collapsed "Rejected AI output — not for use" section (validation_failed,
+  retry_failed, blocked_no_safe_recommendation), visually distinct, no apply
+  path.
+- **VALIDATOR SEVERITY.** `strategy/setup_diagnosis.py` adds
+  `ValidationFailure(code, message, severity)` and
+  `validate_setup_engineering_structured()`; legacy
+  `validate_setup_engineering` still returns byte-identical prefixed strings.
+  ANY blocking-severity failure (safety-prefix OR structural — malformed_schema
+  / invalid_units / locked-field) forces validation_failed (retry_failed if
+  retried) and approved_changes=[]. out-of-range is a WARNING because the
+  clamping mechanism forces the applied value back into range (the clamped
+  in-range value is what lands in approved output).
+- **NEW BLOCKING RULES.** `snap_throttle_lsd_accel_gate` (snap_throttle_induced
+  wheelspin + lsd_accel increase > 4); `kerb_strike_rh_over_increment`
+  (kerb_strike bottoming + rear ride-height increase > 3mm); `gearbox_fake_field`
+  (transmission_max_speed_kmh used as an actionable field);
+  `gearbox_ratio_inversion` (a gear ratio not strictly lower than the gear
+  below it). **NEW WARNING:** `gearbox_out_of_range` (final_drive outside
+  2.5–6.0 or any gear outside 0.5–4.0 — conservative invented constants pending
+  per-car range data).
+- **REAL GEARBOX FIELDS.** final_drive and gear_1..gear_6 are now actionable
+  setup fields (added to `_CANONICAL_SETUP_PARAMS` and
+  `_CAT_FIELDS["transmission"]`; `_normalise_changes` expands a
+  `gear_ratios:[...]` list into individual gear_N keys; surfaced/applied via
+  SetupFormWidget). transmission_max_speed_kmh is DEMOTED to display-only (in
+  `_DISPLAY_ONLY_FIELDS`) — still readable for diagnosis / top-speed-target
+  classification, but stripped from approved_changes/approved_fields and never
+  emitted as an actionable change. `gearbox_category_mismatch` now also blocks
+  final_drive/gear_1..6 changes when the gearing diagnosis is a preserve
+  category.
+- **STRICT RETRY CONTRACT.** `_build_retry_prompt` lists each blocking failure
+  code + max allowed delta + forbidden fields and forbids repeating rejected
+  changes. A retry that still has any blocking failure becomes retry_failed
+  (never approved). The old banner wording "survived a correction attempt" is
+  removed; the reworded banner reads "AI recommendation rejected after retry".
+- **DETERMINISTIC FALLBACK ENGINE.** `_build_deterministic_fallback` now emits
+  1–3 real conservative changes that pass the same validator (respecting
+  ride-height increment / LSD subtype / rake gates); if nothing safe can be
+  produced the status is blocked_no_safe_recommendation with a "run more laps"
+  message.
+- **PERSISTENCE RESPECTS VALIDATION STATE.** `data/setup_history.py::save_entry`
+  takes `validation_status` and routes non-approved statuses to a
+  `_rejected_<config_id>` diagnostic bucket instead of the primary/current
+  bucket; the DB `setup_recommendations` row now carries the final lifecycle
+  status (`strategy/_rec_parser.py` extracts recommendation_status from the
+  JSON) instead of the default 'proposed'.
+- **WORDING / LOGIC FIXES.** kerb_strike bottoming is described distinctly from
+  true floor contact and no longer forces ride-height as "required";
+  snap_throttle_induced wheelspin no longer asserts "inside rear spins" (no
+  inside-wheel telemetry exists) and is classified as mixed setup/driver; the
+  old "top speed below target ⇒ no gearing change" leakage is removed so gearing
+  can change on power-band/driver evidence (with a display-only caveat on
+  transmission_max_speed_kmh).
+- **DEDUP.** `_ENG_SAFETY_PREFIXES` deduplicated to a single shared constant
+  `ENG_SAFETY_PREFIXES` in `strategy/_setup_constants.py`, imported by both
+  driving_advisor and setup_diagnosis.
+- **AMENDMENT B (UI real-estate cleanup).** The redundant read-only "Race
+  Conditions (from Event Planner)" group box was removed from the Setup Builder
+  header (it duplicated Event Planner + the Home Race Setup card, all sourced
+  from the same EventContext). The 320px header cap was lifted so the space
+  flows to the setup view. `_sync_setup_builder_from_event` retains all
+  functional side effects (BoP toggle, setup permissions, spinbox rebind,
+  RE-brief load, prefill, qual-form sync).
+- **AMENDMENT C.** The Home "Race Setup" card now shows a Damage line (the one
+  race-condition field that had only been on the removed Setup Builder block),
+  sourced from `EventContext.damage`.
+
+### New / updated test files
+
+| Test file | Coverage |
+|-----------|----------|
+| `tests/test_group41_validation_gate.py` (NEW) | AC0–AC14: lifecycle statuses, finalisation funnel + embedded JSON keys, display-safety gating (CHANGES/Apply visibility), validator severity (blocking vs out-of-range warning), the four new blocking rules + the out-of-range warning, real gearbox fields + transmission_max_speed_kmh demotion, strict retry contract → retry_failed, deterministic fallback / blocked_no_safe_recommendation, persistence bucket routing + DB lifecycle status, wording/logic fixes, Amendments B & C |
+
+### Acceptance criteria — status
+All story ACs (AC0–AC14) verified by the new suite; zero new regressions. The
+8 pre-existing frozen-allowlist failures are unrelated track-modelling tech
+debt and remain for the track-modelling owner.
+
+### Test-run note (Windows / Python 3.14)
+Running the ENTIRE suite in one process can hit a flaky native PyQt teardown
+segfault. Running in two halves (or by group) completes clean at 5505 passed /
+8 pre-existing failures / 6 skipped. This is an environmental test-isolation
+artifact, not a product defect.
+
+### Manual UAT
+Full manual checklist (Porsche 911 RSR '17 at Fuji): `docs/UAT_SETUP_BRAIN.md`.
+
+### Deferred / limitations
+- Gearbox ratio ranges (final_drive 2.5–6.0, gears 0.5–4.0) are invented
+  constants, not per-car data; `gearbox_out_of_range` is therefore a WARNING,
+  not a hard block, to avoid false-blocking legitimate setups. Tighten to
+  per-car ranges + blocking once range data exists.
+- The DB `_rec_parser` stores the full JSON blob as recommendation_text for
+  structured setup responses (pre-existing behaviour, not human-readable in the
+  DB).
+- Flaky full-suite PyQt segfault on Windows/Py3.14 (see above).

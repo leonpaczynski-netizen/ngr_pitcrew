@@ -311,6 +311,7 @@ def _build_race_setup_card(event_context, track_context) -> HomeDashboardCard:
     stops = _as_int(_get(ev, "mandatory_stops"), 0)
     avail = tuple(_get(ev, "available_tyres") or ())
     required = tuple(_get(ev, "required_tyres") or ())
+    damage = _as_str(_get(ev, "damage"))
 
     lines = [
         f"Event: {name}",
@@ -328,6 +329,8 @@ def _build_race_setup_card(event_context, track_context) -> HomeDashboardCard:
         lines.append("Available tyres: " + ", ".join(_as_str(t) for t in avail))
     if required:
         lines.append("Required tyres: " + ", ".join(_as_str(t) for t in required))
+    if damage:
+        lines.append(f"Damage: {damage}")
 
     warnings = []
     try:

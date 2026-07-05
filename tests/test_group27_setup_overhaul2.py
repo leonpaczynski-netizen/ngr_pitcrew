@@ -803,9 +803,15 @@ class TestFixA_BuildCombinedSetupResponseWiring:
         }
         advisor = DrivingAdvisor(mock_recorder, mock_tracker, config)
 
-        # AI response: arb_front 'to' is 15 (out of range 1–7); setup_fields also says 15
+        # AI response: arb_front 'to' is 15 (out of range 1–7); setup_fields also says 15.
+        # Include all required schema keys so malformed_schema validation does not fire
+        # (malformed_schema is a blocking failure that zeroes changes).
         fake_response = json.dumps({
             "analysis": "Test analysis.",
+            "primary_issue": "arb",
+            "issue_classification": {"arb": "present"},
+            "validation_targets": {},
+            "confidence": {"overall": "medium", "reason": "test"},
             "changes": [
                 {"setting": "Front ARB", "field": "arb_front", "from": "3", "to": 15, "why": "test"}
             ],
@@ -832,6 +838,10 @@ class TestFixA_BuildCombinedSetupResponseWiring:
         # Let's test the case where setup_fields is absent so we confirm range clamping.
         fake_response_no_sf = json.dumps({
             "analysis": "Test analysis.",
+            "primary_issue": "arb",
+            "issue_classification": {"arb": "present"},
+            "validation_targets": {},
+            "confidence": {"overall": "medium", "reason": "test"},
             "changes": [
                 {"setting": "Front ARB", "field": "arb_front", "from": "3", "to": 15, "why": "test"}
             ],

@@ -206,10 +206,22 @@ class TestSetupSyncFullyOffFanOut:
             "config['strategy'] at all")
 
     def test_last_labels_read_event_context(self, sbu_src):
+        # Amendment B (Setup Builder Engineering Validation Gate sprint): the
+        # Race Conditions group (including refuel/req/avail labels) was removed.
+        # The Phase 4 refuel/tyre display reads are therefore also gone.
+        # The spinbox rebind call (functional side effect) must still be present.
         body = _method_body(sbu_src, "_sync_setup_builder_from_event")
-        assert "int(ev_ctx.refuel_rate_lps)" in body
-        assert '", ".join(ev_ctx.required_tyres)' in body
-        assert '", ".join(ev_ctx.available_tyres)' in body
+        # Display-only reads that belonged to the removed RC labels are gone:
+        assert "int(ev_ctx.refuel_rate_lps)" not in body, (
+            "Amendment B: refuel label read should be removed with RC group"
+        )
+        assert '", ".join(ev_ctx.required_tyres)' not in body, (
+            "Amendment B: required tyres label read should be removed with RC group"
+        )
+        assert '", ".join(ev_ctx.available_tyres)' not in body, (
+            "Amendment B: available tyres label read should be removed with RC group"
+        )
+        # Functional side effect: spinbox rebind is still called.
         assert "self._rebound_setup_spinboxes(ev_ctx.car or \"\")" in body
 
     def test_label_values_byte_identical_in_sync(self):
