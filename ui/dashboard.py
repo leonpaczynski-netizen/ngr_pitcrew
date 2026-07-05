@@ -370,6 +370,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._setup_result_queue: queue.Queue = queue.Queue()
         self._practice_result_queue: queue.Queue = queue.Queue()
         self._build_setup_queue: queue.Queue = queue.Queue()
+        self._baseline_result_queue: queue.Queue = queue.Queue()
         self._degradation_result_queue: queue.Queue = queue.Queue()
         self._profile_update_queue: queue.Queue = queue.Queue()
         self._tyre_degradation_cache: dict = {}
@@ -2287,6 +2288,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             (self._setup_result_queue,       self._display_setup_result),
             (self._practice_result_queue,    self._display_practice_results),
             (self._build_setup_queue,        self._display_build_setup_result),
+            (self._baseline_result_queue,    self._display_baseline_result),
             (self._degradation_result_queue, self._display_degradation_result),
             (self._profile_update_queue,     self._display_profile_update_result),
         ]:

@@ -245,6 +245,7 @@ class SetupBuilderMixin:
             "_btn_apply_ai_setup",
             "_setup_feeling_input",
             "_build_setup_result", "_btn_build_setup", "_btn_set_car_ranges",
+            "_btn_baseline",
             "_setup_load_combo", "_lbl_setup_save_status",
             "_re_brief_label", "_re_brief_input",
             "_btn_reread_gears",
@@ -262,6 +263,7 @@ class SetupBuilderMixin:
         self._race_form._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
         self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
+        self._race_form._btn_baseline.clicked.connect(self._generate_baseline_setup)
         self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
         self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
@@ -282,6 +284,9 @@ class SetupBuilderMixin:
         )
         qf._btn_build_setup.clicked.connect(
             lambda: self._run_build_setup_for_form(self._qual_form)
+        )
+        qf._btn_baseline.clicked.connect(
+            lambda: self._generate_baseline_setup_for_form(self._qual_form)
         )
         qf._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         qf._btn_bop_edit.clicked.connect(self._open_bop_file)
@@ -828,6 +833,160 @@ class SetupBuilderMixin:
                 self._build_setup_queue.put(("err", str(exc), session_type, form))
 
         _threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Group 44: Rule-first baseline setup generator
+    # ------------------------------------------------------------------
+
+    def _generate_baseline_setup(self) -> None:
+        """Handler for the Race form 'Build Baseline Setup' button.
+
+        Calls build_baseline_setup_response on the DrivingAdvisor (no API key,
+        no telemetry required), then enqueues the result onto
+        self._baseline_result_queue for display via _display_baseline_result.
+        Pattern mirrors _setup_analyse_ai.
+        """
+        import threading as _threading
+        from strategy.setup_ranges import resolve_ranges as _resolve_ranges
+
+        _ai_snap = self._build_setup_ai_snapshot()
+        car   = _ai_snap.car
+        track = _ai_snap.track
+        if not car or not track:
+            self._build_setup_result.setPlainText(
+                "Select a car and track first — baseline setup needs a car and track context.")
+            self._build_setup_result.setVisible(True)
+            return
+
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+
+        if _locked:
+            self._build_setup_result.setPlainText(
+                "All tuning categories are locked for this Event — baseline unavailable.")
+            self._build_setup_result.setVisible(True)
+            return
+
+        _ranges      = _resolve_ranges(car)
+        _drivetrain  = (
+            self._setup_drivetrain.currentData()
+            if hasattr(self, "_setup_drivetrain")
+            else ""
+        ) or ""
+        _num_gears   = (
+            self._setup_num_gears.value()
+            if hasattr(self, "_setup_num_gears")
+            else 0
+        )
+
+        self._btn_baseline.setEnabled(False)
+        self._btn_baseline.setText("Building baseline…")
+        self._build_setup_result.setPlainText(
+            "Building baseline setup from car ranges and driving profile…")
+        self._build_setup_result.setVisible(True)
+
+        def _worker():
+            try:
+                json_str = self._driving_advisor.build_baseline_setup_response(
+                    car_name=car,
+                    ranges=_ranges,
+                    drivetrain=_drivetrain,
+                    num_gears=_num_gears,
+                    allowed_tuning=_allowed,
+                    tuning_locked=_locked,
+                    session_type="Race",
+                )
+                self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
+            except Exception as exc:
+                self._baseline_result_queue.put(("error", str(exc), "baseline_setup", None))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _generate_baseline_setup_for_form(self, form: "SetupFormWidget") -> None:
+        """Handler for the Qualifying form 'Build Baseline Setup' button.
+
+        Mirror of _generate_baseline_setup, targeting the given form's widgets
+        and enqueuing a form-tagged result for per-form display routing.
+        """
+        import threading as _threading
+        from strategy.setup_ranges import resolve_ranges as _resolve_ranges
+
+        _ai_snap = self._build_setup_ai_snapshot()
+        car   = _ai_snap.car
+        track = _ai_snap.track
+        if not car or not track:
+            form._build_setup_result.setPlainText(
+                "Select a car and track first — baseline setup needs a car and track context.")
+            form._build_setup_result.setVisible(True)
+            return
+
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+
+        if _locked:
+            form._build_setup_result.setPlainText(
+                "All tuning categories are locked for this Event — baseline unavailable.")
+            form._build_setup_result.setVisible(True)
+            return
+
+        _ranges      = _resolve_ranges(car)
+        _drivetrain  = (
+            form._setup_drivetrain.currentData()
+            if hasattr(form, "_setup_drivetrain")
+            else ""
+        ) or ""
+        _num_gears   = (
+            form._setup_num_gears.value()
+            if hasattr(form, "_setup_num_gears")
+            else 0
+        )
+        _session_type = f"{form.purpose} Setup"
+
+        form._btn_baseline.setEnabled(False)
+        form._btn_baseline.setText("Building baseline…")
+        form._build_setup_result.setPlainText(
+            "Building baseline setup from car ranges and driving profile…")
+        form._build_setup_result.setVisible(True)
+
+        def _worker():
+            try:
+                json_str = self._driving_advisor.build_baseline_setup_response(
+                    car_name=car,
+                    ranges=_ranges,
+                    drivetrain=_drivetrain,
+                    num_gears=_num_gears,
+                    allowed_tuning=_allowed,
+                    tuning_locked=_locked,
+                    session_type=_session_type,
+                )
+                self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
+            except Exception as exc:
+                self._baseline_result_queue.put(("error", str(exc), "baseline_setup", None, form))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _display_baseline_result(self, result: tuple) -> None:
+        """Re-enable the baseline button then delegate rendering to _display_setup_result.
+
+        The result tuple from the queue has the same shape expected by
+        _display_setup_result: (status, payload, entry_type, feeling[, form]).
+        Both the Race-form button (aliased to self._btn_baseline) and the
+        per-form button (result[4]) are re-enabled here before delegation so
+        the correct button is restored regardless of which form fired.
+        """
+        # Re-enable the race-form baseline button (aliased on self)
+        if hasattr(self, "_btn_baseline"):
+            self._btn_baseline.setEnabled(True)
+            self._btn_baseline.setText("Build Baseline Setup")
+
+        # Re-enable the per-form button if a form is in the tuple (position 4)
+        _form = result[4] if len(result) > 4 else None
+        if _form is not None and hasattr(_form, "_btn_baseline"):
+            _form._btn_baseline.setEnabled(True)
+            _form._btn_baseline.setText("Build Baseline Setup")
+
+        # Route result through the shared renderer (handles Apply gate, HTML, history)
+        self._display_setup_result(result)
 
     def _build_setup_context(self, recommendation: dict | None = None,
                              diagnosis: dict | None = None):

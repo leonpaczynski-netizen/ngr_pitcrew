@@ -629,6 +629,13 @@ class SetupFormWidget(QWidget):
         self._btn_set_car_ranges.setToolTip(
             "Define per-car min/max bounds for every setup parameter.\n"
             "These bounds constrain the spinboxes and the AI output for this car.")
+        self._btn_baseline = QPushButton("Build Baseline Setup")
+        self._btn_baseline.setStyleSheet(
+            "background: #1A3A5C; color: white; font-weight: bold; padding: 6px 16px;")
+        self._btn_baseline.setToolTip(
+            "Generate a complete safe starting setup from the car's ranges and your "
+            "driving profile — no telemetry needed.")
+        _build_row.addWidget(self._btn_baseline)
         _build_row.addWidget(self._btn_build_setup)
         _build_row.addWidget(self._btn_set_car_ranges)
         _build_row.addStretch()
