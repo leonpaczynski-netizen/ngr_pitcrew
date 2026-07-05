@@ -187,10 +187,9 @@ class SetupBuilderMixin:
         if hasattr(self, "_tab_intro_header"):
             outer_layout.addWidget(self._tab_intro_header(
                 "Setup Builder",
-                "Build and tune your qualifying and race setups side by side. Ask "
-                "AI for a full setup or a targeted fix, then Apply and Save. Next: "
-                "set Min Weight and Max Power, then Build Setup with AI — or "
-                "describe a handling issue and click Analyse."))
+                "Build and tune your qualifying and race setups side by side. "
+                "Describe a handling issue and click Analyse to get Pit Crew's "
+                "rule-based, validated setup changes, then Apply and Save."))
 
         # self._setup_type stays on self (required by main.py + tests). It picks
         # which shift-RPM threshold the live beep uses during Practice telemetry.
@@ -319,7 +318,7 @@ class SetupBuilderMixin:
 
         # ── Shift RPM display (shared, below the splitter) ────────────────────
         _sb = self._config.get("shift_beep", {})
-        shift_rpm_box = QGroupBox("Shift RPM (auto-set by AI Build Setup)")
+        shift_rpm_box = QGroupBox("Shift RPM")
         shift_rpm_box.setStyleSheet(self._group_style())
         shift_rpm_form = QFormLayout(shift_rpm_box)
         self._spin_shift_rpm_qual = QSpinBox()
@@ -330,7 +329,6 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_qual.setValue(int(_sb.get("qual_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_qual.setToolTip(
             "Optimal RPM to upshift for qualifying / unrestricted power.\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Qualifying.\n"
             "Edit via the Live tab Shift Beep controls.")
         _set_spin_readonly(self._spin_shift_rpm_qual, True)
         self._spin_shift_rpm_race = QSpinBox()
@@ -341,7 +339,6 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_race.setValue(int(_sb.get("race_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_race.setToolTip(
             "Optimal RPM to upshift during the race (may be lower if ECU/power restrictor is applied).\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Race.\n"
             "Edit via the Live tab Shift Beep controls.")
         _set_spin_readonly(self._spin_shift_rpm_race, True)
         shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)

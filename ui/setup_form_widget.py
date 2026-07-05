@@ -509,7 +509,7 @@ class SetupFormWidget(QWidget):
         )
         self._lbl_ecu_rec.setToolTip(
             "AI recommendation for ECU stage and/or Power Restrictor to hit the target power.\n"
-            "Fill in Max Power above then click 'Build Setup with AI' to generate."
+            "Set from your current setup and the Analyse flow."
         )
         ecu_inner.addRow(QLabel("ECU / Power Advice:", styleSheet=lbl_s), self._lbl_ecu_rec)
         ecu_inner.addRow(QLabel("ECU (in-game):", styleSheet=lbl_s), self._setup_ecu)
