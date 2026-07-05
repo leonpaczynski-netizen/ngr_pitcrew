@@ -366,6 +366,62 @@ def test_closure_gap_warn_m_constant():
 
 
 # ---------------------------------------------------------------------------
+# Loop-closure (rubber-band) adjustment
+# ---------------------------------------------------------------------------
+
+def _make_open_loop(gap_m: float, lap_number: int, side_m: float = 200.0,
+                    n_samples: int = 800) -> CalibrationLap:
+    """A square loop cut `gap_m` short of closing — last sample is (0, gap_m),
+    i.e. `gap_m` from the start (0, 0)."""
+    perimeter = 4 * side_m
+    end = perimeter - gap_m
+    samples: List[TelemetrySample] = []
+    for i in range(n_samples):
+        d = i / (n_samples - 1) * end
+        if d < side_m:
+            x, z = d, 0.0
+        elif d < 2 * side_m:
+            x, z = side_m, d - side_m
+        elif d < 3 * side_m:
+            x, z = side_m - (d - 2 * side_m), side_m
+        else:
+            x, z = 0.0, side_m - (d - 3 * side_m)
+        samples.append(TelemetrySample(
+            timestamp_ms=i * 50, lap_number=lap_number,
+            x=float(x), y=0.0, z=float(z),
+            speed_kph=100.0, gear=4, rpm=6000.0, throttle=0.8, brake=0.0,
+        ))
+    return CalibrationLap(
+        lap_number=lap_number, lap_time_ms=120_000, samples=samples,
+        quality=CalibrationLapQuality.USABLE, quality_reasons=[], path_length_m=end,
+    )
+
+
+def test_small_misclosure_is_rubber_banded_closed():
+    """A small closure gap (< 2% of lap) is distributed out so the loop closes to
+    ~one station spacing."""
+    manifest = 800.0
+    out_lap = _make_lap(lap_number=0, side_m=200.0, n_samples=800)
+    loop = _make_open_loop(gap_m=8.0, lap_number=1)   # 8 m < 2% of 800 (=16 m)
+    session = _make_session([out_lap, loop])
+    result = build_seed_geometry(session, manifest, "e_track", "e_layout")
+    assert result.can_generate is True
+    assert result.closure_gap_m < 2.0   # closed to ~1 m spacing, not the raw 8 m
+
+
+def test_large_misclosure_is_left_uncorrected():
+    """A large closure gap (> 2% of lap) signals bad data — it is NOT adjusted, so
+    the closure warning still fires."""
+    manifest = 800.0
+    out_lap = _make_lap(lap_number=0, side_m=200.0, n_samples=800)
+    loop = _make_open_loop(gap_m=30.0, lap_number=1)  # 30 m > 2% of 800 (=16 m)
+    session = _make_session([out_lap, loop])
+    result = build_seed_geometry(session, manifest, "e_track", "e_layout")
+    assert result.can_generate is True
+    assert result.closure_gap_m > CLOSURE_GAP_WARN_M   # stays large; warning fires
+
+
+# ---------------------------------------------------------------------------
 # GeometryBuildResult keyword construction without closure_gap_m defaults to 0.0
 # ---------------------------------------------------------------------------
 

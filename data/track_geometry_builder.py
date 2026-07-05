@@ -38,6 +38,15 @@ from data.track_library import _layout_dir, update_manifest_availability
 
 CLOSURE_GAP_WARN_M: float = 10.0
 
+# Loop-closure adjustment: the track is a known closed loop, but averaged laps
+# rarely close perfectly — each lap is cut a few metres from the start/finish
+# line and truncation to the shortest lap chops a little tail off the rest.
+# When the residual misclosure is a small fraction of the lap it is drift, not
+# bad data, so we rubber-band it out (distribute the error proportionally along
+# the stations). Above this fraction the gap signals a real problem (bad laps,
+# wrong start/finish) — leave it uncorrected so the closure warning still fires.
+CLOSURE_ADJUST_MAX_FRACTION: float = 0.02
+
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -304,15 +313,34 @@ def build_seed_geometry(
         avg_z = sum(r[i][2] for r in truncated) / n_laps
         averaged.append((avg_x, avg_y, avg_z))
 
-    # Closure gap: XZ Euclidean distance between first and last averaged point
-    if len(averaged) >= 2:
-        import math as _math
-        closure_gap_m = _math.sqrt(
-            (averaged[-1][0] - averaged[0][0]) ** 2
-            + (averaged[-1][2] - averaged[0][2]) ** 2
+    import math as _math
+
+    def _xz_gap(path: List[tuple]) -> float:
+        return _math.sqrt(
+            (path[-1][0] - path[0][0]) ** 2 + (path[-1][2] - path[0][2]) ** 2
         )
-    else:
-        closure_gap_m = 0.0
+
+    # Loop-closure adjustment. The path is an open 1 m-station polyline of a known
+    # closed loop; for a clean loop station[-1] should sit ~1 m before station[0].
+    # If the raw misclosure is small (drift, not bad data), rubber-band it out:
+    # pin station[-1] onto station[0] by distributing the error vector along the
+    # path (station i shifts by error * i/(N-1)), then drop the now-duplicate last
+    # point so the final closing segment is a natural ~1 m step.
+    raw_gap = _xz_gap(averaged) if len(averaged) >= 2 else 0.0
+    if len(averaged) >= 3 and 0.0 < raw_gap <= manifest_lap_length_m * CLOSURE_ADJUST_MAX_FRACTION:
+        ex = averaged[-1][0] - averaged[0][0]
+        ey = averaged[-1][1] - averaged[0][1]
+        ez = averaged[-1][2] - averaged[0][2]
+        last = len(averaged) - 1
+        adjusted: List[tuple] = []
+        for i, (x, y, z) in enumerate(averaged):
+            f = i / last
+            adjusted.append((x - ex * f, y - ey * f, z - ez * f))
+        # adjusted[-1] now equals adjusted[0]; drop it so the loop isn't degenerate.
+        averaged = adjusted[:-1]
+
+    # Closure gap: XZ Euclidean distance between first and last averaged point
+    closure_gap_m = _xz_gap(averaged) if len(averaged) >= 2 else 0.0
 
     # Confidence tier
     n_accepted = len(accepted_indices)
