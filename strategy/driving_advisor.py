@@ -21,6 +21,8 @@ from strategy.setup_diagnosis import (
     build_setup_diagnosis,
     validate_setup_engineering,
     format_diagnosis_for_prompt,
+    _build_deterministic_fallback,
+    _build_setup_diagnosis_conservative,
 )
 from ui.gt7_data import build_track_context
 
@@ -386,6 +388,55 @@ def _validate_setup_response(
         if f and f in ranges and isinstance(tc, str):
             errors.append(
                 f"change field '{f}' to_clamped is a string ({tc!r}), expected numeric"
+            )
+
+    # 5b. rh_rake_risk structural check (AC10)
+    # Rear ride-height increase > 3mm (i.e. >= 4mm) with no front change => rake risk
+    def _val_ai_value(key: str):
+        """Helper to get AI numeric value for rh_rake_risk check."""
+        if key in sf:
+            try:
+                return float(sf[key])
+            except (TypeError, ValueError):
+                pass
+        for ch in changes:
+            if ch.get("field") == key:
+                tc = ch.get("to_clamped")
+                if tc is not None:
+                    try:
+                        return float(tc)
+                    except (TypeError, ValueError):
+                        pass
+                raw_to = ch.get("to")
+                if raw_to is not None:
+                    try:
+                        return float(raw_to)
+                    except (TypeError, ValueError):
+                        pass
+        return None
+
+    def _val_current_value(key: str):
+        """Helper to get current setup value for rh_rake_risk check."""
+        v = setup.get(key)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    _v_ai_rhf = _val_ai_value("ride_height_front")
+    _v_cur_rhf = _val_current_value("ride_height_front")
+    _v_ai_rhr = _val_ai_value("ride_height_rear")
+    _v_cur_rhr = _val_current_value("ride_height_rear")
+    if _v_ai_rhr is not None and _v_cur_rhr is not None:
+        _v_rear_delta = _v_ai_rhr - _v_cur_rhr
+        _v_front_changed = (_v_ai_rhf is not None and _v_ai_rhf != _v_cur_rhf)
+        if _v_rear_delta > 3 and not _v_front_changed:
+            errors.append(
+                f"rh_rake_risk: AI increases ride_height_rear by {_v_rear_delta:.0f}mm "
+                f"(from {_v_cur_rhr} to {_v_ai_rhr}) with no ride_height_front change — "
+                f"rake risk (high). Use smaller increment or pair with front change."
             )
 
     # 6. Too many changes
@@ -1047,9 +1098,13 @@ class DrivingAdvisor:
                                 rec_history=_rec_history_sa,
                             )
                             if _retry_eng:
-                                # Still failing — surface but return
+                                # Still failing after retry — build deterministic fallback
+                                _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
+                                _fb = _build_deterministic_fallback(_fb_diag)
                                 _retry_data["engineering_validation_failed"] = True
                                 _retry_data["engineering_validation_errors"] = _retry_eng
+                                _retry_data["fallback_used"] = True
+                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
@@ -1288,8 +1343,13 @@ class DrivingAdvisor:
                                 rec_history=_rec_history_cs,
                             )
                             if _retry_eng:
+                                # Still failing after retry — build deterministic fallback
+                                _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
+                                _fb = _build_deterministic_fallback(_fb_diag)
                                 _retry_data["engineering_validation_failed"] = True
                                 _retry_data["engineering_validation_errors"] = _retry_eng
+                                _retry_data["fallback_used"] = True
+                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
