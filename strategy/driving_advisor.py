@@ -1900,6 +1900,140 @@ class DrivingAdvisor:
         except Exception as e:
             return f"Setup analysis failed: {e}"
 
+    def build_baseline_setup_response(
+        self,
+        car_name: str,
+        ranges: dict,
+        drivetrain: str,
+        num_gears: int,
+        allowed_tuning: "list[str] | None",
+        tuning_locked: bool,
+        session_type: str = "Race",
+    ) -> str:
+        """Return a JSON string with a from-scratch baseline setup.
+
+        No telemetry required, no API call made.  Produces a neutral starting
+        point with driver-profile mechanical nudges, routed through the SAME
+        _finalise_recommendation / validate_setup_engineering_structured funnel
+        as the analyse path so the JSON shape is identical.
+
+        Parameters
+        ----------
+        car_name:
+            Car name — passed through for validator context; ranges must already
+            be resolved by the caller (pass resolve_ranges(car_name) as ranges).
+        ranges:
+            Per-car ranges dict from resolve_ranges(car_name).
+        drivetrain:
+            Drivetrain code, e.g. "FR", "FF", "MR", "AWD".
+        num_gears:
+            Number of gear ratios (0–6; >6 capped at 6).
+        allowed_tuning:
+            List of tuning category codes allowed by the event rules, or None.
+        tuning_locked:
+            If True, returns a valid JSON with empty changes/setup_fields.
+        session_type:
+            Informational only ("Race" / "Qualifying"); not currently used in
+            logic but accepted for future differentiation.
+
+        Returns
+        -------
+        JSON string with keys matching build_combined_setup_response:
+            recommendation_status, changes, setup_fields, rejected_changes,
+            engineering_validation_failed, engineering_validation_errors,
+            validation_warnings, fallback_used, deterministic_plan,
+            protected_fields, rule_engine_version, analysis, primary_issue,
+            diagnosis, confidence.
+        """
+        # Function-local import to avoid module-level circular dependency:
+        # setup_baseline imports _derive_locked_fields FROM driving_advisor at
+        # function-call time, not at module import time.
+        from strategy.setup_baseline import build_baseline_setup
+        from strategy.setup_driver_profile import build_driver_profile
+
+        _error_response = _json.dumps({
+            "analysis": "Baseline generation failed — internal error.",
+            "changes": [],
+            "setup_fields": {},
+            "recommendation_status": "blocked_no_safe_recommendation",
+            "engineering_validation_failed": True,
+            "engineering_validation_errors": [],
+            "validation_warnings": [],
+            "fallback_used": False,
+            "rejected_changes": [],
+            "deterministic_plan": {
+                "proposed_count": 0,
+                "rejected_candidate_count": 0,
+                "protected_fields": [],
+                "driver_profile_version": None,
+                "rule_engine_version": RULE_ENGINE_VERSION,
+            },
+            "protected_fields": [],
+            "rule_engine_version": RULE_ENGINE_VERSION,
+        }, ensure_ascii=False)
+
+        try:
+            # Step 1: build driver profile
+            _profile = build_driver_profile()
+
+            # Step 2: build the baseline raw_data dict
+            _raw_data = build_baseline_setup(
+                car_name, ranges, drivetrain, num_gears,
+                _profile, allowed_tuning, tuning_locked,
+            )
+
+            # Step 3: neutral_setup = the proposed setup_fields (no delta
+            # from seed — the baseline IS the proposed setup)
+            _neutral_setup = dict(_raw_data.get("setup_fields") or {})
+
+            # Step 4: engineering validation
+            # Pass empty diagnosis and event_ctx (no telemetry — by design).
+            # validate_setup_engineering_structured never raises.
+            _structured_failures = validate_setup_engineering_structured(
+                _raw_data,
+                diagnosis={},
+                setup=_neutral_setup,
+                ranges=ranges,
+                event_ctx={},
+                car_name=car_name,
+                rec_history=None,
+            )
+
+            # Step 5: route through _finalise_recommendation (single funnel)
+            _final = _finalise_recommendation(
+                _raw_data,
+                _structured_failures,
+                fallback_used=False,
+                retried=False,
+            )
+
+            # Step 6: build the response dict mirroring build_combined_setup_response
+            _resp: dict = dict(_raw_data)
+            _resp["recommendation_status"] = _final.status
+            _resp["changes"] = _final.approved_changes
+            _resp["setup_fields"] = _final.approved_fields
+            _resp["engineering_validation_failed"] = _final.status not in APPROVED_STATUSES
+            _resp["engineering_validation_errors"] = _final.engineering_errors
+            _resp["validation_warnings"] = _final.validation_warnings
+            _resp["fallback_used"] = _final.fallback_used
+            _resp["rejected_changes"] = list(_final.rejected_changes)
+            # No AI audit for the baseline path
+            _resp["ai_audit"] = None
+            _resp["deterministic_plan"] = {
+                "proposed_count": len(_final.approved_changes),
+                "rejected_candidate_count": len(_final.rejected_changes),
+                "protected_fields": [],
+                "driver_profile_version": getattr(_profile, "profile_version", None),
+                "rule_engine_version": RULE_ENGINE_VERSION,
+            }
+            _resp["protected_fields"] = []
+            _resp["rule_engine_version"] = RULE_ENGINE_VERSION
+
+            return _json.dumps(_resp, ensure_ascii=False)
+
+        except Exception as _exc:
+            return _error_response
+
     def build_driver_feeling_response(
         self, feeling_text: str, setup_dict: dict,
         car_name: str = "", car_specs: dict | None = None
