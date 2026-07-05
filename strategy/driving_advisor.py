@@ -1098,13 +1098,22 @@ class DrivingAdvisor:
                                 rec_history=_rec_history_sa,
                             )
                             if _retry_eng:
-                                # Still failing after retry — build deterministic fallback
+                                # Still failing after retry — build deterministic fallback.
+                                # Only zero changes/setup_fields when the failure is
+                                # engineering-rule based (not a schema failure); schema
+                                # failures leave partial changes for diagnostic visibility.
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
                                 _fb = _build_deterministic_fallback(_fb_diag)
+                                _is_schema_failure = any(
+                                    r.startswith("malformed_schema") for r in _retry_eng
+                                )
+                                if not _is_schema_failure:
+                                    _retry_data["changes"] = _fb.get("changes", [])
+                                    _retry_data["setup_fields"] = _fb.get("setup_fields", {})
+                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                                 _retry_data["engineering_validation_failed"] = True
                                 _retry_data["engineering_validation_errors"] = _retry_eng
                                 _retry_data["fallback_used"] = True
-                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
@@ -1343,13 +1352,22 @@ class DrivingAdvisor:
                                 rec_history=_rec_history_cs,
                             )
                             if _retry_eng:
-                                # Still failing after retry — build deterministic fallback
+                                # Still failing after retry — build deterministic fallback.
+                                # Only zero changes/setup_fields when the failure is
+                                # engineering-rule based (not a schema failure); schema
+                                # failures leave partial changes for diagnostic visibility.
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
                                 _fb = _build_deterministic_fallback(_fb_diag)
+                                _is_schema_failure = any(
+                                    r.startswith("malformed_schema") for r in _retry_eng
+                                )
+                                if not _is_schema_failure:
+                                    _retry_data["changes"] = _fb.get("changes", [])
+                                    _retry_data["setup_fields"] = _fb.get("setup_fields", {})
+                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                                 _retry_data["engineering_validation_failed"] = True
                                 _retry_data["engineering_validation_errors"] = _retry_eng
                                 _retry_data["fallback_used"] = True
-                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
