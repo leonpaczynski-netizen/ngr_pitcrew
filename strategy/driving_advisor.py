@@ -432,7 +432,7 @@ def _validate_setup_response(
     if _v_ai_rhr is not None and _v_cur_rhr is not None:
         _v_rear_delta = _v_ai_rhr - _v_cur_rhr
         _v_front_changed = (_v_ai_rhf is not None and _v_ai_rhf != _v_cur_rhf)
-        if _v_rear_delta > 3 and not _v_front_changed:
+        if _v_rear_delta >= 4 and not _v_front_changed:
             errors.append(
                 f"rh_rake_risk: AI increases ride_height_rear by {_v_rear_delta:.0f}mm "
                 f"(from {_v_cur_rhr} to {_v_ai_rhr}) with no ride_height_front change — "
@@ -1104,10 +1104,23 @@ class DrivingAdvisor:
                                 # failures leave partial changes for diagnostic visibility.
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
                                 _fb = _build_deterministic_fallback(_fb_diag)
-                                _is_schema_failure = any(
-                                    r.startswith("malformed_schema") for r in _retry_eng
+                                # Retain changes only when NO engineering-safety rule
+                                # fires.  Structural/schema/range errors (malformed_schema,
+                                # invalid_units, "change field ...", "too many") are cosmetic
+                                # and leave partial changes for diagnostic visibility.
+                                # Engineering-safety rule errors mean the changes are unsafe.
+                                _ENG_SAFETY_PREFIXES = (
+                                    "rh_for_minor_bottoming", "rh_low_confidence_location",
+                                    "aero_cut_with_wheelspin", "aero_at_min_floaty",
+                                    "gearbox_category_mismatch",
+                                    "rh_increment_exceeds_confidence", "rh_rake_risk",
+                                    "lsd_large_change_gated", "lsd_blocked_driver_feel",
+                                    "lsd_reversal_without_evidence",
                                 )
-                                if not _is_schema_failure:
+                                _has_safety_error = any(
+                                    r.startswith(_ENG_SAFETY_PREFIXES) for r in _retry_eng
+                                )
+                                if _has_safety_error:
                                     _retry_data["changes"] = _fb.get("changes", [])
                                     _retry_data["setup_fields"] = _fb.get("setup_fields", {})
                                 _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
@@ -1358,10 +1371,23 @@ class DrivingAdvisor:
                                 # failures leave partial changes for diagnostic visibility.
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
                                 _fb = _build_deterministic_fallback(_fb_diag)
-                                _is_schema_failure = any(
-                                    r.startswith("malformed_schema") for r in _retry_eng
+                                # Retain changes only when NO engineering-safety rule
+                                # fires.  Structural/schema/range errors (malformed_schema,
+                                # invalid_units, "change field ...", "too many") are cosmetic
+                                # and leave partial changes for diagnostic visibility.
+                                # Engineering-safety rule errors mean the changes are unsafe.
+                                _ENG_SAFETY_PREFIXES = (
+                                    "rh_for_minor_bottoming", "rh_low_confidence_location",
+                                    "aero_cut_with_wheelspin", "aero_at_min_floaty",
+                                    "gearbox_category_mismatch",
+                                    "rh_increment_exceeds_confidence", "rh_rake_risk",
+                                    "lsd_large_change_gated", "lsd_blocked_driver_feel",
+                                    "lsd_reversal_without_evidence",
                                 )
-                                if not _is_schema_failure:
+                                _has_safety_error = any(
+                                    r.startswith(_ENG_SAFETY_PREFIXES) for r in _retry_eng
+                                )
+                                if _has_safety_error:
                                     _retry_data["changes"] = _fb.get("changes", [])
                                     _retry_data["setup_fields"] = _fb.get("setup_fields", {})
                                 _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))

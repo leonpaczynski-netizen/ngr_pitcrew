@@ -646,7 +646,15 @@ def _classify_bottoming_confidence(
     Returns {"band": str, "subtype": str, "confidence": str}.
     confidence ∈ low | medium | high
     subtype ∈ floor_contact | suspension_compression | kerb_strike |
-              throttle_squat | undulation | noise | insufficient_data
+              throttle_squat | insufficient_data
+
+    Deferred subtypes (no distinguishing telemetry signal exists):
+      undulation — track-undulation response is indistinguishable from
+                   floor_contact without track-surface metadata.
+      noise      — packet-noise artefacts cannot be separated from genuine
+                   bottoming events without a reference-silence window.
+    Consistent with the project's honest-deferral pattern for
+    inside_wheel_spin and rear_platform_stiffness.
     """
     _BAND_ORDER = {"minor": 0, "moderate": 1, "consider": 2, "required": 3}
 
