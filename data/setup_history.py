@@ -53,7 +53,6 @@ _KNOWN_NON_APPROVED_STATUSES: frozenset[str] = frozenset({
     "retry_failed",
     "blocked_no_safe_recommendation",
     "generated",
-    "validation_failed",
     "retry_requested",
     # Group 41 status strings
     "proposed",

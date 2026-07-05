@@ -1115,18 +1115,35 @@ class SessionDB:
         # Ensure each rec has a status key so the column is written explicitly
         # (SQLite default is 'proposed', but callers that provide a final validated
         # status must have it stored rather than defaulting to the pre-validation value).
+        # v11 (Group 42): also populate the 8 new structured columns when present
+        # in the rec dict (best-effort; old callers that lack the keys get NULL).
         recs_with_status = []
         for rec in recs:
             r = dict(rec)
             r.setdefault("status", "proposed")
+            # v11 defaults — ensures named params never raise KeyError for old callers
+            r.setdefault("deterministic_plan_json", None)
+            r.setdefault("ai_audit_json", None)
+            r.setdefault("validation_status", None)
+            r.setdefault("approved_changes_json", None)
+            r.setdefault("rejected_changes_json", None)
+            r.setdefault("diagnosis_json", None)
+            r.setdefault("driver_profile_version", None)
+            r.setdefault("rule_engine_version", None)
             recs_with_status.append(r)
         with self._lock:
             self._conn.executemany(
                 """INSERT INTO setup_recommendations
                    (ai_interaction_id, session_id, car_id, track, layout_id,
-                    feature, recommendation_text, status, created_at)
+                    feature, recommendation_text, status, created_at,
+                    deterministic_plan_json, ai_audit_json, validation_status,
+                    approved_changes_json, rejected_changes_json, diagnosis_json,
+                    driver_profile_version, rule_engine_version)
                    VALUES (:ai_interaction_id, :session_id, :car_id, :track,
-                           :layout_id, :feature, :recommendation_text, :status, :created_at)""",
+                           :layout_id, :feature, :recommendation_text, :status, :created_at,
+                           :deterministic_plan_json, :ai_audit_json, :validation_status,
+                           :approved_changes_json, :rejected_changes_json, :diagnosis_json,
+                           :driver_profile_version, :rule_engine_version)""",
                 recs_with_status,
             )
             self._conn.commit()

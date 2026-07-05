@@ -235,6 +235,18 @@ def _delta_brake_bias_front(setup: dict, ranges: dict, diagnosis: dict) -> float
     return -0.5
 
 
+def _delta_shorten_final_drive(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Lengthen gearing by decreasing the final drive ratio.
+
+    In GT7 a lower final_drive value means a longer (taller) ratio, which
+    raises top speed and reduces acceleration.  B5 fires when gearing is too
+    short (rev limiter hit on straights) so we apply a negative delta to
+    lengthen the ratio.  The magnitude -0.05 is a conservative one-step
+    change that moves the final drive noticeably without being aggressive.
+    """
+    return -0.05
+
+
 def _delta_noop(setup: dict, ranges: dict, diagnosis: dict) -> float:
     """No-op placeholder — used by Pack A invariant rules (field protected)."""
     return 0.0
@@ -258,6 +270,7 @@ _DELTA_RESOLVERS: dict[str, object] = {
     "decrease_front_arb": _delta_decrease_front_arb,
     "brake_bias_rear": _delta_brake_bias_rear,
     "brake_bias_front": _delta_brake_bias_front,
+    "shorten_final_drive": _delta_shorten_final_drive,
     "noop": _delta_noop,
 }
 
@@ -588,7 +601,7 @@ _PACK_B: list[SetupRule] = [
         },
         contraindications={},
         field="final_drive",
-        delta_fn="decrease_rear_aero",  # delta_fn used as proxy; engine applies negative
+        delta_fn="shorten_final_drive",
         title="Lengthen gearing — too short on straights",
         symptom="Rev limiter hit on straights — gearing too short.",
         rationale=(

@@ -94,7 +94,11 @@ class RuleOutcomeStore:
     Keyed by (rule_id, car, track, driver_profile_version).
     JSON-serialisable internal dict — no DB this sprint.
 
-    Deferred: persistence to DB and inter-session aggregation.
+    Deferred: live wiring into build_combined_setup_response and persistence
+    of RuleOutcomeStore across calls/sessions is deferred to a future sprint.
+    A fresh empty store has no samples so the confidence-downgrade hook (AC21)
+    would never fire anyway — the hook is implemented and unit-tested in
+    isolation, ready to activate once persistence is in place.
     """
 
     def __init__(self) -> None:

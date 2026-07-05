@@ -46,7 +46,7 @@ from typing import Optional, TYPE_CHECKING
 from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
-from strategy._setup_constants import ENG_SAFETY_PREFIXES, APPROVED_STATUSES
+from strategy._setup_constants import ENG_SAFETY_PREFIXES, APPROVED_STATUSES, RULE_ENGINE_VERSION
 from strategy.setup_ranges import resolve_ranges
 from strategy.setup_diagnosis import (
     PERSONAL_DRIVER_TUNING_MODEL,
@@ -1683,6 +1683,10 @@ class DrivingAdvisor:
                     _ranges,
                     _profile,
                     allowed_tuning=allowed_tuning,
+                    # rule_outcome_store=None: live wiring and persistence of
+                    # RuleOutcomeStore is deferred to a future sprint.  A fresh
+                    # empty store would have no samples and the confidence-downgrade
+                    # hook (AC21) would never fire anyway.
                     rule_outcome_store=None,
                 )
             except Exception:
@@ -1864,8 +1868,11 @@ class DrivingAdvisor:
                     "proposed_count": len(_plan.proposed),
                     "rejected_candidate_count": len(_plan.rejected_candidates),
                     "protected_fields": list(_plan.protected_fields),
+                    "driver_profile_version": getattr(_profile, "profile_version", None),
+                    "rule_engine_version": RULE_ENGINE_VERSION,
                 }
                 _data["protected_fields"] = list(_plan.protected_fields)
+                _data["rule_engine_version"] = RULE_ENGINE_VERSION
 
             except Exception:
                 pass  # Engineering validation must not break the response path
