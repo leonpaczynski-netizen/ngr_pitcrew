@@ -721,12 +721,14 @@ class SetupBuilderMixin:
 
     def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
         """Build a complete setup with AI for the given form (Qualifying panel)."""
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        return
         # Delegates to the main _run_build_setup but uses the form's purpose as session_type.
         # We temporarily proxy self._setup_type to match the form's purpose so the existing
         # _run_build_setup reads the correct session type.
         # The session_type is captured at call time from the form's purpose.
-        import threading as _threading
-        from strategy.ai_planner import build_car_setup
+        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
+        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
 
         api_key = self._ai_api_key.text().strip()
         if not api_key:
@@ -1707,8 +1709,10 @@ class SetupBuilderMixin:
 
     def _run_build_setup(self) -> None:
         """Ask AI to generate a complete from-scratch car setup and auto-fill all fields."""
-        import threading as _threading
-        from strategy.ai_planner import build_car_setup
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        return
+        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
+        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
 
         api_key = self._ai_api_key.text().strip()
         if not api_key:

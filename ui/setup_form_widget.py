@@ -619,11 +619,12 @@ class SetupFormWidget(QWidget):
         self._btn_build_setup = QPushButton("Build Setup with AI")
         self._btn_build_setup.setStyleSheet(
             "background: #1A5C2A; color: white; font-weight: bold; padding: 6px 16px;")
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        self._btn_build_setup.setEnabled(False)
+        self._btn_build_setup.setVisible(False)
         self._btn_build_setup.setToolTip(
-            "AI generates a complete from-scratch car setup for this car, track, and session.\n"
-            "Uses GT7 physics knowledge + your personal driving style profile.\n"
-            "Fill in Min Weight and Max Power above first — all fields will be auto-filled.\n"
-            "You can adjust any value after the AI fills them.")
+            "Build Setup with AI is unavailable — use Analyse to get AI-guided, "
+            "rule-validated setup changes.")
         self._btn_set_car_ranges = QPushButton("Set Car Ranges…")
         self._btn_set_car_ranges.setToolTip(
             "Define per-car min/max bounds for every setup parameter.\n"
