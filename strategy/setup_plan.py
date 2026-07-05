@@ -91,6 +91,14 @@ def plan_to_raw_data(
         "changes": changes,
         "setup_fields": setup_fields,
         "diagnosis": diagnosis,
+        # These two keys are required by the malformed_schema validator in
+        # validate_setup_engineering_structured.  For deterministic rule-engine
+        # responses the content is not inspected, only presence is checked.
+        "validation_targets": {},
+        "confidence": {
+            "overall": "high",
+            "reason": "deterministic rule engine",
+        },
     }
 
 

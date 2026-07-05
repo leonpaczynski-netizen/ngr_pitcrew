@@ -509,6 +509,12 @@ def _process_rule(
         except (TypeError, ValueError):
             pass
 
+    # --- Skip when field is absent from setup (cannot compute a valid to_value) ---
+    # A change with to_value=None produces an incomplete change entry that fails
+    # the setup_fields/changes consistency validator.
+    if from_value is None:
+        return
+
     # --- Clamp to ranges ---
     if to_value is not None and rule.field in ranges:
         lo, hi = ranges[rule.field]

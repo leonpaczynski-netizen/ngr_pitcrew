@@ -154,7 +154,24 @@ def _delta_increase_rear_aero(setup: dict, ranges: dict, diagnosis: dict) -> flo
 
 
 def _delta_increase_front_aero(setup: dict, ranges: dict, diagnosis: dict) -> float:
-    """Increase front aero by 1 step."""
+    """Increase front aero by enough to clear the near-min threshold.
+
+    The aero_at_min_floaty engineering validator fires whenever the proposed
+    aero_front value is still <= lo + 0.10*(hi-lo) (the near-min threshold).
+    When the current value is at or below that threshold we must target a
+    value above it to avoid a blocking validation failure.
+    """
+    lo, hi = ranges.get("aero_front", (0, 1000))
+    cur = setup.get("aero_front", 0)
+    try:
+        cur, lo, hi = float(cur), float(lo), float(hi)
+    except (TypeError, ValueError):
+        return 1.0
+    near_min_threshold = lo + 0.10 * (hi - lo)
+    if cur <= near_min_threshold:
+        # Target comfortably above the threshold (5 % above it)
+        target = near_min_threshold + max(1.0, 0.05 * (hi - lo))
+        return max(1.0, target - cur)
     return 1.0
 
 
