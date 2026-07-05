@@ -369,30 +369,40 @@ class TestGearEdgeCases:
 # ===========================================================================
 
 class TestB5GearingTooShortRule:
-    """I3: B5 rule fires when gearbox_flag='too_short' and uses the shorten_final_drive
-    resolver (delta=-0.05), NOT the decrease_rear_aero resolver.
+    """I3: B5 rule fires when gearing_diagnosis_category='gear_too_short' and
+    gearbox_flag='may_change', using the final_drive_down resolver (delta=-0.05).
 
-    Context: build_setup_diagnosis only ever emits 'preserve' or 'may_change' for
-    gearbox_flag — it never emits 'too_short'.  To trigger B5 deterministically we
-    manually inject gearbox_flag='too_short' into the diagnosis dict.
+    Group 43 re-key: the old tests injected the fictional gearbox_flag='too_short'
+    (a value build_setup_diagnosis never emits).  B5 was re-keyed to the REAL
+    diagnosis signals:
+      - gearing_diagnosis_category == 'gear_too_short'  (exact match)
+      - gearbox_flag == 'may_change'                     (exact match; None/'preserve' do not match)
+    The delta_fn was renamed from 'shorten_final_drive' to 'final_drive_down'; the
+    legacy alias 'shorten_final_drive' is preserved (same -0.05 value).
+    Underlying assertion intent is preserved: B5 fires, proposes final_drive, negative delta.
     """
 
-    def test_b5_fires_with_too_short_gearbox_flag(self):
-        """B5 fires when diagnosis['gearbox_flag'] == 'too_short'."""
+    def test_b5_fires_with_real_gearing_signals(self):
+        """B5 fires when gearing_diagnosis_category='gear_too_short' + gearbox_flag='may_change'.
+
+        Group 43 update: inject the REAL signals the diagnosis now emits instead of
+        the old fictional gearbox_flag='too_short'.
+        """
         laps = [_make_lap(rev_limiter_by_gear={6: 5})]
         setup = {"final_drive": 3.6}
 
-        # B5 precondition is gearbox_flag='too_short'; build_setup_diagnosis never
-        # produces this value so we inject it directly.
         diag = _build_diag(laps, setup)
         diag = dict(diag)
-        diag["gearbox_flag"] = "too_short"
+        # Inject the REAL signals B5 now requires (Group 43 re-key)
+        diag["gearing_diagnosis_category"] = "gear_too_short"
+        diag["gearbox_flag"] = "may_change"
 
         plan = _run_engine(diag, setup)
 
         b5_proposed = [i for i in plan.proposed if i.rule_id == "B5"]
         assert len(b5_proposed) >= 1, (
-            f"I3 FAIL: B5 must fire when gearbox_flag='too_short'; "
+            f"I3 FAIL: B5 must fire when gearing_diagnosis_category='gear_too_short' "
+            f"and gearbox_flag='may_change'; "
             f"proposed: {[(i.field, i.rule_id) for i in plan.proposed]}"
         )
 
@@ -403,7 +413,9 @@ class TestB5GearingTooShortRule:
 
         diag = _build_diag(laps, setup)
         diag = dict(diag)
-        diag["gearbox_flag"] = "too_short"
+        # Inject the REAL signals B5 now requires (Group 43 re-key)
+        diag["gearing_diagnosis_category"] = "gear_too_short"
+        diag["gearbox_flag"] = "may_change"
 
         plan = _run_engine(diag, setup)
 
@@ -413,17 +425,23 @@ class TestB5GearingTooShortRule:
         b5 = b5_intents[0]
         assert b5.field == "final_drive", (
             f"I3 FAIL: B5 must propose field='final_drive'; got {b5.field!r}. "
-            f"B5 must use shorten_final_drive resolver, NOT decrease_rear_aero."
+            f"B5 must use final_drive_down resolver (was: shorten_final_drive, same value)."
         )
 
-    def test_b5_delta_is_negative_via_shorten_final_drive(self):
-        """B5's shorten_final_drive resolver returns delta=-0.05 (lengthen gearing)."""
+    def test_b5_delta_is_negative_via_final_drive_down(self):
+        """B5's final_drive_down resolver returns delta=-0.05 (lengthen gearing).
+
+        Group 43 update: delta_fn renamed from 'shorten_final_drive' to 'final_drive_down';
+        the value is identical (-0.05). The assertion intent is preserved: delta must be negative.
+        """
         laps = [_make_lap(rev_limiter_by_gear={6: 5})]
         setup = {"final_drive": 3.6}
 
         diag = _build_diag(laps, setup)
         diag = dict(diag)
-        diag["gearbox_flag"] = "too_short"
+        # Inject the REAL signals B5 now requires (Group 43 re-key)
+        diag["gearing_diagnosis_category"] = "gear_too_short"
+        diag["gearbox_flag"] = "may_change"
 
         plan = _run_engine(diag, setup)
 
@@ -431,40 +449,44 @@ class TestB5GearingTooShortRule:
         assert b5_intents, "I3 FAIL: B5 must be in proposed (precondition not triggered)"
 
         b5 = b5_intents[0]
-        # shorten_final_drive returns -0.05; the delta on the intent must be negative
+        # final_drive_down returns -0.05 (same as legacy shorten_final_drive)
         assert b5.delta < 0.0, (
-            f"I3 FAIL: B5 delta must be negative (lengthen gearing); got delta={b5.delta}. "
-            f"shorten_final_drive resolver must return -0.05."
+            f"I3 FAIL: B5 delta must be negative (lengthen gearing = lower ratio); "
+            f"got delta={b5.delta}. "
+            f"final_drive_down resolver must return -0.05."
         )
         assert abs(b5.delta - (-0.05)) < 0.001, (
-            f"I3 FAIL: B5 delta must be exactly -0.05 (shorten_final_drive); "
+            f"I3 FAIL: B5 delta must be exactly -0.05 (final_drive_down); "
             f"got {b5.delta!r}. "
-            f"If this differs, shorten_final_drive resolver was changed or overridden."
+            f"If this differs, the final_drive_down resolver was changed or overridden."
         )
 
-    def test_b5_does_not_fire_without_too_short_flag(self):
-        """B5 must NOT fire when gearbox_flag is 'may_change' or 'preserve'."""
-        laps = [_make_lap()]
+    def test_b5_does_not_fire_without_real_signals(self):
+        """B5 must NOT fire when the REAL triggering signals are absent.
+
+        Group 43 update: B5 now needs gearing_diagnosis_category='gear_too_short' AND
+        gearbox_flag='may_change'. When neither condition is explicitly set (natural
+        diagnosis output without rev-limiter hits), B5 must not fire.
+        """
+        laps = [_make_lap()]  # no rev-limiter hits → gearing_diagnosis_category != gear_too_short
         setup = {"final_drive": 3.6}
 
-        # Use the natural diagnosis output (always 'preserve' or 'may_change', never 'too_short')
         diag = _build_diag(laps, setup)
 
-        # Verify that the natural diagnosis does NOT contain 'too_short'
-        natural_flag = diag.get("gearbox_flag", "preserve")
-        assert natural_flag != "too_short", (
+        # Verify natural diagnosis does not produce gear_too_short
+        natural_cat = diag.get("gearing_diagnosis_category", "insufficient_data")
+        assert natural_cat != "gear_too_short", (
             f"Test setup assumption violated: build_setup_diagnosis produced "
-            f"gearbox_flag={natural_flag!r} which should never be 'too_short'. "
-            f"If this fails, the production code now produces 'too_short' natively — "
-            f"update this test accordingly."
+            f"gearing_diagnosis_category={natural_cat!r} without rev-limiter hits. "
+            f"If this fails, the production code changed — update this test accordingly."
         )
 
         plan = _run_engine(diag, setup)
 
         b5_proposed = [i for i in plan.proposed if i.rule_id == "B5"]
         assert not b5_proposed, (
-            f"I3 FAIL: B5 must NOT fire when gearbox_flag is not 'too_short'; "
-            f"gearbox_flag={diag.get('gearbox_flag')!r}; "
+            f"I3 FAIL: B5 must NOT fire when gearing_diagnosis_category is not 'gear_too_short'; "
+            f"gearing_diagnosis_category={diag.get('gearing_diagnosis_category')!r}; "
             f"found B5 in proposed: {b5_proposed}"
         )
 
@@ -472,25 +494,31 @@ class TestB5GearingTooShortRule:
         """Regression guard: B5 must never resolve to a rear_aero field change.
 
         Before the I3 fix, B5 used the decrease_rear_aero resolver which changes
-        'aero_rear'. After the fix, B5 must use 'shorten_final_drive' which changes
+        'aero_rear'. After the fix, B5 must use 'final_drive_down' which changes
         'final_drive'. This test guards against regression.
+        Group 43 update: inject REAL signals instead of fictional 'too_short'.
         """
         laps = [_make_lap(rev_limiter_by_gear={6: 5})]
         setup = {"final_drive": 3.6, "aero_rear": 200}
 
         diag = _build_diag(laps, setup)
         diag = dict(diag)
-        diag["gearbox_flag"] = "too_short"
+        # Inject the REAL signals B5 now requires (Group 43 re-key)
+        diag["gearing_diagnosis_category"] = "gear_too_short"
+        diag["gearbox_flag"] = "may_change"
 
         plan = _run_engine(diag, setup)
 
         b5_intents = [i for i in plan.proposed if i.rule_id == "B5"]
-        assert b5_intents, "I3 FAIL: B5 must fire with gearbox_flag='too_short'"
+        assert b5_intents, (
+            "I3 FAIL: B5 must fire with gearing_diagnosis_category='gear_too_short' "
+            "and gearbox_flag='may_change'"
+        )
 
         for b5 in b5_intents:
             assert b5.field != "aero_rear", (
                 f"I3 REGRESSION: B5 is proposing field='aero_rear' — "
                 f"this means B5 is using the decrease_rear_aero resolver (old bug). "
-                f"B5 must use shorten_final_drive (field='final_drive'). "
+                f"B5 must use final_drive_down (field='final_drive'). "
                 f"Backend-builder must fix setup_knowledge_base.py B5 rule definition."
             )
