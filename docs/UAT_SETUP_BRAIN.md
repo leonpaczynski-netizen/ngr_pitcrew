@@ -1,7 +1,8 @@
 # Setup Brain — Manual UAT Checklist
 
-> **Scope:** Setup Builder Engineering Validation Gate (Group 41) and the
-> underlying setup-diagnosis brain (Groups 38–40).
+> **Scope:** Rule-First Setup Brain (Group 42), the Setup Builder Engineering
+> Validation Gate (Group 41), and the underlying setup-diagnosis brain
+> (Groups 38–40).
 > **Branch:** `ofr2-quali-race-disciplines`
 > **Test car / track:** Porsche 911 RSR '17 at Fuji International Speedway
 > **Environment:** GT7 on PS5, dashboard on PC via UDP, `GT7_AI_DEBUG=1` set in
@@ -55,6 +56,71 @@ Run these in order after a stint with real telemetry.
 
 ---
 
+## Rule-First Setup Brain UAT (Group 42)
+
+> **What changed:** the Setup Brain is now RULE-FIRST. The deterministic rule
+> engine authors the setup changes; the AI is an AUDIT-ONLY layer that can
+> approve / warn / reject / request-more-data but **cannot author actionable
+> setup changes**. Confirm below that the deterministic engine drives the
+> recommendation and the AI can only comment on it.
+>
+> Debug: keep `GT7_AI_DEBUG=1` set (see "How to enable AI debug logging" above).
+> The AI Log now shows the audit prompt (8 labelled sections) and the audit
+> response — NOT a setup-authoring prompt.
+
+### Primary scenario — Porsche 911 RSR '17 at Fuji Full Course
+
+Set-up: driver reports **rear loose on throttle**, **snap wheelspin**,
+**mid-corner push**, and that they **hate a floaty front**; telemetry shows
+**snap-throttle wheelspin / traction loss**. Run a stint, enter that driver
+feedback, then **Analyse** in the Setup Builder.
+
+1. **No generic ride-height raise.** Confirm the app does **NOT** recommend a
+   generic ride-height raise as a fix for the traction complaint.
+2. **Downforce not cut first.** Confirm the app does **NOT** reduce downforce as
+   the first fix if traction (not drag) is the true top-speed limiter — the
+   deterministic engine should protect downforce for a driver who protects it.
+3. **Driver-aligned mechanical traction / LSD.** Confirm the recommendation is
+   safe, small (1–3 changes), and consists of driver-aligned **mechanical
+   traction** and/or **LSD** changes (e.g. LSD accel within the safe gate,
+   rear-ARB / rear-aero within the handling-phase rules) — not a floaty-front
+   change the driver dislikes.
+4. **"Pit Crew recommendation" vs "AI audit" labelling.** Confirm the approved
+   changes appear under **"Pit Crew recommendation"** (the deterministic plan),
+   and the AI's verdict appears separately under **"AI audit"**. The AI audit may
+   warn or approve, but it must **never add or change** an actionable setup
+   field. If the AI rejects, the recommendation is surfaced as an
+   `approved_with_warnings` advisory (unless a blocking engineering failure
+   applies — which always wins), and any AI-authored setup keys are stripped.
+5. **"Why Pit Crew recommended this" explainability.** Expand a change's
+   collapsed **"Why Pit Crew recommended this"** block and confirm it shows
+   symptom, rationale, evidence, rejected_alternatives, risk_level,
+   confidence_level, and driver_style_alignment.
+6. **Protected + rejected sections.** Confirm **"Protected fields (Pit Crew will
+   not change these)"** lists the safety-protected fields and **"Rejected
+   candidate changes (not applied)"** lists candidate changes the engine
+   rejected (e.g. conflicting or contraindicated ones).
+7. **Apply is deterministic-only.** Confirm the Apply button reads **"Apply Pit
+   Crew recommendation"** and, when clicked, applies only the deterministic
+   approved changes — never an AI-authored field.
+
+### legacy_unknown — an old cached recommendation is display-only
+
+8. **No status → display only.** Load an old cached recommendation that predates
+   the lifecycle status (absent / unknown status). Confirm it shows the banner
+   **"Legacy recommendation — display only, cannot apply"** and that the Apply
+   button is **hidden** — the old default-to-approved behaviour is gone.
+
+### Voice path is narration-only
+
+9. **Voice cannot surface actionable changes.** Trigger a setup query via the
+   voice path (`build_setup_advice_response`). Confirm the spoken/narrated
+   response describes the situation but does **NOT** surface actionable
+   setup-field changes to apply — the voice path is constrained to
+   narration-only.
+
+---
+
 ## Notes / known limitations
 
 - Gearbox ratio ranges (`final_drive` 2.5–6.0, gears 0.5–4.0) are conservative
@@ -63,5 +129,11 @@ Run these in order after a stint with real telemetry.
 - Running the full automated suite in one process on Windows / Python 3.14 can
   hit a flaky native PyQt teardown segfault; this does not affect the app at
   runtime.
-- Full technical detail: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 41),
-  `MASTER_TESTING_REGISTER.md` (Setup Builder Engineering Validation Gate).
+- **Group 42 deferrals:** the rule-engine learning loop (`RuleOutcomeStore`) is a
+  foundation only — it is not wired live and does not persist across sessions
+  yet, so recommendations will not yet self-tune from outcomes. The handling-phase
+  rule pack (C/D) is a starter set — the remaining per-setting Pack C rules are
+  deferred. The voice path is narration-only pending a full rule-first rebuild.
+- Full technical detail: `docs/RULE_FIRST_SETUP_BRAIN.md` (architecture),
+  `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 and § Group 41),
+  `MASTER_TESTING_REGISTER.md` (Rule-First Setup Brain (Group 42)).

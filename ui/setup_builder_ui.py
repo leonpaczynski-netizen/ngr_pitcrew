@@ -1318,9 +1318,10 @@ class SetupBuilderMixin:
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
-        # Legacy-unknown banner — rendered when a fresh response has an unrecognised status.
-        # (Old-format responses without any status key are NOT flagged here — they use the
-        #  legacy path above which sets _status_approved = True and shows no banner.)
+        # Legacy-unknown banner — rendered when a response's status is absent, None, or
+        # unrecognised. All such cases resolve to _is_legacy=True and _status_approved=False
+        # (via is_legacy_unknown), so the banner shows and Apply stays hidden. Absent status
+        # is NEVER treated as approved (AC17 — closes the previous sprint's default-approved hole).
         _legacy_banner = ""
         if _is_legacy:
             _legacy_banner = (

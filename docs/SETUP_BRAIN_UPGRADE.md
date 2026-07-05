@@ -282,3 +282,183 @@ Manual UAT: `docs/UAT_SETUP_BRAIN.md` (Porsche 911 RSR '17 at Fuji).
   structured setup responses (pre-existing behaviour, not human-readable in the
   DB).
 * Flaky full-suite PyQt segfault on Windows/Py3.14 (see above).
+
+---
+
+# Group 42 — Rule-First Setup Brain
+
+> Date: 2026-07-05 · Branch `ofr2-quali-race-disciplines` (on top of Group 41)
+> Backend **+ UI + DB**. Companion architecture doc:
+> `docs/RULE_FIRST_SETUP_BRAIN.md`. Manual UAT: `docs/UAT_SETUP_BRAIN.md`
+> (Rule-First Setup Brain UAT).
+> New production files (all `strategy/`, pure Python):
+> `setup_knowledge_base.py`, `setup_driver_profile.py`, `setup_rule_engine.py`,
+> `setup_plan.py`, `setup_ai_audit.py`. Changed: `strategy/_setup_constants.py`,
+> `strategy/driving_advisor.py`, `strategy/_rec_parser.py`,
+> `data/setup_history.py`, `data/session_db.py` (v11), `ui/setup_builder_ui.py`,
+> `ui/setup_form_widget.py`.
+
+## 9. The rule-first inversion
+
+Groups 38–41 made the AI's setup output *safe* (diagnosis-before-AI +
+engineering-validation gate). Group 42 changes **who authors the setup**. The
+setup is no longer written by the AI and merely gated — it is written by a
+deterministic **rule engine**, and the AI is demoted to an **audit-only** layer
+that can approve / warn / reject / request-more-data but **cannot author
+actionable setup changes**. The app now has **ONE source of truth for actionable
+setup recommendations: the deterministic rule engine.**
+
+The new flow in `build_combined_setup_response` (the Setup Builder "Analyse"
+path, the canonical builder):
+
+```
+diagnose (build_setup_diagnosis)
+  → build_driver_profile()
+  → run_rule_engine()  →  SetupPlan
+  → plan_to_raw_data  →  _normalise_changes
+  → validate_setup_engineering_structured
+  → if blocking:  _build_deterministic_fallback   (NOT the AI)
+    else if API key:  call_api  →  AI AUDIT ONLY
+                      → parse_audit_response  (strips canonical setup keys)
+                      → map_audit_to_finaliser
+  → _finalise_recommendation   (the unchanged single funnel from Group 41)
+  → response JSON
+```
+
+## 10. The pieces
+
+### Rule packs (`setup_knowledge_base.py`)
+The rule catalogue with `register_pack` / `get_all_rules` / `resolve_delta`;
+enums `RulePhase` / `RiskLevel` / `ConfidenceLevel` / `DrivetrainType` /
+`CarClass` / `SessionType`; NamedTuples `SetupRule`, `SetupEvidence`. **22 rules**:
+
+* **Pack A (A1–A8) — safety invariants.** Protect fields / block unsafe deltas.
+* **Pack B (B1–B6) — driver-style adaptation.** Rank + contraindicate against
+  the driver profile.
+* **Pack C/D — handling-phase starter set:** `C1_entry_lsd_decel`,
+  `C2_entry_brake_bias`, `C3_mid_arb_rear`, `C4_mid_rear_aero`,
+  `C5_exit_lsd_accel`, `C6_exit_rear_aero`, `C7_kerb_arb_rear`,
+  `C8_kerb_rh_rear`. The remaining per-setting Pack C rules are **deferred** —
+  the catalogue is **extensible via `register_pack`**. Delta resolvers are
+  **named-string lookups** in `_DELTA_RESOLVERS` (no stored callables — so the
+  catalogue stays serialisable/inspectable).
+
+### Driver profile as data (`setup_driver_profile.py`)
+`DriverProfile` NamedTuple + `DriverStyleAlignment` enum. `build_driver_profile()`
+derives booleans (prefers_front_bite, dislikes_floaty_front, dislikes_snap_exit,
+trail_braker, rotation_without_snap, prefers_rear_stability, protects_downforce,
+race_values_consistency) from the existing `PERSONAL_DRIVER_TUNING_MODEL` /
+`DRIVER_HARD_CONSTRAINTS` constants; **never raises** (neutral defaults on
+error). Driver style is now a **DATA STRUCTURE** the engine consumes for ranking
++ contraindications — not just prompt text.
+
+### Rule engine (`setup_rule_engine.py`)
+`SetupChangeIntent`, `SetupPlan` NamedTuples;
+`run_rule_engine(diagnosis, setup, ranges, profile, allowed_tuning=None,
+rule_outcome_store=None) -> SetupPlan`. Pack A protects fields; conflict
+resolution moves both same-field opposite candidates to rejected with
+`conflict:<id>`; no-op exclusion; gear-count gating; a confidence-downgrade hook.
+`RuleOutcomeStore` holds fire/success counts keyed by
+rule_id / car / track / driver_profile_version; `get_success_rate` returns `None`
+below `MIN_OUTCOME_SAMPLES`. **Never raises** → empty plan on error.
+
+### Plan → funnel (`setup_plan.py`)
+`plan_to_raw_data` emits the raw_data dict the existing Group 41 funnel consumes
+(including confidence + validation_targets so the engineering validator's schema
+check passes); `rejected_to_json`.
+
+### AI audit only (`setup_ai_audit.py`)
+`AuditStatus` enum (APPROVED / APPROVED_WITH_WARNINGS / REJECTED /
+NEEDS_MORE_DATA), `AuditResult` NamedTuple. `build_audit_prompt` renders 8
+labelled sections (diagnosis, plan, evidence, rules-fired, rejected candidates,
+protected fields, current setup, driver profile + validation result + audit
+instructions). `parse_audit_response(response_text, canonical_params)` **strips
+any key in canonical_params** (logs stripped_fields), maps an unknown status →
+NEEDS_MORE_DATA, and never raises — this is the structural guarantee that the AI
+**cannot author a setup field**. `map_audit_to_finaliser`: REJECTED /
+NEEDS_MORE_DATA with no blocking engineering failure → `approved_with_warnings`
+advisory (`ai_audit_rejected_advisory`); **a blocking engineering failure ALWAYS
+wins.**
+
+### Constants (`strategy/_setup_constants.py`)
+`RULE_ENGINE_VERSION="42.0"`, `MIN_OUTCOME_SAMPLES=3`, `LOW_SUCCESS_RATE=0.40`,
+`AI_AUDIT_REJECTED_ADVISORY="ai_audit_rejected_advisory"` (**NOT** in
+APPROVED_STATUSES). `APPROVED_STATUSES` unchanged = {approved,
+approved_with_warnings, fallback_generated}.
+
+### Voice path constraint (`build_setup_advice_response`)
+Constrained to **NARRATION-ONLY** via new `_strip_actionable_for_voice(data)`,
+which zeroes `changes=[]` / `setup_fields={}` before normalisation — the voice
+path can never surface AI-authored actionable setup changes. A full rule-first
+rebuild of the voice path is **DEFERRED**.
+
+### DB v11 (`data/session_db.py`)
+`_migrate_v11` bumps user_version to 11 and adds 8 nullable TEXT columns to
+`setup_recommendations`: deterministic_plan_json, ai_audit_json,
+validation_status, approved_changes_json, rejected_changes_json, diagnosis_json,
+driver_profile_version, rule_engine_version. The recommendation_text JSON blob is
+preserved. These columns are now **POPULATED on insert** (via
+`strategy/_rec_parser.py` + `insert_setup_recommendations`). Full migration off
+the JSON blob remains deferred.
+
+### Legacy safety — closes Group 41's caveat (`data/setup_history.py`)
+Adds `is_legacy_unknown` / `normalise_validation_status` / `LEGACY_UNKNOWN`. A
+recommendation whose status is absent / None / unrecognised is now treated as
+**legacy_unknown = DISPLAY-ONLY, NO Apply** — previously an absent status could
+default to approved. That hole is closed, enforced in `_display_setup_result` and
+gated at the Apply button. The `_rejected_` bucket routing is preserved
+(`ai_audit_rejected_advisory` routes there).
+
+### Learning foundation (`RuleOutcomeStore`)
+**FOUNDATION ONLY.** The confidence-downgrade hook (samples ≥
+MIN_OUTCOME_SAMPLES and success_rate < LOW_SUCCESS_RATE → downgrade one
+confidence step) is implemented and unit-tested, but **live wiring +
+cross-session persistence is DEFERRED** — `build_combined_setup_response` passes
+`rule_outcome_store=None` today. No fake ML: a deterministic weighted counter.
+
+### UI (`ui/setup_builder_ui.py::_display_setup_result` + `ui/setup_form_widget.py`)
+Section order: diagnosis → **"Pit Crew recommendation"** (approved changes, each
+with a collapsed **"Why Pit Crew recommended this"** details block showing
+symptom / rationale / evidence / rejected_alternatives / risk_level /
+confidence_level / driver_style_alignment) → **"Protected fields (Pit Crew will
+not change these)"** → **"Rejected candidate changes (not applied)"** → **"AI
+audit"** (verdict + concerns) → **"Rejected AI output — not for use"**. Legacy
+banner: "Legacy recommendation — display only, cannot apply". The Apply button is
+relabelled **"Apply Pit Crew recommendation"** and hidden unless status ∈
+APPROVED_STATUSES AND approved changes present AND not legacy.
+
+### Response JSON contract
+Per-change explainability keys live **inside each item** of the `changes` list:
+symptom, evidence (list), rule_id, rationale, rejected_alternatives (list),
+risk_level (low/med/high), confidence_level (low/med/high), driver_style_alignment
+(aligned/neutral/caution). New top-level keys: `ai_audit`, `deterministic_plan`
+{proposed_count, rejected_candidate_count, protected_fields}, `protected_fields`.
+
+## 11. Tests
+
+136 new tests across `tests/test_group42_rule_first_engine.py`,
+`test_group42_ai_audit_only.py`, `test_group42_driver_style.py`,
+`test_group42_legacy_storage.py`, `test_group42_handling_phases.py`,
+`test_group42_voice_path_safety.py`, `test_group42_ui_gate.py` — plus 17
+rewritten tests in `test_group38_setup_diagnosis.py`
+(TestRegenerateOnceOrchestration), `test_group40_diagnosis_hardening.py`
+(TestAC9DeterministicFallback), `test_group41_validation_gate.py` (2 tests),
+`test_group27_setup_overhaul2.py` (1 test). All green.
+
+The 8 pre-existing frozen-allowlist track-modelling failures are unrelated and
+untouched, zero new regressions. **Test-run note (Windows / Python 3.14):** run
+the suite in halves to avoid a flaky native PyQt teardown segfault — an
+environmental test-isolation artifact, not a product defect.
+
+## 12. Deferred / limitations
+
+* `RuleOutcomeStore` live wiring + cross-session persistence — foundation only
+  today (`rule_outcome_store=None`).
+* The remaining per-setting Pack C rules — C/D is a handling-phase starter set,
+  extensible via `register_pack`.
+* Full DB migration off the recommendation_text JSON blob (the 8 v11 columns are
+  populated, but the blob is still the primary store).
+* Full rule-first rebuild of the voice path — constrained to narration-only for
+  now.
+* The 8 pre-existing track-modelling allowlist failures remain for the
+  track-modelling owner.
