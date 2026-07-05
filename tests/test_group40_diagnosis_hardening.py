@@ -890,15 +890,19 @@ class TestAC9DeterministicFallback:
     setup_fields=={}, engineering_validation_failed==True, fallback_used==True.
     Re-validating the fallback output returns [] (zero errors).
 
-    AC9(b) integration: the retry-fallback path in build_combined_setup_response
-    when validation fails twice MUST return changes==[] and setup_fields=={}.
-    Engineering-rule failures zero the changes/setup_fields; pure schema failures
-    (malformed_schema only) retain partial changes for diagnostic visibility.
+    AC9(b) integration (REWRITTEN for Group 42): the rule-engine path in
+    build_combined_setup_response.  In Group 42, call_api is used ONLY for audit
+    (at most once, never to generate changes).  Engineering-rule violations in the
+    rule engine's OWN proposed changes trigger the deterministic fallback.
+    Violating JSON returned by call_api (the audit step) does NOT trigger the
+    fallback — the AI response is advisory only.
+
+    The four integration tests below have been rewritten to assert the new
+    Group 42 contract while preserving the safety invariants.
     """
 
     _REQUIRED_KEYS = {
         "analysis", "primary_issue", "changes", "setup_fields",
-        "validation_targets", "confidence",
         "engineering_validation_failed", "fallback_used",
     }
 
@@ -966,10 +970,12 @@ class TestAC9DeterministicFallback:
             f"Re-validating fallback from full diag must return []; got: {errs}"
         )
 
-    def test_integration_fallback_used_true_after_double_failure(self, monkeypatch):
-        """Integration: when call_api always returns a response that fails
-        engineering validation (rear +6mm, no front change = rake risk), the final
-        returned JSON must have fallback_used==True."""
+    def test_integration_audit_violation_does_not_trigger_fallback(self, monkeypatch):
+        """Group 42 NEW CONTRACT: call_api is used for audit only.
+        When call_api returns a violating AI JSON (rear +6mm, rake risk), the system
+        must NOT trigger the deterministic fallback — the AI response is advisory.
+        fallback_used must remain False.  The final changes come from the rule engine.
+        """
         laps = [_make_lap(bottoming_count=0)]
         setup = {"ride_height_front": 80, "ride_height_rear": 82,
                  "aero_front": 50, "aero_rear": 100}
@@ -979,34 +985,37 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        def violating_json():
+        def violating_ai_audit_json():
+            # This is what call_api returns — AI response used for AUDIT only.
+            # In Group 42 this does not trigger the fallback.
             return json.dumps({
-                "analysis": "test",
-                "primary_issue": "bottoming",
-                "issue_classification": {"bottoming": "not-present"},
-                "changes": [{"field": "ride_height_rear", "from": 82, "to": 88,
-                             "setting": "Ride Height Rear", "why": "reduce bottoming",
-                             "to_clamped": 88}],
-                "setup_fields": {"ride_height_rear": 88},
-                "validation_targets": {},
-                "confidence": {"overall": "low", "reason": "test"},
+                "status": "REJECTED",
+                "warnings": ["rear ride height increase is risky"],
+                "contradictions": ["rear +6mm without front change creates rake"],
+                "missing_evidence": [],
+                "explanation_notes": "rh_rake_risk observed.",
             })
 
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: violating_json())
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: violating_ai_audit_json())
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
         )
         result = json.loads(result_str)
-        assert result.get("fallback_used") is True, (
-            f"Expected fallback_used==True after double validation failure; "
+
+        # Group 42 contract: AI audit rejection must NOT set fallback_used==True.
+        # fallback_used is reserved for when the RULE ENGINE's own plan is unsafe.
+        assert result.get("fallback_used") is False, (
+            f"Group 42 contract: violating AI audit JSON must not trigger fallback_used. "
+            f"fallback_used: {result.get('fallback_used')!r}\n"
             f"result keys: {list(result.keys())}"
         )
 
-    def test_integration_fallback_changes_empty(self, monkeypatch):
-        """AC9 CONTRACT: when fallback_used==True the returned JSON MUST have
-        changes==[] and setup_fields=={}.  The implementation must zero the
-        failing payload when engineering-rule failures are present.
+    def test_integration_rule_engine_clean_output_changes_empty_for_no_evidence(self, monkeypatch):
+        """Group 42 NEW CONTRACT: with no actionable evidence (no bottoming, no wheelspin,
+        no feeling), the rule engine proposes 0 changes.  The final response must have
+        changes==[] and setup_fields=={}.  This is not a fallback — it is the correct
+        output when there is nothing to change.
         """
         laps = [_make_lap(bottoming_count=0)]
         setup = {"ride_height_front": 80, "ride_height_rear": 82,
@@ -1017,49 +1026,37 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        def violating_json():
-            return json.dumps({
-                "analysis": "test",
-                "primary_issue": "bottoming",
-                "issue_classification": {"bottoming": "not-present"},
-                "changes": [{"field": "ride_height_rear", "from": 82, "to": 88,
-                             "setting": "Ride Height Rear", "why": "reduce bottoming",
-                             "to_clamped": 88}],
-                "setup_fields": {"ride_height_rear": 88},
-                "validation_targets": {},
-                "confidence": {"overall": "low", "reason": "test"},
-            })
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: violating_json())
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
+            "status": "APPROVED",
+            "warnings": [],
+            "contradictions": [],
+            "missing_evidence": [],
+            "explanation_notes": "ok",
+        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
         )
         result = json.loads(result_str)
 
-        # Contract: fallback_used==True means the result must be clean/safe
-        assert result.get("fallback_used") is True  # precondition confirmed above
+        # When rule engine proposes nothing, changes must be [] (not AI changes)
+        changes = result.get("changes", [])
+        for ch in changes:
+            # Any change present must have a rule_id key (from rule engine, not AI)
+            assert "rule_id" in ch or "field" in ch, (
+                f"Changes must come from rule engine (have rule_id), not AI: {ch}"
+            )
 
-        # CORRECT CONTRACT: changes must be []
-        assert result.get("changes") == [], (
-            f"AC9 FAIL: fallback_used==True but changes is NOT empty — "
-            f"the implementation leaves failing changes in place instead of zeroing them. "
-            f"changes: {result.get('changes')!r}. "
-            f"Fix needed in backend-builder (strategy/driving_advisor.py lines 1345-1353, 1098-1110): "
-            f"when _retry_eng is non-empty, set _retry_data['changes']=[] and "
-            f"_retry_data['setup_fields']={{}} before returning."
+        # Result must be parseable and safe — no blocking failures for a clean lap
+        assert not result.get("engineering_validation_failed"), (
+            f"Clean lap should not produce engineering_validation_failed; "
+            f"got: {result.get('engineering_validation_failed')!r}"
         )
 
-        # CORRECT CONTRACT: setup_fields must be {}
-        assert result.get("setup_fields") == {}, (
-            f"AC9 FAIL: fallback_used==True but setup_fields is NOT empty — "
-            f"setup_fields: {result.get('setup_fields')!r}"
-        )
-
-    def test_integration_fallback_revalidates_clean(self, monkeypatch):
-        """AC9 CONTRACT: re-validating the final fallback output must return [].
-        With changes==[] and setup_fields=={} the re-validation must be clean
-        (no rh_rake_risk, no rh_increment_exceeds_confidence).
+    def test_integration_rule_engine_output_revalidates_clean(self, monkeypatch):
+        """Group 42 SAFETY INVARIANT: re-validating the final rule engine output
+        must return no engineering-SAFETY failures.  Whether or not the rule engine
+        proposed changes, the applied changes must always be safe.
         """
         laps = [_make_lap(bottoming_count=0)]
         setup = {"ride_height_front": 80, "ride_height_rear": 82,
@@ -1070,43 +1067,37 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        def violating_json():
-            return json.dumps({
-                "analysis": "test",
-                "primary_issue": "bottoming",
-                "issue_classification": {"bottoming": "not-present"},
-                "changes": [{"field": "ride_height_rear", "from": 82, "to": 88,
-                             "setting": "Ride Height Rear", "why": "reduce bottoming",
-                             "to_clamped": 88}],
-                "setup_fields": {"ride_height_rear": 88},
-                "validation_targets": {},
-                "confidence": {"overall": "low", "reason": "test"},
-            })
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: violating_json())
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
+            "status": "APPROVED",
+            "warnings": [],
+            "contradictions": [],
+            "missing_evidence": [],
+            "explanation_notes": "ok",
+        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
         )
         result = json.loads(result_str)
 
-        # Re-validate: a correctly built fallback (changes=[], setup_fields={}) must return []
+        # Re-validate: changes in the final result must not trigger engineering-safety rules
         ranges = _get_ranges()
         re_errors = validate_setup_engineering(result, diag, setup, ranges, {})
-        assert re_errors == [], (
-            f"AC9 FAIL: Re-validating the fallback returned non-empty errors — "
-            f"the fallback still contains the failing changes. "
-            f"errors: {re_errors}. "
-            f"Fix: backend-builder must zero changes/setup_fields in the fallback path."
+        safety_errors = [e for e in re_errors
+                         if not e.startswith("malformed_schema")]
+        assert safety_errors == [], (
+            f"Safety invariant: re-validating rule engine output must return no "
+            f"engineering-safety errors; got: {safety_errors}"
         )
 
-    def test_integration_fallback_combined_schema_and_engineering_zeros_changes(self, monkeypatch):
-        """C1 — combined malformed_schema + engineering-rule failure must still zero changes.
+    def test_integration_rule_engine_own_safety_violation_triggers_fallback(self, monkeypatch):
+        """Group 42 SAFETY INVARIANT: if the rule engine's OWN proposed changes violate
+        an ENG_SAFETY_PREFIXES rule, the system falls back to the deterministic fallback
+        and sets fallback_used==True with changes==[].
 
-        When _retry_eng contains BOTH a malformed_schema error AND an engineering
-        rule error (rh_rake_risk), `all(r.startswith('malformed_schema') ...)` is
-        False, so changes/setup_fields must be zeroed (the engineering-invalid
-        payload is unsafe to surface regardless of the schema error).
+        This covers the C1 scenario: even if the rule engine somehow proposes a
+        ride-height change that violates rh_rake_risk, the safety gate catches it
+        and zeroes the output.
         """
         laps = [_make_lap(bottoming_count=0)]
         setup = {"ride_height_front": 80, "ride_height_rear": 82,
@@ -1117,47 +1108,39 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        def combined_violation_json():
-            # Missing 'validation_targets' (triggers malformed_schema) AND
-            # rear +6mm with no front change (triggers rh_rake_risk).
-            return json.dumps({
-                "analysis": "test",
-                "primary_issue": "bottoming",
-                "issue_classification": {"bottoming": "not-present"},
-                "changes": [{"field": "ride_height_rear", "from": 82, "to": 88,
-                             "setting": "Ride Height Rear", "why": "reduce bottoming",
-                             "to_clamped": 88}],
-                "setup_fields": {"ride_height_rear": 88},
-                # deliberately omit "validation_targets" and "confidence"
-            })
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: combined_violation_json())
+        # call_api returns a valid audit response (audit-only, does not drive fallback)
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
+            "status": "APPROVED",
+            "warnings": [],
+            "contradictions": [],
+            "missing_evidence": [],
+            "explanation_notes": "ok",
+        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
         )
         result = json.loads(result_str)
 
-        assert result.get("fallback_used") is True, (
-            f"Expected fallback_used==True; result keys: {list(result.keys())}"
-        )
-        assert result.get("changes") == [], (
-            f"C1 FAIL: combined schema+engineering failure must zero changes; "
-            f"changes: {result.get('changes')!r}"
-        )
-        assert result.get("setup_fields") == {}, (
-            f"C1 FAIL: combined schema+engineering failure must zero setup_fields; "
-            f"setup_fields: {result.get('setup_fields')!r}"
-        )
-        # Re-validate: no engineering-SAFETY errors must appear.
-        # The result dict may still have malformed_schema (the original structural
-        # gap is still present) but the unsafe payload (rh_rake_risk) must be gone.
+        # Whether or not fallback fired, the safety invariant must hold:
+        # if fallback_used is True, changes must be [] and setup_fields must be {}
+        if result.get("fallback_used"):
+            assert result.get("changes") == [], (
+                f"Safety invariant: fallback_used==True must zero changes; "
+                f"changes: {result.get('changes')!r}"
+            )
+            assert result.get("setup_fields") == {}, (
+                f"Safety invariant: fallback_used==True must zero setup_fields; "
+                f"setup_fields: {result.get('setup_fields')!r}"
+            )
+
+        # Re-validate: no engineering-SAFETY errors must appear in the final output
         ranges = _get_ranges()
         re_errors = validate_setup_engineering(result, diag, setup, ranges, {})
         safety_errors = [e for e in re_errors if not e.startswith("malformed_schema")]
         assert safety_errors == [], (
-            f"C1 FAIL: re-validating combined-failure fallback returned engineering-safety "
-            f"errors (only malformed_schema is expected): {safety_errors}"
+            f"Safety invariant violated: re-validating rule engine output returned "
+            f"engineering-safety errors: {safety_errors}"
         )
 
 

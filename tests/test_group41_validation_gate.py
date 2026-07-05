@@ -212,18 +212,71 @@ class TestAC0EndToEndPayloadContract:
         )
 
     def test_build_combined_response_status_is_failed(self, monkeypatch):
+        """Group 42 REWRITE: in the deterministic rule-first flow, AI JSON (from call_api)
+        is used for audit only and cannot trigger blocking status.  The correct trigger for
+        a non-approved terminal status is the rule engine's OWN proposed changes hitting an
+        ENG_SAFETY blocking rule.
+
+        Scenario: 5 laps with bottoming_count=8/lap + kerb_count=25/lap, feeling='stiff on
+        kerbs', location_confidence='high' → bottoming_confidence medium (kerb_strike).
+        Rule C8 proposes ride_height_rear +3mm; rh_increment_exceeds_confidence fires
+        (medium confidence only allows +2mm).  This is a blocking ENG_SAFETY failure from
+        the rule engine itself → fallback → validation_failed, changes=[], setup_fields={}.
+        """
         import strategy.driving_advisor as da
-        laps = [_make_lap()]
-        setup = {"ride_height_front": 80, "ride_height_rear": 82}
+        from strategy.setup_diagnosis import build_setup_diagnosis
+        from strategy._setup_constants import APPROVED_STATUSES
+
+        laps = [_make_lap(bottoming_count=8, kerb_count=25) for _ in range(5)]
+        setup = {
+            "ride_height_front": 80,
+            "ride_height_rear": 82,
+            "arb_rear": 4,
+            "aero_front": 500,
+            "aero_rear": 500,
+        }
         adv = _make_full_advisor({}, laps)
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: self._violating_json())
-        result_str = adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
+
+        # Build diagnosis with location_confidence='high' so bottoming_confidence = medium
+        # (kerb_strike subtype).  Medium confidence permits only +2mm RH increment.
+        # The rule engine proposes +3mm → rh_increment_exceeds_confidence blocks it.
+        diag = build_setup_diagnosis(
+            laps=laps, setup=setup, car_name="", event_ctx={},
+            feeling="stiff on kerbs", location_confidence="high",
+        )
+
+        # AI is audit-only in Group 42; its response cannot generate blocking failures.
+        # Returning a valid audit-approved response so we can isolate the deterministic failure.
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
+            "status": "APPROVED",
+            "warnings": [],
+            "contradictions": [],
+            "missing_evidence": [],
+            "explanation_notes": "ok",
+        }))
+
+        result_str = adv.build_combined_setup_response(
+            setup_dict=setup, car_name="", feeling="stiff on kerbs", diagnosis=diag,
+        )
         result = json.loads(result_str)
         status = result.get("recommendation_status", "MISSING")
-        assert status in {"validation_failed", "retry_failed", "fallback_generated",
-                          "blocked_no_safe_recommendation"}, (
-            f"Expected a rejection/fallback status for blocking-invalid AI output; got {status!r}. "
-            "Backend-builder must route all blocking safety failures to a non-approved status."
+
+        # Safety invariant: when the rule engine's own plan trips a blocking ENG_SAFETY
+        # rule, the status must NOT be in APPROVED_STATUSES (it must be validation_failed
+        # or another non-approved status, and changes must be []).
+        assert status not in APPROVED_STATUSES, (
+            f"Group 42 safety invariant violated: rule engine triggered a blocking "
+            f"ENG_SAFETY failure (rh_increment_exceeds_confidence) but status is "
+            f"{status!r} which is in APPROVED_STATUSES. "
+            f"changes={result.get('changes')!r}, "
+            f"engineering_validation_failed={result.get('engineering_validation_failed')!r}"
+        )
+        assert result.get("changes") == [], (
+            f"CRITICAL: blocking safety failure must produce changes==[]; got {result.get('changes')!r}"
+        )
+        assert result.get("setup_fields") == {}, (
+            f"CRITICAL: blocking safety failure must produce setup_fields=={{}}; "
+            f"got {result.get('setup_fields')!r}"
         )
 
     def test_build_combined_response_changes_empty_on_blocking(self, monkeypatch):
@@ -468,18 +521,64 @@ class TestAC2RetryFailure:
         })
 
     def test_retry_failed_status_when_both_attempts_violate(self, monkeypatch):
+        """Group 42 REWRITE: 'retry_failed' is no longer reachable because Group 42 removed
+        the AI-retry loop entirely.  call_api is used for audit only (at most once).
+
+        This test re-expresses the SAME safety property under Group 42 semantics:
+        when the deterministic rule engine produces changes that trip a blocking ENG_SAFETY
+        rule, the final status must NOT be in APPROVED_STATUSES (i.e. it must be
+        validation_failed or another terminal-unsafe status), and changes must be [].
+
+        Scenario: same kerb_strike bottoming setup as the AC0 test above — the rule engine
+        proposes ride_height_rear +3mm which fires rh_increment_exceeds_confidence (medium
+        confidence only allows +2mm).  No retry exists; the deterministic fallback fires once.
+        """
         import strategy.driving_advisor as da
-        laps = [_make_lap()]
-        setup = {"ride_height_front": 80, "ride_height_rear": 82}
+        from strategy.setup_diagnosis import build_setup_diagnosis
+        from strategy._setup_constants import APPROVED_STATUSES
+
+        laps = [_make_lap(bottoming_count=8, kerb_count=25) for _ in range(5)]
+        setup = {
+            "ride_height_front": 80,
+            "ride_height_rear": 82,
+            "arb_rear": 4,
+            "aero_front": 500,
+            "aero_rear": 500,
+        }
         adv = _make_full_advisor({}, laps)
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: self._always_violating_json())
-        result_str = adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
+
+        diag = build_setup_diagnosis(
+            laps=laps, setup=setup, car_name="", event_ctx={},
+            feeling="stiff on kerbs", location_confidence="high",
+        )
+
+        # AI audit returns OK — the blocking failure comes from the rule engine only
+        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
+            "status": "APPROVED",
+            "warnings": [],
+            "contradictions": [],
+            "missing_evidence": [],
+            "explanation_notes": "ok",
+        }))
+
+        result_str = adv.build_combined_setup_response(
+            setup_dict=setup, car_name="", feeling="stiff on kerbs", diagnosis=diag,
+        )
         result = json.loads(result_str)
-        # Both paths fail → fallback triggered; final status should be either
-        # retry_failed or fallback_generated/blocked_no_safe_recommendation
         status = result.get("recommendation_status", "")
-        assert status not in {"approved", "approved_with_warnings"}, (
-            f"Doubly-failing AI output must NOT produce an approved status; got {status!r}"
+
+        # Safety invariant (Group 42): rule engine blocking failure → NOT in APPROVED_STATUSES
+        assert status not in APPROVED_STATUSES, (
+            f"Group 42 safety invariant: deterministic blocking failure (rh_increment_exceeds_confidence) "
+            f"must produce a non-approved status; got {status!r}. "
+            f"In Group 42, 'retry_failed' is no longer reachable but the terminal-unsafe "
+            f"outcome (non-approved + changes==[]) must still be enforced."
+        )
+
+        # Safety invariant: changes must be [] when the terminal-unsafe path is taken
+        assert result.get("changes") == [], (
+            f"Safety invariant: terminal-unsafe status must have changes==[]; "
+            f"got {result.get('changes')!r}"
         )
 
     def test_retry_failed_changes_empty(self, monkeypatch):
