@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 import re as _re
 from typing import Any
 
@@ -29,8 +30,20 @@ def parse_recommendations_from_response(
     if not response_text or not response_text.strip():
         return []
 
+    # Extract recommendation_status from the JSON payload when present.
+    # The setup-advice and combined-setup paths serialise the full validated _data dict
+    # as _response_text; that dict carries recommendation_status after _finalise_recommendation.
+    # Non-setup coaching paths produce plain prose with no JSON, so we default to 'proposed'.
+    _lifecycle_status: str | None = None
+    try:
+        _parsed = _json.loads(response_text)
+        if isinstance(_parsed, dict):
+            _lifecycle_status = _parsed.get("recommendation_status") or None
+    except (ValueError, TypeError):
+        pass  # Plain-text response — status stays None → default 'proposed'
+
     created_at = _dt.datetime.utcnow().isoformat()
-    base = {
+    base: dict[str, Any] = {
         "ai_interaction_id": ai_interaction_id,
         "session_id": session_id,
         "car_id": car_id,
@@ -39,6 +52,9 @@ def parse_recommendations_from_response(
         "feature": feature,
         "created_at": created_at,
     }
+    # Attach final lifecycle status when available; fall back to 'proposed' for legacy paths.
+    if _lifecycle_status is not None:
+        base["status"] = _lifecycle_status
 
     blocks = [b.strip() for b in response_text.split("\n\n") if b.strip()]
     qualified = [b for b in blocks if _STRUCTURED_PREFIXES.match(b)]

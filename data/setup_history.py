@@ -13,9 +13,19 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+# Import APPROVED_STATUSES from _setup_constants to avoid duplicating the frozenset.
+# setup_history is a data-layer module with no dependency on strategy/, so this
+# import is clean (no circular risk).
+from strategy._setup_constants import APPROVED_STATUSES  # noqa: F401 — re-exported
+
 _HISTORY_PATH = Path(__file__).parent / "setup_history.json"
 _lock = threading.Lock()
 _MAX_ENTRIES_PER_CONFIG = 20
+
+# Key prefix for the rejected/diagnostic bucket — entries with non-approved statuses
+# are written here so they never appear as the current recommendation but are still
+# visible for debugging.
+_REJECTED_KEY_PREFIX = "_rejected_"
 
 
 def _load_all() -> dict:
@@ -47,6 +57,7 @@ def save_entry(
     entry: dict,
     labels: "list[str] | None" = None,
     driver_feedback: str = "",
+    validation_status: str = "",
 ) -> None:
     """Append one history entry for this config_id.
 
@@ -62,8 +73,13 @@ def save_entry(
       feeling      : str (driver description, for feeling_fix type)
 
     New optional params (backward-compatible):
-      labels         : list of label strings from VALID_LABELS (any invalid labels silently dropped)
-      driver_feedback: free-text driver outcome description (empty = not provided)
+      labels            : list of label strings from VALID_LABELS (any invalid labels silently dropped)
+      driver_feedback   : free-text driver outcome description (empty = not provided)
+      validation_status : SetupRecommendationResult.status string.
+                          When provided AND not in APPROVED_STATUSES, the entry is written
+                          to a separate diagnostic bucket (key prefix "_rejected_") so it
+                          never appears as the current recommendation.  Approved statuses
+                          write to the primary bucket as before.
     """
     if not config_id:
         return
@@ -71,15 +87,24 @@ def save_entry(
     entry["ts"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     # Attach labels (filter to valid vocabulary)
     if labels:
-        valid = [l for l in labels if l in VALID_LABELS]
+        valid = [lbl for lbl in labels if lbl in VALID_LABELS]
         if valid:
             entry["labels"] = valid
     # Attach driver feedback
     if driver_feedback:
         entry["driver_feedback"] = driver_feedback.strip()
+    # Attach validation status for audit trail
+    if validation_status:
+        entry["validation_status"] = validation_status
+
+    # Route non-approved statuses to the rejected diagnostic bucket
+    _use_config_id = config_id
+    if validation_status and validation_status not in APPROVED_STATUSES:
+        _use_config_id = f"{_REJECTED_KEY_PREFIX}{config_id}"
+
     with _lock:
         data = _load_all()
-        cfg = data.setdefault(config_id, {"car": car, "track": track, "entries": []})
+        cfg = data.setdefault(_use_config_id, {"car": car, "track": track, "entries": []})
         cfg["car"] = car
         cfg["track"] = track
         cfg.setdefault("entries", []).append(entry)

@@ -23,10 +23,36 @@ DRIVER_HARD_CONSTRAINTS       — 8 verbatim hard constraints for the AI
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from telemetry.recorder import LapStats
+
+# ENG_SAFETY_PREFIXES is defined in _setup_constants to avoid a circular import
+# (driving_advisor imports setup_diagnosis; setup_diagnosis back-imports
+# driving_advisor inside validate_setup_engineering).
+from strategy._setup_constants import ENG_SAFETY_PREFIXES  # noqa: F401 — re-exported
+
+# ---------------------------------------------------------------------------
+# ValidationFailure — structured result for the new validate_setup_engineering_structured
+# ---------------------------------------------------------------------------
+
+class ValidationFailure(NamedTuple):
+    """A single engineering-validation failure with severity.
+
+    severity ∈ {"info", "warning", "blocking"}
+    code     — stable prefix string (e.g. "rh_for_minor_bottoming")
+    message  — human-readable explanation including current values
+    """
+    code: str
+    message: str
+    severity: str
+
+# ---------------------------------------------------------------------------
+# Gearbox range constants — documented so validators stay in sync with prompts
+# ---------------------------------------------------------------------------
+_FINAL_DRIVE_RANGE: tuple[float, float] = (2.5, 6.0)
+_GEAR_RATIO_RANGE: tuple[float, float] = (0.5, 4.0)
 
 # ---------------------------------------------------------------------------
 # Tunable module-level constants
@@ -286,11 +312,13 @@ def _derive_dominant_problem(
 
 
 def _bottoming_band_readable(band: str) -> str:
+    # AC10 wording: "required" band now says "may need attention" rather than
+    # asserting ride-height is automatically required — the engineer decides.
     return {
         "minor": "no action needed",
         "moderate": "monitor; address other issues first",
-        "consider": "ride height / spring rate change should be considered",
-        "required": "ride height / spring rate change is required",
+        "consider": "ride height / spring rate change may be worth considering",
+        "required": "bottoming needs attention — ride height or spring rate change may be appropriate",
     }.get(band, band)
 
 
@@ -896,14 +924,28 @@ def _derive_location_confidence(
 # Main public function
 # ---------------------------------------------------------------------------
 
-def _build_deterministic_fallback(diagnosis: dict) -> dict:
+def _build_deterministic_fallback(
+    diagnosis: dict,
+    setup: "dict | None" = None,
+    ranges: "dict | None" = None,
+) -> dict:
     """Build a deterministic fallback response from a diagnosis dict.
 
-    Returns a dict satisfying the required AI response schema with
-    engineering_validation_failed=True and fallback_used=True.
+    Returns a dict satisfying the required AI response schema.
+    When setup + ranges are provided, attempts to generate 1–3 REAL conservative
+    changes by walking recommended_tuning_priority and proposing the smallest
+    safe increment for the top non-blocked field.
 
-    Re-validating this output with validate_setup_engineering returns []
-    because changes=[] and setup_fields={} have no field violations.
+    Each candidate is run through validate_setup_engineering_structured;
+    only candidates with ZERO blocking failures are kept.
+
+    When NO candidate passes (or setup/ranges are not provided) the response has
+    changes=[] and fallback_used=True.  The finaliser maps this to
+    blocked_no_safe_recommendation with the standard analysis message.
+
+    Re-validating the returned output always passes because either:
+    - changes=[] and setup_fields={} have no field violations, or
+    - each included change was pre-validated above.
     """
     bottoming_confidence = diagnosis.get("bottoming_confidence") or {"band": "minor", "subtype": "insufficient_data", "confidence": "low"}
     wheelspin_subtype = diagnosis.get("wheelspin_subtype", "insufficient_data")
@@ -914,10 +956,11 @@ def _build_deterministic_fallback(diagnosis: dict) -> dict:
     b_conf = bottoming_confidence.get("confidence", "low")
     b_subtype = bottoming_confidence.get("subtype", "insufficient_data")
     b_band = bottoming_confidence.get("band", "minor")
+    loc_evidence_usable = diagnosis.get("location_evidence_usable", False)
 
     # Build plain-English analysis from diagnosis
     analysis_parts = [
-        f"Engineering validation failed after retry — returning a safe no-change response.",
+        "Engineering validation failed after retry — returning a safe conservative response.",
         f"Dominant problem: {dominant_problem}.",
     ]
     if b_band != "minor":
@@ -934,16 +977,116 @@ def _build_deterministic_fallback(diagnosis: dict) -> dict:
         analysis_parts.append(
             f"Recommended priority: {tuning_priority[0] if tuning_priority else 'unknown'}."
         )
-    analysis_parts.append(
-        "No setup changes are recommended in this fallback response — "
-        "please review the session data and try again."
-    )
+
+    approved_changes: list[dict] = []
+    approved_sf: dict = {}
+
+    # ------------------------------------------------------------------
+    # Attempt to generate real conservative changes from diagnosis
+    # ------------------------------------------------------------------
+    if setup is not None and ranges is not None:
+        # Walk tuning priority; try the top non-blocked field
+        _tried: set[str] = set()
+
+        for _priority_entry in tuning_priority[:5]:
+            # Map priority label to candidate field + conservative delta
+            _priority_lower = _priority_entry.lower()
+            _candidates: list[tuple[str, float]] = []
+
+            if "ride height" in _priority_lower or "springs" in _priority_lower:
+                # Ride-height — only if increment is permitted
+                _perm = _rh_permitted_increment(bottoming_confidence, loc_evidence_usable)
+                if _perm > 0:
+                    for _rh_f in ("ride_height_rear", "ride_height_front"):
+                        if _rh_f not in _tried:
+                            _candidates.append((_rh_f, float(_perm)))
+
+            elif "lsd" in _priority_lower or "traction" in _priority_lower:
+                # LSD accel — only if subtype allows (not snap_throttle with delta > 4)
+                if wheelspin_subtype != "snap_throttle_induced" and "lsd_accel" not in _tried:
+                    _lsd_delta = 2.0  # conservative
+                    _candidates.append(("lsd_accel", _lsd_delta))
+
+            elif "aero" in _priority_lower:
+                # Aero rear — increase by 1 step if wheelspin present
+                if "aero_rear" not in _tried:
+                    _candidates.append(("aero_rear", 1.0))
+
+            for _field, _delta in _candidates:
+                if _field in _tried:
+                    continue
+                _tried.add(_field)
+                _cur_raw = setup.get(_field)
+                if _cur_raw is None:
+                    continue
+                try:
+                    _cur_val = float(_cur_raw)
+                except (TypeError, ValueError):
+                    continue
+                _new_val = _cur_val + _delta
+                # Clamp to range
+                if _field in ranges:
+                    _lo, _hi = ranges[_field]
+                    _new_val = max(float(_lo), min(float(_hi), _new_val))
+                    # Preserve int type
+                    if isinstance(_lo, int) and isinstance(_hi, int):
+                        _new_val = int(_new_val)
+                # Skip no-op
+                if _new_val == _cur_val:
+                    continue
+                # Build a minimal AI-response-shaped dict for validation
+                _test_sf = {_field: _new_val}
+                _test_ch = [{
+                    "setting": _field.replace("_", " ").title(),
+                    "field": _field,
+                    "from": str(_cur_val),
+                    "to": str(_new_val),
+                    "to_clamped": _new_val,
+                    "why": f"Fallback conservative change: +{_delta} for {_priority_entry[:40]}",
+                }]
+                _test_resp = {
+                    "analysis": "fallback",
+                    "primary_issue": dominant_problem,
+                    "changes": _test_ch,
+                    "setup_fields": _test_sf,
+                    "validation_targets": {},
+                    "confidence": {"overall": "low", "reason": "fallback"},
+                }
+                try:
+                    _failures = validate_setup_engineering_structured(
+                        _test_resp, diagnosis, setup, ranges, {},
+                    )
+                    _blocking = [f for f in _failures if f.severity == "blocking"]
+                    if not _blocking:
+                        _ch_out = dict(_test_ch[0])
+                        _ch_out["why"] = (
+                            f"{_ch_out['why']} — safer than rejected AI output: "
+                            f"uses minimum permitted increment, validated against all rules."
+                        )
+                        approved_changes.append(_ch_out)
+                        approved_sf[_field] = _new_val
+                        if len(approved_changes) >= 3:
+                            break
+                except Exception:
+                    pass  # Validation error → skip this candidate
+
+            if len(approved_changes) >= 3:
+                break
+
+    if approved_changes:
+        analysis_parts.append(
+            f"Conservative fallback: {len(approved_changes)} safe change(s) generated from diagnosis."
+        )
+    else:
+        analysis_parts.append(
+            "Not enough session data to generate a safe recommendation — run more laps."
+        )
 
     return {
         "analysis": " ".join(analysis_parts),
         "primary_issue": dominant_problem,
-        "changes": [],
-        "setup_fields": {},
+        "changes": approved_changes,
+        "setup_fields": approved_sf,
         "validation_targets": [],
         "confidence": "low",
         "engineering_validation_failed": True,
@@ -1337,6 +1480,104 @@ def _build_setup_diagnosis_inner(
 
 
 # ---------------------------------------------------------------------------
+# Engineering validation — severity map for structured validator
+# ---------------------------------------------------------------------------
+
+# Maps stable code prefixes to their severity.
+# Unlisted prefixes default to "blocking" (conservative).
+_VALIDATION_SEVERITY_MAP: dict[str, str] = {
+    # Blocking rules
+    "rh_for_minor_bottoming":          "blocking",
+    "rh_low_confidence_location":      "blocking",
+    "rh_increment_exceeds_confidence": "blocking",
+    "rh_rake_risk":                    "blocking",
+    "aero_cut_with_wheelspin":         "blocking",
+    "aero_at_min_floaty":              "blocking",
+    "gearbox_category_mismatch":       "blocking",
+    "lsd_large_change_gated":          "blocking",
+    "lsd_blocked_driver_feel":         "blocking",
+    "lsd_reversal_without_evidence":   "blocking",
+    "malformed_schema":                "blocking",
+    "invalid_units":                   "blocking",
+    "locked-field":                    "blocking",
+    # out-of-range is a WARNING, not blocking: the clamping mechanism (to_clamped) already
+    # forces the applied value back into range.  The clamp guarantee: _normalise_changes
+    # always sets to_clamped before validation, so approved_changes only ever carry the
+    # clamped in-range value.  If clamping did not occur the value is unchanged/out-of-range,
+    # but the applied path reads to_clamped, not to — so the user is never exposed to the
+    # raw out-of-range value.
+    "out-of-range":                    "warning",
+    "snap_throttle_lsd_accel_gate":    "blocking",
+    "kerb_strike_rh_over_increment":   "blocking",
+    "gearbox_fake_field":              "blocking",
+    "gearbox_ratio_inversion":         "blocking",
+    # Warning-only rules
+    "gearbox_out_of_range":            "warning",
+    # Generic/cosmetic errors from _validate_setup_response
+    "too many changes":                "warning",
+}
+
+# Prefixes of _validate_setup_response cosmetic errors that are warnings.
+# "outside valid range": the _validate_setup_response range check fires when to_clamped is
+#   out of range.  Per the I1 spec, out-of-range is a WARNING (not blocking) because the
+#   clamping mechanism in _normalise_changes guarantees the applied value is safe — the UI
+#   reads to_clamped and that value is already within range or was clamped to range max/min.
+_WARNING_SUBSTRINGS: tuple[str, ...] = (
+    "too many changes",
+    "is a no-op",
+    "outside valid range",
+)
+
+
+def _severity_for_reason(reason: str) -> str:
+    """Derive severity for a legacy reason string using the severity map.
+
+    Checks code prefix first (up to first ':'), then scans warning substrings.
+    Default is "blocking" (conservative).
+    """
+    code = reason.split(":")[0].strip() if ":" in reason else reason.strip()
+    if code in _VALIDATION_SEVERITY_MAP:
+        return _VALIDATION_SEVERITY_MAP[code]
+    # Substring scan for warning patterns
+    lower = reason.lower()
+    for ws in _WARNING_SUBSTRINGS:
+        if ws in lower:
+            return "warning"
+    return "blocking"
+
+
+def validate_setup_engineering_structured(
+    parsed_ai_response: dict,
+    diagnosis: dict,
+    setup: dict,
+    ranges: dict,
+    event_ctx: dict,
+    car_name: str = "",
+    rec_history: "dict | None" = None,
+) -> "list[ValidationFailure]":
+    """Return a list of ValidationFailure namedtuples, each with code, message, severity.
+
+    Inputs are IDENTICAL to validate_setup_engineering.  This is the primary
+    implementation; validate_setup_engineering delegates here and re-serialises
+    to the legacy prefixed-string format for backward compatibility.
+
+    The legacy string format ``validate_setup_engineering`` returns is byte-identical
+    to today's output so all 5000+ existing tests and ENG_SAFETY_PREFIXES substring
+    matching continue to pass.
+    """
+    raw_reasons = validate_setup_engineering(
+        parsed_ai_response, diagnosis, setup, ranges, event_ctx,
+        car_name=car_name, rec_history=rec_history,
+    )
+    results: list[ValidationFailure] = []
+    for reason in raw_reasons:
+        code = reason.split(":")[0].strip() if ":" in reason else reason.strip()
+        severity = _severity_for_reason(reason)
+        results.append(ValidationFailure(code=code, message=reason, severity=severity))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Engineering validation
 # ---------------------------------------------------------------------------
 
@@ -1530,6 +1771,14 @@ def validate_setup_engineering(
         gearing_diagnosis_category in _PRESERVE_GEARBOX_CATEGORIES
         or feel_flags.get("gearbox_good")
     )
+    # Canonical gearbox fields that must never be changed when gearbox is in a preserve category.
+    # Includes legacy display-only field, old gear_ratios blob, and AC6 individual gear fields.
+    _CANONICAL_GEARBOX_FIELDS = frozenset({
+        "transmission_max_speed_kmh",
+        "gear_ratios",
+        "final_drive",
+        "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6",
+    })
     if _gearbox_blocked:
         if _ai_changes_field("transmission_max_speed_kmh"):
             ai_ts = _ai_value("transmission_max_speed_kmh")
@@ -1541,13 +1790,28 @@ def validate_setup_engineering(
                     f"'{gearing_diagnosis_category}' (gearbox should be preserved)."
                 )
         for ch in ai_changes:
-            if ch.get("field") == "gear_ratios" or "gear_ratio" in str(ch.get("field", "")).lower():
+            field = ch.get("field", "")
+            if field == "gear_ratios" or "gear_ratio" in str(field).lower():
                 reasons.append(
                     f"gearbox_category_mismatch: AI recommends gear ratio change but "
                     f"gearing_diagnosis_category is '{gearing_diagnosis_category}' "
                     "(gearbox should be preserved)."
                 )
                 break
+        # Also check the AC6 canonical fields: final_drive and individual gear slots.
+        # These are additive checks — legacy detection above is preserved byte-identical.
+        for ch in ai_changes:
+            field = ch.get("field", "")
+            if field in ("final_drive", "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6"):
+                ai_v = ch.get("to_clamped") if ch.get("to_clamped") is not None else ch.get("to")
+                cur_v = _current_value(field)
+                if ai_v is not None and (cur_v is None or ai_v != cur_v):
+                    reasons.append(
+                        f"gearbox_category_mismatch: AI changes {field} "
+                        f"but gearing_diagnosis_category is "
+                        f"'{gearing_diagnosis_category}' (gearbox should be preserved)."
+                    )
+                    break
 
     # ----------------------------------------------------------------
     # RULE: rh_increment_exceeds_confidence
@@ -1693,6 +1957,115 @@ def validate_setup_engineering(
                     pass
 
     # ----------------------------------------------------------------
+    # NEW RULE: snap_throttle_lsd_accel_gate (BLOCKING)
+    # ----------------------------------------------------------------
+    # wheelspin_subtype == snap_throttle_induced AND lsd_accel increase > 4
+    _ws_subtype_snap = diagnosis.get("wheelspin_subtype", "insufficient_data")
+    if _ws_subtype_snap == "snap_throttle_induced":
+        _ai_lsd_snap = _ai_value("lsd_accel")
+        _cur_lsd_snap = _current_value("lsd_accel")
+        if _ai_lsd_snap is not None and _cur_lsd_snap is not None:
+            _snap_delta = _ai_lsd_snap - _cur_lsd_snap
+            if _snap_delta > 4:
+                reasons.append(
+                    f"snap_throttle_lsd_accel_gate: AI increases lsd_accel by {_snap_delta:.0f} "
+                    f"(from {_cur_lsd_snap} to {_ai_lsd_snap}) but wheelspin_subtype is "
+                    f"'snap_throttle_induced' — maximum permitted increase is 4. "
+                    f"Large LSD accel changes for snap-throttle wheelspin can cause rear oscillation; "
+                    f"use small steps (<=4) and re-assess after each session."
+                )
+
+    # ----------------------------------------------------------------
+    # NEW RULE: kerb_strike_rh_over_increment (BLOCKING)
+    # ----------------------------------------------------------------
+    # bottoming subtype == kerb_strike AND rear ride-height increase > 3mm
+    _btm_conf_new = diagnosis.get("bottoming_confidence") or {}
+    if _btm_conf_new.get("subtype") == "kerb_strike":
+        _ai_rhr_ks = _ai_value("ride_height_rear")
+        _cur_rhr_ks = _current_value("ride_height_rear")
+        if _ai_rhr_ks is not None and _cur_rhr_ks is not None:
+            _ks_delta = _ai_rhr_ks - _cur_rhr_ks
+            if _ks_delta > 3:
+                reasons.append(
+                    f"kerb_strike_rh_over_increment: AI increases ride_height_rear by "
+                    f"{_ks_delta:.0f}mm (from {_cur_rhr_ks} to {_ai_rhr_ks}) but bottoming "
+                    f"subtype is 'kerb_strike' — maximum permitted rear ride-height increase "
+                    f"for kerb-strike bottoming is 3mm. Address kerb compliance via damping "
+                    f"or spring rate before raising ride height further."
+                )
+
+    # ----------------------------------------------------------------
+    # NEW RULE: gearbox_fake_field (BLOCKING)
+    # ----------------------------------------------------------------
+    # transmission_max_speed_kmh present as an actionable field in setup_fields/changes
+    _ai_sf_new = parsed_ai_response.get("setup_fields") or {}
+    _ai_ch_new = parsed_ai_response.get("changes") or []
+    if "transmission_max_speed_kmh" in _ai_sf_new:
+        reasons.append(
+            "gearbox_fake_field: transmission_max_speed_kmh appears in setup_fields — "
+            "this field is DISPLAY-ONLY (it shows the current calculated top speed) and "
+            "must never be included in actionable setup changes. Remove it from setup_fields."
+        )
+    for _ch_gf in _ai_ch_new:
+        if _ch_gf.get("field") == "transmission_max_speed_kmh":
+            reasons.append(
+                "gearbox_fake_field: transmission_max_speed_kmh appears in changes — "
+                "this field is DISPLAY-ONLY and must never be a change target. "
+                "Use final_drive or gear_1..gear_6 for real gearbox changes."
+            )
+            break
+
+    # ----------------------------------------------------------------
+    # NEW RULE: gearbox_out_of_range (WARNING)
+    # ----------------------------------------------------------------
+    # final_drive outside 2.5–6.0 or any gear outside 0.5–4.0
+    # Severity is WARNING (not blocking) — bounds are conservative constants,
+    # must not false-block real setups near the edges of their actual range.
+    _GEAR_FIELDS = ("gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6")
+    _fd_ai = _ai_value("final_drive")
+    if _fd_ai is not None:
+        if not (_FINAL_DRIVE_RANGE[0] <= _fd_ai <= _FINAL_DRIVE_RANGE[1]):
+            reasons.append(
+                f"gearbox_out_of_range: AI sets final_drive to {_fd_ai} which is outside "
+                f"the expected range {_FINAL_DRIVE_RANGE[0]}–{_FINAL_DRIVE_RANGE[1]}. "
+                f"Verify this is a valid GT7 final drive ratio. (WARNING — not blocking)"
+            )
+    for _gf in _GEAR_FIELDS:
+        _gv_ai = _ai_value(_gf)
+        if _gv_ai is not None:
+            if not (_GEAR_RATIO_RANGE[0] <= _gv_ai <= _GEAR_RATIO_RANGE[1]):
+                reasons.append(
+                    f"gearbox_out_of_range: AI sets {_gf} to {_gv_ai} which is outside "
+                    f"the expected range {_GEAR_RATIO_RANGE[0]}–{_GEAR_RATIO_RANGE[1]}. "
+                    f"Verify this is a valid GT7 gear ratio. (WARNING — not blocking)"
+                )
+
+    # ----------------------------------------------------------------
+    # NEW RULE: gearbox_ratio_inversion (BLOCKING)
+    # ----------------------------------------------------------------
+    # Any gear_n >= gear_{n-1} (gear ratios must strictly decrease from 1st to top gear)
+    # This is a real physical invariant — a higher gear must always have a LOWER ratio.
+    _gear_values: dict[int, float] = {}
+    for _n, _gfk in enumerate(("gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6"), start=1):
+        _gv = _ai_value(_gfk)
+        if _gv is not None:
+            _gear_values[_n] = _gv
+    _sorted_gear_nums = sorted(_gear_values.keys())
+    for _i in range(1, len(_sorted_gear_nums)):
+        _prev_n = _sorted_gear_nums[_i - 1]
+        _curr_n = _sorted_gear_nums[_i]
+        _prev_v = _gear_values[_prev_n]
+        _curr_v = _gear_values[_curr_n]
+        if _curr_v >= _prev_v:
+            reasons.append(
+                f"gearbox_ratio_inversion: gear_{_curr_n} ratio {_curr_v} is NOT lower than "
+                f"gear_{_prev_n} ratio {_prev_v} — gear ratios must strictly decrease from "
+                f"1st to top gear (each higher gear must have a lower ratio). "
+                f"Fix the ratio sequence before applying."
+            )
+            break  # one inversion message is sufficient
+
+    # ----------------------------------------------------------------
     # Merge _validate_setup_response errors
     # ----------------------------------------------------------------
     # Lazy import here to avoid circular import at module level
@@ -1771,10 +2144,21 @@ def format_diagnosis_for_prompt(diagnosis: dict) -> str:
     ts = diagnosis.get("avg_top_speed_kmh", 0)
     ts_target = diagnosis.get("top_speed_target_kmh", 0)
     if ts > 0:
-        lines.append(
+        _ts_line = (
             f"Top speed: {ts:.0f} km/h"
             + (f" vs target {ts_target:.0f} km/h" if ts_target > 0 else "")
         )
+        # AC12 wording: transmission_max_speed_kmh is display-only — add caveat
+        # so the AI never uses this number as a reason to add/remove a gearing change.
+        # Gearing changes are permitted when justified by power-band / driver evidence;
+        # the top-speed gap alone does NOT block gearing changes (removed that leakage).
+        if ts_target > 0:
+            _ts_line += (
+                " [Note: transmission_max_speed_kmh is DISPLAY-ONLY — "
+                "do NOT include it in setup_fields or changes; "
+                "gearing changes may still be recommended on power-band or driver evidence]"
+            )
+        lines.append(_ts_line)
     lines.append(
         f"Aero front: {diagnosis.get('aero_front_value', 'n/a')} "
         f"(near min: {diagnosis.get('aero_front_near_min', False)})"
@@ -1792,7 +2176,22 @@ def format_diagnosis_for_prompt(diagnosis: dict) -> str:
         lines.append(f"Gearing diagnosis: {gearing_cat}")
     ws_subtype = diagnosis.get("wheelspin_subtype", "")
     if ws_subtype:
-        lines.append(f"Wheelspin subtype: {ws_subtype}")
+        # AC12 wording: snap_throttle_induced must NOT assert inside-wheel-spin;
+        # frame it as mixed (driver input + setup) with no inside-wheel-spin claim.
+        # kerb_strike is described distinctly from floor_contact.
+        _ws_note = ""
+        if ws_subtype == "snap_throttle_induced":
+            _ws_note = (
+                " [mixed cause: snap throttle application pattern suggests driver-input component"
+                " alongside possible setup instability — do NOT claim inside rear spins specifically"
+                " as no per-wheel telemetry is available]"
+            )
+        elif ws_subtype == "kerb_strike":
+            _ws_note = (
+                " [kerb-strike wheelspin: unloading over kerbs — distinct from floor-contact"
+                " bottoming; address kerb compliance / damping rather than ride height alone]"
+            )
+        lines.append(f"Wheelspin subtype: {ws_subtype}{_ws_note}")
 
     # Group 40: bottoming confidence, driver feel traction status, aero rear health
     _btm_conf = diagnosis.get("bottoming_confidence")

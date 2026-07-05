@@ -8,23 +8,70 @@ from __future__ import annotations
 
 import json as _json
 import re as _re
+from dataclasses import dataclass
 from statistics import mean
 from typing import Optional, TYPE_CHECKING
 
 from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
+from strategy._setup_constants import ENG_SAFETY_PREFIXES, APPROVED_STATUSES
 from strategy.setup_ranges import resolve_ranges
 from strategy.setup_diagnosis import (
     PERSONAL_DRIVER_TUNING_MODEL,
     DRIVER_HARD_CONSTRAINTS,
     build_setup_diagnosis,
     validate_setup_engineering,
+    validate_setup_engineering_structured,
     format_diagnosis_for_prompt,
     _build_deterministic_fallback,
     _build_setup_diagnosis_conservative,
 )
 from ui.gt7_data import build_track_context
+
+# ---------------------------------------------------------------------------
+# SetupRecommendationResult — the single lifecycle container for a setup rec
+# ---------------------------------------------------------------------------
+
+# The 8 valid status strings:
+#   generated               — AI responded but not yet validated
+#   validation_failed       — first-pass validation failed (no retry attempted)
+#   retry_requested         — retry has been sent
+#   retry_failed            — retry still has blocking failures
+#   approved                — all rules pass, no warnings
+#   approved_with_warnings  — rules pass but non-blocking warnings present
+#   fallback_generated      — deterministic fallback used (has changes)
+#   blocked_no_safe_recommendation — fallback produced zero changes
+
+@dataclass(frozen=True)
+class SetupRecommendationResult:
+    """Immutable lifecycle container for a single setup recommendation.
+
+    Frontend contract
+    -----------------
+    - status in APPROVED_STATUSES         → surface approved_changes to the driver
+    - status not in APPROVED_STATUSES     → show error banner; rejected_changes for debug
+    - approved_changes / approved_fields  → these are safe to apply
+    - rejected_changes                    → collapsed debug section only
+    - engineering_errors                  → list of blocking failure messages
+    - validation_warnings                 → list of warning messages (non-blocking)
+    - raw_json                            → the full AI response as a JSON string
+    - fallback_used                       → True when deterministic fallback was triggered
+    """
+    status: str
+    approved_changes: list
+    approved_fields: dict
+    rejected_changes: list
+    analysis: str
+    primary_issue: str
+    engineering_errors: list
+    validation_warnings: list
+    fallback_used: bool
+    raw_json: str
+
+# Fields that are DISPLAY-ONLY and must never appear in approved_changes / approved_fields.
+# Keep in _CANONICAL_SETUP_PARAMS so they are still recognised/diagnostic.
+_DISPLAY_ONLY_FIELDS: frozenset[str] = frozenset({"transmission_max_speed_kmh"})
 
 # Setup-tuning categories that can be locked by event rules. Must match the
 # selectable checkboxes in DashboardWindow._TUNING_CATEGORIES — "tyres" is NOT a
@@ -126,6 +173,10 @@ _CANONICAL_SETUP_PARAMS: frozenset[str] = frozenset({
     "brake_bias",
     "ballast_kg", "ballast_position",
     "power_restrictor",
+    # Gearbox real fields — actionable (except transmission_max_speed_kmh which is display-only)
+    "final_drive",
+    "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6",
+    # Display-only (stays in canonical so it's recognised; stripped by _DISPLAY_ONLY_FIELDS)
     "transmission_max_speed_kmh",
 })
 
@@ -178,6 +229,47 @@ def _resolve_field_key(field: str, setting: str) -> str | None:
     return None
 
 
+def _expand_gear_ratios(changes: list[dict], setup_fields: dict[str, object]) -> tuple[list[dict], dict[str, object]]:
+    """Expand a ``gear_ratios: [v1..v6]`` change/field into individual gear_1..gear_6 keys.
+
+    When the AI returns a single change with field="gear_ratios" and a list value,
+    or a setup_fields key "gear_ratios" with a list, this expands them into the
+    individual canonical gear_1..gear_6 keys so the rest of the pipeline (validation,
+    clamping, apply-button) works uniformly.
+
+    Returns (expanded_changes, expanded_setup_fields).  If no gear_ratios key is
+    present the inputs are returned unchanged.
+    """
+    _GEAR_KEYS = ("gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6")
+
+    # Expand setup_fields
+    sf_out: dict[str, object] = {}
+    for k, v in setup_fields.items():
+        if k == "gear_ratios" and isinstance(v, list):
+            for _i, _ratio in enumerate(v[:6]):
+                sf_out[_GEAR_KEYS[_i]] = _ratio
+        else:
+            sf_out[k] = v
+
+    # Expand changes
+    ch_out: list[dict] = []
+    for ch in changes:
+        raw_field = str(ch.get("field", "")).strip()
+        if raw_field == "gear_ratios":
+            ratios = ch.get("to")
+            if isinstance(ratios, list):
+                for _i, _ratio in enumerate(ratios[:6]):
+                    _new_ch = dict(ch)
+                    _new_ch["field"] = _GEAR_KEYS[_i]
+                    _new_ch["setting"] = f"Gear {_i + 1} Ratio"
+                    _new_ch["to"] = str(_ratio)
+                    ch_out.append(_new_ch)
+                continue  # skip original gear_ratios entry
+        ch_out.append(ch)
+
+    return ch_out, sf_out
+
+
 def _normalise_changes(
     changes: list[dict],
     setup_fields: dict[str, object],
@@ -206,7 +298,15 @@ def _normalise_changes(
     - ``ch["to"]``         — raw AI recommended value (string or number, unchanged).
     - ``ch["to_clamped"]`` — numeric value clamped to per-car range, or the raw
                              ``to`` value if the field is unresolvable or non-numeric.
+
+    Gear-ratio expansion
+    --------------------
+    If any change has field="gear_ratios" with a list "to" value, it is expanded
+    into individual gear_1..gear_6 changes.  Likewise for setup_fields.
     """
+    # Expand gear_ratios before processing
+    changes, setup_fields = _expand_gear_ratios(changes, setup_fields)
+
     ranges = resolve_ranges(car_name)
     result: list[dict] = []
     for ch in changes:
@@ -281,7 +381,11 @@ def _derive_locked_fields(allowed_tuning: "list[str] | None") -> "set[str]":
         "differential": ["lsd_initial", "lsd_accel", "lsd_decel",
                          "lsd_front_initial", "lsd_front_accel", "lsd_front_decel"],
         "brake_balance": ["brake_bias"],
-        "transmission": ["transmission_max_speed_kmh"],
+        "transmission": [
+            "final_drive",
+            "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6",
+            "transmission_max_speed_kmh",  # display-only; included so lock check covers it
+        ],
         "power": ["power_restrictor"],
         "ballast": ["ballast_kg", "ballast_position"],
         # "steering": []   — no canonical setup params mapped yet
@@ -299,6 +403,209 @@ def _derive_locked_fields(allowed_tuning: "list[str] | None") -> "set[str]":
             if f not in allowed_fields:
                 locked.add(f)
     return locked
+
+
+# ---------------------------------------------------------------------------
+# _finalise_recommendation — SINGLE funnel for all AI paths
+# ---------------------------------------------------------------------------
+
+def _finalise_recommendation(
+    raw_data: dict,
+    structured_failures: list,
+    fallback_used: bool,
+    retried: bool,
+    failing_changes: "list | None" = None,
+) -> "SetupRecommendationResult":
+    """Compute the final lifecycle status and approved changes for a recommendation.
+
+    Parameters
+    ----------
+    raw_data:
+        The parsed (and normalised) AI response dict.
+    structured_failures:
+        list[ValidationFailure] from validate_setup_engineering_structured.
+    fallback_used:
+        True when the deterministic fallback was used instead of the AI output.
+    retried:
+        True when this is already a retry attempt.
+    failing_changes:
+        Optional explicit list of the AI's failing changes.  When the retry path
+        triggers a fallback, ``raw_data["changes"]`` is overwritten by the
+        fallback's empty list before this function runs.  Pass the original
+        failing changes here so that ``rejected_changes`` is populated correctly.
+
+    Returns
+    -------
+    SetupRecommendationResult with all fields populated.
+
+    Logic
+    -----
+    1. Split failures into blocking vs warning/info.
+    2. If any blocking failure:
+         status = retry_failed (if retried) else validation_failed
+         approved_changes = []
+         approved_fields = {}
+         rejected_changes = raw_data's changes (collapsed debug)
+         engineering_errors = blocking messages
+    3. Elif fallback_used AND changes are empty:
+         status = blocked_no_safe_recommendation
+    4. Elif fallback_used:
+         status = fallback_generated
+    5. Elif warnings present:
+         status = approved_with_warnings
+    6. Else:
+         status = approved
+
+    Always strips _DISPLAY_ONLY_FIELDS from approved_changes/approved_fields.
+    """
+    all_blocking = [f for f in structured_failures if f.severity == "blocking"]
+    warnings = [f for f in structured_failures if f.severity == "warning"]
+
+    raw_changes = raw_data.get("changes") or []
+    raw_sf = raw_data.get("setup_fields") or {}
+    analysis = raw_data.get("analysis", "")
+    primary_issue = raw_data.get("primary_issue", "")
+
+    raw_json = _json.dumps(raw_data, ensure_ascii=False)
+
+    # Classify blocking failures into safety-rule vs structural/schema categories.
+    # BOTH categories force validation_failed + zeroed changes — the distinction only
+    # affects message routing (engineering_errors vs validation_warnings for banner text).
+    # EXCEPTION: out-of-range is now a WARNING (not blocking) because the clamping
+    # mechanism in _normalise_changes guarantees the applied value is always in range.
+    safety_blocking = [
+        f for f in all_blocking
+        if any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
+    ]
+    structural_blocking = [f for f in all_blocking if f not in safety_blocking]
+
+    if all_blocking:
+        # Any blocking failure — safety-rule OR structural (malformed_schema, invalid_units,
+        # locked-field, etc.) — zeroes approved_changes and forces a failed status.
+        # This ensures locked/malformed/invalid-unit changes are never applyable.
+        status = "retry_failed" if retried else "validation_failed"
+        approved_changes: list = []
+        approved_fields: dict = {}
+        # Use the explicitly supplied failing changes when provided — the retry→fallback
+        # path overwrites raw_data["changes"] with [] before _finalise_recommendation runs,
+        # so raw_changes would be empty without this.
+        rejected_changes: list = (
+            failing_changes if failing_changes is not None else list(raw_changes)
+        )
+        # Safety-rule failures go to engineering_errors (shown as "rejected by safety rule")
+        # Structural failures go to validation_warnings (shown as "structural/schema error")
+        engineering_errors = [f.message for f in safety_blocking]
+        validation_warnings = [f.message for f in structural_blocking + warnings]
+
+        if not analysis:
+            analysis = (
+                "Engineering validation failed — the AI's recommended changes "
+                "were rejected. No changes will be applied."
+            )
+    else:
+        # No blocking failures: approved_changes survive (out-of-range warnings are visible
+        # but the applied value is always the clamped safe value per _normalise_changes).
+        engineering_errors = []
+        validation_warnings = [f.message for f in warnings]
+        rejected_changes = []
+
+        # Strip display-only fields from changes and setup_fields
+        approved_changes = [
+            ch for ch in raw_changes
+            if ch.get("field") not in _DISPLAY_ONLY_FIELDS
+        ]
+        approved_fields = {
+            k: v for k, v in raw_sf.items()
+            if k not in _DISPLAY_ONLY_FIELDS
+        }
+
+        if fallback_used and not approved_changes:
+            status = "blocked_no_safe_recommendation"
+            analysis = (
+                analysis or
+                "Not enough session data to generate a safe recommendation — run more laps."
+            )
+        elif fallback_used:
+            status = "fallback_generated"
+        elif validation_warnings:
+            status = "approved_with_warnings"
+        else:
+            status = "approved"
+
+    return SetupRecommendationResult(
+        status=status,
+        approved_changes=approved_changes,
+        approved_fields=approved_fields,
+        rejected_changes=rejected_changes,
+        analysis=analysis,
+        primary_issue=primary_issue,
+        engineering_errors=engineering_errors,
+        validation_warnings=validation_warnings,
+        fallback_used=fallback_used,
+        raw_json=raw_json,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _build_retry_prompt — strict retry contract
+# ---------------------------------------------------------------------------
+
+def _build_retry_prompt(
+    original_prompt: str,
+    blocking_failures: list,
+    current_setup: dict,
+    ranges: dict,
+) -> str:
+    """Build a retry prompt that explicitly lists each blocking failure.
+
+    Forbids repeating any rejected change, demands fresh valid JSON,
+    and includes the max allowed delta for each affected field.
+
+    Parameters
+    ----------
+    original_prompt:
+        The original prompt sent to the AI.
+    blocking_failures:
+        list[ValidationFailure] (only blocking severity items).
+    current_setup:
+        The current car setup dict for context.
+    ranges:
+        Resolved per-car ranges dict (for max delta info).
+    """
+    if not blocking_failures:
+        return original_prompt
+
+    lines = [
+        "",
+        "",
+        "## Engineering Validation Failure — Retry Required",
+        "Your previous response was REJECTED. The following rules were violated:",
+    ]
+
+    rejected_fields: set[str] = set()
+    for vf in blocking_failures:
+        lines.append(f"- [{vf.code}] {vf.message}")
+        # Extract the field from the code if possible
+        # e.g. "rh_for_minor_bottoming" maps to ride_height_*
+        # We capture any canonical field name mentioned in the message
+        for _canon_key in _CANONICAL_SETUP_PARAMS:
+            if _canon_key in vf.message:
+                rejected_fields.add(_canon_key)
+
+    lines.append("")
+    lines.append("## MANDATORY CORRECTIONS")
+    lines.append("1. Do NOT repeat any of the rejected changes listed above.")
+    lines.append("2. Do NOT include these fields in your new response:")
+    for _rf in sorted(rejected_fields):
+        _lo_hi = ranges.get(_rf)
+        if _lo_hi:
+            lines.append(f"   - {_rf} (current: {current_setup.get(_rf, 'unknown')}, valid: {_lo_hi[0]}–{_lo_hi[1]})")
+        else:
+            lines.append(f"   - {_rf} (current: {current_setup.get(_rf, 'unknown')})")
+    lines.append("3. Produce a FRESH recommendation that corrects ALL listed issues.")
+    lines.append("4. Return ONLY valid JSON — no markdown, no extra text.")
+
+    return original_prompt + "\n".join(lines)
 
 
 def _validate_setup_response(
@@ -991,22 +1298,7 @@ class DrivingAdvisor:
                                                           "has_setup": bool(setup_dict)},
                                       model=self._config.get("anthropic", {}).get("model") or None,
                                       car_id=self._car_id_ref[0], track=_track_da)
-            if self._db is not None:
-                _session_id = self._session_id_getter()
-                try:
-                    _ai_id = self._db._conn.execute(
-                        "SELECT MAX(id) FROM ai_interactions"
-                    ).fetchone()[0]
-                except Exception:
-                    _ai_id = None
-                _recs = parse_recommendations_from_response(
-                    _response_text, "Setup Advice",
-                    self._car_id_ref[0], _track_da, "",
-                    session_id=_session_id, ai_interaction_id=_ai_id,
-                )
-                if _recs:
-                    self._db.insert_setup_recommendations(_recs)
-            # Normalise changes and run validation (mirror combined path)
+            # Normalise changes and run validation — persistence happens AFTER finalisation
             try:
                 _data = _json.loads(_response_text)
                 _raw_changes = _data.get("changes") or []
@@ -1039,22 +1331,30 @@ class DrivingAdvisor:
                         if _k not in _locked
                     }
 
-                # Engineering validation + single regenerate
+                # Engineering validation + single retry using the strict retry contract
                 try:
                     _ranges = resolve_ranges(car_name)
-                    _eng_errors = validate_setup_engineering(
+                    _structured_failures = validate_setup_engineering_structured(
                         _data, diagnosis, setup_dict, _ranges, _event_ctx,
                         car_name=car_name,
                         rec_history=_rec_history_sa,
                     )
-                    if _eng_errors:
-                        # Build a correction prompt and retry once
-                        _correction = (
-                            "\n\n## Engineering Validation Failure\n"
-                            + "\n".join(f"- {e}" for e in _eng_errors)
-                            + "\nCorrect ALL listed issues; do not repeat them."
+                    # Only safety-rule failures trigger a retry and zero changes.
+                    # Structural/schema/range errors are cosmetic and leave changes visible.
+                    _blocking_failures = [
+                        f for f in _structured_failures
+                        if f.severity == "blocking"
+                        and any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
+                    ]
+                    _fb_used = False
+                    _retried = False
+                    _failing_ai_changes: "list | None" = None
+
+                    if _blocking_failures:
+                        # Build strict retry prompt and attempt one correction
+                        _retry_prompt = _build_retry_prompt(
+                            prompt, _blocking_failures, setup_dict, _ranges
                         )
-                        _retry_prompt = prompt + _correction
                         try:
                             _retry_text = call_api(
                                 _retry_prompt, api_key, max_tokens=1500,
@@ -1066,6 +1366,7 @@ class DrivingAdvisor:
                                 model=self._config.get("anthropic", {}).get("model") or None,
                                 car_id=self._car_id_ref[0], track=_track_da,
                             )
+                            _retried = True
                             _retry_data = _json.loads(_retry_text)
                             # Re-normalise
                             _rr_ch = _retry_data.get("changes") or []
@@ -1092,55 +1393,81 @@ class DrivingAdvisor:
                                     if _k not in _locked
                                 }
                             # Re-validate engineering on retry result
-                            _retry_eng = validate_setup_engineering(
+                            _retry_structured = validate_setup_engineering_structured(
                                 _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
                                 car_name=car_name,
                                 rec_history=_rec_history_sa,
                             )
-                            if _retry_eng:
-                                # Still failing after retry — build deterministic fallback.
-                                # Only zero changes/setup_fields when the failure is
-                                # engineering-rule based (not a schema failure); schema
-                                # failures leave partial changes for diagnostic visibility.
+                            _retry_blocking = [
+                                f for f in _retry_structured
+                                if f.severity == "blocking"
+                                and any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
+                            ]
+                            if _retry_blocking:
+                                # Still failing after retry — build deterministic fallback
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
-                                _fb = _build_deterministic_fallback(_fb_diag)
-                                # Retain changes only when NO engineering-safety rule
-                                # fires.  Structural/schema/range errors (malformed_schema,
-                                # invalid_units, "change field ...", "too many") are cosmetic
-                                # and leave partial changes for diagnostic visibility.
-                                # Engineering-safety rule errors mean the changes are unsafe.
-                                _ENG_SAFETY_PREFIXES = (
-                                    "rh_for_minor_bottoming", "rh_low_confidence_location",
-                                    "aero_cut_with_wheelspin", "aero_at_min_floaty",
-                                    "gearbox_category_mismatch",
-                                    "rh_increment_exceeds_confidence", "rh_rake_risk",
-                                    "lsd_large_change_gated", "lsd_blocked_driver_feel",
-                                    "lsd_reversal_without_evidence",
-                                )
-                                _has_safety_error = any(
-                                    r.startswith(_ENG_SAFETY_PREFIXES) for r in _retry_eng
-                                )
-                                if _has_safety_error:
-                                    _retry_data["changes"] = _fb.get("changes", [])
-                                    _retry_data["setup_fields"] = _fb.get("setup_fields", {})
-                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
-                                _retry_data["engineering_validation_failed"] = True
-                                _retry_data["engineering_validation_errors"] = _retry_eng
-                                _retry_data["fallback_used"] = True
+                                _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
+                                _fb_used = True
+                                # Capture failing changes before the fallback zeros them out
+                                _failing_ai_changes = list(_retry_data.get("changes") or [])
+                                _retry_data.update(_fb)
+                                _structured_failures = _retry_structured
+                            else:
+                                _structured_failures = _retry_structured
+                                _fb_used = False
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
                         except Exception:
-                            # Retry failed (API error, parse error, etc.) — keep original
-                            # but mark engineering validation failed
-                            _data["engineering_validation_failed"] = True
-                            _data["engineering_validation_errors"] = _eng_errors
+                            # Retry API/parse error — fallback to deterministic
+                            _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
+                            _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
+                            _fb_used = True
+                            # Capture failing changes before the fallback zeros them out
+                            _failing_ai_changes = list(_data.get("changes") or [])
+                            _data.update(_fb)
+                            _retried = True  # We attempted a retry
+
                     if diagnosis:
                         _data["diagnosis"] = diagnosis
+
+                    # Route through _finalise_recommendation — the single funnel
+                    _final = _finalise_recommendation(
+                        _data, _structured_failures, _fb_used, _retried,
+                        failing_changes=_failing_ai_changes,
+                    )
+                    # Attach lifecycle status to raw dict for callers that read the JSON
+                    _data["recommendation_status"] = _final.status
+                    _data["changes"] = _final.approved_changes
+                    _data["setup_fields"] = _final.approved_fields
+                    _data["engineering_validation_failed"] = _final.status not in APPROVED_STATUSES
+                    _data["engineering_validation_errors"] = _final.engineering_errors
+                    _data["validation_warnings"] = _final.validation_warnings
+                    _data["fallback_used"] = _final.fallback_used
+                    _data["rejected_changes"] = _final.rejected_changes
+
                 except Exception:
                     pass  # Engineering validation must not break the response path
 
                 _response_text = _json.dumps(_data, ensure_ascii=False)
+
+                # Persistence after validation — write FINAL status to DB
+                if self._db is not None:
+                    _session_id = self._session_id_getter()
+                    try:
+                        _ai_id = self._db._conn.execute(
+                            "SELECT MAX(id) FROM ai_interactions"
+                        ).fetchone()[0]
+                    except Exception:
+                        _ai_id = None
+                    _recs = parse_recommendations_from_response(
+                        _response_text, "Setup Advice",
+                        self._car_id_ref[0], _track_da, "",
+                        session_id=_session_id, ai_interaction_id=_ai_id,
+                    )
+                    if _recs:
+                        self._db.insert_setup_recommendations(_recs)
+
             except Exception:
                 pass  # If normalisation/validation fails, return the original text unchanged
             return _response_text
@@ -1257,24 +1584,9 @@ class DrivingAdvisor:
                                                           "has_feeling": bool(feeling)},
                                       model=self._config.get("anthropic", {}).get("model") or None,
                                       car_id=self._car_id_ref[0], track=_track_da)
-            if self._db is not None:
-                _session_id = self._session_id_getter()
-                try:
-                    _ai_id = self._db._conn.execute(
-                        "SELECT MAX(id) FROM ai_interactions"
-                    ).fetchone()[0]
-                except Exception:
-                    _ai_id = None
-                _recs = parse_recommendations_from_response(
-                    _response_text, "Combined Setup",
-                    self._car_id_ref[0], _track_da, "",
-                    session_id=_session_id, ai_interaction_id=_ai_id,
-                )
-                if _recs:
-                    self._db.insert_setup_recommendations(_recs)
             # Normalise changes server-side: resolve 'field' key and add
             # 'to_clamped' so the frontend never needs to slug-guess or
-            # re-clamp raw AI values; then validate.
+            # re-clamp raw AI values; then validate.  Persistence moved AFTER finalisation.
             try:
                 _data = _json.loads(_response_text)
                 _raw_changes = _data.get("changes") or []
@@ -1308,21 +1620,30 @@ class DrivingAdvisor:
                         if _k not in _locked
                     }
 
-                # Engineering validation + single regenerate
+                # Engineering validation + single retry using the strict retry contract
                 try:
                     _ranges = resolve_ranges(car_name)
-                    _eng_errors = validate_setup_engineering(
+                    _structured_failures = validate_setup_engineering_structured(
                         _data, diagnosis, setup_dict, _ranges, _event_ctx,
                         car_name=car_name,
                         rec_history=_rec_history_cs,
                     )
-                    if _eng_errors:
-                        _correction = (
-                            "\n\n## Engineering Validation Failure\n"
-                            + "\n".join(f"- {e}" for e in _eng_errors)
-                            + "\nCorrect ALL listed issues; do not repeat them."
+                    # Only safety-rule failures trigger a retry and zero changes.
+                    # Structural/schema/range errors are cosmetic and leave changes visible.
+                    _blocking_failures = [
+                        f for f in _structured_failures
+                        if f.severity == "blocking"
+                        and any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
+                    ]
+                    _fb_used = False
+                    _retried = False
+                    _failing_ai_changes: "list | None" = None
+
+                    if _blocking_failures:
+                        # Build strict retry prompt and attempt one correction
+                        _retry_prompt = _build_retry_prompt(
+                            prompt, _blocking_failures, setup_dict, _ranges
                         )
-                        _retry_prompt = prompt + _correction
                         try:
                             _retry_text = call_api(
                                 _retry_prompt, api_key, max_tokens=1500,
@@ -1335,6 +1656,7 @@ class DrivingAdvisor:
                                 model=self._config.get("anthropic", {}).get("model") or None,
                                 car_id=self._car_id_ref[0], track=_track_da,
                             )
+                            _retried = True
                             _retry_data = _json.loads(_retry_text)
                             _rr_ch = _retry_data.get("changes") or []
                             _rr_sf = _retry_data.get("setup_fields") or {}
@@ -1359,53 +1681,81 @@ class DrivingAdvisor:
                                     _k: _v for _k, _v in (_retry_data.get("setup_fields") or {}).items()
                                     if _k not in _locked
                                 }
-                            _retry_eng = validate_setup_engineering(
+                            _retry_structured = validate_setup_engineering_structured(
                                 _retry_data, diagnosis, setup_dict, _ranges, _event_ctx,
                                 car_name=car_name,
                                 rec_history=_rec_history_cs,
                             )
-                            if _retry_eng:
-                                # Still failing after retry — build deterministic fallback.
-                                # Only zero changes/setup_fields when the failure is
-                                # engineering-rule based (not a schema failure); schema
-                                # failures leave partial changes for diagnostic visibility.
+                            _retry_blocking = [
+                                f for f in _retry_structured
+                                if f.severity == "blocking"
+                                and any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
+                            ]
+                            if _retry_blocking:
+                                # Still failing after retry — build deterministic fallback
                                 _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
-                                _fb = _build_deterministic_fallback(_fb_diag)
-                                # Retain changes only when NO engineering-safety rule
-                                # fires.  Structural/schema/range errors (malformed_schema,
-                                # invalid_units, "change field ...", "too many") are cosmetic
-                                # and leave partial changes for diagnostic visibility.
-                                # Engineering-safety rule errors mean the changes are unsafe.
-                                _ENG_SAFETY_PREFIXES = (
-                                    "rh_for_minor_bottoming", "rh_low_confidence_location",
-                                    "aero_cut_with_wheelspin", "aero_at_min_floaty",
-                                    "gearbox_category_mismatch",
-                                    "rh_increment_exceeds_confidence", "rh_rake_risk",
-                                    "lsd_large_change_gated", "lsd_blocked_driver_feel",
-                                    "lsd_reversal_without_evidence",
-                                )
-                                _has_safety_error = any(
-                                    r.startswith(_ENG_SAFETY_PREFIXES) for r in _retry_eng
-                                )
-                                if _has_safety_error:
-                                    _retry_data["changes"] = _fb.get("changes", [])
-                                    _retry_data["setup_fields"] = _fb.get("setup_fields", {})
-                                _retry_data["analysis"] = _fb.get("analysis", _retry_data.get("analysis", ""))
-                                _retry_data["engineering_validation_failed"] = True
-                                _retry_data["engineering_validation_errors"] = _retry_eng
-                                _retry_data["fallback_used"] = True
+                                _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
+                                _fb_used = True
+                                # Capture failing changes before the fallback zeros them out
+                                _failing_ai_changes = list(_retry_data.get("changes") or [])
+                                _retry_data.update(_fb)
+                                _structured_failures = _retry_structured
+                            else:
+                                _structured_failures = _retry_structured
+                                _fb_used = False
                             if diagnosis:
                                 _retry_data["diagnosis"] = diagnosis
                             _data = _retry_data
                         except Exception:
-                            _data["engineering_validation_failed"] = True
-                            _data["engineering_validation_errors"] = _eng_errors
+                            # Retry API/parse error — fallback to deterministic
+                            _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
+                            _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
+                            _fb_used = True
+                            # Capture failing changes before the fallback zeros them out
+                            _failing_ai_changes = list(_data.get("changes") or [])
+                            _data.update(_fb)
+                            _retried = True  # We attempted a retry
+
                     if diagnosis:
                         _data["diagnosis"] = diagnosis
+
+                    # Route through _finalise_recommendation — the single funnel
+                    _final = _finalise_recommendation(
+                        _data, _structured_failures, _fb_used, _retried,
+                        failing_changes=_failing_ai_changes,
+                    )
+                    # Attach lifecycle status to raw dict for callers that read the JSON
+                    _data["recommendation_status"] = _final.status
+                    _data["changes"] = _final.approved_changes
+                    _data["setup_fields"] = _final.approved_fields
+                    _data["engineering_validation_failed"] = _final.status not in APPROVED_STATUSES
+                    _data["engineering_validation_errors"] = _final.engineering_errors
+                    _data["validation_warnings"] = _final.validation_warnings
+                    _data["fallback_used"] = _final.fallback_used
+                    _data["rejected_changes"] = _final.rejected_changes
+
                 except Exception:
                     pass  # Engineering validation must not break the response path
 
                 _response_text = _json.dumps(_data, ensure_ascii=False)
+
+                # Persistence after validation — write FINAL status to DB
+                if self._db is not None:
+                    _session_id = self._session_id_getter()
+                    try:
+                        _ai_id = self._db._conn.execute(
+                            "SELECT MAX(id) FROM ai_interactions"
+                        ).fetchone()[0]
+                    except Exception:
+                        _ai_id = None
+                    _recs = parse_recommendations_from_response(
+                        _response_text, "Combined Setup",
+                        self._car_id_ref[0], _track_da, "",
+                        session_id=_session_id, ai_interaction_id=_ai_id,
+                    )
+                    if _recs:
+                        self._db.insert_setup_recommendations(_recs)
+
             except Exception:
                 pass  # If normalisation/validation fails, return the original text unchanged
             return _response_text
@@ -2230,7 +2580,15 @@ springs_front, springs_rear, dampers_front_comp, dampers_front_ext,
 dampers_rear_comp, dampers_rear_ext, camber_front, camber_rear,
 toe_front, toe_rear, aero_front, aero_rear,
 lsd_initial, lsd_accel, lsd_decel, brake_bias,
-transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
+power_restrictor, ballast_kg, ballast_position,
+final_drive, gear_1, gear_2, gear_3, gear_4, gear_5, gear_6
+
+DISPLAY-ONLY (do NOT include in setup_fields or changes):
+transmission_max_speed_kmh — shows calculated top speed only; use final_drive / gear_N for real gearbox changes.
+
+Gearbox fields valid ranges: final_drive 2.5–6.0; gear_1..gear_6 each 0.5–4.0 (must strictly decrease gear_1 > gear_2 > … > gear_6).
+Optional gearbox advisory (when exact ratios are unknown): include a "gearbox_advice" object:
+  {{"action": "shorten|lengthen|preserve", "reason": "one sentence", "suggested_direction": "shorter/taller ratios or preserve"}}
 
 Reply ONLY with valid JSON — no markdown fences, no extra text.
 issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data | not-present
@@ -2247,10 +2605,11 @@ issue_classification values MUST be one of: setup-limited | driver-input-limited
   "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}},
   "driver_feel_match": {{"supported_by_telemetry": true, "explanation": "Driver reports floaty front; aero_front is near minimum — telemetry-supported."}},
   "engineering_diagnosis": {{"aero_platform": "front near-min with floaty feel", "ride_height": "not primary issue", "traction": "wheelspin low", "gearbox": "preserve", "braking": "stable"}},
-  "preserve_settings": ["brake_bias", "transmission_max_speed_kmh"]
+  "preserve_settings": ["brake_bias"]
 }}
 In setup_fields include ONLY the fields being changed, with numeric values (not strings).
-In changes, "field" MUST be the exact canonical key from the setup_fields list above."""
+In changes, "field" MUST be the exact canonical key from the setup_fields list above.
+NEVER include transmission_max_speed_kmh in setup_fields or changes."""
 
     def _build_feeling_prompt(
         self,
@@ -2493,7 +2852,15 @@ springs_front, springs_rear, dampers_front_comp, dampers_front_ext,
 dampers_rear_comp, dampers_rear_ext, camber_front, camber_rear,
 toe_front, toe_rear, aero_front, aero_rear,
 lsd_initial, lsd_accel, lsd_decel, brake_bias,
-transmission_max_speed_kmh, power_restrictor, ballast_kg, ballast_position
+power_restrictor, ballast_kg, ballast_position,
+final_drive, gear_1, gear_2, gear_3, gear_4, gear_5, gear_6
+
+DISPLAY-ONLY (do NOT include in setup_fields or changes):
+transmission_max_speed_kmh — shows calculated top speed only; use final_drive / gear_N for real gearbox changes.
+
+Gearbox fields valid ranges: final_drive 2.5–6.0; gear_1..gear_6 each 0.5–4.0 (must strictly decrease gear_1 > gear_2 > … > gear_6).
+Optional gearbox advisory (when exact ratios are unknown): include a "gearbox_advice" object:
+  {{"action": "shorten|lengthen|preserve", "reason": "one sentence", "suggested_direction": "shorter/taller ratios or preserve"}}
 
 Reply ONLY with valid JSON — no markdown fences, no extra text.
 issue_classification values MUST be one of: setup-limited | driver-input-limited | mixed | insufficient-data | not-present
@@ -2510,8 +2877,9 @@ issue_classification values MUST be one of: setup-limited | driver-input-limited
   "confidence": {{"overall": "medium", "reason": "Issues are clear but track model is seed-only"}},
   "driver_feel_match": {{"supported_by_telemetry": true, "explanation": "Driver reports floaty front; aero_front is near minimum — telemetry-supported."}},
   "engineering_diagnosis": {{"aero_platform": "front near-min with floaty feel", "ride_height": "not primary issue", "traction": "wheelspin low", "gearbox": "preserve", "braking": "stable"}},
-  "preserve_settings": ["brake_bias", "transmission_max_speed_kmh"]
+  "preserve_settings": ["brake_bias"]
 }}
 In setup_fields include ONLY the fields being changed, with numeric values (not strings).
-In changes, "field" MUST be the exact canonical key from the setup_fields list above."""
+In changes, "field" MUST be the exact canonical key from the setup_fields list above.
+NEVER include transmission_max_speed_kmh in setup_fields or changes."""
 

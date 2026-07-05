@@ -1067,14 +1067,22 @@ class SessionDB:
     def insert_setup_recommendations(self, recs: list[dict]) -> None:
         if not recs:
             return
+        # Ensure each rec has a status key so the column is written explicitly
+        # (SQLite default is 'proposed', but callers that provide a final validated
+        # status must have it stored rather than defaulting to the pre-validation value).
+        recs_with_status = []
+        for rec in recs:
+            r = dict(rec)
+            r.setdefault("status", "proposed")
+            recs_with_status.append(r)
         with self._lock:
             self._conn.executemany(
                 """INSERT INTO setup_recommendations
                    (ai_interaction_id, session_id, car_id, track, layout_id,
-                    feature, recommendation_text, created_at)
+                    feature, recommendation_text, status, created_at)
                    VALUES (:ai_interaction_id, :session_id, :car_id, :track,
-                           :layout_id, :feature, :recommendation_text, :created_at)""",
-                recs,
+                           :layout_id, :feature, :recommendation_text, :status, :created_at)""",
+                recs_with_status,
             )
             self._conn.commit()
 
