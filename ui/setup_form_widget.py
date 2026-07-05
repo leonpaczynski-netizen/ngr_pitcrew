@@ -603,11 +603,11 @@ class SetupFormWidget(QWidget):
             "AI setup suggestions will appear here after analysis.")
         outer.addWidget(self._setup_result_text)
 
-        self._btn_apply_ai_setup = QPushButton("Apply to Setup")
+        self._btn_apply_ai_setup = QPushButton("Apply Pit Crew recommendation")
         self._btn_apply_ai_setup.setStyleSheet(
             "background: #2E6A4A; color: white; font-weight: bold; padding: 6px 12px;")
         self._btn_apply_ai_setup.setToolTip(
-            "Apply the AI's recommended changes to the setup form.\n"
+            "Apply the Pit Crew's recommended changes to the setup form.\n"
             "Changed fields are highlighted until you click Save Setup to persist them.")
         self._btn_apply_ai_setup.setVisible(False)
         outer.addWidget(self._btn_apply_ai_setup)

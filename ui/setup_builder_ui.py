@@ -1202,18 +1202,39 @@ class SetupBuilderMixin:
                 _btn_apply.setVisible(False)
             return
 
+        # Group 42: extract new optional keys (defensive — absent on legacy/fallback responses).
+        _protected_fields: list = data.get("protected_fields") or []
+        _ai_audit: dict | None = data.get("ai_audit") or None
+        # deterministic_plan is informational only — not rendered in this sprint.
+
         # Determine whether this recommendation is approved for display/apply.
+        # AC17: absent/empty/None/unrecognised recommendation_status MUST resolve to
+        # legacy_unknown = display-only.  is_legacy_unknown already handles all of
+        # these cases (empty string and None both return True at the first guard).
+        # Call it unconditionally — no falsy short-circuit.
         from strategy._setup_constants import APPROVED_STATUSES as _APPROVED_STATUSES
-        _status_approved = _rec_status in _APPROVED_STATUSES
+        from data.setup_history import is_legacy_unknown as _is_legacy_unknown, LEGACY_UNKNOWN as _LEGACY_UNKNOWN
+        _is_legacy: bool = _is_legacy_unknown(_rec_status)  # True for "", None, unrecognised
+        _status_approved: bool = (not _is_legacy) and (_rec_status in _APPROVED_STATUSES)
 
         # Build status banner (replaces old eng_banner + validation_banner logic).
-        # For old-format responses without recommendation_status, fall back to legacy banners.
-        if _rec_status:
+        # For known non-approved statuses (validation_failed, blocked_no_safe_recommendation,
+        # etc.) _rec_status is truthy and non-empty — render the status banner normally.
+        # For legacy/absent status _is_legacy is True — skip the status banner and fall
+        # through to legacy-banner rendering in the HTML block below.
+        if _rec_status and not _is_legacy:
+            _status_banner = _format_status_banner(_rec_status, _validation_warnings)
+            _eng_banner = ""
+            _validation_banner = ""
+        elif _rec_status and _is_legacy:
+            # Present but unrecognised status: render the status banner so the user
+            # sees the raw status string, then the legacy banner explains it cannot apply.
             _status_banner = _format_status_banner(_rec_status, _validation_warnings)
             _eng_banner = ""
             _validation_banner = ""
         else:
-            # Legacy path: no recommendation_status in response (old-format JSON)
+            # Absent/empty status (old-format JSON from before the validation gate).
+            # AC17: display-only — no status banner, show legacy-specific banners instead.
             _status_banner = ""
             _eng_validation_failed: bool = bool(data.get("engineering_validation_failed", False))
             _eng_banner = (
@@ -1221,8 +1242,6 @@ class SetupBuilderMixin:
                 if _eng_validation_failed else ""
             )
             _validation_banner = _format_validation_errors_banner(_validation_errors)
-            # Treat legacy responses as approved (old behaviour preserved)
-            _status_approved = True
 
         # Build a compact diagnosis summary when the backend diagnosis is present.
         _diagnosis_html = ""
@@ -1252,8 +1271,11 @@ class SetupBuilderMixin:
             k: v for k, v in approved_fields.items()
             if isinstance(v, (int, float))
         }
-        # Apply button: VISIBLE only when status is approved AND there are approved changes.
-        _show_apply = _status_approved and bool(_parsed_ai_fields)
+        # Apply button: VISIBLE only when status is in APPROVED_STATUSES and NOT legacy.
+        # AC17: _is_legacy is True for absent/empty/unrecognised statuses — those NEVER show Apply.
+        # _status_approved already incorporates _is_legacy (see above), so `and not _is_legacy`
+        # is a belt-and-suspenders guard that makes the constraint visible at the call site.
+        _show_apply = _status_approved and bool(_parsed_ai_fields) and not _is_legacy
         if _form is not None:
             _form.last_ai_fields = _parsed_ai_fields if _show_apply else {}
         else:
@@ -1281,35 +1303,62 @@ class SetupBuilderMixin:
         except Exception:  # pragma: no cover - defensive; never break the display
             self._last_setup_context = None
 
-        # Build HTML: status banner (highest priority) + legacy banners (old format)
-        # + diagnosis + event restriction banner + analysis block + changes (approved only)
-        # + rejected output (collapsed debug, non-approved statuses only)
+        # Build HTML — Group 42 section hierarchy (AC22):
+        #   0. Status banner + legacy banners + event-restriction banner
+        #   1. Pit Crew diagnosis block
+        #   2. Analysis card
+        #   3. Pit Crew recommendation (approved changes only, with per-change explainability)
+        #   4. Protected fields (collapsed)
+        #   5. Rejected candidate changes (collapsed, rule-engine rejects — distinct from Rejected AI output)
+        #   6. AI audit result (only when present)
+        #   7. Engineering gate failures (for rejected statuses)
+        #   8. Rejected AI text (existing collapsed block, validation_failed / retry_failed statuses)
         card = "background:#1C2A3A; border-radius:6px; padding:10px; margin-bottom:8px;"
         chg_hdr = "background:#2A3A1C; border-left:4px solid #8BC34A; border-radius:4px; " \
                   "padding:8px 12px; margin-bottom:4px;"
         chg_row = "padding:4px 0 4px 8px; border-bottom:1px solid #2A3A1C;"
 
+        # Legacy-unknown banner — rendered when a fresh response has an unrecognised status.
+        # (Old-format responses without any status key are NOT flagged here — they use the
+        #  legacy path above which sets _status_approved = True and shows no banner.)
+        _legacy_banner = ""
+        if _is_legacy:
+            _legacy_banner = (
+                "<div style='background:#1A1A2A; border:1px solid #8888CC; "
+                "border-radius:4px; padding:8px; margin-bottom:8px; color:#AAAAEE;'>"
+                "&#9432; <b>Legacy recommendation — display only, cannot apply</b><br>"
+                "<span style='font-size:11px;'>This recommendation was saved before the "
+                "engineering validation gate and has no verified status. "
+                "It is shown for reference only and cannot be applied.</span>"
+                "</div>"
+            )
+
         html = (
             _status_banner
             + _eng_banner
+            + _legacy_banner
             + _diagnosis_html
             + _violation_banner
             + _validation_banner
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
         )
 
-        # CHANGES TO MAKE section: ONLY shown when status is approved and changes exist.
+        # --- Section 3: Pit Crew recommendation ---
+        # ONLY shown when status is approved and changes exist.
         if _status_approved and approved_changes:
-            html += f"<div style='{chg_hdr}'>" \
-                    "<b style='color:#8BC34A;'>&#9745; CHANGES TO MAKE IN CAR SETUP</b></div>"
+            html += (
+                f"<div style='{chg_hdr}'>"
+                "<b style='color:#8BC34A;'>&#9745; Pit Crew recommendation</b>"
+                "</div>"
+            )
             for ch in approved_changes:
-                s       = ch.get("setting", "?")
-                frm     = ch.get("from", "?")
-                to_raw  = ch.get("to", "?")
+                s        = ch.get("setting", "?")
+                frm      = ch.get("from", "?")
+                to_raw   = ch.get("to", "?")
                 # Backend supplies to_clamped (value already within the car's allowed range).
                 # Falls back to raw to when field is None or to is non-numeric.
                 _clamped_val = ch.get("to_clamped", to_raw)
-                why     = ch.get("why", "")
+                why      = ch.get("why", "")
                 # Prefer the clamped value when the param field was resolved by the backend.
                 # field is None when the backend could not identify the param — show raw value.
                 _field = ch.get("field")
@@ -1326,7 +1375,9 @@ class SetupBuilderMixin:
                 else:
                     # Field unresolvable — acceptable degradation: show raw value as-is.
                     to_display = to_raw
-                html += (
+
+                # Base change line (always shown).
+                _ch_html = (
                     f"<div style='{chg_row}'>"
                     f"<b style='color:#E0E0E0;'>{s}</b>&nbsp;&nbsp;"
                     f"<span style='color:#F5A623;'>{frm}</span>"
@@ -1334,10 +1385,181 @@ class SetupBuilderMixin:
                     f"<span style='color:#8BC34A;'>{to_display}</span>"
                     + (f"<span style='color:#AAA; font-size:10px;'>{_clamp_note}</span>" if _clamp_note else "")
                     + (f"<br><span style='color:#888;font-size:11px;'>&nbsp;&nbsp;&nbsp;{why}</span>" if why else "")
-                    + "</div>"
                 )
 
-        # Engineering errors (bulleted) for rejected statuses
+                # Per-change explainability sub-row (Group 42, AC22).
+                # Only rendered when rule_id is present — absent on legacy/fallback changes.
+                _rule_id = ch.get("rule_id", "")
+                if _rule_id:
+                    _symptom    = ch.get("symptom", "")
+                    _rationale  = ch.get("rationale", "")
+                    _evidence   = ch.get("evidence") or []
+                    _rej_alts   = ch.get("rejected_alternatives") or []
+                    _risk       = ch.get("risk_level", "")
+                    _conf       = ch.get("confidence_level", "")
+                    _align      = ch.get("driver_style_alignment", "")
+
+                    # Badge colours for risk and confidence.
+                    _risk_colour = {"low": "#8BC34A", "med": "#F5A623", "high": "#E86A5E"}.get(
+                        str(_risk).lower(), "#AAAAAA")
+                    _align_colour = {"aligned": "#8BC34A", "neutral": "#AAAAAA", "caution": "#F5A623"}.get(
+                        str(_align).lower(), "#AAAAAA")
+
+                    _ev_text   = "; ".join(_evidence) if _evidence else "—"
+                    _alt_text  = "; ".join(_rej_alts) if _rej_alts else "none"
+
+                    _detail_rows = ""
+                    if _symptom:
+                        _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Symptom</td><td style='color:#CCC;'>{_symptom}</td></tr>"
+                    if _rationale:
+                        _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Rationale</td><td style='color:#CCC;'>{_rationale}</td></tr>"
+                    _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Evidence</td><td style='color:#CCC;'>{_ev_text}</td></tr>"
+                    _detail_rows += f"<tr><td style='color:#888; padding-right:8px;'>Considered alternatives</td><td style='color:#CCC;'>{_alt_text}</td></tr>"
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Risk</td>"
+                        f"<td style='color:{_risk_colour};'>{_risk or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Confidence</td>"
+                        f"<td style='color:#CCC;'>{_conf or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Driver style</td>"
+                        f"<td style='color:{_align_colour};'>{_align or '—'}</td></tr>"
+                    )
+                    _detail_rows += (
+                        f"<tr><td style='color:#888; padding-right:8px;'>Rule</td>"
+                        f"<td style='color:#888; font-size:10px;'>{_rule_id}</td></tr>"
+                    )
+
+                    _ch_html += (
+                        "<details style='margin-top:4px; margin-left:8px;'>"
+                        "<summary style='color:#7AB3D4; font-size:11px; cursor:pointer;'>"
+                        "Why Pit Crew recommended this</summary>"
+                        "<div style='margin-top:4px; padding:4px 6px; "
+                        "background:#1A2A3A; border-radius:3px;'>"
+                        f"<table style='font-size:11px; border-collapse:collapse;'>{_detail_rows}</table>"
+                        "</div>"
+                        "</details>"
+                    )
+
+                _ch_html += "</div>"
+                html += _ch_html
+
+        # --- Section 4: Protected fields (collapsed) ---
+        if _protected_fields:
+            _pf_items = "".join(
+                f"<li style='margin:2px 0; color:#CCC; font-size:11px;'><code>{f}</code></li>"
+                for f in _protected_fields
+            )
+            html += (
+                "<div style='background:#1A1A2A; border:1px solid #555588; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px;'>"
+                "<details>"
+                "<summary style='color:#AAAACC; font-size:11px; cursor:pointer;'>"
+                "Protected fields (Pit Crew will not change these)</summary>"
+                f"<ul style='margin:6px 0 2px 0; padding-left:16px;'>{_pf_items}</ul>"
+                "</details>"
+                "</div>"
+            )
+
+        # --- Section 5: Rejected candidate changes (rule-engine rejects) ---
+        # Distinct from section 8 ("Rejected AI output") — these are rule-engine
+        # candidates that were evaluated and rejected before the AI saw the plan.
+        # Shown regardless of status (informational — never actionable).
+        _rule_rejects = [
+            r for r in rejected_changes
+            if r.get("rule_id")  # rule-engine rejects carry rule_id
+        ]
+        if _rule_rejects:
+            _rj_rows = ""
+            for _rch in _rule_rejects:
+                _rf  = _rch.get("field", _rch.get("setting", "?"))
+                _rrule = _rch.get("rule_id", "")
+                _rreason = _rch.get("reason", _rch.get("why", ""))
+                _rsymp   = _rch.get("symptom", "")
+                _rrisk   = _rch.get("risk_level", "")
+                _rconf   = _rch.get("confidence_level", "")
+                _ralign  = _rch.get("driver_style_alignment", "")
+                _rj_rows += (
+                    f"<div style='padding:3px 0 3px 8px; border-bottom:1px solid #2A2A1A;'>"
+                    f"<b style='color:#C8AA66;'>{_rf}</b>"
+                    + (f"&nbsp;<span style='color:#777; font-size:10px;'>[{_rrule}]</span>" if _rrule else "")
+                    + (f"<br><span style='color:#AAA;font-size:11px;'>{_rreason}</span>" if _rreason else "")
+                    + (f"<br><span style='color:#888;font-size:10px;'>"
+                       f"symptom: {_rsymp} &nbsp;|&nbsp; risk: {_rrisk} &nbsp;|&nbsp; "
+                       f"confidence: {_rconf} &nbsp;|&nbsp; alignment: {_ralign}"
+                       f"</span>" if (_rsymp or _rrisk or _rconf or _ralign) else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#1A1A0A; border:1px solid #665533; "
+                "border-radius:4px; padding:6px 10px; margin-top:6px;'>"
+                "<details>"
+                "<summary style='color:#C8AA66; font-size:11px; cursor:pointer;'>"
+                "Rejected candidate changes (not applied)</summary>"
+                f"<div style='margin-top:6px;'>{_rj_rows}</div>"
+                "</details>"
+                "</div>"
+            )
+
+        # --- Section 6: AI audit result ---
+        # Rendered ONLY when ai_audit is present in the response.
+        # Makes clear the AI audited (did not author) the plan.
+        if _ai_audit:
+            _aud_status = _ai_audit.get("status", "")
+            _aud_warnings    = _ai_audit.get("warnings") or []
+            _aud_contradictions = _ai_audit.get("contradictions") or []
+            _aud_missing     = _ai_audit.get("missing_evidence") or []
+            _aud_notes       = _ai_audit.get("explanation_notes", "")
+            _aud_stripped    = _ai_audit.get("stripped_fields") or []
+
+            # Status badge colour.
+            _aud_colour = {
+                "APPROVED":               "#8BC34A",
+                "APPROVED_WITH_WARNINGS": "#F5A623",
+                "REJECTED":               "#E86A5E",
+                "NEEDS_MORE_DATA":        "#AAAAAA",
+            }.get(str(_aud_status).upper(), "#AAAAAA")
+
+            _aud_body = ""
+            if _aud_notes:
+                _aud_body += (
+                    f"<p style='margin:4px 0; color:#CCC; font-size:11px;'>{_aud_notes}</p>"
+                )
+            for _label, _items in (
+                ("Warnings", _aud_warnings),
+                ("Contradictions", _aud_contradictions),
+                ("Missing evidence", _aud_missing),
+            ):
+                if _items:
+                    _li = "".join(f"<li style='margin:2px 0;'>{i}</li>" for i in _items)
+                    _aud_body += (
+                        f"<p style='margin:4px 0 0 0; color:#AAA; font-size:11px;'><b>{_label}:</b></p>"
+                        f"<ul style='margin:2px 0 4px 0; padding-left:16px; color:#CCC; font-size:11px;'>{_li}</ul>"
+                    )
+            if _aud_stripped:
+                _stripped_str = ", ".join(f"<code>{f}</code>" for f in _aud_stripped)
+                _aud_body += (
+                    f"<p style='margin:4px 0; color:#888; font-size:10px;'>"
+                    f"Stripped AI fields: {_stripped_str}</p>"
+                )
+
+            html += (
+                "<div style='background:#1A2A1A; border:1px solid #336633; "
+                "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+                "<div style='margin-bottom:4px;'>"
+                "<b style='color:#88BB88; font-size:12px;'>AI audit</b>"
+                f"&nbsp;&nbsp;<span style='color:{_aud_colour}; font-weight:bold; font-size:12px;'>"
+                f"{_aud_status}</span>"
+                "<span style='color:#777; font-size:10px; margin-left:8px;'>"
+                "(AI checked the plan — it did not author the setup changes)</span>"
+                "</div>"
+                + (_aud_body or "<p style='margin:0; color:#888; font-size:11px;'>No details available.</p>")
+                + "</div>"
+            )
+
+        # --- Section 7: Engineering gate failures (for rejected statuses) ---
         if _rec_status in {"validation_failed", "retry_failed"} and _eng_validation_errors:
             _err_items = "".join(
                 f"<li style='margin:2px 0;'>{e}</li>" for e in _eng_validation_errors
@@ -1350,15 +1572,21 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
-        # Rejected AI output: collapsed <details> block for debug visibility.
-        # Rendered for validation_failed / retry_failed / blocked_no_safe_recommendation
-        # when rejected_changes is non-empty.
+        # --- Section 8: Rejected AI text (existing collapsed block) ---
+        # For validation_failed / retry_failed / blocked_no_safe_recommendation
+        # when rejected_changes is non-empty (AI-format rejects without rule_id).
         # Visually distinct: muted/red, no apply path, no green header.
+        # Only show changes that are NOT rule-engine candidates (no rule_id) so
+        # there is no overlap with section 5.
         # NOTE: blocked_no_safe_recommendation does NOT enable the CHANGES section or
         # the Apply button — those remain gated on _status_approved (APPROVED_STATUSES only).
-        if _rec_status in {"validation_failed", "retry_failed", "blocked_no_safe_recommendation"} and rejected_changes:
+        _ai_text_rejects = [
+            r for r in rejected_changes
+            if not r.get("rule_id")  # AI-format or old-format rejects lack rule_id
+        ]
+        if _rec_status in {"validation_failed", "retry_failed", "blocked_no_safe_recommendation"} and _ai_text_rejects:
             _rej_rows = ""
-            for _rch in rejected_changes:
+            for _rch in _ai_text_rejects:
                 _rs = _rch.get("setting", "?")
                 _rfr = _rch.get("from", "?")
                 _rto = _rch.get("to", "?")
