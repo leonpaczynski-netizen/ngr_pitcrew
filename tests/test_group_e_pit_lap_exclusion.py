@@ -178,7 +178,7 @@ def test_out_lap_rejection_reason_text():
     session = _make_session([out_lap, good_lap])
     results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
     assert results[0].reason == (
-        "out-lap: first calibration lap excluded (always starts from pits)"
+        "out-lap: first calibration lap excluded (warm-up / not a full flying lap)"
     )
 
 
@@ -187,19 +187,39 @@ def test_out_lap_rejection_reason_text():
 # ---------------------------------------------------------------------------
 
 def test_pit_lap_raw_detected_lap_rejected():
-    """If detect_pit_lap_raw returns True for a lap, it is rejected with pit-in reason."""
+    """When pit detection is explicitly enabled and detect_pit_lap_raw returns True,
+    the lap is rejected with a pit-in reason."""
     out_lap = _make_lap(lap_number=0, side_m=100.0)
     pit_lap = _make_lap(lap_number=1, side_m=100.0)
     session = _make_session([out_lap, pit_lap])
 
     with patch("data.track_geometry_builder.detect_pit_lap_raw", return_value=True):
-        results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
+        results = filter_full_laps(
+            session, manifest_lap_length_m=MANIFEST_LAP_M, pit_detection_enabled=True
+        )
 
     # results[0] = out-lap rejected
     # results[1] = pit-in lap rejected
     assert results[1].status == "rejected"
     assert "pit-in lap" in results[1].reason
     assert "pit lane excursion" in results[1].reason
+
+
+def test_pit_detection_off_by_default_does_not_reject_clean_laps():
+    """DEF-17U-UAT-007 regression: pit detection is OFF by default, so a lap that
+    detect_pit_lap_raw WOULD flag is not rejected and detect_pit_lap_raw is never
+    even called (Time Trial laps never touch the pits)."""
+    out_lap = _make_lap(lap_number=0, side_m=100.0)
+    clean_lap = _make_lap(lap_number=1, side_m=100.0)
+    session = _make_session([out_lap, clean_lap])
+
+    def _must_not_be_called(samples):
+        raise AssertionError("detect_pit_lap_raw called despite pit detection off by default")
+
+    with patch("data.track_geometry_builder.detect_pit_lap_raw", side_effect=_must_not_be_called):
+        results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
+
+    assert results[1].status == "accepted"
 
 
 def test_no_pit_lap_detection_when_returns_false():
@@ -227,7 +247,9 @@ def test_pit_lap_detection_not_applied_to_out_lap():
         return False
 
     with patch("data.track_geometry_builder.detect_pit_lap_raw", side_effect=mock_detect):
-        results = filter_full_laps(session, manifest_lap_length_m=MANIFEST_LAP_M)
+        results = filter_full_laps(
+            session, manifest_lap_length_m=MANIFEST_LAP_M, pit_detection_enabled=True
+        )
 
     # detect_pit_lap_raw should only have been called for good_lap, not out_lap
     assert len(call_log) == 1
@@ -396,7 +418,9 @@ def test_out_lap_plus_pit_lap_cannot_generate():
     session = _make_session([out_lap, pit_lap])
 
     with patch("data.track_geometry_builder.detect_pit_lap_raw", return_value=True):
-        result = build_seed_geometry(session, MANIFEST_LAP_M, "e_track", "e_layout")
+        result = build_seed_geometry(
+            session, MANIFEST_LAP_M, "e_track", "e_layout", pit_detection_enabled=True
+        )
 
     assert result.can_generate is False
 

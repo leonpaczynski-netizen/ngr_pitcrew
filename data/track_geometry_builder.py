@@ -101,6 +101,8 @@ def classify_lap_delta(delta_pct: float, consistent_short_count: int) -> str:
 def filter_full_laps(
     session: CalibrationSession,
     manifest_lap_length_m: float,
+    *,
+    pit_detection_enabled: bool = False,
 ) -> List[LapGeometryFilterResult]:
     """Filter laps by existing quality gates and full-lap threshold.
 
@@ -109,6 +111,17 @@ def filter_full_laps(
     manifest_lap_length_m to be accepted.
 
     Returns one LapGeometryFilterResult per lap in session.laps order.
+
+    Parameters
+    ----------
+    pit_detection_enabled : bool, default False
+        DEF-17U-UAT-007: GT7 Custom UDP telemetry provides no reliable pit-lane
+        signal, and the geometry-based fallback (detect_pit_lap_raw) uses an
+        absolute distance-from-centroid threshold that false-positives on every
+        normal lap of a real-size track (all of it lies well beyond the
+        threshold from the lap centroid).  So pit detection is OFF by default —
+        mirroring build_reference_path — and no lap is flagged "pit-in" unless a
+        caller explicitly opts in for a data source that supports it.
     """
     import statistics as _stats
 
@@ -137,8 +150,10 @@ def filter_full_laps(
         path_len = path_lengths[idx]
 
         # --- Gate 0a: OUT-LAP rejection ---
-        # Reject ONLY the first lap with the lowest lap_number (always starts from
-        # pits). If several laps share that lap_number (telemetry ties), reject just
+        # Reject ONLY the first lap with the lowest lap_number — the first
+        # calibration lap is a warm-up/out-lap (from the pits in a race, or a
+        # rolling/partial first lap in Time Trial) and is never a clean flying
+        # lap. If several laps share that lap_number (telemetry ties), reject just
         # the first occurrence so legitimate clean laps are not over-excluded.
         # Fall back to idx==0 if lap_number is unavailable/ambiguous.
         is_out_lap = not out_lap_rejected and (
@@ -150,14 +165,15 @@ def filter_full_laps(
             results.append(LapGeometryFilterResult(
                 lap_index=idx,
                 status="rejected",
-                reason="out-lap: first calibration lap excluded (always starts from pits)",
+                reason="out-lap: first calibration lap excluded (warm-up / not a full flying lap)",
                 delta_pct=0.0,
                 note="",
             ))
             continue
 
         # --- Gate 0b: PIT-IN lap rejection ---
-        if detect_pit_lap_raw(lap.samples):
+        # DEF-17U-UAT-007: off by default; see filter_full_laps docstring.
+        if pit_detection_enabled and detect_pit_lap_raw(lap.samples):
             results.append(LapGeometryFilterResult(
                 lap_index=idx,
                 status="rejected",
@@ -228,6 +244,8 @@ def build_seed_geometry(
     manifest_lap_length_m: float,
     track_location_id: str,
     layout_id: str,
+    *,
+    pit_detection_enabled: bool = False,
 ) -> GeometryBuildResult:
     """Build a SeedCoordinateMap from accepted laps in the session.
 
@@ -238,8 +256,13 @@ def build_seed_geometry(
     4.  Build and return a SeedCoordinateMap.
 
     Returns can_generate=False with seed_map=None if no laps pass filtering.
+
+    pit_detection_enabled is forwarded to filter_full_laps; OFF by default
+    (DEF-17U-UAT-007) so clean Time Trial laps are never mislabelled "pit-in".
     """
-    filter_results = filter_full_laps(session, manifest_lap_length_m)
+    filter_results = filter_full_laps(
+        session, manifest_lap_length_m, pit_detection_enabled=pit_detection_enabled
+    )
 
     accepted_indices: List[int] = []
     rejected_laps: List[LapGeometryFilterResult] = []

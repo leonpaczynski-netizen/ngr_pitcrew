@@ -2672,8 +2672,9 @@ class TrackModellingMixin:
                     _existing = lbl.text()
                     lbl.setText(
                         (_existing + "\n\n" if _existing else "")
-                        + "Not enough clean laps to build the map. Drive more full laps"
-                        " starting and finishing on the grid, not from the pits."
+                        + "Not enough clean laps to build the map. Drive more full,"
+                        " uninterrupted laps (Time Trial works well) — the first lap"
+                        " is always skipped as a warm-up."
                     )
                 return
             from data.track_geometry_builder import CLOSURE_GAP_WARN_M as _CLOSURE_GAP_WARN_M
