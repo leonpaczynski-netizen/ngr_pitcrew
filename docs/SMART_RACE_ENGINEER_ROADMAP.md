@@ -21,6 +21,82 @@
 > on branch `ofr2-quali-race-disciplines`; see `docs/OFR2_SEPARATE_DISCIPLINES.md`.
 > Strategy-prompt telemetry (Phase 2-B/2-C) remains deferred.
 
+---
+
+## Group 48 — Race Strategy Brain Phase 2: Telemetry-Based Strategy Intelligence (DELIVERED 2026-07-06)
+
+**Branch:** `group48-race-strategy-intelligence` (from clean `master` `1c5890e`, Group 47 merged).
+**One line:** the Pit Crew now ranks race strategies by estimated **total race time**, not
+fastest lap — deterministically, from real evidence, with honest confidence and a
+category-separated explanation. *The fastest lap is not always the fastest race.*
+
+This applies the Groups 43–47 "professional, rule-first, honest" approach to race
+strategy. It is **purely additive** — five new pure `strategy/` modules and six new
+test files; **no existing file was modified**, so every Group 43–47 guarantee holds by
+construction.
+
+### Objective
+Answer *"what strategy gives the best total race result?"* using real event settings and
+available session samples. Compare candidates by estimated total race time (fuel + tyre
+degradation + stint length + pit count + refuel time + compound deltas), gate the
+conclusion on available evidence, and explain it in driver-readable terms.
+
+### Modules added (all pure: no PyQt / DB / AI / file I/O; never raise)
+1. **`strategy/race_strategy_evidence.py`** — `StrategyConfidence` enum
+   (HIGH/MEDIUM/LOW/INSUFFICIENT_EVIDENCE) and the frozen `RaceStrategyEvidence` snapshot
+   (car/track/layout, race duration + laps, fuel & tyre multipliers, refuel rate, pit
+   loss, starting fuel, available/required compounds, mandatory stops, weather, and the
+   **measured** lap-time / fuel-use / tyre-wear / per-compound samples), plus a computed
+   `evidence_confidence` and a `missing_evidence` list. `build_strategy_evidence(...)`
+   records — never fabricates — anything unknown; race pace is the **median** clean lap
+   (race-repeatable), not a flying lap.
+2. **`strategy/race_strategy_candidates.py`** — `generate_candidates(evidence)`
+   enumerates no/one/two/three-stop plus fuel-save, push, and compound-switch variants
+   with **stable, deterministic IDs**, each carrying the plan and the **pace-free**
+   fuel/refuel/pit maths. **Legality is a hard gate** (mandatory stops, per-stint fuel ≤
+   100 L tank, required compounds all fit); illegal candidates are returned-but-flagged
+   and excluded from `legal_candidates()`.
+3. **`strategy/race_strategy_scorer.py`** — `score_candidates(...)` ranks legal
+   candidates by `green_base + degradation_cost + pit_time + fuel_saving_cost +
+   compound_cost` (all itemised). Degradation from measured tyre-wear only; fuel-save
+   cost only on a lean map; compound cost only where per-compound pace evidence exists.
+   `recommend_strategy(...)` adds a **safety-aware tie-break** so a marginally-quicker but
+   fragile plan loses to a stable one.
+4. **`strategy/race_strategy_explain.py`** — `build_explanation(...)` renders a text
+   surface that keeps **KNOWN evidence / CALCULATED estimate / ASSUMPTION / MISSING
+   evidence / RISK** visibly separate, shows the plan + confidence, and never over-claims.
+5. **`strategy/race_strategy_benchmark.py`** — the Porsche 911 RSR '17 / Fuji Full Course
+   / ~50 min / 8× tyre / 3× fuel / 1 L/s refuel benchmark, reading rear-fragility from the
+   structured Group 42 `DriverProfile`.
+
+### Benchmark result
+On the RSR/Fuji scenario the estimated **one-stop (~3103 s) beats the two-stop (~3139 s)
+by ~36 s** — the expensive 1 L/s refuel is not recovered by fresher tyres — and the
+`2stop_push` plan is flagged *"rear traction fragile — an attacking map risks snap
+oversteer"* and never recommended. The explanation names fuel, tyre, pit loss, refuel
+time, confidence, and missing evidence honestly.
+
+### Safety guarantees (verified by tests)
+Strategy intelligence authors no setup values, has no apply/approve capability, imports no
+setup-authoring module, and cannot reach the Apply gate; the Apply-gate predicate string
+and the disabled AI-Build line in `ui/setup_builder_ui.py` are asserted unchanged; driver
+memory (`rear_traction_fragile`) can influence confidence/risk/tie-break only — never
+legality or the total-time maths; missing required evidence lowers confidence or returns
+INSUFFICIENT_EVIDENCE rather than inventing certainty. Nothing writes to
+`data/setup_history.json` (all modules are pure).
+
+### Tests
+6 new files — `tests/test_group48_{strategy_evidence, strategy_candidates,
+strategy_scorer, strategy_confidence, strategy_ui_explainability,
+porsche_fuji_strategy_benchmark}.py` — **95 pure/offline tests, all pass.**
+
+### Deferred (honest)
+Rival-driver modelling, steering-angle metrics, automatic track mapping, weather-radar
+prediction, ML training, AI-authored strategy numbers, re-enabling the AI Build path, live
+pit-wall voice, and any large UI redesign all remain future work. Wiring the evidence
+builder to pull live session samples from `SessionDB` (as `strategy_orchestrator` already
+does for the AI path) is the natural next step; today the caller supplies the samples.
+
 ### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
 
 After each race, the AI should evaluate whether its own setup recommendations actually
