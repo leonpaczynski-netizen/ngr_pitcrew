@@ -357,11 +357,15 @@ class TestAC10SafeFallback:
         assert isinstance(result, list), "Must return a list (possibly empty), not raise"
 
     def test_db_version_is_12(self, tmp_path):
-        """Fresh DB migrates to user_version=12 (DB_VERSION constant)."""
+        """Fresh DB migrates to user_version=DB_VERSION.
+
+        Reconciled for Group 47: DB_VERSION bumped 12 → 13 (_migrate_v13 added the
+        5 additive outcome-verification columns).  Test name kept stable for blame.
+        """
         db = _make_temp_db(tmp_path)
         version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == DB_VERSION == 12, (
-            f"Expected user_version=DB_VERSION=12; got user_version={version}, DB_VERSION={DB_VERSION}"
+        assert version == DB_VERSION == 13, (
+            f"Expected user_version=DB_VERSION=13; got user_version={version}, DB_VERSION={DB_VERSION}"
         )
         db.close()
 
@@ -395,7 +399,7 @@ class TestAC10SafeFallback:
         # Second open must not raise
         db2 = SessionDB(db_path)
         version = db2._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 12
+        assert version == 13  # Reconciled for Group 47 (v12 → v13)
         db2.close()
 
 

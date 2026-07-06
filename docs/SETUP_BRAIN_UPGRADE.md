@@ -665,3 +665,43 @@ environmental test-isolation artifact, not a product defect.
   now.
 * The 8 pre-existing track-modelling allowlist failures remain for the
   track-modelling owner.
+
+---
+
+## Group 47 — Outcome Verification & Learning Loop 2 (2026-07-06)
+
+Branch `group47-setup-brain-outcome-learning`, on top of Group 46 (merged to
+master at `249410e`). Rule-first, validator-gated, AI-audit-only — all Group
+43–46 guarantees intact (Analyse/Baseline AI-disabled; AI audit explanation-only;
+old AI Build path disabled; Apply-gate predicate UNCHANGED; only approved changes
+render/apply). Learning affects **confidence/ranking/explanation only**; it never
+authors values, creates fields, un-blocks rejected advice, overrides validation,
+or writes to `data/setup_history.json`.
+
+* **NEW `strategy/setup_outcome_verification.py`** (pure; no PyQt/sqlite3/AI/I-O;
+  never raises). `OutcomeVerdict` = IMPROVED / UNCHANGED / WORSE / MIXED /
+  INSUFFICIENT_EVIDENCE. `MetricSnapshot` (typed before/after telemetry) +
+  `OutcomeVerificationResult` (rule_id, car_id, track, layout_id, target_issue,
+  before_metric, after_metric, driver_feedback, outcome, confidence,
+  evidence_summary, safety_notes). Deterministic checks for exit-traction/
+  wheelspin, bottoming/platform, brake-stability; rotation via oversteer proxy;
+  understeer/front-bite → INSUFFICIENT_EVIDENCE (no invented metrics).
+  `classify_driver_feedback` + safety-first folding (positive feedback never
+  overrides a telemetry regression, never manufactures IMPROVED on flat telemetry;
+  negative-on-flat downgrades; contradictory → MIXED; vague → weak). Verdict
+  bridge `outcome_to_learning_verdict()` (MIXED → neutral; INSUFFICIENT → skipped).
+* **`_migrate_v13`** (additive, idempotent) adds 5 `TEXT NOT NULL DEFAULT ''`
+  columns to `learning_outcomes` (target_issue, evidence_summary, driver_feedback,
+  safety_notes, outcome_kind). `record_learning_outcome` gained keyword-only params
+  with `''` defaults (Group 46 callers unchanged). `DB_VERSION` → 13. Old v12 DBs
+  upgrade without data loss; SQLite-only.
+* **Integration:** dashboard scoring pass stores the richer evidence per approved
+  change (`_verify_change_outcome`); the confidence-feed verdict stays the OFR-1
+  telemetry verdict (non-regressive). `driving_advisor` populates
+  `_learning_outcome_explanation`; `setup_builder_ui` renders a gated, disclaimer-
+  ended outcome block.
+* **Tests:** 4 new files, 73 tests. `RULE_ENGINE_VERSION` stays 46.0. Reconciled
+  DB-version tests → 13.
+* **Deferred:** live feed still uses the OFR-1 verdict (feedback-aware verdict
+  routing is a scoped follow-up); understeer/front-bite verification; baseline
+  learning-record wiring; `session_type` population; feedback negation.

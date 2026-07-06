@@ -211,8 +211,10 @@ class TestAC18SessionDBMigrationV11:
 
         version = db._conn.execute("PRAGMA user_version").fetchone()[0]
         # Reconciled for Group 46: DB_VERSION bumped to 12.
-        assert version == 12, (
-            f"AC18 FAIL: Expected user_version=12; got {version}"
+        # Reconciled for Group 47: DB_VERSION bumped to 13 (_migrate_v13 added the
+        # 5 additive outcome-verification columns to learning_outcomes).
+        assert version == 13, (
+            f"AC18 FAIL: Expected user_version=13; got {version}"
         )
 
     def test_v11_columns_exist_on_fresh_db(self, tmp_path):
@@ -244,7 +246,7 @@ class TestAC18SessionDBMigrationV11:
         # Open it to create the initial schema (will migrate to v11)
         db = SessionDB(db_path)
         initial_version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert initial_version == 12  # fresh always migrates to latest (Group 46: v12)
+        assert initial_version == 13  # fresh always migrates to latest (Group 47: v13)
 
         # Insert a dummy session to simulate existing data
         db._conn.execute(
@@ -257,7 +259,7 @@ class TestAC18SessionDBMigrationV11:
         # Re-open the same DB — should still be at v12 with data intact
         db2 = SessionDB(db_path)
         version2 = db2._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version2 == 12  # Reconciled for Group 46
+        assert version2 == 13  # Reconciled for Group 47 (v12 → v13)
 
         # Data row must still be there
         rows = db2._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]

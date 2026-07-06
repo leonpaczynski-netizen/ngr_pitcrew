@@ -6359,3 +6359,36 @@ segfault; run in two halves (or by group). Environmental artifact, not a defect.
   biasing of the baseline.
 - The 8 pre-existing track-modelling allowlist failures remain for the
   track-modelling owner.
+
+---
+
+## Setup Brain Outcome Verification & Learning Loop 2 (Group 47)
+
+Branch `group47-setup-brain-outcome-learning` (on top of Group 46 @ `249410e`).
+
+### New tests (73)
+| File | Tests | Covers |
+| --- | --- | --- |
+| `test_group47_outcome_verification.py` | 26 | IMPROVED/UNCHANGED/WORSE/MIXED/INSUFFICIENT classification; target inference; no-signal → insufficient; verdict bridge; model-safety (no setup-authoring surface, pure imports) |
+| `test_group47_feedback_learning.py` | 25 | feedback classification; positive supports upgrade only with telemetry agreement; negative-on-flat downgrades; vague → weak; contradictory → mixed; telemetry regression not overridden |
+| `test_group47_learning_persistence.py` | 9 | v13 additive columns; migration idempotent; old v12 DB upgrade without data loss; SQLite-only round-trip; setup_history JSON NOT in learning path; Group 46 call still works |
+| `test_group47_ui_explainability.py` | 13 | formatter content/disclaimer/grouping/robustness; gated render-path source assertions; backend wiring |
+
+### Reconciled version tests (DB v12 → v13)
+`test_session_db`, `test_group18b_rec_persistence`, `test_group18e_setup_history`,
+`test_group42_legacy_storage`, `test_group46_learning_persistence`.
+`RULE_ENGINE_VERSION` unchanged at 46.0 (Group 47 changes no rule proposals).
+
+### Results (run in groups; UI files individually on Win/Py3.14)
+- Group 47: 73 passed.
+- Group 46: 106 non-UI passed / 1 skipped; UI explainability 16 passed (isolated).
+- Groups 38–45 non-UI: 694 passed / 1 skipped. AC37 RSR/Fuji benchmark: 9 passed.
+- UI files (group42_ui_gate 10, group44_baseline_ui 64, group45_ui_context 14):
+  all passed individually.
+
+### Known / pre-existing (unrelated to Group 47)
+- `test_recommendation_scoring_db::test_v9_schema_version` asserts the stale v10
+  and fails on master too (DB is ≥ v12). Pre-existing; not touched.
+- Full single-process suite can hit the native PyQt teardown segfault on
+  Win/Py3.14 — run in halves / UI files individually. Environmental, not a defect.
+- The ~7–20 frozen-allowlist / OFR track-modelling failures remain for their owner.

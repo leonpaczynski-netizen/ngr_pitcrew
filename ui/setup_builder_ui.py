@@ -1566,6 +1566,24 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
+        # Group 47: honest outcome-verification block — confidence/ranking/
+        # explanation only.  Rendered only when the backend supplies a non-empty
+        # explanation string (absent on legacy responses / when no cross-session
+        # history exists).  It never adds an actionable field.
+        _learning_outcome_html = ""
+        try:
+            _lo_expl = str(data.get("_learning_outcome_explanation", "") or "").strip()
+            if _lo_expl:
+                _lo_body = _lo_expl.replace("\n", "<br>")
+                _learning_outcome_html = (
+                    "<div style='background:#1A2618; border:1px solid #4A6B3A; "
+                    "border-radius:4px; padding:8px; margin-bottom:8px; "
+                    "color:#A9C99A; font-size:11px;'>"
+                    f"{_lo_body}</div>"
+                )
+        except Exception:
+            _learning_outcome_html = ""
+
         html = (
             _status_banner
             + _eng_banner
@@ -1574,6 +1592,7 @@ class SetupBuilderMixin:
             + _violation_banner
             + _validation_banner
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
+            + _learning_outcome_html
         )
 
         # --- Section 3: Pit Crew recommendation ---

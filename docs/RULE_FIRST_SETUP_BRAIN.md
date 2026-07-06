@@ -1023,3 +1023,88 @@ All Group 46 tests pass; the ~7–20 pre-existing frozen-allowlist / OFR failure
 known, unrelated, and untouched. Run the suite in halves on Win/Py3.14. See
 `MASTER_TESTING_REGISTER.md` (Setup Brain Learning & Race Context (Group 46)) for
 the per-file coverage table.
+
+---
+
+## 16. Group 47 — Outcome Verification & Learning Loop 2
+
+> Date: 2026-07-06 · Branch `group47-setup-brain-outcome-learning` (on top of
+> Group 46, which is merged to master at `249410e`). Cross-referenced from
+> `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 47 changelog), `docs/UAT_SETUP_BRAIN.md`
+> (§ Group 47 UAT), and `MASTER_TESTING_REGISTER.md`.
+
+### 16.0 What did NOT change (all Group 43–46 guarantees intact)
+Analyse and Baseline still work with **AI disabled**; the AI audit is still
+**explanation-only**; the old **AI Build path stays disabled**; the **Apply-gate
+predicate is UNCHANGED**; only **approved** changes render/apply; rejected /
+blocked / low-confidence / unvalidated changes stay non-actionable. Group 47 adds
+**verification + explanation** — it authors no setup values and touches no gate.
+
+### 16.1 Outcome verification model (`strategy/setup_outcome_verification.py`)
+A new **pure** module (no PyQt / sqlite3 / AI / file I/O; never raises). It
+classifies whether an applied change fixed its targeted issue:
+`OutcomeVerdict = {IMPROVED, UNCHANGED, WORSE, MIXED, INSUFFICIENT_EVIDENCE}`.
+
+* `MetricSnapshot` — typed per-lap-average before/after telemetry (wheelspin,
+  oversteer-on-throttle, bottoming, lock-up, brake-consistency, oversteer,
+  clean-laps). `from_window()` adapts an OFR-1 `LapWindow`.
+* `verify_outcome(...)` → `OutcomeVerificationResult` with `rule_id`, `car_id`,
+  `track`, `layout_id`, `target_issue`, `before_metric`, `after_metric`,
+  `driver_feedback`, `outcome`, `confidence`, `evidence_summary`, `safety_notes`.
+* **Telemetry-first + safety-first.** Positive driver feedback can *strengthen* an
+  upgrade only when telemetry agrees; it can **never** override a telemetry safety
+  regression, and never manufactures IMPROVED on flat telemetry. Negative feedback
+  on flat telemetry downgrades. Contradictory feedback → MIXED. Vague feedback →
+  no strong learning.
+* **Invents no metrics.** Understeer / front-bite / rotation-feel have no reliable
+  signal → `INSUFFICIENT_EVIDENCE` (no steering-angle or rival-driver metrics).
+* **Bridge:** `outcome_to_learning_verdict()` maps onto the Group 46 vocabulary —
+  MIXED → `neutral` (never an upgrade), INSUFFICIENT_EVIDENCE → `insufficient_data`
+  (skipped by the feed), IMPROVED → `improved`, WORSE → `worsened`, UNCHANGED →
+  `neutral`. The engine's confidence step stays capped ±1 and validator-gated.
+
+### 16.2 Persistence (SQLite only — never JSON)
+`_migrate_v13` (idempotent, additive; duplicate-column guard) adds 5 nullable
+`TEXT NOT NULL DEFAULT ''` columns to **`learning_outcomes`**: `target_issue`,
+`evidence_summary`, `driver_feedback`, `safety_notes`, `outcome_kind`.
+`record_learning_outcome(...)` gained matching **keyword-only** params (defaults
+`''`), so every Group 46 caller keeps working. `DB_VERSION` → **13**. Learning
+data is **never** written to `data/setup_history.json`.
+
+### 16.3 Integration (additive, best-effort, non-regressive)
+`ui/dashboard.py::_trigger_scoring_pass` now derives the Group 47 verification per
+approved change (`_verify_change_outcome`) and stores `target_issue` /
+`evidence_summary` / `driver_feedback` / `safety_notes` / `outcome_kind`
+alongside the record. **The confidence-feed `verdict` remains the telemetry OFR-1
+verdict** (deliberately non-regressive); the richer classification is stored as
+evidence + surfaced in explanation. `strategy/driving_advisor.py` populates the
+`_learning_outcome_explanation` payload key via
+`format_learning_outcome_explanation()`.
+
+### 16.4 Explainability UI
+`ui/setup_builder_ui.py::_display_setup_result` renders a subdued **outcome-
+verification block** after the analysis card, only when the backend supplies a
+non-empty explanation. Text always ends with the honest disclaimer: *"This adjusts
+confidence/ranking and explanation only — it does not author setup values or
+bypass validation."*
+
+### 16.5 Deferred after Group 47 (honest)
+* The **live confidence feed** still consumes the telemetry OFR-1 verdict, not the
+  Group 47 feedback-aware verdict — routing the model's verdict into the feed is a
+  scoped, deliberate follow-up (kept out to guarantee non-regression).
+* Understeer / front-bite / rotation-feel verification (no telemetry signal).
+* `source_path="Baseline"` recording and `learning_outcomes.session_type`
+  population (carried from Group 46).
+* Feedback negation handling ("not worse") — the classifier is literal by design.
+
+### 16.6 Tests
+4 new files: `tests/test_group47_outcome_verification.py`,
+`test_group47_feedback_learning.py`, `test_group47_learning_persistence.py`,
+`test_group47_ui_explainability.py` — **73 tests**, covering classification,
+target inference, the verdict bridge, feedback folding, migration idempotency,
+old-DB upgrade, SQLite-only persistence, and the explainability surface. Reconciled
+version tests: DB version → **13** (`test_session_db`, `test_group18b_rec_persistence`,
+`test_group18e_setup_history`, `test_group42_legacy_storage`,
+`test_group46_learning_persistence`). `RULE_ENGINE_VERSION` stays `46.0` (Group 47
+does not change rule proposals). All Group 38–47 setup-brain tests pass; run UI
+files individually on Win/Py3.14 (known cross-file PyQt segfault).

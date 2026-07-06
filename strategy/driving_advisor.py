@@ -2073,6 +2073,18 @@ class DrivingAdvisor:
                     )
                 else:
                     _data["_learning_note"] = "no cross-session learning history available"
+                # Group 47: honest outcome-verification explanation (confidence/
+                # ranking/explanation only — never authors values or bypasses
+                # validation).  Empty string when there is nothing to say.
+                try:
+                    from strategy.setup_outcome_verification import (
+                        format_learning_outcome_explanation,
+                    )
+                    _data["_learning_outcome_explanation"] = (
+                        format_learning_outcome_explanation(_outcomes)
+                    )
+                except Exception:
+                    _data["_learning_outcome_explanation"] = ""
                 # Group 45: tyre/fuel context availability note
                 _tyre_fuel_note: str
                 if not (diagnosis or {}).get("tyre_wear_known", False):

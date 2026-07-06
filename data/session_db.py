@@ -348,6 +348,21 @@ _V11_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("setup_recommendations", "rule_engine_version      TEXT"),
 ]
 
+# v13: Group 47 — Outcome Verification & Learning Loop 2.
+# Additive nullable-with-default TEXT columns on learning_outcomes so each row can
+# carry the richer outcome-verification evidence (target issue, before/after
+# evidence summary, optional driver feedback, safety notes, and the typed
+# OutcomeVerdict).  All columns default to '' so existing v12 rows survive
+# untouched and no back-fill is needed.  A "duplicate column" guard makes the
+# migration idempotent on already-upgraded databases.
+_V13_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("learning_outcomes", "target_issue      TEXT NOT NULL DEFAULT ''"),
+    ("learning_outcomes", "evidence_summary  TEXT NOT NULL DEFAULT ''"),
+    ("learning_outcomes", "driver_feedback   TEXT NOT NULL DEFAULT ''"),
+    ("learning_outcomes", "safety_notes      TEXT NOT NULL DEFAULT ''"),
+    ("learning_outcomes", "outcome_kind      TEXT NOT NULL DEFAULT ''"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -450,6 +465,10 @@ class SessionDB:
         if version < 12:
             self._migrate_v12()
             self._conn.execute("PRAGMA user_version = 12")
+            self._conn.commit()
+        if version < 13:
+            self._migrate_v13()
+            self._conn.execute("PRAGMA user_version = 13")
             self._conn.commit()
 
     def _migrate_v2(self) -> None:
@@ -584,6 +603,26 @@ class SessionDB:
                 ON learning_outcomes (car_id, track, layout_id);
         """)
 
+    def _migrate_v13(self) -> None:
+        """Group 47 — Outcome Verification & Learning Loop 2 (schema version 13).
+
+        Adds 5 additive TEXT columns to learning_outcomes carrying the richer
+        outcome-verification evidence (target_issue, evidence_summary,
+        driver_feedback, safety_notes, outcome_kind).
+
+        Additive and idempotent — all columns are NOT NULL DEFAULT '' so existing
+        v12 rows survive without back-fill, and the duplicate-column guard (V9
+        pattern) makes re-running the migration a no-op.  If the learning_outcomes
+        table does not yet exist (older DB opened straight to v13) the CREATE in
+        _migrate_v12 runs first because migrations apply in ascending order.
+        """
+        for table, col_def in _V13_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
     def _migrate_v5(self) -> None:
         try:
             self._conn.execute(
@@ -691,8 +730,19 @@ class SessionDB:
         confidence: float,
         driver_profile_version: str,
         rule_engine_version: str,
+        *,
+        target_issue: str = "",
+        evidence_summary: str = "",
+        driver_feedback: str = "",
+        safety_notes: str = "",
+        outcome_kind: str = "",
     ) -> None:
         """Insert a single learning outcome row.
+
+        The Group 47 fields (target_issue, evidence_summary, driver_feedback,
+        safety_notes, outcome_kind) are keyword-only with empty-string defaults so
+        every existing Group 46 caller keeps working unchanged; when supplied they
+        persist the richer outcome-verification evidence into the v13 columns.
 
         Never raises — any error (corrupt DB, missing table, type error) is
         silently swallowed so callers cannot be disrupted by persistence failures.
@@ -704,12 +754,16 @@ class SessionDB:
                     """INSERT INTO learning_outcomes
                            (ts, car_id, track, layout_id, session_id, session_type,
                             rule_id, source_path, verdict, confidence,
-                            driver_profile_version, rule_engine_version)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            driver_profile_version, rule_engine_version,
+                            target_issue, evidence_summary, driver_feedback,
+                            safety_notes, outcome_kind)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         ts, car_id, track, layout_id, session_id, session_type,
                         rule_id, source_path, verdict, float(confidence),
                         driver_profile_version, rule_engine_version,
+                        target_issue, evidence_summary, driver_feedback,
+                        safety_notes, outcome_kind,
                     ),
                 )
                 self._conn.commit()

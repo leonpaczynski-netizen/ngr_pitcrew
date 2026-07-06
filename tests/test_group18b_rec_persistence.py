@@ -386,14 +386,15 @@ def test_car_setup_recommendation_has_raw_response():
 
 # AC1 — schema version must be 9 after migration (v9 adds OFR-1 scoring columns)
 def test_schema_version_is_current(db):
-    """PRAGMA user_version must equal 12 after opening a fresh DB.
+    """PRAGMA user_version must equal 13 after opening a fresh DB.
 
     History: v10 added driver_feedback setup_id + rating; v11 added Rule-First
-    Setup Brain columns; v12 (Group 46) added learning_outcomes table.
-    Reconciled from v10 → v12 for Group 46.
+    Setup Brain columns; v12 (Group 46) added learning_outcomes table; v13
+    (Group 47) added the 5 additive outcome-verification columns.
+    Reconciled from v10 → v12 for Group 46, then v12 → v13 for Group 47.
     """
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 12, f"Expected schema version 12, got {version}"
+    assert version == 13, f"Expected schema version 13, got {version}"
 
 
 # AC3 — setup_recommendations table has correct columns
