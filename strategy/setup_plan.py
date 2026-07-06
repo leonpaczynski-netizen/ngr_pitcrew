@@ -69,6 +69,11 @@ def plan_to_raw_data(
                 if hasattr(intent.driver_style_alignment, "value")
                 else str(intent.driver_style_alignment)
             ),
+            # Group 45 explainability fields
+            "source_label": getattr(intent, "source_label", ""),
+            "session_influence": getattr(intent, "session_influence", ""),
+            "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
+            "pack": getattr(intent, "pack", ""),
         }
         changes.append(change)
 
@@ -128,5 +133,10 @@ def rejected_to_json(plan: SetupPlan) -> list[dict]:
                 if hasattr(intent.driver_style_alignment, "value")
                 else str(intent.driver_style_alignment)
             ),
+            # Group 45 explainability fields
+            "source_label": getattr(intent, "source_label", ""),
+            "session_influence": getattr(intent, "session_influence", ""),
+            "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
+            "pack": getattr(intent, "pack", ""),
         })
     return result

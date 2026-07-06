@@ -509,7 +509,7 @@ class SetupFormWidget(QWidget):
         )
         self._lbl_ecu_rec.setToolTip(
             "AI recommendation for ECU stage and/or Power Restrictor to hit the target power.\n"
-            "Fill in Max Power above then click 'Build Setup with AI' to generate."
+            "Set from your current setup and the Analyse flow."
         )
         ecu_inner.addRow(QLabel("ECU / Power Advice:", styleSheet=lbl_s), self._lbl_ecu_rec)
         ecu_inner.addRow(QLabel("ECU (in-game):", styleSheet=lbl_s), self._setup_ecu)
@@ -619,15 +619,23 @@ class SetupFormWidget(QWidget):
         self._btn_build_setup = QPushButton("Build Setup with AI")
         self._btn_build_setup.setStyleSheet(
             "background: #1A5C2A; color: white; font-weight: bold; padding: 6px 16px;")
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        self._btn_build_setup.setEnabled(False)
+        self._btn_build_setup.setVisible(False)
         self._btn_build_setup.setToolTip(
-            "AI generates a complete from-scratch car setup for this car, track, and session.\n"
-            "Uses GT7 physics knowledge + your personal driving style profile.\n"
-            "Fill in Min Weight and Max Power above first — all fields will be auto-filled.\n"
-            "You can adjust any value after the AI fills them.")
+            "Build Setup with AI is unavailable — use Analyse to get AI-guided, "
+            "rule-validated setup changes.")
         self._btn_set_car_ranges = QPushButton("Set Car Ranges…")
         self._btn_set_car_ranges.setToolTip(
             "Define per-car min/max bounds for every setup parameter.\n"
             "These bounds constrain the spinboxes and the AI output for this car.")
+        self._btn_baseline = QPushButton("Build Baseline Setup")
+        self._btn_baseline.setStyleSheet(
+            "background: #1A3A5C; color: white; font-weight: bold; padding: 6px 16px;")
+        self._btn_baseline.setToolTip(
+            "Generate a complete safe starting setup from the car's ranges and your "
+            "driving profile — no telemetry needed.")
+        _build_row.addWidget(self._btn_baseline)
         _build_row.addWidget(self._btn_build_setup)
         _build_row.addWidget(self._btn_set_car_ranges)
         _build_row.addStretch()

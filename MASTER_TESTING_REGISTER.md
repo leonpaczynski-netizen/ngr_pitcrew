@@ -1,6 +1,8 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> Last updated: 2026-07-05 (**Group 42 — Rule-First Setup Brain** — backend + UI + DB. **The Setup Brain inverted from AI-first to RULE-FIRST**: deterministic race-engineering rules are now the PRIMARY source of setup recommendations; the AI is demoted to an AUDIT-ONLY layer (approve/warn/reject/request-more-data) that CANNOT author actionable setup changes. ONE source of truth for actionable changes: the deterministic rule engine. New flow in `build_combined_setup_response`: diagnose (`build_setup_diagnosis`) → `build_driver_profile()` → `run_rule_engine()` → `SetupPlan` → `plan_to_raw_data` → `_normalise_changes` → `validate_setup_engineering_structured` → if blocking `_build_deterministic_fallback` (NOT AI) → else if API key `call_api` for AI AUDIT ONLY → `parse_audit_response` (strips any canonical setup field keys) → `map_audit_to_finaliser` → `_finalise_recommendation` (unchanged funnel). NEW backend modules (all `strategy/`, pure Python): `setup_knowledge_base.py` (rule catalogue + `register_pack`/`get_all_rules`/`resolve_delta`; enums RulePhase/RiskLevel/ConfidenceLevel/DrivetrainType/CarClass/SessionType; NamedTuples SetupRule/SetupEvidence; **22 rules** — Pack A A1–A8 safety invariants, Pack B B1–B6 driver-style adaptation, Pack C/D C1_entry_lsd_decel/C2_entry_brake_bias/C3_mid_arb_rear/C4_mid_rear_aero/C5_exit_lsd_accel/C6_exit_rear_aero/C7_kerb_arb_rear/C8_kerb_rh_rear handling-phase starter set; remaining per-setting Pack C deferred, extensible via register_pack; delta resolvers = named-string lookups in `_DELTA_RESOLVERS`, no stored callables); `setup_driver_profile.py` (`DriverProfile` NamedTuple + `DriverStyleAlignment` enum; `build_driver_profile()` derives 8 booleans from the existing `PERSONAL_DRIVER_TUNING_MODEL`/`DRIVER_HARD_CONSTRAINTS`; never raises — driver style is now a DATA STRUCTURE for ranking + contraindications); `setup_rule_engine.py` (`SetupChangeIntent`/`SetupPlan` NamedTuples; `run_rule_engine(diagnosis, setup, ranges, profile, allowed_tuning=None, rule_outcome_store=None)` — Pack A protects fields, conflict resolution → rejected `conflict:<id>`, no-op exclusion, gear-count gating, confidence-downgrade hook; `RuleOutcomeStore` fire/success counts keyed rule_id/car/track/driver_profile_version, `get_success_rate` None below MIN_OUTCOME_SAMPLES; never raises → empty plan); `setup_plan.py` (`plan_to_raw_data` emits the raw_data dict the funnel consumes incl. confidence + validation_targets; `rejected_to_json`); `setup_ai_audit.py` (`AuditStatus` APPROVED/APPROVED_WITH_WARNINGS/REJECTED/NEEDS_MORE_DATA + `AuditResult`; `build_audit_prompt` 8 labelled sections; `parse_audit_response(text, canonical_params)` STRIPS any canonical param key + logs stripped_fields, unknown status → NEEDS_MORE_DATA, never raises; `map_audit_to_finaliser` — REJECTED/NEEDS_MORE_DATA + no blocking → approved_with_warnings advisory, a blocking engineering failure ALWAYS wins). Constants in `_setup_constants.py`: `RULE_ENGINE_VERSION="42.0"`, `MIN_OUTCOME_SAMPLES=3`, `LOW_SUCCESS_RATE=0.40`, `AI_AUDIT_REJECTED_ADVISORY="ai_audit_rejected_advisory"` (NOT in APPROVED_STATUSES). VOICE PATH constrained to NARRATION-ONLY via `_strip_actionable_for_voice(data)` (zeroes changes/setup_fields pre-normalisation); full voice rule-first rebuild deferred. DB v11 (`data/session_db.py::_migrate_v11`) adds 8 nullable TEXT cols to `setup_recommendations` (deterministic_plan_json, ai_audit_json, validation_status, approved_changes_json, rejected_changes_json, diagnosis_json, driver_profile_version, rule_engine_version), blob preserved + now POPULATED on insert (`_rec_parser.py` + `insert_setup_recommendations`). LEGACY SAFETY (closes Group 41's caveat): `data/setup_history.py` adds `is_legacy_unknown`/`normalise_validation_status`/`LEGACY_UNKNOWN` — absent/None/unrecognised status → legacy_unknown = DISPLAY-ONLY, NO Apply (previously could default to approved). LEARNING: `RuleOutcomeStore` FOUNDATION ONLY (downgrade hook implemented + unit-tested, live wiring + persistence DEFERRED, `rule_outcome_store=None`; no fake ML). UI (`ui/setup_builder_ui.py::_display_setup_result` + `ui/setup_form_widget.py`): diagnosis → "Pit Crew recommendation" (approved changes + collapsed "Why Pit Crew recommended this": symptom/rationale/evidence/rejected_alternatives/risk_level/confidence_level/driver_style_alignment) → "Protected fields" → "Rejected candidate changes" → "AI audit" → "Rejected AI output — not for use"; legacy banner; Apply relabelled "Apply Pit Crew recommendation", hidden unless status ∈ APPROVED_STATUSES AND approved changes present AND not legacy. RESPONSE CONTRACT: per-change keys inside each `changes` item (symptom, evidence, rule_id, rationale, rejected_alternatives, risk_level, confidence_level, driver_style_alignment) + new top-level `ai_audit`/`deterministic_plan`/`protected_fields`. New suites `tests/test_group42_rule_first_engine.py`, `test_group42_ai_audit_only.py`, `test_group42_driver_style.py`, `test_group42_legacy_storage.py`, `test_group42_handling_phases.py`, `test_group42_voice_path_safety.py`, `test_group42_ui_gate.py` (136 new) + 17 rewritten (test_group38 TestRegenerateOnceOrchestration, test_group40 TestAC9DeterministicFallback, test_group41 ×2, test_group27 ×1). All green, zero new regressions; the SAME 8 pre-existing frozen-allowlist track-modelling guards remain (unrelated). Run tests in halves on Win/Py3.14 (flaky PyQt teardown segfault). `docs/RULE_FIRST_SETUP_BRAIN.md` (NEW architecture doc), `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42), `docs/UAT_SETUP_BRAIN.md` (Rule-First section). See "Rule-First Setup Brain (Group 42)" at the end of this file.)
+> Last updated: 2026-07-06 (**Group 45 — Setup Brain Intelligence Expansion** — backend + UI; branch `ofr2-quali-race-disciplines` (on top of Group 44). **The rule-first Setup Brain became context-aware: session type, tyre-wear, drivetrain, and car-class now genuinely shape which rules fire and how confident/ranked they are — WITHOUT inventing precision (delta magnitudes unchanged; context affects filtering, confidence, ranking, contraindication, and explanation only).** Architecture preserved: Pit Crew owns the decision, AI stays audit-only (`parse_audit_response` strips canonical params; `map_audit_to_finaliser` never un-blocks; voice narration-only); both Analyse and Baseline run through the one validator → funnel → renderer → Apply gate; the old AI build path stays disabled; everything works with AI disabled. ENGINE SCOPE FILTER (`strategy/setup_rule_engine.py::_scope_matches`): `applies_session`/`applies_drivetrain`/`applies_car_class` now enforced at runtime; `any`/`None` = wildcard-permissive; Pack A EXEMPT; all-rules-filtered-out → valid empty `SetupPlan`. CONTEXT RESOLUTION (`strategy/driving_advisor.py`): Analyse reads `_event_ctx` (tyre_wear→tyre_wear_multiplier, fuel_multiplier, duration_mins) + `purpose`→`SessionType`, `car_specs.category`→`CarClass`, `drivetrain` (precedence: UI combo > `CAR_DRIVETRAIN_OVERRIDES {"Porsche 911 RSR (991) '17":"rr"}` > empty DB → None); Baseline gets SCALAR params only (no EventContext). DRIVER-PROFILE ACTIVE WEIGHTING: bounded {−1,0,+1} rank tiebreaker when confidence equal (magnitudes UNCHANGED). SESSION/TYRE/FUEL: session biases confidence (quali→front-bite/trail-braker; race→safety/consistency; endurance=race+duration>=60); `HIGH_TYRE_WEAR_THRESHOLD=5.0` sets `diagnosis["tyre_wear_high"]` which CONTRAINDICATES 4 tyre-abusing rules (B3 lsd_accel-down, C1_entry_lsd_decel lsd_decel-down, C3_mid_arb_rear + C7_kerb_arb_rear rear-ARB-soften); increase-lock/downforce rules NOT suppressed; fuel READ but only informational. PORSCHE PACK P (`register_pack("P",...)`): rule P1 cautious traction-first lsd_accel increase (rr+gr3, contraindicated on `snap_oversteer_exit`); no P2 (A2 covers rear-downforce); asserts RR via overrides. GEARBOX: B5b (gear_too_long→final_drive_up) added to B5; "limiter_before_braking" maps to existing gear_too_short (not faked); `per_gear_limiter_evidence` exposed, full per-gear rules DEFERRED; monotonic ordering now NON-INCREASING (equal ratios allowed; engine + `gearbox_ratio_inversion` validator both strict-`>`). LEARNING SEAM: live-but-EMPTY `RuleOutcomeStore` (was None) — hook wired but never fires without samples; `_learning_note`; persistence + feed DEFERRED; learning CANNOT un-block/un-reject/bypass validation/make AI actionable. EXPLAINABILITY: `source_label`/`session_influence`/`car_drivetrain_influence`/`pack` on each approved + rejected change, populated HONESTLY (positive claim only when context used, else explicit neutral string); baseline labels never claim telemetry. `RULE_ENGINE_VERSION`="45.0". New suites `tests/test_group45_engine_scope.py`, `test_group45_gear_monotonic.py`, `test_group45_context_signals.py`, `test_group45_porsche_pack.py`, `test_group45_explainability.py`, `test_group45_learning.py`, `test_group45_baseline_context.py`, `test_group45_ui_context.py`; 3 existing tests reconciled (`RULE_ENGINE_VERSION` "42.0"→"45.0"; baseline lsd_decel bias nets differently with `rotation_without_snap`; inversion validator strict-`>`). All Group 45 tests pass; the ~18 pre-existing frozen-allowlist/schema failures are KNOWN, unrelated, and untouched; run tests IN HALVES on Win/Py3.14 (flaky PyQt teardown segfault). `docs/RULE_FIRST_SETUP_BRAIN.md` (§ Group 45 + § 14 dedicated "Setup Brain Intelligence Expansion"), `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 45), `docs/UAT_SETUP_BRAIN.md` (§ Group 45). See "Setup Brain Intelligence Expansion (Group 45)" at the end of this file.)
+> Prior: 2026-07-06 (**Group 44 — Rule-First From-Scratch Setup Baseline Generator** — backend + UI; branch `ofr2-quali-race-disciplines` (on top of Group 43); delivered via the feature-factory chain. **Restores the capability lost when Group 43 disabled "Build Setup with AI" — the app can now author a COMPLETE safe starting setup for a car with NO telemetry, deterministically, with the AI NEVER called.** A new **"Build Baseline Setup"** button (`_btn_baseline`) sits separate from the still-disabled `_btn_build_setup` (Group 43 guards untouched). Why a new module (not `run_rule_engine`): the rule engine emits DELTAS off a telemetry diagnosis, so with no telemetry almost no rules fire — a separate ABSOLUTE-VALUE author was required. NEW `strategy/setup_baseline.py`: `NEUTRAL_SEEDS` (single source of truth for neutral physics defaults; matches the form seeds in `ui/setup_form_widget.py` — lsd_front_initial/accel/decel take the FORM values 10/15/5, differing from the `ai_planner` parser fallbacks 0/0/0); `build_baseline_setup(car, ranges, drivetrain, num_gears, profile, allowed_tuning, tuning_locked) -> raw_data dict` (plan_to_raw_data shape) authors ALL 33 actionable `_CANONICAL_SETUP_PARAMS` (34 minus display-only transmission_max_speed_kmh) as ABSOLUTE values via neutral seed → driver-profile bias (`_PROFILE_BIAS_TABLE`) → clamp to `resolve_ranges(car)`; gearbox (`_build_gearbox_changes`) = final_drive midpoint of `_FINAL_DRIVE_RANGE (2.5,6.0)` + a strictly-DECREASING geometric gear sequence inside `_GEAR_RATIO_RANGE (0.5,4.0)` (monotonic by construction → `gearbox_ratio_inversion` can never fire); locked categories excluded + named by human category; every change carries a source label ("neutral default"/"range midpoint"/"driver-profile biased"/"conservative default, not diagnosed"). ORCHESTRATOR `DrivingAdvisor.build_baseline_setup_response(...)`: `build_driver_profile()` → `build_baseline_setup` → `validate_setup_engineering_structured` (neutral baseline passed as BOTH the `setup` arg AND the proposed setup_fields → zero delta) → `_filter_baseline_artifact_warnings` (drops ONLY WARNING-severity failures whose message contains "is a no-op" or "too many changes"; the severity guard `if vf.severity == "warning"` is the OUTER condition → cannot suppress a blocking failure) → `_finalise_recommendation` → JSON identical in shape to `build_combined_setup_response`. NO api_key read, NO call_api, NO audit. FRONTEND: new `_btn_baseline` (enabled+visible; added to `_RACE_ALIASES`) in `ui/setup_form_widget.py` + `ui/setup_builder_ui.py` handlers `_generate_baseline_setup`/`_generate_baseline_setup_for_form` (daemon thread → `_baseline_result_queue` in `ui/dashboard.py`) → `_display_baseline_result` DELEGATES to the shared `_display_setup_result` renderer + Apply gate; Group 43 `_btn_build_setup`/`_run_build_setup*` guards untouched. New suites `tests/test_group44_baseline_generator.py` (86 backend) + `tests/test_group44_baseline_ui.py` (64 UI/integration). **406 green together with group41 + group42 (all) + group43; 0 fail** — the SAME 8 pre-existing frozen-allowlist track-modelling guards remain (unrelated, untouched); run tests in halves on Win/Py3.14 (flaky PyQt teardown segfault). `docs/RULE_FIRST_SETUP_BRAIN.md` (§ Group 44). See "Rule-First Setup Baseline Generator (Group 44)" at the end of this file.)
+> Prior: 2026-07-05 (**Group 42 — Rule-First Setup Brain** — backend + UI + DB. **The Setup Brain inverted from AI-first to RULE-FIRST**: deterministic race-engineering rules are now the PRIMARY source of setup recommendations; the AI is demoted to an AUDIT-ONLY layer (approve/warn/reject/request-more-data) that CANNOT author actionable setup changes. ONE source of truth for actionable changes: the deterministic rule engine. New flow in `build_combined_setup_response`: diagnose (`build_setup_diagnosis`) → `build_driver_profile()` → `run_rule_engine()` → `SetupPlan` → `plan_to_raw_data` → `_normalise_changes` → `validate_setup_engineering_structured` → if blocking `_build_deterministic_fallback` (NOT AI) → else if API key `call_api` for AI AUDIT ONLY → `parse_audit_response` (strips any canonical setup field keys) → `map_audit_to_finaliser` → `_finalise_recommendation` (unchanged funnel). NEW backend modules (all `strategy/`, pure Python): `setup_knowledge_base.py` (rule catalogue + `register_pack`/`get_all_rules`/`resolve_delta`; enums RulePhase/RiskLevel/ConfidenceLevel/DrivetrainType/CarClass/SessionType; NamedTuples SetupRule/SetupEvidence; **22 rules** — Pack A A1–A8 safety invariants, Pack B B1–B6 driver-style adaptation, Pack C/D C1_entry_lsd_decel/C2_entry_brake_bias/C3_mid_arb_rear/C4_mid_rear_aero/C5_exit_lsd_accel/C6_exit_rear_aero/C7_kerb_arb_rear/C8_kerb_rh_rear handling-phase starter set; remaining per-setting Pack C deferred, extensible via register_pack; delta resolvers = named-string lookups in `_DELTA_RESOLVERS`, no stored callables); `setup_driver_profile.py` (`DriverProfile` NamedTuple + `DriverStyleAlignment` enum; `build_driver_profile()` derives 8 booleans from the existing `PERSONAL_DRIVER_TUNING_MODEL`/`DRIVER_HARD_CONSTRAINTS`; never raises — driver style is now a DATA STRUCTURE for ranking + contraindications); `setup_rule_engine.py` (`SetupChangeIntent`/`SetupPlan` NamedTuples; `run_rule_engine(diagnosis, setup, ranges, profile, allowed_tuning=None, rule_outcome_store=None)` — Pack A protects fields, conflict resolution → rejected `conflict:<id>`, no-op exclusion, gear-count gating, confidence-downgrade hook; `RuleOutcomeStore` fire/success counts keyed rule_id/car/track/driver_profile_version, `get_success_rate` None below MIN_OUTCOME_SAMPLES; never raises → empty plan); `setup_plan.py` (`plan_to_raw_data` emits the raw_data dict the funnel consumes incl. confidence + validation_targets; `rejected_to_json`); `setup_ai_audit.py` (`AuditStatus` APPROVED/APPROVED_WITH_WARNINGS/REJECTED/NEEDS_MORE_DATA + `AuditResult`; `build_audit_prompt` 8 labelled sections; `parse_audit_response(text, canonical_params)` STRIPS any canonical param key + logs stripped_fields, unknown status → NEEDS_MORE_DATA, never raises; `map_audit_to_finaliser` — REJECTED/NEEDS_MORE_DATA + no blocking → approved_with_warnings advisory, a blocking engineering failure ALWAYS wins). Constants in `_setup_constants.py`: `RULE_ENGINE_VERSION="42.0"`, `MIN_OUTCOME_SAMPLES=3`, `LOW_SUCCESS_RATE=0.40`, `AI_AUDIT_REJECTED_ADVISORY="ai_audit_rejected_advisory"` (NOT in APPROVED_STATUSES). VOICE PATH constrained to NARRATION-ONLY via `_strip_actionable_for_voice(data)` (zeroes changes/setup_fields pre-normalisation); full voice rule-first rebuild deferred. DB v11 (`data/session_db.py::_migrate_v11`) adds 8 nullable TEXT cols to `setup_recommendations` (deterministic_plan_json, ai_audit_json, validation_status, approved_changes_json, rejected_changes_json, diagnosis_json, driver_profile_version, rule_engine_version), blob preserved + now POPULATED on insert (`_rec_parser.py` + `insert_setup_recommendations`). LEGACY SAFETY (closes Group 41's caveat): `data/setup_history.py` adds `is_legacy_unknown`/`normalise_validation_status`/`LEGACY_UNKNOWN` — absent/None/unrecognised status → legacy_unknown = DISPLAY-ONLY, NO Apply (previously could default to approved). LEARNING: `RuleOutcomeStore` FOUNDATION ONLY (downgrade hook implemented + unit-tested, live wiring + persistence DEFERRED, `rule_outcome_store=None`; no fake ML). UI (`ui/setup_builder_ui.py::_display_setup_result` + `ui/setup_form_widget.py`): diagnosis → "Pit Crew recommendation" (approved changes + collapsed "Why Pit Crew recommended this": symptom/rationale/evidence/rejected_alternatives/risk_level/confidence_level/driver_style_alignment) → "Protected fields" → "Rejected candidate changes" → "AI audit" → "Rejected AI output — not for use"; legacy banner; Apply relabelled "Apply Pit Crew recommendation", hidden unless status ∈ APPROVED_STATUSES AND approved changes present AND not legacy. RESPONSE CONTRACT: per-change keys inside each `changes` item (symptom, evidence, rule_id, rationale, rejected_alternatives, risk_level, confidence_level, driver_style_alignment) + new top-level `ai_audit`/`deterministic_plan`/`protected_fields`. New suites `tests/test_group42_rule_first_engine.py`, `test_group42_ai_audit_only.py`, `test_group42_driver_style.py`, `test_group42_legacy_storage.py`, `test_group42_handling_phases.py`, `test_group42_voice_path_safety.py`, `test_group42_ui_gate.py` (136 new) + 17 rewritten (test_group38 TestRegenerateOnceOrchestration, test_group40 TestAC9DeterministicFallback, test_group41 ×2, test_group27 ×1). All green, zero new regressions; the SAME 8 pre-existing frozen-allowlist track-modelling guards remain (unrelated). Run tests in halves on Win/Py3.14 (flaky PyQt teardown segfault). `docs/RULE_FIRST_SETUP_BRAIN.md` (NEW architecture doc), `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42), `docs/UAT_SETUP_BRAIN.md` (Rule-First section). See "Rule-First Setup Brain (Group 42)" at the end of this file.)
 > Prior: 2026-07-05 (**Group 41 — Setup Builder Engineering Validation Gate** — backend + UI. `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py` + `strategy/_setup_constants.py` (NEW) + `strategy/_rec_parser.py` + `data/setup_history.py` + `ui/setup_builder_ui.py`. RECOMMENDATION LIFECYCLE with explicit statuses (generated, validation_failed, retry_requested, retry_failed, approved, approved_with_warnings, fallback_generated, blocked_no_safe_recommendation; `APPROVED_STATUSES = {approved, approved_with_warnings, fallback_generated}` in `_setup_constants.py`). SINGLE FINALISATION FUNNEL `_finalise_recommendation` in driving_advisor.py — BOTH AI paths (`build_setup_advice_response`, `build_combined_setup_response`) route through it, producing a frozen `SetupRecommendationResult` dataclass (status/approved_changes/approved_fields/rejected_changes/analysis/primary_issue/engineering_errors/validation_warnings/fallback_used/raw_json), embedded into the returned JSON (keys: recommendation_status, changes, setup_fields, rejected_changes, engineering_validation_errors, validation_warnings, fallback_used). DISPLAY SAFETY (`ui/setup_builder_ui.py::_display_setup_result`): "CHANGES TO MAKE IN CAR SETUP" renders ONLY when status ∈ APPROVED_STATUSES and approved_changes non-empty (iterates approved_changes only); Apply button HIDDEN (not disabled) unless approved-ish with non-empty approved_fields, applies approved_fields only via `SetupFormWidget.apply_ai_fields`; rejected output only in a collapsed "Rejected AI output — not for use" section (validation_failed/retry_failed/blocked_no_safe_recommendation), no apply path. VALIDATOR SEVERITY: `ValidationFailure(code, message, severity)` + `validate_setup_engineering_structured()` (legacy `validate_setup_engineering` still returns byte-identical prefixed strings); ANY blocking-severity failure (safety-prefix OR structural — malformed_schema/invalid_units/locked-field) forces validation_failed (retry_failed if retried) + approved_changes=[]; out-of-range is a WARNING (clamping forces the applied value back in range). NEW BLOCKING RULES: `snap_throttle_lsd_accel_gate` (snap_throttle_induced + lsd_accel > 4), `kerb_strike_rh_over_increment` (kerb_strike bottoming + rear RH increase > 3mm), `gearbox_fake_field` (transmission_max_speed_kmh used as actionable), `gearbox_ratio_inversion` (a gear ratio not strictly lower than the gear below). NEW WARNING: `gearbox_out_of_range` (final_drive outside 2.5–6.0 or any gear outside 0.5–4.0 — conservative invented constants pending per-car ranges). REAL GEARBOX FIELDS: final_drive + gear_1..gear_6 now actionable (added to `_CANONICAL_SETUP_PARAMS` + `_CAT_FIELDS["transmission"]`; `_normalise_changes` expands `gear_ratios:[...]` into gear_N keys; surfaced/applied via SetupFormWidget); transmission_max_speed_kmh DEMOTED to display-only (`_DISPLAY_ONLY_FIELDS`) — readable for diagnosis/top-speed classification, stripped from approved output, never an actionable change; `gearbox_category_mismatch` now also blocks final_drive/gear_1..6 on a preserve gearing category. STRICT RETRY CONTRACT: `_build_retry_prompt` lists each blocking failure code + max delta + forbidden fields + forbids repeating rejected changes; a retry with any blocking failure becomes retry_failed (never approved); banner reworded "AI recommendation rejected after retry" (was "survived a correction attempt"). DETERMINISTIC FALLBACK ENGINE (`_build_deterministic_fallback`) now emits 1–3 real conservative changes that pass the same validator (respecting RH-increment/LSD-subtype/rake gates); if nothing safe → blocked_no_safe_recommendation + "run more laps". PERSISTENCE respects validation state: `data/setup_history.py::save_entry` takes `validation_status` and routes non-approved to a `_rejected_<config_id>` diagnostic bucket; DB `setup_recommendations` row now carries the final lifecycle status (`_rec_parser.py` extracts recommendation_status, was default 'proposed'). WORDING/LOGIC FIXES: kerb_strike bottoming described distinctly from true floor contact (no longer forces RH "required"); snap_throttle_induced no longer asserts "inside rear spins" (no telemetry), classified mixed setup/driver; old "top speed below target ⇒ no gearing change" leakage removed (gearing can change on power-band/driver evidence, display-only caveat on transmission_max_speed_kmh). `_ENG_SAFETY_PREFIXES` deduplicated to shared `ENG_SAFETY_PREFIXES` in `_setup_constants.py` (imported by driving_advisor + setup_diagnosis). AMENDMENT B (UI real-estate): the redundant read-only "Race Conditions (from Event Planner)" group box removed from the Setup Builder header (duplicated Event Planner + Home Race Setup card, same EventContext); 320px header cap lifted; `_sync_setup_builder_from_event` retains all functional side effects (BoP toggle, permissions, spinbox rebind, RE-brief load, prefill, qual-form sync). AMENDMENT C: Home "Race Setup" card now shows a Damage line (sourced from `EventContext.damage`). New suite `tests/test_group41_validation_gate.py` (AC0–AC14). **Full suite: 5505 pass / 8 fail / 6 skip** — the 8 fails are the SAME pre-existing frozen-allowlist guards (`ui/track_modelling_ui.py::_tm_restore_last_track`, unrelated track-modelling tech debt, NOT this sprint), zero new regressions. NOTE: running the ENTIRE suite in one process can hit a flaky native PyQt teardown segfault on Windows/Python 3.14; running in two halves (or by group) completes clean at 5505 pass / 8 pre-existing fail — an environmental test-isolation artifact, not a product defect. See "Setup Builder Engineering Validation Gate (Group 41)" at the end of this file.)
 > Prior: 2026-07-05 (**Group 40 — Setup Diagnosis Hardening** — pure Python backend. `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW: `_classify_bottoming_confidence(...)` → `bottoming_confidence` dict (band/subtype/confidence); `_rh_permitted_increment(...)` — confidence-gated ride-height increment limiter; `_derive_driver_feel_traction_status(...)` → `driver_feel_traction_status` ("good"/"degraded"/"unknown"); `_build_deterministic_fallback(...)` — safe no-change response for engineering-retry failures; `aero_rear_healthy` bool (fraction-of-max threshold, 0.80*hi, no false positives on generic-range cars). NEW VALIDATION RULES: `rh_increment_exceeds_confidence` (composes with rh_for_minor_bottoming), `rh_rake_risk` (rear delta >= 4mm without front change), `lsd_large_change_gated` (subtype-gated LSD increase cap), `lsd_blocked_driver_feel` (traction good + LSD increase blocked). HARDENED: `lsd_reversal_without_evidence` now requires delta >= 5 AND includes `delta=N` in reason string. `_derive_dominant_problem` + `_derive_tuning_priority` both respect `aero_rear_healthy` (skip rear-aero priority when near-max). `format_diagnosis_for_prompt` renders all three new keys with AI-directive text. `_validate_setup_response` gains `rh_rake_risk` structural check (> 3mm rear-only). CONSERVATIVE DICT updated with all three new keys. New tests: `test_group40` (test-verifier, S1–S10 + AC9 fallback + key parity). **Full suite: 5359 pass / 6 skip / 8 fail** — same 8 pre-existing frozen-allowlist failures, zero new regressions.)
 > Prior: 2026-07-05 (**Setup Brain Upgrade — Professional Race Engineer Diagnosis** — the setup-diagnosis brain (`strategy/setup_diagnosis.py`) now reasons about WHY a symptom appears before the AI touches a setup; backend-only, no UI surface, branch `ofr2-quali-race-disciplines` (on top of OFR-2). Two production files: `strategy/setup_diagnosis.py` + `strategy/driving_advisor.py`. NEW app-side GEARING DIAGNOSIS `_classify_gearing(...)` → `gearing_diagnosis_category` (7 categories) via a priority decision table, fed by the new pure `_derive_top_gear_frame_signals(frames, top_gear)` over ~10Hz `LapStats.frames`. The flawed rule REMOVED (the `gear_note` "Do NOT lengthen gears" block, old `DRIVER_HARD_CONSTRAINTS` #8 → now 8, `gearbox_edit_when_preserve`) → replaced by `gearbox_category_mismatch` (Fuji RSR power-band now ALLOWS a gearbox change). NEW `_classify_wheelspin_subtype(...)` → `wheelspin_subtype` (7 values) with honest deferrals (`inside_wheel_spin` NEVER emitted — no per-wheel slip; `rear_platform_stiffness` folds into mixed; kerb_unload_spin is a kerb-count proxy). NEW `compliance_priority` bool (`_detect_compliance_priority`) raises natural-freq/damping UNPROMPTED. Dominant re-order (severe wheelspin > "consider" bottoming). LSD ANTI-OSCILLATION `validate_setup_engineering`+`rec_history`+rule `lsd_reversal_without_evidence` (rec_history resolved by the CALLER from STRUCTURED `data/setup_history.json` + DB `worsened` verdict — no new config["strategy"] read). FEEDBACK CHRONOLOGY: `_get_driver_feedback_context` splits Latest vs Earlier with trend tags via `DrivingAdvisor._feedback_trend_tag`. SCHEMA FIX: `not-present` added to `issue_classification`. New keys present on the conservative/error path too. New tests `tests/test_group39_setup_brain_upgrade.py` (~72, AC1–AC9 + frame-signal units); 4 re-pointed in `tests/test_group38_setup_diagnosis.py` (constraint 9→8, rule rename). `docs/SETUP_BRAIN_UPGRADE.md` (NEW). **Full suite: 5356 pass / 6 skip / 8 fail** — the 8 fails are ALL pre-existing frozen-allowlist guards from the already-committed `ui/track_modelling_ui.py::_tm_restore_last_track` config["strategy"] consumer (unrelated track-modelling tech debt, NOT this sprint); ~72 new tests green, zero regressions. See "Setup Brain Upgrade" at the end of this file.)
@@ -6031,5 +6033,214 @@ and the voice path is narration-only.
 - Full DB migration off the recommendation_text JSON blob (the 8 v11 columns are
   populated, but the blob is still the primary store).
 - Full rule-first rebuild of the voice path (narration-only for now).
+- The 8 pre-existing track-modelling allowlist failures remain for the
+  track-modelling owner.
+
+---
+
+## Setup Brain Intelligence Expansion (Group 45) (2026-07-06)
+
+> Branch `ofr2-quali-race-disciplines` (built on top of Group 44). Backend + UI.
+> Changed: `strategy/setup_rule_engine.py`, `strategy/driving_advisor.py`,
+> `strategy/setup_knowledge_base.py`, `strategy/setup_baseline.py`,
+> `strategy/_setup_constants.py`, `ui/setup_builder_ui.py`.
+> Full docs: `docs/RULE_FIRST_SETUP_BRAIN.md` (§ 14 "Setup Brain Intelligence
+> Expansion" — the dedicated honest account), `docs/SETUP_BRAIN_UPGRADE.md`
+> (§ Group 45 changelog), `docs/UAT_SETUP_BRAIN.md` (§ Group 45 UAT).
+> **All Group 45 tests pass; 3 existing tests reconciled for legitimate
+> behaviour changes; the ~18 pre-existing frozen-allowlist / schema failures are
+> KNOWN, unrelated, and untouched.** Run the suite IN HALVES on Win/Py3.14
+> (flaky PyQt teardown segfault).
+
+### What was built
+The rule-first Setup Brain became **context-aware** without changing *who*
+authors setups. Session type, tyre-wear, drivetrain, and car-class now genuinely
+shape **which rules fire and how confident / ranked they are** — but **delta
+magnitudes are unchanged** (context affects filtering, confidence, ranking,
+contraindication, and explanation only; it never invents precision). The
+architecture is preserved: Pit Crew owns the decision, the AI stays audit-only,
+both Analyse and Baseline run through the one validator → funnel → renderer →
+Apply gate, and everything works with the AI disabled. `RULE_ENGINE_VERSION` is
+now **"45.0"** (was "42.0"); `HIGH_TYRE_WEAR_THRESHOLD=5.0`.
+
+- **Engine scope filter** (`_scope_matches`): `applies_session` /
+  `applies_drivetrain` / `applies_car_class` are now enforced at runtime;
+  `any`/`None` = wildcard-permissive (unknown never filters); **Pack A EXEMPT**;
+  all-rules-filtered-out → valid empty `SetupPlan` (no raise).
+- **Context resolution** (`driving_advisor.py`): Analyse reads `_event_ctx`
+  (tyre_wear → tyre_wear_multiplier, fuel_multiplier, duration_mins) + new params
+  `purpose` → `SessionType`, `car_specs.category` → `CarClass`, `drivetrain`
+  (precedence: UI combo > `CAR_DRIVETRAIN_OVERRIDES` > empty DB → None);
+  **Baseline receives scalar params only** (no EventContext).
+- **Driver-profile active weighting**: bounded {−1,0,+1} rank tiebreaker when
+  confidence is equal (magnitudes UNCHANGED); baseline `_PROFILE_BIAS_TABLE`
+  gained trail_braker → brake_bias −0.5 + rotation_without_snap → lsd_decel −2.
+- **Session / tyre / fuel**: session biases confidence (quali → front-bite /
+  trail-braker; race → safety-phase / consistency; endurance = race +
+  duration>=60); high tyre-wear CONTRAINDICATES 4 tyre-abusing rules (B3,
+  C1_entry_lsd_decel, C3_mid_arb_rear, C7_kerb_arb_rear); increase-lock /
+  downforce rules NOT suppressed; fuel READ but only informational.
+- **Porsche Pack P** (`register_pack("P",...)`): rule P1 cautious traction-first
+  lsd_accel increase (rr + gr3, contraindicated on `snap_oversteer_exit`); no P2
+  (existing Pack A A2 covers rear-downforce, so P2 was intentionally omitted);
+  asserts RR via `CAR_DRIVETRAIN_OVERRIDES`.
+- **Gearbox**: B5b (gear_too_long → final_drive_up) added to B5;
+  "limiter_before_braking" maps to existing gear_too_short (documented, not
+  faked); `per_gear_limiter_evidence` exposed, full per-gear rules DEFERRED;
+  monotonic ordering now NON-INCREASING (equal ratios allowed; engine +
+  `gearbox_ratio_inversion` validator both strict-`>`).
+- **Learning seam**: live-but-EMPTY `RuleOutcomeStore` (was None) — hook wired
+  but never fires without samples; `_learning_note`; persistence + a
+  success-recording feed DEFERRED; learning CANNOT un-block / un-reject / bypass
+  validation / make the AI actionable.
+- **Explainability**: `source_label` / `session_influence` /
+  `car_drivetrain_influence` / `pack` on each approved + rejected change,
+  populated HONESTLY (a positive claim only when the context was used, else the
+  explicit neutral string); baseline labels never claim telemetry evidence.
+
+### New test files
+
+| Test file | Coverage |
+|-----------|----------|
+| `tests/test_group45_engine_scope.py` (NEW) | `_scope_matches` enforcement: `applies_session` / `applies_drivetrain` / `applies_car_class` now filter at runtime; `any`/`None` is wildcard-permissive (unknown context never drops a rule); Pack A safety rules are EXEMPT from scope filtering; all-rules-filtered-out returns a valid empty `SetupPlan` (no raise) |
+| `tests/test_group45_gear_monotonic.py` (NEW) | Gearbox: B5b (gear_too_long → final_drive_up) proposes correctly; B5 (gear_too_short → final_drive_down) unchanged; limiter_limited stays preserve; monotonic ordering is NON-INCREASING (equal adjacent ratios ALLOWED, only a strict inversion rejected "monotonic ordering violation"); engine and the `gearbox_ratio_inversion` validator agree on strict-`>` |
+| `tests/test_group45_context_signals.py` (NEW) | Session bias (quali / race / endurance confidence shifts, magnitudes unchanged); high tyre-wear (`>=5.0`) sets `tyre_wear_high` and suppresses exactly the 4 tyre-abusing rules (B3, C1, C3, C7) while NOT suppressing increase-lock / downforce rules; missing tyre/fuel context yields the honest "not available" note; fuel read but only informational |
+| `tests/test_group45_porsche_pack.py` (NEW) | Pack P registered; rule P1 fires on snap-throttle wheelspin for rr+gr3, contraindicated on `snap_oversteer_exit`; no P2 (A2 covers rear-downforce, all cars); changes labelled "Porsche-specific rule"; RR asserted via `CAR_DRIVETRAIN_OVERRIDES`, overridable by the manual combo |
+| `tests/test_group45_explainability.py` (NEW) | Each approved + rejected change carries `source_label` / `session_influence` / `car_drivetrain_influence` / `pack`; honest population (positive claim only when context used, else explicit neutral string); baseline `_LABEL_*` labels never claim telemetry |
+| `tests/test_group45_learning.py` (NEW) | Production constructs a live-but-EMPTY `RuleOutcomeStore`; the hook never fires without samples (behaviour unchanged); `_learning_note` present; learning cannot un-block a safety rule / un-reject / bypass validation / make the AI actionable |
+| `tests/test_group45_baseline_context.py` (NEW) | Baseline receives scalar `session_type` / `tyre_wear_multiplier` / `car_class` only (no EventContext); baseline `session_influence` records a session was noted but is NOT session-tuned; the new `_PROFILE_BIAS_TABLE` entries; the opposing lsd_decel biases net to zero on a both-flags profile |
+| `tests/test_group45_ui_context.py` (NEW) | Both UI analyse handlers (`_setup_analyse_ai` / `_setup_analyse_ai_for_form`) and both baseline callers thread the new context params; the renderer shows a small `source_label` row |
+
+### Reconciled existing tests
+Three existing tests were updated for **legitimate** behaviour changes (not to
+paper over regressions): (1) `RULE_ENGINE_VERSION` "42.0" → "45.0"; (2) the
+baseline lsd_decel bias now nets differently with `rotation_without_snap`;
+(3) the `gearbox_ratio_inversion` validator now uses strict `>` (allowing equal
+adjacent ratios), agreeing with the engine.
+
+### Acceptance criteria — status
+All Group 45 tests pass. The ~18 pre-existing frozen-allowlist / schema failures
+are known, unrelated, and untouched.
+
+### Test-run note (Windows / Python 3.14)
+Running the ENTIRE suite in one process can hit a flaky native PyQt teardown
+segfault; run in two halves (or by group). Environmental artifact, not a defect.
+
+### Deferred / limitations
+- Cross-session `RuleOutcomeStore` persistence + a success-recording feed (e.g.
+  from OFR-1 `recommendation_scoring` verdicts) — the seam is in place but EMPTY
+  in production, so recommendations do not yet self-tune.
+- Full per-gear individual ratio proposal rules — `per_gear_limiter_evidence`
+  exists for future use; broad final-drive-only logic ships today.
+- Session-specific NUMERICAL baseline tuning — session context is recorded on
+  baseline changes but does not yet change baseline values.
+- A fuel-specific rule — the fuel multiplier is read but only informational.
+- The two opposing lsd_decel baseline bias entries (`race_values_consistency` +2
+  vs `rotation_without_snap` −2) net to zero on a profile carrying both flags.
+- The ~18 pre-existing frozen-allowlist / schema failures remain for their owners.
+
+---
+
+## Rule-First Setup Baseline Generator (Group 44) (2026-07-06)
+
+> Branch `ofr2-quali-race-disciplines` (built on top of Group 43). Delivered via
+> the feature-factory chain. Backend + UI. New production file:
+> `strategy/setup_baseline.py` (NEW, pure Python). Changed:
+> `strategy/driving_advisor.py`, `ui/setup_form_widget.py`,
+> `ui/setup_builder_ui.py`, `ui/dashboard.py`.
+> Full docs: `docs/RULE_FIRST_SETUP_BRAIN.md` (§ 3b Group 44 — the from-scratch
+> baseline generator as a second rule-first authoring path).
+> **All Group 44 tests green (86 backend + 64 UI/integration); 406 green together
+> with group41 + group42 (all) + group43; 0 fail; zero new regressions.**
+> The only failures remain the SAME 8 pre-existing frozen-allowlist guards
+> (`ui/track_modelling_ui.py::_tm_restore_last_track`, unrelated track-modelling
+> tech debt).
+
+### What was built
+Group 43 disabled the ungated "Build Setup with AI" path, and since Group 42 the
+AI is audit-only and cannot author a setup — leaving no way to produce a complete
+starting setup for a car with **no telemetry**. Group 44 restores that
+capability **deterministically, with the AI NEVER called**, via a **second
+rule-first authoring path** distinct from the delta/Analyse path.
+
+- **Why not `run_rule_engine`?** The Analyse engine emits DELTAS off a telemetry
+  diagnosis; with no telemetry almost no rules fire, so it cannot author a
+  from-scratch full-field setup. A separate ABSOLUTE-VALUE author was required.
+- **BACKEND** (`strategy/setup_baseline.py`): `NEUTRAL_SEEDS` (single source of
+  truth for neutral physics defaults; matches the form seeds in
+  `ui/setup_form_widget.py` — lsd_front_initial/accel/decel take the FORM values
+  10/15/5, differing from the `ai_planner` parser fallbacks 0/0/0);
+  `build_baseline_setup(car, ranges, drivetrain, num_gears, profile,
+  allowed_tuning, tuning_locked) -> raw_data dict` (plan_to_raw_data shape)
+  authors ALL 33 actionable `_CANONICAL_SETUP_PARAMS` (34 minus display-only
+  transmission_max_speed_kmh) as ABSOLUTE values via neutral seed →
+  driver-profile bias (`_PROFILE_BIAS_TABLE`) → clamp to `resolve_ranges(car)`.
+- **GEARBOX** (`_build_gearbox_changes`): final_drive = midpoint of
+  `_FINAL_DRIVE_RANGE (2.5,6.0)`; gear_1..gear_num_gears = a strictly-DECREASING
+  geometric sequence inside `_GEAR_RATIO_RANGE (0.5,4.0)` — **monotonic by
+  construction, so `gearbox_ratio_inversion` can never fire** — sized to the car's
+  gear count (>6 capped, ≤1 → single gear@2.0, 0 → none); ranges
+  function-local-imported from `setup_diagnosis` (source of truth, try/except
+  fallback to local constants).
+- **LOCKED categories** (via `_derive_locked_fields`) excluded from actionable
+  output + named by human category (e.g. "Suspension, Aero") in the analysis text;
+  tuning_locked=True → empty changes. Every change carries a source label
+  ("neutral default" / "range midpoint" / "driver-profile biased" / "conservative
+  default, not diagnosed" — the last is honest: camber/toe/dampers/springs/
+  lsd_initial/lsd_front_initial have NO engineering authority; the baseline is a
+  safe STARTING POINT, not an optimum).
+- **ORCHESTRATOR** `DrivingAdvisor.build_baseline_setup_response(car_name, ranges,
+  drivetrain, num_gears, allowed_tuning, tuning_locked, session_type="Race") ->
+  JSON str`: `build_driver_profile()` → `build_baseline_setup` →
+  `validate_setup_engineering_structured` (neutral baseline passed as BOTH the
+  `setup` arg AND the proposed setup_fields so increment/comparison rules see zero
+  delta) → `_filter_baseline_artifact_warnings` → `_finalise_recommendation` →
+  JSON identical in shape to `build_combined_setup_response`. NO api_key read, NO
+  call_api, NO audit; a clean neutral baseline returns status "approved" with
+  validation_warnings == [].
+- **WARNING FILTER** (`_filter_baseline_artifact_warnings`): drops ONLY
+  WARNING-severity failures whose message contains "is a no-op" or "too many
+  changes" (definitional artifacts of a full-field from==to baseline); ALL
+  blocking failures pass through unfiltered — the severity guard `if vf.severity
+  == "warning"` is the OUTER condition, proven unable to suppress a blocking
+  failure.
+- **FRONTEND**: new `_btn_baseline` "Build Baseline Setup" (enabled+visible; added
+  to `_RACE_ALIASES`) in `ui/setup_form_widget.py` + `ui/setup_builder_ui.py`
+  handlers `_generate_baseline_setup`/`_generate_baseline_setup_for_form` (daemon
+  thread → `_baseline_result_queue` in `ui/dashboard.py`, polled) →
+  `_display_baseline_result` re-enables the baseline button then DELEGATES to the
+  shared `_display_setup_result` renderer + Apply gate (no duplication); advisor
+  accessor `self._driving_advisor`; Group 43 `_btn_build_setup`/`_run_build_setup*`
+  guards untouched.
+
+### New test files
+
+| Test file | Coverage |
+|-----------|----------|
+| `tests/test_group44_baseline_generator.py` (NEW, 86) | Backend: `build_baseline_setup` produces FULL-FIELD output (all 33 actionable params authored as absolute values); the no-AI guarantee (`build_baseline_setup_response` reads no api_key, calls no `call_api`, runs no audit); gearbox is MONOTONIC strictly-decreasing so `gearbox_ratio_inversion` can never fire (and gear-count sizing: >6 capped, ≤1 single gear, 0 none); transmission_max_speed_kmh stays DISPLAY-ONLY (never actionable); driver-profile BIAS via `_PROFILE_BIAS_TABLE` shifts the right fields then clamps to `resolve_ranges`; source labels; locked-category exclusion + human-category naming + tuning_locked → empty changes; `_filter_baseline_artifact_warnings` drops only the no-op/too-many-changes WARNING artifacts and NEVER a blocking failure; a clean baseline finalises as "approved" with validation_warnings == [] |
+| `tests/test_group44_baseline_ui.py` (NEW, 64) | UI/integration: the `_btn_baseline` handlers route through the validator → funnel → Apply-gate; `_display_baseline_result` delegates to the shared `_display_setup_result` renderer (no duplicate render path); the daemon-thread → `_baseline_result_queue` polling; the Group 43 guard REGRESSION (`_btn_build_setup` still disabled, its `_run_build_setup*` guards untouched); Apply pushes the baseline fields into the form |
+
+### Acceptance criteria — status
+All Group 44 tests green (86 + 64). 406 green together with group41 + group42
+(all) + group43; 0 fail; zero new regressions. The 8 pre-existing
+frozen-allowlist failures are unrelated track-modelling tech debt.
+
+### Test-run note (Windows / Python 3.14)
+Running the ENTIRE suite in one process can hit a flaky native PyQt teardown
+segfault; run in two halves (or by group). Environmental artifact, not a defect.
+
+### Deferred / limitations
+- `_btn_baseline` is enabled-at-construction with a runtime car/track guard (no
+  proactive disable) — consistent with `_btn_analyse_setup`; the shared renderer
+  also re-enables `_btn_analyse_setup` after a baseline (harmless).
+- The "no telemetry baseline" symptom label is generic even on the
+  driver-profile-biased fields.
+- The no-authority fields (camber/toe/dampers/springs/lsd_initial/
+  lsd_front_initial) are conservative defaults, not engineered values.
+- The old `build_car_setup` AI-authoring path remains dead-in-tree behind the
+  Group 43 guards.
+- Build candidates: wire `RuleOutcomeStore` live-learning + persistence; per-car
+  gearbox ratio bounds (promote `gearbox_out_of_range` to blocking); track-type
+  biasing of the baseline.
 - The 8 pre-existing track-modelling allowlist failures remain for the
   track-modelling owner.

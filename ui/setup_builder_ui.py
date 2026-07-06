@@ -187,10 +187,9 @@ class SetupBuilderMixin:
         if hasattr(self, "_tab_intro_header"):
             outer_layout.addWidget(self._tab_intro_header(
                 "Setup Builder",
-                "Build and tune your qualifying and race setups side by side. Ask "
-                "AI for a full setup or a targeted fix, then Apply and Save. Next: "
-                "set Min Weight and Max Power, then Build Setup with AI — or "
-                "describe a handling issue and click Analyse."))
+                "Build and tune your qualifying and race setups side by side. "
+                "Describe a handling issue and click Analyse to get Pit Crew's "
+                "rule-based, validated setup changes, then Apply and Save."))
 
         # self._setup_type stays on self (required by main.py + tests). It picks
         # which shift-RPM threshold the live beep uses during Practice telemetry.
@@ -246,6 +245,7 @@ class SetupBuilderMixin:
             "_btn_apply_ai_setup",
             "_setup_feeling_input",
             "_build_setup_result", "_btn_build_setup", "_btn_set_car_ranges",
+            "_btn_baseline",
             "_setup_load_combo", "_lbl_setup_save_status",
             "_re_brief_label", "_re_brief_input",
             "_btn_reread_gears",
@@ -263,6 +263,7 @@ class SetupBuilderMixin:
         self._race_form._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
         self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
+        self._race_form._btn_baseline.clicked.connect(self._generate_baseline_setup)
         self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
         self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
@@ -283,6 +284,9 @@ class SetupBuilderMixin:
         )
         qf._btn_build_setup.clicked.connect(
             lambda: self._run_build_setup_for_form(self._qual_form)
+        )
+        qf._btn_baseline.clicked.connect(
+            lambda: self._generate_baseline_setup_for_form(self._qual_form)
         )
         qf._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         qf._btn_bop_edit.clicked.connect(self._open_bop_file)
@@ -319,7 +323,7 @@ class SetupBuilderMixin:
 
         # ── Shift RPM display (shared, below the splitter) ────────────────────
         _sb = self._config.get("shift_beep", {})
-        shift_rpm_box = QGroupBox("Shift RPM (auto-set by AI Build Setup)")
+        shift_rpm_box = QGroupBox("Shift RPM")
         shift_rpm_box.setStyleSheet(self._group_style())
         shift_rpm_form = QFormLayout(shift_rpm_box)
         self._spin_shift_rpm_qual = QSpinBox()
@@ -330,7 +334,6 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_qual.setValue(int(_sb.get("qual_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_qual.setToolTip(
             "Optimal RPM to upshift for qualifying / unrestricted power.\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Qualifying.\n"
             "Edit via the Live tab Shift Beep controls.")
         _set_spin_readonly(self._spin_shift_rpm_qual, True)
         self._spin_shift_rpm_race = QSpinBox()
@@ -341,7 +344,6 @@ class SetupBuilderMixin:
         self._spin_shift_rpm_race.setValue(int(_sb.get("race_rpm", _sb.get("rpm", 0))))
         self._spin_shift_rpm_race.setToolTip(
             "Optimal RPM to upshift during the race (may be lower if ECU/power restrictor is applied).\n"
-            "Auto-filled when you run 'Build Setup with AI' with session = Race.\n"
             "Edit via the Live tab Shift Beep controls.")
         _set_spin_readonly(self._spin_shift_rpm_race, True)
         shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
@@ -695,6 +697,18 @@ class SetupBuilderMixin:
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
+        # Group 45: pass session context params to the backend.
+        # purpose: form.purpose is "Race" or "Qualifying" — always available here.
+        _purpose = form.purpose
+        # car_class: car_specs.category (empty string when no specs loaded — backend maps to neutral).
+        _car_class = (_car_specs or {}).get("category", "")
+        # drivetrain: explicit combo selection wins (empty string = "Auto-detect" →
+        # backend falls back to CAR_DRIVETRAIN_OVERRIDES by car name, e.g. Porsche).
+        _drivetrain = (
+            form._setup_drivetrain.currentData()
+            if hasattr(form, "_setup_drivetrain")
+            else ""
+        ) or ""
 
         def _worker():
             try:
@@ -702,7 +716,10 @@ class SetupBuilderMixin:
                     d, n_laps=n_laps, car_name=_car_name, car_specs=_car_specs,
                     feeling=feeling or None,
                     allowed_tuning=_allowed, tuning_locked=_locked,
-                    compound=_compound)
+                    compound=_compound,
+                    purpose=_purpose,
+                    car_class=_car_class,
+                    drivetrain=_drivetrain)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None, form))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
@@ -721,12 +738,14 @@ class SetupBuilderMixin:
 
     def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
         """Build a complete setup with AI for the given form (Qualifying panel)."""
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        return
         # Delegates to the main _run_build_setup but uses the form's purpose as session_type.
         # We temporarily proxy self._setup_type to match the form's purpose so the existing
         # _run_build_setup reads the correct session type.
         # The session_type is captured at call time from the form's purpose.
-        import threading as _threading
-        from strategy.ai_planner import build_car_setup
+        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
+        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
 
         api_key = self._ai_api_key.text().strip()
         if not api_key:
@@ -829,6 +848,190 @@ class SetupBuilderMixin:
                 self._build_setup_queue.put(("err", str(exc), session_type, form))
 
         _threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Group 44: Rule-first baseline setup generator
+    # ------------------------------------------------------------------
+
+    def _generate_baseline_setup(self) -> None:
+        """Handler for the Race form 'Build Baseline Setup' button.
+
+        Calls build_baseline_setup_response on the DrivingAdvisor (no API key,
+        no telemetry required), then enqueues the result onto
+        self._baseline_result_queue for display via _display_baseline_result.
+        Pattern mirrors _setup_analyse_ai.
+        """
+        import threading as _threading
+        from strategy.setup_ranges import resolve_ranges as _resolve_ranges
+
+        _ai_snap = self._build_setup_ai_snapshot()
+        car   = _ai_snap.car
+        track = _ai_snap.track
+        if not car or not track:
+            self._build_setup_result.setPlainText(
+                "Select a car and track first — baseline setup needs a car and track context.")
+            self._build_setup_result.setVisible(True)
+            return
+
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+
+        if _locked:
+            self._build_setup_result.setPlainText(
+                "All tuning categories are locked for this Event — baseline unavailable.")
+            self._build_setup_result.setVisible(True)
+            return
+
+        _ranges      = _resolve_ranges(car)
+        _drivetrain  = (
+            self._setup_drivetrain.currentData()
+            if hasattr(self, "_setup_drivetrain")
+            else ""
+        ) or ""
+        _num_gears   = (
+            self._setup_num_gears.value()
+            if hasattr(self, "_setup_num_gears")
+            else 0
+        )
+        # Group 45: real session purpose from the Race form (never a hardcoded string).
+        _session_type = self._active_form().purpose if hasattr(self, "_active_form") else "Race"
+        # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
+        # real event is active (EMPTY source) so the backend treats context as unknown.
+        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        _tyre_wear = (
+            _ai_snap.tyre_wear_multiplier
+            if _ai_snap.core.source != _SnapSrc.EMPTY
+            else None
+        )
+        # Group 45: car_class from car_specs.category (empty string when no specs loaded).
+        _, _car_specs_bl = self._load_car_specs_for_current()
+        _car_class = (_car_specs_bl or {}).get("category", "")
+
+        self._btn_baseline.setEnabled(False)
+        self._btn_baseline.setText("Building baseline…")
+        self._build_setup_result.setPlainText(
+            "Building baseline setup from car ranges and driving profile…")
+        self._build_setup_result.setVisible(True)
+
+        def _worker():
+            try:
+                json_str = self._driving_advisor.build_baseline_setup_response(
+                    car_name=car,
+                    ranges=_ranges,
+                    drivetrain=_drivetrain,
+                    num_gears=_num_gears,
+                    allowed_tuning=_allowed,
+                    tuning_locked=_locked,
+                    session_type=_session_type,
+                    tyre_wear_multiplier=_tyre_wear,
+                    car_class=_car_class,
+                )
+                self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
+            except Exception as exc:
+                self._baseline_result_queue.put(("error", str(exc), "baseline_setup", None))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _generate_baseline_setup_for_form(self, form: "SetupFormWidget") -> None:
+        """Handler for the Qualifying form 'Build Baseline Setup' button.
+
+        Mirror of _generate_baseline_setup, targeting the given form's widgets
+        and enqueuing a form-tagged result for per-form display routing.
+        """
+        import threading as _threading
+        from strategy.setup_ranges import resolve_ranges as _resolve_ranges
+
+        _ai_snap = self._build_setup_ai_snapshot()
+        car   = _ai_snap.car
+        track = _ai_snap.track
+        if not car or not track:
+            form._build_setup_result.setPlainText(
+                "Select a car and track first — baseline setup needs a car and track context.")
+            form._build_setup_result.setVisible(True)
+            return
+
+        _allowed  = _ai_snap.allowed_tuning_or_none()
+        _locked   = _ai_snap.tuning_locked
+
+        if _locked:
+            form._build_setup_result.setPlainText(
+                "All tuning categories are locked for this Event — baseline unavailable.")
+            form._build_setup_result.setVisible(True)
+            return
+
+        _ranges      = _resolve_ranges(car)
+        _drivetrain  = (
+            form._setup_drivetrain.currentData()
+            if hasattr(form, "_setup_drivetrain")
+            else ""
+        ) or ""
+        _num_gears   = (
+            form._setup_num_gears.value()
+            if hasattr(form, "_setup_num_gears")
+            else 0
+        )
+        # Group 45: pass form's raw purpose (e.g. "Qualifying") — backend calls
+        # normalise_purpose which accepts both "Qualifying" and "Qualifying Setup".
+        _session_type = f"{form.purpose} Setup"
+        # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
+        # real event is active (EMPTY source) so the backend treats context as unknown.
+        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        _tyre_wear = (
+            _ai_snap.tyre_wear_multiplier
+            if _ai_snap.core.source != _SnapSrc.EMPTY
+            else None
+        )
+        # Group 45: car_class from car_specs.category (empty string when no specs loaded).
+        _, _car_specs_bl = self._load_car_specs_for_current()
+        _car_class = (_car_specs_bl or {}).get("category", "")
+
+        form._btn_baseline.setEnabled(False)
+        form._btn_baseline.setText("Building baseline…")
+        form._build_setup_result.setPlainText(
+            "Building baseline setup from car ranges and driving profile…")
+        form._build_setup_result.setVisible(True)
+
+        def _worker():
+            try:
+                json_str = self._driving_advisor.build_baseline_setup_response(
+                    car_name=car,
+                    ranges=_ranges,
+                    drivetrain=_drivetrain,
+                    num_gears=_num_gears,
+                    allowed_tuning=_allowed,
+                    tuning_locked=_locked,
+                    session_type=_session_type,
+                    tyre_wear_multiplier=_tyre_wear,
+                    car_class=_car_class,
+                )
+                self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
+            except Exception as exc:
+                self._baseline_result_queue.put(("error", str(exc), "baseline_setup", None, form))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _display_baseline_result(self, result: tuple) -> None:
+        """Re-enable the baseline button then delegate rendering to _display_setup_result.
+
+        The result tuple from the queue has the same shape expected by
+        _display_setup_result: (status, payload, entry_type, feeling[, form]).
+        Both the Race-form button (aliased to self._btn_baseline) and the
+        per-form button (result[4]) are re-enabled here before delegation so
+        the correct button is restored regardless of which form fired.
+        """
+        # Re-enable the race-form baseline button (aliased on self)
+        if hasattr(self, "_btn_baseline"):
+            self._btn_baseline.setEnabled(True)
+            self._btn_baseline.setText("Build Baseline Setup")
+
+        # Re-enable the per-form button if a form is in the tuple (position 4)
+        _form = result[4] if len(result) > 4 else None
+        if _form is not None and hasattr(_form, "_btn_baseline"):
+            _form._btn_baseline.setEnabled(True)
+            _form._btn_baseline.setText("Build Baseline Setup")
+
+        # Route result through the shared renderer (handles Apply gate, HTML, history)
+        self._display_setup_result(result)
 
     def _build_setup_context(self, recommendation: dict | None = None,
                              diagnosis: dict | None = None):
@@ -1108,6 +1311,19 @@ class SetupBuilderMixin:
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
+        # Group 45: thread session-context params so the Race form's Analyse
+        # button is context-aware, matching _setup_analyse_ai_for_form exactly.
+        # purpose: race form always carries purpose="Race" (set at construction).
+        _purpose = self._race_form.purpose
+        # car_class: specs category, or "" when no specs loaded (backend neutral fallback).
+        _car_class = (_car_specs or {}).get("category", "")
+        # drivetrain: explicit combo selection wins; "" = Auto-detect (backend uses
+        # CAR_DRIVETRAIN_OVERRIDES by car name, e.g. Porsche).
+        _drivetrain = (
+            self._race_form._setup_drivetrain.currentData()
+            if hasattr(self._race_form, "_setup_drivetrain")
+            else ""
+        ) or ""
 
         def _worker():
             try:
@@ -1115,7 +1331,10 @@ class SetupBuilderMixin:
                     d, n_laps=n_laps, car_name=_car_name, car_specs=_car_specs,
                     feeling=feeling or None,
                     allowed_tuning=_allowed, tuning_locked=_locked,
-                    compound=_compound)
+                    compound=_compound,
+                    purpose=_purpose,
+                    car_class=_car_class,
+                    drivetrain=_drivetrain)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))
@@ -1432,6 +1651,14 @@ class SetupBuilderMixin:
                         f"<tr><td style='color:#888; padding-right:8px;'>Rule</td>"
                         f"<td style='color:#888; font-size:10px;'>{_rule_id}</td></tr>"
                     )
+                    # Group 45: source_label — "Porsche-specific rule", "generic rule", etc.
+                    # Only shown when the backend populates it (absent on legacy responses).
+                    _source_label = ch.get("source_label", "")
+                    if _source_label:
+                        _detail_rows += (
+                            f"<tr><td style='color:#888; padding-right:8px;'>Source</td>"
+                            f"<td style='color:#7AB3D4; font-size:10px; font-style:italic;'>{_source_label}</td></tr>"
+                        )
 
                     _ch_html += (
                         "<details style='margin-top:4px; margin-left:8px;'>"
@@ -1707,8 +1934,10 @@ class SetupBuilderMixin:
 
     def _run_build_setup(self) -> None:
         """Ask AI to generate a complete from-scratch car setup and auto-fill all fields."""
-        import threading as _threading
-        from strategy.ai_planner import build_car_setup
+        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        return
+        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
+        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
 
         api_key = self._ai_api_key.text().strip()
         if not api_key:

@@ -46,7 +46,10 @@ from typing import Optional, TYPE_CHECKING
 from data.session_db import ms_to_str
 from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_reference
 from strategy._rec_parser import parse_recommendations_from_response
-from strategy._setup_constants import ENG_SAFETY_PREFIXES, APPROVED_STATUSES, RULE_ENGINE_VERSION
+from strategy._setup_constants import (
+    ENG_SAFETY_PREFIXES, APPROVED_STATUSES, RULE_ENGINE_VERSION,
+    HIGH_TYRE_WEAR_THRESHOLD,
+)
 from strategy.setup_ranges import resolve_ranges
 from strategy.setup_diagnosis import (
     PERSONAL_DRIVER_TUNING_MODEL,
@@ -599,6 +602,55 @@ def _strip_actionable_for_voice(data: dict) -> dict:
     stripped["changes"] = []
     stripped["setup_fields"] = {}
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# _filter_baseline_artifact_warnings — baseline-path warning suppressor
+# ---------------------------------------------------------------------------
+
+# Substrings that identify the two artifact-warning types produced by
+# _validate_setup_response when validating a full-field from-scratch baseline.
+# These are structural artifacts of the baseline shape, not real safety issues:
+#   1. "is a no-op" — fires because gearbox from==to (baseline IS the starting point).
+#   2. "too many changes" — fires because a full-field baseline has >4 fields.
+# We match by substring on the .message so the filter is stable even if the
+# exact error text includes variable field names / counts.
+_BASELINE_ARTIFACT_SUBSTRINGS: tuple[str, ...] = (
+    "is a no-op",
+    "too many changes",
+)
+
+
+def _filter_baseline_artifact_warnings(
+    failures: list,
+) -> list:
+    """Remove warning-severity ValidationFailure entries that are structural
+    artifacts of the full-field from-scratch baseline shape.
+
+    ONLY removes entries where BOTH conditions hold:
+      - severity == "warning"   (blocking failures are NEVER removed)
+      - message contains one of the _BASELINE_ARTIFACT_SUBSTRINGS
+
+    All blocking-severity failures and all other warnings pass through unchanged,
+    so every safety rule and genuine engineering check still applies.
+
+    Parameters
+    ----------
+    failures:
+        list[ValidationFailure] from validate_setup_engineering_structured.
+
+    Returns
+    -------
+    A new filtered list.  Input is not mutated.
+    """
+    result = []
+    for vf in failures:
+        if vf.severity == "warning":
+            msg_lower = vf.message.lower()
+            if any(sub in msg_lower for sub in _BASELINE_ARTIFACT_SUBSTRINGS):
+                continue   # drop this artifact warning
+        result.append(vf)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1551,6 +1603,9 @@ class DrivingAdvisor:
         compound: str = "",
         prior_outcomes: "list[dict] | None" = None,
         diagnosis: "dict | None" = None,
+        purpose: str = "",
+        car_class: str = "",
+        drivetrain: str = "",
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -1563,7 +1618,11 @@ class DrivingAdvisor:
         Always uses full telemetry. If *feeling* is provided it is included alongside
         telemetry — never sent alone. Uses up to *n_laps* most recent laps from the recorder.
 
-        New optional param:
+        Group 45 new optional params:
+          purpose:    Session purpose string ("Race"/"Qualifying"/"Practice"/...).
+          car_class:  Car class string ("Gr.1"/"Gr.3"/"Gr.4"/"Road Car"/...).
+          drivetrain: Explicit drivetrain override ("FR"/"FF"/"MR"/"RR"/"AWD"/...).
+                      Precedence: explicit kwarg (non-empty) > CAR_DRIVETRAIN_OVERRIDES > None.
           diagnosis: pre-computed build_setup_diagnosis dict; computed internally if None.
         engineering_validation_failed and engineering_validation_errors keys are added
         to the returned JSON.  The AI audit key (ai_audit) is only present when
@@ -1583,6 +1642,91 @@ class DrivingAdvisor:
                 diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, feeling)
             except Exception:
                 diagnosis = {}
+
+        # --- Group 45: Context resolution ---
+        # Tyre wear / fuel from EventContext
+        _tyre_wear_multiplier: "float | None"
+        try:
+            _tyre_wear_raw = _event_ctx.get("tyre_wear", None)
+            _tyre_wear_multiplier = float(_tyre_wear_raw) if _tyre_wear_raw is not None else None
+        except (TypeError, ValueError):
+            _tyre_wear_multiplier = None
+
+        _fuel_multiplier: "float | None"
+        try:
+            _fuel_raw = _event_ctx.get("fuel_multiplier", None)
+            _fuel_multiplier = float(_fuel_raw) if _fuel_raw is not None else None
+        except (TypeError, ValueError):
+            _fuel_multiplier = None
+
+        _duration_mins: float
+        try:
+            _duration_mins = float(_event_ctx.get("duration_mins", 0) or 0)
+        except (TypeError, ValueError):
+            _duration_mins = 0.0
+
+        # Map purpose → SessionType enum
+        from strategy.setup_knowledge_base import SessionType as _SessionType, CarClass as _CarClass, DrivetrainType as _DrivetrainType, CAR_DRIVETRAIN_OVERRIDES as _CAR_DT_OVERRIDES
+        from data.setup_context import normalise_purpose, SetupPurpose as _SetupPurpose
+
+        _setup_purpose = normalise_purpose(purpose)
+        _session_type_enum: "_SessionType | None"
+        if _setup_purpose == _SetupPurpose.QUALIFYING:
+            _session_type_enum = _SessionType.quali
+        elif _setup_purpose == _SetupPurpose.RACE:
+            _session_type_enum = _SessionType.race
+        elif _setup_purpose == _SetupPurpose.PRACTICE:
+            _session_type_enum = _SessionType.practice
+        else:
+            _session_type_enum = None
+
+        # Map car_class string → CarClass enum
+        _car_class_enum: "_CarClass | None"
+        _car_class_lower = (car_class or "").lower()
+        _cc_map = {
+            "gr.1": _CarClass.gr1, "gr1": _CarClass.gr1,
+            "gr.2": _CarClass.gr2, "gr2": _CarClass.gr2,
+            "gr.3": _CarClass.gr3, "gr3": _CarClass.gr3,
+            "gr.4": _CarClass.gr4, "gr4": _CarClass.gr4,
+            "road car": _CarClass.road, "road": _CarClass.road,
+            "race car": _CarClass.race, "race": _CarClass.race,
+        }
+        _car_class_enum = _cc_map.get(_car_class_lower.strip()) if _car_class_lower else None
+
+        # Drivetrain precedence: explicit kwarg > CAR_DRIVETRAIN_OVERRIDES > None
+        _drivetrain_str: "str | None"
+        if drivetrain:
+            _drivetrain_str = drivetrain.lower().strip()
+        else:
+            _drivetrain_str = _CAR_DT_OVERRIDES.get(car_name)
+
+        _drivetrain_enum: "_DrivetrainType | None"
+        _dt_map = {
+            "fr": _DrivetrainType.fr, "ff": _DrivetrainType.ff,
+            "mr": _DrivetrainType.mr, "rr": _DrivetrainType.rr,
+            "awd": _DrivetrainType.awd, "4wd": _DrivetrainType.awd, "4x4": _DrivetrainType.awd,
+        }
+        _drivetrain_enum = _dt_map.get(_drivetrain_str or "") if _drivetrain_str else None
+
+        # Session type string for diagnosis injection
+        _session_type_str = (
+            _session_type_enum.value if _session_type_enum is not None else ""
+        )
+
+        # Inject context keys into diagnosis dict (mutable, setdefault so caller-injected
+        # values are not overwritten if diagnosis was pre-computed with them already set)
+        if isinstance(diagnosis, dict):
+            diagnosis.setdefault("session_type", _session_type_str)
+            diagnosis.setdefault(
+                "tyre_wear_high",
+                _tyre_wear_multiplier is not None and _tyre_wear_multiplier >= HIGH_TYRE_WEAR_THRESHOLD,
+            )
+            diagnosis.setdefault("tyre_wear_known", _tyre_wear_multiplier is not None)
+            diagnosis.setdefault(
+                "fuel_known",
+                _fuel_multiplier is not None and _fuel_multiplier > 0,
+            )
+            diagnosis.setdefault("duration_mins", _duration_mins)
 
         # B4: resolve rec_history for lsd_reversal_without_evidence validation.
         _rec_history_cs: dict | None = None
@@ -1673,21 +1817,25 @@ class DrivingAdvisor:
             # ------------------------------------------------------------------
             try:
                 from strategy.setup_driver_profile import build_driver_profile
-                from strategy.setup_rule_engine import run_rule_engine
+                from strategy.setup_rule_engine import run_rule_engine, RuleOutcomeStore
                 from strategy.setup_plan import plan_to_raw_data, rejected_to_json
                 _profile = build_driver_profile()
                 _ranges = resolve_ranges(car_name)
+                # Group 45: construct a live-but-empty RuleOutcomeStore (Learning seam active).
+                # No samples → confidence-downgrade hook (AC21) never fires.
+                # Cross-session persistence is deferred; the seam is honest and ready.
+                _rule_outcome_store = RuleOutcomeStore()
                 _plan = run_rule_engine(
                     diagnosis or {},
                     setup_dict,
                     _ranges,
                     _profile,
                     allowed_tuning=allowed_tuning,
-                    # rule_outcome_store=None: live wiring and persistence of
-                    # RuleOutcomeStore is deferred to a future sprint.  A fresh
-                    # empty store would have no samples and the confidence-downgrade
-                    # hook (AC21) would never fire anyway.
-                    rule_outcome_store=None,
+                    rule_outcome_store=_rule_outcome_store,
+                    session_type=_session_type_enum,
+                    car_class=_car_class_enum,
+                    drivetrain=_drivetrain_enum,
+                    tyre_wear_multiplier=_tyre_wear_multiplier,
                 )
             except Exception:
                 # Rule engine failure → fall through to empty plan (deterministic fallback handles)
@@ -1873,6 +2021,15 @@ class DrivingAdvisor:
                 }
                 _data["protected_fields"] = list(_plan.protected_fields)
                 _data["rule_engine_version"] = RULE_ENGINE_VERSION
+                # Group 45: learning seam — live empty store; note cross-session deferral
+                _data["_learning_note"] = "no cross-session learning history available"
+                # Group 45: tyre/fuel context availability note
+                _tyre_fuel_note: str
+                if not (diagnosis or {}).get("tyre_wear_known", False):
+                    _tyre_fuel_note = "tyre/fuel context not available — conservative default applied"
+                else:
+                    _tyre_fuel_note = ""
+                _data["_tyre_fuel_context"] = _tyre_fuel_note
 
             except Exception:
                 pass  # Engineering validation must not break the response path
@@ -1899,6 +2056,161 @@ class DrivingAdvisor:
             return _response_text
         except Exception as e:
             return f"Setup analysis failed: {e}"
+
+    def build_baseline_setup_response(
+        self,
+        car_name: str,
+        ranges: dict,
+        drivetrain: str,
+        num_gears: int,
+        allowed_tuning: "list[str] | None",
+        tuning_locked: bool,
+        session_type: str = "Race",
+        tyre_wear_multiplier: "float | None" = None,
+        car_class: str = "",
+    ) -> str:
+        """Return a JSON string with a from-scratch baseline setup.
+
+        No telemetry required, no API call made.  Produces a neutral starting
+        point with driver-profile mechanical nudges, routed through the SAME
+        _finalise_recommendation / validate_setup_engineering_structured funnel
+        as the analyse path so the JSON shape is identical.
+
+        Parameters
+        ----------
+        car_name:
+            Car name — passed through for validator context; ranges must already
+            be resolved by the caller (pass resolve_ranges(car_name) as ranges).
+        ranges:
+            Per-car ranges dict from resolve_ranges(car_name).
+        drivetrain:
+            Drivetrain code, e.g. "FR", "FF", "MR", "AWD".
+        num_gears:
+            Number of gear ratios (0–6; >6 capped at 6).
+        allowed_tuning:
+            List of tuning category codes allowed by the event rules, or None.
+        tuning_locked:
+            If True, returns a valid JSON with empty changes/setup_fields.
+        session_type:
+            Session type string ("Race" / "Qualifying" / "Practice").
+            Wired through to build_baseline_setup for session_influence labelling.
+        tyre_wear_multiplier:
+            Optional tyre-wear multiplier. Passed to build_baseline_setup;
+            currently accepted for forward-compatibility.
+        car_class:
+            Car class string (e.g. "Gr.3"). Passed to build_baseline_setup;
+            currently accepted for forward-compatibility.
+
+        Returns
+        -------
+        JSON string with keys matching build_combined_setup_response:
+            recommendation_status, changes, setup_fields, rejected_changes,
+            engineering_validation_failed, engineering_validation_errors,
+            validation_warnings, fallback_used, deterministic_plan,
+            protected_fields, rule_engine_version, analysis, primary_issue,
+            diagnosis, confidence.
+        """
+        # Function-local import to avoid module-level circular dependency:
+        # setup_baseline imports _derive_locked_fields FROM driving_advisor at
+        # function-call time, not at module import time.
+        from strategy.setup_baseline import build_baseline_setup
+        from strategy.setup_driver_profile import build_driver_profile
+
+        _error_response = _json.dumps({
+            "analysis": "Baseline generation failed — internal error.",
+            "changes": [],
+            "setup_fields": {},
+            "recommendation_status": "blocked_no_safe_recommendation",
+            "engineering_validation_failed": True,
+            "engineering_validation_errors": [],
+            "validation_warnings": [],
+            "fallback_used": False,
+            "rejected_changes": [],
+            "deterministic_plan": {
+                "proposed_count": 0,
+                "rejected_candidate_count": 0,
+                "protected_fields": [],
+                "driver_profile_version": None,
+                "rule_engine_version": RULE_ENGINE_VERSION,
+            },
+            "protected_fields": [],
+            "rule_engine_version": RULE_ENGINE_VERSION,
+        }, ensure_ascii=False)
+
+        try:
+            # Step 1: build driver profile
+            _profile = build_driver_profile()
+
+            # Step 2: build the baseline raw_data dict
+            # Group 45: wire session_type, tyre_wear_multiplier, car_class through
+            _raw_data = build_baseline_setup(
+                car_name, ranges, drivetrain, num_gears,
+                _profile, allowed_tuning, tuning_locked,
+                session_type=session_type,
+                tyre_wear_multiplier=tyre_wear_multiplier,
+                car_class=car_class,
+            )
+
+            # Step 3: neutral_setup = the proposed setup_fields (no delta
+            # from seed — the baseline IS the proposed setup)
+            _neutral_setup = dict(_raw_data.get("setup_fields") or {})
+
+            # Step 4: engineering validation
+            # Pass empty diagnosis and event_ctx (no telemetry — by design).
+            # validate_setup_engineering_structured never raises.
+            _structured_failures = validate_setup_engineering_structured(
+                _raw_data,
+                diagnosis={},
+                setup=_neutral_setup,
+                ranges=ranges,
+                event_ctx={},
+                car_name=car_name,
+                rec_history=None,
+            )
+
+            # Step 5a: filter out structural artifact warnings that are
+            # meaningless for a full-field from-scratch baseline.
+            # CRITICAL: only warning-severity entries matching the two known
+            # artifact patterns are removed; every blocking failure passes
+            # through unfiltered so safety checks still zero approved_changes.
+            _filtered_failures = _filter_baseline_artifact_warnings(
+                _structured_failures
+            )
+
+            # Step 5b: route through _finalise_recommendation (single funnel)
+            _final = _finalise_recommendation(
+                _raw_data,
+                _filtered_failures,
+                fallback_used=False,
+                retried=False,
+            )
+
+            # Step 6: build the response dict mirroring build_combined_setup_response
+            _resp: dict = dict(_raw_data)
+            _resp["recommendation_status"] = _final.status
+            _resp["changes"] = _final.approved_changes
+            _resp["setup_fields"] = _final.approved_fields
+            _resp["engineering_validation_failed"] = _final.status not in APPROVED_STATUSES
+            _resp["engineering_validation_errors"] = _final.engineering_errors
+            _resp["validation_warnings"] = _final.validation_warnings
+            _resp["fallback_used"] = _final.fallback_used
+            _resp["rejected_changes"] = list(_final.rejected_changes)
+            # No AI audit for the baseline path
+            _resp["ai_audit"] = None
+            _resp["deterministic_plan"] = {
+                "proposed_count": len(_final.approved_changes),
+                "rejected_candidate_count": len(_final.rejected_changes),
+                "protected_fields": [],
+                "driver_profile_version": getattr(_profile, "profile_version", None),
+                "rule_engine_version": RULE_ENGINE_VERSION,
+            }
+            _resp["protected_fields"] = []
+            _resp["rule_engine_version"] = RULE_ENGINE_VERSION
+
+            return _json.dumps(_resp, ensure_ascii=False)
+
+        except Exception as _exc:
+            return _error_response
 
     def build_driver_feeling_response(
         self, feeling_text: str, setup_dict: dict,

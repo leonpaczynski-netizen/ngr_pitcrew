@@ -1,8 +1,8 @@
 # Setup Brain — Manual UAT Checklist
 
-> **Scope:** Rule-First Setup Brain (Group 42), the Setup Builder Engineering
-> Validation Gate (Group 41), and the underlying setup-diagnosis brain
-> (Groups 38–40).
+> **Scope:** Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
+> (Group 42), the Setup Builder Engineering Validation Gate (Group 41), and the
+> underlying setup-diagnosis brain (Groups 38–40).
 > **Branch:** `ofr2-quali-race-disciplines`
 > **Test car / track:** Porsche 911 RSR '17 at Fuji International Speedway
 > **Environment:** GT7 on PS5, dashboard on PC via UDP, `GT7_AI_DEBUG=1` set in
@@ -121,6 +121,90 @@ feedback, then **Analyse** in the Setup Builder.
 
 ---
 
+## Setup Brain Intelligence Expansion UAT (Group 45)
+
+> **What changed:** the rule-first engine is now **context-aware** — session
+> type, tyre-wear, drivetrain, and car-class shape *which* rules fire and *how
+> confident / ranked* they are, without changing any delta magnitude. Every
+> approved and rejected change now carries honest explainability fields
+> (`source_label`, `session_influence`, `car_drivetrain_influence`, `pack`). The
+> Porsche 911 RSR '17 gets its own rule pack (Pack P). Full detail:
+> `docs/RULE_FIRST_SETUP_BRAIN.md` § 14.
+>
+> Debug: keep `GT7_AI_DEBUG=1` set. Nothing here requires the AI — everything
+> works with the AI disabled; the AI (if enabled) is still audit-only.
+
+### Session-aware recommendations (Porsche 911 RSR '17 at Fuji)
+
+Run the **same** stint/feedback twice, changing only the Event Planner session
+purpose.
+
+1. **Quali vs Race differ.** Analyse once with the session set to **Qualifying**
+   and once to **Race**. Confirm the recommendations differ in **which changes
+   are surfaced / their ordering / their confidence** — quali should favour
+   front-bite / trail-braker-tagged changes, race should favour
+   safety-phase / consistency changes. **The delta magnitudes should NOT change**
+   (this is deliberate — context shifts confidence/ranking, not the numbers).
+2. **Endurance.** Confirm a Race session with a duration **>= 60 min** is treated
+   as endurance (race behaviour + the endurance flag).
+3. **`session_influence` is honest.** Expand a change and confirm `session_influence`
+   describes how the session affected it — or, if session context was missing,
+   reads the explicit neutral / "not session-tuned" string rather than claiming a
+   session tune.
+
+### Tyre-wear-aware recommendations
+
+4. **High tyre-wear suppresses tyre-abusing rules.** Set a high tyre-wear
+   multiplier (`>= 5.0`) in the Event Planner and Analyse. Confirm the four
+   tyre-abusing rules are **suppressed** — no lsd_accel *decrease* (B3), no
+   lsd_decel *decrease* (C1), no rear-ARB *soften* (C3 / C7).
+5. **Stabilising rules survive.** Confirm rules that **increase** lsd lock or rear
+   downforce are **NOT** suppressed at high wear (they stabilise worn tyres).
+6. **Missing tyre/fuel context is honest.** With no tyre/fuel context available,
+   confirm the change reads "tyre/fuel context not available — conservative
+   default applied" and makes no tyre/fuel-aware claim. (Fuel is read but only
+   informational — there is no fuel-specific change yet.)
+
+### Car / drivetrain-aware recommendations + the Porsche pack
+
+7. **Porsche pack fires.** On the RSR (RR, Gr.3), confirm a snap-throttle
+   wheelspin complaint yields the cautious traction-first **lsd_accel increase**
+   (Pack P / rule P1), labelled `source_label` **"Porsche-specific rule"**, and
+   that it is **contraindicated** (not proposed) when `snap_oversteer_exit` is
+   diagnosed.
+8. **No generic ride-height raise / no downforce cut first.** Confirm (as in the
+   Group 42 primary scenario) there is still no generic ride-height raise and no
+   downforce cut as the first fix — A2/A3/A4 still cover these unconditionally
+   (Pack P deliberately has no P2).
+9. **`car_drivetrain_influence` is honest.** Expand a change and confirm
+   `car_drivetrain_influence` describes the car-class / drivetrain effect — or, if
+   the drivetrain is unknown, reads "drivetrain unknown — generic logic applied".
+   The RSR's RR drivetrain comes from the override map / the manual combo, not the
+   (empty) DB column.
+
+### Gearbox
+
+10. **B5b lengthens gearing.** Confirm a `gear_too_long` diagnosis proposes a
+    `final_drive` **up** change (B5b); a `gear_too_short` still proposes
+    `final_drive` **down** (B5); `limiter_limited` proposes **no** gearbox change.
+11. **Equal ratios allowed.** Confirm a setup with two equal adjacent gear ratios
+    is **NOT** rejected as an inversion (monotonic ordering is now non-increasing;
+    only a strict inversion is rejected).
+
+### Explainability + learning
+
+12. **Source label row.** Confirm each change shows a small `source_label` row
+    ("Porsche-specific rule" / "generic rule"; baseline changes show
+    neutral / biased / midpoint / conservative labels and never claim telemetry
+    evidence).
+13. **Learning is inert but present.** Confirm the response carries a learning
+    note "no cross-session learning history available" — the learning seam is
+    wired but empty, so recommendations do **not** yet self-tune from outcomes.
+    Learning can never un-block a safety rule, un-reject a change, or make the AI
+    actionable.
+
+---
+
 ## Notes / known limitations
 
 - Gearbox ratio ranges (`final_drive` 2.5–6.0, gears 0.5–4.0) are conservative
@@ -129,11 +213,21 @@ feedback, then **Analyse** in the Setup Builder.
 - Running the full automated suite in one process on Windows / Python 3.14 can
   hit a flaky native PyQt teardown segfault; this does not affect the app at
   runtime.
-- **Group 42 deferrals:** the rule-engine learning loop (`RuleOutcomeStore`) is a
-  foundation only — it is not wired live and does not persist across sessions
-  yet, so recommendations will not yet self-tune from outcomes. The handling-phase
-  rule pack (C/D) is a starter set — the remaining per-setting Pack C rules are
-  deferred. The voice path is narration-only pending a full rule-first rebuild.
-- Full technical detail: `docs/RULE_FIRST_SETUP_BRAIN.md` (architecture),
-  `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 and § Group 41),
-  `MASTER_TESTING_REGISTER.md` (Rule-First Setup Brain (Group 42)).
+- **Group 42 deferrals:** the handling-phase rule pack (C/D) is a starter set —
+  the remaining per-setting Pack C rules are deferred. The voice path is
+  narration-only pending a full rule-first rebuild.
+- **Group 45 deferrals:** the learning seam (`RuleOutcomeStore`) is now *wired but
+  empty* in production — it never fires without samples, so recommendations still
+  do **not** self-tune (cross-session persistence + a success-recording feed are
+  deferred). Session context is *recorded* on baseline changes but does not yet
+  change baseline **values** (session-specific numerical baseline tuning is
+  deferred). The fuel multiplier is read but only informational (no fuel-specific
+  rule). Full per-gear individual ratio rules are deferred (broad final-drive-only
+  logic today). On a driver profile that carries **both** `race_values_consistency`
+  and `rotation_without_snap`, the two opposing baseline lsd_decel biases (+2 / −2)
+  net to zero.
+- Full technical detail: `docs/RULE_FIRST_SETUP_BRAIN.md` (architecture, incl.
+  § 14 "Setup Brain Intelligence Expansion"), `docs/SETUP_BRAIN_UPGRADE.md`
+  (§ Group 45, § Group 42 and § Group 41), `MASTER_TESTING_REGISTER.md`
+  (Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
+  (Group 42)).

@@ -1,4 +1,22 @@
-"""Setup rule engine — Group 42: Rule-First Setup Brain.
+"""Setup rule engine — Group 45: Setup Brain Intelligence Expansion.
+
+Group 45 changes
+----------------
+- run_rule_engine / _run_rule_engine_inner: new optional keyword params
+  session_type, car_class, drivetrain, tyre_wear_multiplier (all default None).
+  Existing Group 42/43/44 callers work unchanged (defaults cover them).
+- _scope_matches: new filter applied AFTER Pack A unconditional checks.
+  Pack A rules are always evaluated (safety invariants); scope only gates B/C/D/P+.
+- SetupChangeIntent: four new tail fields with "" defaults:
+    source_label, session_influence, car_drivetrain_influence, pack.
+- _process_rule: new session_type / drivetrain params; profile rank bonus
+  (+1/0/-1) used as a tiebreaker tuple (confidence_rank, profile_rank_bonus).
+- Session confidence upgrade: quali → prefers_front_bite/trail_braker tags
+  upgrade one step; race → safety-phase or race_values_consistency tags upgrade.
+- Monotonic gear inversion check: changed from `>=` to `>` so equal adjacent
+  ratios are ALLOWED; reject-reason starts with "monotonic ordering violation".
+
+Previously "Setup rule engine — Group 42: Rule-First Setup Brain."
 
 Evaluates the rule catalogue against a diagnosis dict and produces a SetupPlan
 of proposed and rejected candidates.
@@ -31,9 +49,12 @@ from typing import NamedTuple
 
 from strategy._setup_constants import MIN_OUTCOME_SAMPLES, LOW_SUCCESS_RATE
 from strategy.setup_knowledge_base import (
+    CarClass,
     ConfidenceLevel,
+    DrivetrainType,
     RiskLevel,
     RulePhase,
+    SessionType,
     SetupRule,
     get_all_rules,
     resolve_delta,
@@ -62,7 +83,14 @@ def _downgrade_confidence(c: ConfidenceLevel) -> ConfidenceLevel:
 # ---------------------------------------------------------------------------
 
 class SetupChangeIntent(NamedTuple):
-    """A single proposed or rejected setup change with full explainability."""
+    """A single proposed or rejected setup change with full explainability.
+
+    Group 45 tail fields (all default ""):
+      source_label          — "Porsche-specific rule" if pack=="P", else "generic rule".
+      session_influence     — verbatim session-bias text; "" when session unknown.
+      car_drivetrain_influence — drivetrain-specific modifier text; "" when generic.
+      pack                  — rule pack letter (e.g. "A", "B", "P").
+    """
     field: str
     delta: float
     from_value: object          # float or None
@@ -75,6 +103,11 @@ class SetupChangeIntent(NamedTuple):
     risk: RiskLevel
     confidence: ConfidenceLevel
     driver_style_alignment: DriverStyleAlignment
+    # Group 45 explainability fields — at tail with defaults so existing code is unaffected
+    source_label: str = ""
+    session_influence: str = ""
+    car_drivetrain_influence: str = ""
+    pack: str = ""
 
 
 class SetupPlan(NamedTuple):
@@ -321,6 +354,51 @@ def _is_pack_a_rule(rule: SetupRule) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Scope filter (Group 45)
+# ---------------------------------------------------------------------------
+
+def _scope_matches(
+    rule: SetupRule,
+    session_type: "SessionType | None",
+    car_class: "CarClass | None",
+    drivetrain: "DrivetrainType | None",
+) -> bool:
+    """Return True when the rule applies to the given context.
+
+    None context value = wildcard-permissive (never filters that axis).
+    Rules with applies_* == 'any' always pass.
+    Pack A rules are NOT filtered by this function — they are called
+    only for non-Pack-A rules (safety invariants are always evaluated).
+    """
+    if (
+        rule.applies_session != SessionType.any
+        and session_type is not None
+        and rule.applies_session != session_type
+    ):
+        return False
+    if (
+        rule.applies_drivetrain != DrivetrainType.any
+        and drivetrain is not None
+        and rule.applies_drivetrain != drivetrain
+    ):
+        return False
+    if (
+        rule.applies_car_class != CarClass.any
+        and car_class is not None
+        and rule.applies_car_class != car_class
+    ):
+        return False
+    return True
+
+
+def _upgrade_confidence(c: ConfidenceLevel) -> ConfidenceLevel:
+    """Upgrade confidence one step (low→med→high); cap at high."""
+    if c == ConfidenceLevel.low:
+        return ConfidenceLevel.med
+    return ConfidenceLevel.high
+
+
+# ---------------------------------------------------------------------------
 # Main engine
 # ---------------------------------------------------------------------------
 
@@ -331,17 +409,28 @@ def run_rule_engine(
     profile: DriverProfile,
     allowed_tuning: "list[str] | None" = None,
     rule_outcome_store: "RuleOutcomeStore | None" = None,
+    *,
+    session_type: "SessionType | None" = None,
+    car_class: "CarClass | None" = None,
+    drivetrain: "DrivetrainType | None" = None,
+    tyre_wear_multiplier: "float | None" = None,
 ) -> SetupPlan:
     """Evaluate all registered rules against diagnosis and return a SetupPlan.
 
     Parameters
     ----------
-    diagnosis     : Output of build_setup_diagnosis.
-    setup         : Current car setup dict (canonical keys).
-    ranges        : Resolved per-car ranges from resolve_ranges().
-    profile       : DriverProfile from build_driver_profile().
-    allowed_tuning: Optional list of allowed tuning categories; None = no restriction.
-    rule_outcome_store: Optional outcome store for AC21 confidence downgrade.
+    diagnosis          : Output of build_setup_diagnosis.
+    setup              : Current car setup dict (canonical keys).
+    ranges             : Resolved per-car ranges from resolve_ranges().
+    profile            : DriverProfile from build_driver_profile().
+    allowed_tuning     : Optional list of allowed tuning categories; None = no restriction.
+    rule_outcome_store : Optional outcome store for AC21 confidence downgrade.
+    session_type       : SessionType enum or None (None = wildcard-permissive).
+    car_class          : CarClass enum or None (None = wildcard-permissive).
+    drivetrain         : DrivetrainType enum or None (None = wildcard-permissive).
+    tyre_wear_multiplier: float or None — for tyre/fuel weighting; not directly used by
+                          the engine (the diagnosis dict already carries tyre_wear_high);
+                          accepted here for forward-compatibility.
 
     Returns
     -------
@@ -350,7 +439,10 @@ def run_rule_engine(
     """
     try:
         return _run_rule_engine_inner(
-            diagnosis, setup, ranges, profile, allowed_tuning, rule_outcome_store
+            diagnosis, setup, ranges, profile, allowed_tuning, rule_outcome_store,
+            session_type=session_type,
+            car_class=car_class,
+            drivetrain=drivetrain,
         )
     except Exception as exc:
         log.warning("run_rule_engine failed: %s", exc, exc_info=True)
@@ -364,6 +456,10 @@ def _run_rule_engine_inner(
     profile: DriverProfile,
     allowed_tuning: "list[str] | None",
     rule_outcome_store: "RuleOutcomeStore | None",
+    *,
+    session_type: "SessionType | None" = None,
+    car_class: "CarClass | None" = None,
+    drivetrain: "DrivetrainType | None" = None,
 ) -> SetupPlan:
     proposed: list[SetupChangeIntent] = []
     rejected: list[SetupChangeIntent] = []
@@ -408,6 +504,9 @@ def _run_rule_engine_inner(
                 proposed_by_field=proposed_by_field,
                 rejected=rejected,
                 max_gear=max_gear,
+                session_type=session_type,
+                car_class=car_class,
+                drivetrain=drivetrain,
             )
         except Exception as exc:
             log.debug("Rule %s failed: %s", rule.rule_id, exc)
@@ -435,8 +534,24 @@ def _process_rule(
     proposed_by_field: dict,
     rejected: list,
     max_gear: int,
+    session_type: "SessionType | None" = None,
+    car_class: "CarClass | None" = None,
+    drivetrain: "DrivetrainType | None" = None,
 ) -> None:
-    """Process a single rule — updates proposed_by_field, rejected, protected_fields."""
+    """Process a single rule — updates proposed_by_field, rejected, protected_fields.
+
+    Group 45 additions:
+    - Scope filter (_scope_matches) applied after Pack A unconditional checks.
+      Pack A rules are EXEMPT from scope filtering (safety invariants).
+    - Session confidence upgrade: qualifying → prefers_front_bite/trail_braker tags
+      upgrade confidence one step; race → safety-phase or race_values_consistency
+      tags upgrade one step.
+    - Profile rank bonus (+1/0/-1) used as tiebreaker tuple when confidence is equal.
+    - Monotonic gear inversion check: strict > (not >=) — equal ratios are allowed.
+      Reject-reason starts with "monotonic ordering violation".
+    - New explainability fields on SetupChangeIntent: source_label, session_influence,
+      car_drivetrain_influence, pack.
+    """
 
     # --- Pack A: unconditional field protection ---
     if rule.rule_id in _PACK_A_UNCONDITIONAL_PROTECT:
@@ -448,24 +563,21 @@ def _process_rule(
     if rule.field in _PACK_A_VIRTUAL_FIELDS:
         return
 
-    # --- Evaluate preconditions ---
-    if not _eval_preconditions(rule.preconditions, diagnosis):
-        return  # rule does not fire
-
-    # --- Evaluate contraindications ---
-    if _eval_contraindications(rule.contraindications, diagnosis):
-        return  # rule suppressed
-
-    # --- Pack A conditional protection rules (A3, A4): block the field ---
-    if rule.pack == "A" and rule.rule_id in _PACK_A_CONDITIONAL_PROTECT:
-        # The rule fired = the guard condition is active → protect the field
-        if rule.field not in protected_fields:
-            protected_fields.append(rule.field)
-        return
-
-    # --- General Pack A: any firing Pack A rule → rejected_candidate ---
+    # --- Pack A safety checks: preconditions + contraindications BEFORE scope filter ---
+    # Pack A rules are unconditionally evaluated (safety invariants are not scope-filtered).
     if _is_pack_a_rule(rule):
-        reason = f"pack_a_safety: {rule.title}"
+        # Evaluate preconditions
+        if not _eval_preconditions(rule.preconditions, diagnosis):
+            return  # rule does not fire
+        # Evaluate contraindications
+        if _eval_contraindications(rule.contraindications, diagnosis):
+            return  # rule suppressed
+        # Conditional protect (A3, A4)
+        if rule.rule_id in _PACK_A_CONDITIONAL_PROTECT:
+            if rule.field not in protected_fields:
+                protected_fields.append(rule.field)
+            return
+        # General Pack A: any firing Pack A rule → rejected_candidate
         intent = SetupChangeIntent(
             field=rule.field,
             delta=0.0,
@@ -479,9 +591,25 @@ def _process_rule(
             risk=rule.risk,
             confidence=rule.base_confidence,
             driver_style_alignment=DriverStyleAlignment.caution,
+            source_label="generic rule",
+            session_influence="",
+            car_drivetrain_influence="",
+            pack=rule.pack,
         )
         rejected.append(intent)
         return
+
+    # --- Scope filter (Group 45): non-Pack-A rules only ---
+    if not _scope_matches(rule, session_type, car_class, drivetrain):
+        return  # rule does not apply in this session/car context
+
+    # --- Evaluate preconditions ---
+    if not _eval_preconditions(rule.preconditions, diagnosis):
+        return  # rule does not fire
+
+    # --- Evaluate contraindications ---
+    if _eval_contraindications(rule.contraindications, diagnosis):
+        return  # rule suppressed
 
     # --- Skip if field is protected ---
     if rule.field in protected_fields:
@@ -532,15 +660,17 @@ def _process_rule(
         if abs(to_value - from_value) < 1e-9:
             return
 
-    # --- Gear inversion check ---
+    # --- Gear inversion check (Group 45: strict > to allow equal adjacent ratios) ---
+    # Reject reason MUST start with "monotonic ordering violation" (brief contract).
     if gear_idx > 1 and from_value is not None and to_value is not None:
         prev_key = f"gear_{gear_idx - 1}"
         prev_val = setup.get(prev_key)
         if prev_val is not None:
             try:
                 prev_float = float(prev_val)
-                if to_value >= prev_float:
-                    # Would create inversion — reject
+                if to_value > prev_float:
+                    # Would create strict inversion — reject
+                    # (equal values are ALLOWED: gear_N == gear_{N-1} is not an inversion)
                     intent = SetupChangeIntent(
                         field=rule.field,
                         delta=delta,
@@ -549,11 +679,18 @@ def _process_rule(
                         symptom=rule.symptom,
                         evidence=[],
                         rule_id=rule.rule_id,
-                        rationale=f"BLOCKED — gear ratio inversion: {rule.field} to_value={to_value:.3f} >= gear_{gear_idx-1}={prev_float:.3f}",
+                        rationale=(
+                            f"monotonic ordering violation: {rule.field} to_value={to_value:.3f} "
+                            f"> gear_{gear_idx-1}={prev_float:.3f}"
+                        ),
                         rejected_alternatives=[],
                         risk=RiskLevel.high,
                         confidence=ConfidenceLevel.high,
                         driver_style_alignment=DriverStyleAlignment.caution,
+                        source_label="generic rule" if rule.pack != "P" else "Porsche-specific rule",
+                        session_influence="",
+                        car_drivetrain_influence="",
+                        pack=rule.pack,
                     )
                     rejected.append(intent)
                     return
@@ -568,14 +705,61 @@ def _process_rule(
         if rate is not None and rate < LOW_SUCCESS_RATE and fc >= MIN_OUTCOME_SAMPLES:
             confidence = _downgrade_confidence(confidence)
 
+    # --- Session confidence upgrade (Group 45) ---
+    # qualifying → rules with prefers_front_bite or trail_braker tags get +1 confidence
+    # race → safety-phase rules or race_values_consistency-tagged rules get +1 confidence
+    # Downgrade must NEVER be reversed here — only upgrade after the downgrade.
+    _session_influence = ""
+    if session_type == SessionType.quali:
+        if rule.driver_style_tags and (
+            "prefers_front_bite" in rule.driver_style_tags
+            or "trail_braker" in rule.driver_style_tags
+        ):
+            confidence = _upgrade_confidence(confidence)
+            _session_influence = "qualifying bias applied — front response/bite prioritised"
+        else:
+            # A qualifying rule that lacks front-bite/trail-braker tags gets no positive
+            # quali claim — session is known but no special bias applies for this rule.
+            _session_influence = ""
+    elif session_type == SessionType.race:
+        if (
+            rule.phase == RulePhase.safety
+            or (rule.driver_style_tags and "race_values_consistency" in rule.driver_style_tags)
+        ):
+            confidence = _upgrade_confidence(confidence)
+            # Endurance flag comes from the diagnosis (injected by driving_advisor)
+            _duration_mins = diagnosis.get("duration_mins", 0) or 0
+            if _duration_mins >= 60:
+                _session_influence = "endurance bias applied"
+            else:
+                _session_influence = "race consistency bias applied"
+    else:
+        if session_type is None:
+            _session_influence = "neutral weighting — session type not available"
+
     # --- Driver-style alignment ---
     alignment = _compute_driver_style_alignment(rule, profile)
 
     # --- Apply driver-style caution from profile ---
     # If profile dislikes_snap_exit and rule would increase LSD accel → caution
+    # Also record this in driver_style_influence context (the blocked case exits here).
     if profile.dislikes_snap_exit and rule.field == "lsd_accel" and delta > 0:
         if diagnosis.get("driver_feel_flags", {}).get("snap_oversteer_exit"):
             return  # blocked by driver-style contraindication
+
+    # --- Profile rank bonus (Group 45): tiebreaker (+1/0/-1) ---
+    # +1 if ALL rule.driver_style_tags ⊆ profile.style_tags
+    # 0 if partial/none overlap
+    # -1 if profile.dislikes_snap_exit and rule increases lsd_accel (already blocked above
+    #    when snap_oversteer_exit is in the diagnosis; this covers the ranking reduction
+    #    when snap is not in the diagnosis but profile still dislikes it)
+    _profile_rank_bonus = 0
+    if rule.driver_style_tags:
+        _all_match = all(t in profile.style_tags for t in rule.driver_style_tags)
+        if _all_match:
+            _profile_rank_bonus = 1
+    if profile.dislikes_snap_exit and rule.field == "lsd_accel" and delta > 0:
+        _profile_rank_bonus = -1  # override — profile penalty for snap-risk LSD increase
 
     # --- Build evidence list from diagnosis ---
     evidence: list[str] = []
@@ -588,6 +772,14 @@ def _process_rule(
     for fk, fv in feel_flags.items():
         if fv:
             evidence.append(f"feel:{fk}")
+
+    # --- Explainability fields (Group 45) ---
+    _source_label = "Porsche-specific rule" if rule.pack == "P" else "generic rule"
+    _car_drivetrain_influence = ""
+    if drivetrain == DrivetrainType.rr and rule.applies_drivetrain == DrivetrainType.rr:
+        _car_drivetrain_influence = "RR drivetrain: rear-exit-stability modifiers applied"
+    elif drivetrain is None:
+        _car_drivetrain_influence = "drivetrain unknown — generic logic applied"
 
     # --- Build candidate intent ---
     intent = SetupChangeIntent(
@@ -603,17 +795,32 @@ def _process_rule(
         risk=rule.risk,
         confidence=confidence,
         driver_style_alignment=alignment,
+        source_label=_source_label,
+        session_influence=_session_influence,
+        car_drivetrain_influence=_car_drivetrain_influence,
+        pack=rule.pack,
     )
 
     # --- Conflict resolution: same field, check existing candidate ---
+    # Group 45: tiebreaker is a tuple (confidence_rank, profile_rank_bonus)
+    _conf_rank = {ConfidenceLevel.low: 0, ConfidenceLevel.med: 1, ConfidenceLevel.high: 2}
     existing = proposed_by_field.get(rule.field)
     if existing is not None:
+        # Reconstruct existing profile rank bonus
+        _existing_bonus = 0
+        if hasattr(existing, "driver_style_alignment"):
+            if existing.driver_style_alignment == DriverStyleAlignment.aligned:
+                _existing_bonus = 1
+            elif existing.driver_style_alignment == DriverStyleAlignment.caution:
+                _existing_bonus = -1
+        _new_tuple = (_conf_rank[confidence], _profile_rank_bonus)
+        _existing_tuple = (_conf_rank[existing.confidence], _existing_bonus)
+
         # Same field already has a candidate
         existing_delta = existing.delta
         if (delta > 0) == (existing_delta > 0):
-            # Same direction — keep higher confidence candidate
-            _conf_rank = {ConfidenceLevel.low: 0, ConfidenceLevel.med: 1, ConfidenceLevel.high: 2}
-            if _conf_rank[confidence] > _conf_rank[existing.confidence]:
+            # Same direction — keep higher (confidence, profile_bonus) tuple
+            if _new_tuple > _existing_tuple:
                 # New candidate wins — move existing to rejected with conflict reason
                 rej_existing = existing._replace(
                     rationale=f"conflict:{rule.rule_id} — lower confidence",
@@ -626,9 +833,8 @@ def _process_rule(
                     rationale=f"conflict:{existing.rule_id} — lower confidence",
                 ))
         else:
-            # Opposite directions — conflict; keep higher confidence, reject both or lower
-            _conf_rank = {ConfidenceLevel.low: 0, ConfidenceLevel.med: 1, ConfidenceLevel.high: 2}
-            if _conf_rank[confidence] >= _conf_rank[existing.confidence]:
+            # Opposite directions — conflict; keep higher (confidence, bonus) tuple
+            if _new_tuple >= _existing_tuple:
                 rej_existing = existing._replace(
                     rationale=f"conflict:{rule.rule_id} — opposite direction, lower or equal confidence",
                 )

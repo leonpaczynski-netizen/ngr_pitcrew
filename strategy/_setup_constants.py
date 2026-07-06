@@ -55,7 +55,16 @@ APPROVED_STATUSES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 # AC26: rule-engine version string — non-empty, bumped with each pack change.
-RULE_ENGINE_VERSION: str = "42.0"
+RULE_ENGINE_VERSION: str = "45.0"
+
+# ---------------------------------------------------------------------------
+# Group 45 — Setup Brain Intelligence Expansion constants
+# ---------------------------------------------------------------------------
+
+# High tyre-wear cutoff: tyre_wear_multiplier >= 5.0 is classified as high wear.
+# Used by the tyre-wear contraindication layer in setup_knowledge_base.py and the
+# context-resolution layer in driving_advisor.py.
+HIGH_TYRE_WEAR_THRESHOLD: float = 5.0
 
 # AC21: minimum outcome samples before the success-rate gate fires.
 MIN_OUTCOME_SAMPLES: int = 3
