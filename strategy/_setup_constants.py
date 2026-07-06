@@ -83,7 +83,8 @@ HIGH_FUEL_MULTIPLIER_THRESHOLD: float = 5.0
 HIGH_SUCCESS_RATE: float = 0.60
 
 # DB schema version — bump with each migration; tests may assert this value.
-DB_VERSION: int = 12
+# v13 (Group 47): added 5 additive outcome-verification columns to learning_outcomes.
+DB_VERSION: int = 13
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

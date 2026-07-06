@@ -52,6 +52,76 @@ from ui.tab_registry import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Group 47 — Outcome verification helpers (pure, best-effort, never raise)
+# ---------------------------------------------------------------------------
+
+# Structured driver_feedback columns whose text feeds outcome classification.
+_FEEDBACK_TEXT_FIELDS = (
+    "corner_entry", "mid_corner", "exit_stability", "rear_braking",
+    "tyre_condition", "notes",
+)
+
+
+def _combine_driver_feedback_text(feedback_row: dict) -> str:
+    """Join a driver_feedback row's free-text/structured fields into one string.
+
+    Used only as evidence for deterministic outcome classification.  Never raises.
+    """
+    try:
+        parts = []
+        for f in _FEEDBACK_TEXT_FIELDS:
+            v = (feedback_row.get(f) or "").strip()
+            if v:
+                parts.append(v)
+        return "; ".join(parts)
+    except Exception:
+        return ""
+
+
+def _verify_change_outcome(
+    rule_id: str,
+    field: str,
+    car_id: int,
+    track: str,
+    layout_id: str,
+    before_window,
+    after_window,
+    feedback_text: str,
+) -> dict:
+    """Run the Group 47 outcome-verification model for one applied change.
+
+    Returns a small dict {target_issue, evidence_summary, safety_notes,
+    outcome_kind} used to enrich the learning_outcomes record additively.  Any
+    failure returns empty strings so the caller's persistence is never disrupted.
+    """
+    try:
+        from strategy.setup_outcome_verification import (
+            MetricSnapshot, verify_outcome, infer_target_issue_from_fields,
+        )
+        target_issue = infer_target_issue_from_fields([field])
+        result = verify_outcome(
+            rule_id=rule_id,
+            car_id=car_id,
+            track=track,
+            layout_id=layout_id,
+            target_issue=target_issue,
+            before=MetricSnapshot.from_window(before_window),
+            after=MetricSnapshot.from_window(after_window),
+            driver_feedback=feedback_text,
+        )
+        return {
+            "target_issue": result.target_issue,
+            "evidence_summary": result.evidence_summary,
+            "safety_notes": result.safety_notes,
+            "outcome_kind": result.outcome.value,
+        }
+    except Exception:
+        return {
+            "target_issue": "", "evidence_summary": "",
+            "safety_notes": "", "outcome_kind": "",
+        }
+
 
 # ---------------------------------------------------------------------------
 # Cross-thread signal bridge
@@ -848,8 +918,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             after_window = aggregate_lap_window(after_laps)
             multi_count = len(scoreable)
             # Query driver feedback once for this car+track (not per rec).
-            has_driver_feedback = bool(
-                self._db.get_recent_feedback(car_id, track)
+            _feedback_rows = self._db.get_recent_feedback(car_id, track)
+            has_driver_feedback = bool(_feedback_rows)
+            # Group 47: build a single feedback string from the most-recent row's
+            # free-text/structured fields for deterministic outcome classification.
+            _feedback_text = _combine_driver_feedback_text(
+                _feedback_rows[0] if _feedback_rows else {}
             )
             written = 0
             for rec in scoreable:
@@ -889,6 +963,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                                     _rule_id = _ch.get("rule_id", "")
                                     if not _rule_id:
                                         continue
+                                    # Group 47: derive richer outcome-verification
+                                    # evidence for this change.  The persisted
+                                    # confidence-feed `verdict` stays the telemetry
+                                    # OFR-1 verdict (non-regressive); the typed
+                                    # outcome_kind + evidence/feedback/safety notes
+                                    # are stored additively for explainability.
+                                    _g47 = _verify_change_outcome(
+                                        _rule_id, _ch.get("field", ""),
+                                        car_id, track, layout_id,
+                                        before_window, after_window, _feedback_text,
+                                    )
                                     self._db.record_learning_outcome(
                                         car_id=car_id,
                                         track=track,
@@ -901,6 +986,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                                         confidence=result.confidence,
                                         driver_profile_version=_dpv,
                                         rule_engine_version=_rev,
+                                        target_issue=_g47["target_issue"],
+                                        evidence_summary=_g47["evidence_summary"],
+                                        driver_feedback=_feedback_text,
+                                        safety_notes=_g47["safety_notes"],
+                                        outcome_kind=_g47["outcome_kind"],
                                     )
                     except Exception:
                         pass  # learning persistence is best-effort — never disrupt scoring

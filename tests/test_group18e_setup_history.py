@@ -202,12 +202,13 @@ class TestMigrationV6(unittest.TestCase):
             ).fetchall()
         col_names = [c[1] for c in cols]
         self.assertIn("before_metrics", col_names)
-        # Check user_version — v12 is the current schema (Group 46 added
+        # Check user_version — v13 is the current schema (Group 47 added the 5
+        # additive outcome-verification columns; v12 (Group 46) added
         # learning_outcomes; v11 added Rule-First columns; v10 added rating).
-        # Reconciled from v10 → v12 for Group 46.
+        # Reconciled from v10 → v12 for Group 46, then v12 → v13 for Group 47.
         with db._lock:
             version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 12)
+        self.assertEqual(version, 13)
 
 
 class TestBuildCarSetupSignature(unittest.TestCase):

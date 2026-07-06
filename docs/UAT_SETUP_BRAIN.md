@@ -316,3 +316,38 @@ purpose.
   § Group 41), `MASTER_TESTING_REGISTER.md` (Setup Brain Learning & Race Context
   (Group 46), Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
   (Group 42)).
+
+---
+
+## Group 47 UAT — Outcome Verification & Learning Loop 2
+
+**Benchmark scenario (manual):** Porsche 911 RSR '17 · Fuji Full Course · high
+tyre + high fuel.
+
+1. Run a session; Analyse (AI disabled) → approve the traction-first change (P1
+   lsd_accel). Apply it.
+2. Drive another session with the change applied.
+3. Submit driver feedback — try "fixed exit traction" (positive) and, separately,
+   "rear still loose" (negative).
+4. Re-open the next session / re-Analyse.
+
+**Expected:**
+* A "Learning outcome" block appears on the setup result **only** when there is a
+  scored, non-insufficient outcome for this car+track+layout.
+* The text honestly reflects the before/after **exit-traction** telemetry
+  (wheelspin per lap) and the feedback, and always ends with the disclaimer that
+  learning adjusts confidence/ranking/explanation only and does not author values
+  or bypass validation.
+* Positive feedback strengthens an upgrade **only** when telemetry agrees; a
+  telemetry safety regression is **never** overridden by positive feedback;
+  negative feedback on flat telemetry downgrades; contradictory feedback → mixed.
+* No new actionable field ever appears from learning. Apply stays gated. Rejected
+  advice stays non-actionable.
+
+**Automated proof:** `tests/test_group47_*` (73 tests) + Group 38–46 regression
+(incl. AC37 RSR/Fuji). Run UI files individually on Win/Py3.14.
+
+**Deferred (honest):** the live confidence feed still consumes the telemetry OFR-1
+verdict (not yet the feedback-aware Group 47 verdict); understeer/front-bite
+verification has no telemetry signal; baseline learning-record wiring and
+`learning_outcomes.session_type` population remain deferred from Group 46.
