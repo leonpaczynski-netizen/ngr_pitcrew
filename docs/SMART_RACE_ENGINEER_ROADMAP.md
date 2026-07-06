@@ -97,6 +97,74 @@ pit-wall voice, and any large UI redesign all remain future work. Wiring the evi
 builder to pull live session samples from `SessionDB` (as `strategy_orchestrator` already
 does for the AI path) is the natural next step; today the caller supplies the samples.
 
+---
+
+## Group 49 — Race Strategy Brain Phase 3: SessionDB Evidence Integration (DELIVERED 2026-07-06)
+
+**Branch:** `group49-strategy-sessiondb-integration` (from clean `master` `df78535`, Group 48 merged).
+**One line:** the Group 48 strategy brain now builds its evidence from **real stored
+SessionDB practice/race telemetry** instead of only caller-supplied samples — turning
+the calculator into a race analyst fed by the driver's own session data.
+
+This delivers the Group 48 caveat directly: *"wire the evidence builder to pull live
+SessionDB samples."* It adds **5 new pure `strategy/` modules + 6 new test files** plus two
+tiny **additive** edits — a read-only `SessionDB.get_session_meta(...)` method (no schema
+change) and an optional `evidence_sources` field on the Group 48 `StrategyExplanation`
+(Group 48 behaviour byte-identical when unset). **No schema migration; `DB_VERSION` stays 13.**
+
+### Objective
+Answer *"based on my actual practice data for this car/track/event/fuel-mult/tyre-mult/refuel,
+what race strategy is fastest over the full race distance?"* — deterministically,
+evidence-gated, honest about missing data, safe with AI disabled, and completely separate
+from setup authoring and the Apply gate.
+
+### Modules added
+1. **`strategy/race_strategy_session_adapter.py`** (READ-ONLY) — `SessionStrategySamples`
+   frozen dataclass + `extract_session_strategy_samples(...)`. Calls only
+   `db.get_session_meta` and `db.get_session_laps`; writes nothing; never raises. Reads
+   clean laps, fuel (`fuel_used` or `fuel_start-fuel_end`), and per-compound pace.
+   **Tyre-wear honesty:** SessionDB has no tyre-wear column, so degradation is a proxy
+   *derived* from measured within-stint lap-time drift (≥3 consecutive same-compound laps),
+   clearly labelled and warned; too little data → missing. Safe on no-DB / no-session /
+   no-laps / car-or-track mismatch.
+2. **`strategy/race_strategy_from_session.py`** — `build_strategy_evidence_from_session(...)`
+   and `build_strategy_evidence_from_event_context(...)`. Feeds adapter samples + event
+   settings into Group 48 `build_strategy_evidence(...)`; fabricates nothing; a
+   `source_summary` classifies each input **SessionDB measured / event setting / default /
+   missing**.
+3. **`strategy/race_strategy_pipeline.py`** — `recommend_strategy_from_session(...)` /
+   `recommend_strategy_from_event_context(...)` run the full Group 48 stack over
+   session-built evidence and return a frozen `SessionStrategyResult` with standing
+   read-only/strategy-only safety notes.
+4. **`strategy/race_strategy_session_explain.py`** — `build_session_explanation(...)` reuses
+   the Group 48 builder and attaches per-input provenance lines ("Race pace: SessionDB
+   measured (7 clean laps)", "Tyre degradation: missing, confidence reduced").
+5. **`strategy/race_strategy_session_benchmark.py`** — seeds an in-memory
+   `SessionDB(":memory:")` with 12 RSR/Fuji practice laps and runs the whole pipeline.
+
+### Benchmark result (RSR / Fuji, all from SessionDB)
+Samples read from SessionDB; **one-stop (~3112 s) beats two-stop (~3148 s)** on total race
+time (pit loss + refuel included, degradation from the derived lap-drift proxy); confidence
+HIGH; the explanation names each input's source; the `2stop_push` plan is flagged rear-fragile
+and never recommended. Offline, no AI.
+
+### Safety guarantees (verified by tests)
+Apply-gate predicate string + disabled AI-build line asserted intact; the pipeline authors
+no setup fields, has no apply/approve capability, imports no setup-authoring module, and
+writes nothing to `data/setup_history.json` (content-hash before/after); the pipeline has no
+learning parameter; driver memory cannot flip legality or change the total-time maths;
+Group 48 scoring stays deterministic; SessionDB access is strictly read-only.
+
+### Tests
+6 new files — `tests/test_group49_{strategy_session_adapter, strategy_from_session,
+strategy_pipeline, strategy_session_explainability, porsche_fuji_session_strategy,
+strategy_safety_regression}.py` — **73 pure/offline tests, all pass.**
+
+### Deferred (honest)
+All Group 48 deferrals stand. No new Qt UI surface — wiring `recommend_strategy_from_session`
+into the Strategy tab is the next step. SessionDB stores no explicit tyre-wear or pit-loss
+column, so tyre degradation is a disclosed lap-drift proxy and pit loss stays event-supplied.
+
 ### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
 
 After each race, the AI should evaluate whether its own setup recommendations actually
