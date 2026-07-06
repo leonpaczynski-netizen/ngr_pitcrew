@@ -74,6 +74,9 @@ def plan_to_raw_data(
             "session_influence": getattr(intent, "session_influence", ""),
             "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
             "pack": getattr(intent, "pack", ""),
+            # Group 46 explainability fields
+            "learning_influence": getattr(intent, "learning_influence", ""),
+            "fuel_influence": getattr(intent, "fuel_influence", ""),
         }
         changes.append(change)
 
@@ -138,5 +141,8 @@ def rejected_to_json(plan: SetupPlan) -> list[dict]:
             "session_influence": getattr(intent, "session_influence", ""),
             "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
             "pack": getattr(intent, "pack", ""),
+            # Group 46 explainability fields
+            "learning_influence": getattr(intent, "learning_influence", ""),
+            "fuel_influence": getattr(intent, "fuel_influence", ""),
         })
     return result

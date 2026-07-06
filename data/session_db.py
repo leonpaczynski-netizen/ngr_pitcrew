@@ -447,6 +447,10 @@ class SessionDB:
             self._migrate_v11()
             self._conn.execute("PRAGMA user_version = 11")
             self._conn.commit()
+        if version < 12:
+            self._migrate_v12()
+            self._conn.execute("PRAGMA user_version = 12")
+            self._conn.commit()
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -550,6 +554,36 @@ class SessionDB:
                 if "duplicate column" not in str(exc).lower():
                     raise
 
+    def _migrate_v12(self) -> None:
+        """Group 46 — Learning & Race Context Intelligence (schema version 12).
+
+        Creates learning_outcomes table to persist cross-session rule outcome
+        records.  Each row ties a rule_id to a car/track/layout scope and records
+        a verdict (improved / worsened / neutral / insufficient_data) so the
+        confidence-upgrade gate can query real historical success rates.
+
+        Idempotent — uses IF NOT EXISTS throughout; no ALTER TABLE.
+        """
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS learning_outcomes (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts                   TEXT    NOT NULL DEFAULT '',
+                car_id               INTEGER NOT NULL DEFAULT 0,
+                track                TEXT    NOT NULL DEFAULT '',
+                layout_id            TEXT    NOT NULL DEFAULT '',
+                session_id           INTEGER NOT NULL DEFAULT 0,
+                session_type         TEXT    NOT NULL DEFAULT '',
+                rule_id              TEXT    NOT NULL DEFAULT '',
+                source_path          TEXT    NOT NULL DEFAULT '',
+                verdict              TEXT    NOT NULL DEFAULT '',
+                confidence           REAL    NOT NULL DEFAULT 0.0,
+                driver_profile_version TEXT  NOT NULL DEFAULT '',
+                rule_engine_version  TEXT    NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_outcomes_scope
+                ON learning_outcomes (car_id, track, layout_id);
+        """)
+
     def _migrate_v5(self) -> None:
         try:
             self._conn.execute(
@@ -639,6 +673,71 @@ class SessionDB:
                 (event_id, car_id),
             ).fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Learning outcomes CRUD (schema version 12)
+    # ------------------------------------------------------------------
+
+    def record_learning_outcome(
+        self,
+        car_id: int,
+        track: str,
+        layout_id: str,
+        session_id: int,
+        session_type: str,
+        rule_id: str,
+        source_path: str,
+        verdict: str,
+        confidence: float,
+        driver_profile_version: str,
+        rule_engine_version: str,
+    ) -> None:
+        """Insert a single learning outcome row.
+
+        Never raises — any error (corrupt DB, missing table, type error) is
+        silently swallowed so callers cannot be disrupted by persistence failures.
+        """
+        try:
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                self._conn.execute(
+                    """INSERT INTO learning_outcomes
+                           (ts, car_id, track, layout_id, session_id, session_type,
+                            rule_id, source_path, verdict, confidence,
+                            driver_profile_version, rule_engine_version)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        ts, car_id, track, layout_id, session_id, session_type,
+                        rule_id, source_path, verdict, float(confidence),
+                        driver_profile_version, rule_engine_version,
+                    ),
+                )
+                self._conn.commit()
+        except Exception:
+            pass  # never raise outward — learning persistence is best-effort
+
+    def get_learning_outcomes(
+        self, car_id: int, track: str, layout_id: str
+    ) -> list[dict]:
+        """Return learning outcome rows scoped to car_id+track+layout_id, newest first.
+
+        Returns [] on ANY error (corrupt/missing table, schema mismatch, etc.) —
+        callers must tolerate an empty list gracefully.
+
+        Each dict includes: verdict, rule_id, car_id, track, layout_id,
+        session_type, source_path, driver_profile_version (plus all other columns).
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM learning_outcomes
+                       WHERE car_id=? AND track=? AND layout_id=?
+                       ORDER BY id DESC""",
+                    (car_id, track, layout_id),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []  # silent fallback — corrupt/missing table/schema-mismatch
 
     def close(self) -> None:
         with self._lock:

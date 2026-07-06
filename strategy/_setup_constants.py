@@ -55,7 +55,7 @@ APPROVED_STATUSES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 # AC26: rule-engine version string — non-empty, bumped with each pack change.
-RULE_ENGINE_VERSION: str = "45.0"
+RULE_ENGINE_VERSION: str = "46.0"
 
 # ---------------------------------------------------------------------------
 # Group 45 — Setup Brain Intelligence Expansion constants
@@ -71,6 +71,19 @@ MIN_OUTCOME_SAMPLES: int = 3
 
 # AC21: success rate threshold below which confidence is downgraded one step.
 LOW_SUCCESS_RATE: float = 0.40
+
+# ---------------------------------------------------------------------------
+# Group 46 — Learning & Race Context Intelligence constants
+# ---------------------------------------------------------------------------
+
+# High fuel-load cutoff: fuel_multiplier >= 5.0 is classified as high fuel.
+HIGH_FUEL_MULTIPLIER_THRESHOLD: float = 5.0
+
+# High success-rate threshold above which confidence is upgraded one step.
+HIGH_SUCCESS_RATE: float = 0.60
+
+# DB schema version — bump with each migration; tests may assert this value.
+DB_VERSION: int = 12
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

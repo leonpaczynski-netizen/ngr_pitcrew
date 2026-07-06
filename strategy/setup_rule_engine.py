@@ -47,7 +47,10 @@ from __future__ import annotations
 import logging
 from typing import NamedTuple
 
-from strategy._setup_constants import MIN_OUTCOME_SAMPLES, LOW_SUCCESS_RATE
+from strategy._setup_constants import (
+    MIN_OUTCOME_SAMPLES, LOW_SUCCESS_RATE, HIGH_SUCCESS_RATE,
+    HIGH_FUEL_MULTIPLIER_THRESHOLD,
+)
 from strategy.setup_knowledge_base import (
     CarClass,
     ConfidenceLevel,
@@ -108,6 +111,9 @@ class SetupChangeIntent(NamedTuple):
     session_influence: str = ""
     car_drivetrain_influence: str = ""
     pack: str = ""
+    # Group 46 explainability fields — learning and fuel context
+    learning_influence: str = ""
+    fuel_influence: str = ""
 
 
 class SetupPlan(NamedTuple):
@@ -414,6 +420,9 @@ def run_rule_engine(
     car_class: "CarClass | None" = None,
     drivetrain: "DrivetrainType | None" = None,
     tyre_wear_multiplier: "float | None" = None,
+    car: str = "",
+    track: str = "",
+    profile_version: str = "",
 ) -> SetupPlan:
     """Evaluate all registered rules against diagnosis and return a SetupPlan.
 
@@ -431,6 +440,9 @@ def run_rule_engine(
     tyre_wear_multiplier: float or None — for tyre/fuel weighting; not directly used by
                           the engine (the diagnosis dict already carries tyre_wear_high);
                           accepted here for forward-compatibility.
+    car                : Car identifier string for keyed outcome-store lookup (Group 46).
+    track              : Track identifier string for keyed outcome-store lookup (Group 46).
+    profile_version    : Driver profile version string for keyed lookup (Group 46).
 
     Returns
     -------
@@ -443,6 +455,9 @@ def run_rule_engine(
             session_type=session_type,
             car_class=car_class,
             drivetrain=drivetrain,
+            car=car,
+            track=track,
+            profile_version=profile_version,
         )
     except Exception as exc:
         log.warning("run_rule_engine failed: %s", exc, exc_info=True)
@@ -460,6 +475,9 @@ def _run_rule_engine_inner(
     session_type: "SessionType | None" = None,
     car_class: "CarClass | None" = None,
     drivetrain: "DrivetrainType | None" = None,
+    car: str = "",
+    track: str = "",
+    profile_version: str = "",
 ) -> SetupPlan:
     proposed: list[SetupChangeIntent] = []
     rejected: list[SetupChangeIntent] = []
@@ -507,13 +525,46 @@ def _run_rule_engine_inner(
                 session_type=session_type,
                 car_class=car_class,
                 drivetrain=drivetrain,
+                car=car,
+                track=track,
+                profile_version=profile_version,
             )
         except Exception as exc:
             log.debug("Rule %s failed: %s", rule.rule_id, exc)
             continue  # one bad rule must not abort the whole engine
 
+    # Group 46: per-gear rule emission (AFTER main rule loop)
+    _emit_per_gear_changes(
+        diagnosis=diagnosis,
+        setup=setup,
+        ranges=ranges,
+        profile=profile,
+        allowed_fields=allowed_fields,
+        rule_outcome_store=rule_outcome_store,
+        protected_fields=protected_fields,
+        proposed_by_field=proposed_by_field,
+        rejected=rejected,
+        max_gear=max_gear,
+        gearbox_flag=diagnosis.get("gearbox_flag", "preserve"),
+        gearing_diagnosis_category=diagnosis.get("gearing_diagnosis_category", "insufficient_data"),
+        car=car,
+        track=track,
+        profile_version=profile_version,
+    )
+
     # Build final proposed list from proposed_by_field
     proposed = list(proposed_by_field.values())
+
+    # Build per_gear_explanation and attach to diagnosis (mutable dict)
+    _gear_explanation = _build_per_gear_explanation(
+        diagnosis=diagnosis,
+        setup=setup,
+        max_gear=max_gear,
+        proposed_by_field=proposed_by_field,
+        rejected=rejected,
+    )
+    if isinstance(diagnosis, dict):
+        diagnosis["per_gear_explanation"] = _gear_explanation
 
     return SetupPlan(
         proposed=proposed,
@@ -537,6 +588,9 @@ def _process_rule(
     session_type: "SessionType | None" = None,
     car_class: "CarClass | None" = None,
     drivetrain: "DrivetrainType | None" = None,
+    car: str = "",
+    track: str = "",
+    profile_version: str = "",
 ) -> None:
     """Process a single rule — updates proposed_by_field, rejected, protected_fields.
 
@@ -697,13 +751,31 @@ def _process_rule(
             except (TypeError, ValueError):
                 pass
 
-    # --- Compute confidence (with outcome-store downgrade) ---
+    # --- Compute confidence (with outcome-store downgrade/upgrade — Group 46) ---
+    # Key-aware lookup with fallback to empty-key for backward compatibility.
+    # Group 46: also upgrade when success_rate >= HIGH_SUCCESS_RATE with enough samples.
     confidence = rule.base_confidence
+    _learning_influence = ""
     if rule_outcome_store is not None:
-        rate = rule_outcome_store.get_success_rate(rule.rule_id)
-        fc = rule_outcome_store.fire_count(rule.rule_id)
-        if rate is not None and rate < LOW_SUCCESS_RATE and fc >= MIN_OUTCOME_SAMPLES:
-            confidence = _downgrade_confidence(confidence)
+        # Specific-key lookup first (car+track+profile_version scoped)
+        rate = rule_outcome_store.get_success_rate(rule.rule_id, car, track, profile_version)
+        fc = rule_outcome_store.fire_count(rule.rule_id, car, track, profile_version)
+        # Fall back to empty-key aggregate if no specific-key data
+        if rate is None:
+            rate = rule_outcome_store.get_success_rate(rule.rule_id)
+            fc = rule_outcome_store.fire_count(rule.rule_id)
+        if rate is not None and fc >= MIN_OUTCOME_SAMPLES:
+            if rate >= HIGH_SUCCESS_RATE:
+                confidence = _upgrade_confidence(confidence)
+                _learning_influence = (
+                    f"learning: {fc} samples, {rate:.0%} success — confidence upgraded"
+                )
+            elif rate < LOW_SUCCESS_RATE:
+                confidence = _downgrade_confidence(confidence)
+                _learning_influence = (
+                    f"learning: {fc} samples, {rate:.0%} success — confidence downgraded"
+                )
+            # else: between thresholds — no learning claim
 
     # --- Session confidence upgrade (Group 45) ---
     # qualifying → rules with prefers_front_bite or trail_braker tags get +1 confidence
@@ -736,6 +808,25 @@ def _process_rule(
     else:
         if session_type is None:
             _session_influence = "neutral weighting — session type not available"
+
+    # --- Fuel load layer (Group 46) ---
+    # High fuel load: traction/stability fields with delta>0 are upgraded;
+    # rotation/aero-cut fields are noted (NOT downgraded) when delta<0.
+    # Fuel influence is only claimed when fuel_high is genuinely True.
+    _fuel_influence = ""
+    _FUEL_TRACTION_STABILITY_FIELDS = frozenset({
+        "lsd_accel", "lsd_initial", "arb_rear", "aero_rear", "ride_height_rear",
+    })
+    _FUEL_ROTATION_FIELDS = frozenset({
+        "aero_front", "aero_rear", "lsd_decel", "brake_bias",
+    })
+    if diagnosis.get("fuel_high"):
+        if rule.field in _FUEL_TRACTION_STABILITY_FIELDS and delta > 0:
+            confidence = _upgrade_confidence(confidence)
+            _fuel_influence = "high fuel load: traction/stability prioritised"
+        elif rule.field in _FUEL_ROTATION_FIELDS and delta < 0:
+            # Note only — do NOT downgrade, do NOT upgrade
+            _fuel_influence = "high fuel load: rotation/aero-cut de-prioritised (note only)"
 
     # --- Driver-style alignment ---
     alignment = _compute_driver_style_alignment(rule, profile)
@@ -799,6 +890,8 @@ def _process_rule(
         session_influence=_session_influence,
         car_drivetrain_influence=_car_drivetrain_influence,
         pack=rule.pack,
+        learning_influence=_learning_influence,
+        fuel_influence=_fuel_influence,
     )
 
     # --- Conflict resolution: same field, check existing candidate ---
@@ -846,3 +939,311 @@ def _process_rule(
                 ))
     else:
         proposed_by_field[rule.field] = intent
+
+
+# ---------------------------------------------------------------------------
+# Per-gear rule emission (Group 46)
+# ---------------------------------------------------------------------------
+
+# Thresholds for per-gear signal detection
+_PER_GEAR_WHEELSPIN_THRESHOLD = 2   # wheelspin events in a gear to trigger a proposal
+_PER_GEAR_LIMITER_THRESHOLD   = 0   # >0 hits is sufficient (brief: > 0)
+_PER_GEAR_DELTA               = 0.03  # conservative, smaller than final_drive ±0.05
+
+
+def _emit_per_gear_changes(
+    diagnosis: dict,
+    setup: dict,
+    ranges: dict,
+    profile: DriverProfile,
+    allowed_fields: "set[str] | None",
+    rule_outcome_store: "RuleOutcomeStore | None",
+    protected_fields: list,
+    proposed_by_field: dict,
+    rejected: list,
+    max_gear: int,
+    gearbox_flag: str,
+    gearing_diagnosis_category: str,
+    car: str = "",
+    track: str = "",
+    profile_version: str = "",
+) -> None:
+    """Emit per-gear changes for gears 1..max_gear based on indexed telemetry signals.
+
+    Called from _run_rule_engine_inner AFTER the main rule loop.  Only proposes
+    a gear_N change when a REAL indexed signal exists for that gear:
+      - limiter evidence: per_gear_limiter_evidence[N] > 0 AND gearing_diagnosis_category
+        == 'gear_too_short' → lengthen (lower ratio by _PER_GEAR_DELTA)
+      - wheelspin evidence: wheelspin_by_gear[N] > _PER_GEAR_WHEELSPIN_THRESHOLD (esp.
+        low gears / snap-throttle context) → lengthen that gear for traction
+      - bog evidence: bog_by_gear[N] if genuinely detected (shortens: +delta)
+
+    Gated on gearbox_flag=='may_change'; emits a 'gearbox locked' note otherwise.
+    Routes through the SAME clamp + strict-'>' monotonic check + conflict machinery.
+    Uses rule_id="PG_{N}".
+    """
+    if gearbox_flag != "may_change":
+        # Gearbox is locked — emit per-gear notes (no proposed changes)
+        return
+
+    per_gear_limiter: dict = diagnosis.get("per_gear_limiter_evidence") or {}
+    wheelspin_by_gear: dict = diagnosis.get("wheelspin_by_gear") or {}
+    bog_by_gear: dict = diagnosis.get("bog_by_gear") or {}
+
+    for gear_n in range(1, max_gear + 1):
+        gear_key = f"gear_{gear_n}"
+
+        # Skip if field is not in setup (cannot compute from_value)
+        cur_raw = setup.get(gear_key)
+        if cur_raw is None:
+            continue
+        try:
+            from_value = float(cur_raw)
+        except (TypeError, ValueError):
+            continue
+
+        # Skip protected / locked fields
+        if gear_key in protected_fields:
+            continue
+        if allowed_fields is not None and gear_key not in allowed_fields:
+            continue
+
+        # Skip if already has a proposed change from the main rule loop
+        if gear_key in proposed_by_field:
+            continue
+
+        # Determine evidence and delta direction for this gear
+        delta: float = 0.0
+        evidence_reason: str = ""
+
+        # 1. Limiter + gear_too_short → lengthen (lower ratio = negative delta)
+        limiter_hits = float(per_gear_limiter.get(gear_n, 0) or 0)
+        if limiter_hits > _PER_GEAR_LIMITER_THRESHOLD and gearing_diagnosis_category == "gear_too_short":
+            delta = -_PER_GEAR_DELTA
+            evidence_reason = (
+                f"rev limiter in gear {gear_n} ({limiter_hits:.1f} avg hits/lap) + "
+                f"gear_too_short diagnosis: lengthening ratio for traction/shift comfort"
+            )
+
+        # 2. Per-gear wheelspin → lengthen that gear for traction (negative delta = lower ratio)
+        ws_hits = int(wheelspin_by_gear.get(gear_n, 0) or 0)
+        if ws_hits > _PER_GEAR_WHEELSPIN_THRESHOLD and delta == 0.0:
+            delta = -_PER_GEAR_DELTA
+            evidence_reason = (
+                f"wheelspin in gear {gear_n} ({ws_hits} events detected): "
+                f"lengthening ratio to ease traction demands"
+            )
+
+        # 3. Per-gear bog → shorten (higher ratio = positive delta), if genuine signal
+        bog_hits = int(bog_by_gear.get(gear_n, 0) or 0)
+        if bog_hits > 0 and delta == 0.0:
+            delta = +_PER_GEAR_DELTA
+            evidence_reason = (
+                f"bog detected in gear {gear_n} ({bog_hits} events): "
+                f"shortening ratio to reduce bog (stay above power band)"
+            )
+
+        if delta == 0.0:
+            continue  # no indexed evidence for this gear
+
+        # Compute to_value
+        to_value = from_value + delta
+
+        # Clamp to ranges
+        if gear_key in ranges:
+            lo, hi = ranges[gear_key]
+            try:
+                to_value = max(float(lo), min(float(hi), to_value))
+            except (TypeError, ValueError):
+                pass
+
+        # No-op after clamp
+        if abs(to_value - from_value) < 1e-9:
+            continue
+
+        # Strict monotonic check: gear_N must be <= gear_{N-1}
+        if gear_n > 1:
+            prev_key = f"gear_{gear_n - 1}"
+            # Check proposed_by_field first (may have been modified by main loop or earlier PG)
+            prev_intent = proposed_by_field.get(prev_key)
+            prev_raw = (
+                prev_intent.to_value
+                if prev_intent is not None and prev_intent.to_value is not None
+                else setup.get(prev_key)
+            )
+            if prev_raw is not None:
+                try:
+                    prev_float = float(prev_raw)
+                    if to_value > prev_float:
+                        # Monotonic violation — reject
+                        _rej = SetupChangeIntent(
+                            field=gear_key,
+                            delta=delta,
+                            from_value=from_value,
+                            to_value=to_value,
+                            symptom=f"per-gear: {evidence_reason}",
+                            evidence=[evidence_reason],
+                            rule_id=f"PG_{gear_n}",
+                            rationale=(
+                                f"monotonic ordering violation: {gear_key} to_value={to_value:.3f} "
+                                f"> gear_{gear_n - 1}={prev_float:.3f}"
+                            ),
+                            rejected_alternatives=[],
+                            risk=RiskLevel.high,
+                            confidence=ConfidenceLevel.med,
+                            driver_style_alignment=DriverStyleAlignment.neutral,
+                            source_label="per-gear rule",
+                            session_influence="",
+                            car_drivetrain_influence="",
+                            pack="",
+                            learning_influence="",
+                            fuel_influence="",
+                        )
+                        rejected.append(_rej)
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+        # Monotonic check: gear_N must be >= gear_{N+1} (check next gear too)
+        if gear_n < max_gear:
+            next_key = f"gear_{gear_n + 1}"
+            next_intent = proposed_by_field.get(next_key)
+            next_raw = (
+                next_intent.to_value
+                if next_intent is not None and next_intent.to_value is not None
+                else setup.get(next_key)
+            )
+            if next_raw is not None:
+                try:
+                    next_float = float(next_raw)
+                    if to_value < next_float:
+                        # Would create inversion with next gear — reject
+                        _rej = SetupChangeIntent(
+                            field=gear_key,
+                            delta=delta,
+                            from_value=from_value,
+                            to_value=to_value,
+                            symptom=f"per-gear: {evidence_reason}",
+                            evidence=[evidence_reason],
+                            rule_id=f"PG_{gear_n}",
+                            rationale=(
+                                f"monotonic ordering violation: {gear_key} to_value={to_value:.3f} "
+                                f"< gear_{gear_n + 1}={next_float:.3f}"
+                            ),
+                            rejected_alternatives=[],
+                            risk=RiskLevel.high,
+                            confidence=ConfidenceLevel.med,
+                            driver_style_alignment=DriverStyleAlignment.neutral,
+                            source_label="per-gear rule",
+                            session_influence="",
+                            car_drivetrain_influence="",
+                            pack="",
+                            learning_influence="",
+                            fuel_influence="",
+                        )
+                        rejected.append(_rej)
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+        # Propose the change
+        _pg_intent = SetupChangeIntent(
+            field=gear_key,
+            delta=delta,
+            from_value=from_value,
+            to_value=to_value,
+            symptom=f"per-gear: {evidence_reason}",
+            evidence=[evidence_reason],
+            rule_id=f"PG_{gear_n}",
+            rationale=evidence_reason,
+            rejected_alternatives=[],
+            risk=RiskLevel.low,
+            confidence=ConfidenceLevel.med,
+            driver_style_alignment=DriverStyleAlignment.neutral,
+            source_label="per-gear rule",
+            session_influence="",
+            car_drivetrain_influence="",
+            pack="",
+            learning_influence="",
+            fuel_influence="",
+        )
+
+        # Conflict with existing candidate for same field
+        existing = proposed_by_field.get(gear_key)
+        if existing is not None:
+            _conf_rank = {ConfidenceLevel.low: 0, ConfidenceLevel.med: 1, ConfidenceLevel.high: 2}
+            if _conf_rank[_pg_intent.confidence] > _conf_rank[existing.confidence]:
+                rejected.append(existing._replace(
+                    rationale=f"conflict:PG_{gear_n} — lower confidence",
+                ))
+                proposed_by_field[gear_key] = _pg_intent
+            else:
+                rejected.append(_pg_intent._replace(
+                    rationale=f"conflict:{existing.rule_id} — lower confidence",
+                ))
+        else:
+            proposed_by_field[gear_key] = _pg_intent
+
+
+def _build_per_gear_explanation(
+    diagnosis: dict,
+    setup: dict,
+    max_gear: int,
+    proposed_by_field: dict,
+    rejected: list,
+) -> dict:
+    """Build per_gear_explanation dict for all gears 1..max_gear.
+
+    Returns {gear_N: "proposed: <reason>" | "not proposed: <reason>"} for every
+    gear that exists in the setup, so the UI can display an honest per-gear note.
+    """
+    explanation: dict = {}
+    per_gear_limiter: dict = diagnosis.get("per_gear_limiter_evidence") or {}
+    wheelspin_by_gear: dict = diagnosis.get("wheelspin_by_gear") or {}
+    bog_by_gear: dict = diagnosis.get("bog_by_gear") or {}
+    gearbox_flag = diagnosis.get("gearbox_flag", "preserve")
+    gearing_category = diagnosis.get("gearing_diagnosis_category", "insufficient_data")
+
+    for gear_n in range(1, max_gear + 1):
+        gear_key = f"gear_{gear_n}"
+        if setup.get(gear_key) is None:
+            continue
+
+        if gearbox_flag != "may_change":
+            explanation[gear_key] = "not proposed: gearbox locked (preserve flag)"
+            continue
+
+        pg_intent = proposed_by_field.get(gear_key)
+        if pg_intent is not None and pg_intent.rule_id == f"PG_{gear_n}":
+            explanation[gear_key] = f"proposed: {pg_intent.rationale}"
+            continue
+
+        # Check if rejected due to monotonic violation
+        pg_rejected = [r for r in rejected if r.rule_id == f"PG_{gear_n}" and r.field == gear_key]
+        if pg_rejected:
+            explanation[gear_key] = f"not proposed: {pg_rejected[0].rationale}"
+            continue
+
+        # No indexed evidence
+        limiter_hits = float(per_gear_limiter.get(gear_n, 0) or 0)
+        ws_hits = int(wheelspin_by_gear.get(gear_n, 0) or 0)
+        bog_hits = int(bog_by_gear.get(gear_n, 0) or 0)
+
+        if limiter_hits == 0 and ws_hits <= _PER_GEAR_WHEELSPIN_THRESHOLD and bog_hits == 0:
+            if gearing_category == "gear_too_short":
+                explanation[gear_key] = (
+                    f"not proposed: gearing_diagnosis_category=gear_too_short but no indexed "
+                    f"evidence for gear {gear_n} specifically (no limiter hits, no wheelspin events)"
+                )
+            else:
+                explanation[gear_key] = (
+                    f"not proposed: no indexed evidence for gear {gear_n} "
+                    f"(limiter=0, wheelspin={ws_hits}, bog=0)"
+                )
+        else:
+            explanation[gear_key] = (
+                f"not proposed: evidence present (limiter={limiter_hits:.1f}, "
+                f"wheelspin={ws_hits}, bog={bog_hits}) but change was blocked or conflicted"
+            )
+
+    return explanation

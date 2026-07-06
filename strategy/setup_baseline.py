@@ -309,6 +309,71 @@ def _make_change_dict(
     }
 
 
+# ---------------------------------------------------------------------------
+# Group 46 — Session baseline bias table
+# ---------------------------------------------------------------------------
+# Small, safe, explainable per-field deltas keyed by normalised session category.
+# Applied AFTER the driver-profile bias (same `bias` dict), so the combined total
+# is clamped and rounded by the existing pipeline unchanged.
+#
+# Scale notes (from NEUTRAL_SEEDS / typical ranges):
+#   aero_front/rear:  0-1000 range → ±25 = ~2.5% meaningful but conservative
+#   lsd_accel/decel:  integer 0-60 → ±1 or ±2 = one "click"
+#   brake_bias:       integer range, ±1 = one step forward/rearward
+#
+# "qualifying" bias: sharper response, less trailing-edge heat build, lighter
+#   rear/rotation setup so the car changes direction more crisply.
+#   brake_bias: -1 → one step forward (more front braking = bite / trail rotation)
+#   lsd_decel:  -1 → easier decel diff → freer rotation on entry
+#   aero_front: +25 → more front downforce for mid-corner stability at speed
+#
+# "sprint" bias (race, duration unknown/short, < 60 mins):
+#   lsd_accel: +1 → mild traction nudge (race starts matter, but no long wear concerns)
+#
+# "endurance" bias (race, duration >= 60 mins):
+#   lsd_accel: +2 → more consistent traction over a long stint
+#   lsd_decel: +1 → less rotation wear / more predictable entry over many laps
+#   aero_rear:  +25 → more rear stability for high-fuel early stints
+#
+# "practice" / "unknown" → no session-specific deltas (safe default)
+_SESSION_BIAS_TABLE: dict[str, dict[str, float]] = {
+    "qualifying":  {"brake_bias": -1.0, "lsd_decel": -1.0, "aero_front": +25.0},
+    "sprint":      {"lsd_accel": +1.0},
+    "endurance":   {"lsd_accel": +2.0, "lsd_decel": +1.0, "aero_rear": +25.0},
+    "practice":    {},
+    "unknown":     {},
+}
+
+
+def _normalise_session_for_bias(session_type: str, duration_mins: float) -> str:
+    """Classify the session into a bias-table key.
+
+    Returns one of: qualifying | sprint | endurance | practice | unknown.
+
+    Rules
+    -----
+    - session_type contains "qual" (case-insensitive) → "qualifying"
+    - session_type contains "practice" → "practice"
+    - session_type contains "race":
+        - duration_mins >= 60 → "endurance"
+        - duration_mins > 0 AND < 60 → "sprint"
+        - duration_mins <= 0 (unknown duration) → "sprint"
+          IMPORTANT: duration <= 0 must NOT classify as endurance (brief contract).
+    - anything else (empty / unrecognised) → "unknown"
+    """
+    st = (session_type or "").strip().lower()
+    if "qual" in st:
+        return "qualifying"
+    if "practice" in st:
+        return "practice"
+    if "race" in st or "sprint" in st:
+        if duration_mins >= 60.0:
+            return "endurance"
+        # duration <= 0 (unknown) → sprint (NOT endurance)
+        return "sprint"
+    return "unknown"
+
+
 def build_baseline_setup(
     car: str,
     ranges: dict,
@@ -320,6 +385,7 @@ def build_baseline_setup(
     session_type: str = "",
     tyre_wear_multiplier: "float | None" = None,
     car_class: str = "",
+    duration_mins: float = 0.0,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -353,6 +419,10 @@ def build_baseline_setup(
     car_class:
         Car class string (e.g. "Gr.3", "Gr.4").  Accepted for forward-compatibility;
         not currently used to author changes in the baseline path.
+    duration_mins:
+        Session duration in minutes.  Used with session_type to determine session
+        bias category (e.g. race + duration>=60 → endurance).  Default 0.0 = unknown.
+        duration_mins <= 0 must NOT classify as endurance (brief contract).
 
     Returns
     -------
@@ -402,6 +472,17 @@ def build_baseline_setup(
                 for field, delta in deltas.items():
                     bias[field] = bias.get(field, 0.0) + delta
 
+    # Group 46: compute session bias and accumulate into the SAME bias dict.
+    # _normalise_session_for_bias → one of qualifying/sprint/endurance/practice/unknown.
+    # The session deltas ADD on top of existing profile deltas; the combined total is
+    # clamped and rounded by the existing pipeline — no special handling needed.
+    _session_bias_category = _normalise_session_for_bias(session_type, duration_mins)
+    _session_bias_deltas: dict[str, float] = _SESSION_BIAS_TABLE.get(
+        _session_bias_category, {}
+    )
+    for _sb_field, _sb_delta in _session_bias_deltas.items():
+        bias[_sb_field] = bias.get(_sb_field, 0.0) + _sb_delta
+
     # Derive locked CATEGORY names for the analysis text (human-readable).
     # If allowed_tuning is set, locked categories = all categories minus allowed.
     # Import _ALL_TUNING_CATS from driving_advisor (already imported above at call site).
@@ -415,22 +496,6 @@ def build_baseline_setup(
 
     changes: list[dict] = []
     setup_fields: dict = {}
-
-    # Group 45: normalise session_type for session_influence text on change dicts.
-    # IMPORTANT (honesty): baseline values do NOT numerically differ by session yet
-    # (session-specific baseline tuning is deferred). Any bias on a baseline field
-    # comes solely from the driver profile, NOT from the session. So we must NOT claim
-    # a session-driven bias was "applied". We only record that a session context was
-    # provided but was not used to change the value.
-    _session_type_lower = (session_type or "").strip().lower()
-    _session_influence_text = ""
-    if "qual" in _session_type_lower:
-        _session_influence_text = "qualifying session — no session-specific baseline bias applied (deferred)"
-    elif "race" in _session_type_lower:
-        _session_influence_text = "race session — no session-specific baseline bias applied (deferred)"
-    elif "practice" in _session_type_lower:
-        _session_influence_text = "practice session — no special bias applied"
-    # If session_type is "" or unknown → leave "" (not available = no claim)
 
     # Actionable canonical fields (excluding display-only and gearbox)
     _GEARBOX_FIELDS: frozenset[str] = frozenset({
@@ -458,9 +523,9 @@ def build_baseline_setup(
             continue
 
         seed = NEUTRAL_SEEDS[field]
-        to_val = float(seed)
 
-        # Apply driver-profile bias
+        # Compute value WITH combined bias (profile + session)
+        to_val = float(seed)
         is_biased = False
         if field in bias:
             to_val += bias[field]
@@ -475,6 +540,16 @@ def build_baseline_setup(
         to_val = _round_for_field(field, to_val)
         seed_rounded = _round_for_field(field, float(seed))
 
+        # Group 46: compute value WITHOUT session bias to detect session_changed.
+        # session_changed = True only when session bias actually changed the output.
+        _profile_only_bias = bias.get(field, 0.0) - _session_bias_deltas.get(field, 0.0)
+        _val_without_session = float(seed) + _profile_only_bias
+        if field in ranges:
+            lo, hi = ranges[field]
+            _val_without_session = _clamp(_val_without_session, lo, hi)
+        _val_without_session_rounded = _round_for_field(field, _val_without_session)
+        _session_changed = (to_val != _val_without_session_rounded)
+
         # Determine source label and alignment
         if is_biased:
             label = _LABEL_BIASED
@@ -486,9 +561,31 @@ def build_baseline_setup(
             label = _LABEL_NEUTRAL
             alignment = "neutral"
 
-        # session_influence: only non-empty when session_type was provided AND is_biased
-        # (neutral/conservative fields are unaffected by session in the baseline path)
-        _ch_session_influence = _session_influence_text if is_biased else ""
+        # Group 46: honest session_influence per change (brief contract):
+        # - session known + field changed numerically by session bias → real session text
+        # - session known, field is profile-biased but session did not change it numerically →
+        #     for sessions with non-empty bias tables: "session noted — no numerical change for this field"
+        #     for sessions with empty bias tables (practice/unknown): preserve the old per-session label
+        # - non-biased + session has no delta for this field → ""
+        # - session unknown → ""
+        if _session_bias_category in ("qualifying", "sprint", "endurance"):
+            # Sessions with actual deltas in _SESSION_BIAS_TABLE
+            if _session_changed:
+                _ch_session_influence = (
+                    f"{_session_bias_category} session bias applied"
+                )
+            elif field in _session_bias_deltas:
+                # Field IS in the session bias table but delta was zero after clamp
+                _ch_session_influence = "session noted — no numerical change for this field"
+            else:
+                # Field not in this session's bias table — no session claim
+                _ch_session_influence = ""
+        elif _session_bias_category == "practice":
+            # Practice has no session deltas: only profile-biased fields get the label
+            _ch_session_influence = "practice session — no special bias applied" if is_biased else ""
+        else:
+            # "unknown" session category → no claim
+            _ch_session_influence = ""
 
         change = _make_change_dict(
             field=field,

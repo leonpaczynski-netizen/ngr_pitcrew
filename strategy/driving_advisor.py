@@ -48,7 +48,7 @@ from strategy._ai_client import call_api, format_setup_for_prompt, load_gt7_refe
 from strategy._rec_parser import parse_recommendations_from_response
 from strategy._setup_constants import (
     ENG_SAFETY_PREFIXES, APPROVED_STATUSES, RULE_ENGINE_VERSION,
-    HIGH_TYRE_WEAR_THRESHOLD,
+    HIGH_TYRE_WEAR_THRESHOLD, HIGH_FUEL_MULTIPLIER_THRESHOLD,
 )
 from strategy.setup_ranges import resolve_ranges
 from strategy.setup_diagnosis import (
@@ -1727,6 +1727,16 @@ class DrivingAdvisor:
                 _fuel_multiplier is not None and _fuel_multiplier > 0,
             )
             diagnosis.setdefault("duration_mins", _duration_mins)
+            # Group 46: inject fuel_multiplier and fuel_high into diagnosis
+            diagnosis.setdefault("fuel_multiplier", _fuel_multiplier)
+            diagnosis.setdefault(
+                "fuel_high",
+                (
+                    (_fuel_multiplier or 0.0) >= HIGH_FUEL_MULTIPLIER_THRESHOLD
+                    if _fuel_multiplier is not None
+                    else False
+                ),
+            )
 
         # B4: resolve rec_history for lsd_reversal_without_evidence validation.
         _rec_history_cs: dict | None = None
@@ -1815,16 +1825,46 @@ class DrivingAdvisor:
             # ------------------------------------------------------------------
             # Step 1: build DriverProfile and run the deterministic rule engine
             # ------------------------------------------------------------------
+            _outcomes: list[dict] = []  # Group 46: initialized here so scope is always valid
             try:
                 from strategy.setup_driver_profile import build_driver_profile
                 from strategy.setup_rule_engine import run_rule_engine, RuleOutcomeStore
                 from strategy.setup_plan import plan_to_raw_data, rejected_to_json
                 _profile = build_driver_profile()
                 _ranges = resolve_ranges(car_name)
-                # Group 45: construct a live-but-empty RuleOutcomeStore (Learning seam active).
-                # No samples → confidence-downgrade hook (AC21) never fires.
-                # Cross-session persistence is deferred; the seam is honest and ready.
+                # Group 46: load learning outcomes from DB and populate RuleOutcomeStore.
+                # car key = str(car_id) to match what _process_rule receives.
                 _rule_outcome_store = RuleOutcomeStore()
+                _car_id_learn = int(self._car_id_ref[0]) or 0
+                _track_learn = _event_ctx.get("track") or _track_da or ""
+                _layout_learn = _event_ctx.get("layout_id") or ""
+                _car_key_learn = str(_car_id_learn) if _car_id_learn > 0 else ""
+                _profile_ver_learn = getattr(_profile, "profile_version", "") or ""
+                _outcomes: list[dict] = []
+                if self._db is not None and _car_id_learn > 0:
+                    try:
+                        _outcomes = self._db.get_learning_outcomes(
+                            _car_id_learn, _track_learn, _layout_learn
+                        )
+                    except Exception:
+                        _outcomes = []
+                # Feed outcomes into the store (scoped key)
+                for _row in _outcomes:
+                    _rid = _row.get("rule_id") or ""
+                    if not _rid:
+                        continue
+                    _verdict = _row.get("verdict") or ""
+                    if _verdict == "insufficient_data":
+                        continue  # skip — no meaningful signal
+                    _rule_outcome_store.record_fire(
+                        _rid, _car_key_learn, _track_learn, _profile_ver_learn
+                    )
+                    if _verdict == "improved":
+                        _rule_outcome_store.record_success(
+                            _rid, _car_key_learn, _track_learn, _profile_ver_learn
+                        )
+                    # worsened / neutral → fire only (no success)
+
                 _plan = run_rule_engine(
                     diagnosis or {},
                     setup_dict,
@@ -1836,6 +1876,9 @@ class DrivingAdvisor:
                     car_class=_car_class_enum,
                     drivetrain=_drivetrain_enum,
                     tyre_wear_multiplier=_tyre_wear_multiplier,
+                    car=_car_key_learn,
+                    track=_track_learn,
+                    profile_version=_profile_ver_learn,
                 )
             except Exception:
                 # Rule engine failure → fall through to empty plan (deterministic fallback handles)
@@ -2021,8 +2064,15 @@ class DrivingAdvisor:
                 }
                 _data["protected_fields"] = list(_plan.protected_fields)
                 _data["rule_engine_version"] = RULE_ENGINE_VERSION
-                # Group 45: learning seam — live empty store; note cross-session deferral
-                _data["_learning_note"] = "no cross-session learning history available"
+                # Group 46: honest learning note — reflect real outcomes loaded
+                _n_outcomes = len(_outcomes)
+                if _n_outcomes > 0:
+                    _data["_learning_note"] = (
+                        f"{_n_outcomes} learning record(s) applied — "
+                        f"confidence adjusted where samples and success rate warrant"
+                    )
+                else:
+                    _data["_learning_note"] = "no cross-session learning history available"
                 # Group 45: tyre/fuel context availability note
                 _tyre_fuel_note: str
                 if not (diagnosis or {}).get("tyre_wear_known", False):
@@ -2068,6 +2118,7 @@ class DrivingAdvisor:
         session_type: str = "Race",
         tyre_wear_multiplier: "float | None" = None,
         car_class: str = "",
+        duration_mins: float = 0.0,
     ) -> str:
         """Return a JSON string with a from-scratch baseline setup.
 
@@ -2100,6 +2151,10 @@ class DrivingAdvisor:
         car_class:
             Car class string (e.g. "Gr.3"). Passed to build_baseline_setup;
             currently accepted for forward-compatibility.
+        duration_mins:
+            Session duration in minutes (e.g. 60.0 for an hour race).
+            Passed to build_baseline_setup for session_type classification
+            (e.g. race + duration>=60 → endurance bias). Default 0.0 = unknown.
 
         Returns
         -------
@@ -2143,12 +2198,14 @@ class DrivingAdvisor:
 
             # Step 2: build the baseline raw_data dict
             # Group 45: wire session_type, tyre_wear_multiplier, car_class through
+            # Group 46: also wire duration_mins through for session bias classification
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
                 _profile, allowed_tuning, tuning_locked,
                 session_type=session_type,
                 tyre_wear_multiplier=tyre_wear_multiplier,
                 car_class=car_class,
+                duration_mins=duration_mins,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta
