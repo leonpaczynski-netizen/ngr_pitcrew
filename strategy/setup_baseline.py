@@ -75,16 +75,14 @@ NEUTRAL_SEEDS: dict[str, float] = {
 
 # ---------------------------------------------------------------------------
 # Gearbox range constants
-# Sourced from strategy/setup_diagnosis.py where they are defined.
-# Defined here as a local copy so setup_baseline has no runtime dependency
-# on setup_diagnosis at module-import time (avoids any future cycle risk).
+# These are function-local-imported from strategy/setup_diagnosis.py inside
+# _build_gearbox_changes() to avoid any module-level circular import risk.
+# The module-level fallback constants below are used ONLY if setup_diagnosis
+# cannot be imported (which should never happen in practice).  They are tested
+# against the source of truth by tests/test_group44_baseline_generator.py.
 # ---------------------------------------------------------------------------
-_GEAR_RATIO_RANGE: tuple[float, float] = (0.5, 4.0)
-
-# Final-drive range: sourced from setup_diagnosis._FINAL_DRIVE_RANGE = (2.5, 6.0).
-# Kept as a local constant rather than a runtime import to avoid module-level
-# cycles; the value must stay in sync with setup_diagnosis._FINAL_DRIVE_RANGE.
-_FINAL_DRIVE_RANGE: tuple[float, float] = (2.5, 6.0)
+_GEAR_RATIO_RANGE: tuple[float, float] = (0.5, 4.0)   # fallback; real value from setup_diagnosis
+_FINAL_DRIVE_RANGE: tuple[float, float] = (2.5, 6.0)  # fallback; real value from setup_diagnosis
 
 # Source label constants used in change dicts
 _LABEL_NEUTRAL    = "neutral default"
@@ -186,9 +184,20 @@ def _build_gearbox_changes(
     - num_gears > 6: capped at 6 (canonical set only has gear_1..gear_6).
     - transmission_max_speed_kmh is NEVER authored.
     """
+    # Function-local import: avoids module-level circular import while ensuring
+    # we always use the same range constants as the validator in setup_diagnosis.
+    try:
+        from strategy.setup_diagnosis import (
+            _GEAR_RATIO_RANGE as _GRR,  # type: ignore[attr-defined]
+            _FINAL_DRIVE_RANGE as _FDR,  # type: ignore[attr-defined]
+        )
+    except (ImportError, AttributeError):
+        _GRR = _GEAR_RATIO_RANGE   # module-level fallback
+        _FDR = _FINAL_DRIVE_RANGE  # module-level fallback
+
     changes: list[dict] = []
-    _gear_lo, _gear_hi = _GEAR_RATIO_RANGE
-    _fd_lo, _fd_hi = _FINAL_DRIVE_RANGE
+    _gear_lo, _gear_hi = _GRR
+    _fd_lo, _fd_hi = _FDR
 
     # final_drive (only if not locked)
     if "final_drive" not in locked_fields:
@@ -362,8 +371,16 @@ def build_baseline_setup(
                 for field, delta in deltas.items():
                     bias[field] = bias.get(field, 0.0) + delta
 
-    # Collect locked field names for the analysis text
-    locked_names: list[str] = sorted(locked_fields - _DISPLAY_ONLY_FIELDS)
+    # Derive locked CATEGORY names for the analysis text (human-readable).
+    # If allowed_tuning is set, locked categories = all categories minus allowed.
+    # Import _ALL_TUNING_CATS from driving_advisor (already imported above at call site).
+    from strategy.driving_advisor import _ALL_TUNING_CATS as _TUNING_CATS
+    if allowed_tuning is not None:
+        _locked_cats: list[str] = sorted(
+            cat for cat in _TUNING_CATS if cat not in allowed_tuning
+        )
+    else:
+        _locked_cats = []
 
     changes: list[dict] = []
     setup_fields: dict = {}
@@ -451,9 +468,9 @@ def build_baseline_setup(
 
     # Build analysis text
     locked_text = (
-        f" The following categories are locked by event rules: "
-        f"{', '.join(locked_names)}."
-        if locked_names else ""
+        f" The following tuning categories are locked by event rules: "
+        f"{', '.join(c.replace('_', ' ').title() for c in _locked_cats)}."
+        if _locked_cats else ""
     )
     awd_text = " Front differential fields included (AWD drivetrain)." if _is_awd else ""
     gear_text = (

@@ -46,6 +46,7 @@ from strategy.setup_baseline import (
 from strategy.setup_driver_profile import build_driver_profile, DriverProfile
 from strategy.setup_ranges import resolve_ranges
 from strategy._setup_constants import APPROVED_STATUSES
+from strategy.setup_diagnosis import ValidationFailure
 
 
 # ---------------------------------------------------------------------------
@@ -681,3 +682,161 @@ class TestExplainabilityKeys:
         result = build_baseline_setup("", ranges, "FR", 6, profile, None, False)
         for ch in result["changes"]:
             assert ch["confidence_level"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL-1 regression: warning-filter for artifact warnings
+# ---------------------------------------------------------------------------
+
+class TestBaselineWarningFilter:
+    """Clean baseline must yield status='approved' and empty validation_warnings.
+
+    Also verifies that blocking failures are never filtered out.
+    """
+
+    def test_neutral_baseline_status_is_approved(self):
+        """A clean neutral-profile baseline (FR, 6 gears, no locking) must return
+        recommendation_status == 'approved' — NOT 'approved_with_warnings'."""
+        advisor = _make_advisor()
+        ranges = resolve_ranges("")
+        result = advisor.build_baseline_setup_response(
+            car_name="", ranges=ranges, drivetrain="FR",
+            num_gears=6, allowed_tuning=None, tuning_locked=False,
+        )
+        data = json.loads(result)
+        assert data["recommendation_status"] == "approved", (
+            f"Expected 'approved', got {data['recommendation_status']!r}. "
+            f"validation_warnings={data.get('validation_warnings')}"
+        )
+
+    def test_neutral_baseline_validation_warnings_empty(self):
+        """A clean neutral-profile baseline must have validation_warnings == []."""
+        advisor = _make_advisor()
+        ranges = resolve_ranges("")
+        result = advisor.build_baseline_setup_response(
+            car_name="", ranges=ranges, drivetrain="FR",
+            num_gears=6, allowed_tuning=None, tuning_locked=False,
+        )
+        data = json.loads(result)
+        assert data["validation_warnings"] == [], (
+            f"Expected [], got: {data['validation_warnings']}"
+        )
+
+    def test_awd_neutral_baseline_status_is_approved(self):
+        """AWD car (even more fields) must also yield 'approved'."""
+        advisor = _make_advisor()
+        ranges = resolve_ranges("")
+        result = advisor.build_baseline_setup_response(
+            car_name="", ranges=ranges, drivetrain="AWD",
+            num_gears=6, allowed_tuning=None, tuning_locked=False,
+        )
+        data = json.loads(result)
+        assert data["recommendation_status"] == "approved"
+        assert data["validation_warnings"] == []
+
+    def test_filter_only_removes_warning_severity_not_blocking(self):
+        """_filter_baseline_artifact_warnings must NEVER remove a blocking failure."""
+        from strategy.driving_advisor import _filter_baseline_artifact_warnings
+        from strategy.setup_diagnosis import ValidationFailure
+
+        blocking = ValidationFailure(
+            code="gearbox_ratio_inversion",
+            message="gearbox_ratio_inversion: gear_1 <= gear_2",
+            severity="blocking",
+        )
+        noop_warning = ValidationFailure(
+            code="change field 'gear_1' is a no-op (from == to_clamped == 3.8)",
+            message="change field 'gear_1' is a no-op (from == to_clamped == 3.8)",
+            severity="warning",
+        )
+        too_many_warning = ValidationFailure(
+            code="too many changes (>4)",
+            message="too many changes (>4): 31 changes recommended — prefer 2–4 targeted changes",
+            severity="warning",
+        )
+        real_warning = ValidationFailure(
+            code="gearbox_out_of_range",
+            message="gearbox_out_of_range: gear_1=5.0 is outside the expected range 0.5–4.0.",
+            severity="warning",
+        )
+
+        mixed = [blocking, noop_warning, too_many_warning, real_warning]
+        filtered = _filter_baseline_artifact_warnings(mixed)
+
+        # Blocking failure must survive
+        assert blocking in filtered, "Blocking failure was incorrectly removed"
+        # The two artifact warnings must be dropped
+        assert noop_warning not in filtered, "No-op warning should have been removed"
+        assert too_many_warning not in filtered, "Too-many-changes warning should have been removed"
+        # A genuine warning (gearbox_out_of_range) must survive
+        assert real_warning in filtered, "Genuine warning was incorrectly removed"
+        assert len(filtered) == 2  # blocking + real_warning
+
+    def test_filter_with_only_blocking_failures_unchanged(self):
+        """If there are no artifact warnings, the list comes back unchanged."""
+        from strategy.driving_advisor import _filter_baseline_artifact_warnings
+        from strategy.setup_diagnosis import ValidationFailure
+
+        failures = [
+            ValidationFailure(
+                code="rh_for_minor_bottoming",
+                message="rh_for_minor_bottoming: ride height raised for minor bottoming",
+                severity="blocking",
+            ),
+        ]
+        filtered = _filter_baseline_artifact_warnings(failures)
+        assert filtered == failures
+
+    def test_filter_with_empty_list(self):
+        """Empty input returns empty output — no errors."""
+        from strategy.driving_advisor import _filter_baseline_artifact_warnings
+        assert _filter_baseline_artifact_warnings([]) == []
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANT-3: gearbox range constants match setup_diagnosis source of truth
+# ---------------------------------------------------------------------------
+
+class TestGearboxRangeConstants:
+    """Module-level fallback constants in setup_baseline must equal setup_diagnosis values."""
+
+    def test_gear_ratio_range_matches_setup_diagnosis(self):
+        from strategy.setup_diagnosis import _GEAR_RATIO_RANGE as _diag_grr
+        assert _GEAR_RATIO_RANGE == _diag_grr, (
+            f"setup_baseline._GEAR_RATIO_RANGE={_GEAR_RATIO_RANGE} differs from "
+            f"setup_diagnosis._GEAR_RATIO_RANGE={_diag_grr}"
+        )
+
+    def test_final_drive_range_matches_setup_diagnosis(self):
+        from strategy.setup_diagnosis import _FINAL_DRIVE_RANGE as _diag_fdr
+        assert _FINAL_DRIVE_RANGE == _diag_fdr, (
+            f"setup_baseline._FINAL_DRIVE_RANGE={_FINAL_DRIVE_RANGE} differs from "
+            f"setup_diagnosis._FINAL_DRIVE_RANGE={_diag_fdr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# MINOR-2: locked analysis text uses category names not raw field keys
+# ---------------------------------------------------------------------------
+
+class TestLockedAnalysisText:
+    """When allowed_tuning restricts categories, analysis text must name them."""
+
+    def test_locked_categories_use_human_names(self):
+        ranges = resolve_ranges("")
+        profile = _neutral_profile()
+        result = build_baseline_setup(
+            "", ranges, "FR", 6, profile,
+            allowed_tuning=["aero", "differential"],
+            tuning_locked=False,
+        )
+        analysis = result["analysis"]
+        # Category names that SHOULD appear (locked = all cats minus aero/differential)
+        # Should mention "Suspension" (not "ride_height_front" etc.)
+        assert "Suspension" in analysis or "suspension" in analysis.lower(), (
+            f"Expected 'Suspension' in analysis but got: {analysis!r}"
+        )
+        # Raw field keys should NOT appear in the locked-categories sentence
+        assert "ride_height_front" not in analysis
+        assert "arb_front" not in analysis
+        assert "camber_front" not in analysis

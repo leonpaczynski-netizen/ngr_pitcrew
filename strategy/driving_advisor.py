@@ -602,6 +602,55 @@ def _strip_actionable_for_voice(data: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# _filter_baseline_artifact_warnings — baseline-path warning suppressor
+# ---------------------------------------------------------------------------
+
+# Substrings that identify the two artifact-warning types produced by
+# _validate_setup_response when validating a full-field from-scratch baseline.
+# These are structural artifacts of the baseline shape, not real safety issues:
+#   1. "is a no-op" — fires because gearbox from==to (baseline IS the starting point).
+#   2. "too many changes" — fires because a full-field baseline has >4 fields.
+# We match by substring on the .message so the filter is stable even if the
+# exact error text includes variable field names / counts.
+_BASELINE_ARTIFACT_SUBSTRINGS: tuple[str, ...] = (
+    "is a no-op",
+    "too many changes",
+)
+
+
+def _filter_baseline_artifact_warnings(
+    failures: list,
+) -> list:
+    """Remove warning-severity ValidationFailure entries that are structural
+    artifacts of the full-field from-scratch baseline shape.
+
+    ONLY removes entries where BOTH conditions hold:
+      - severity == "warning"   (blocking failures are NEVER removed)
+      - message contains one of the _BASELINE_ARTIFACT_SUBSTRINGS
+
+    All blocking-severity failures and all other warnings pass through unchanged,
+    so every safety rule and genuine engineering check still applies.
+
+    Parameters
+    ----------
+    failures:
+        list[ValidationFailure] from validate_setup_engineering_structured.
+
+    Returns
+    -------
+    A new filtered list.  Input is not mutated.
+    """
+    result = []
+    for vf in failures:
+        if vf.severity == "warning":
+            msg_lower = vf.message.lower()
+            if any(sub in msg_lower for sub in _BASELINE_ARTIFACT_SUBSTRINGS):
+                continue   # drop this artifact warning
+        result.append(vf)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # _build_retry_prompt — strict retry contract
 # ---------------------------------------------------------------------------
 
@@ -1999,10 +2048,19 @@ class DrivingAdvisor:
                 rec_history=None,
             )
 
-            # Step 5: route through _finalise_recommendation (single funnel)
+            # Step 5a: filter out structural artifact warnings that are
+            # meaningless for a full-field from-scratch baseline.
+            # CRITICAL: only warning-severity entries matching the two known
+            # artifact patterns are removed; every blocking failure passes
+            # through unfiltered so safety checks still zero approved_changes.
+            _filtered_failures = _filter_baseline_artifact_warnings(
+                _structured_failures
+            )
+
+            # Step 5b: route through _finalise_recommendation (single funnel)
             _final = _finalise_recommendation(
                 _raw_data,
-                _structured_failures,
+                _filtered_failures,
                 fallback_used=False,
                 retried=False,
             )
