@@ -164,8 +164,9 @@ class TestAC26RuleEngineVersion:
         )
 
     def test_rule_engine_version_value(self):
-        assert RULE_ENGINE_VERSION == "45.0", (
-            f"Expected RULE_ENGINE_VERSION='45.0', got {RULE_ENGINE_VERSION!r}"
+        # Reconciled for Group 46: version bumped from "45.0" to "46.0".
+        assert RULE_ENGINE_VERSION == "46.0", (
+            f"Expected RULE_ENGINE_VERSION='46.0', got {RULE_ENGINE_VERSION!r}"
         )
 
 
