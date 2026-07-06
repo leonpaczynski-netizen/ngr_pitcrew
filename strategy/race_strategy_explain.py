@@ -42,6 +42,10 @@ class StrategyExplanation:
     missing_evidence: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     has_recommendation: bool = True
+    # Group 49 (additive): per-input provenance lines — SessionDB measured /
+    # event setting / default / missing. Empty for a caller-sample explanation,
+    # so Group 48 behaviour is byte-identical when this is not populated.
+    evidence_sources: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     def to_text(self) -> str:
@@ -56,6 +60,7 @@ class StrategyExplanation:
             lines.append("")
         lines.append(f"Confidence: {self.confidence}")
         lines.append("")
+        _section(lines, "Evidence source", self.evidence_sources)
         _section(lines, "Known evidence", self.known_evidence)
         _section(lines, "Calculated estimate", self.calculated)
         _section(lines, "Assumptions / defaults", self.assumptions)

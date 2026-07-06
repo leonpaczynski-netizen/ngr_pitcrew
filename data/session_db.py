@@ -2053,6 +2053,28 @@ class SessionDB:
         except Exception:
             return ""
 
+    def get_session_meta(self, session_id: int) -> Optional[dict]:
+        """Return the sessions row for ``session_id`` as a dict, or None.
+
+        READ-ONLY. Added for the Group 49 race-strategy SessionDB adapter so the
+        pure strategy layer can resolve a session's car/track/config without
+        touching private state. Returns None when session_id is 0/missing or the
+        query fails (never raises).
+        """
+        if not session_id:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id, car_id, car_name, config_id, track, "
+                    "session_type, total_laps, event_id "
+                    "FROM sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
     def get_recent_fuel_sequence(self, car_id: int, track: str, limit: int = 15) -> list:
         """Return per-lap fuel consumption values (L/lap) for this car+track.
 
