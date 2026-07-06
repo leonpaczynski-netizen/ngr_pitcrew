@@ -1311,6 +1311,19 @@ class SetupBuilderMixin:
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
+        # Group 45: thread session-context params so the Race form's Analyse
+        # button is context-aware, matching _setup_analyse_ai_for_form exactly.
+        # purpose: race form always carries purpose="Race" (set at construction).
+        _purpose = self._race_form.purpose
+        # car_class: specs category, or "" when no specs loaded (backend neutral fallback).
+        _car_class = (_car_specs or {}).get("category", "")
+        # drivetrain: explicit combo selection wins; "" = Auto-detect (backend uses
+        # CAR_DRIVETRAIN_OVERRIDES by car name, e.g. Porsche).
+        _drivetrain = (
+            self._race_form._setup_drivetrain.currentData()
+            if hasattr(self._race_form, "_setup_drivetrain")
+            else ""
+        ) or ""
 
         def _worker():
             try:
@@ -1318,7 +1331,10 @@ class SetupBuilderMixin:
                     d, n_laps=n_laps, car_name=_car_name, car_specs=_car_specs,
                     feeling=feeling or None,
                     allowed_tuning=_allowed, tuning_locked=_locked,
-                    compound=_compound)
+                    compound=_compound,
+                    purpose=_purpose,
+                    car_class=_car_class,
+                    drivetrain=_drivetrain)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))
