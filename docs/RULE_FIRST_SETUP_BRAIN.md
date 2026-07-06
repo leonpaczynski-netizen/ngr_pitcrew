@@ -1,20 +1,23 @@
-# Rule-First Setup Brain — Architecture (Group 42 + Group 43 + Group 44 + Group 45)
+# Rule-First Setup Brain — Architecture (Group 42 + Group 43 + Group 44 + Group 45 + Group 46)
 
-> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43); updated 2026-07-06 (Group 44 — from-scratch baseline generator); updated 2026-07-06 (Group 45 — Setup Brain Intelligence Expansion)
+> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43); updated 2026-07-06 (Group 44 — from-scratch baseline generator); updated 2026-07-06 (Group 45 — Setup Brain Intelligence Expansion); updated 2026-07-06 (Group 46 — Setup Brain Learning & Race Context)
 > Branch: `ofr2-quali-race-disciplines` (built on top of Group 41)
 >
 > Companion docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 changelog, § Group 45
-> intelligence-expansion detail), `docs/UAT_SETUP_BRAIN.md` (manual UAT),
-> `MASTER_TESTING_REGISTER.md` (Rule-First Setup Brain (Group 42), Setup Brain
-> Intelligence Expansion (Group 45)).
+> intelligence-expansion detail, § Group 46 learning & race-context detail),
+> `docs/UAT_SETUP_BRAIN.md` (manual UAT), `MASTER_TESTING_REGISTER.md` (Rule-First
+> Setup Brain (Group 42), Setup Brain Intelligence Expansion (Group 45), Setup
+> Brain Learning & Race Context (Group 46)).
 >
 > This is the architecture doc. It explains *why* the AI is no longer the source
 > of truth, how the deterministic rule engine works, and the contracts that keep
 > the AI from ever authoring a setup change.
 >
 > **Group 45 added context-awareness on top of this architecture — see the
-> dedicated section "Setup Brain Intelligence Expansion" (§14) at the end. The
-> core inversion (rule-first, AI audit-only, single funnel) is unchanged.**
+> dedicated section "Setup Brain Intelligence Expansion" (§14). Group 46 added
+> cross-session learning, fuel/per-gear intelligence, and session-biased baselines
+> — see "Setup Brain Learning & Race Context" (§15) at the end. The core inversion
+> (rule-first, AI audit-only, single funnel) is unchanged in both.**
 
 ---
 
@@ -406,10 +409,13 @@ This is a **deterministic weighted counter — there is no ML.** It counts fires
 and successes and applies a threshold. That honesty matters: the app never
 pretends to a learned model it does not have.
 
-**What is deferred:** live wiring and cross-session persistence.
-`build_combined_setup_response` passes `rule_outcome_store=None` today, so the
-store is exercised only in tests. Wiring it to a real per-car/track/profile store
-and persisting it across sessions is the next step in this line of work.
+**Group 45 update:** production began constructing a live-but-**EMPTY** store (§14.10).
+**Group 46 update — DELIVERED:** the store is now **populated across sessions** from
+a real SQLite-backed feed, and the hook both **downgrades and upgrades** confidence.
+See **§15** for the full account (persistence table, feed, the ±1-step
+upgrade/downgrade thresholds, and the honesty constraints). The store still
+**cannot** un-block a safety rule, un-reject a rejected change, bypass validation,
+or make the AI actionable — learning only shifts a confidence label / ranking.
 
 ---
 
@@ -511,18 +517,24 @@ driver can always see which is which.
 ## 12. Remaining limitations / deferred
 
 * **`RuleOutcomeStore` live wiring + cross-session persistence.** *(Group 45
-  partially advanced this — see §14.)* Production now constructs a live-but-EMPTY
-  store (the hook is wired), but it never fires without samples, and cross-session
-  persistence + a success-recording feed remain deferred.
-* **Individual `gear_1..gear_6` proposing rules.** B5 proposes `final_drive` on
-  `gear_too_short`; **Group 45 added B5b** (`final_drive` up on `gear_too_long`).
-  Rules for individual `gear_1..gear_6` slots are still deferred — the
-  `per_gear_limiter_evidence` diagnosis key exists for future use, but broad
-  final-drive-only logic is what ships today.
-* **Tyre / fuel signals.** *(Group 45 partially delivered this — see §14.)*
-  Tyre-wear is now read and **contraindicates** four tyre-abusing rules at high
-  wear; the fuel multiplier is read but only informational (no fuel-specific rule
-  yet). Tyre-compound signals remain unused.
+  advanced this with a live-but-EMPTY store; **Group 46 DELIVERED persistence +
+  the feed** — see §15.)* The store is now populated across sessions from the
+  SQLite `learning_outcomes` table on the **Analyse** path, and the hook both
+  downgrades and upgrades confidence by one step. **Still deferred:** the Baseline
+  path does not consume rule-confidence learning; `source_path="Baseline"`
+  recording is not yet wired; `session_type` is stored as `""` on learning rows
+  (no session_type column on `setup_recommendations` — a JOIN/column is deferred).
+* **Individual `gear_1..gear_6` proposing rules.** *(Group 46 DELIVERED this —
+  see §15.)* B5/B5b propose `final_drive`; **`_emit_per_gear_changes` now proposes
+  individual `gear_N` slots** on real indexed evidence (rev-limiter-in-gear or the
+  newly-detected per-gear wheelspin). **Still deferred:** per-gear bog and lockup
+  detection (no genuine 10 Hz telemetry signal — `bog_by_gear` / `lockups_by_gear`
+  are honestly `None`); evidence beyond limiter + wheelspin.
+* **Tyre / fuel signals.** *(Group 45 delivered tyre-wear contraindication;
+  **Group 46 delivered fuel influence** — see §15.)* High fuel now **upgrades the
+  confidence** of traction/stability changes and is note-only for rotation/aero-cut
+  (ranking/confidence only — no new deltas). **Still deferred:** a fuel-specific
+  *delta* rule; tyre-compound signals remain unused.
 * **`applies_session` / `applies_drivetrain` / `applies_car_class` scope
   enforcement.** **DELIVERED in Group 45** (`_scope_matches`, see §14) — the
   engine now filters at runtime; Pack A is exempt; `any`/`None` is
@@ -789,3 +801,225 @@ strict `>` (allowing equal ratios). All Group 45 tests pass; the ~18 pre-existin
 frozen-allowlist / schema failures are known, unrelated, and untouched. Run the
 suite in halves on Win/Py3.14. See `MASTER_TESTING_REGISTER.md` (Setup Brain
 Intelligence Expansion (Group 45)) for the per-file coverage table.
+
+---
+
+## 15. Setup Brain Learning & Race Context (Group 46)
+
+> Date: 2026-07-06 · Branch `ofr2-quali-race-disciplines` (on top of Group 45).
+> This is the dedicated, honest account of the learning + race-context
+> intelligence added in Group 46. Cross-referenced from
+> `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 46 changelog), `docs/UAT_SETUP_BRAIN.md`
+> (§ Group 46 UAT), and `MASTER_TESTING_REGISTER.md` (Setup Brain Learning & Race
+> Context (Group 46)).
+>
+> **`RULE_ENGINE_VERSION` is now "46.0"** (was "45.0"); the DB `user_version` is
+> now **12** (was 11).
+
+### 15.0 What did NOT change (architecture preserved)
+The rule-first inversion is intact. The full pipeline is: telemetry + feedback +
+setup + car/track/session context + **learning history** → deterministic
+diagnosis → deterministic rule recommendation → validation → **AI audit-only** →
+approved-only display / apply. The AI still **cannot** author setup values, add an
+approved field, un-block a blocking failure, un-reject a rejected change, or
+author a per-gear value. Both the **Analyse** path and the Group 44 **Baseline**
+path still work with the AI disabled; the old "Build Setup with AI" path stays
+disabled; **the Apply-gate predicate is UNCHANGED.** Group 46 is a *learning +
+race-context* layer — it does not change *who* authors setups.
+
+### 15.1 Cross-session learning persistence + feed
+
+**The persistence decision (and WHY).** Learning outcomes are stored in a **new
+SQLite table `learning_outcomes`**, created by
+`data/session_db.py::_migrate_v12` (PRAGMA `user_version` 11 → 12; an additive
+`CREATE TABLE IF NOT EXISTS`, idempotent — safe to run repeatedly). Columns:
+`id, ts, car_id, track, layout_id, session_id, session_type, rule_id,
+source_path, verdict, confidence, driver_profile_version, rule_engine_version`,
+with an index on `(car_id, track, layout_id)`.
+
+Learning is **DELIBERATELY NOT persisted to `data/setup_history.json`.** That file
+is a **user-local artifact** owned by `data/setup_history.py`; writing learning
+state into it would (a) churn a file the user edits and that appears in their
+working tree, (b) split ownership of learning across two stores, and (c) risk the
+local state being committed by accident. Learning therefore lives **entirely in
+the gitignored session DB**, with a single owner (`session_db.py`) and a single
+schema.
+
+**Recording (write side).** `record_learning_outcome(...)` is an INSERT that
+**never raises**. It is written from the OFR-1 scoring pass
+(`ui/dashboard.py::_trigger_scoring_pass`) **after `persist_score`**, once per
+approved `rule_id`, **skipping `insufficient_data`** verdicts (thin evidence is
+not learned from). `get_learning_outcomes(car_id, track, layout_id)` returns the
+scoped rows, and returns **`[]` on any error** (a safe fallback — a DB hiccup can
+never break a setup request).
+
+**Feeding the engine (read side).** `driving_advisor.build_combined_setup_response`
+(the Analyse path) loads the scoped rows into a **real `RuleOutcomeStore`** before
+calling `run_rule_engine`, translating each verdict:
+`improved` → fire **+ success**; `worsened` / `neutral` → **fire** (no success);
+`insufficient_data` → **skip**. `_process_rule` threads `car / track /
+driver_profile_version` and does a **key-aware lookup with an empty-key
+fallback**, so a rule that recorded outcomes under a slightly different key still
+matches.
+
+**What learning does (the ±1-step hook).** The confidence hook now runs in **both
+directions**, still capped at **one step** and still **validator-gated**:
+
+* **UPGRADE** — `samples >= MIN_OUTCOME_SAMPLES (3)` **AND** `success_rate >=
+  HIGH_SUCCESS_RATE (0.60)` → **+1 confidence step**.
+* **DOWNGRADE** — `success_rate < LOW_SUCCESS_RATE (0.40)` → **−1 confidence
+  step**.
+* Between `0.40` and `0.60`, or below the sample floor → **no change**.
+
+**What learning does NOT do.** It can only shift a confidence label / affect
+ranking. It **cannot** un-block a blocking safety rule, un-reject a rejected
+change, bypass validation, or make the AI actionable. It authors **no** new
+change and moves **no** delta magnitude.
+
+**Honesty.** The `learning_influence` explainability string is populated **only
+when a step actually happened** — a rule that had history but did not cross a
+threshold makes **no** learning claim. `_learning_note` reflects the **real**
+loaded history (not a placeholder).
+
+**Honest limitations (state clearly):**
+* **The Baseline path does NOT consume rule-confidence learning** — it does not run
+  the rule engine (§3b), so baseline change dicts carry an **honest EMPTY
+  `learning_influence`**. Learning shapes the **Analyse** path only.
+* **`source_path` is effectively always `"Analyse"` in production today.** The
+  baseline path does not insert a scored `setup_recommendations` row, so
+  `source_path="Baseline"` is supported by the schema/method but **not yet
+  written** — wiring baseline recording is **deferred**.
+* **`session_type` is stored as `""` on `learning_outcomes`** because
+  `setup_recommendations` has no `session_type` column; scope is enforced by
+  `car_id + track + layout_id` instead. A JOIN / column to populate it is
+  **deferred**.
+
+### 15.2 Fuel-multiplier influence (Analyse)
+`driving_advisor` now injects **`diagnosis["fuel_multiplier"]`** (the value) and
+**`diagnosis["fuel_high"]`** (`>= HIGH_FUEL_MULTIPLIER_THRESHOLD (5.0)`; unknown
+→ `False`, so it never makes a false high-fuel claim). Previously only a
+`fuel_known` bool existed.
+
+`_process_rule` adds a **fuel layer**:
+* **High fuel UPGRADES the confidence** of traction / stability fields —
+  `_FUEL_TRACTION_STABILITY_FIELDS` = `lsd_accel, lsd_initial, arb_rear,
+  aero_rear, ride_height_rear`, with **delta > 0** (i.e. adding grip/stability).
+* For rotation / aero-cut fields — `_FUEL_ROTATION_FIELDS` with **delta < 0** —
+  it is **NOTE-ONLY** (no downgrade): a heavy car wants stability, but the app
+  will not *penalise* a rotation change on fuel alone.
+
+**No new deltas** — fuel affects ranking / confidence only. The `fuel_influence`
+string is set **only when the effect occurred**, and is appended to the change's
+**`evidence`** list so it renders in the existing UI (keeping the at-most-2-new-
+rows constraint). **Honesty:** `fuel = 1.0` or absent → no bias and no claim.
+
+### 15.3 Session-specific NUMERICAL baseline tuning
+The from-scratch **Baseline** author (§3b) now applies a **session bias**.
+`setup_baseline._SESSION_BIAS_TABLE` is keyed
+`qualifying / sprint / endurance / practice / unknown` → `{field: delta}`, and is
+accumulated into the **same** bias dict as the driver-profile table (§3b), so the
+existing **clamp / round / validator** machinery applies unchanged.
+
+`_normalise_session_for_bias(session_type, duration_mins)` maps the raw session to
+one of those buckets:
+* **qualifying**;
+* **sprint** — a race with `duration < 60` (or unknown duration);
+* **endurance** — a race with **`duration_mins >= 60`**;
+* **practice**; **unknown**.
+
+`duration <= 0` is **NOT** treated as endurance. `build_baseline_setup` and
+`build_baseline_setup_response` gained a **`duration_mins`** parameter, threaded
+from the UI's `_ai_snap.duration_mins` / `EventContext.race_duration_minutes`.
+
+**Honesty gate.** A per-field **`session_changed`** flag compares the clamped /
+rounded output **with vs without** the session bias. The `session_influence` text
+claims a session bias **only for fields whose value actually moved**:
+* moved → describes the session tune;
+* known session but the field did not move → **"session noted — no numerical
+  change for this field"**;
+* unknown session → **`""`**.
+
+There is **no false "session bias applied"** — unlike Group 45's baseline (which
+recorded a session was *noted* but never changed a value), Group 46's baseline
+**does** change values, and says so only where it genuinely did.
+
+### 15.4 Fuller per-gear intelligence (with REAL telemetry detection)
+`setup_diagnosis` now **genuinely detects** per-gear wheelspin.
+**`wheelspin_by_gear`** buckets per-frame wheelspin — `throttle > 0.7`,
+`speed > 2 m/s`, `rear-wheel-speed > 1.3 × vehicle speed` — by the **gear active
+at each frame**, **normalized PER-LAP** (mirroring the existing
+`rev_limiter_by_gear`). Two related signals are **honestly deferred = `None`**:
+**`bog_by_gear`** (GT7's 10 Hz telemetry has no reliable longitudinal-acceleration
+signal to detect bogging) and **`lockups_by_gear`**.
+
+`setup_rule_engine._emit_per_gear_changes` proposes an individual **`gear_N`**
+change **only when a REAL indexed signal exists for gear N**:
+* rev-limiter-in-gear — `per_gear_limiter_evidence[N] > 0` **with**
+  `gearing_diagnosis_category == "gear_too_short"`; **OR**
+* per-gear wheelspin — `wheelspin_by_gear[N] >= _PER_GEAR_WHEELSPIN_THRESHOLD
+  (2.0)` frames/lap.
+
+The delta is **conservative (±0.03)** — smaller than `final_drive`'s ±0.05 — and
+gated on `gearbox_flag == "may_change"`. It runs through the **same** clamp,
+**strict-`>` monotonic** check (rejecting "monotonic ordering violation"), and
+validator machinery. `rule_id` is `"PG_{N}"`; `source_label` is **"per-gear
+rule"**. `final_drive` (B5 / B5b) is **UNTOUCHED** as the broad lever — the per-gear
+rules are additive, not a replacement.
+
+`diagnosis["per_gear_explanation"]` records, **for every gear**, whether a change
+was proposed (with its evidence) or not (with the reason). Crucially, **"top speed
+low" alone, with no indexed evidence, yields NO gear change** — and the
+explanation says why (the app will not lengthen a gear as a blind top-speed fix).
+
+### 15.5 Porsche 911 RSR '17 extension
+No new authored rule was needed. The **existing Pack P** (P1 — traction-first
+`lsd_accel` increase, scoped `rr` + `gr3` via `CAR_DRIVETRAIN_OVERRIDES`, §14.7)
+**auto-benefits** from the new fuel / tyre / learning **confidence** layers.
+Rear-downforce protection under instability remains provided by existing **Pack A
+A2** (all cars) — still no Porsche P2.
+
+**Benchmark AC37** (the integrated regression) drives the RSR at Fuji, 50 min,
+**high tyre + high fuel**, with driver feedback *rear-loose + mid-push +
+floaty-front* and telemetry *snap-throttle wheelspin + top-speed-low +
+entry-stable + possible-bottoming*, and asserts:
+* traction-first **before / instead of** aero-cut;
+* **no** rear-downforce reduction;
+* **no** rearward brake bias;
+* **no** generic ride-height raise without bottoming confidence;
+* **no** top-speed gear-lengthening as the primary wheelspin fix;
+* **no** AI-authored values; and it **passes the Apply gate**.
+
+`source_label` distinguishes Porsche-specific from generic changes throughout.
+
+### 15.6 Constants
+`RULE_ENGINE_VERSION` "45.0" → **"46.0"**; DB `user_version` 11 → **12**
+(`DB_VERSION = 12`); `HIGH_FUEL_MULTIPLIER_THRESHOLD = 5.0`;
+`HIGH_SUCCESS_RATE = 0.60` (paired with the existing `LOW_SUCCESS_RATE = 0.40`
+and `MIN_OUTCOME_SAMPLES = 3`).
+
+### 15.7 Still deferred after Group 46 (honest)
+* **Baseline rule-confidence learning consumption** — the Baseline path does not
+  run the rule engine, so it carries an empty `learning_influence`.
+* **`source_path="Baseline"` recording** — the baseline path does not insert a
+  scored `setup_recommendations` row, so only `"Analyse"` is written today.
+* **`learning_outcomes.session_type` population** — needs a JOIN / a `session_type`
+  column on `setup_recommendations`; scope is currently car_id + track + layout_id.
+* **`bog_by_gear` + `lockups_by_gear` detection** — no genuine 10 Hz telemetry
+  signal; honestly `None`. Per-gear evidence today is **limiter + wheelspin only**.
+* **A fuel-specific *delta* rule** — fuel is confidence / ranking only, not a new
+  change.
+
+### 15.8 Tests
+6 new files: `tests/test_group46_learning_persistence.py`,
+`test_group46_fuel_influence.py`, `test_group46_baseline_session_modifiers.py`,
+`test_group46_per_gear.py`, `test_group46_porsche_pack.py`,
+`test_group46_ui_explainability.py` — **122 tests**, including the **AC37**
+RSR/Fuji integrated regression, a **fuel-renders-into-evidence** test, and an
+**AC16 single-winner-per-field** learning-safety assertion. Reconciled
+version/schema tests: `RULE_ENGINE_VERSION` → 46.0
+(`test_group42_rule_first_engine`); DB version → 12 (`test_group42_legacy_storage`,
+`test_group18b_rec_persistence`, `test_session_db`, `test_group18e_setup_history`).
+All Group 46 tests pass; the ~7–20 pre-existing frozen-allowlist / OFR failures are
+known, unrelated, and untouched. Run the suite in halves on Win/Py3.14. See
+`MASTER_TESTING_REGISTER.md` (Setup Brain Learning & Race Context (Group 46)) for
+the per-file coverage table.

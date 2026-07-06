@@ -1141,6 +1141,7 @@ def _build_setup_diagnosis_conservative() -> dict:
         "aero_rear_near_min":         False,
         "driver_feel_flags":          {},
         "wheelspin_by_gear":          None,
+        "bog_by_gear":                None,  # Group 46: conservative = None
         "lockups_by_gear":            None,
         "event_type":                 "unknown",
         "is_timed_race":              False,
@@ -1255,6 +1256,71 @@ def _build_setup_diagnosis_inner(
         )
 
         avg_top_speed_kmh = sum(getattr(l, "max_speed_kmh", 0.0) for l in laps) / len(laps)
+
+        # Group 46: per-gear wheelspin detection.
+        # Mirrors the wheelspin detection in telemetry/recorder.py (_compute_stats)
+        # but buckets events by the gear active at each wheelspin frame.
+        # Signal: throttle > 0.7 AND rear wheel speed > car speed * 1.3 AND speed > 2 m/s.
+        # We count total wheelspin frame events per gear across ALL laps.
+        # Returns None when no frame data is available (honest — no fabrication).
+        _ws_gear_totals: dict[int, int] = {}
+        _any_frames_for_ws = False
+        for lap in laps:
+            lap_frames = getattr(lap, "frames", [])
+            if not lap_frames:
+                continue
+            _any_frames_for_ws = True
+            for f in lap_frames:
+                _gear_f = getattr(f, "gear", 0)
+                if _gear_f <= 0:
+                    continue
+                _throttle = getattr(f, "throttle", 0.0)
+                if _throttle <= 0.7:
+                    continue
+                _speed_kmh = getattr(f, "speed_kmh", 0.0)
+                _speed_ms = _speed_kmh / 3.6
+                if _speed_ms < 2.0:
+                    continue
+                # Compute rear wheel speed using wheel_rps and tyre_radius
+                # (mirrors _wheel_speed_ms logic from recorder.py)
+                _wheel_rps = getattr(f, "wheel_rps", None)
+                _tyre_radius = getattr(f, "tyre_radius", None)
+                if _wheel_rps is None or _tyre_radius is None:
+                    continue
+                try:
+                    import math as _math
+                    # Use rear wheels only (indices 2 and 3: RL, RR)
+                    _rl_ms = abs(_wheel_rps[2]) * _tyre_radius[2] * 2.0 * _math.pi
+                    _rr_ms = abs(_wheel_rps[3]) * _tyre_radius[3] * 2.0 * _math.pi
+                    _rear_wheel_ms = (_rl_ms + _rr_ms) / 2.0
+                    if _rear_wheel_ms > _speed_ms * 1.3:
+                        _ws_gear_totals[_gear_f] = _ws_gear_totals.get(_gear_f, 0) + 1
+                except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                    continue
+        # Normalise to PER-LAP average — mirrors exactly how rev_limiter_by_gear is
+        # averaged (~line 1253: {g: cnt / len(laps) for g, cnt in _gear_totals.items()}).
+        # Guard len(laps) > 0 is already guaranteed by the outer `if laps:` branch, but
+        # we keep the explicit guard for clarity and defensive safety.
+        wheelspin_by_gear: dict | None = (
+            {g: cnt / len(laps) for g, cnt in _ws_gear_totals.items()}
+            if _any_frames_for_ws and len(laps) > 0
+            else None
+        )
+
+        # Group 46: bog_by_gear detection.
+        # A genuine bog signal requires: low-rpm + high-throttle + low longitudinal
+        # acceleration in a gear. GT7 telemetry does NOT expose longitudinal acceleration
+        # directly (no accel_x/accel_z field on TelemetryFrame). We could estimate it from
+        # velocity deltas between frames, but the 10 Hz sample rate (one frame per ~100 ms)
+        # makes velocity-delta acceleration estimates noisy and unreliable. A proxy using
+        # speed_drop with high throttle is possible but would conflate cornering deceleration
+        # with true bog. To avoid fabricating signals, bog_by_gear is left as None.
+        # Deferred: genuine bog detection requires either a higher sample rate, direct accel
+        # signal from the packet, or a more sophisticated multi-frame filter. When a real
+        # signal becomes available, populate this dict {gear: event_count} analogously to
+        # wheelspin_by_gear above.
+        bog_by_gear: "dict | None" = None  # deliberately absent — signal not derivable
+
     else:
         avg_bottoming         = 0.0
         avg_wheelspin         = 0.0
@@ -1263,6 +1329,8 @@ def _build_setup_diagnosis_inner(
         avg_rev_limiter_total = 0.0
         rev_limiter_by_gear   = None
         avg_top_speed_kmh     = 0.0
+        wheelspin_by_gear     = None
+        bog_by_gear           = None
 
     # ------------------------------------------------------------------
     # Bands
@@ -1481,9 +1549,10 @@ def _build_setup_diagnosis_inner(
         "aero_rear_near_min":         aero_rear_near_min,
         # Driver feel
         "driver_feel_flags":          driver_feel_flags,
-        # Fields not on LapStats
-        "wheelspin_by_gear":          None,
-        "lockups_by_gear":            None,
+        # Group 46: per-gear telemetry signals (real detection — see above comments)
+        "wheelspin_by_gear":          wheelspin_by_gear,
+        "bog_by_gear":                bog_by_gear,  # None — signal not derivable (deferred)
+        "lockups_by_gear":            None,  # lockups_by_gear: no per-gear bucketing yet (deferred)
         # Event
         "event_type":                 event_type,
         "is_timed_race":              is_timed_race,

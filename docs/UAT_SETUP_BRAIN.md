@@ -1,8 +1,9 @@
 # Setup Brain — Manual UAT Checklist
 
-> **Scope:** Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
-> (Group 42), the Setup Builder Engineering Validation Gate (Group 41), and the
-> underlying setup-diagnosis brain (Groups 38–40).
+> **Scope:** Setup Brain Learning & Race Context (Group 46), Setup Brain
+> Intelligence Expansion (Group 45), Rule-First Setup Brain (Group 42), the Setup
+> Builder Engineering Validation Gate (Group 41), and the underlying
+> setup-diagnosis brain (Groups 38–40).
 > **Branch:** `ofr2-quali-race-disciplines`
 > **Test car / track:** Porsche 911 RSR '17 at Fuji International Speedway
 > **Environment:** GT7 on PS5, dashboard on PC via UDP, `GT7_AI_DEBUG=1` set in
@@ -205,6 +206,84 @@ purpose.
 
 ---
 
+## Setup Brain Learning & Race Context UAT (Group 46)
+
+> **What changed:** the rule-first engine now **learns across sessions** (a real
+> SQLite `learning_outcomes` feed), and its **Analyse** recommendations are shaped
+> by **fuel load** and by **fuller per-gear telemetry**; the from-scratch
+> **Baseline** is now **numerically biased by session type**; the Porsche pack
+> inherits the new confidence layers. Full detail:
+> `docs/RULE_FIRST_SETUP_BRAIN.md` § 15.
+>
+> Debug: keep `GT7_AI_DEBUG=1` set. Nothing here requires the AI — everything works
+> with the AI disabled; the AI (if enabled) is still audit-only. Learning shows up
+> **only after repeated matching sessions** have been scored.
+
+### Cross-session learning (Porsche 911 RSR '17 at Fuji)
+
+1. **Learning is silent until there is history.** On a fresh DB (or a new
+   car+track+layout), Analyse and confirm the recommendation carries **no**
+   learning-influence claim — a rule with no history makes no learning statement.
+2. **Learning influence appears only for repeated matching contexts.** Drive and
+   score the **same** car+track+layout across **at least 3 sessions** so outcomes
+   accumulate, then Analyse again. Confirm a `learning_influence` note appears
+   **only** on a rule whose confidence actually stepped — a rule that had history
+   but stayed between the thresholds shows **no** learning claim (honesty).
+3. **Upgrade vs downgrade.** Confirm a rule with a **good** track record
+   (success_rate `>= 0.60` over `>= 3` samples) reads as an **upgraded** confidence
+   step, and a rule going **badly** (`< 0.40`) reads as a **downgraded** step — one
+   step either way, never more.
+4. **Learning cannot break safety.** Confirm learning never un-blocks a blocked
+   safety rule, never un-rejects a rejected change, and never makes the AI author a
+   change — it only shifts a confidence label / ranking.
+5. **No user-file churn.** Confirm `data/setup_history.json` is **not** touched by
+   learning (learning lives only in the gitignored session DB). *(Observable: the
+   file's mtime/contents do not change when a scored session records outcomes.)*
+
+### Fuel-aware recommendations (Analyse)
+
+6. **High fuel prioritises traction / stability.** Set a high fuel multiplier
+   (`>= 5.0`) in the Event Planner and Analyse a traction complaint. Confirm the
+   traction / stability changes (lsd_accel, arb_rear, aero_rear, etc.) are ranked /
+   confidence-boosted, and that the change's evidence line mentions the fuel
+   effect. **The delta magnitudes must NOT change** — fuel affects
+   ranking/confidence only.
+7. **Fuel honesty.** With fuel = 1.0 or no fuel context, confirm there is **no**
+   fuel claim on any change (no false "high fuel" statement).
+
+### Session-biased baseline (Build Baseline Setup)
+
+8. **Session-specific baselines differ numerically.** Build a baseline for the
+   same car three times, changing only the session: **Qualifying**, a short
+   **Sprint** race, and an **Endurance** race (duration `>= 60 min`). Confirm the
+   resulting baseline **values differ numerically** between sessions (this is the
+   Group 46 change — Group 45's baseline only *noted* the session).
+9. **Baseline session honesty.** Confirm a field the session bias **did not** move
+   reads "session noted — no numerical change for this field", and an **unknown**
+   session makes no session claim. No false "session bias applied".
+
+### Per-gear intelligence
+
+10. **Per-gear only on real evidence.** Confirm an individual `gear_N` change is
+    proposed **only** when there is real indexed evidence for gear N (rev-limiter
+    in that gear on a `gear_too_short` diagnosis, or detected per-gear wheelspin).
+    A change carries the `source_label` **"per-gear rule"**.
+11. **"Top speed low" alone changes nothing.** Confirm a top-speed-low symptom with
+    **no** indexed per-gear evidence yields **no** gear change — and the
+    per-gear explanation says why. `final_drive` (B5/B5b) remains the broad lever.
+
+### Porsche benchmark (AC37)
+
+12. **RSR / Fuji integrated check.** On the RSR at Fuji with high tyre + high fuel
+    and the *rear-loose + mid-push + floaty-front* / snap-throttle-wheelspin +
+    top-speed-low scenario, confirm the recommendation is **traction-first**
+    (before/instead of an aero cut), with **no** rear-downforce reduction, **no**
+    rearward brake bias, **no** generic ride-height raise without bottoming
+    confidence, and **no** top-speed gear-lengthening as the primary wheelspin fix
+    — and it applies cleanly through the Apply gate.
+
+---
+
 ## Notes / known limitations
 
 - Gearbox ratio ranges (`final_drive` 2.5–6.0, gears 0.5–4.0) are conservative
@@ -216,18 +295,24 @@ purpose.
 - **Group 42 deferrals:** the handling-phase rule pack (C/D) is a starter set —
   the remaining per-setting Pack C rules are deferred. The voice path is
   narration-only pending a full rule-first rebuild.
-- **Group 45 deferrals:** the learning seam (`RuleOutcomeStore`) is now *wired but
-  empty* in production — it never fires without samples, so recommendations still
-  do **not** self-tune (cross-session persistence + a success-recording feed are
-  deferred). Session context is *recorded* on baseline changes but does not yet
-  change baseline **values** (session-specific numerical baseline tuning is
-  deferred). The fuel multiplier is read but only informational (no fuel-specific
-  rule). Full per-gear individual ratio rules are deferred (broad final-drive-only
-  logic today). On a driver profile that carries **both** `race_values_consistency`
-  and `rotation_without_snap`, the two opposing baseline lsd_decel biases (+2 / −2)
-  net to zero.
+- **Group 45 deferrals (now partly superseded by Group 46):** what Group 45 left
+  open — the empty learning seam, informational-only fuel, and session context
+  merely *recorded* on the baseline — was **delivered in Group 46** (see below).
+  Still standing from Group 45: on a driver profile that carries **both**
+  `race_values_consistency` and `rotation_without_snap`, the two opposing baseline
+  lsd_decel biases (+2 / −2) net to zero.
+- **Group 46 deferrals:** the **Baseline path does NOT consume rule-confidence
+  learning** (it does not run the rule engine — learning shapes the **Analyse**
+  path only). `source_path="Baseline"` is schema-supported but **not yet written**
+  (only `"Analyse"` is recorded in production today). `learning_outcomes.session_type`
+  is stored as `""` (scope is car_id + track + layout_id; a JOIN/column is
+  deferred). **`bog_by_gear` and `lockups_by_gear` are honestly `None`** — GT7's
+  10 Hz telemetry has no reliable signal for them, so per-gear evidence today is
+  limiter + wheelspin only. Fuel affects confidence/ranking only — there is no
+  fuel-specific *delta* rule.
 - Full technical detail: `docs/RULE_FIRST_SETUP_BRAIN.md` (architecture, incl.
-  § 14 "Setup Brain Intelligence Expansion"), `docs/SETUP_BRAIN_UPGRADE.md`
-  (§ Group 45, § Group 42 and § Group 41), `MASTER_TESTING_REGISTER.md`
-  (Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
+  § 14 "Setup Brain Intelligence Expansion" and § 15 "Setup Brain Learning & Race
+  Context"), `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 46, § Group 45, § Group 42 and
+  § Group 41), `MASTER_TESTING_REGISTER.md` (Setup Brain Learning & Race Context
+  (Group 46), Setup Brain Intelligence Expansion (Group 45), Rule-First Setup Brain
   (Group 42)).

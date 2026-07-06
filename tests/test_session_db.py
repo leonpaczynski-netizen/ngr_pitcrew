@@ -140,8 +140,10 @@ def test_write_feedback_empty_ok(db):
 # ---------------------------------------------------------------------------
 
 def test_schema_version_is_v10(db):
+    # Reconciled for Group 46: DB_VERSION bumped from 10 → 12 (_migrate_v12 added
+    # learning_outcomes table). The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 10
+    assert version == 12
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

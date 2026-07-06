@@ -865,8 +865,45 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 self._db.persist_score(
                     result.rec_id, result.verdict, result.confidence, result.details
                 )
+                # Group 46: record per-rule learning outcomes (best-effort, never raises).
+                # Only when verdict is not "insufficient_data" (no signal — skip).
                 if result.verdict != "insufficient_data":
                     written += 1
+                    try:
+                        _ac_json = rec.get("approved_changes_json") or ""
+                        if _ac_json:
+                            _ac_list = json.loads(_ac_json)
+                            if isinstance(_ac_list, list):
+                                # All recs in get_applied_unverified_recs come from
+                                # the analyse path (baseline path never calls
+                                # insert_setup_recommendations), so source_path is "Analyse".
+                                _source_path = "Analyse"
+                                # session_type is not stored on setup_recommendations;
+                                # default to "" (learning_outcomes schema has NOT NULL DEFAULT '').
+                                _session_type_lo = ""
+                                _dpv = rec.get("driver_profile_version") or ""
+                                _rev = rec.get("rule_engine_version") or ""
+                                for _ch in _ac_list:
+                                    if not isinstance(_ch, dict):
+                                        continue
+                                    _rule_id = _ch.get("rule_id", "")
+                                    if not _rule_id:
+                                        continue
+                                    self._db.record_learning_outcome(
+                                        car_id=car_id,
+                                        track=track,
+                                        layout_id=layout_id,
+                                        session_id=after_sid,
+                                        session_type=_session_type_lo,
+                                        rule_id=_rule_id,
+                                        source_path=_source_path,
+                                        verdict=result.verdict,
+                                        confidence=result.confidence,
+                                        driver_profile_version=_dpv,
+                                        rule_engine_version=_rev,
+                                    )
+                    except Exception:
+                        pass  # learning persistence is best-effort — never disrupt scoring
             print(f"[Learning] scored {len(scoreable)} recommendation(s) for "
                   f"{car_id}/{track} ({written} non-trivial)")
             if written >= 1:

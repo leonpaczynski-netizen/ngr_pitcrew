@@ -45,7 +45,17 @@ def plan_to_raw_data(
         from_val = intent.from_value
         to_val = intent.to_value
 
-        # Build the change dict in AI-response shape
+        # Build the change dict in AI-response shape.
+        # Group 46: fuel_influence rides the evidence list so the UI renders it
+        # without needing a new row. Build a fresh evidence list per change (do
+        # NOT mutate the shared intent.evidence tuple/list) and append the fuel
+        # text only when it is genuinely non-empty (honesty — no claim when
+        # there was no fuel effect).
+        _fuel_influence = getattr(intent, "fuel_influence", "")
+        _evidence_list: list[str] = list(intent.evidence)
+        if _fuel_influence:
+            _evidence_list.append(_fuel_influence)
+
         change: dict = {
             "setting": field.replace("_", " ").title(),
             "field": field,
@@ -56,7 +66,7 @@ def plan_to_raw_data(
             "why": intent.rationale,
             # Explainability keys
             "symptom": intent.symptom,
-            "evidence": list(intent.evidence),
+            "evidence": _evidence_list,
             "rule_id": intent.rule_id,
             "rationale": intent.rationale,
             "rejected_alternatives": list(intent.rejected_alternatives),
@@ -74,6 +84,9 @@ def plan_to_raw_data(
             "session_influence": getattr(intent, "session_influence", ""),
             "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
             "pack": getattr(intent, "pack", ""),
+            # Group 46 explainability fields (kept as standalone keys too — tests check them)
+            "learning_influence": getattr(intent, "learning_influence", ""),
+            "fuel_influence": _fuel_influence,
         }
         changes.append(change)
 
@@ -138,5 +151,8 @@ def rejected_to_json(plan: SetupPlan) -> list[dict]:
             "session_influence": getattr(intent, "session_influence", ""),
             "car_drivetrain_influence": getattr(intent, "car_drivetrain_influence", ""),
             "pack": getattr(intent, "pack", ""),
+            # Group 46 explainability fields
+            "learning_influence": getattr(intent, "learning_influence", ""),
+            "fuel_influence": getattr(intent, "fuel_influence", ""),
         })
     return result
