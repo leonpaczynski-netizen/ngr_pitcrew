@@ -946,7 +946,15 @@ def _process_rule(
 # ---------------------------------------------------------------------------
 
 # Thresholds for per-gear signal detection
-_PER_GEAR_WHEELSPIN_THRESHOLD = 2   # wheelspin events in a gear to trigger a proposal
+# _PER_GEAR_WHEELSPIN_THRESHOLD is a PER-LAP average rate (float).
+# wheelspin_by_gear values are now normalised by len(laps) in setup_diagnosis.py,
+# mirroring exactly how rev_limiter_by_gear is averaged.  A value of 2.0 means
+# the gear averaged 2 wheelspin-frames per lap — a meaningful and repeatable signal.
+# This matches the per-lap scale of _PER_GEAR_LIMITER_THRESHOLD (>0 avg hits/lap)
+# and is consistent with the evidence_reason text which already says "avg hits/lap".
+# At 10 Hz telemetry, 2 wheelspin frames/lap ≈ 0.2 s of wheelspin per lap in that
+# gear — a level that warrants investigation without triggering on noise.
+_PER_GEAR_WHEELSPIN_THRESHOLD = 2.0   # wheelspin frames per lap in a gear to trigger a proposal
 _PER_GEAR_LIMITER_THRESHOLD   = 0   # >0 hits is sufficient (brief: > 0)
 _PER_GEAR_DELTA               = 0.03  # conservative, smaller than final_drive ±0.05
 
@@ -1026,11 +1034,13 @@ def _emit_per_gear_changes(
             )
 
         # 2. Per-gear wheelspin → lengthen that gear for traction (negative delta = lower ratio)
-        ws_hits = int(wheelspin_by_gear.get(gear_n, 0) or 0)
+        # ws_hits is a per-lap float average (normalised in setup_diagnosis.py);
+        # compare as float against the per-lap threshold.
+        ws_hits = float(wheelspin_by_gear.get(gear_n, 0) or 0)
         if ws_hits > _PER_GEAR_WHEELSPIN_THRESHOLD and delta == 0.0:
             delta = -_PER_GEAR_DELTA
             evidence_reason = (
-                f"wheelspin in gear {gear_n} ({ws_hits} events detected): "
+                f"wheelspin in gear {gear_n} ({ws_hits:.1f} avg frames/lap): "
                 f"lengthening ratio to ease traction demands"
             )
 

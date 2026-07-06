@@ -1297,7 +1297,15 @@ def _build_setup_diagnosis_inner(
                         _ws_gear_totals[_gear_f] = _ws_gear_totals.get(_gear_f, 0) + 1
                 except (TypeError, ValueError, IndexError, ZeroDivisionError):
                     continue
-        wheelspin_by_gear: dict | None = _ws_gear_totals if _any_frames_for_ws else None
+        # Normalise to PER-LAP average — mirrors exactly how rev_limiter_by_gear is
+        # averaged (~line 1253: {g: cnt / len(laps) for g, cnt in _gear_totals.items()}).
+        # Guard len(laps) > 0 is already guaranteed by the outer `if laps:` branch, but
+        # we keep the explicit guard for clarity and defensive safety.
+        wheelspin_by_gear: dict | None = (
+            {g: cnt / len(laps) for g, cnt in _ws_gear_totals.items()}
+            if _any_frames_for_ws and len(laps) > 0
+            else None
+        )
 
         # Group 46: bog_by_gear detection.
         # A genuine bog signal requires: low-rpm + high-throttle + low longitudinal

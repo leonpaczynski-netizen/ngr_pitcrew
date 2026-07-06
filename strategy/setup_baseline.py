@@ -306,6 +306,10 @@ def _make_change_dict(
         "session_influence": session_influence,
         "car_drivetrain_influence": car_drivetrain_influence,
         "pack": "",                     # baseline changes have no rule pack
+        # Group 46 explainability fields — present-but-empty (honest: baseline has no
+        # learning data and no fuel context; "" not absent so callers use .get() safely)
+        "learning_influence": "",
+        "fuel_influence": "",
     }
 
 
