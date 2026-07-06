@@ -1,0 +1,25 @@
+{
+  "schema": "accepted_track_model_v1",
+  "track_location_id": "fuji_international_speedway",
+  "layout_id": "fuji_international_speedway__full_course",
+  "match_status": "GOOD_MATCH",
+  "accepted": true,
+  "accepted_at": "2026-07-05T04:16:33.156617+00:00",
+  "seed_corners_expected": 16,
+  "model_corners_found": 16,
+  "extra_peaks_suppressed": 4,
+  "placeholder_count": 0,
+  "lap_length_m_model": 4440.567522255162,
+  "lap_length_m_seed": 4563,
+  "lap_length_delta_pct": 2.68315752235017,
+  "station_count": 4441,
+  "confidence": 1.0,
+  "blockers": [],
+  "warnings": [
+    "4 extra curvature peak(s) suppressed \u2014 not promoted to official turns",
+    "Seed corner location data unavailable \u2014 corner count matched, but corner-position match cannot be fully verified."
+  ],
+  "seed_corner_positions_available": false,
+  "corner_position_match": "NOT_AVAILABLE",
+  "corners_matched": 0
+}
