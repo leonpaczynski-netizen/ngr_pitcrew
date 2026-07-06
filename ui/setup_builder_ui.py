@@ -913,6 +913,12 @@ class SetupBuilderMixin:
             "Building baseline setup from car ranges and driving profile…")
         self._build_setup_result.setVisible(True)
 
+        # Group 46: pass real race duration so build_baseline_setup_response can
+        # classify session bias (race + duration>=60 → endurance bias).
+        # _ai_snap.duration_mins is 0 when no event is configured — backend treats
+        # 0 / <=0 as sprint/conservative (by design — safe default).
+        _duration_mins_bl = float(_ai_snap.duration_mins)
+
         def _worker():
             try:
                 json_str = self._driving_advisor.build_baseline_setup_response(
@@ -925,6 +931,7 @@ class SetupBuilderMixin:
                     session_type=_session_type,
                     tyre_wear_multiplier=_tyre_wear,
                     car_class=_car_class,
+                    duration_mins=_duration_mins_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
             except Exception as exc:
@@ -984,6 +991,11 @@ class SetupBuilderMixin:
         # Group 45: car_class from car_specs.category (empty string when no specs loaded).
         _, _car_specs_bl = self._load_car_specs_for_current()
         _car_class = (_car_specs_bl or {}).get("category", "")
+        # Group 46: pass real race duration so build_baseline_setup_response can
+        # classify session bias (race + duration>=60 → endurance bias).
+        # _ai_snap.duration_mins is 0 when no event is configured — backend treats
+        # 0 / <=0 as sprint/conservative (by design — safe default).
+        _duration_mins_bl = float(_ai_snap.duration_mins)
 
         form._btn_baseline.setEnabled(False)
         form._btn_baseline.setText("Building baseline…")
@@ -1003,6 +1015,7 @@ class SetupBuilderMixin:
                     session_type=_session_type,
                     tyre_wear_multiplier=_tyre_wear,
                     car_class=_car_class,
+                    duration_mins=_duration_mins_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
             except Exception as exc:
@@ -1658,6 +1671,24 @@ class SetupBuilderMixin:
                         _detail_rows += (
                             f"<tr><td style='color:#888; padding-right:8px;'>Source</td>"
                             f"<td style='color:#7AB3D4; font-size:10px; font-style:italic;'>{_source_label}</td></tr>"
+                        )
+                    # Group 46: learning_influence — shown only when backend populated it
+                    # (non-empty = genuine cross-session learning effect occurred).
+                    # Subdued style: small, italic, muted amber to distinguish from Source.
+                    _learning_influence = ch.get("learning_influence", "")
+                    if _learning_influence:
+                        _detail_rows += (
+                            f"<tr><td style='color:#888; padding-right:8px;'>Learning</td>"
+                            f"<td style='color:#C8AA66; font-size:10px; font-style:italic;'>{_learning_influence}</td></tr>"
+                        )
+                    # Group 46: session_influence — shown only when backend populated it.
+                    # No session_influence row existed before Group 46 — adding fresh.
+                    # Distinct subdued teal to separate from the learning row.
+                    _session_influence = ch.get("session_influence", "")
+                    if _session_influence:
+                        _detail_rows += (
+                            f"<tr><td style='color:#888; padding-right:8px;'>Session</td>"
+                            f"<td style='color:#7ABFBF; font-size:10px; font-style:italic;'>{_session_influence}</td></tr>"
                         )
 
                     _ch_html += (
