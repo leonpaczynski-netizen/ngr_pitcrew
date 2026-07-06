@@ -697,6 +697,18 @@ class SetupBuilderMixin:
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
+        # Group 45: pass session context params to the backend.
+        # purpose: form.purpose is "Race" or "Qualifying" — always available here.
+        _purpose = form.purpose
+        # car_class: car_specs.category (empty string when no specs loaded — backend maps to neutral).
+        _car_class = (_car_specs or {}).get("category", "")
+        # drivetrain: explicit combo selection wins (empty string = "Auto-detect" →
+        # backend falls back to CAR_DRIVETRAIN_OVERRIDES by car name, e.g. Porsche).
+        _drivetrain = (
+            form._setup_drivetrain.currentData()
+            if hasattr(form, "_setup_drivetrain")
+            else ""
+        ) or ""
 
         def _worker():
             try:
@@ -704,7 +716,10 @@ class SetupBuilderMixin:
                     d, n_laps=n_laps, car_name=_car_name, car_specs=_car_specs,
                     feeling=feeling or None,
                     allowed_tuning=_allowed, tuning_locked=_locked,
-                    compound=_compound)
+                    compound=_compound,
+                    purpose=_purpose,
+                    car_class=_car_class,
+                    drivetrain=_drivetrain)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None, form))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
@@ -878,6 +893,19 @@ class SetupBuilderMixin:
             if hasattr(self, "_setup_num_gears")
             else 0
         )
+        # Group 45: real session purpose from the Race form (never a hardcoded string).
+        _session_type = self._active_form().purpose if hasattr(self, "_active_form") else "Race"
+        # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
+        # real event is active (EMPTY source) so the backend treats context as unknown.
+        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        _tyre_wear = (
+            _ai_snap.tyre_wear_multiplier
+            if _ai_snap.core.source != _SnapSrc.EMPTY
+            else None
+        )
+        # Group 45: car_class from car_specs.category (empty string when no specs loaded).
+        _, _car_specs_bl = self._load_car_specs_for_current()
+        _car_class = (_car_specs_bl or {}).get("category", "")
 
         self._btn_baseline.setEnabled(False)
         self._btn_baseline.setText("Building baseline…")
@@ -894,7 +922,9 @@ class SetupBuilderMixin:
                     num_gears=_num_gears,
                     allowed_tuning=_allowed,
                     tuning_locked=_locked,
-                    session_type="Race",
+                    session_type=_session_type,
+                    tyre_wear_multiplier=_tyre_wear,
+                    car_class=_car_class,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
             except Exception as exc:
@@ -940,7 +970,20 @@ class SetupBuilderMixin:
             if hasattr(form, "_setup_num_gears")
             else 0
         )
+        # Group 45: pass form's raw purpose (e.g. "Qualifying") — backend calls
+        # normalise_purpose which accepts both "Qualifying" and "Qualifying Setup".
         _session_type = f"{form.purpose} Setup"
+        # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
+        # real event is active (EMPTY source) so the backend treats context as unknown.
+        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        _tyre_wear = (
+            _ai_snap.tyre_wear_multiplier
+            if _ai_snap.core.source != _SnapSrc.EMPTY
+            else None
+        )
+        # Group 45: car_class from car_specs.category (empty string when no specs loaded).
+        _, _car_specs_bl = self._load_car_specs_for_current()
+        _car_class = (_car_specs_bl or {}).get("category", "")
 
         form._btn_baseline.setEnabled(False)
         form._btn_baseline.setText("Building baseline…")
@@ -958,6 +1001,8 @@ class SetupBuilderMixin:
                     allowed_tuning=_allowed,
                     tuning_locked=_locked,
                     session_type=_session_type,
+                    tyre_wear_multiplier=_tyre_wear,
+                    car_class=_car_class,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
             except Exception as exc:
@@ -1590,6 +1635,14 @@ class SetupBuilderMixin:
                         f"<tr><td style='color:#888; padding-right:8px;'>Rule</td>"
                         f"<td style='color:#888; font-size:10px;'>{_rule_id}</td></tr>"
                     )
+                    # Group 45: source_label — "Porsche-specific rule", "generic rule", etc.
+                    # Only shown when the backend populates it (absent on legacy responses).
+                    _source_label = ch.get("source_label", "")
+                    if _source_label:
+                        _detail_rows += (
+                            f"<tr><td style='color:#888; padding-right:8px;'>Source</td>"
+                            f"<td style='color:#7AB3D4; font-size:10px; font-style:italic;'>{_source_label}</td></tr>"
+                        )
 
                     _ch_html += (
                         "<details style='margin-top:4px; margin-left:8px;'>"
