@@ -1,15 +1,20 @@
-# Rule-First Setup Brain — Architecture (Group 42 + Group 43 + Group 44)
+# Rule-First Setup Brain — Architecture (Group 42 + Group 43 + Group 44 + Group 45)
 
-> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43); updated 2026-07-06 (Group 44 — from-scratch baseline generator)
+> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43); updated 2026-07-06 (Group 44 — from-scratch baseline generator); updated 2026-07-06 (Group 45 — Setup Brain Intelligence Expansion)
 > Branch: `ofr2-quali-race-disciplines` (built on top of Group 41)
 >
-> Companion docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 changelog),
-> `docs/UAT_SETUP_BRAIN.md` (manual UAT), `MASTER_TESTING_REGISTER.md`
-> (Rule-First Setup Brain (Group 42)).
+> Companion docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 changelog, § Group 45
+> intelligence-expansion detail), `docs/UAT_SETUP_BRAIN.md` (manual UAT),
+> `MASTER_TESTING_REGISTER.md` (Rule-First Setup Brain (Group 42), Setup Brain
+> Intelligence Expansion (Group 45)).
 >
 > This is the architecture doc. It explains *why* the AI is no longer the source
 > of truth, how the deterministic rule engine works, and the contracts that keep
 > the AI from ever authoring a setup change.
+>
+> **Group 45 added context-awareness on top of this architecture — see the
+> dedicated section "Setup Brain Intelligence Expansion" (§14) at the end. The
+> core inversion (rule-first, AI audit-only, single funnel) is unchanged.**
 
 ---
 
@@ -505,21 +510,23 @@ driver can always see which is which.
 
 ## 12. Remaining limitations / deferred
 
-* **`RuleOutcomeStore` live wiring + cross-session persistence.** The learning
-  hook is implemented and tested but not wired live
-  (`rule_outcome_store=None`) and does not persist across sessions yet.
-  `RuleOutcomeStore` live wiring and cross-session persistence are deferred to
-  a future sprint.
-* **Individual `gear_1..gear_6` proposing rules.** B5 now proposes `final_drive`
-  on `gear_too_short`; rules for individual `gear_1..gear_6` slots are
-  deferred. The resolver foundation (`final_drive_down` / `final_drive_up`) is
-  in place and extensible via `register_pack`.
-* **Tyre signals.** `tyre`-compound / tyre-wear / fuel signals are not read by
-  any rule (deferred; no dedicated tyre telemetry diagnosis keys exist today).
-* **`applies_session` / `applies_drivetrain` scope enforcement.** These fields
-  are set on rules but the engine does not yet filter by them at runtime
-  (deferred; the fields are ready for the engine to honour once the scope
-  enforcement work is scoped).
+* **`RuleOutcomeStore` live wiring + cross-session persistence.** *(Group 45
+  partially advanced this — see §14.)* Production now constructs a live-but-EMPTY
+  store (the hook is wired), but it never fires without samples, and cross-session
+  persistence + a success-recording feed remain deferred.
+* **Individual `gear_1..gear_6` proposing rules.** B5 proposes `final_drive` on
+  `gear_too_short`; **Group 45 added B5b** (`final_drive` up on `gear_too_long`).
+  Rules for individual `gear_1..gear_6` slots are still deferred — the
+  `per_gear_limiter_evidence` diagnosis key exists for future use, but broad
+  final-drive-only logic is what ships today.
+* **Tyre / fuel signals.** *(Group 45 partially delivered this — see §14.)*
+  Tyre-wear is now read and **contraindicates** four tyre-abusing rules at high
+  wear; the fuel multiplier is read but only informational (no fuel-specific rule
+  yet). Tyre-compound signals remain unused.
+* **`applies_session` / `applies_drivetrain` / `applies_car_class` scope
+  enforcement.** **DELIVERED in Group 45** (`_scope_matches`, see §14) — the
+  engine now filters at runtime; Pack A is exempt; `any`/`None` is
+  wildcard-permissive.
 * **Voice path.** The voice path is constrained to narration-only; a full
   rule-first rebuild of the voice path so it too is authored by the rule engine
   is deferred.
@@ -528,9 +535,9 @@ driver can always see which is which.
   via `register_pack`.
 * **Full DB migration off the JSON blob.** The 8 v11 columns are populated, but
   `recommendation_text` is still the primary store.
-* **No car-specific / drivetrain-specific rule packs.** Currently all rules
-  default to `applies_drivetrain=any` / `applies_car_class=any` (deferred;
-  per-car specificity once more data is in).
+* **Car-specific / drivetrain-specific rule packs.** **Group 45 added the first
+  car pack (Pack P — Porsche 911 RSR '17, see §14)** and enforces
+  drivetrain/car-class scope. Broader per-car packs are still deferred.
 * **From-scratch baseline no-authority fields (Group 44).** camber / toe / dampers
   / springs / lsd_initial / lsd_front_initial are seeded from conservative neutral
   defaults, not engineered — the baseline is a safe starting point, not an optimum.
@@ -575,3 +582,210 @@ Setup Baseline Generator (Group 44)).
 **Test-run note (Windows / Python 3.14):** run the suite in halves to avoid a
 flaky native PyQt teardown segfault — an environmental test-isolation artifact,
 not a product defect.
+
+---
+
+## 14. Setup Brain Intelligence Expansion (Group 45)
+
+> Date: 2026-07-06 · Branch `ofr2-quali-race-disciplines` (on top of Group 44).
+> This is the dedicated, honest account of the intelligence added in Group 45.
+> Cross-referenced from `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 45, which carries
+> the Pack P / B5b / tyre-wear-contraindication changelog detail).
+>
+> **`RULE_ENGINE_VERSION` is now "45.0"** (was "42.0").
+
+### 14.0 What did NOT change (architecture preserved)
+The rule-first inversion is intact. Pit Crew still owns the decision; the AI is
+still **audit-only** (`parse_audit_response` strips canonical params;
+`map_audit_to_finaliser` never un-blocks; the voice path is narration-only). Both
+the Analyse path and the Group 44 Baseline path still run through the **one**
+validator → `_finalise_recommendation` funnel → renderer → Apply gate. The old
+"Build Setup with AI" path stays disabled. **Everything works with the AI
+disabled.** Group 45 is a *context and confidence* layer on top — it does not
+change *who* authors setups.
+
+### 14.1 What new intelligence was added
+The engine now consumes **session type, tyre-wear, fuel, drivetrain, and
+car-class** context. This context genuinely changes:
+- **which rules are eligible** (scope filter, §14.3),
+- **how confident** an eligible rule is (session bias, §14.5),
+- **how candidates are ranked** when they tie (driver-profile active weighting,
+  §14.4),
+- **which rules are suppressed** at high tyre-wear (contraindication, §14.5),
+- **how each change is explained** (explainability fields, §14.9).
+
+**Crucially, delta magnitudes are UNCHANGED.** Context never invents a more
+precise number — it filters, ranks, confidence-shifts, contraindicates, and
+explains. This is deliberate: the app has no data to justify finer magnitudes, so
+it does not fake them.
+
+### 14.2 What inputs are genuinely used
+- **Session type** — resolved from the analysed session's `purpose` → `SessionType`
+  (quali / race / endurance; endurance = race + `duration_mins>=60`).
+- **Tyre-wear** — `EventContext` tyre_wear → `tyre_wear_multiplier`; at
+  `>= HIGH_TYRE_WEAR_THRESHOLD (5.0)` sets `diagnosis["tyre_wear_high"]`.
+- **Fuel multiplier** — **READ** (`fuel_known` flag) but currently **only
+  informational**. No fuel-specific rule fires. Documented honestly.
+- **Car class** — `car_specs.json.category` → `CarClass` (available for **579
+  cars**).
+- **Drivetrain** — **NOT reliably in per-car data.** Resolved by precedence:
+  explicit UI combo > `CAR_DRIVETRAIN_OVERRIDES` (in-module dict, currently
+  `{"Porsche 911 RSR (991) '17":"rr"}`) > empty DB → `None` (generic). Unknown
+  drivetrain → generic logic + an honest "drivetrain unknown — generic logic
+  applied" note.
+
+Context is resolved in `strategy/driving_advisor.py`: the Analyse path reads
+`_event_ctx` plus the new `purpose` / `car_specs.category` / `drivetrain` params;
+the Baseline path receives **scalar** params only (`session_type`,
+`tyre_wear_multiplier`, `car_class`) — **no `EventContext` is injected into the
+baseline author**. Both UI analyse handlers (`_setup_analyse_ai`,
+`_setup_analyse_ai_for_form`) and both baseline callers thread these.
+
+### 14.3 The engine scope filter (`_scope_matches`)
+Rules already carried `applies_session` / `applies_drivetrain` /
+`applies_car_class` (set since Group 42) but the engine **ignored** them. Group 45
+enforces them at runtime:
+- `any` / `None` on either the rule or the context = **wildcard-permissive** —
+  an unknown context **never** filters a rule out (missing data must not silently
+  drop safe advice).
+- **Pack A safety rules are EXEMPT** from scope filtering — safety invariants
+  always apply.
+- If *every* rule is filtered out, the engine returns a **valid empty
+  `SetupPlan`** (it never raises).
+
+`applies_drivetrain` ∈ {fr, ff, mr, rr, awd}; `applies_car_class` ∈
+{gr1..gr4, road, race}.
+
+### 14.4 How driver style is now active
+Driver style became a data structure in Group 42, but only shaped
+contraindication text. Group 45 makes it an **active ranking input**: a bounded
+**{−1, 0, +1} rank bonus** used as a **conflict-resolution tiebreaker when two
+candidates have equal confidence**:
+- all `rule.driver_style_tags ⊆ profile.style_tags` → **+1**;
+- `dislikes_snap_exit` + a proposed lsd_accel **increase** → **hard block + −1**.
+
+Again, **magnitudes/deltas are unchanged** — the bonus affects ranking /
+confidence / explanation only. On the Baseline path, `_PROFILE_BIAS_TABLE`
+gained `trail_braker` → brake_bias −0.5 and `rotation_without_snap` → lsd_decel
+−2 (absolute-value baseline biases, driver-profile-driven only).
+
+### 14.5 How session type and tyre/fuel settings affect recommendations
+**Session type biases confidence** (not magnitude):
+- **quali** upgrades the confidence of front-bite / trail-braker-tagged rules;
+- **race** upgrades safety-phase / consistency rules;
+- **endurance** = race behaviour + `duration_mins>=60`.
+
+**Tyre-wear contraindicates (suppresses) rules that abuse worn tyres.** At
+`tyre_wear_multiplier >= 5.0`, `diagnosis["tyre_wear_high"]` is set and these
+**four genuinely tyre-abusing** rules are suppressed:
+- **B3** — lsd_accel decrease,
+- **C1_entry_lsd_decel** — lsd_decel decrease,
+- **C3_mid_arb_rear** — rear ARB soften,
+- **C7_kerb_arb_rear** — rear ARB soften.
+
+Rules that **increase** lsd lock or rear downforce are deliberately **NOT**
+suppressed — they stabilise worn tyres, so suppressing them would be wrong.
+
+**Honesty gate:** when tyre/fuel context is missing, the change carries the
+explicit "tyre/fuel context not available — conservative default applied" note
+and makes **no** tyre/fuel-aware claim. The **fuel multiplier is read but only
+informational** — there is no fuel-specific rule yet.
+
+### 14.6 How car / drivetrain modifiers work
+`applies_drivetrain` and `applies_car_class` filters (§14.3) let rules target a
+drivetrain or class. Car class is reliable (`car_specs.json.category`, 579 cars);
+**drivetrain is not reliably in per-car data** — it comes from the manual UI
+combo or `CAR_DRIVETRAIN_OVERRIDES`, and an unknown drivetrain falls back to
+generic logic with an honest note. This is why the Porsche pack asserts its
+drivetrain via the override map (§14.7) rather than trusting the empty DB column.
+
+### 14.7 What the Porsche 911 RSR '17 pack (Pack P) does
+Registered via `register_pack("P", ...)`.
+- **Rule P1** — a **cautious lsd_accel increase (traction-first)**, scoped
+  `applies_drivetrain=rr` + `applies_car_class=gr3`, precondition snap-throttle
+  wheelspin, **contraindicated when `snap_oversteer_exit` is diagnosed**.
+- **No P2.** Rear-downforce protection under rear instability is already provided
+  by existing **Pack A A2** (unconditional, all cars), so a separate Porsche P2
+  was **intentionally omitted** — A2 covers it. Ride-height raise is gated by
+  existing A3/A4 (no generic raise). A top-speed deficit under wheelspin is
+  handled **traction-first** (P1), not aero-cut-first (A2 blocks the cut).
+- **Labelling.** Every change is tagged `source_label` "Porsche-specific rule"
+  (pack `P`) or "generic rule".
+- **Drivetrain assertion.** The pack asserts RR via `CAR_DRIVETRAIN_OVERRIDES`
+  (it does **not** rely on the empty DB drivetrain column); the manual UI combo
+  overrides it.
+
+### 14.8 What gearbox logic exists
+- **B5** — `gear_too_short` → `final_drive_down`.
+- **B5b (NEW)** — `gear_too_long` → `final_drive_up`.
+- `limiter_limited` stays a **preserve** category (no proposal).
+- **"limiter_before_braking" is NOT a real diagnosis category** — the sprint's
+  wording maps it onto the existing `gear_too_short`. Documented, not faked.
+- Diagnosis exposes **`per_gear_limiter_evidence`** (an alias of
+  `rev_limiter_by_gear`). Individual `gear_N` changes are only ever proposed with
+  gear-specific evidence — but **full per-gear rules remain DEFERRED**; today the
+  logic is broad, final-drive-only.
+- **Monotonic ordering is enforced NON-INCREASING:** equal adjacent ratios are
+  **allowed**; only a strict inversion is rejected with reason "monotonic
+  ordering violation". The engine AND the `gearbox_ratio_inversion` validator both
+  use strict `>` now (in agreement — this is one of the three reconciled tests).
+
+### 14.9 Explainability fields
+Each approved change **and** each rejected candidate now carries, in addition to
+the pre-existing symptom / evidence / rule_id / rationale / risk_level /
+confidence_level / driver_style_alignment:
+
+| Key | Meaning |
+|-----|---------|
+| `source_label` | e.g. "Porsche-specific rule" / "generic rule" (Analyse); `_LABEL_NEUTRAL` / `_LABEL_BIASED` / `_LABEL_MIDPOINT` / `_LABEL_CONSERV` (Baseline) |
+| `session_influence` | how the session type affected this change — or the neutral "not session-tuned" string |
+| `car_drivetrain_influence` | how car class / drivetrain affected it — or "drivetrain unknown — generic logic applied" |
+| `pack` | the rule pack that authored it (A / B / C / P) |
+
+**Populated honestly:** a positive session/tyre/car claim appears **only** when
+that context was received AND used; missing context yields the explicit
+neutral / "not available" string. **Baseline changes never claim telemetry
+evidence**, and their `session_influence` text records that a session was *noted*
+but the baseline is **NOT session-tuned** (session-specific numerical baseline
+tuning is deferred; baseline bias is driver-profile-driven only). The renderer
+shows a small `source_label` row.
+
+### 14.10 What learning does — and does NOT do
+Production now constructs a **live-but-EMPTY `RuleOutcomeStore`** (was `None` in
+Group 42). The confidence-downgrade hook (§4) is therefore **wired**, but with no
+samples it **never fires** — behaviour is unchanged. The response carries
+`_learning_note` "no cross-session learning history available".
+
+Learning **can only** lower a confidence label / affect ranking. It **CANNOT**:
+- un-block a blocking safety rule,
+- un-reject a rejected change,
+- bypass validation,
+- make the AI actionable.
+
+**Deferred:** cross-session persistence of the store, and a success-recording
+feed (e.g. from OFR-1 `recommendation_scoring` verdicts) to populate it.
+
+### 14.11 Still deferred after Group 45 (honest)
+- Cross-session `RuleOutcomeStore` persistence + a success-recording feed (seam in
+  place, empty in production — no behaviour change yet).
+- Full per-gear individual ratio proposal rules (`per_gear_limiter_evidence` key
+  exists for future use; broad final-drive-only logic today).
+- Session-specific **numerical** baseline tuning (session context is recorded on
+  baseline changes but does not yet change baseline values).
+- A fuel-specific rule (the fuel multiplier is read but only informational).
+- The two opposing lsd_decel baseline bias entries
+  (`race_values_consistency` +2 vs `rotation_without_snap` −2) **net to zero** on
+  a driver profile that carries both flags.
+
+### 14.12 Tests
+NEW: `tests/test_group45_engine_scope.py`, `test_group45_gear_monotonic.py`,
+`test_group45_context_signals.py`, `test_group45_porsche_pack.py`,
+`test_group45_explainability.py`, `test_group45_learning.py`,
+`test_group45_baseline_context.py`, `test_group45_ui_context.py`. **Three**
+existing tests were reconciled for legitimate behaviour changes:
+`RULE_ENGINE_VERSION` "42.0"→"45.0"; the baseline lsd_decel bias now nets
+differently with `rotation_without_snap`; the gearbox inversion validator now uses
+strict `>` (allowing equal ratios). All Group 45 tests pass; the ~18 pre-existing
+frozen-allowlist / schema failures are known, unrelated, and untouched. Run the
+suite in halves on Win/Py3.14. See `MASTER_TESTING_REGISTER.md` (Setup Brain
+Intelligence Expansion (Group 45)) for the per-file coverage table.

@@ -1,4 +1,25 @@
-"""Setup rule knowledge base — Group 43: Rule-First Setup Brain Completion.
+"""Setup rule knowledge base — Group 45: Setup Brain Intelligence Expansion.
+
+Group 45 changes
+----------------
+- CAR_DRIVETRAIN_OVERRIDES: explicit per-car drivetrain registry (e.g. Porsche 911 RSR
+  (991) '17 → "rr") for cases where the UI combo may be absent or generic.
+- _HIGH_WEAR_CONTRAINDICATED_TAGS: frozenset of driver_style_tags whose rules are
+  contraindicated under high tyre-wear conditions.
+- Pack P: Porsche-specific rules (applies_drivetrain=rr, applies_car_class=gr3).
+  P1 — LSD accel increase under snap_throttle_induced wheelspin (traction-first).
+  P2 — rear downforce protection under rear instability (contraindication guard).
+- B5b rule: gear_too_long + gearbox_flag==may_change → final_drive_up.
+- driver_style_tags additions on relevant rules: prefers_front_bite and trail_braker
+  on B1/C2 qualify-sensitive rules; race_values_consistency and rear-rotation tags
+  on B5/B5b gearing rules.
+
+Preserved from Group 43
+-----------------------
+- _PACK_A, _PACK_B, _PACK_CD — unchanged (safety + style packs).
+- register_pack / get_all_rules — unchanged API.
+
+Previously "Setup rule knowledge base — Group 43: Rule-First Setup Brain Completion."
 
 Defines the canonical rule catalogue (Packs A, B, C/D) consumed by
 setup_rule_engine.run_rule_engine.
@@ -54,6 +75,29 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import NamedTuple
+
+# ---------------------------------------------------------------------------
+# Group 45 — Per-car drivetrain overrides
+# ---------------------------------------------------------------------------
+# Explicit drivetrain registry for cars where the UI combo may return an empty
+# or generic value.  Keys must match the exact car name string used in GT7.
+# Precedence: explicit UI-combo drivetrain > CAR_DRIVETRAIN_OVERRIDES > empty DB → generic(None).
+CAR_DRIVETRAIN_OVERRIDES: dict[str, str] = {
+    "Porsche 911 RSR (991) '17": "rr",
+}
+
+# ---------------------------------------------------------------------------
+# Group 45 — High-wear contraindicated rule tags
+# ---------------------------------------------------------------------------
+# Rules tagged with any of these driver_style_tags are contraindicated when
+# tyre_wear_high=True in the diagnosis dict (injected by driving_advisor.py).
+# The contraindication evaluator checks diagnosis["tyre_wear_high"] against the
+# rule's contraindications dict (key "tyre_wear_high": True).
+_HIGH_WEAR_CONTRAINDICATED_TAGS: frozenset[str] = frozenset({
+    "toe_active",
+    "camber_active",
+    "rear_rotation_risk",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +668,10 @@ _PACK_B: list[SetupRule] = [
         },
         contraindications={
             "driver_feel_flags.floaty_front": True,
+            # Contraindicated under high tyre wear: reducing LSD accel under high wear
+            # increases rear wheel speed differential, which accelerates tyre degradation
+            # on already-worn tyres and risks snap oversteer on exit.
+            "tyre_wear_high": True,
         },
         field="lsd_accel",
         delta_fn="decrease_lsd_accel",
@@ -679,6 +727,10 @@ _PACK_B: list[SetupRule] = [
         # on gear_too_short + may_change passes the gearbox_category_mismatch validator.
         # Delta: final_drive_down returns -0.05 (lower ratio number = taller/longer gearing
         # = higher top speed), which is the correct direction to fix gear_too_short.
+        # NOTE: limiter-before-braking (rev limiter hit before a braking zone)
+        # maps to the gearing_diagnosis_category == "gear_too_short" signal.  There is no
+        # separate "limiter_before_braking" diagnosis key; the relevant evidence surface
+        # is per_gear_limiter_evidence (alias of rev_limiter_by_gear in the diagnosis dict).
         preconditions={
             "gearing_diagnosis_category": "gear_too_short",
             "gearbox_flag": "may_change",
@@ -693,6 +745,41 @@ _PACK_B: list[SetupRule] = [
             "Decreasing the final_drive ratio (final_drive_down, delta=-0.05) "
             "lengthens the gearing, raising top speed. "
             "Only fires when telemetry diagnosis confirms gear_too_short AND "
+            "the engineering gate allows gearbox changes (gearbox_flag=may_change)."
+        ),
+        risk=RiskLevel.low,
+        base_confidence=ConfidenceLevel.med,
+        driver_style_tags=["race_values_consistency"],
+        applies_session=SessionType.race,
+    ),
+    SetupRule(
+        rule_id="B5b",
+        pack="B",
+        phase=RulePhase.straight,
+        # Group 45: complement to B5 — fires when gearing is diagnosed as too long.
+        # Preconditions (ALL must match):
+        #   - gearing_diagnosis_category == "gear_too_long": telemetry confirms
+        #     under-revving in top gear (speed ratio >= 0.98, no limiter hits).
+        #   - gearbox_flag == "may_change": engineering gate allows gearbox edits.
+        # Delta: final_drive_up returns +0.05 (higher ratio number = shorter gearing
+        # = more acceleration / earlier power delivery at cost of top speed).
+        # NOTE: gearbox_category "limiter_limited" stays a preserve category — B5b
+        # does NOT fire on limiter_limited (gearbox_flag is "preserve" in that case).
+        preconditions={
+            "gearing_diagnosis_category": "gear_too_long",
+            "gearbox_flag": "may_change",
+        },
+        contraindications={},
+        field="final_drive",
+        delta_fn="final_drive_up",
+        title="Shorten gearing — gear too long, power band under-used",
+        symptom="Gearing too long — car under-revving in top gear, losing acceleration.",
+        rationale=(
+            "When speed ratio >= 0.98 with no rev-limiter hits, the gearing is "
+            "too long and the driver is leaving power on the table. "
+            "Increasing the final_drive ratio (final_drive_up, delta=+0.05) "
+            "shortens the gearing for better power delivery. "
+            "Only fires when telemetry diagnosis confirms gear_too_long AND "
             "the engineering gate allows gearbox changes (gearbox_flag=may_change)."
         ),
         risk=RiskLevel.low,
@@ -742,6 +829,10 @@ _PACK_CD: list[SetupRule] = [
         },
         contraindications={
             "driver_feel_flags.rear_loose_on_exit": True,
+            # Contraindicated under high tyre wear: reducing LSD decel increases entry
+            # rotation, which scrubs already-worn front tyres harder on corner entry and
+            # risks rear snap oversteer when rear tyre grip is marginal.
+            "tyre_wear_high": True,
         },
         field="lsd_decel",
         delta_fn="decrease_lsd_decel",
@@ -791,6 +882,10 @@ _PACK_CD: list[SetupRule] = [
         contraindications={
             "driver_feel_flags.rear_loose_on_exit": True,
             "wheelspin_band": "__not_low__",
+            # Contraindicated under high tyre wear: softening rear ARB increases rear
+            # body roll and lateral load transfer, which scrubs worn rear tyres harder
+            # in mid-corner and increases rear-rotation risk under marginal grip.
+            "tyre_wear_high": True,
         },
         field="arb_rear",
         delta_fn="decrease_rear_arb",
@@ -888,6 +983,11 @@ _PACK_CD: list[SetupRule] = [
         },
         contraindications={
             "wheelspin_band": "__not_low__",
+            # Contraindicated under high tyre wear: reducing rear ARB over kerbs on
+            # worn tyres increases lateral compliance and rear rotation risk under
+            # the impulsive loads of kerb strikes, which can unsettle an already
+            # grip-limited rear axle.
+            "tyre_wear_high": True,
         },
         field="arb_rear",
         delta_fn="decrease_rear_arb",
@@ -926,9 +1026,75 @@ _PACK_CD: list[SetupRule] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Pack P — Porsche-Specific Rules (RR / Gr.3 drivetrain-scoped)
+# ---------------------------------------------------------------------------
+# Scope: applies_drivetrain=rr AND/OR applies_car_class=gr3.
+# CAR_DRIVETRAIN_OVERRIDES maps "Porsche 911 RSR (991) '17" → "rr".
+# source_label for explainability: "Porsche-specific rule" (pack=="P").
+#
+# REAR AERO PROTECTION UNDER REAR INSTABILITY:
+# Pack A A2 already covers the case where rear_loose_on_exit OR snap_oversteer_exit
+# is present — it unconditionally blocks aero_rear decrease as a safety invariant.
+# Therefore no separate Pack P contraindication rule is needed for that scenario:
+# A2 is the authoritative guard and is NOT scope-filtered (Pack A rules are exempt
+# from _scope_matches filtering — they are safety invariants always evaluated).
+# P2 exists as an explicit documentation/reference rule to make the protection
+# visible in the rejected_candidates list for RR cars; it does NOT author a change.
+
+_PACK_P: list[SetupRule] = [
+    SetupRule(
+        rule_id="P1",
+        pack="P",
+        phase=RulePhase.exit,
+        # Fires when wheelspin is snap_throttle_induced.
+        # The exact diagnosis key for snap-throttle wheelspin is "wheelspin_subtype"
+        # with value "snap_throttle_induced" (confirmed from _classify_wheelspin_subtype
+        # in setup_diagnosis.py).
+        preconditions={
+            "wheelspin_subtype": "snap_throttle_induced",
+        },
+        contraindications={
+            # Hard block: if driver already reports snap oversteer on exit, do NOT increase
+            # LSD accel (this mirrors the existing lsd_accel snap contraindication in _process_rule).
+            "driver_feel_flags.snap_oversteer_exit": True,
+        },
+        field="lsd_accel",
+        delta_fn="increase_lsd_accel",
+        title="Increase LSD accel — snap throttle wheelspin (RR traction-first)",
+        symptom="Snap-throttle-induced wheelspin on exit — traction deficit under snap application.",
+        rationale=(
+            "Porsche-specific rule (RR drivetrain). "
+            "When wheelspin subtype is snap_throttle_induced, the rear wheels break "
+            "traction abruptly under throttle application. For RR cars, increasing "
+            "LSD accel cautiously locks the rear axle to prevent the abrupt slip. "
+            "Contraindicated when snap oversteer on exit is already reported "
+            "— that indicates the LSD is already too locked and needs the opposite treatment. "
+            "Magnitude is intentionally conservative (delta=+2 via increase_lsd_accel). "
+            "Traction-first: do NOT reduce rear downforce to fix top-speed-low + snap wheelspin "
+            "— always address traction before aero-cut for RR cars under snap conditions."
+        ),
+        risk=RiskLevel.med,
+        base_confidence=ConfidenceLevel.med,
+        driver_style_tags=["rotation_without_snap"],
+        applies_drivetrain=DrivetrainType.rr,
+        applies_car_class=CarClass.gr3,
+        applies_session=SessionType.any,
+    ),
+    # P2 is intentionally OMITTED here.
+    # Pack A A2 already provides the unconditional safety invariant that blocks
+    # aero_rear decrease under rear_loose_on_exit / snap_oversteer_exit for ALL
+    # drivetrain types.  A2 is NOT scope-filtered (Pack A rules are exempt), so it
+    # fires for RR cars too.  A separate P2 duplicating A2 would conflict with the
+    # engine's Pack A processing and could propose the decrease before A2 rejects it.
+    # Explainability for the RR-specific context is provided by the A2 rejected_candidate
+    # plus the car_drivetrain_influence field on P1 and other P-pack rules.
+]
+
+# ---------------------------------------------------------------------------
 # Register all built-in packs at import time
 # ---------------------------------------------------------------------------
 
 register_pack("A", _PACK_A)
 register_pack("B", _PACK_B)
 register_pack("CD", _PACK_CD)
+register_pack("P", _PACK_P)

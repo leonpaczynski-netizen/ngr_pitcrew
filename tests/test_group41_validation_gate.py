@@ -1499,7 +1499,14 @@ class TestAC12GearboxFieldsAndDisplayOnlyDemotion:
         )
 
     def test_gearbox_ratio_inversion_is_blocking(self):
-        """gear_2 >= gear_1 → gearbox_ratio_inversion BLOCKING."""
+        """gear_2 > gear_1 → gearbox_ratio_inversion BLOCKING.
+
+        Group 45 note: the check was changed from >= to > (strict inversion only).
+        Equal adjacent gear ratios are ALLOWED (gear_2 == gear_1 is no longer an error).
+        This test now uses a genuine strict inversion (gear_2 > gear_1) to confirm
+        the blocking rule still fires for real inversions.  The old equal-ratio test case
+        (gear_2 = 3.5 == gear_1 = 3.5) is no longer an inversion by design.
+        """
         from strategy.setup_diagnosis import (
             validate_setup_engineering_structured, build_setup_diagnosis,
         )
@@ -1508,16 +1515,16 @@ class TestAC12GearboxFieldsAndDisplayOnlyDemotion:
             laps=laps, setup={}, car_name="", event_ctx={},
             feeling=None, location_confidence="low",
         )
-        # gear_2 = 3.5 >= gear_1 = 3.5 → inversion (not strictly decreasing)
+        # gear_2 = 4.0 > gear_1 = 3.5 → strict inversion (higher gear has higher ratio)
         ai_resp = _gear_change(
             gear_1=(3.5, 3.5),
-            gear_2=(2.8, 3.5),  # inverted: gear_2 == gear_1
+            gear_2=(2.8, 4.0),  # strictly inverted: gear_2 > gear_1
         )
         ranges = _get_ranges()
         failures = validate_setup_engineering_structured(ai_resp, diag, {}, ranges, {})
         inversion = [f for f in failures if f.code == "gearbox_ratio_inversion"]
         assert inversion, (
-            f"gear_2 >= gear_1 must fire gearbox_ratio_inversion; failures: {failures}"
+            f"gear_2 > gear_1 must fire gearbox_ratio_inversion; failures: {failures}"
         )
         assert all(f.severity == "blocking" for f in inversion), (
             f"gearbox_ratio_inversion must be BLOCKING; got {[f.severity for f in inversion]}"

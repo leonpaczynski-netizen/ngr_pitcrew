@@ -5,6 +5,90 @@
 >
 > Companion docs: `docs/OFR2_SEPARATE_DISCIPLINES.md`,
 > `docs/SMART_RACE_ENGINEER_ROADMAP.md`. Backend-only — no UI surface yet.
+>
+> **This file is now multi-sprint.** The original Group 39 upgrade is below,
+> followed by Group 41, Group 42, and — added most recently — **Group 45 (Setup
+> Brain Intelligence Expansion)**. The full, honest architecture account of
+> Group 45 lives in `docs/RULE_FIRST_SETUP_BRAIN.md` § 14 ("Setup Brain
+> Intelligence Expansion"); the section below is the changelog-level detail
+> (Pack P, gearbox B5b, tyre-wear contraindications).
+
+---
+
+## Group 45 — Setup Brain Intelligence Expansion (changelog)
+
+> Date: 2026-07-06 · Branch `ofr2-quali-race-disciplines` (on top of Group 44).
+> **Full architecture + honesty account: `docs/RULE_FIRST_SETUP_BRAIN.md` § 14
+> ("Setup Brain Intelligence Expansion").** This section is the changelog-level
+> highlight of the three most product-visible pieces. `RULE_ENGINE_VERSION` is
+> now **"45.0"**.
+
+The rule-first Setup Brain became **context-aware** — session type, tyre-wear,
+drivetrain, and car-class now genuinely shape which rules fire and how
+confident/ranked they are — **without inventing precision** (delta magnitudes
+are unchanged; context affects filtering, confidence, ranking, contraindication,
+and explanation only). The architecture is preserved: Pit Crew owns the decision,
+the AI stays audit-only, both Analyse and Baseline run through the one validator →
+funnel → renderer → Apply gate, and everything works with the AI disabled. The
+engine scope filter (`_scope_matches`, Pack A exempt, `any`/`None`
+wildcard-permissive), driver-profile active weighting, session/tyre confidence
+bias, and the learning seam (live-but-empty `RuleOutcomeStore`) are all detailed
+in § 14 of the architecture doc.
+
+### Pack P — Porsche 911 RSR '17 (the first car pack)
+Registered via `register_pack("P", ...)`.
+* **Rule P1** — a cautious **lsd_accel increase (traction-first)**, scoped
+  `applies_drivetrain=rr` + `applies_car_class=gr3`, precondition snap-throttle
+  wheelspin, **contraindicated when `snap_oversteer_exit` is diagnosed**.
+* **No P2 (intentional).** Rear-downforce protection under rear instability is
+  already handled by existing **Pack A A2** (unconditional, all cars); a separate
+  Porsche P2 would duplicate it, so it was omitted. Ride-height raise stays gated
+  by A3/A4 (no generic raise). A top-speed deficit under wheelspin is handled
+  traction-first (P1), not aero-cut-first (A2 blocks the cut).
+* **Labelling** — every change is tagged `source_label` "Porsche-specific rule"
+  (pack `P`) or "generic rule".
+* **Drivetrain assertion** — the pack asserts RR via `CAR_DRIVETRAIN_OVERRIDES`
+  (`{"Porsche 911 RSR (991) '17":"rr"}`), **not** the empty DB drivetrain column;
+  the manual UI combo overrides it.
+
+### Gearbox B5b
+* **B5** — `gear_too_short` → `final_drive_down` (Group 43).
+* **B5b (NEW)** — `gear_too_long` → `final_drive_up`.
+* `limiter_limited` stays a **preserve** category (no proposal). The sprint's
+  "limiter_before_braking" is **not a real diagnosis category** — it maps to the
+  existing `gear_too_short` (documented, not faked). `per_gear_limiter_evidence`
+  (alias of `rev_limiter_by_gear`) is exposed for future per-gear rules, which
+  remain deferred (final-drive-only broad logic today). Monotonic ordering is now
+  enforced **non-increasing** — equal adjacent ratios are allowed; only a strict
+  inversion is rejected (engine and the `gearbox_ratio_inversion` validator both
+  use strict `>`).
+
+### Tyre-wear contraindications
+At `tyre_wear_multiplier >= HIGH_TYRE_WEAR_THRESHOLD (5.0)`,
+`diagnosis["tyre_wear_high"]` suppresses **four genuinely tyre-abusing** rules:
+**B3** (lsd_accel decrease), **C1_entry_lsd_decel** (lsd_decel decrease),
+**C3_mid_arb_rear** (rear ARB soften), **C7_kerb_arb_rear** (rear ARB soften).
+Rules that **increase** lsd lock or rear downforce are deliberately **not**
+suppressed (they stabilise worn tyres). Missing tyre/fuel context → the honest
+"tyre/fuel context not available — conservative default applied" note; the fuel
+multiplier is read (`fuel_known`) but **only informational** (no fuel rule yet).
+
+### Tests
+NEW `tests/test_group45_engine_scope.py`, `test_group45_gear_monotonic.py`,
+`test_group45_context_signals.py`, `test_group45_porsche_pack.py`,
+`test_group45_explainability.py`, `test_group45_learning.py`,
+`test_group45_baseline_context.py`, `test_group45_ui_context.py`; 3 existing tests
+reconciled (`RULE_ENGINE_VERSION` "42.0"→"45.0"; baseline lsd_decel bias nets
+differently with `rotation_without_snap`; the inversion validator now strict-`>`).
+All Group 45 tests pass; the ~18 pre-existing frozen-allowlist / schema failures
+are known, unrelated, and untouched. Run the suite in halves on Win/Py3.14.
+
+### Deferred (honest)
+Cross-session `RuleOutcomeStore` persistence + a success-recording feed (seam in
+place, empty in production); full per-gear ratio rules; session-specific numerical
+baseline tuning; a fuel-specific rule; the two opposing lsd_decel baseline bias
+entries net to zero on a profile with both flags. See
+`docs/RULE_FIRST_SETUP_BRAIN.md` § 14.11.
 
 ---
 

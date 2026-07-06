@@ -1130,6 +1130,8 @@ def _build_setup_diagnosis_conservative() -> dict:
         "avg_lockups":                0.0,
         "avg_rev_limiter_total":      0.0,
         "rev_limiter_by_gear":        None,
+        # Group 45: alias of rev_limiter_by_gear (conservative = None)
+        "per_gear_limiter_evidence":  None,
         "avg_top_speed_kmh":          0.0,
         "top_speed_target_kmh":       0.0,
         "gearbox_flag":               "preserve",
@@ -1460,6 +1462,13 @@ def _build_setup_diagnosis_inner(
         "avg_lockups":                avg_lockups,
         "avg_rev_limiter_total":      avg_rev_limiter_total,
         "rev_limiter_by_gear":        rev_limiter_by_gear,
+        # Group 45: per_gear_limiter_evidence — alias of rev_limiter_by_gear.
+        # Used by the gearbox per-gear rule gating: only propose a gear_N change
+        # when per_gear_limiter_evidence.get(N, 0) > 0 for that specific gear.
+        # No separate computation needed — the value IS rev_limiter_by_gear.
+        # Note: limiter-before-braking evidence maps to the gear_too_short category
+        # (gearing_diagnosis_category) and surfaces here as per-gear hit counts.
+        "per_gear_limiter_evidence":  rev_limiter_by_gear,
         # Speed
         "avg_top_speed_kmh":          avg_top_speed_kmh,
         "top_speed_target_kmh":       top_speed_target_kmh,
@@ -2061,8 +2070,12 @@ def validate_setup_engineering(
     # ----------------------------------------------------------------
     # NEW RULE: gearbox_ratio_inversion (BLOCKING)
     # ----------------------------------------------------------------
-    # Any gear_n >= gear_{n-1} (gear ratios must strictly decrease from 1st to top gear)
-    # This is a real physical invariant — a higher gear must always have a LOWER ratio.
+    # Group 45: changed from >= to > (strict inversion only).
+    # Equal adjacent gear ratios are ALLOWED (non-standard but not physically
+    # invalid for GT7's sequential model).  This aligns the validator with the
+    # engine's monotonic check in setup_rule_engine._process_rule which also
+    # uses strict > since Group 45.
+    # A higher gear must have a STRICTLY LOWER ratio; equal is now permitted.
     _gear_values: dict[int, float] = {}
     for _n, _gfk in enumerate(("gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6"), start=1):
         _gv = _ai_value(_gfk)
@@ -2074,7 +2087,7 @@ def validate_setup_engineering(
         _curr_n = _sorted_gear_nums[_i]
         _prev_v = _gear_values[_prev_n]
         _curr_v = _gear_values[_curr_n]
-        if _curr_v >= _prev_v:
+        if _curr_v > _prev_v:
             reasons.append(
                 f"gearbox_ratio_inversion: gear_{_curr_n} ratio {_curr_v} is NOT lower than "
                 f"gear_{_prev_n} ratio {_prev_v} — gear ratios must strictly decrease from "

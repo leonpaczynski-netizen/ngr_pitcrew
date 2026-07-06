@@ -117,6 +117,10 @@ _PROFILE_BIAS_TABLE: list[tuple[str, dict[str, float]]] = [
     ("dislikes_floaty_front",  {"aero_front": +50}),
     ("protects_downforce",     {"aero_rear": +50}),
     ("race_values_consistency", {"lsd_decel": +2}),
+    # Group 45: trail_braker → move brake bias forward (front); same delta convention as existing entries
+    ("trail_braker",           {"brake_bias": -0.5}),
+    # Group 45: rotation_without_snap → reduce LSD decel for entry rotation
+    ("rotation_without_snap",  {"lsd_decel": -2}),
 ]
 
 
@@ -270,8 +274,17 @@ def _make_change_dict(
     to_val: object,
     label: str,
     alignment: str,
+    session_influence: str = "",
+    car_drivetrain_influence: str = "",
 ) -> dict:
-    """Build a change dict in plan_to_raw_data / AI-response shape."""
+    """Build a change dict in plan_to_raw_data / AI-response shape.
+
+    Group 45: added session_influence and car_drivetrain_influence keys.
+    Both are "" unless a session_type was passed AND changed output (populated
+    by build_baseline_setup when applicable).
+    source_label is derived from label: "driver-profile biased" → label itself;
+    other labels map to themselves per _LABEL_* constants.
+    """
     return {
         "setting": field.replace("_", " ").title(),
         "field": field,
@@ -288,6 +301,11 @@ def _make_change_dict(
         "risk_level": "low",
         "confidence_level": "low",
         "driver_style_alignment": alignment,
+        # Group 45 explainability fields
+        "source_label": label,          # label IS the source description for baseline changes
+        "session_influence": session_influence,
+        "car_drivetrain_influence": car_drivetrain_influence,
+        "pack": "",                     # baseline changes have no rule pack
     }
 
 
@@ -299,6 +317,9 @@ def build_baseline_setup(
     profile,
     allowed_tuning: "list[str] | None",
     tuning_locked: bool,
+    session_type: str = "",
+    tyre_wear_multiplier: "float | None" = None,
+    car_class: str = "",
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -322,6 +343,16 @@ def build_baseline_setup(
     tuning_locked:
         If True, return a valid raw_data with empty changes/setup_fields
         (UI should have disabled the button — this is a defensive guard).
+    session_type:
+        Session type string ("Race" / "Qualifying" / "Practice" / "").
+        Used to populate session_influence on change dicts when it changes output.
+        Scalar param only — no EventContext injected here (by design).
+    tyre_wear_multiplier:
+        Optional tyre-wear multiplier for future tyre-aware baseline differentiation.
+        Currently accepted and forwarded but not used to author changes (deferred).
+    car_class:
+        Car class string (e.g. "Gr.3", "Gr.4").  Accepted for forward-compatibility;
+        not currently used to author changes in the baseline path.
 
     Returns
     -------
@@ -385,6 +416,22 @@ def build_baseline_setup(
     changes: list[dict] = []
     setup_fields: dict = {}
 
+    # Group 45: normalise session_type for session_influence text on change dicts.
+    # IMPORTANT (honesty): baseline values do NOT numerically differ by session yet
+    # (session-specific baseline tuning is deferred). Any bias on a baseline field
+    # comes solely from the driver profile, NOT from the session. So we must NOT claim
+    # a session-driven bias was "applied". We only record that a session context was
+    # provided but was not used to change the value.
+    _session_type_lower = (session_type or "").strip().lower()
+    _session_influence_text = ""
+    if "qual" in _session_type_lower:
+        _session_influence_text = "qualifying session — no session-specific baseline bias applied (deferred)"
+    elif "race" in _session_type_lower:
+        _session_influence_text = "race session — no session-specific baseline bias applied (deferred)"
+    elif "practice" in _session_type_lower:
+        _session_influence_text = "practice session — no special bias applied"
+    # If session_type is "" or unknown → leave "" (not available = no claim)
+
     # Actionable canonical fields (excluding display-only and gearbox)
     _GEARBOX_FIELDS: frozenset[str] = frozenset({
         "final_drive",
@@ -439,12 +486,18 @@ def build_baseline_setup(
             label = _LABEL_NEUTRAL
             alignment = "neutral"
 
+        # session_influence: only non-empty when session_type was provided AND is_biased
+        # (neutral/conservative fields are unaffected by session in the baseline path)
+        _ch_session_influence = _session_influence_text if is_biased else ""
+
         change = _make_change_dict(
             field=field,
             from_val=seed_rounded,
             to_val=to_val,
             label=label,
             alignment=alignment,
+            session_influence=_ch_session_influence,
+            car_drivetrain_influence="",
         )
         changes.append(change)
 
