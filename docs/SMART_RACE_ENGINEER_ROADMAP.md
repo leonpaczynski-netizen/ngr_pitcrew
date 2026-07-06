@@ -165,6 +165,61 @@ All Group 48 deferrals stand. No new Qt UI surface — wiring `recommend_strateg
 into the Strategy tab is the next step. SessionDB stores no explicit tyre-wear or pit-loss
 column, so tyre degradation is a disclosed lap-drift proxy and pit loss stays event-supplied.
 
+---
+
+## Group 50 — Race Strategy Brain Phase 4: Driver-Facing Race Plan Surface (DELIVERED 2026-07-06)
+
+**Branch:** `group50-race-strategy-surface` (from clean `master` `7b65fbd`, Group 49 merged).
+**One line:** the Group 48/49 strategy engine is finally shown to the driver — a clean,
+read-only **Race Plan** in the Strategy Builder with recommended plan, confidence, total
+race time, stint plan, candidate comparison, evidence sources, missing evidence, risk, and
+a plain-English explanation. Presentation/integration only — **no strategy-maths changes**.
+
+This delivers the Group 49 caveat: *"wire `recommend_strategy_from_session` into the Strategy
+tab."* It adds **1 new pure Qt-free view-model module + 6 new test files** and a **purely
+additive** UI block in `ui/dashboard.py`. **No schema change; `DB_VERSION` stays 13.**
+
+### Modules / changes
+1. **`ui/race_strategy_vm.py`** (PURE — no Qt import) — `RacePlanViewModel` +
+   `build_race_plan_view_model(SessionStrategyResult)` + section formatters
+   (`format_race_time` mm:ss.s, `compound_name`, stint/candidate/evidence/missing/risk/
+   safety formatters). Evidence rows carry a `category` ∈ {measured, derived, event, manual,
+   default, missing}. Renderers `render_race_plan_html(vm)` + `candidate_table_rows(vm)`
+   and one-call runners `run_race_plan_from_session(...)` / `run_race_plan_from_event_context(...)`.
+2. **`ui/dashboard.py`** (additive) — `_build_race_plan_group()` in the Strategy Builder tab:
+   a "Race Plan (evidence-based — no AI, no API key)" group with two small manual inputs
+   (Pit loss s, Starting fuel %), a **Build Race Strategy** button → `_run_race_plan()`, a
+   read-only HTML narrative, and a candidate-comparison table. `_assemble_race_plan_inputs()`
+   reads the canonical `EventContext` + resolved session id + car id.
+
+### Behaviour
+Session-backed when a session resolves (SessionDB-measured evidence); honest fallback to
+INSUFFICIENT_EVIDENCE + visible missing evidence when no session is selected. No API key, no
+Apply/approve controls, no setup writes, read-only SessionDB access.
+
+### Benchmark result (RSR / Fuji, via the Group 49 in-memory benchmark)
+One-stop **51:52.0** beats two-stop **52:28.0 (+36.0s)**; race pace + fuel are SessionDB
+measured, tyre degradation is a derived proxy; the push plan is flagged rear-fragile and never
+recommended; no Apply action appears anywhere.
+
+### Safety (verified by tests)
+Apply-gate predicate + disabled AI-build line asserted intact; the Race Plan group/method
+has no Apply/approve capability, reads no API key, and writes no setup history (content-hash
+before/after); the view-model imports no setup-authoring module and has no Qt import; the
+SessionDB adapter stays read-only; Group 48/49 scoring stays deterministic; the dashboard
+still constructs (13 `test_ui_structure_smoke` pass).
+
+### Tests
+6 new files — `tests/test_group50_{race_strategy_vm, strategy_surface, strategy_candidate_table,
+strategy_evidence_display, strategy_safety_regression, porsche_fuji_strategy_surface}.py` —
+**70 pure/offline tests, all pass.** Qt guarantees are verified by source inspection (no
+QApplication constructed), so the Group 50 suite itself is Qt-free.
+
+### Deferred (honest)
+All Group 48/49 deferrals stand. No session browser (the surface uses the active/resolved
+session); tyre degradation stays a disclosed lap-drift proxy and pit loss is manual/event-
+supplied. Known caveat: run UI test files individually on Win/Py3.14 (PyQt cross-file segfault).
+
 ### OFR-1 — Between-Race Learning Loop (self-scoring recommendations)
 
 After each race, the AI should evaluate whether its own setup recommendations actually

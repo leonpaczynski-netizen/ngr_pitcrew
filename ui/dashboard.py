@@ -4685,6 +4685,209 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         guide_outer.addWidget(self._guide_content)
         return guide_box
 
+    # ------------------------------------------------------------------
+    # Group 50 — driver-facing Race Plan surface (deterministic, no AI/API key)
+    # ------------------------------------------------------------------
+
+    def _build_race_plan_group(self) -> QGroupBox:
+        """Deterministic, evidence-based Race Plan surface (Groups 48/49/50).
+
+        Runs the pure strategy engine over the current event settings + selected
+        SessionDB session — NO API key, NO setup Apply/approve controls, NO writes.
+        Read-only presentation of the recommended plan, confidence, stint plan,
+        candidate comparison, evidence sources, missing evidence, and risks.
+        """
+        box = QGroupBox("Race Plan (evidence-based — no AI, no API key)")
+        box.setStyleSheet(self._group_style())
+        v = QVBoxLayout(box)
+
+        intro = QLabel(
+            "Builds a race strategy from your event settings and — when a practice "
+            "session is loaded — your measured SessionDB laps. Ranked by estimated "
+            "TOTAL race time, not fastest lap. Read-only: this never changes or "
+            "applies a car setup."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #AAA; font-size: 11px; padding: 2px;")
+        v.addWidget(intro)
+
+        # Small manual inputs Group 49 needs but cannot infer (shown as manual input).
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        lbl_style = f"color: {_TEXT};"
+
+        self._rp_pit_loss = QDoubleSpinBox()
+        self._rp_pit_loss.setRange(0.0, 120.0)
+        self._rp_pit_loss.setDecimals(1)
+        self._rp_pit_loss.setSingleStep(0.5)
+        self._rp_pit_loss.setValue(0.0)
+        self._rp_pit_loss.setToolTip(
+            "Pit-lane time loss in seconds (entry to racing line). 0 = use the "
+            "event/strategy value if known. SessionDB has no measured pit loss.")
+        form.addRow(QLabel("Pit loss (s):", styleSheet=lbl_style), self._rp_pit_loss)
+
+        self._rp_start_fuel = QDoubleSpinBox()
+        self._rp_start_fuel.setRange(1.0, 100.0)
+        self._rp_start_fuel.setDecimals(0)
+        self._rp_start_fuel.setSingleStep(5.0)
+        self._rp_start_fuel.setValue(100.0)
+        self._rp_start_fuel.setToolTip("Starting fuel as a percentage of a full tank (GT7 full = 100).")
+        form.addRow(QLabel("Starting fuel (%):", styleSheet=lbl_style), self._rp_start_fuel)
+        v.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        self._btn_build_race_plan = QPushButton("Build Race Strategy")
+        self._btn_build_race_plan.setStyleSheet(
+            "background: #1F5E3A; color: white; font-weight: bold; padding: 6px 16px;")
+        self._btn_build_race_plan.setToolTip(
+            "Generate an evidence-based race strategy from the current event + "
+            "session data. No API key required. Cannot change any car setup.")
+        self._btn_build_race_plan.clicked.connect(self._run_race_plan)
+        btn_row.addStretch()
+        btn_row.addWidget(self._btn_build_race_plan)
+        v.addLayout(btn_row)
+
+        self._race_plan_text = QTextEdit()
+        self._race_plan_text.setReadOnly(True)
+        self._race_plan_text.setMinimumHeight(240)
+        self._race_plan_text.setStyleSheet(
+            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
+        self._race_plan_text.setPlaceholderText(
+            "Click Build Race Strategy to generate an evidence-based race plan. "
+            "Load a practice session for higher confidence.")
+        v.addWidget(self._race_plan_text)
+
+        from ui.race_strategy_vm import CANDIDATE_TABLE_COLUMNS
+        self._race_plan_table = QTableWidget()
+        self._race_plan_table.setColumnCount(len(CANDIDATE_TABLE_COLUMNS))
+        self._race_plan_table.setHorizontalHeaderLabels(CANDIDATE_TABLE_COLUMNS)
+        self._race_plan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self._race_plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._race_plan_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._race_plan_table.setAlternatingRowColors(True)
+        self._race_plan_table.setStyleSheet(
+            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
+            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
+        )
+        self._race_plan_table.setMinimumHeight(140)
+        v.addWidget(QLabel("Candidate comparison (legal strategies, ranked by total race time):",
+                           styleSheet="color:#AAA; font-size:11px; padding-top:4px;"))
+        v.addWidget(self._race_plan_table)
+
+        return box
+
+    def _assemble_race_plan_inputs(self) -> dict:
+        """Collect deterministic strategy inputs from event context + session.
+
+        Read-only. Reads canonical EventContext for race settings, the resolved
+        practice session id, the car id, and the two small manual fields. pit loss
+        falls back to the frozen strategy snapshot when the manual field is 0.
+        Never raises.
+        """
+        ec = self._build_event_context()
+        try:
+            session_id = int(self._resolve_strat_session_id() or 0)
+        except Exception:
+            session_id = 0
+
+        car_name = ""
+        car_id = 0
+        try:
+            car_name, _ = self._load_car_specs_for_current()
+            if self._db and car_name:
+                car_id = int(self._db.get_car_id(car_name) or 0)
+        except Exception:
+            car_id = 0
+
+        # Pit loss: manual field wins; else the frozen snapshot's pit_loss_secs.
+        pit_loss = float(self._rp_pit_loss.value()) if hasattr(self, "_rp_pit_loss") else 0.0
+        pit_loss_is_manual = pit_loss > 0
+        if not pit_loss_is_manual:
+            try:
+                _snap = self._build_strategy_ai_snapshot()
+                pit_loss = float(_snap.race_params_dict().get("pit_loss_secs", 0.0) or 0.0)
+            except Exception:
+                pit_loss = 0.0
+
+        start_fuel = float(self._rp_start_fuel.value()) if hasattr(self, "_rp_start_fuel") else 100.0
+
+        race_type = getattr(ec, "race_type", "lap")
+        return {
+            "event_context": ec,
+            "session_id": session_id,
+            "car_id": car_id,
+            "car_name": car_name,
+            "track": str(getattr(ec, "track", "") or ""),
+            "layout_id": str(getattr(ec, "layout_id", "") or ""),
+            "race_type": race_type,
+            "race_laps": int(getattr(ec, "laps", 0) or 0) if race_type != "timed" else 0,
+            "race_duration_minutes": float(getattr(ec, "race_duration_minutes", 0) or 0) if race_type == "timed" else 0.0,
+            "fuel_multiplier": float(getattr(ec, "fuel_multiplier", 0.0) or 0.0),
+            "tyre_multiplier": float(getattr(ec, "tyre_wear_multiplier", 0.0) or 0.0),
+            "refuel_rate_lps": float(getattr(ec, "refuel_rate_lps", 0.0) or 0.0),
+            "pit_loss_seconds": pit_loss,
+            "pit_loss_is_manual": pit_loss_is_manual,
+            "starting_fuel_pct": start_fuel,
+            "available_compounds": tuple(getattr(ec, "available_tyres", ()) or ()),
+            "required_compounds": tuple(getattr(ec, "required_tyres", ()) or ()),
+            "mandatory_pit_stops": int(getattr(ec, "mandatory_stops", 0) or 0),
+        }
+
+    def _run_race_plan(self) -> None:
+        """Build and render an evidence-based race plan (no AI, no Apply)."""
+        from ui.race_strategy_vm import (
+            run_race_plan_from_session, build_race_plan_view_model,
+            render_race_plan_html, candidate_table_rows,
+        )
+        try:
+            inp = self._assemble_race_plan_inputs()
+        except Exception as exc:
+            self._race_plan_text.setHtml(
+                f"<p style='color:#E8A9A3;'>Could not read race settings: {exc}</p>")
+            return
+
+        # Rear-fragility from the structured driver profile (never free text).
+        rear_fragile = False
+        try:
+            from strategy.setup_driver_profile import build_driver_profile
+            _p = build_driver_profile()
+            rear_fragile = bool(_p.prefers_rear_stability or _p.dislikes_snap_exit)
+        except Exception:
+            rear_fragile = False
+
+        # Weather source label for the evidence display (manual pit loss noted below).
+        try:
+            vm = run_race_plan_from_session(
+                self._db,
+                session_id=inp["session_id"],
+                car_id=inp["car_id"],
+                track=inp["track"],
+                layout_id=inp["layout_id"],
+                race_duration_minutes=inp["race_duration_minutes"],
+                race_laps=inp["race_laps"],
+                fuel_multiplier=inp["fuel_multiplier"],
+                tyre_multiplier=inp["tyre_multiplier"],
+                refuel_rate_lps=inp["refuel_rate_lps"],
+                pit_loss_seconds=inp["pit_loss_seconds"],
+                starting_fuel_pct=inp["starting_fuel_pct"],
+                available_compounds=inp["available_compounds"],
+                required_compounds=inp["required_compounds"],
+                mandatory_pit_stops=inp["mandatory_pit_stops"],
+                rear_traction_fragile=rear_fragile,
+            )
+        except Exception as exc:
+            self._race_plan_text.setHtml(
+                f"<p style='color:#E8A9A3;'>Race plan could not be built: {exc}</p>")
+            return
+
+        self._race_plan_text.setHtml(render_race_plan_html(vm))
+
+        rows = candidate_table_rows(vm)
+        self._race_plan_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, cell in enumerate(row):
+                self._race_plan_table.setItem(r, c, QTableWidgetItem(cell))
+
     def _build_ai_analysis_group(self) -> QGroupBox:
         ai_box = QGroupBox("AI Race Analysis")
         ai_layout = QVBoxLayout(ai_box)
@@ -6623,6 +6826,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         layout.addWidget(self._build_workflow_guide_group())
+        layout.addWidget(self._build_race_plan_group())
         layout.addWidget(self._build_ai_analysis_group())
         layout.addWidget(self._build_stint_plan_group())
         layout.addWidget(self._build_tyre_ref_group())
