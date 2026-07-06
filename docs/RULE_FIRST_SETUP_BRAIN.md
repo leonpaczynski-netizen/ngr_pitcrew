@@ -1,6 +1,6 @@
-# Rule-First Setup Brain — Architecture (Group 42 + Group 43)
+# Rule-First Setup Brain — Architecture (Group 42 + Group 43 + Group 44)
 
-> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43)
+> Author: Rule-First Setup Brain sprint · Date: 2026-07-05 (Group 42); updated 2026-07-05 (Group 43); updated 2026-07-06 (Group 44 — from-scratch baseline generator)
 > Branch: `ofr2-quali-race-disciplines` (built on top of Group 41)
 >
 > Companion docs: `docs/SETUP_BRAIN_UPGRADE.md` (§ Group 42 changelog),
@@ -177,6 +177,111 @@ the AI is **audit-only** and cannot author setup changes. Until the rule-first
 baseline is the stable default path for all setup requests, the "Build" button
 is disabled to prevent the old AI-authoring flow from being reached accidentally.
 The "Analyse" button (rule-first path) remains active.
+
+---
+
+## 3b. Group 44 — the from-scratch baseline generator (a second rule-first authoring path)
+
+Group 43 disabled the ungated **"Build Setup with AI"** path (§3a), and since
+Group 42 the AI is audit-only and structurally cannot author a setup. That left a
+real gap: for a car with **no telemetry at all**, the app could no longer produce a
+complete starting setup. **Group 44 restores that capability — deterministically,
+with the AI NEVER called.**
+
+### Why not `run_rule_engine`?
+The Analyse path's engine (§4) emits **deltas** off a telemetry diagnosis. With no
+telemetry, almost no rules fire, so it cannot author a from-scratch full-field
+setup. A separate **absolute-value author** was required. This is a *distinct
+authoring path* from the delta/Analyse path — the two do not share the rule engine,
+but they share the same finaliser, validator, response shape, UI renderer, and
+Apply gate.
+
+### Backend — `strategy/setup_baseline.py` (NEW)
+* **`NEUTRAL_SEEDS`** — the single source of truth for neutral physics defaults.
+  It matches the form seeds in `ui/setup_form_widget.py` (note: lsd_front_initial /
+  accel / decel take the FORM values 10 / 15 / 5, which differ from the `ai_planner`
+  parser fallbacks 0 / 0 / 0).
+* **`build_baseline_setup(car, ranges, drivetrain, num_gears, profile,
+  allowed_tuning, tuning_locked) -> raw_data dict`** (the same `plan_to_raw_data`
+  shape the funnel consumes). It authors **all 33 actionable
+  `_CANONICAL_SETUP_PARAMS`** (34 minus the display-only
+  `transmission_max_speed_kmh`) as **absolute values**, in three stages:
+  neutral seed → **driver-profile bias** (`_PROFILE_BIAS_TABLE`) → **clamp** to
+  `resolve_ranges(car)`.
+* **`_PROFILE_BIAS_TABLE`** (§5 driver profile as data, applied to a from-scratch
+  baseline): prefers_rear_stability → arb_rear −1 / toe_rear +.05; dislikes_snap_exit
+  → lsd_accel −2; prefers_front_bite → arb_front +1 / toe_front −.02;
+  dislikes_floaty_front → aero_front +50; protects_downforce → aero_rear +50;
+  race_values_consistency → lsd_decel +2.
+* **Gearbox** (`_build_gearbox_changes`): `final_drive` = midpoint of
+  `_FINAL_DRIVE_RANGE (2.5, 6.0)`; `gear_1..gear_num_gears` = a strictly-**decreasing
+  geometric sequence** inside `_GEAR_RATIO_RANGE (0.5, 4.0)` — **monotonic by
+  construction, so the `gearbox_ratio_inversion` validator can never fire** — sized
+  to the car's gear count (>6 capped, ≤1 → a single gear@2.0, 0 → none). The gearbox
+  ranges are function-local-imported from `setup_diagnosis` (the source of truth),
+  with a try/except fallback to local constants.
+* **Locked categories** (via `_derive_locked_fields`) are excluded from the
+  actionable output and named by human category (e.g. "Suspension, Aero") in the
+  analysis text; `tuning_locked=True` → empty changes (and the UI disables the
+  button first anyway).
+* Every change carries a **source label**: "neutral default" / "range midpoint" /
+  "driver-profile biased" / "conservative default, not diagnosed". The last label is
+  deliberately honest — camber / toe / dampers / springs / lsd_initial /
+  lsd_front_initial have **no engineering authority** here. The baseline is a safe
+  **starting point, not an optimum.**
+
+### Orchestrator — `DrivingAdvisor.build_baseline_setup_response(...)`
+`build_baseline_setup_response(car_name, ranges, drivetrain, num_gears,
+allowed_tuning, tuning_locked, session_type="Race") -> JSON str`:
+
+```
+build_driver_profile()
+  → build_baseline_setup
+  → validate_setup_engineering_structured
+       (the neutral baseline is passed as BOTH the `setup` arg AND the proposed
+        setup_fields, so increment / comparison rules see zero delta)
+  → _filter_baseline_artifact_warnings
+  → _finalise_recommendation            (the same Group 41 funnel)
+  → response JSON  (identical in shape to build_combined_setup_response)
+```
+
+**The no-AI guarantee:** this path reads **no api_key**, calls **no `call_api`**,
+and runs **no audit**. A clean neutral baseline returns status `"approved"` with
+`validation_warnings == []`.
+
+### The warning-filter (`_filter_baseline_artifact_warnings`)
+A full-field baseline where the proposed setup **equals** the current setup trips
+two *definitional* validator artifacts: some rules flag a change as "is a no-op",
+and the full field count trips "too many changes". These are meaningless for a
+from-scratch baseline. `_filter_baseline_artifact_warnings` drops **only**
+WARNING-severity failures whose message contains `"is a no-op"` or
+`"too many changes"`.
+
+The safety property is structural: the severity guard `if vf.severity ==
+"warning"` is the **outer** condition, so the filter is **proven unable to suppress
+a blocking failure** — every blocking failure passes through unfiltered and still
+forces `validation_failed` / the fallback exactly as on the Analyse path.
+
+### Frontend
+A new **`_btn_baseline` "Build Baseline Setup"** button (enabled + visible; added
+to `_RACE_ALIASES`) lives in `ui/setup_form_widget.py` + `ui/setup_builder_ui.py`,
+**separate from** the still-disabled Group 43 `_btn_build_setup`. Handlers
+`_generate_baseline_setup` / `_generate_baseline_setup_for_form` run on a daemon
+thread → `_baseline_result_queue` in `ui/dashboard.py` (polled) →
+`_display_baseline_result` re-enables the baseline button then **delegates to the
+shared `_display_setup_result` renderer + Apply gate** (no duplication). The Group
+43 `_btn_build_setup` / `_run_build_setup*` guards are untouched.
+
+### Honest limitations (Group 44)
+* `_btn_baseline` is enabled-at-construction with a **runtime car/track guard** (no
+  proactive disable) — consistent with `_btn_analyse_setup`; the shared renderer
+  also re-enables `_btn_analyse_setup` after a baseline (harmless).
+* The symptom label `"no telemetry baseline"` is generic even on the
+  driver-profile-biased fields.
+* The no-authority fields (camber / toe / dampers / springs / lsd_initial /
+  lsd_front_initial) are **conservative defaults, not engineered values.**
+* The old `build_car_setup` AI-authoring path remains **dead-in-tree** behind the
+  Group 43 guards.
 
 ---
 
@@ -426,6 +531,11 @@ driver can always see which is which.
 * **No car-specific / drivetrain-specific rule packs.** Currently all rules
   default to `applies_drivetrain=any` / `applies_car_class=any` (deferred;
   per-car specificity once more data is in).
+* **From-scratch baseline no-authority fields (Group 44).** camber / toe / dampers
+  / springs / lsd_initial / lsd_front_initial are seeded from conservative neutral
+  defaults, not engineered — the baseline is a safe starting point, not an optimum.
+  Per-car gearbox ratio bounds (to promote `gearbox_out_of_range` to blocking) and
+  track-type biasing of the baseline are deferred.
 * **Pre-existing track-modelling failures.** The 8 frozen-allowlist guard tests
   (`ui/track_modelling_ui.py::_tm_restore_last_track`) are unrelated
   track-modelling tech debt and remain for the track-modelling owner.
@@ -449,6 +559,18 @@ The Group 42 `TestB5GearingTooShortRule` tests inject the old `gearbox_flag="too
 and will need updating by the test-verifier to inject both new keys instead.
 All Group 42 tests for A2/A3/A4/A5 that relied on the fictional `*_evidence` keys will
 now correctly fire (or correctly not fire) on the real diagnosis signals.
+
+**Group 44 note:** The from-scratch baseline generator (§3b) is covered by
+`tests/test_group44_baseline_generator.py` (86 backend) +
+`tests/test_group44_baseline_ui.py` (64 UI/integration) — full-field output,
+the no-AI guarantee (no api_key / no `call_api` / no audit), the gearbox monotonic
+guarantee (`gearbox_ratio_inversion` can never fire), transmission_max_speed_kmh
+display-only, driver-profile bias, validator/funnel/Apply-gate routing, the Group
+43 guard regression (`_btn_build_setup` still disabled), and
+`_filter_baseline_artifact_warnings` (drops only the no-op / too-many-changes
+WARNING artifacts, never a blocking failure). **406 green together with group41 +
+group42 (all) + group43; 0 fail.** See `MASTER_TESTING_REGISTER.md` (Rule-First
+Setup Baseline Generator (Group 44)).
 
 **Test-run note (Windows / Python 3.14):** run the suite in halves to avoid a
 flaky native PyQt teardown segfault — an environmental test-isolation artifact,
