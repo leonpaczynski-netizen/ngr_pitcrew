@@ -145,9 +145,11 @@ class TestQtSurfaceSource:
         body = src[start:end]
         assert "Build Race Strategy" in body
         assert "_btn_build_race_plan" in body
-        # Exactly one button wired — the Build button → _run_race_plan.
-        assert body.count("clicked.connect") == 1
+        # The Build button is wired to the deterministic runner. Group 51 also added
+        # a read-only Refresh button; both handlers are strategy-only (no setup power).
         assert "self._run_race_plan" in body
+        for handler in ("self._run_race_plan", "self._populate_race_plan_sessions"):
+            assert handler in body
         # No setup-apply/approve CAPABILITY (the word may appear in disclaimers).
         for banned in ("apply_ai_fields", "_finalise_recommendation", "setup_fields",
                        "insert_setup_recommendations", "save_entry", "_btn_apply"):

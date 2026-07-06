@@ -4711,6 +4711,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         intro.setStyleSheet("color: #AAA; font-size: 11px; padding: 2px;")
         v.addWidget(intro)
 
+        # --- Group 51: read-only session selector + diagnostics/readiness ---
+        sess_row = QHBoxLayout()
+        sess_row.addWidget(QLabel("Session:", styleSheet=f"color: {_TEXT};"))
+        self._rp_session_combo = QComboBox()
+        self._rp_session_combo.setToolTip(
+            "Choose which recorded practice session the race plan reads (read-only). "
+            "'Active session (auto)' uses the currently resolved session.")
+        self._rp_session_combo.addItem("Active session (auto)", 0)
+        self._rp_session_combo.currentIndexChanged.connect(
+            lambda _=0: self._refresh_race_plan_diagnostics())
+        sess_row.addWidget(self._rp_session_combo, 1)
+        self._btn_rp_refresh_sessions = QPushButton("Refresh")
+        self._btn_rp_refresh_sessions.setToolTip("Reload the list of recent sessions for this car and track.")
+        self._btn_rp_refresh_sessions.clicked.connect(self._populate_race_plan_sessions)
+        sess_row.addWidget(self._btn_rp_refresh_sessions)
+        v.addLayout(sess_row)
+
+        self._rp_session_status = QLabel("No session selected.")
+        self._rp_session_status.setWordWrap(True)
+        self._rp_session_status.setStyleSheet("color: #AAA; font-size: 11px; padding: 1px;")
+        v.addWidget(self._rp_session_status)
+
+        self._rp_readiness_status = QLabel("Race Plan readiness: —")
+        self._rp_readiness_status.setWordWrap(True)
+        self._rp_readiness_status.setStyleSheet("color: #F5C542; font-size: 11px; padding: 1px;")
+        v.addWidget(self._rp_readiness_status)
+
         # Small manual inputs Group 49 needs but cannot infer (shown as manual input).
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -4786,7 +4813,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """
         ec = self._build_event_context()
         try:
-            session_id = int(self._resolve_strat_session_id() or 0)
+            session_id = int(self._selected_race_plan_session_id())
         except Exception:
             session_id = 0
 
@@ -4833,11 +4860,101 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "mandatory_pit_stops": int(getattr(ec, "mandatory_stops", 0) or 0),
         }
 
+    # ------------------------------------------------------------------
+    # Group 51 — session selection + readiness diagnostics (read-only)
+    # ------------------------------------------------------------------
+
+    def _selected_race_plan_session_id(self) -> int:
+        """Session id chosen in the Race Plan selector, or the resolved active one.
+
+        The combo's first entry ("Active session (auto)", data=0) means "use the
+        currently resolved practice session". Any other entry carries its session
+        id in the item data. Read-only; never raises.
+        """
+        try:
+            combo = getattr(self, "_rp_session_combo", None)
+            if combo is not None:
+                data = combo.currentData()
+                sid = int(data) if data is not None else 0
+                if sid > 0:
+                    return sid
+            return int(self._resolve_strat_session_id() or 0)
+        except Exception:
+            return 0
+
+    def _populate_race_plan_sessions(self) -> None:
+        """Fill the session selector with recent sessions for this car+track (read-only)."""
+        combo = getattr(self, "_rp_session_combo", None)
+        if combo is None:
+            return
+        try:
+            from ui.race_strategy_readiness_vm import list_recent_matching_sessions
+            ec = self._build_event_context()
+            track = str(getattr(ec, "track", "") or "")
+            car_id = 0
+            try:
+                car_name, _ = self._load_car_specs_for_current()
+                if self._db and car_name:
+                    car_id = int(self._db.get_car_id(car_name) or 0)
+            except Exception:
+                car_id = 0
+            sessions = list_recent_matching_sessions(self._db, car_id, track, limit=10)
+
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Active session (auto)", 0)
+            for s in sessions:
+                combo.addItem(s.label, s.session_id)
+            combo.blockSignals(False)
+        except Exception:
+            # Never break the UI — leave the default entry in place.
+            try:
+                combo.blockSignals(False)
+            except Exception:
+                pass
+        self._refresh_race_plan_diagnostics()
+
+    def _refresh_race_plan_diagnostics(self) -> None:
+        """Update the session-status + readiness labels for the selected session.
+
+        Read-only: reads SessionDB samples via the adapter and grades readiness.
+        Never builds a plan, never writes, never raises.
+        """
+        try:
+            from strategy.race_strategy_session_adapter import extract_session_strategy_samples
+            from ui.race_strategy_readiness_vm import (
+                build_session_diagnostics, build_race_plan_readiness,
+            )
+            inp = self._assemble_race_plan_inputs()
+            samples = extract_session_strategy_samples(
+                self._db, inp["session_id"],
+                expected_car_id=inp["car_id"], expected_track=inp["track"],
+                layout_id=inp["layout_id"],
+            )
+            diag = build_session_diagnostics(
+                samples, event_car_id=inp["car_id"], event_track=inp["track"],
+                event_layout=inp["layout_id"],
+            )
+            readiness = build_race_plan_readiness(samples=samples, event_settings=inp)
+            if hasattr(self, "_rp_session_status"):
+                self._rp_session_status.setText(diag.message)
+            if hasattr(self, "_rp_readiness_status"):
+                self._rp_readiness_status.setText(
+                    f"{readiness.readiness_message}. Next: {readiness.next_best_action}")
+        except Exception:
+            if hasattr(self, "_rp_session_status"):
+                self._rp_session_status.setText("Session diagnostics unavailable.")
+
     def _run_race_plan(self) -> None:
         """Build and render an evidence-based race plan (no AI, no Apply)."""
         from ui.race_strategy_vm import (
             run_race_plan_from_session, build_race_plan_view_model,
             render_race_plan_html, candidate_table_rows,
+        )
+        from strategy.race_strategy_session_adapter import extract_session_strategy_samples
+        from ui.race_strategy_readiness_vm import (
+            build_session_diagnostics, build_race_plan_readiness,
+            render_readiness_html, empty_state_messages,
         )
         try:
             inp = self._assemble_race_plan_inputs()
@@ -4880,7 +4997,39 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 f"<p style='color:#E8A9A3;'>Race plan could not be built: {exc}</p>")
             return
 
-        self._race_plan_text.setHtml(render_race_plan_html(vm))
+        # Group 51: readiness + diagnostics banner above the plan, plus honest
+        # empty/missing-evidence guidance. All read-only, evidence-based.
+        readiness_html = ""
+        empty_html = ""
+        try:
+            samples = extract_session_strategy_samples(
+                self._db, inp["session_id"],
+                expected_car_id=inp["car_id"], expected_track=inp["track"],
+                layout_id=inp["layout_id"],
+            )
+            diag = build_session_diagnostics(
+                samples, event_car_id=inp["car_id"], event_track=inp["track"],
+                event_layout=inp["layout_id"],
+            )
+            readiness = build_race_plan_readiness(samples=samples, event_settings=inp)
+            readiness_html = render_readiness_html(readiness, diag)
+            if hasattr(self, "_rp_session_status"):
+                self._rp_session_status.setText(diag.message)
+            if hasattr(self, "_rp_readiness_status"):
+                self._rp_readiness_status.setText(
+                    f"{readiness.readiness_message}. Next: {readiness.next_best_action}")
+            _msgs = empty_state_messages(samples, inp)
+            if _msgs:
+                _items = "".join(f"<li style='font-size:11px;'>{m}</li>" for m in _msgs)
+                empty_html = (
+                    "<p style='margin:4px 0 1px; color:#F5C542; font-size:11px;'><b>Before you rely on this</b></p>"
+                    f"<ul style='margin:1px 0;'>{_items}</ul>")
+        except Exception:
+            readiness_html = ""
+
+        _sep = "<hr style='border:none; border-top:1px solid #333; margin:6px 0;'>"
+        self._race_plan_text.setHtml(
+            readiness_html + (empty_html or "") + _sep + render_race_plan_html(vm))
 
         rows = candidate_table_rows(vm)
         self._race_plan_table.setRowCount(len(rows))
@@ -6679,7 +6828,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         key = reg.key_at(index) if reg is not None else None
         if key == TAB_HISTORY:            self._refresh_history()
         elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
-        elif key == TAB_STRATEGY_BUILDER: self._sync_strategy_from_event()
+        elif key == TAB_STRATEGY_BUILDER:
+            self._sync_strategy_from_event()
+            # Group 51: refresh the read-only Race Plan session selector + readiness.
+            if hasattr(self, "_rp_session_combo"):
+                self._populate_race_plan_sessions()
         elif key == TAB_PRACTICE_REVIEW:  self._sync_practice_from_event()
         elif key == TAB_TELEMETRY:        self._refresh_telemetry_context()
         elif key == TAB_AI_LOG:           self._flush_ai_log_pending_select()
