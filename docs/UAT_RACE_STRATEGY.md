@@ -388,12 +388,72 @@ simply degrades to Group 54 behaviour.
 
 ---
 
+## Group 56 additions (Live Position → Track Progress Resolver)
+
+Group 56 gives Group 55 the live lap-progress it needed. It converts live GT7 **world
+position** (X/Y/Z) into a **read-only normalised lap progress (0.0–1.0)** by matching the
+car to the nearest station on an **approved / reference track path**. "The pit wall
+already has the map — this gives it a finger on the map." **Read-only, advisory-only** —
+it makes no pit call, sends no command, and **never creates a pit event** (position only
+corroborates existing pit evidence through Group 55).
+
+### Track-progress resolver (pure)
+
+New `data/live_track_progress.py` resolves a live position against reference-path stations
+into: normalised progress, distance along the lap (m), nearest station index + distance,
+a lateral offset estimate, and a **confidence** grade. Distance thresholds mirror the
+existing `data/track_map_matching.py`: **HIGH ≤5 m, MEDIUM ≤20 m, LOW ≤60 m**, beyond →
+**UNKNOWN**. It matches on the horizontal **X/Z** plane (ignoring elevation noise), rejects
+NaN/inf, handles zero/missing lap length, and returns **UNKNOWN** rather than guessing.
+Qt/DB/AI/file-write-free; never raises.
+
+### Confidence gating (evidence-quality only)
+
+| Progress confidence | Effect on Group 55 pit corroboration |
+|---------------------|--------------------------------------|
+| **HIGH / MEDIUM** | May feed the pit-lane resolver (position used to corroborate a detected pit) |
+| **LOW / UNKNOWN** | **Not used** — falls back to "live track progress unavailable"; never lifts pit confidence |
+
+Pit count and tyre age still come **solely from the Group 54 tracker**; a MEDIUM refuel pit
+inside the pit-lane corridor still lifts to HIGH (Group 55 rule), a speed-only LOW pit still
+caps at MEDIUM, and the **overall** live-replan confidence is unchanged (still ≤ MEDIUM —
+progress is supporting evidence, not a strategy author).
+
+### UI / render
+
+The Live Replan surface now adds, when available: `track progress: 73.4% lap (track model)`,
+`distance along lap: 3,842 m`, `position match: medium confidence, 4.2 m from reference path`,
+and `pit-lane map used live track progress`; and under **Missing**: `live world position
+unavailable` / `approved reference path unavailable` / `track progress unavailable, pit-lane
+corroboration disabled`. Warnings show when far from the reference path, when low-confidence
+progress is not used, or when the path does not match the current track/layout. No "Pit Now".
+
+### Manual UAT (Porsche 911 RSR '17, Fuji Full Course, 50 min, 8×/3×/1 L/s)
+
+1. Build the pre-race Race Plan.
+2. Start live telemetry.
+3. Refresh Live Replan Snapshot **while on track**: track progress + distance-along-lap +
+   position-match confidence appear **when a reference path + world position are available**;
+   pit-lane evidence can then use the resolved progress.
+4. Pit once.
+5. Refresh after pit exit: pit-stop count increments, laps-since-pit resets, and pit-lane
+   corroboration works **only when progress confidence is MEDIUM/HIGH** — missing / LOW
+   progress degrades cleanly.
+6. Confirm **no pit command, no voice command, no Apply control, no setup recommendation**.
+
+Note: no approved **reference-path file** ships in the repo today, so in the live app progress
+typically reports "approved reference path unavailable" until one exists for the track/layout.
+The resolver is exercised via the offline `fuji_reference_path()` fixture in tests.
+
+---
+
 ## Known caveats
 
-- **Live lap-progress is not yet broadcast by GT7** in a normalised `0–1` form, so the
-  pit-lane corroboration path typically reports "live track progress unavailable" and
-  degrades to Group 54 behaviour. Wiring a real progress source (e.g. from a reference
-  path + world position) is the natural Group 56+ step.
+- **No approved reference-path file ships in the repo**, so live track progress typically
+  resolves as "approved reference path unavailable" until a reference/calibration path exists
+  for the track/layout. When present, MEDIUM/HIGH progress drives Group 55 corroboration.
+- GT7's packet `road_distance` (cumulative) could be a future fallback progress source when
+  world-position matching is weak — deferred to Group 57+.
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is

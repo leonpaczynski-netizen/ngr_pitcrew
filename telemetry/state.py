@@ -293,6 +293,22 @@ class RaceStateTracker:
         """
         return self._phase == RacePhase.IN_PIT
 
+    @property
+    def live_world_position(self) -> "tuple | None":
+        """Latest GT7 world position (x, y, z) + speed_kph, or None (read-only; Group 56).
+
+        Returns a 4-tuple ``(x, y, z, speed_kph)`` from the last packet, or None when
+        no packet has arrived. Used only to resolve read-only live track progress —
+        it applies nothing, writes nothing, and creates no pit event.
+        """
+        p = self._prev
+        if p is None:
+            return None
+        try:
+            return (float(p.pos_x), float(p.pos_y), float(p.pos_z), float(p.speed_kmh))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
     def update(self, packet: GT7Packet) -> None:
         now = time.monotonic()
 

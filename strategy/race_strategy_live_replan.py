@@ -28,7 +28,14 @@ from strategy.race_strategy_replan import (
 from strategy.race_strategy_live_state import (
     LiveReplanStateResult,
     apply_pit_lane_evidence,
+    attach_track_progress,
     extract_live_replan_state,
+    resolve_live_progress_evidence,
+)
+from data.live_track_progress import (
+    LiveTrackProgressResult,
+    build_track_path_stations,
+    format_live_track_progress_evidence,
 )
 
 
@@ -51,6 +58,8 @@ class LiveReplanResult:
     pit_lane_source: str = "missing"
     pit_lane_mapping_confidence: str = "NONE"
     pit_corroboration: str = "none"
+    # Group 56: live world-position → track-progress evidence (or None).
+    track_progress: Optional[LiveTrackProgressResult] = None
 
     @property
     def confidence(self) -> ReplanConfidence:
@@ -77,6 +86,9 @@ def build_live_replan_snapshot(
     latest_fuel_samples: Optional[Sequence[float]] = None,
     track_context=None,
     live_progress=None,
+    live_position=None,
+    reference_stations=None,
+    identity_ok: bool = True,
     generated_at: str = "",
 ) -> LiveReplanResult:
     """Build a read-only live replan snapshot.
@@ -85,9 +97,14 @@ def build_live_replan_snapshot(
     Group 53 adapter) or an explicit ``live_state``. Live fuel burn from the adapter
     is fed to the snapshot as ``latest_fuel_samples`` when the caller supplies none.
 
-    Group 55: when a ``track_context`` (with pit-lane mapping) and ``live_progress``
-    are supplied, pit-event confidence is corroborated against the known pit-lane
+    Group 55: when a ``track_context`` (with pit-lane mapping) and a progress value
+    are available, pit-event confidence is corroborated against the known pit-lane
     corridor (evidence-quality only — no pit is ever counted or fabricated here).
+
+    Group 56: when ``live_position`` and a reference path (``reference_stations`` or a
+    ``track_context`` carrying one) are available, live world position is resolved to
+    normalised track progress; MEDIUM/HIGH progress then feeds the Group 55 corroboration
+    (LOW/UNKNOWN never lifts pit confidence). An explicit ``live_progress`` overrides.
     ``generated_at`` is caller-supplied (no clock in this pure builder). Never raises.
     """
     try:
@@ -106,7 +123,20 @@ def build_live_replan_snapshot(
             extracted = LiveReplanStateResult(state=live_state)
         state_sources = dict(state_sources or {})
 
+        # Group 56: resolve live world position → normalised track progress.
+        if live_position is None:
+            live_position = _position_from_source(live_source)
+        progress_result: Optional[LiveTrackProgressResult] = None
+        if reference_stations or (track_context is not None
+                                  and build_track_path_stations(track_context)):
+            progress_result = resolve_live_progress_evidence(
+                position=live_position, reference_stations=reference_stations,
+                track_context=track_context, identity_ok=identity_ok)
+            extracted = attach_track_progress(extracted, progress_result)
+
         # Group 55: corroborate pit evidence against the track's pit-lane mapping.
+        # (apply_pit_lane_evidence consumes MEDIUM/HIGH track progress when
+        #  ``live_progress`` is not supplied explicitly.)
         extracted = apply_pit_lane_evidence(
             extracted, track_context=track_context, live_progress=live_progress)
         warnings = tuple(warnings) + tuple(
@@ -141,6 +171,7 @@ def build_live_replan_snapshot(
             pit_lane_source=extracted.pit_lane_source,
             pit_lane_mapping_confidence=extracted.pit_lane_mapping_confidence,
             pit_corroboration=extracted.pit_corroboration,
+            track_progress=extracted.track_progress,
         )
     except Exception:
         # Absolute fallback — never raise out of the live runner.
@@ -180,8 +211,20 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
     if st.pit_stops_completed is not None:
         found.append(f"pit stops completed: {st.pit_stops_completed} ({srcs.get('pit_stops_completed', 'live')})")
 
-    # Group 55: pit-lane mapping corroboration (evidence-quality only).
+    # Group 56: live world-position → track-progress evidence.
     missing_extra: list[str] = []
+    prog_warnings: list[str] = []
+    tp = result.track_progress
+    if tp is not None:
+        ev = format_live_track_progress_evidence(tp)
+        found.extend(ev.get("found", []))
+        missing_extra.extend(ev.get("missing", []))
+        prog_warnings.extend(ev.get("warnings", []))
+        if getattr(tp, "usable_for_pit", False) and str(result.pit_corroboration or "none") not in (
+                "none", "no_mapping", "position_unknown"):
+            found.append("pit-lane map used live track progress")
+
+    # Group 55: pit-lane mapping corroboration (evidence-quality only).
     zone = str(result.pit_lane_zone or "UNKNOWN")
     corr = str(result.pit_corroboration or "none")
     if corr == "no_mapping":
@@ -208,13 +251,47 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
         lines.append("Missing:")
         lines.extend(f"  - {m}" for m in missing_all)
 
-    # Surface any pit-lane contradiction warning honestly.
+    # Surface honest warnings: pit-lane contradiction + track-progress cautions.
+    warn_lines: list[str] = []
     for w in result.warnings:
         if "did not match pit-lane mapping" in w.lower():
-            lines.append(f"Warning: {w}")
+            warn_lines.append(w)
+    for w in prog_warnings:
+        if w not in warn_lines:
+            warn_lines.append(w)
+    for w in warn_lines:
+        lines.append(f"Warning: {w}")
 
     lines.append(render_replan_snapshot_text(result.snapshot))
     return "\n".join(lines)
+
+
+def _position_from_source(source):
+    """Best-effort live world position (x, y, z[, speed]) from a live source. None-safe.
+
+    Reads the tracker's read-only ``live_world_position`` (Group 56), else a
+    dashboard's ``_tracker``/``_last_packet``, else a packet's pos_x/pos_y/pos_z.
+    Never raises.
+    """
+    try:
+        if source is None:
+            return None
+        pos = getattr(source, "live_world_position", None)
+        if pos:
+            return pos
+        tracker = getattr(source, "_tracker", None)
+        if tracker is not None:
+            pos = getattr(tracker, "live_world_position", None)
+            if pos:
+                return pos
+        packet = getattr(source, "_last_packet", None) or source
+        if all(hasattr(packet, a) for a in ("pos_x", "pos_y", "pos_z")):
+            spd = getattr(packet, "speed_kmh", None)
+            return (float(packet.pos_x), float(packet.pos_y), float(packet.pos_z),
+                    float(spd) if spd is not None else 0.0)
+        return None
+    except Exception:
+        return None
 
 
 def _zone_label(zone: str) -> str:
@@ -313,3 +390,40 @@ def fuji_pit_lane_mapping() -> dict:
             ],
         },
     }
+
+
+# --- Group 56: Fuji reference-path fixture (test/UAT only — NOT production data) ---
+
+def fuji_reference_path(lap_length_m: float = 4563.0, n: int = 200) -> dict:
+    """A minimal circular Fuji-length reference path (test fixture only, NOT on disk).
+
+    Returns a track_context dict carrying a ``reference_path`` of evenly-spaced
+    stations around a circle of the given lap length, so the Group 56 resolver can
+    convert an (x, z) position into normalised progress deterministically.
+    """
+    import math as _m
+    r = lap_length_m / (2.0 * _m.pi)
+    points = []
+    for i in range(n + 1):
+        prog = i / n
+        theta = 2.0 * _m.pi * prog
+        points.append({
+            "x": r * _m.cos(theta),
+            "y": 0.0,
+            "z": r * _m.sin(theta),
+            "distance_along_lap_m": prog * lap_length_m,
+            "lap_progress": prog,
+        })
+    return {
+        "track_id": "fuji_speedway",
+        "layout_id": "full_course",
+        "reference_path": {"points": points},
+    }
+
+
+def fuji_position_at_progress(progress: float, lap_length_m: float = 4563.0) -> tuple:
+    """World (x, y, z) on the Fuji reference circle at a given progress (test helper)."""
+    import math as _m
+    r = lap_length_m / (2.0 * _m.pi)
+    theta = 2.0 * _m.pi * (progress % 1.0)
+    return (r * _m.cos(theta), 0.0, r * _m.sin(theta))
