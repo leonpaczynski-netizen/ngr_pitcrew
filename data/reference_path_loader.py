@@ -433,3 +433,95 @@ def validate_reference_path_identity(
         return False, "reference path track/layout mismatch"
     except Exception:
         return False, "reference path track/layout mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Group 58 — reference-path asset registry foundation + trusted lap length
+# ---------------------------------------------------------------------------
+
+def list_available_reference_paths(search_roots=None) -> List[dict]:
+    """List every discoverable approved reference-path asset (read-only registry).
+
+    Returns one summary dict per usable asset:
+      {track_id, layout_id, source, path, station_count, lap_length_m}
+    Deterministic (sorted by track_id, layout_id, path). Never raises; never writes.
+    Used to answer "which circuits currently ship an approved reference path?" and
+    to drive docs / honest missing-asset messages. It invents nothing.
+    """
+    try:
+        roots = [Path(r) for r in (search_roots or _default_search_roots())]
+        seen: set = set()
+        out: List[dict] = []
+        for root in roots:
+            for p in _iter_reference_files(root):
+                key = str(p.resolve()) if p.exists() else str(p)
+                if key in seen:
+                    continue
+                seen.add(key)
+                res = load_reference_path_file(p)
+                if not res.has_stations:
+                    continue
+                a = res.asset
+                out.append({
+                    "track_id": a.track_id, "layout_id": a.layout_id,
+                    "source": a.source, "path": a.path,
+                    "station_count": a.station_count, "lap_length_m": a.lap_length_m,
+                })
+        out.sort(key=lambda d: (d["track_id"], d["layout_id"], d["path"]))
+        return out
+    except Exception:
+        return []
+
+
+def reference_path_asset_summary(track_id: str, layout_id: str,
+                                 search_roots=None) -> dict:
+    """Return an honest availability summary for a track/layout (read-only).
+
+    {available: bool, source: str, message: str, station_count: int, lap_length_m: float}.
+    Never raises. A missing asset yields a clear, non-crashing "unavailable" summary.
+    """
+    try:
+        res = load_reference_path_for_layout(track_id, layout_id, search_roots)
+        if res.has_stations:
+            a = res.asset
+            return {
+                "available": True, "source": a.source,
+                "message": (f"Approved reference path available "
+                            f"({a.station_count} stations)."),
+                "station_count": a.station_count, "lap_length_m": a.lap_length_m,
+            }
+        return {
+            "available": False, "source": "missing",
+            "message": ("Approved reference path unavailable for this track/layout — "
+                        "live progress will use the road-distance fallback if possible."),
+            "station_count": 0, "lap_length_m": 0.0,
+        }
+    except Exception:
+        return {"available": False, "source": "missing",
+                "message": "Approved reference path unavailable.",
+                "station_count": 0, "lap_length_m": 0.0}
+
+
+def resolve_trusted_lap_length(track_id: str, layout_id: str,
+                               search_roots=None) -> Optional[float]:
+    """Return a TRUSTED lap length (metres) for a track/layout, or None. Read-only.
+
+    Resolution order (first trustworthy, positive value wins):
+      1. an approved reference-path asset's ``lap_length_m``
+      2. the track-library manifest ``lap_length_m``
+    Never invents a length; returns None when no trusted source exists. Never raises.
+    """
+    try:
+        res = load_reference_path_for_layout(track_id, layout_id, search_roots)
+        if res.has_stations and res.asset.lap_length_m and res.asset.lap_length_m > 0:
+            return float(res.asset.lap_length_m)
+    except Exception:
+        pass
+    try:
+        from data.track_library import resolve_track_layout_manifest
+        m = resolve_track_layout_manifest(track_id, layout_id)
+        if m is not None and getattr(m, "lap_length_m", 0) and m.lap_length_m > 0:
+            return float(m.lap_length_m)
+    except Exception:
+        pass
+    return None

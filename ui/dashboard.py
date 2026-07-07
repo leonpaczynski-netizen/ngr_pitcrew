@@ -4864,6 +4864,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             track_context, live_progress = self._resolve_live_pit_lane_context()
             (live_position, reference_stations, identity_ok,
              ref_source, ref_warnings) = self._resolve_live_track_progress_context()
+            lap_distance_m, road_distance, lap_length_m = \
+                self._resolve_road_distance_fallback_context()
             result = build_live_replan_snapshot(
                 pre_race_result=pre,
                 live_source=self,                 # dashboard: reads _tracker + _last_packet
@@ -4875,6 +4877,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 identity_ok=identity_ok,
                 reference_path_source=ref_source,       # Group 57: provenance (or "")
                 reference_path_warnings=ref_warnings,   # Group 57: load warnings
+                lap_distance_m=lap_distance_m,    # Group 58: fallback inputs (or None)
+                road_distance=road_distance,
+                lap_length_m=lap_length_m,
                 generated_at=time.strftime("%H:%M:%S"),
             )
             label.setText(render_live_replan_text(result))
@@ -4978,6 +4983,39 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             ref_source = ""
             ref_warnings = ()
         return live_position, reference_stations, identity_ok, ref_source, ref_warnings
+
+    def _resolve_road_distance_fallback_context(self):
+        """Resolve Group 58 road-distance fallback inputs (read-only, defensive).
+
+        Returns ``(lap_distance_m, road_distance, lap_length_m)`` — all None/absent
+        when unavailable. ``lap_distance_m`` is the tracker's per-lap distance (from
+        cumulative road_distance minus the lap-start reference); ``lap_length_m`` is a
+        TRUSTED length (reference-path asset or track-library manifest) — never invented.
+        Never raises. This only supplies inputs to the pure fallback resolver; it makes
+        no pit call, writes nothing, and creates no pit event.
+        """
+        lap_distance_m = None
+        road_distance = None
+        lap_length_m = None
+        try:
+            tr = self._tracker
+            if tr is not None:
+                lap_distance_m = getattr(tr, "live_lap_distance", None)
+                road_distance = getattr(tr, "live_road_distance", None)
+        except Exception:
+            lap_distance_m = None
+            road_distance = None
+        try:
+            ec = self._build_event_context()
+            track_id = str(getattr(ec, "track_location_id", "") or "").strip()
+            layout_id = str(getattr(ec, "layout_id", "") or "").strip()
+            track_hint = track_id or str(getattr(ec, "track", "") or "").strip()
+            if track_hint or layout_id:
+                from data.reference_path_loader import resolve_trusted_lap_length
+                lap_length_m = resolve_trusted_lap_length(track_hint, layout_id)
+        except Exception:
+            lap_length_m = None
+        return lap_distance_m, road_distance, lap_length_m
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.

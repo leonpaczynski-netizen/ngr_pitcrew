@@ -497,13 +497,73 @@ Notes:
 
 ---
 
+## Group 58 additions (Road Distance Fallback & Asset Expansion Foundation)
+
+Group 58 adds a **safe, lower-confidence fallback** for live track progress when no approved
+reference path is available: it estimates normalised progress from GT7's cumulative
+`road_distance` and a **trusted** lap length. It is **advisory-only** and **never** as good
+as map matching — it is always labelled approximate, never HIGH confidence, never creates a
+pit event, and never lifts pit confidence.
+
+### Precedence (unchanged preferred path)
+
+1. **Approved reference path + live world position → map-matched progress** (MEDIUM/HIGH) — wins whenever usable.
+2. **GT7 road-distance fallback** — only when there is no usable map-matched progress AND a trusted lap length exists.
+3. **No progress** — honest "track progress unavailable".
+
+The fallback **never overrides** a usable approved-reference-path result.
+
+### Confidence + safety
+
+| Fallback confidence | When |
+|---------------------|------|
+| **MEDIUM** | accurate per-lap distance, in bounds, trusted lap length, known identity |
+| **LOW** | value had to wrap, or only cumulative `road_distance` was available |
+| **UNKNOWN** | missing/invalid road distance or lap length, or identity mismatch |
+
+Fallback progress is **display-only** — it is deliberately **excluded from pit-lane
+corroboration**, so it can never lift pit confidence (never HIGH). It creates no pit event and
+mutates no pit count.
+
+### UI / render
+
+- Approved path: `track progress: 42.3% lap (track model)` + `position match: HIGH …`.
+- Fallback: `track progress: 42.3% via GT7 road-distance fallback`, `progress confidence:
+  MEDIUM (fallback)`, `approved reference path unavailable for this track/layout`,
+  `fallback progress is approximate and lower confidence than map matching`.
+- Neither: `track progress unavailable` / `no approved reference path or usable road-distance
+  signal was available`.
+
+### How to add an approved reference-path asset
+
+Drop a `*.reference_path.json` into `data/track_models/` (or a track-library layout dir) using
+either the explicit `reference_path_v1` shape or the Group 17 calibration shape
+(`track_location_id` + `points`). The loader discovers it by scanning + identity match;
+`list_available_reference_paths()` then includes it and `resolve_trusted_lap_length()` prefers
+its lap length. **Do not invent geometry — only import real approved calibration output.**
+
+### Manual UAT
+
+**Fuji Full Course** (Porsche 911 RSR '17, 50 min, 8×/3×/1 L/s): approved path loads → live
+progress resolves HIGH near the path; the fallback does **not** override it; Live Replan Snapshot
+shows approved-path evidence; no pit call / setup Apply / command appears.
+
+**Non-Fuji track without an approved path**: `approved reference path unavailable` appears; the
+road-distance fallback attempts progress **only** if valid road-distance + a trusted lap length
+exist (e.g. a track-library manifest lap length); fallback is labelled approximate / lower
+confidence; confidence is never HIGH; missing evidence stays visible; snapshot is advisory-only;
+no pit call / setup Apply / command appears.
+
+---
+
 ## Known caveats
 
-- **Reference-path assets ship only for Fuji Full Course and Daytona Road Course.** Other
-  track/layouts report "approved reference path unavailable" (safe fallback) until a path is
-  imported via the track-modelling workflow.
-- The GT7 packet `road_distance` (cumulative) lower-confidence fallback progress source is
-  **deferred to Group 58** (the core reference-path activation works with the real Fuji asset).
+- **Approved reference-path assets ship only for Fuji Full Course and Daytona Road Course.**
+  Other track/layouts use the **road-distance fallback** (when a trusted lap length exists) or
+  honestly report "approved reference path unavailable".
+- The fallback derives per-lap distance from a lap-start reference (GT7 `road_distance` is
+  cumulative). Confirming the packet field's absolute zero-point across more tracks, and a local
+  nearest-station search window / hysteresis, are **deferred to Group 59+**.
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is
