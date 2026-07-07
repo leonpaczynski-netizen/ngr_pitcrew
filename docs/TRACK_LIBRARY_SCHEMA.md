@@ -210,6 +210,15 @@ exist to import; do **not** fabricate geometry.
 `{ok, errors, warnings, track_id, layout_id, station_count, lap_length_m, source}`; fix any reported errors
 (missing ids, <2 stations, malformed JSON, identity mismatch), then drop it into `data/track_models/`.
 
+**Road-distance semantics from real captures (Group 60):** `data/road_distance_capture_analysis.py`
+(`analyse_calibration_capture(track_id, layout_id)` / `analyse_capture_road_distance(laps, …)` +
+`build_capture_report(...)`) feeds a capture's per-lap `road_distance` samples through the Group 59 validator.
+Running it over the shipped Fuji + Daytona `*.calibration_laps.json` does **not** confirm cumulative semantics
+(Fuji INSUFFICIENT_EVIDENCE, Daytona INCONSISTENT): the captured `road_distance` per-lap span is far below the
+lap length, so it does not measure cumulative lap distance in that post-processed data. The live road-distance
+fallback still assumes cumulative semantics with **capped confidence** and discloses this — a raw live-packet
+capture is needed to settle the true live behaviour. Read-only; nothing is written; no geometry is invented.
+
 ---
 
 ### `semantic_model.json` — `track_semantic_model_v1`

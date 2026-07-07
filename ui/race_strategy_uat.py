@@ -329,6 +329,57 @@ def run_road_distance_semantics_uat(kind: str = "cumulative", lap_length_m: floa
     return analyse_road_distance_semantics(samples, lap_length_m=L)
 
 
+def run_real_capture_road_distance_uat(kind: str = "fuji", lap_length_m: float = 4563.0):
+    """Group 60 real-capture road-distance semantics UAT (offline; no AI, no writes).
+
+    Runs the SAME pure analysis path (``analyse_capture_road_distance``) for either a
+    real shipped calibration capture or a deterministic synthetic scenario, so fixtures
+    and real data flow through one pathway. Returns a ``CaptureAnalysisResult``.
+
+    ``kind``:
+      "fuji" / "daytona"   → analyse the real shipped calibration capture (read-only).
+      "cumulative" / "reset" / "inconsistent" / "insufficient" / "unknown" / "empty"
+                           → deterministic synthetic laps (each lap traverses 0..lap_len).
+    """
+    from data.road_distance_capture_analysis import (
+        analyse_calibration_capture, analyse_capture_road_distance,
+    )
+    real = {
+        "fuji": ("fuji_international_speedway", "fuji_international_speedway__full_course"),
+        "daytona": ("daytona_international_speedway",
+                    "daytona_international_speedway__road_course"),
+    }
+    if kind in real:
+        tid, lid = real[kind]
+        return analyse_calibration_capture(tid, lid)
+
+    L = float(lap_length_m)
+
+    def _lap(lap_number, start, cover):
+        # A lap that sweeps road_distance from `start` to `start + cover` (0..lap).
+        n = 20
+        return {"lap_number": lap_number,
+                "samples": [{"road_distance": start + cover * (j / n)} for j in range(n + 1)]}
+
+    scenarios = {
+        # Cumulative: each lap continues from the previous (start increases by L).
+        "cumulative": [_lap(i + 1, i * L, L) for i in range(3)],
+        # Per-lap reset: each lap sweeps 0..L then resets.
+        "reset": [_lap(i + 1, 0.0, L) for i in range(3)],
+        # Inconsistent: a lap with a backward sweep.
+        "inconsistent": [_lap(1, 0.0, L), _lap(2, L, -L)],
+        # Insufficient: one lap only.
+        "insufficient": [_lap(1, 0.0, L)],
+        # Unknown / empty: no usable samples.
+        "unknown": [{"lap_number": 1, "samples": []}],
+        "empty": [],
+    }
+    laps = scenarios.get(kind, scenarios["cumulative"])
+    return analyse_capture_road_distance(
+        laps, track_id="fixture_track", layout_id="fixture_layout",
+        car_id="fixture_car", lap_length_m=L)
+
+
 def _uat_safety_checks(html: str, vm) -> dict:
     """Read-only assertions that the surface exposes no setup power / certainty."""
     lowered = html.lower()
