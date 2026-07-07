@@ -283,11 +283,16 @@ def run_fuji_live_replan(kind: str = "healthy", generated_at: str = ""):
     from strategy.race_strategy_live_replan import (
         build_live_replan_snapshot,
         fuji_live_state_healthy, fuji_live_state_fuel_short, fuji_live_state_missing,
+        fuji_live_state_pre_pit_healthy, fuji_live_state_just_pitted,
+        fuji_live_state_missing_pit,
     )
     fixtures = {
         "healthy": fuji_live_state_healthy,
         "fuel_short": fuji_live_state_fuel_short,
         "missing": fuji_live_state_missing,
+        "pre_pit_healthy": fuji_live_state_pre_pit_healthy,
+        "just_pitted": fuji_live_state_just_pitted,
+        "missing_pit": fuji_live_state_missing_pit,
     }
     state = fixtures.get(kind, fuji_live_state_healthy)()
     return build_live_replan_snapshot(

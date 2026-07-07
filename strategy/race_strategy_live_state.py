@@ -39,7 +39,9 @@ from strategy.race_strategy_replan import RaceReplanState
 
 # Provenance labels for each populated field.
 SRC_LIVE = "live_telemetry"
+SRC_LIVE_LOW = "live_telemetry (low confidence — not used)"
 SRC_STRATEGY_TAG = "strategy/UI tag"
+SRC_MANUAL = "manual input"
 SRC_EVENT = "event_setting"
 SRC_MISSING = "missing"
 
@@ -52,6 +54,7 @@ class LiveReplanStateResult:
     warnings: tuple[str, ...] = ()
     missing_state: tuple[str, ...] = ()
     live_fuel_per_lap: float = 0.0   # measured live burn (for the snapshot), 0 = unknown
+    pit_state_confidence: str = "UNKNOWN"   # HIGH/MEDIUM/LOW/UNKNOWN from the tracker
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +179,26 @@ def build_replan_state_from_tracker(
         comp = current_compound or getattr(tracker, "_current_compound", "") or ""
         comp = str(comp).strip() or None
 
+        # Group 54: pit / tyre-age state from the tracker's read-only pit tracking.
+        # HIGH/MEDIUM confidence → use tyre age + pit count (they lift readiness).
+        # LOW confidence → keep them MISSING (never lift readiness on a guess) but
+        # surface the low-confidence estimate + a warning. UNKNOWN → missing.
+        pit_conf = str(getattr(tracker, "pit_state_confidence", "UNKNOWN") or "UNKNOWN")
+        tyre_age = None
+        pit_stops = None
+        tyre_pit_source = SRC_MISSING
+        pit_warn = None
+        if pit_conf in ("HIGH", "MEDIUM"):
+            tyre_age = _pos_int(getattr(tracker, "tyre_age_laps", None))
+            pit_stops = _pos_int(getattr(tracker, "pit_stops_completed", None))
+            tyre_pit_source = SRC_LIVE
+        elif pit_conf == "LOW":
+            _est = _pos_int(getattr(tracker, "tyre_age_laps", None))
+            tyre_pit_source = SRC_LIVE_LOW
+            pit_warn = (
+                f"Pit/tyre state is LOW confidence (est. {_est} laps since pit) — "
+                "not used to raise replan confidence.")
+
         return _assemble(
             current_lap=current_lap,
             remaining_laps=remaining_laps,
@@ -186,6 +209,11 @@ def build_replan_state_from_tracker(
             event_settings=event_settings,
             live_fuel_per_lap=live_burn,
             compound_from_tag=bool(comp),
+            tyre_age_laps=tyre_age,
+            pit_stops_completed=pit_stops,
+            tyre_pit_source=tyre_pit_source,
+            pit_state_confidence=pit_conf,
+            extra_warning=pit_warn,
         )
     except Exception:
         return _empty_result()
@@ -258,6 +286,11 @@ def _assemble(
     event_settings,
     live_fuel_per_lap,
     compound_from_tag: bool = False,
+    tyre_age_laps=None,
+    pit_stops_completed=None,
+    tyre_pit_source: str = SRC_MISSING,
+    pit_state_confidence: str = "UNKNOWN",
+    extra_warning: Optional[str] = None,
 ) -> LiveReplanStateResult:
     state = RaceReplanState(
         current_lap=current_lap,
@@ -266,8 +299,8 @@ def _assemble(
         remaining_time_seconds=remaining_time_seconds,
         fuel_remaining_pct=fuel_remaining_pct,
         current_compound=current_compound,
-        tyre_age_laps=None,               # not tracked live → missing
-        pit_stops_completed=None,          # not tracked live → missing
+        tyre_age_laps=tyre_age_laps,       # Group 54: from read-only pit tracking (HIGH/MEDIUM only)
+        pit_stops_completed=pit_stops_completed,
         required_compounds_used=(),        # not tracked live
         weather_status=None,
         damage_status=None,
@@ -290,20 +323,34 @@ def _assemble(
     _mark("fuel_remaining_pct", fuel_remaining_pct, SRC_LIVE)
     _mark("current_compound", current_compound,
           SRC_STRATEGY_TAG if compound_from_tag else SRC_LIVE)
-    # Always-missing structured fields (honest).
-    for f in ("tyre_age_laps", "pit_stops_completed"):
-        sources[f] = SRC_MISSING
-        missing.append(f)
+
+    # Group 54: tyre age + pit-stop count. When a LOW-confidence estimate exists the
+    # value is deliberately NOT populated on the state (so it can't lift readiness);
+    # the source label still reveals the low-confidence estimate honestly.
+    if tyre_age_laps is not None:
+        sources["tyre_age_laps"] = tyre_pit_source
+    else:
+        sources["tyre_age_laps"] = tyre_pit_source if tyre_pit_source == SRC_LIVE_LOW else SRC_MISSING
+        missing.append("tyre_age_laps")
+    if pit_stops_completed is not None:
+        sources["pit_stops_completed"] = tyre_pit_source
+    else:
+        sources["pit_stops_completed"] = tyre_pit_source if tyre_pit_source == SRC_LIVE_LOW else SRC_MISSING
+        missing.append("pit_stops_completed")
 
     warnings: list[str] = []
     if fuel_remaining_pct is None:
         warnings.append("Fuel remaining is unavailable from live telemetry.")
     if not current_compound:
         warnings.append("Current compound is not known from live telemetry.")
-    warnings.append("Tyre age and pit-stop count are not tracked live — treated as unknown, not safe.")
+    if tyre_age_laps is None and tyre_pit_source not in (SRC_LIVE_LOW, SRC_MANUAL):
+        warnings.append("Tyre age and pit-stop count are not tracked yet — treated as unknown, not safe.")
+    if extra_warning:
+        warnings.append(extra_warning)
 
     return LiveReplanStateResult(
         state=state,
+        pit_state_confidence=str(pit_state_confidence or "UNKNOWN"),
         state_sources=sources,
         warnings=tuple(warnings),
         missing_state=tuple(missing),
