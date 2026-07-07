@@ -1,0 +1,119 @@
+"""Group 59 — safety-guard tests.
+
+Asserts the new pure modules are Qt/AI/DB-write/file-write-free, author nothing,
+introduce no setup Apply path, keep the DB version + Apply-gate + disabled AI-build
+intact, and keep Group 48/49 scoring deterministic.
+"""
+from __future__ import annotations
+
+import hashlib
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+
+def _hash(path: Path):
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+_NEW_MODULES = (
+    "data/road_distance_semantics.py",
+    "data/reference_path_loader.py",
+    "strategy/race_strategy_live_replan.py",
+    "ui/race_strategy_uat.py",
+)
+
+
+class TestModulePurity:
+    def test_semantics_no_qt_import(self):
+        src = (ROOT / "data" / "road_distance_semantics.py").read_text(encoding="utf-8")
+        for line in src.splitlines():
+            s = line.strip()
+            if s.startswith("import ") or s.startswith("from "):
+                assert "PyQt" not in s and "QtWidgets" not in s and "QtCore" not in s
+
+    def test_semantics_no_ai_db_write_fs(self):
+        src = (ROOT / "data" / "road_distance_semantics.py").read_text(encoding="utf-8")
+        assert "api_key" not in src.lower()
+        assert "anthropic" not in src.lower() and "openai" not in src.lower()
+        assert "sqlite3" not in src and "session_db" not in src
+        assert ".write(" not in src and "json.dump" not in src and "open(" not in src
+
+    def test_no_api_key_in_touched_modules(self):
+        for mod in _NEW_MODULES:
+            src = (ROOT / mod).read_text(encoding="utf-8")
+            assert "api_key" not in src.lower()
+
+    def test_no_setup_authoring_import(self):
+        for mod in ("data/road_distance_semantics.py", "data/reference_path_loader.py"):
+            src = (ROOT / mod).read_text(encoding="utf-8")
+            for banned in ("setup_plan", "setup_rule_engine", "setup_ai_audit",
+                           "setup_knowledge_base", "setup_baseline", "setup_history"):
+                assert banned not in src
+
+
+class TestResultsHaveNoApplyPath:
+    def test_semantics_result_has_no_apply_attrs(self):
+        from data.road_distance_semantics import RoadDistanceSemanticsResult, RoadDistanceSemanticsStatus
+        r = RoadDistanceSemanticsResult(status=RoadDistanceSemanticsStatus.UNKNOWN)
+        for banned in ("apply", "approve", "write", "pit_now", "send_command",
+                       "make_pit_call", "setup_fields"):
+            assert not hasattr(r, banned)
+
+
+class TestSetupGuaranteesUntouched:
+    def test_apply_gate_predicate_unchanged(self):
+        src = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+        assert "_status_approved and bool(_parsed_ai_fields) and not _is_legacy" in src
+
+    def test_old_ai_build_path_still_disabled(self):
+        src = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
+        assert "form._btn_build_setup.setEnabled(False)" in src
+
+    def test_no_setup_history_write(self):
+        from ui.race_strategy_uat import run_fuji_live_replan
+        target = ROOT / "data" / "setup_history.json"
+        before = _hash(target)
+        for kind in ("pre_pit_healthy", "just_pitted", "missing_pit"):
+            run_fuji_live_replan(kind)
+        assert _hash(target) == before
+
+
+class TestNoSchemaMigration:
+    def test_db_user_version_unchanged(self):
+        src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
+        assert "PRAGMA user_version = 13" in src
+        assert "PRAGMA user_version = 14" not in src
+
+    def test_no_new_migration_hook(self):
+        src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
+        assert "_migrate_v14" not in src
+
+
+class TestStrategyScoringDeterministic:
+    def test_group48_49_scoring_stable(self):
+        from ui.race_strategy_uat import run_fuji_uat
+        a = run_fuji_uat()
+        b = run_fuji_uat()
+        assert a.recommendation.recommended.candidate_id == b.recommendation.recommended.candidate_id
+
+
+class TestRuntimeAssetsUntouched:
+    def test_reference_path_files_untouched_by_analysis(self):
+        from data.reference_path_loader import list_available_reference_paths
+        from ui.race_strategy_uat import run_road_distance_semantics_uat
+        f = (ROOT / "data" / "track_models" /
+             "fuji_international_speedway__fuji_international_speedway__full_course.reference_path.json")
+        before = _hash(f)
+        list_available_reference_paths()
+        for kind in ("cumulative", "reset", "inconsistent", "insufficient", "unknown"):
+            run_road_distance_semantics_uat(kind)
+        assert _hash(f) == before
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

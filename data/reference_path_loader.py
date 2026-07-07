@@ -525,3 +525,56 @@ def resolve_trusted_lap_length(track_id: str, layout_id: str,
     except Exception:
         pass
     return None
+
+
+def validate_reference_path_candidate(path, *, expected_track_id: str = "",
+                                      expected_layout_id: str = "") -> dict:
+    """Validate a CANDIDATE reference-path file before registering it. Read-only.
+
+    Returns {ok, errors, warnings, track_id, layout_id, station_count, lap_length_m,
+    source}. Gives clear, actionable errors for incomplete / malformed candidates so
+    future approved assets can be added cleanly. Never raises; writes nothing; invents
+    nothing. When ``expected_*`` ids are supplied, an identity mismatch is an error.
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+    try:
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "errors": [f"file not found: {p}"], "warnings": [],
+                    "track_id": "", "layout_id": "", "station_count": 0,
+                    "lap_length_m": 0.0, "source": "missing"}
+        if p.suffix != ".json":
+            warnings.append("file does not end in .json — the loader scans "
+                            "'*.reference_path.json'")
+        res = load_reference_path_file(p)
+        if not res.has_stations:
+            errors.extend(res.warnings or ("no usable stations",))
+            return {"ok": False, "errors": errors, "warnings": warnings,
+                    "track_id": "", "layout_id": "", "station_count": 0,
+                    "lap_length_m": 0.0, "source": res.source}
+        a = res.asset
+        if not a.track_id:
+            errors.append("missing track_id / track_location_id")
+        if not a.layout_id:
+            errors.append("missing layout_id")
+        if not (a.lap_length_m and a.lap_length_m > 0):
+            warnings.append("no positive lap length — road-distance fallback will be "
+                            "unavailable for this asset unless a manifest provides one")
+        if a.station_count < 2:
+            errors.append("a usable reference path needs at least two stations")
+        if expected_track_id or expected_layout_id:
+            ok, msg = validate_reference_path_identity(
+                a, expected_track_id, expected_layout_id)
+            if not ok:
+                errors.append(msg)
+        warnings.extend(res.warnings or ())
+        return {"ok": not errors, "errors": errors,
+                "warnings": list(dict.fromkeys(warnings)),
+                "track_id": a.track_id, "layout_id": a.layout_id,
+                "station_count": a.station_count, "lap_length_m": a.lap_length_m,
+                "source": a.source}
+    except Exception as exc:  # never raise out of a validator
+        return {"ok": False, "errors": [f"could not read candidate: {exc}"],
+                "warnings": warnings, "track_id": "", "layout_id": "",
+                "station_count": 0, "lap_length_m": 0.0, "source": "missing"}

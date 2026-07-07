@@ -556,14 +556,70 @@ no pit call / setup Apply / command appears.
 
 ---
 
+## Group 59 additions (Reference Path Assets & Road-Distance Semantics Validation)
+
+Group 59 adds a **deterministic validator** for GT7 `road_distance` zero-point semantics, hardens the
+reference-path asset registry, and honestly discloses that the road-distance fallback **assumes**
+cumulative semantics. **No new production reference-path assets were added** — the repo already ships
+two trustworthy calibration-sourced approved paths (Fuji Full Course + Daytona Road Course), both of
+which already load and register. Group 59 invents nothing and never raises confidence beyond the evidence.
+
+### Road-distance semantics validator (pure)
+
+`data/road_distance_semantics.py` analyses lap-boundary `road_distance` samples and reports one of:
+`CUMULATIVE_CONFIRMED`, `PER_LAP_RESET_CONFIRMED`, `INCONSISTENT`, `INSUFFICIENT_EVIDENCE`, `UNKNOWN`.
+It records lap-start, lap-end, per-lap delta, compares the delta to a **trusted** lap length (only when
+one exists), needs **≥2 laps** to confirm anything, flags negative deltas, rejects NaN/inf, and never
+assumes the answer. It is a **UAT / analysis tool** — it does **not** change live strategy behaviour.
+
+Offline UAT helper: `run_road_distance_semantics_uat(kind)` with `kind ∈ {cumulative, reset, inconsistent,
+insufficient, unknown}` returns the pure result (lap deltas, lap-length comparison, status, warnings).
+
+### Live render disclosure (honest, conservative)
+
+When the fallback is active, the Live Replan Snapshot now discloses the assumption:
+- `road-distance semantics: cumulative behaviour assumed from lap-start reference`
+- `zero-point validation: insufficient evidence (per-track validation pending)`
+- a warning that the fallback uses **unconfirmed** cumulative semantics and **confidence stays capped**.
+
+Approved-path progress shows **no** semantics disclosure (it is genuinely map-matched).
+
+### How to add a future approved reference-path asset
+
+1. Obtain **real** approved calibration output — do **not** invent geometry.
+2. Save it as `*.reference_path.json` in `data/track_models/` (or a track-library layout dir), using the
+   explicit `reference_path_v1` shape or the Group 17 calibration shape (`track_location_id` + `points`).
+3. Validate it first: `validate_reference_path_candidate(path, expected_track_id=…, expected_layout_id=…)`
+   returns `{ok, errors, warnings, …}` — fix any errors (missing ids, <2 stations, identity mismatch).
+4. The loader then discovers it by scan + identity match; `list_available_reference_paths()` includes it
+   and `resolve_trusted_lap_length()` prefers its lap length.
+
+### Manual UAT
+
+**Fuji Full Course / Daytona Road Course**: approved path loads → live progress resolves HIGH near the
+path; the fallback does not override it; **no** semantics disclosure appears (map-matched); advisory-only;
+no pit/command/Apply control.
+
+**Track without an approved path**: `approved reference path unavailable`; the fallback activates only with
+valid road-distance + a trusted lap length; it is labelled approximate/lower-confidence **with** the
+semantics disclosure; confidence is never HIGH; missing evidence stays visible; advisory-only.
+
+**Road-distance semantics UAT** (2+ laps, same track/layout): the report shows lap-start road distance,
+lap-end road distance, per-lap delta, comparison with the trusted lap length, and the
+cumulative/reset/inconsistent/insufficient status with warnings for weak/missing evidence.
+
+---
+
 ## Known caveats
 
-- **Approved reference-path assets ship only for Fuji Full Course and Daytona Road Course.**
-  Other track/layouts use the **road-distance fallback** (when a trusted lap length exists) or
-  honestly report "approved reference path unavailable".
-- The fallback derives per-lap distance from a lap-start reference (GT7 `road_distance` is
-  cumulative). Confirming the packet field's absolute zero-point across more tracks, and a local
-  nearest-station search window / hysteresis, are **deferred to Group 59+**.
+- **Approved reference-path assets ship only for Fuji Full Course and Daytona Road Course** — no other
+  trustworthy assets currently exist to import (do not fabricate). Other track/layouts use the
+  **road-distance fallback** (when a trusted lap length exists) or report "approved reference path unavailable".
+- **GT7 `road_distance` zero-point behaviour is still formally unconfirmed across tracks.** The fallback
+  assumes cumulative semantics (deriving per-lap distance from a lap-start reference) and **discloses this**
+  with capped confidence; `data/road_distance_semantics.py` is the tool to confirm it on real multi-lap
+  captures. A strictly correctness-preserving local nearest-station search window / hysteresis remains
+  **deferred to Group 60+**.
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is

@@ -274,6 +274,16 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
         found.extend(ev.get("found", []))
         missing_extra.extend(ev.get("missing", []))
         prog_warnings.extend(ev.get("warnings", []))
+        # Group 59: when fallback is active, disclose the (unvalidated) road-distance
+        # zero-point assumption honestly — the confidence stays capped regardless.
+        if is_fallback_result(tp) and getattr(tp, "has_progress", False):
+            found.append("road-distance semantics: cumulative behaviour assumed "
+                         "from lap-start reference")
+            found.append("zero-point validation: insufficient evidence "
+                         "(per-track validation pending)")
+            prog_warnings.append(
+                "road-distance fallback using unconfirmed cumulative semantics — "
+                "progress remains approximate and confidence capped")
         # Only map-matched (non-fallback) progress can corroborate the pit lane.
         if (not is_fallback_result(tp)) and getattr(tp, "usable_for_pit", False) and \
                 str(result.pit_corroboration or "none") not in (
