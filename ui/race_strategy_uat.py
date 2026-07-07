@@ -380,6 +380,75 @@ def run_real_capture_road_distance_uat(kind: str = "fuji", lap_length_m: float =
         car_id="fixture_car", lap_length_m=L)
 
 
+def build_raw_live_capture_fixture(kind: str = "cumulative", *, lap_length_m: float = 4563.0,
+                                   laps: int = 3, samples_per_lap: int = 40):
+    """Build a deterministic `LiveRoadDistanceCapture` for a raw-live-packet scenario.
+
+    ``kind``:
+      cumulative      → road_distance runs 0..N·lap across the whole run.
+      reset           → road_distance runs 0..lap each lap then resets.
+      non_distance    → the Group 60 lesson: per-lap span is tiny vs lap length.
+      inconsistent    → one lap sweeps backward.
+      insufficient    → only one lap.
+    """
+    from data.live_road_distance_capture import LiveRoadDistanceCapture
+    L = float(lap_length_m)
+    cap = LiveRoadDistanceCapture(track_id="fixture_track",
+                                  layout_id="fixture_track__layout", car_id="fixture_car")
+
+    def _sweep(lap_number, start, cover):
+        for j in range(samples_per_lap + 1):
+            cap.add_packet(type("P", (), {
+                "road_distance": start + cover * (j / samples_per_lap),
+                "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0, "speed_kmh": 200.0})(),
+                lap_number=lap_number)
+
+    if kind == "reset":
+        for lp in range(1, laps + 1):
+            _sweep(lp, 0.0, L)
+    elif kind == "non_distance":     # spans only ~2.5% of the lap (Fuji/Daytona lesson)
+        for lp in range(1, laps + 1):
+            _sweep(lp, -16.0, L * 0.025)
+    elif kind == "inconsistent":
+        _sweep(1, 0.0, L)
+        _sweep(2, L, -L)
+    elif kind == "insufficient":
+        _sweep(1, 0.0, L)
+    else:                            # cumulative
+        for lp in range(1, laps + 1):
+            _sweep(lp, (lp - 1) * L, L)
+    return cap
+
+
+def run_raw_live_capture_uat(kind: str = "cumulative", *, lap_length_m: float = 4563.0):
+    """Group 61 raw-live-packet semantics UAT (offline; no AI, no writes).
+
+    Builds a deterministic raw capture, runs it through the SAME Group 60 analysis flow,
+    and returns the ``CaptureAnalysisResult`` (exposing ``.capture_status`` incl. the
+    Group 61 NON_DISTANCE_LIKE verdict). Use ``build_capture_report(result)`` to print.
+    """
+    from data.live_road_distance_capture import analyse_live_capture
+    cap = build_raw_live_capture_fixture(kind, lap_length_m=lap_length_m)
+    return analyse_live_capture(cap, lap_length_m=lap_length_m)
+
+
+def save_raw_capture_to_path(capture, path) -> bool:
+    """Write a raw capture to an EXPLICIT path as JSON (Group 61 UAT). Returns success.
+
+    Writes ONLY to the caller-supplied path — never to any runtime project file. Never
+    raises. This is the single, explicit place a capture may be persisted for offline
+    analysis; the pure capture module itself performs no I/O.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        data = capture.to_capture_dict() if hasattr(capture, "to_capture_dict") else dict(capture)
+        _Path(path).write_text(_json.dumps(data, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def _uat_safety_checks(html: str, vm) -> dict:
     """Read-only assertions that the surface exposes no setup power / certainty."""
     lowered = html.lower()

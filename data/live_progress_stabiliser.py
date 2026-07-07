@@ -218,3 +218,53 @@ def stabilise_progress(
         c = current if isinstance(current, LiveTrackProgressResult) else LiveTrackProgressResult()
         return StabilisedProgress(result=c, stabilised_confidence=c.confidence,
                                   notes=("stabiliser error — passthrough",))
+
+
+# ---------------------------------------------------------------------------
+# Stateful holder (Group 61) — retains previous progress across live refreshes
+# ---------------------------------------------------------------------------
+
+class LiveProgressStabiliserState:
+    """A tiny, explicit state holder that carries previous progress between updates.
+
+    Pure logic (Qt-free, no I/O). It resets automatically when the identity key
+    (track/layout/car/session) changes, so state never bleeds across sessions,
+    tracks, or cars. It only ever produces a ``StabilisedProgress`` — it never
+    changes the reported progress value, never inflates confidence, and touches no
+    pit state. Never raises.
+    """
+
+    def __init__(self, *, max_progress_jump: float = _DEFAULT_MAX_JUMP):
+        self._max_jump = float(max_progress_jump)
+        self._prev: Optional[LiveTrackProgressResult] = None
+        self._identity_key: str = ""
+
+    def reset(self) -> None:
+        self._prev = None
+        self._identity_key = ""
+
+    @property
+    def identity_key(self) -> str:
+        return self._identity_key
+
+    def update(self, current: LiveTrackProgressResult, *,
+               identity_key: str = "", continuity_ok: Optional[bool] = None
+               ) -> StabilisedProgress:
+        """Stabilise ``current`` against the retained previous result. Never raises."""
+        try:
+            key = str(identity_key or "")
+            if key != self._identity_key:
+                # New session/track/car → drop stale history.
+                self._prev = None
+                self._identity_key = key
+            sp = stabilise_progress(current, self._prev,
+                                    max_progress_jump=self._max_jump,
+                                    continuity_ok=continuity_ok)
+            # Retain only real progress as the next comparison anchor.
+            if current is not None and getattr(current, "has_progress", False):
+                self._prev = current
+            return sp
+        except Exception:
+            c = current if isinstance(current, LiveTrackProgressResult) else LiveTrackProgressResult()
+            return StabilisedProgress(result=c, stabilised_confidence=c.confidence,
+                                      notes=("stabiliser state error — passthrough",))

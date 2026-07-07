@@ -84,8 +84,23 @@ class CaptureAnalysisResult:
                 else RoadDistanceSemanticsStatus.UNKNOWN)
 
     @property
+    def capture_status(self) -> RoadDistanceSemanticsStatus:
+        """The honest capture-level verdict (Group 61).
+
+        Promotes the raw semantics status to ``NON_DISTANCE_LIKE`` when the captured
+        road_distance clearly does not span the lap (``span_covers_lap`` is False) —
+        i.e. the field is not a lap-distance measure at all (the Fuji/Daytona lesson).
+        Otherwise it is the validator's own status.
+        """
+        if self.span_covers_lap is False:
+            return RoadDistanceSemanticsStatus.NON_DISTANCE_LIKE
+        return self.status
+
+    @property
     def confirmed(self) -> bool:
-        return bool(self.semantics is not None and self.semantics.is_confirmed)
+        # Confirmed only when the validator confirms AND the field spans the lap.
+        return bool(self.semantics is not None and self.semantics.is_confirmed
+                    and self.span_covers_lap is not False)
 
 
 # ---------------------------------------------------------------------------
@@ -255,12 +270,17 @@ def build_capture_report(result: CaptureAnalysisResult) -> List[str]:
         if result.max_span_m is not None:
             rows.append(f"Max per-lap span: {result.max_span_m:,.1f} m")
         # Honest status — never claim confirmation the validator did not make.
-        rows.append(f"Semantics status: {result.status.value}")
+        rows.append(f"Semantics status (validator): {result.status.value}")
+        rows.append(f"Capture verdict: {result.capture_status.value}")
+        if result.capture_status == RoadDistanceSemanticsStatus.NON_DISTANCE_LIKE:
+            rows.append("The captured road_distance is NOT a lap-distance measure — "
+                        "fallback CANNOT be trusted for this capture.")
         if result.semantics is not None and result.semantics.message:
             rows.append(f"Reason: {result.semantics.message}")
         if not result.confirmed:
             rows.append("Confidence: NOT confirmed — treat road-distance fallback as "
-                        "approximate/lower-confidence (unchanged).")
+                        "approximate/lower-confidence (unchanged). Production behaviour "
+                        "is NOT changed by this capture.")
         for w in result.warnings:
             rows.append(f"Warning: {w}")
         rows.append(f"Next action: {result.next_action}")
