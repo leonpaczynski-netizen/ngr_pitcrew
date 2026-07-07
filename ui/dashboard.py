@@ -4862,12 +4862,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             )
             event_settings = dict(getattr(self, "_last_race_plan_inputs", {}) or {})
             track_context, live_progress = self._resolve_live_pit_lane_context()
+            live_position, reference_stations, identity_ok = \
+                self._resolve_live_track_progress_context()
             result = build_live_replan_snapshot(
                 pre_race_result=pre,
                 live_source=self,                 # dashboard: reads _tracker + _last_packet
                 event_settings=event_settings,
                 track_context=track_context,      # Group 55: pit-lane mapping (or None)
-                live_progress=live_progress,      # Group 55: live lap progress (or None)
+                live_progress=live_progress,      # Group 55: explicit lap progress (or None)
+                live_position=live_position,      # Group 56: live world XYZ (or None)
+                reference_stations=reference_stations,  # Group 56: approved path (or None)
+                identity_ok=identity_ok,
                 generated_at=time.strftime("%H:%M:%S"),
             )
             label.setText(render_live_replan_text(result))
@@ -4904,16 +4909,72 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                         break
         except Exception:
             track_context = None
-        # Live normalised lap-progress: only used if the app ever exposes one.
+        # Live normalised lap-progress: an explicit override only (Group 56 now
+        # derives progress from world position, so this is usually None).
         try:
             lp = getattr(self, "_live_lap_progress", None)
-            if lp is None and self._tracker is not None:
-                lp = getattr(self._tracker, "lap_progress", None)
             if lp is not None:
                 live_progress = float(lp)
         except Exception:
             live_progress = None
         return track_context, live_progress
+
+    def _resolve_live_track_progress_context(self):
+        """Resolve (live_position, reference_stations, identity_ok) for Group 56.
+
+        Read-only and defensive. Returns (None, None, True) whenever the live world
+        position or an approved reference path is unavailable, so live replan degrades
+        cleanly. Never raises. The reference path is loaded read-only from the existing
+        track-model files; no calibration workflow is run here and nothing is mutated.
+        """
+        live_position = None
+        reference_stations = None
+        identity_ok = True
+        try:
+            if self._tracker is not None:
+                live_position = getattr(self._tracker, "live_world_position", None)
+            if live_position is None:
+                p = getattr(self, "_last_packet", None)
+                if p is not None and all(hasattr(p, a) for a in ("pos_x", "pos_y", "pos_z")):
+                    live_position = (float(p.pos_x), float(p.pos_y), float(p.pos_z),
+                                     float(getattr(p, "speed_kmh", 0.0) or 0.0))
+        except Exception:
+            live_position = None
+        try:
+            ec = self._build_event_context()
+            track = str(getattr(ec, "track", "") or "").strip()
+            layout_id = str(getattr(ec, "layout_id", "") or "").strip()
+            if track:
+                from data.live_track_progress import build_track_path_stations
+                ref_path = self._load_reference_path_readonly(track, layout_id)
+                if ref_path is not None:
+                    reference_stations = build_track_path_stations(ref_path)
+                    if not reference_stations:
+                        reference_stations = None
+        except Exception:
+            reference_stations = None
+        return live_position, reference_stations, identity_ok
+
+    def _load_reference_path_readonly(self, track: str, layout_id: str):
+        """Load an approved/reference track path (read-only) or None. Never raises.
+
+        Tries a few track-id spellings via the existing track-model reference-path
+        loader. No mutation, no calibration, no writes.
+        """
+        try:
+            from data.track_calibration import (
+                import_reference_path_json, reference_path_filename, TRACK_MODELS_DIR,
+            )
+            candidates = []
+            for tid in (track, track.lower().replace(" ", "_")):
+                candidates.append((tid, layout_id or tid))
+            for tid, lid in candidates:
+                path = TRACK_MODELS_DIR / reference_path_filename(tid, lid)
+                if path.exists():
+                    return import_reference_path_json(path)
+        except Exception:
+            return None
+        return None
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.

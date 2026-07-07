@@ -46,6 +46,12 @@ from data.pit_lane_resolver import (
     resolve_pit_lane_zone,
     segments_mapping_confidence,
 )
+from data.live_track_progress import (
+    LiveTrackProgressResult,
+    TrackProgressConfidence,
+    build_track_path_stations,
+    resolve_live_track_progress,
+)
 
 # Provenance labels for each populated field.
 SRC_LIVE = "live_telemetry"
@@ -72,6 +78,8 @@ class LiveReplanStateResult:
     pit_lane_mapping_confidence: str = "NONE"  # NONE/LOW/MEDIUM/HIGH — trust in the map
     pit_evidence_confidence: str = "UNKNOWN"   # combined pit confidence (may upgrade, capped)
     pit_corroboration: str = "none"          # corroborated/contradicted/position_unknown/no_mapping/...
+    # Group 56: live world-position → track-progress evidence (or None when unavailable).
+    track_progress: Optional["LiveTrackProgressResult"] = None
 
 
 # Group 55: corroboration outcome labels.
@@ -305,6 +313,57 @@ def summarise_live_state_sources(result: LiveReplanStateResult) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Group 56: live world-position → track-progress evidence
+# ---------------------------------------------------------------------------
+
+def resolve_live_progress_evidence(
+    *,
+    position=None,
+    reference_stations=None,
+    track_context=None,
+    track_id=None,
+    layout_id=None,
+    identity_ok: bool = True,
+    speed_kph=None,
+) -> LiveTrackProgressResult:
+    """Resolve a live world position to read-only track progress. Never raises.
+
+    ``reference_stations`` (a prebuilt station list) wins; otherwise stations are
+    built from ``track_context`` (if it carries a reference path). Returns an
+    UNKNOWN result when position or path is unavailable — never guesses.
+    """
+    try:
+        stations = reference_stations
+        if not stations and track_context is not None:
+            stations = build_track_path_stations(track_context)
+        tid = track_id
+        lid = layout_id
+        if (tid is None or lid is None) and isinstance(track_context, dict):
+            tid = tid if tid is not None else track_context.get("track_id")
+            lid = lid if lid is not None else track_context.get("layout_id")
+        return resolve_live_track_progress(
+            position, stations or [], track_id=tid, layout_id=lid,
+            identity_ok=identity_ok, speed_kph=speed_kph, source="live_telemetry",
+        )
+    except Exception:
+        return LiveTrackProgressResult(
+            confidence=TrackProgressConfidence.UNKNOWN, source="live_telemetry",
+            message="Track progress unavailable.",
+            warnings=("track progress unavailable, pit-lane corroboration disabled",),
+        )
+
+
+def attach_track_progress(
+    result: LiveReplanStateResult,
+    progress_result: Optional[LiveTrackProgressResult],
+) -> LiveReplanStateResult:
+    """Attach a resolved track-progress result to a live-state result (read-only)."""
+    if progress_result is None:
+        return result
+    return _dc_replace(result, track_progress=progress_result)
+
+
+# ---------------------------------------------------------------------------
 # Group 55: pit-lane mapping corroboration
 # ---------------------------------------------------------------------------
 
@@ -332,6 +391,11 @@ def apply_pit_lane_evidence(
 
     The tracker's pit confidence uses HIGH to mean "no pit yet — 0 stops is
     certain"; that is not a *detected* pit, so it is never further upgraded here.
+    Group 56: when ``live_progress`` is not supplied explicitly, a MEDIUM/HIGH
+    track-progress result attached to ``result`` (from the live position resolver)
+    is used as the progress source. LOW/UNKNOWN track progress is NEVER used to lift
+    pit confidence — it falls through to the "position unknown" path.
+
     Returns a NEW result (never mutates); never raises.
     """
     try:
@@ -343,6 +407,13 @@ def apply_pit_lane_evidence(
         has_mapping = bool(segments)
         map_conf = segments_mapping_confidence(segments)
         map_source = _mapping_source(track_context, segments)
+
+        # Group 56: fall back to the resolved live track progress when no explicit
+        # progress was given — but ONLY when it is MEDIUM/HIGH confidence.
+        if live_progress is None and result.track_progress is not None:
+            tp = result.track_progress
+            if getattr(tp, "usable_for_pit", False):
+                live_progress = tp.progress
 
         progress = normalise_progress(live_progress)
         warnings = list(result.warnings)
