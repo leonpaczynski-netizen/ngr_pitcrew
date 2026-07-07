@@ -121,6 +121,70 @@ can see the readiness drop and the missing-evidence guidance appear.
 
 ---
 
+## Group 52 additions (Phase 6 — UAT harness & read-only replan foundation)
+
+### Structured UAT verification harness
+
+`ui/race_strategy_uat.py::run_fuji_race_plan_uat_check()` runs the whole Race Plan
+surface offline and returns a **structured, testable** `FujiUatCheckResult` (not just
+printed text): event/session validation, readiness level, clean-lap count, fuel + tyre
+evidence flags, candidate count, recommended plan, one-stop vs two-stop total times,
+whether the push plan was rejected, missing evidence, warnings, a `safety_checks` dict,
+and `passed` / `failure_reasons`.
+
+```python
+from ui.race_strategy_uat import run_fuji_race_plan_uat_check
+c = run_fuji_race_plan_uat_check()
+assert c.passed and c.readiness_level == "READY"
+assert c.one_stop_total_time == "51:52.0" and c.two_stop_total_time == "52:28.0"
+assert c.push_plan_rejected_or_not_recommended
+```
+
+**UAT outcome (Group 52): no defects found.** The full and incomplete Porsche/Fuji
+scenarios both behave correctly — the surface never crashes, keeps missing evidence
+visible, keeps legal candidates only, does not recommend the rear-fragile push plan,
+and emits no false-certainty wording. The behaviours are pinned by
+`tests/test_group52_race_plan_uat_remediation.py` as regression guards.
+
+### Read-only live-replan readiness foundation (NOT live yet)
+
+`strategy/race_strategy_replan.py` is a **pure, advisory-only** foundation for a future
+live/mid-race replan. It does **not** connect live telemetry, make pit calls, send driver
+commands, change setup, or write anything.
+
+- `RaceReplanState` — reported current race state (current lap, fuel remaining %, current
+  compound, tyre age, remaining laps/time, pit stops completed, …). Every field defaults
+  to **unknown** (`None`); nothing is fabricated, and **unknown tyre state is never treated
+  as safe**.
+- `validate_replan_state(state)` — honest per-field validation (missing fuel / compound /
+  remaining distance / tyre age flagged, never crashes).
+- `assess_replan_readiness(state)` — `READY / PARTIAL / LOW_CONFIDENCE /
+  INSUFFICIENT_EVIDENCE` (no fuel/compound/distance → INSUFFICIENT; tyre unknown →
+  LOW_CONFIDENCE).
+- `build_replan_snapshot(*, pre_race_result, state, …)` — read-only `RaceReplanSnapshot`:
+  is the pre-race plan still viable? It compares reported fuel remaining to the pre-race
+  burn rate over the laps to the next planned stop; advisory options are the pre-race
+  Group 48 scored candidates (labelled *pre-race estimates* — no invented live numbers);
+  confidence is capped at MEDIUM (LOW when tyre is unknown); `INSUFFICIENT_EVIDENCE` when
+  critical state or a pre-race plan is missing. Every snapshot carries the standing note:
+  *"Advisory only — no pit call, setup change, or driver command is applied."*
+
+```python
+from strategy.race_strategy_replan import RaceReplanState, build_replan_snapshot
+from ui.race_strategy_uat import run_fuji_uat
+snap = build_replan_snapshot(
+    pre_race_result=run_fuji_uat(),
+    state=RaceReplanState(current_lap=10, fuel_remaining_pct=8.0, current_compound="RM",
+                          tyre_age_laps=10, remaining_laps=20, pit_stops_completed=0))
+# snap.current_plan_still_viable == False  (fuel below expected)  → advisory options shown
+```
+
+The Strategy Builder shows a **read-only "Live Replan Readiness" placeholder** that says
+live telemetry is *not connected yet* and lists the state a future replan will need. It is
+a labelled wiring point only — no button, no loop, no action.
+
+---
+
 ## Safety guarantees (unchanged since Group 43)
 
 - No API key required to build a Race Plan.

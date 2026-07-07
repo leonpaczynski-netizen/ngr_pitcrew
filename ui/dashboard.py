@@ -4801,6 +4801,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                            styleSheet="color:#AAA; font-size:11px; padding-top:4px;"))
         v.addWidget(self._race_plan_table)
 
+        # Group 52: read-only Live Replan Readiness placeholder (NOT wired to live
+        # telemetry — a labelled foundation only; makes no pit calls, applies nothing).
+        try:
+            from strategy.race_strategy_replan import replan_placeholder_message
+            _replan_msg = replan_placeholder_message()
+        except Exception:
+            _replan_msg = "Live Replan Readiness: not connected yet."
+        self._rp_replan_placeholder = QLabel(_replan_msg)
+        self._rp_replan_placeholder.setWordWrap(True)
+        self._rp_replan_placeholder.setStyleSheet(
+            "color: #888; font-size: 11px; padding: 6px 2px; border-top: 1px solid #333; margin-top: 4px;")
+        v.addWidget(self._rp_replan_placeholder)
+
         return box
 
     def _assemble_race_plan_inputs(self) -> dict:
