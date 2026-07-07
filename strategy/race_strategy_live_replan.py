@@ -129,13 +129,33 @@ def build_live_replan_snapshot(
 
 
 def render_live_replan_text(result: LiveReplanResult) -> str:
-    """Plain-text advisory rendering of a live replan result."""
+    """Plain-text advisory rendering of a live replan result (incl. pit/tyre state)."""
     lines = ["Live Replan Snapshot", f"Status: {result.status}",
              f"Confidence: {result.confidence.value}"]
     if result.driver_message:
         lines.append(f"Reason: {result.driver_message}")
+
+    # Group 54: honest live-state breakdown (found + missing, with provenance).
+    st = result.state
+    srcs = dict(result.state_sources or {})
+    found: list[str] = []
+    if st.current_lap is not None:
+        found.append(f"current lap: {st.current_lap}")
+    if st.fuel_remaining_pct is not None:
+        found.append(f"fuel remaining: {st.fuel_remaining_pct:.0f}%")
+    if st.current_compound:
+        found.append(f"current compound: {st.current_compound}")
+    if st.tyre_age_laps is not None:
+        found.append(f"laps since pit: {st.tyre_age_laps} ({srcs.get('tyre_age_laps', 'live')})")
+    if st.pit_stops_completed is not None:
+        found.append(f"pit stops completed: {st.pit_stops_completed} ({srcs.get('pit_stops_completed', 'live')})")
+    if found:
+        lines.append("Found:")
+        lines.extend(f"  - {f}" for f in found)
     if result.missing_state:
-        lines.append("Missing: " + ", ".join(result.missing_state))
+        lines.append("Missing:")
+        lines.extend(f"  - {m}" for m in result.missing_state)
+
     lines.append(render_replan_snapshot_text(result.snapshot))
     return "\n".join(lines)
 
@@ -167,3 +187,34 @@ def fuji_live_state_fuel_short() -> RaceReplanState:
 def fuji_live_state_missing() -> RaceReplanState:
     """Current lap known, but fuel / compound / remaining distance unknown."""
     return RaceReplanState(current_lap=12)
+
+
+# --- Group 54: pit/tyre-age fixtures ---------------------------------------
+
+def fuji_live_state_pre_pit_healthy() -> RaceReplanState:
+    """Before any pit: lap 12, tyre age = 12 (tracked, certain), pit stops = 0.
+
+    With tyre age + pit count known, replan confidence can rise above LOW.
+    """
+    return RaceReplanState(
+        current_lap=12, elapsed_time_seconds=1200.0, remaining_laps=18,
+        remaining_time_seconds=1800.0, fuel_remaining_pct=60.0,
+        current_compound="RM", tyre_age_laps=12, pit_stops_completed=0,
+    )
+
+
+def fuji_live_state_just_pitted() -> RaceReplanState:
+    """Just after a pit: lap 18, fresh tyres (age 1), pit stops = 1, RS compound."""
+    return RaceReplanState(
+        current_lap=18, elapsed_time_seconds=1800.0, remaining_laps=12,
+        remaining_time_seconds=1200.0, fuel_remaining_pct=95.0,
+        current_compound="RS", tyre_age_laps=1, pit_stops_completed=1,
+    )
+
+
+def fuji_live_state_missing_pit() -> RaceReplanState:
+    """Fuel + lap + distance known, but tyre age + pit count unknown → LOW confidence."""
+    return RaceReplanState(
+        current_lap=12, fuel_remaining_pct=54.0, current_compound="RM",
+        remaining_laps=18, remaining_time_seconds=1800.0,
+    )

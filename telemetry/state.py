@@ -7,6 +7,11 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 from .packet import GT7Packet
+from .pit_state import (
+    PitStintState, PitEvent, PitDetectionConfidence,
+    start_stint_tracking, apply_lap_completed, apply_pit_event,
+    classify_pit_confidence,
+)
 
 
 class TyreState(enum.Enum):
@@ -253,6 +258,32 @@ class RaceStateTracker:
     def tyre_states(self) -> dict[str, TyreState]:
         return dict(self._tyre_states)
 
+    # --- Group 54: read-only pit / stint state ---------------------------
+    @property
+    def pit_stint_state(self) -> PitStintState:
+        """The current runtime pit/stint state (pure model; read-only)."""
+        return self._pit_stint
+
+    @property
+    def pit_stops_completed(self) -> int:
+        """Detected pit stops so far (0 = none detected)."""
+        return self._pit_stint.pit_stops_completed
+
+    @property
+    def laps_since_pit(self) -> int:
+        """Laps completed on the current stint since the last pit / race start."""
+        return self._pit_stint.laps_since_pit
+
+    @property
+    def tyre_age_laps(self) -> "int | None":
+        """Laps on the current tyre set, or None when pit/stint tracking is inactive."""
+        return self._pit_stint.tyre_age_laps
+
+    @property
+    def pit_state_confidence(self) -> str:
+        """Confidence of the pit/stint state: HIGH / MEDIUM / LOW / UNKNOWN."""
+        return self._pit_stint.pit_detection_confidence.value
+
     def update(self, packet: GT7Packet) -> None:
         now = time.monotonic()
 
@@ -387,6 +418,8 @@ class RaceStateTracker:
         self._lap_fuel_hist: list[float] = []
         self._lap_time_hist: list[int]   = []
         self._pit_lap: bool = False
+        # Group 54: runtime-only pit/stint state (pure model; no persistence).
+        self._pit_stint: PitStintState = PitStintState()
         self._outlap_pending: bool = False  # True after pit exit in practice; next lap recorded as out-lap
         self._race_is_active: bool = False  # True after RACE_STARTED; drives session_type on LapRecord
         self._fuel_warned: bool = False    # True once FUEL_LOW emitted; reset on pit exit
@@ -512,6 +545,10 @@ class RaceStateTracker:
             ):
                 self._phase = RacePhase.RACING
                 self._race_start_time = now
+                # Group 54: begin read-only pit/stint tracking at race start.
+                # 0 pits so far is certain; the stint ages from here (tyres started on).
+                self._pit_stint = start_stint_tracking(
+                    self._pit_stint, start_lap=len(self._lap_time_hist))
                 # Prefer the pre-race max over the current packet value; the current
                 # packet may already show a decremented count if the S/F line was
                 # crossed before we hit the 80 km/h speed threshold.
@@ -648,6 +685,17 @@ class RaceStateTracker:
 
     def _exit_pit(self, p: GT7Packet, now: float) -> None:
         fuel_added = p.fuel_level - self._fuel_at_pit_entry
+        # Group 54: count the completed pit stop and reset the stint age. Confidence
+        # is MEDIUM when a real refuel was seen, LOW for a speed-only (no-refuel) stop.
+        _pit_conf = classify_pit_confidence(fuel_added, self._pit_threshold)
+        self._pit_stint = apply_pit_event(
+            self._pit_stint,
+            pit_lap=len(self._lap_time_hist),
+            confidence=_pit_conf,
+            source=("refuel-detected pit" if _pit_conf == PitDetectionConfidence.MEDIUM
+                    else "speed-stop pit (no refuel)"),
+            event=PitEvent.EXIT,
+        ).state
         self._phase = RacePhase.RACING
         self._fuel_lap_start = p.fuel_level
         self._lap_start_time = now
@@ -711,6 +759,8 @@ class RaceStateTracker:
 
         self._lap_fuel_hist.append(fuel_used)
         self._lap_time_hist.append(lap_ms)
+        # Group 54: age the current stint by one lap (read-only pit/stint state).
+        self._pit_stint = apply_lap_completed(self._pit_stint, len(self._lap_time_hist))
 
         _st = (
             self._session_type_override

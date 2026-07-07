@@ -266,6 +266,64 @@ r = run_fuji_live_replan("missing")     # INSUFFICIENT_EVIDENCE, missing state l
 
 ---
 
+## Group 54 additions (Phase 8 — live pit & tyre-age tracking)
+
+The Group 53 caveat ("tyre age + pit count not tracked → snapshots cap at LOW") is
+now addressed. The `RaceStateTracker` already detected pit entry/exit (fuel-refuel +
+a conservative sustained-stop heuristic — GT7 broadcasts no pit flag); Group 54 adds a
+read-only **pit-stop counter** and **laps-since-pit / tyre-age** tracker on top of that
+existing detection, so live replan can judge tyre age and pit count honestly.
+
+### Pit / stint state model
+
+`telemetry/pit_state.py` — a pure, deterministic state machine:
+
+- `PitStintState` (frozen): `pit_stops_completed`, `laps_since_pit`, `current_stint_index`,
+  `last_pit_lap`, `pit_detection_confidence`, `pit_detection_source`, `tracking_active`,
+  `tyre_age_laps` (= laps_since_pit while tracking, else None).
+- `PitDetectionConfidence`: **HIGH** (no pit yet — the count is certain and tyre age
+  equals the stint), **MEDIUM** (refuel-based pit detection — reliable), **LOW**
+  (speed-only no-refuel stop — uncertain), **UNKNOWN** (tracking not started).
+- Pure updaters `start_stint_tracking` / `apply_lap_completed` / `apply_pit_event`
+  (dedups same-lap events, ignores negative laps, never counts a `NONE` event) +
+  `classify_pit_confidence(fuel_added, threshold)`.
+
+### RaceStateTracker integration (read-only, runtime-only)
+
+`RaceStateTracker` holds a `PitStintState` and updates it from its EXISTING detection:
+start tracking at race start; `apply_lap_completed` on each recorded lap; `apply_pit_event`
+on pit exit (MEDIUM if a refuel was seen, LOW for a speed-only stop). New read-only
+getters: `pit_stops_completed`, `laps_since_pit`, `tyre_age_laps`, `pit_state_confidence`,
+`pit_stint_state`. No persistence, no events changed, no crashes on partial packets.
+
+### Live adapter + confidence
+
+The Group 53 adapter now maps the tracker's pit state into
+`RaceReplanState.tyre_age_laps` + `pit_stops_completed` **only at HIGH/MEDIUM
+confidence** (so they can legitimately lift readiness). At **LOW** confidence the values
+are NOT populated (they can't raise confidence on a guess) but the low-confidence estimate
+is shown honestly ("live_telemetry (low confidence — not used)"). Effect: **before a pit,
+or after a refuel pit, live replan can now reach MEDIUM confidence** instead of being
+capped at LOW; unknown/low-confidence tyre state still caps at LOW; missing fuel/distance
+stays INSUFFICIENT_EVIDENCE. Live confidence is still capped at MEDIUM (live tyre/pace are
+proxies) — it is never forced HIGH.
+
+### UI
+
+The Live Replan surface now lists pit/stint state under **Found** — e.g. `laps since pit:
+12 (live)`, `pit stops completed: 0 (live)` — and keeps them under **Missing** when
+unknown. Still read-only, manual refresh, no pit-command button, no voice.
+
+### Offline pit-state fixtures
+
+```python
+run_fuji_live_replan("pre_pit_healthy")  # tyre age 12, 0 pits → MEDIUM confidence
+run_fuji_live_replan("just_pitted")      # 1 pit, fresh tyres (age 1) → still viable
+run_fuji_live_replan("missing_pit")      # tyre age + pit count unknown → LOW
+```
+
+---
+
 ## Known caveats
 
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is
