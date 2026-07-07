@@ -284,6 +284,15 @@ class RaceStateTracker:
         """Confidence of the pit/stint state: HIGH / MEDIUM / LOW / UNKNOWN."""
         return self._pit_stint.pit_detection_confidence.value
 
+    @property
+    def in_pit(self) -> bool:
+        """True while the tracker's phase is IN_PIT (read-only; Group 55).
+
+        Used only as corroborating context for pit-lane mapping — it applies
+        nothing and makes no pit call.
+        """
+        return self._phase == RacePhase.IN_PIT
+
     def update(self, packet: GT7Packet) -> None:
         now = time.monotonic()
 

@@ -4861,10 +4861,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 build_live_replan_snapshot, render_live_replan_text,
             )
             event_settings = dict(getattr(self, "_last_race_plan_inputs", {}) or {})
+            track_context, live_progress = self._resolve_live_pit_lane_context()
             result = build_live_replan_snapshot(
                 pre_race_result=pre,
                 live_source=self,                 # dashboard: reads _tracker + _last_packet
                 event_settings=event_settings,
+                track_context=track_context,      # Group 55: pit-lane mapping (or None)
+                live_progress=live_progress,      # Group 55: live lap progress (or None)
                 generated_at=time.strftime("%H:%M:%S"),
             )
             label.setText(render_live_replan_text(result))
@@ -4872,6 +4875,45 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             label.setText(
                 f"Live replan snapshot unavailable: {exc}. "
                 "Advisory only; no action is applied.")
+
+    def _resolve_live_pit_lane_context(self):
+        """Resolve (track_context, live_progress) for Group 55 pit-lane corroboration.
+
+        Read-only and defensive: returns (None, None) whenever pit-lane mapping or
+        live lap-progress is unavailable, so live replan degrades to exact Group 54
+        behaviour. Never raises. GT7 does not currently broadcast a normalised
+        lap-progress fraction, so ``live_progress`` is typically None today.
+        """
+        track_context = None
+        live_progress = None
+        try:
+            ec = self._build_event_context()
+            track = str(getattr(ec, "track", "") or "").strip()
+            layout_id = str(getattr(ec, "layout_id", "") or "").strip()
+            if track:
+                from data.track_library import load_track_pit_lane
+                # Try a couple of id spellings; missing mapping → None (graceful).
+                candidates = [track, track.lower().replace(" ", "_")]
+                for track_id in candidates:
+                    block = load_track_pit_lane(track_id, layout_id or track_id)
+                    if block:
+                        track_context = {
+                            "track_id": track_id, "layout_id": layout_id,
+                            "pit_lane": block if "segments" in block else block.get("pit_lane", block),
+                        }
+                        break
+        except Exception:
+            track_context = None
+        # Live normalised lap-progress: only used if the app ever exposes one.
+        try:
+            lp = getattr(self, "_live_lap_progress", None)
+            if lp is None and self._tracker is not None:
+                lp = getattr(self._tracker, "lap_progress", None)
+            if lp is not None:
+                live_progress = float(lp)
+        except Exception:
+            live_progress = None
+        return track_context, live_progress
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.

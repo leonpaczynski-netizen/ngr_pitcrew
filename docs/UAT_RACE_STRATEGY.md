@@ -324,8 +324,78 @@ run_fuji_live_replan("missing_pit")      # tyre age + pit count unknown → LOW
 
 ---
 
+## Group 55 additions (Track-Specific Pit-Lane Mapping & Pit Confidence Upgrade)
+
+Group 55 adds an **independent, corroborating** line of pit evidence: if the car's
+live lap-progress falls inside a track's *known* pit-lane corridor, a detected pit
+event is stronger. **Read-only, advisory-only, evidence-quality only** — it makes
+**no pit call**, sends no command, counts no pit stop, and mutates no track model.
+
+### Pit-lane resolver (pure)
+
+New `data/pit_lane_resolver.py` resolves a normalised lap progress (`0.0–1.0`)
+against explicit pit-lane metadata into one of: **pit entry / pit lane / pit exit /
+not-pit-lane / unknown**. It handles spans that wrap the start/finish line, rejects
+invalid ranges, and returns **UNKNOWN** when no usable mapping exists. A pit lane is
+**never inferred** from ordinary racing segments — only from explicit `pit_lane`
+metadata (see `docs/TRACK_LIBRARY_SCHEMA.md`). Qt/DB/AI/file-write-free; never raises.
+
+### Corroboration rules (evidence-quality only)
+
+`apply_pit_lane_evidence` combines the Group 54 pit confidence with the resolved zone:
+
+| Situation | Result |
+|-----------|--------|
+| No pit-lane mapping for the track | **Group 54 behaviour preserved exactly** |
+| Live progress unknown | No upgrade; "live track progress unavailable" surfaced |
+| Position inside corridor + **refuel** pit (MEDIUM) | Pit evidence upgraded to **HIGH** |
+| Position inside corridor + **speed-only** pit (LOW) | Upgraded to **MEDIUM at most**, never HIGH |
+| Mapping **contradicts** detection (in-pit but on track) | **No upgrade**; contradiction warning |
+| Low-confidence (estimated) map | Cannot certify HIGH — capped at MEDIUM |
+
+Pit count and tyre age still come **solely from the Group 54 tracker** — corroboration
+never touches them. This "pit evidence confidence" is a **separate** signal: the
+**overall** live-replan confidence still obeys the existing cap (never HIGH from proxy
+tyre/pace evidence alone).
+
+### UI / render
+
+The Live Replan surface now adds, when available: `pit lane zone: pit lane (track
+model)`, `pit detection corroborated by pit-lane map`, and `pit confidence:
+high/medium/low`; and under **Missing**: `pit-lane map unavailable for this
+track/layout` / `live track progress unavailable` / `pit event not corroborated by
+track position`. A contradiction shows a `Warning:` line. No "Pit Now" wording anywhere.
+
+### Manual UAT (Porsche 911 RSR '17, Fuji Full Course, 50 min, 8×/3×/1 L/s)
+
+1. Build the pre-race Race Plan.
+2. Start live telemetry.
+3. Refresh Live Replan Snapshot **before** a pit: laps-since-pit + pit stops completed
+   appear; **pit-lane map evidence appears if current progress is available** (GT7 does
+   not yet broadcast a normalised lap-progress, so this typically shows "live track
+   progress unavailable" — that is the honest, expected result and it degrades to
+   Group 54 behaviour).
+4. Enter the pit lane and pit once.
+5. Refresh after pit exit: pit-stop count increments, laps-since-pit resets, and where
+   pit-lane position is available the pit event is **corroborated** — confidence
+   improves only within the allowed caps.
+6. Confirm **no pit command, no setup recommendation, no Apply control, no voice command**.
+
+Note: because the repo has no Fuji **track-library** entry (only Daytona, which has no
+pit-lane data), the pit-lane path exercises via the offline fixture
+`fuji_pit_lane_mapping()` in tests; in the live app a track with no `pit_lane` metadata
+simply degrades to Group 54 behaviour.
+
+---
+
 ## Known caveats
 
+- **Live lap-progress is not yet broadcast by GT7** in a normalised `0–1` form, so the
+  pit-lane corroboration path typically reports "live track progress unavailable" and
+  degrades to Group 54 behaviour. Wiring a real progress source (e.g. from a reference
+  path + world position) is the natural Group 56+ step.
+- **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
+  test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is
   a disclosed lap-drift proxy** and **pit loss is manual / event-supplied**.
 - The session selector lists recent sessions for the current **car + track**

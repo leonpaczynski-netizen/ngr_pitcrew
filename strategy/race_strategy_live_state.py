@@ -35,7 +35,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from dataclasses import replace as _dc_replace
+
 from strategy.race_strategy_replan import RaceReplanState
+from data.pit_lane_resolver import (
+    PitLaneMappingConfidence,
+    PitLaneZone,
+    build_pit_lane_segments_from_track_context,
+    normalise_progress,
+    resolve_pit_lane_zone,
+    segments_mapping_confidence,
+)
 
 # Provenance labels for each populated field.
 SRC_LIVE = "live_telemetry"
@@ -55,6 +65,27 @@ class LiveReplanStateResult:
     missing_state: tuple[str, ...] = ()
     live_fuel_per_lap: float = 0.0   # measured live burn (for the snapshot), 0 = unknown
     pit_state_confidence: str = "UNKNOWN"   # HIGH/MEDIUM/LOW/UNKNOWN from the tracker
+    # Group 55: pit-lane mapping corroboration (all default to "no evidence yet").
+    pit_in_progress: bool = False            # tracker phase == IN_PIT (corroboration context)
+    pit_lane_zone: str = "UNKNOWN"           # PitLaneZone value from the track model
+    pit_lane_source: str = "missing"         # provenance of the pit-lane mapping
+    pit_lane_mapping_confidence: str = "NONE"  # NONE/LOW/MEDIUM/HIGH — trust in the map
+    pit_evidence_confidence: str = "UNKNOWN"   # combined pit confidence (may upgrade, capped)
+    pit_corroboration: str = "none"          # corroborated/contradicted/position_unknown/no_mapping/...
+
+
+# Group 55: corroboration outcome labels.
+CORR_NONE = "none"
+CORR_NO_MAPPING = "no_mapping"
+CORR_POSITION_UNKNOWN = "position_unknown"
+CORR_CORROBORATED = "corroborated"
+CORR_CONTRADICTED = "contradicted"
+CORR_NOT_CORROBORATED = "not_corroborated"
+CORR_IN_LANE_NO_EVENT = "in_pit_lane_no_event"
+
+# Rank helper for capping the combined pit confidence.
+_PIT_CONF_RANK = {"UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+_PIT_CONF_BY_RANK = {v: k for k, v in _PIT_CONF_RANK.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +215,7 @@ def build_replan_state_from_tracker(
         # LOW confidence → keep them MISSING (never lift readiness on a guess) but
         # surface the low-confidence estimate + a warning. UNKNOWN → missing.
         pit_conf = str(getattr(tracker, "pit_state_confidence", "UNKNOWN") or "UNKNOWN")
+        pit_in_progress = bool(getattr(tracker, "in_pit", False))
         tyre_age = None
         pit_stops = None
         tyre_pit_source = SRC_MISSING
@@ -214,6 +246,7 @@ def build_replan_state_from_tracker(
             tyre_pit_source=tyre_pit_source,
             pit_state_confidence=pit_conf,
             extra_warning=pit_warn,
+            pit_in_progress=pit_in_progress,
         )
     except Exception:
         return _empty_result()
@@ -272,6 +305,144 @@ def summarise_live_state_sources(result: LiveReplanStateResult) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Group 55: pit-lane mapping corroboration
+# ---------------------------------------------------------------------------
+
+def apply_pit_lane_evidence(
+    result: LiveReplanStateResult,
+    *,
+    track_context=None,
+    live_progress=None,
+) -> LiveReplanStateResult:
+    """Combine Group 54 pit-event confidence with track-specific pit-lane mapping.
+
+    Evidence-quality only. This NEVER counts a pit stop, never fabricates one, and
+    never touches ``pit_stops_completed`` / ``tyre_age_laps`` — those come solely
+    from the Group 54 tracker. It only adjusts a *separate* pit-evidence confidence
+    signal and records the pit-lane zone/source, per the Group 55 rules:
+
+      • No pit-lane mapping           → Group 54 behaviour preserved exactly.
+      • Live progress unknown         → no upgrade; surfaced as missing evidence.
+      • Position inside the corridor + a refuel pit (MEDIUM) → upgrade to HIGH.
+      • Position inside the corridor + a speed-only pit (LOW) → upgrade to MEDIUM
+        at most (never HIGH).
+      • Mapping contradicts detection (in-pit but position on track) → no upgrade,
+        warning surfaced.
+      • A LOW-confidence (estimated) map cannot lift pit evidence above MEDIUM.
+
+    The tracker's pit confidence uses HIGH to mean "no pit yet — 0 stops is
+    certain"; that is not a *detected* pit, so it is never further upgraded here.
+    Returns a NEW result (never mutates); never raises.
+    """
+    try:
+        base_conf = str(result.pit_state_confidence or "UNKNOWN").upper()
+        pit_detected = base_conf in ("MEDIUM", "LOW")
+        pit_in_progress = bool(result.pit_in_progress)
+
+        segments = build_pit_lane_segments_from_track_context(track_context)
+        has_mapping = bool(segments)
+        map_conf = segments_mapping_confidence(segments)
+        map_source = _mapping_source(track_context, segments)
+
+        progress = normalise_progress(live_progress)
+        warnings = list(result.warnings)
+
+        # --- No mapping → keep Group 54 behaviour exactly. --------------------
+        if not has_mapping:
+            warnings.append("Pit-lane map unavailable for this track/layout.")
+            return _dc_replace(
+                result,
+                pit_lane_zone=PitLaneZone.UNKNOWN.value,
+                pit_lane_source="missing",
+                pit_lane_mapping_confidence=PitLaneMappingConfidence.NONE.value,
+                pit_evidence_confidence=base_conf,
+                pit_corroboration=CORR_NO_MAPPING,
+                warnings=tuple(warnings),
+            )
+
+        # --- Mapping exists but live position is unknown. --------------------
+        if progress is None:
+            warnings.append("Live track progress unavailable — pit-lane position not resolved.")
+            if pit_detected:
+                warnings.append("Pit event not corroborated by track position.")
+            return _dc_replace(
+                result,
+                pit_lane_zone=PitLaneZone.UNKNOWN.value,
+                pit_lane_source=map_source,
+                pit_lane_mapping_confidence=map_conf.value,
+                pit_evidence_confidence=base_conf,
+                pit_corroboration=CORR_POSITION_UNKNOWN,
+                warnings=tuple(warnings),
+            )
+
+        # --- Position resolved against the map. ------------------------------
+        resolution = resolve_pit_lane_zone(progress, segments)
+        zone = resolution.zone
+
+        upgraded = base_conf
+        corroboration = CORR_NOT_CORROBORATED
+
+        if zone.is_inside:
+            if base_conf == "MEDIUM":       # refuel pit corroborated by position
+                upgraded = "HIGH"
+                corroboration = CORR_CORROBORATED
+            elif base_conf == "LOW":        # speed-only pit — lift to MEDIUM, never HIGH
+                upgraded = "MEDIUM"
+                corroboration = CORR_CORROBORATED
+                warnings.append(
+                    "Speed-only pit detection was not allowed to lift confidence above MEDIUM.")
+            else:                           # HIGH (no pit yet) / UNKNOWN — nothing to upgrade
+                corroboration = CORR_IN_LANE_NO_EVENT
+            # A weak map cannot certify a HIGH pit: cap the upgrade at MEDIUM.
+            if map_conf == PitLaneMappingConfidence.LOW and _PIT_CONF_RANK.get(upgraded, 0) > 2:
+                upgraded = "MEDIUM"
+                warnings.append(
+                    "Pit-lane map is low confidence — pit evidence capped at MEDIUM.")
+            if corroboration == CORR_CORROBORATED:
+                warnings.append("Pit detection corroborated by pit-lane map.")
+        elif zone == PitLaneZone.NOT_PIT_LANE:
+            if pit_in_progress:
+                corroboration = CORR_CONTRADICTED
+                warnings.append(
+                    "Pit event was detected but live position did not match pit-lane mapping.")
+            else:
+                corroboration = CORR_NOT_CORROBORATED
+                if pit_detected:
+                    warnings.append("Pit event not corroborated by track position.")
+        else:  # UNKNOWN despite mapping + progress (defensive)
+            corroboration = CORR_POSITION_UNKNOWN
+
+        return _dc_replace(
+            result,
+            pit_lane_zone=zone.value,
+            pit_lane_source=resolution.source or map_source,
+            pit_lane_mapping_confidence=map_conf.value,
+            pit_evidence_confidence=upgraded,
+            pit_corroboration=corroboration,
+            warnings=tuple(warnings),
+        )
+    except Exception:
+        # Never let corroboration destabilise the live path — fall back untouched.
+        return _dc_replace(
+            result,
+            pit_evidence_confidence=str(result.pit_state_confidence or "UNKNOWN"),
+            pit_corroboration=CORR_NONE,
+        )
+
+
+def _mapping_source(track_context, segments) -> str:
+    """Best-effort provenance label for the pit-lane mapping."""
+    for s in segments:
+        if getattr(s, "source", ""):
+            return s.source
+    if isinstance(track_context, dict):
+        block = track_context.get("pit_lane")
+        if isinstance(block, dict) and block.get("source"):
+            return str(block["source"])
+    return "track_model"
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
@@ -291,6 +462,7 @@ def _assemble(
     tyre_pit_source: str = SRC_MISSING,
     pit_state_confidence: str = "UNKNOWN",
     extra_warning: Optional[str] = None,
+    pit_in_progress: bool = False,
 ) -> LiveReplanStateResult:
     state = RaceReplanState(
         current_lap=current_lap,
@@ -351,6 +523,8 @@ def _assemble(
     return LiveReplanStateResult(
         state=state,
         pit_state_confidence=str(pit_state_confidence or "UNKNOWN"),
+        pit_in_progress=bool(pit_in_progress),
+        pit_evidence_confidence=str(pit_state_confidence or "UNKNOWN"),
         state_sources=sources,
         warnings=tuple(warnings),
         missing_state=tuple(missing),

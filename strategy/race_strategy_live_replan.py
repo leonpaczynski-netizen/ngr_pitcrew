@@ -27,6 +27,7 @@ from strategy.race_strategy_replan import (
 )
 from strategy.race_strategy_live_state import (
     LiveReplanStateResult,
+    apply_pit_lane_evidence,
     extract_live_replan_state,
 )
 
@@ -43,6 +44,13 @@ class LiveReplanResult:
     warnings: tuple[str, ...] = ()
     safety_notes: tuple[str, ...] = REPLAN_SAFETY_NOTES
     generated_at: str = ""
+    # Group 55: pit-lane mapping corroboration (evidence-quality only).
+    pit_state_confidence: str = "UNKNOWN"      # raw tracker pit confidence (Group 54)
+    pit_evidence_confidence: str = "UNKNOWN"   # combined w/ pit-lane map (Group 55)
+    pit_lane_zone: str = "UNKNOWN"
+    pit_lane_source: str = "missing"
+    pit_lane_mapping_confidence: str = "NONE"
+    pit_corroboration: str = "none"
 
     @property
     def confidence(self) -> ReplanConfidence:
@@ -67,6 +75,8 @@ def build_live_replan_snapshot(
     warnings: Sequence[str] = (),
     event_settings: Optional[dict] = None,
     latest_fuel_samples: Optional[Sequence[float]] = None,
+    track_context=None,
+    live_progress=None,
     generated_at: str = "",
 ) -> LiveReplanResult:
     """Build a read-only live replan snapshot.
@@ -74,19 +84,33 @@ def build_live_replan_snapshot(
     Supply either a ``live_source`` (tracker / dashboard / packet — read via the
     Group 53 adapter) or an explicit ``live_state``. Live fuel burn from the adapter
     is fed to the snapshot as ``latest_fuel_samples`` when the caller supplies none.
+
+    Group 55: when a ``track_context`` (with pit-lane mapping) and ``live_progress``
+    are supplied, pit-event confidence is corroborated against the known pit-lane
+    corridor (evidence-quality only — no pit is ever counted or fabricated here).
     ``generated_at`` is caller-supplied (no clock in this pure builder). Never raises.
     """
     try:
         live_fuel_per_lap = 0.0
+        extracted: Optional[LiveReplanStateResult] = None
         if live_state is None:
-            extracted: LiveReplanStateResult = extract_live_replan_state(
+            extracted = extract_live_replan_state(
                 live_source, event_settings=event_settings)
             live_state = extracted.state
             if state_sources is None:
                 state_sources = extracted.state_sources
             warnings = tuple(warnings) + tuple(extracted.warnings)
             live_fuel_per_lap = extracted.live_fuel_per_lap
+        else:
+            # Wrap an explicit live_state so pit-lane corroboration still applies.
+            extracted = LiveReplanStateResult(state=live_state)
         state_sources = dict(state_sources or {})
+
+        # Group 55: corroborate pit evidence against the track's pit-lane mapping.
+        extracted = apply_pit_lane_evidence(
+            extracted, track_context=track_context, live_progress=live_progress)
+        warnings = tuple(warnings) + tuple(
+            w for w in extracted.warnings if w not in warnings)
 
         readiness = assess_replan_readiness(live_state)
 
@@ -111,6 +135,12 @@ def build_live_replan_snapshot(
             warnings=tuple(warnings),
             safety_notes=snapshot.safety_notes,
             generated_at=str(generated_at or ""),
+            pit_state_confidence=extracted.pit_state_confidence,
+            pit_evidence_confidence=extracted.pit_evidence_confidence,
+            pit_lane_zone=extracted.pit_lane_zone,
+            pit_lane_source=extracted.pit_lane_source,
+            pit_lane_mapping_confidence=extracted.pit_lane_mapping_confidence,
+            pit_corroboration=extracted.pit_corroboration,
         )
     except Exception:
         # Absolute fallback — never raise out of the live runner.
@@ -149,15 +179,52 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
         found.append(f"laps since pit: {st.tyre_age_laps} ({srcs.get('tyre_age_laps', 'live')})")
     if st.pit_stops_completed is not None:
         found.append(f"pit stops completed: {st.pit_stops_completed} ({srcs.get('pit_stops_completed', 'live')})")
+
+    # Group 55: pit-lane mapping corroboration (evidence-quality only).
+    missing_extra: list[str] = []
+    zone = str(result.pit_lane_zone or "UNKNOWN")
+    corr = str(result.pit_corroboration or "none")
+    if corr == "no_mapping":
+        missing_extra.append("pit-lane map unavailable for this track/layout")
+    elif corr == "position_unknown":
+        missing_extra.append("live track progress unavailable")
+        if result.pit_state_confidence in ("MEDIUM", "LOW"):
+            missing_extra.append("pit event not corroborated by track position")
+    else:
+        found.append(f"pit lane zone: {_zone_label(zone)} (track model)")
+        if corr == "corroborated":
+            found.append("pit detection corroborated by pit-lane map")
+        elif corr == "not_corroborated" and result.pit_state_confidence in ("MEDIUM", "LOW"):
+            missing_extra.append("pit event not corroborated by track position")
+    if result.pit_evidence_confidence not in ("UNKNOWN", ""):
+        found.append(f"pit confidence: {str(result.pit_evidence_confidence).lower()}")
+
     if found:
         lines.append("Found:")
         lines.extend(f"  - {f}" for f in found)
-    if result.missing_state:
+    missing_all = list(result.missing_state) + [m for m in missing_extra
+                                                if m not in result.missing_state]
+    if missing_all:
         lines.append("Missing:")
-        lines.extend(f"  - {m}" for m in result.missing_state)
+        lines.extend(f"  - {m}" for m in missing_all)
+
+    # Surface any pit-lane contradiction warning honestly.
+    for w in result.warnings:
+        if "did not match pit-lane mapping" in w.lower():
+            lines.append(f"Warning: {w}")
 
     lines.append(render_replan_snapshot_text(result.snapshot))
     return "\n".join(lines)
+
+
+def _zone_label(zone: str) -> str:
+    return {
+        "PIT_ENTRY": "pit entry",
+        "PIT_LANE": "pit lane",
+        "PIT_EXIT": "pit exit",
+        "NOT_PIT_LANE": "on track (not pit lane)",
+        "UNKNOWN": "unknown",
+    }.get(str(zone).upper(), str(zone).lower())
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +285,31 @@ def fuji_live_state_missing_pit() -> RaceReplanState:
         current_lap=12, fuel_remaining_pct=54.0, current_compound="RM",
         remaining_laps=18, remaining_time_seconds=1800.0,
     )
+
+
+# --- Group 55: Fuji pit-lane mapping fixture (test/UAT only — NOT production data) ---
+
+def fuji_pit_lane_mapping() -> dict:
+    """A minimal, illustrative Fuji Full Course pit-lane mapping (test fixture only).
+
+    The repo has no Fuji track-library entry, so this lives as a helper fixture and
+    is NOT written to disk. Progress values are approximate corridor bounds (0–1):
+    entry just before the line, body across it, exit just after — the exit span
+    wraps past the start/finish line to exercise wrapped-range handling.
+    """
+    return {
+        "track_id": "fuji_speedway",
+        "layout_id": "full_course",
+        "pit_lane": {
+            "available": True,
+            "source": "track_library",
+            "segments": [
+                {"zone": "pit_entry", "start_progress": 0.935, "end_progress": 0.955,
+                 "label": "Pit entry"},
+                {"zone": "pit_lane", "start_progress": 0.955, "end_progress": 0.985,
+                 "label": "Pit lane"},
+                {"zone": "pit_exit", "start_progress": 0.985, "end_progress": 0.025,
+                 "label": "Pit exit"},
+            ],
+        },
+    }
