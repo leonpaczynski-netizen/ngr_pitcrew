@@ -610,16 +610,83 @@ cumulative/reset/inconsistent/insufficient status with warnings for weak/missing
 
 ---
 
+## Group 60 additions (Real-Capture Semantics UAT & Progress Stabilisation)
+
+Group 60 ran the Group 59 semantics validator against the repo's **real** multi-lap calibration captures,
+added a **correctness-preserving** live-progress stabiliser (pure, tested, not yet wired), and reported an
+honest finding. **No production live behaviour changed** and nothing was confirmed that the evidence did
+not support.
+
+### Real-capture finding (evidence first)
+
+Feeding the shipped **Fuji** and **Daytona** calibration captures through the validator does **not** confirm
+cumulative `road_distance` semantics:
+
+- **Fuji → INSUFFICIENT_EVIDENCE**, **Daytona → INCONSISTENT**.
+- The captured `road_distance` spans only **~117 m (Fuji) / ~430 m (Daytona) per lap** — far below the
+  ~4441 m / ~5420 m lap lengths — and returns to a near-constant value at the start/finish line.
+- **So the captured field does not measure cumulative lap distance in this (post-processed calibration) data.**
+
+The live fallback's cumulative assumption therefore stays **unvalidated**. It already caps confidence and
+discloses the assumption (Group 59); Group 60 changes nothing about it. **What still needs UAT:** capturing
+**raw live packets** (not post-processed calibration) over ≥3 clean laps to settle the field's true live semantics.
+
+### Real-capture UAT helper
+
+`run_real_capture_road_distance_uat(kind)`:
+- `kind ∈ {fuji, daytona}` → analyses the real shipped capture (read-only) and returns a
+  `CaptureAnalysisResult`; `build_capture_report(result)` prints track/car/laps, per-lap start/end/delta/span,
+  trusted lap length + diff, semantics status, reason, and a clear next action.
+- `kind ∈ {cumulative, reset, inconsistent, insufficient, unknown, empty}` → deterministic synthetic laps
+  through the **same** analysis path.
+
+The report never claims confirmation the validator did not make.
+
+### Progress stabiliser (correctness-preserving; not yet wired)
+
+`data/live_progress_stabiliser.py` reduces jitter without lying:
+- `nearest_station_stabilised` **always returns the global nearest** — a local continuity window never
+  overrides it (safe on crossings/hairpins/chicanes/parallel sections).
+- `stabilise_progress` **never changes the reported progress value** and **only downgrades** confidence on an
+  implausible jump (lap-wrap aware); it never inflates confidence, never makes the fallback HIGH, and touches
+  no pit state.
+
+It is implemented and tested but **not wired** into the live pipeline yet (the snapshot builder is stateless;
+wiring needs a stateful live loop that holds previous progress).
+
+### Manual UAT checklist
+
+**Fuji / Daytona with approved reference path**
+- Approved path loads; world-position map match is used.
+- Progress is MEDIUM/HIGH only when justified.
+- Road-distance fallback does not override the map match.
+- No fallback/semantics disclosure while a true map match is active.
+- Pit-lane confidence is unchanged by fallback.
+
+**Real multi-lap road-distance capture**
+- Capture ≥3 clean consecutive laps; record lap number, road_distance at lap start, and road_distance at lap end.
+- Run `run_real_capture_road_distance_uat(...)` (or feed laps to `analyse_capture_road_distance`).
+- Confirm the status (cumulative / per-lap reset / inconsistent / insufficient / unknown) and that the report
+  shows per-lap deltas and the trusted lap-length comparison.
+
+**Track without approved path**
+- "Approved reference path unavailable" is shown honestly.
+- Fallback activates only with valid road-distance + a trusted lap length; it is labelled approximate/lower
+  confidence; confidence is never HIGH; no pit corroboration; advisory-only language.
+
+---
+
 ## Known caveats
 
 - **Approved reference-path assets ship only for Fuji Full Course and Daytona Road Course** — no other
   trustworthy assets currently exist to import (do not fabricate). Other track/layouts use the
   **road-distance fallback** (when a trusted lap length exists) or report "approved reference path unavailable".
-- **GT7 `road_distance` zero-point behaviour is still formally unconfirmed across tracks.** The fallback
-  assumes cumulative semantics (deriving per-lap distance from a lap-start reference) and **discloses this**
-  with capped confidence; `data/road_distance_semantics.py` is the tool to confirm it on real multi-lap
-  captures. A strictly correctness-preserving local nearest-station search window / hysteresis remains
-  **deferred to Group 60+**.
+- **GT7 `road_distance` live semantics remain formally unconfirmed.** Real calibration captures do NOT confirm
+  cumulative behaviour (Fuji INSUFFICIENT_EVIDENCE, Daytona INCONSISTENT; per-lap span far below lap length),
+  because that data is post-processed. A **raw live-packet** capture over ≥3 clean laps is still needed. The
+  fallback continues to assume cumulative semantics with capped confidence and discloses this.
+- The correctness-preserving progress stabiliser is implemented + tested but **not yet wired** into the live
+  pipeline (needs a stateful live loop). Wiring is **deferred to Group 61+**.
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is
