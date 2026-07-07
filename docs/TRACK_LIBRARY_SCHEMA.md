@@ -199,6 +199,17 @@ the existing Group 17 calibration shape (`track_location_id` + `points[{lap_prog
 Consumed by `data/reference_path_loader.py` + `data/live_track_progress.py` (pure,
 Qt/DB/AI/file-write-free).
 
+**Shipped approved assets (Group 57–59):** Fuji Full Course
+(`fuji_international_speedway__fuji_international_speedway__full_course.reference_path.json`) and Daytona
+Road Course (`daytona_international_speedway__daytona_international_speedway__road_course.reference_path.json`)
+— both real Porsche 911 RSR calibration output (200 stations, confidence 1.0). No other trustworthy assets
+exist to import; do **not** fabricate geometry.
+
+**Adding a future asset (Group 59):** validate the candidate first with
+`validate_reference_path_candidate(path, expected_track_id=…, expected_layout_id=…)` →
+`{ok, errors, warnings, track_id, layout_id, station_count, lap_length_m, source}`; fix any reported errors
+(missing ids, <2 stations, malformed JSON, identity mismatch), then drop it into `data/track_models/`.
+
 ---
 
 ### `semantic_model.json` — `track_semantic_model_v1`
@@ -337,6 +348,11 @@ from data.track_library import (
     load_source_manifest,              # (track_id, layout_id) → SourceManifest | None
     load_track_pit_lane,               # (track_id, layout_id) → pit-lane dict | None (Group 55)
     load_track_reference_path,         # (track_id, layout_id) → reference-path pointer dict | None (Group 57)
+    # Group 58/59 registry (in data/reference_path_loader.py):
+    #   list_available_reference_paths()            → [ {track_id, layout_id, source, path, station_count, lap_length_m} ]
+    #   reference_path_asset_summary(t, l)          → {available, source, message, station_count, lap_length_m}
+    #   resolve_trusted_lap_length(t, l)            → float | None (asset → manifest; never invented)
+    #   validate_reference_path_candidate(path, ...)→ {ok, errors, warnings, ...} (Group 59 candidate check)
     load_seed_coordinate_map_from_library,  # (track_id, layout_id) → SeedCoordinateMap | None
     resolve_seed_coordinate_map,       # (track_id, layout_id) → (SeedCoordinateMap|None, str)
     audit_track_library_layout,        # (track_id, layout_id) → TrackLibraryAuditResult

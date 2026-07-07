@@ -303,6 +303,32 @@ def run_fuji_live_replan(kind: str = "healthy", generated_at: str = ""):
     )
 
 
+def run_road_distance_semantics_uat(kind: str = "cumulative", lap_length_m: float = 4563.0):
+    """Offline Group 59 road-distance semantics UAT (no game, no AI, no writes).
+
+    ``kind`` ∈ {"cumulative", "reset", "inconsistent", "insufficient", "unknown"}.
+    Returns the pure ``RoadDistanceSemanticsResult`` for a deterministic scenario so
+    UAT can inspect lap-start/end, per-lap delta, comparison with the trusted lap
+    length, and the resulting status/warnings without a live session.
+    """
+    from data.road_distance_semantics import RoadDistanceSample, analyse_road_distance_semantics
+    L = float(lap_length_m)
+    scenarios = {
+        # Cumulative: starts increase, start(N+1) == end(N), delta == lap length.
+        "cumulative": [RoadDistanceSample(i + 1, i * L, (i + 1) * L) for i in range(3)],
+        # Per-lap reset: every lap starts near zero, delta == lap length.
+        "reset": [RoadDistanceSample(i + 1, 0.0, L) for i in range(3)],
+        # Inconsistent: a negative delta appears.
+        "inconsistent": [RoadDistanceSample(1, 0.0, L), RoadDistanceSample(2, L, L * 0.5)],
+        # Insufficient: only one completed lap.
+        "insufficient": [RoadDistanceSample(1, 0.0, L)],
+        # Unknown: no usable samples.
+        "unknown": [],
+    }
+    samples = scenarios.get(kind, scenarios["cumulative"])
+    return analyse_road_distance_semantics(samples, lap_length_m=L)
+
+
 def _uat_safety_checks(html: str, vm) -> dict:
     """Read-only assertions that the surface exposes no setup power / certainty."""
     lowered = html.lower()
