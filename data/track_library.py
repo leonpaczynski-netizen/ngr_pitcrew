@@ -83,6 +83,10 @@ class TrackLayoutManifest:
     availability:  TrackLibraryAvailability = field(default_factory=TrackLibraryAvailability)
     source:        str   = "estimated"
     confidence:    str   = "low"
+    # Group 55: optional pit-lane mapping block (backward-compatible; {} when absent).
+    # Shape: {"available": bool, "source": str, "segments": [ {zone, start_progress,
+    #         end_progress, label}, ... ]}. Missing / older manifests → {}.
+    pit_lane:      dict  = field(default_factory=dict)
 
 
 @dataclass
@@ -269,6 +273,7 @@ def resolve_track_layout_manifest(
         availability  = _parse_availability(raw),
         source        = raw.get("source", "estimated"),
         confidence    = raw.get("confidence", "low"),
+        pit_lane      = dict(raw.get("pit_lane", {}) or {}),
     )
 
 
@@ -338,6 +343,38 @@ def load_source_manifest(
         notes            = raw.get("notes", ""),
         last_reviewed_at = raw.get("last_reviewed_at", ""),
     )
+
+
+def load_track_pit_lane(
+    track_id:  str,
+    layout_id: str,
+    base_dir:  Optional[Path] = None,
+) -> Optional[dict]:
+    """Return the pit-lane mapping block for a layout, or None when absent.
+
+    Group 55 — backward-compatible. Resolution order (first hit wins):
+      1. layouts/<id>/pit_lane.json   (a dedicated file, if present)
+      2. manifest.json ``pit_lane``   (inline block)
+    A track with no pit-lane metadata is valid: returns None (never raises). The
+    returned dict is the raw mapping block ({"available", "source", "segments"}).
+    """
+    try:
+        ldir = _layout_dir(track_id, layout_id, base_dir)
+        raw = _load_json(ldir / "pit_lane.json")
+        if isinstance(raw, dict) and raw.get("segments"):
+            block = dict(raw)
+            block.setdefault("track_id", track_id)
+            block.setdefault("layout_id", layout_id)
+            return block
+        manifest = resolve_track_layout_manifest(track_id, layout_id, base_dir)
+        if manifest is not None and manifest.pit_lane:
+            block = dict(manifest.pit_lane)
+            block.setdefault("track_id", track_id)
+            block.setdefault("layout_id", layout_id)
+            return block
+        return None
+    except Exception:
+        return None
 
 
 def load_seed_coordinate_map_from_library(

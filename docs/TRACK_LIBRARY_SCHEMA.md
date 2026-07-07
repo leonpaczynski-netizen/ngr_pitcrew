@@ -116,6 +116,39 @@ Every JSON file **must** declare `"schema": "<version_string>"`. Load functions 
 - `source`: `"estimated"` / `"measured"` / `"official"`.
 - `confidence`: `"low"` / `"medium"` / `"high"`.
 
+#### Optional `pit_lane` block (Group 55, 2026-07-07)
+
+A layout **may** carry an optional pit-lane mapping. It is fully
+**backward-compatible**: older manifests have no `pit_lane` key, which parses to
+`{}` and behaves exactly as before. It may live inline in `manifest.json` or in a
+dedicated `layouts/<layout_id>/pit_lane.json` (a dedicated file takes precedence).
+
+```json
+"pit_lane": {
+  "available": true,
+  "source": "track_library",
+  "segments": [
+    { "zone": "pit_entry", "start_progress": 0.935, "end_progress": 0.955, "label": "Pit entry" },
+    { "zone": "pit_lane",  "start_progress": 0.955, "end_progress": 0.985, "label": "Pit lane" },
+    { "zone": "pit_exit",  "start_progress": 0.985, "end_progress": 0.025, "label": "Pit exit" }
+  ]
+}
+```
+
+- `zone`: one of `pit_entry` / `pit_lane` / `pit_exit`. Any other value is ignored
+  (a pit lane is **never inferred** from ordinary racing segments/sectors).
+- `start_progress` / `end_progress`: normalised lap progress `0.0–1.0`. A span may
+  **wrap** past the start/finish line (`start > end`, e.g. pit exit `0.985 → 0.025`).
+- `source` / per-segment `confidence`: `engineer_validated`/`verified`/`high` → HIGH,
+  `track_library`/`reviewed`/`medium` → MEDIUM, `estimated`/`seed`/`low` → LOW.
+- **Not required.** A track with no pit-lane data is valid; the loader
+  (`load_track_pit_lane`) returns `None` and the live-replan path degrades to the
+  Group 54 behaviour (pit confidence from tracker heuristics only).
+- This mapping is **evidence-quality only** — it corroborates a detected pit event
+  and never creates or counts a pit stop (Group 54 owns pit events).
+
+Consumed by `data/pit_lane_resolver.py` (pure, Qt/DB/AI/file-write-free).
+
 ---
 
 ### `semantic_model.json` — `track_semantic_model_v1`
@@ -252,6 +285,7 @@ from data.track_library import (
     load_track_semantic_model,         # (track_id, layout_id) → TrackSemanticModel | None
     load_validation_rules,             # (track_id, layout_id) → ValidationRules | None
     load_source_manifest,              # (track_id, layout_id) → SourceManifest | None
+    load_track_pit_lane,               # (track_id, layout_id) → pit-lane dict | None (Group 55)
     load_seed_coordinate_map_from_library,  # (track_id, layout_id) → SeedCoordinateMap | None
     resolve_seed_coordinate_map,       # (track_id, layout_id) → (SeedCoordinateMap|None, str)
     audit_track_library_layout,        # (track_id, layout_id) → TrackLibraryAuditResult
