@@ -196,6 +196,76 @@ a labelled wiring point only — no button, no loop, no action.
 
 ---
 
+## Group 53 additions (Phase 7 — live current-state replan input)
+
+Group 52's replan foundation is now wired to the app's **existing read-only live
+race-state source**. It reads live state, compares it to the pre-race plan, and shows
+an **advisory-only** snapshot. It makes no pit call, sends no driver command, changes
+no setup, needs no API key, and invents nothing.
+
+### Which live fields exist (discovery)
+
+From `telemetry.state.RaceStateTracker` + the last `GT7Packet`:
+
+| Field | Source | Available? |
+| --- | --- | --- |
+| current lap | `tracker.laps_recorded` | ✅ live |
+| remaining time (timed) | `tracker.computed_remaining_ms()` | ✅ live |
+| remaining laps (lap race) | `tracker.laps_remaining` | ✅ live |
+| fuel remaining % | `packet.fuel_level / packet.fuel_capacity` | ✅ live |
+| live fuel burn / lap | `tracker.avg_fuel_per_lap` | ✅ live (feeds the snapshot) |
+| current compound | `tracker._current_compound` | ⚠️ strategy/UI tag (GT7 doesn't broadcast it) |
+| tyre age (laps) | — | ❌ **not tracked → missing** |
+| pit stops completed | — | ❌ **not tracked → missing** |
+| required compounds used | — | ❌ **not tracked → missing** |
+| weather / damage / safety-car | — | ❌ not structured → missing |
+
+**Consequence:** because tyre age and pit-stop count are not tracked live, a live
+snapshot in this app is typically **LOW_CONFIDENCE** (tyre unknown) or
+**INSUFFICIENT_EVIDENCE** (fuel/compound/distance unknown) — and it says so honestly.
+
+### Modules
+
+- `strategy/race_strategy_live_state.py` — read-only adapter. `build_replan_state_from_tracker`,
+  `build_replan_state_from_live_packet`, `build_replan_state_from_dashboard_context`,
+  `extract_live_replan_state`, `summarise_live_state_sources`. Populates only real
+  fields; drops impossible values (fuel > capacity, negative laps); records the rest as
+  missing. Never raises, never writes, no AI, no setup imports.
+- `strategy/race_strategy_live_replan.py` — `build_live_replan_snapshot(*, pre_race_result,
+  live_source=…, event_settings=…, generated_at=…)` → read-only `LiveReplanResult`
+  (state, state_sources, readiness, snapshot, driver_message, missing_state, warnings,
+  safety_notes, generated_at). Plus deterministic Fuji fixtures and `render_live_replan_text`.
+
+### UI
+
+The Group 52 placeholder is now a small read-only **Live Replan Readiness** group with a
+**Refresh Live Replan Snapshot** button. It reads the live tracker/packet (read-only),
+compares against the last-built Race Plan, and shows the status (still viable / needs
+review / insufficient evidence), confidence, reason, and missing live state. No
+auto-refresh loop, no voice, no pit call, no Apply — refresh is a manual click.
+
+### Manual UAT (live path)
+
+1–4. As above (confirm event, load session, open Strategy Builder, **Build Race Strategy**).
+5. Start / connect live telemetry if available.
+6. Under **Live Replan Readiness**, click **Refresh Live Replan Snapshot**.
+7. Confirm current lap / fuel / remaining distance show only when genuinely available; tyre
+   age and pit-stop count show as **missing** (the app does not track them live).
+8. Confirm the snapshot says *still viable* / *needs review* / *insufficient evidence*.
+9. Confirm the safety note *"Advisory only — no pit call, setup change, or driver command is
+   applied"* is shown, and **no** pit call / setup recommendation / Apply control appears.
+
+### Offline UAT helper
+
+```python
+from ui.race_strategy_uat import run_fuji_live_replan
+r = run_fuji_live_replan("healthy")     # one-stop still viable, MEDIUM confidence
+r = run_fuji_live_replan("fuel_short")  # plan needs review (fuel below expected)
+r = run_fuji_live_replan("missing")     # INSUFFICIENT_EVIDENCE, missing state listed
+```
+
+---
+
 ## Known caveats
 
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is
