@@ -409,10 +409,13 @@ def apply_pit_lane_evidence(
         map_source = _mapping_source(track_context, segments)
 
         # Group 56: fall back to the resolved live track progress when no explicit
-        # progress was given — but ONLY when it is MEDIUM/HIGH confidence.
+        # progress was given — but ONLY when it is MEDIUM/HIGH map-matched progress.
+        # Group 58: road-distance FALLBACK progress is display-only and is never used
+        # to corroborate a pit (it must not lift pit confidence), so it is excluded here.
         if live_progress is None and result.track_progress is not None:
             tp = result.track_progress
-            if getattr(tp, "usable_for_pit", False):
+            if getattr(tp, "usable_for_pit", False) and \
+                    str(getattr(tp, "source", "")) != "road_distance_fallback":
                 live_progress = tp.progress
 
         progress = normalise_progress(live_progress)

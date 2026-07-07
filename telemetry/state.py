@@ -309,6 +309,38 @@ class RaceStateTracker:
         except (TypeError, ValueError, AttributeError):
             return None
 
+    @property
+    def live_road_distance(self) -> "float | None":
+        """Latest GT7 cumulative road_distance (metres), or None (read-only; Group 58).
+
+        This is a running total, not per-lap. Used only as a lower-confidence
+        fallback progress source; applies nothing and creates no pit event.
+        """
+        p = self._prev
+        if p is None:
+            return None
+        try:
+            return float(p.road_distance)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @property
+    def live_lap_distance(self) -> "float | None":
+        """Distance travelled on the CURRENT lap (metres), or None (read-only; Group 58).
+
+        Computed as live road_distance − the road_distance captured at the last lap
+        start. Only meaningful once racing has begun; None otherwise. Read-only
+        fallback evidence — it applies nothing and creates no pit event.
+        """
+        p = self._prev
+        if p is None or self._phase not in (RacePhase.RACING, RacePhase.IN_PIT):
+            return None
+        try:
+            d = float(p.road_distance) - float(self._road_distance_lap_start)
+            return d if d >= 0.0 else None
+        except (TypeError, ValueError, AttributeError):
+            return None
+
     def update(self, packet: GT7Packet) -> None:
         now = time.monotonic()
 
@@ -432,6 +464,10 @@ class RaceStateTracker:
         self._fuel_at_pit_entry: float = 0.0
         self._pit_entry_time: float = 0.0
         self._fuel_lap_start: float = 0.0
+        # Group 58: cumulative road_distance captured at the start of the current lap,
+        # so distance-along-lap = live road_distance - this (road_distance is a running
+        # total, not per-lap). Read-only fallback evidence only; creates no pit events.
+        self._road_distance_lap_start: float = 0.0
         self._lap_start_time: float = time.monotonic()
         self._race_start_time: float = 0.0
         self._laps_in_race: int = 0          # captured at race start; GT7 can send -1 mid-race
@@ -515,6 +551,7 @@ class RaceStateTracker:
             if p.car_on_track:
                 self._phase = RacePhase.PRE_RACE
                 self._fuel_lap_start = p.fuel_level
+                self._road_distance_lap_start = p.road_distance   # Group 58
                 self._lap_start_time = now
                 # Clamp to 0: GT7 sends 0xFFFF (→ -1 signed) when no laps
                 # completed yet; _check_lap's `< 0` guard would skip every lap.
@@ -723,6 +760,7 @@ class RaceStateTracker:
         ).state
         self._phase = RacePhase.RACING
         self._fuel_lap_start = p.fuel_level
+        self._road_distance_lap_start = p.road_distance   # Group 58: new stint/lap
         self._lap_start_time = now
         self._fuel_warned = False   # re-arm warning for the next stint
         if self._session_type == SessionType.PRACTICE:
@@ -826,6 +864,7 @@ class RaceStateTracker:
         ))
 
         self._fuel_lap_start = p.fuel_level
+        self._road_distance_lap_start = p.road_distance   # Group 58: new lap begins here
         self._lap_start_time = now
         self._prev_laps_completed = p.laps_completed
 

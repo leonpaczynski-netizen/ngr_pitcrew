@@ -34,8 +34,15 @@ from strategy.race_strategy_live_state import (
 )
 from data.live_track_progress import (
     LiveTrackProgressResult,
+    TrackProgressConfidence,
     build_track_path_stations,
     format_live_track_progress_evidence,
+)
+from data.live_track_progress_fallback import (
+    FALLBACK_SOURCE,
+    format_road_distance_fallback_evidence,
+    is_fallback_result,
+    resolve_progress_from_road_distance,
 )
 
 
@@ -94,6 +101,9 @@ def build_live_replan_snapshot(
     identity_ok: bool = True,
     reference_path_source: str = "",
     reference_path_warnings: Sequence[str] = (),
+    lap_distance_m=None,
+    road_distance=None,
+    lap_length_m=None,
     generated_at: str = "",
 ) -> LiveReplanResult:
     """Build a read-only live replan snapshot.
@@ -128,15 +138,37 @@ def build_live_replan_snapshot(
             extracted = LiveReplanStateResult(state=live_state)
         state_sources = dict(state_sources or {})
 
-        # Group 56: resolve live world position → normalised track progress.
+        # Group 56: resolve live world position → normalised track progress (primary).
         if live_position is None:
             live_position = _position_from_source(live_source)
-        progress_result: Optional[LiveTrackProgressResult] = None
+        primary: Optional[LiveTrackProgressResult] = None
         if reference_stations or (track_context is not None
                                   and build_track_path_stations(track_context)):
-            progress_result = resolve_live_progress_evidence(
+            primary = resolve_live_progress_evidence(
                 position=live_position, reference_stations=reference_stations,
                 track_context=track_context, identity_ok=identity_ok)
+
+        # Group 58: precedence —
+        #   1) usable (MEDIUM/HIGH) approved-reference-path map matching wins;
+        #   2) else road-distance fallback, if it yields progress;
+        #   3) else the primary's honest LOW/UNKNOWN result (or fallback UNKNOWN).
+        # Fallback NEVER overrides a usable map-matched result and NEVER lifts pit conf.
+        progress_result: Optional[LiveTrackProgressResult] = primary
+        primary_usable = bool(primary is not None and primary.confidence in (
+            TrackProgressConfidence.MEDIUM, TrackProgressConfidence.HIGH))
+        if not primary_usable and (lap_distance_m is not None or road_distance is not None):
+            fb = resolve_progress_from_road_distance(
+                lap_distance_m=lap_distance_m, road_distance=road_distance,
+                lap_length_m=lap_length_m, identity_ok=identity_ok,
+                track_id=(track_context or {}).get("track_id") if isinstance(track_context, dict) else None,
+                layout_id=(track_context or {}).get("layout_id") if isinstance(track_context, dict) else None,
+            )
+            if fb.has_progress:
+                progress_result = fb
+            elif primary is None or not primary.has_progress:
+                # Keep whichever carries the more useful honest message.
+                progress_result = primary if (primary is not None and primary.message) else fb
+        if progress_result is not None:
             extracted = attach_track_progress(extracted, progress_result)
 
         # Group 55: corroborate pit evidence against the track's pit-lane mapping.
@@ -231,15 +263,21 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
         elif w not in prog_warnings:
             prog_warnings.append(w)
 
-    # Group 56: live world-position → track-progress evidence.
+    # Group 56/58: track-progress evidence — map-matched (primary) OR road-distance
+    # fallback (clearly labelled approximate / lower confidence).
     tp = result.track_progress
     if tp is not None:
-        ev = format_live_track_progress_evidence(tp)
+        if is_fallback_result(tp):
+            ev = format_road_distance_fallback_evidence(tp)
+        else:
+            ev = format_live_track_progress_evidence(tp)
         found.extend(ev.get("found", []))
         missing_extra.extend(ev.get("missing", []))
         prog_warnings.extend(ev.get("warnings", []))
-        if getattr(tp, "usable_for_pit", False) and str(result.pit_corroboration or "none") not in (
-                "none", "no_mapping", "position_unknown"):
+        # Only map-matched (non-fallback) progress can corroborate the pit lane.
+        if (not is_fallback_result(tp)) and getattr(tp, "usable_for_pit", False) and \
+                str(result.pit_corroboration or "none") not in (
+                    "none", "no_mapping", "position_unknown"):
             found.append("pit-lane map used live track progress")
 
     # Group 55: pit-lane mapping corroboration (evidence-quality only).
@@ -248,7 +286,14 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
     if corr == "no_mapping":
         missing_extra.append("pit-lane map unavailable for this track/layout")
     elif corr == "position_unknown":
-        missing_extra.append("live track progress unavailable")
+        # Group 58: distinguish "no progress at all" from "only fallback progress"
+        # (fallback progress is display-only and never corroborates the pit lane).
+        if is_fallback_result(tp) and getattr(tp, "has_progress", False):
+            missing_extra.append(
+                "pit-lane corroboration needs approved reference-path progress "
+                "(road-distance fallback is not used to corroborate pits)")
+        else:
+            missing_extra.append("live track progress unavailable")
         if result.pit_state_confidence in ("MEDIUM", "LOW"):
             missing_extra.append("pit event not corroborated by track position")
     else:
