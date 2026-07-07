@@ -4801,20 +4801,77 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                            styleSheet="color:#AAA; font-size:11px; padding-top:4px;"))
         v.addWidget(self._race_plan_table)
 
-        # Group 52: read-only Live Replan Readiness placeholder (NOT wired to live
-        # telemetry — a labelled foundation only; makes no pit calls, applies nothing).
+        # Group 52/53: read-only Live Replan Readiness surface. Reads live race state
+        # (read-only), compares it to the pre-race plan, and shows an ADVISORY snapshot.
+        # No auto-refresh loop, no pit call, no voice, no Apply — refresh is manual.
+        _replan_box = QGroupBox("Live Replan Readiness (read-only, advisory only)")
+        _replan_box.setStyleSheet(self._group_style())
+        _rv = QVBoxLayout(_replan_box)
+
+        _replan_row = QHBoxLayout()
+        self._btn_rp_replan_refresh = QPushButton("Refresh Live Replan Snapshot")
+        self._btn_rp_replan_refresh.setToolTip(
+            "Read the current live race state (read-only) and check whether the "
+            "pre-race plan is still on track. Advisory only — no pit call, no setup "
+            "change, no API key.")
+        self._btn_rp_replan_refresh.clicked.connect(self._refresh_live_replan_snapshot)
+        _replan_row.addStretch()
+        _replan_row.addWidget(self._btn_rp_replan_refresh)
+        _rv.addLayout(_replan_row)
+
         try:
             from strategy.race_strategy_replan import replan_placeholder_message
             _replan_msg = replan_placeholder_message()
         except Exception:
             _replan_msg = "Live Replan Readiness: not connected yet."
-        self._rp_replan_placeholder = QLabel(_replan_msg)
-        self._rp_replan_placeholder.setWordWrap(True)
-        self._rp_replan_placeholder.setStyleSheet(
-            "color: #888; font-size: 11px; padding: 6px 2px; border-top: 1px solid #333; margin-top: 4px;")
-        v.addWidget(self._rp_replan_placeholder)
+        self._rp_replan_status = QLabel(_replan_msg)
+        self._rp_replan_status.setWordWrap(True)
+        self._rp_replan_status.setStyleSheet("color: #AAA; font-size: 11px; padding: 4px 2px;")
+        _rv.addWidget(self._rp_replan_status)
+
+        v.addWidget(_replan_box)
 
         return box
+
+    # ------------------------------------------------------------------
+    # Group 53 — read-only live current-state replan snapshot (advisory only)
+    # ------------------------------------------------------------------
+
+    def _refresh_live_replan_snapshot(self) -> None:
+        """Build and render a read-only, advisory-only live replan snapshot.
+
+        Reads live race state from the tracker + last packet (read-only), compares
+        it against the last-built pre-race Race Plan, and shows whether the plan is
+        still viable / needs review / lacks evidence. No pit call, no setup change,
+        no writes, no API key. Never raises.
+        """
+        label = getattr(self, "_rp_replan_status", None)
+        if label is None:
+            return
+
+        pre = getattr(self, "_last_race_plan_result", None)
+        if pre is None or not getattr(getattr(pre, "recommendation", None), "has_recommendation", False):
+            label.setText(
+                "Build a Race Plan first — then Refresh to check it against the live "
+                "race state. (Advisory only; no pit call or setup change is applied.)")
+            return
+
+        try:
+            from strategy.race_strategy_live_replan import (
+                build_live_replan_snapshot, render_live_replan_text,
+            )
+            event_settings = dict(getattr(self, "_last_race_plan_inputs", {}) or {})
+            result = build_live_replan_snapshot(
+                pre_race_result=pre,
+                live_source=self,                 # dashboard: reads _tracker + _last_packet
+                event_settings=event_settings,
+                generated_at=time.strftime("%H:%M:%S"),
+            )
+            label.setText(render_live_replan_text(result))
+        except Exception as exc:
+            label.setText(
+                f"Live replan snapshot unavailable: {exc}. "
+                "Advisory only; no action is applied.")
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.
@@ -4987,7 +5044,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         # Weather source label for the evidence display (manual pit loss noted below).
         try:
-            vm = run_race_plan_from_session(
+            from strategy.race_strategy_pipeline import recommend_strategy_from_session
+            _result = recommend_strategy_from_session(
                 self._db,
                 session_id=inp["session_id"],
                 car_id=inp["car_id"],
@@ -5005,6 +5063,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 mandatory_pit_stops=inp["mandatory_pit_stops"],
                 rear_traction_fragile=rear_fragile,
             )
+            vm = build_race_plan_view_model(_result)
+            # Group 53: retain the read-only pre-race result + event inputs so the
+            # Live Replan snapshot can compare live state against this plan.
+            self._last_race_plan_result = _result
+            self._last_race_plan_inputs = dict(inp)
         except Exception as exc:
             self._race_plan_text.setHtml(
                 f"<p style='color:#E8A9A3;'>Race plan could not be built: {exc}</p>")

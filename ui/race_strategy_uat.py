@@ -269,6 +269,35 @@ def run_fuji_race_plan_uat_check(n_laps: int = 12, fuel: float = _FUEL_PER_LAP_L
     )
 
 
+# ---------------------------------------------------------------------------
+# Group 53 — Porsche RSR / Fuji live-replan UAT runner (offline, advisory-only)
+# ---------------------------------------------------------------------------
+
+def run_fuji_live_replan(kind: str = "healthy", generated_at: str = ""):
+    """Run the offline RSR/Fuji live-replan path for a fixture live state.
+
+    ``kind`` ∈ {"healthy", "fuel_short", "missing"}. Pairs the pre-race one-stop
+    plan (``run_fuji_uat``) with a deterministic Group 53 live-state fixture and
+    returns a read-only, advisory-only `LiveReplanResult`. No game, no AI, no writes.
+    """
+    from strategy.race_strategy_live_replan import (
+        build_live_replan_snapshot,
+        fuji_live_state_healthy, fuji_live_state_fuel_short, fuji_live_state_missing,
+    )
+    fixtures = {
+        "healthy": fuji_live_state_healthy,
+        "fuel_short": fuji_live_state_fuel_short,
+        "missing": fuji_live_state_missing,
+    }
+    state = fixtures.get(kind, fuji_live_state_healthy)()
+    return build_live_replan_snapshot(
+        pre_race_result=run_fuji_uat(),
+        live_state=state,
+        event_settings=dict(FUJI_UAT_EVENT_SETTINGS),
+        generated_at=generated_at,
+    )
+
+
 def _uat_safety_checks(html: str, vm) -> dict:
     """Read-only assertions that the surface exposes no setup power / certainty."""
     lowered = html.lower()
