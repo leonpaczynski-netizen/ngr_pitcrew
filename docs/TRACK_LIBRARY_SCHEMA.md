@@ -149,6 +149,56 @@ dedicated `layouts/<layout_id>/pit_lane.json` (a dedicated file takes precedence
 
 Consumed by `data/pit_lane_resolver.py` (pure, Qt/DB/AI/file-write-free).
 
+#### Optional `reference_path` block (Group 57, 2026-07-07)
+
+A layout **may** carry an optional approved reference-path pointer. Fully
+**backward-compatible**: older manifests have no `reference_path` key, which parses
+to `{}`. It is a POINTER — the actual geometry lives in a separate file (discovered
+by `data/reference_path_loader.py`, which primarily scans `data/track_models/`).
+
+```json
+"reference_path": {
+  "available": true,
+  "file": "reference_path.json",
+  "source": "approved_track_model",
+  "notes": "Approved reference path used for live progress matching."
+}
+```
+
+- **Not required.** A track with no reference-path pointer is valid; the loader also
+  discovers `*.reference_path.json` files by scanning, so the pointer is optional.
+- Loaded via `load_track_reference_path(track_id, layout_id)`.
+
+##### Reference-path file format — `reference_path_v1` (Group 57)
+
+The reference-path geometry file itself. The loader accepts this explicit shape **and**
+the existing Group 17 calibration shape (`track_location_id` + `points[{lap_progress, …}]`).
+
+```json
+{
+  "schema_version": "reference_path_v1",
+  "track_id": "fuji_speedway",
+  "layout_id": "fuji_speedway__full_course",
+  "source": "approved_track_model",
+  "lap_length_m": 4563.0,
+  "stations": [
+    { "index": 0, "x": 0.0, "y": 0.0, "z": 0.0, "distance_along_lap_m": 0.0, "progress": 0.0 }
+  ]
+}
+```
+
+- `stations[*]`: `x`/`y`/`z` (world position; **X/Z** is the horizontal plane), a
+  `distance_along_lap_m` and/or a normalised `progress` (0.0–1.0). NaN/inf and missing
+  x/z are rejected; malformed stations are skipped (with a warning).
+- `source`: provenance label (`approved_track_model` / `calibration_reference_path` / …).
+- **Read-only.** The loader never writes, never mutates a track model, and never raises.
+- **Evidence-quality only** — reference-path geometry drives Group 56 live progress, which
+  Group 55 uses to corroborate a detected pit; it never creates a pit event, and LOW/UNKNOWN/
+  identity-mismatched progress never lifts pit confidence.
+
+Consumed by `data/reference_path_loader.py` + `data/live_track_progress.py` (pure,
+Qt/DB/AI/file-write-free).
+
 ---
 
 ### `semantic_model.json` — `track_semantic_model_v1`
@@ -286,6 +336,7 @@ from data.track_library import (
     load_validation_rules,             # (track_id, layout_id) → ValidationRules | None
     load_source_manifest,              # (track_id, layout_id) → SourceManifest | None
     load_track_pit_lane,               # (track_id, layout_id) → pit-lane dict | None (Group 55)
+    load_track_reference_path,         # (track_id, layout_id) → reference-path pointer dict | None (Group 57)
     load_seed_coordinate_map_from_library,  # (track_id, layout_id) → SeedCoordinateMap | None
     resolve_seed_coordinate_map,       # (track_id, layout_id) → (SeedCoordinateMap|None, str)
     audit_track_library_layout,        # (track_id, layout_id) → TrackLibraryAuditResult

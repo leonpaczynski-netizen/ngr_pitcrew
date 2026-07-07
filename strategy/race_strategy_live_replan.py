@@ -60,6 +60,9 @@ class LiveReplanResult:
     pit_corroboration: str = "none"
     # Group 56: live world-position → track-progress evidence (or None).
     track_progress: Optional[LiveTrackProgressResult] = None
+    # Group 57: approved reference-path provenance (empty when none loaded).
+    reference_path_source: str = ""
+    reference_path_warnings: tuple = ()
 
     @property
     def confidence(self) -> ReplanConfidence:
@@ -89,6 +92,8 @@ def build_live_replan_snapshot(
     live_position=None,
     reference_stations=None,
     identity_ok: bool = True,
+    reference_path_source: str = "",
+    reference_path_warnings: Sequence[str] = (),
     generated_at: str = "",
 ) -> LiveReplanResult:
     """Build a read-only live replan snapshot.
@@ -172,6 +177,8 @@ def build_live_replan_snapshot(
             pit_lane_mapping_confidence=extracted.pit_lane_mapping_confidence,
             pit_corroboration=extracted.pit_corroboration,
             track_progress=extracted.track_progress,
+            reference_path_source=str(reference_path_source or ""),
+            reference_path_warnings=tuple(reference_path_warnings or ()),
         )
     except Exception:
         # Absolute fallback — never raise out of the live runner.
@@ -211,9 +218,20 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
     if st.pit_stops_completed is not None:
         found.append(f"pit stops completed: {st.pit_stops_completed} ({srcs.get('pit_stops_completed', 'live')})")
 
-    # Group 56: live world-position → track-progress evidence.
+    # Group 57: approved reference-path provenance (loaded from disk, read-only).
     missing_extra: list[str] = []
     prog_warnings: list[str] = []
+    if result.reference_path_source:
+        found.append(f"reference path: loaded ({_ref_source_label(result.reference_path_source)})")
+    for w in (result.reference_path_warnings or ()):
+        wl = w.lower()
+        if "unavailable" in wl or "no usable stations" in wl:
+            if w not in missing_extra:
+                missing_extra.append(w)
+        elif w not in prog_warnings:
+            prog_warnings.append(w)
+
+    # Group 56: live world-position → track-progress evidence.
     tp = result.track_progress
     if tp is not None:
         ev = format_live_track_progress_evidence(tp)
@@ -292,6 +310,16 @@ def _position_from_source(source):
         return None
     except Exception:
         return None
+
+
+def _ref_source_label(source: str) -> str:
+    return {
+        "approved_track_model": "approved track model",
+        "calibration_reference_path": "calibration reference path",
+        "track_library": "track library",
+        "missing": "unavailable",
+        "malformed": "malformed",
+    }.get(str(source).strip().lower(), str(source).replace("_", " ").strip() or "track model")
 
 
 def _zone_label(zone: str) -> str:

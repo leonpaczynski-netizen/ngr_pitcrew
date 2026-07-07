@@ -4862,8 +4862,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             )
             event_settings = dict(getattr(self, "_last_race_plan_inputs", {}) or {})
             track_context, live_progress = self._resolve_live_pit_lane_context()
-            live_position, reference_stations, identity_ok = \
-                self._resolve_live_track_progress_context()
+            (live_position, reference_stations, identity_ok,
+             ref_source, ref_warnings) = self._resolve_live_track_progress_context()
             result = build_live_replan_snapshot(
                 pre_race_result=pre,
                 live_source=self,                 # dashboard: reads _tracker + _last_packet
@@ -4871,8 +4871,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 track_context=track_context,      # Group 55: pit-lane mapping (or None)
                 live_progress=live_progress,      # Group 55: explicit lap progress (or None)
                 live_position=live_position,      # Group 56: live world XYZ (or None)
-                reference_stations=reference_stations,  # Group 56: approved path (or None)
+                reference_stations=reference_stations,  # Group 56/57: approved path (or None)
                 identity_ok=identity_ok,
+                reference_path_source=ref_source,       # Group 57: provenance (or "")
+                reference_path_warnings=ref_warnings,   # Group 57: load warnings
                 generated_at=time.strftime("%H:%M:%S"),
             )
             label.setText(render_live_replan_text(result))
@@ -4920,16 +4922,20 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         return track_context, live_progress
 
     def _resolve_live_track_progress_context(self):
-        """Resolve (live_position, reference_stations, identity_ok) for Group 56.
+        """Resolve live progress inputs for Group 56/57.
 
-        Read-only and defensive. Returns (None, None, True) whenever the live world
-        position or an approved reference path is unavailable, so live replan degrades
-        cleanly. Never raises. The reference path is loaded read-only from the existing
-        track-model files; no calibration workflow is run here and nothing is mutated.
+        Returns ``(live_position, reference_stations, identity_ok, reference_path_source,
+        reference_path_warnings)``. Read-only and defensive: discovers an APPROVED
+        reference-path asset for the event's track/layout via the Group 57 loader,
+        validates identity, and converts it to Group 56 stations. Returns safe empties
+        when the live position or an approved path is unavailable. Never raises; runs no
+        calibration workflow and mutates nothing.
         """
         live_position = None
         reference_stations = None
         identity_ok = True
+        ref_source = ""
+        ref_warnings: tuple = ()
         try:
             if self._tracker is not None:
                 live_position = getattr(self._tracker, "live_world_position", None)
@@ -4942,39 +4948,36 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             live_position = None
         try:
             ec = self._build_event_context()
-            track = str(getattr(ec, "track", "") or "").strip()
+            track_id = str(getattr(ec, "track_location_id", "") or "").strip()
             layout_id = str(getattr(ec, "layout_id", "") or "").strip()
-            if track:
-                from data.live_track_progress import build_track_path_stations
-                ref_path = self._load_reference_path_readonly(track, layout_id)
-                if ref_path is not None:
-                    reference_stations = build_track_path_stations(ref_path)
-                    if not reference_stations:
-                        reference_stations = None
+            track_hint = track_id or str(getattr(ec, "track", "") or "").strip()
+            if track_hint or layout_id:
+                from data.reference_path_loader import (
+                    load_reference_path_for_layout,
+                    reference_path_to_track_stations,
+                    validate_reference_path_identity,
+                )
+                result = load_reference_path_for_layout(track_hint, layout_id)
+                if result.has_stations:
+                    stations = reference_path_to_track_stations(result.asset)
+                    if stations:
+                        reference_stations = stations
+                        ref_source = result.source
+                        ref_warnings = tuple(result.warnings or ())
+                        ok, msg = validate_reference_path_identity(
+                            result.asset, track_hint, layout_id)
+                        identity_ok = ok
+                        if not ok:
+                            ref_warnings = ref_warnings + (msg,)
+                else:
+                    ref_warnings = ("reference path has no usable stations",)
+                if reference_stations is None and not ref_warnings:
+                    ref_warnings = tuple(result.warnings or ())
         except Exception:
             reference_stations = None
-        return live_position, reference_stations, identity_ok
-
-    def _load_reference_path_readonly(self, track: str, layout_id: str):
-        """Load an approved/reference track path (read-only) or None. Never raises.
-
-        Tries a few track-id spellings via the existing track-model reference-path
-        loader. No mutation, no calibration, no writes.
-        """
-        try:
-            from data.track_calibration import (
-                import_reference_path_json, reference_path_filename, TRACK_MODELS_DIR,
-            )
-            candidates = []
-            for tid in (track, track.lower().replace(" ", "_")):
-                candidates.append((tid, layout_id or tid))
-            for tid, lid in candidates:
-                path = TRACK_MODELS_DIR / reference_path_filename(tid, lid)
-                if path.exists():
-                    return import_reference_path_json(path)
-        except Exception:
-            return None
-        return None
+            ref_source = ""
+            ref_warnings = ()
+        return live_position, reference_stations, identity_ok, ref_source, ref_warnings
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.

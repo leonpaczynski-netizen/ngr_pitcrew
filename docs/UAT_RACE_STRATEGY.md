@@ -447,13 +447,63 @@ The resolver is exercised via the offline `fuji_reference_path()` fixture in tes
 
 ---
 
+## Group 57 additions (Approved Reference Path Assets & Live Progress Activation)
+
+Group 57 makes Group 56 live progress **actually activate**. Group 56 needs an approved
+reference path for the current track/layout; Group 57 adds a read-only loader that
+**discovers and loads** those assets and converts them to Group 56 stations. **The repo
+already ships a real calibration-sourced Fuji Full Course reference path** (200 stations,
+Porsche RSR, confidence 1.0), so Fuji progress now genuinely resolves. Read-only,
+advisory-only — reference-path matching **never creates a pit event**.
+
+### Reference-path loader (pure)
+
+New `data/reference_path_loader.py` scans `data/track_models/` (and the track library) for
+`*.reference_path.json`, parses **both** the explicit `reference_path_v1` format and the
+existing Group 17 calibration format, validates track/layout identity, and converts to
+Group 56 `TrackPathStation`. Missing/malformed files degrade to an honest "unavailable" /
+"malformed, ignored" result; NaN/inf and bad stations are rejected; it never writes or raises.
+Historical calibration build-notes stay in metadata (not shown to the driver).
+
+### UI / render
+
+The Live Replan surface now adds `reference path: loaded (calibration reference path)` in
+**Found** when an approved path is loaded, followed by the Group 56 `track progress` /
+`distance along lap` / `position match` lines. **Missing:** `approved reference path
+unavailable` / `reference path has no usable stations`. **Warnings:** `reference path
+track/layout mismatch` / `reference path malformed, ignored`. Identity mismatch caps progress
+at LOW so it never lifts pit confidence.
+
+### Manual UAT (Porsche 911 RSR '17, Fuji Full Course, 50 min, 8×/3×/1 L/s)
+
+1. Build the pre-race Race Plan.
+2. Start live telemetry.
+3. Refresh Live Replan Snapshot **while on track**: with the shipped Fuji reference path,
+   `reference path: loaded (calibration reference path)` appears, followed by track progress %,
+   distance-along-lap, and position-match confidence (when a live world position is available).
+4. Pit once.
+5. Refresh after pit exit: pit-stop count increments, laps-since-pit resets, and pit-lane
+   corroboration uses the resolved progress **only when confidence is MEDIUM/HIGH**.
+6. Confirm **no pit command, no voice command, no Apply control, no setup recommendation**.
+
+Notes:
+- Fuji Full Course is the verified live-activation target (real reference path ships).
+- Other tracks (except Daytona, which also ships one) will honestly report "approved reference
+  path unavailable" until a reference/calibration path is imported through the track-modelling
+  workflow — that is the expected safe fallback.
+- The event's canonical `track_location_id` / `layout_id` must resolve to the shipped Fuji ids
+  (`fuji_international_speedway` / `fuji_international_speedway__full_course`) for the path to load;
+  the loader also matches tolerantly by display-name tokens.
+
+---
+
 ## Known caveats
 
-- **No approved reference-path file ships in the repo**, so live track progress typically
-  resolves as "approved reference path unavailable" until a reference/calibration path exists
-  for the track/layout. When present, MEDIUM/HIGH progress drives Group 55 corroboration.
-- GT7's packet `road_distance` (cumulative) could be a future fallback progress source when
-  world-position matching is weak — deferred to Group 57+.
+- **Reference-path assets ship only for Fuji Full Course and Daytona Road Course.** Other
+  track/layouts report "approved reference path unavailable" (safe fallback) until a path is
+  imported via the track-modelling workflow.
+- The GT7 packet `road_distance` (cumulative) lower-confidence fallback progress source is
+  **deferred to Group 58** (the core reference-path activation works with the real Fuji asset).
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is

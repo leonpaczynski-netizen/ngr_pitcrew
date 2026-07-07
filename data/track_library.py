@@ -87,6 +87,10 @@ class TrackLayoutManifest:
     # Shape: {"available": bool, "source": str, "segments": [ {zone, start_progress,
     #         end_progress, label}, ... ]}. Missing / older manifests → {}.
     pit_lane:      dict  = field(default_factory=dict)
+    # Group 57: optional approved reference-path pointer (backward-compatible; {}).
+    # Shape: {"available": bool, "file": str, "source": str, "notes": str}. Missing /
+    # older manifests → {}. The actual geometry lives in the referenced file.
+    reference_path: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -274,6 +278,7 @@ def resolve_track_layout_manifest(
         source        = raw.get("source", "estimated"),
         confidence    = raw.get("confidence", "low"),
         pit_lane      = dict(raw.get("pit_lane", {}) or {}),
+        reference_path = dict(raw.get("reference_path", {}) or {}),
     )
 
 
@@ -369,6 +374,30 @@ def load_track_pit_lane(
         manifest = resolve_track_layout_manifest(track_id, layout_id, base_dir)
         if manifest is not None and manifest.pit_lane:
             block = dict(manifest.pit_lane)
+            block.setdefault("track_id", track_id)
+            block.setdefault("layout_id", layout_id)
+            return block
+        return None
+    except Exception:
+        return None
+
+
+def load_track_reference_path(
+    track_id:  str,
+    layout_id: str,
+    base_dir:  Optional[Path] = None,
+) -> Optional[dict]:
+    """Return the reference-path pointer block for a layout, or None when absent.
+
+    Group 57 — backward-compatible. Reads the optional manifest ``reference_path``
+    block ({"available", "file", "source", "notes"}); the actual geometry lives in
+    the referenced file (resolved by ``data/reference_path_loader.py``). A track
+    with no reference-path metadata is valid: returns None (never raises).
+    """
+    try:
+        manifest = resolve_track_layout_manifest(track_id, layout_id, base_dir)
+        if manifest is not None and manifest.reference_path:
+            block = dict(manifest.reference_path)
             block.setdefault("track_id", track_id)
             block.setdefault("layout_id", layout_id)
             return block
