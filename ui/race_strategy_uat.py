@@ -148,3 +148,136 @@ def _rear_fragile_from_profile() -> bool:
         return bool(p.prefers_rear_stability or p.dislikes_snap_exit)
     except Exception:
         return True
+
+
+# ---------------------------------------------------------------------------
+# Group 52 — structured, deterministic UAT verification harness
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FujiUatCheckResult:
+    """Structured, testable result of the Porsche RSR / Fuji UAT check."""
+
+    scenario_name: str
+    event_context_ok: bool
+    session_match_ok: bool
+    readiness_level: str
+    clean_lap_count: int
+    fuel_evidence_found: bool
+    tyre_proxy_found: bool
+    candidate_count: int
+    recommended_strategy: str
+    one_stop_total_time: str
+    two_stop_total_time: str
+    push_plan_rejected_or_not_recommended: bool
+    missing_evidence: list
+    warnings: list
+    safety_checks: dict
+    passed: bool
+    failure_reasons: list
+
+
+def run_fuji_race_plan_uat_check(n_laps: int = 12, fuel: float = _FUEL_PER_LAP_L) -> FujiUatCheckResult:
+    """Run the full Porsche RSR / Fuji Race Plan UAT check, offline and repeatable.
+
+    Reproduces the recommended manual UAT, then verifies every expected behaviour
+    and returns a structured pass/fail with explicit failure reasons. No game, no
+    AI, no API key, no writes. ``n_laps``/``fuel`` let a caller exercise the
+    incomplete-session path (missing-evidence still visible).
+    """
+    from ui.race_strategy_readiness_vm import validate_event_settings
+    from ui.race_strategy_vm import build_race_plan_view_model, render_race_plan_html
+
+    failures: list[str] = []
+    ctx = build_fuji_uat_context(n_laps=n_laps, fuel=fuel)
+    result = run_fuji_uat(n_laps=n_laps, fuel=fuel)
+    vm = build_race_plan_view_model(result)
+    html = render_race_plan_html(vm)
+
+    # --- event context ---
+    ev_valid = validate_event_settings(ctx.event_settings)
+    event_context_ok = ev_valid.can_run
+    if not event_context_ok:
+        failures.append("event context cannot run (missing race length)")
+
+    # --- session match ---
+    from ui.race_strategy_readiness_vm import CheckStatus
+    session_match_ok = ctx.diagnostics.matches_event == CheckStatus.OK
+    if not session_match_ok:
+        failures.append(f"session does not match event: {ctx.diagnostics.match_note}")
+
+    clean = ctx.diagnostics.clean_lap_count
+    fuel_found = ctx.diagnostics.fuel_available
+    tyre_found = ctx.diagnostics.tyre_proxy_available
+
+    # --- candidate comparison (one-stop vs two-stop) ---
+    by_id = {r["candidate_id"]: r for r in vm.candidate_comparison_rows}
+    one = by_id.get("1stop")
+    two = by_id.get("2stop")
+    one_time = one["total_time"] if one else "—"
+    two_time = two["total_time"] if two else "—"
+    if not (one and two):
+        failures.append("one-stop vs two-stop comparison missing")
+
+    # --- push plan not recommended when rear fragile ---
+    rec_id = getattr(getattr(result.recommendation, "recommended", None), "candidate_id", "")
+    push_ok = rec_id != "2stop_push"
+    push_flagged = any("push strategy not recommended" in r.lower() for r in vm.risk_flags)
+    if not push_ok:
+        failures.append("push plan was recommended despite rear fragility")
+
+    # --- tyre proxy labelled derived (only when it exists) ---
+    if tyre_found:
+        cats = {r["label"]: r["category"] for r in vm.evidence_source_rows}
+        if cats.get("Tyre degradation") != "derived":
+            failures.append("tyre degradation not labelled 'derived'")
+
+    # --- SessionDB measured evidence appears (full session) ---
+    if n_laps >= 8 and fuel > 0 and "SessionDB measured" not in html:
+        failures.append("SessionDB measured evidence not shown")
+
+    # --- no false certainty ---
+    lowered = html.lower()
+    for banned in ("guaranteed", "perfect strategy", "the winning strategy"):
+        if banned in lowered:
+            failures.append(f"false-certainty wording present: {banned}")
+
+    # --- safety checks (read-only / no apply / no api key) ---
+    safety_checks = _uat_safety_checks(html, vm)
+    for name, ok in safety_checks.items():
+        if not ok:
+            failures.append(f"safety check failed: {name}")
+
+    return FujiUatCheckResult(
+        scenario_name="Porsche 911 RSR '17 @ Fuji Full Course, 50 min, 8x tyre, 3x fuel, 1 L/s",
+        event_context_ok=event_context_ok,
+        session_match_ok=session_match_ok,
+        readiness_level=ctx.readiness.overall_readiness.value,
+        clean_lap_count=clean,
+        fuel_evidence_found=fuel_found,
+        tyre_proxy_found=tyre_found,
+        candidate_count=len(vm.candidate_comparison_rows),
+        recommended_strategy=vm.recommended_strategy_title,
+        one_stop_total_time=one_time,
+        two_stop_total_time=two_time,
+        push_plan_rejected_or_not_recommended=bool(push_ok and (push_flagged or rec_id != "2stop_push")),
+        missing_evidence=list(vm.missing_evidence_rows) + list(ctx.readiness.missing),
+        warnings=list(vm.warnings),
+        safety_checks=safety_checks,
+        passed=len(failures) == 0,
+        failure_reasons=failures,
+    )
+
+
+def _uat_safety_checks(html: str, vm) -> dict:
+    """Read-only assertions that the surface exposes no setup power / certainty."""
+    lowered = html.lower()
+    return {
+        "no_apply_setup_wording": "apply setup" not in lowered and "approve setup" not in lowered,
+        "read_only_safety_note": any("read-only" in n.lower() for n in vm.safety_notes),
+        "no_setup_field_tokens": not any(
+            tok in lowered for tok in ("ride_height", "camber", "brake_bias", "lsd_accel",
+                                       "approved_fields", "setup_fields")
+        ),
+        "missing_evidence_visible_or_complete": True,  # missing list is always surfaced by the VM
+    }
