@@ -219,6 +219,15 @@ lap length, so it does not measure cumulative lap distance in that post-processe
 fallback still assumes cumulative semantics with **capped confidence** and discloses this — a raw live-packet
 capture is needed to settle the true live behaviour. Read-only; nothing is written; no geometry is invented.
 
+**Raw live-packet capture (Group 61):** `data/live_road_distance_capture.py` (`LiveRoadDistanceCapture` +
+`analyse_live_capture`) accumulates RAW live-packet `road_distance` (+ position/lap markers) so a manual UAT
+over ≥3 clean laps can settle the field's LIVE semantics (calibration data is post-processed). The Group 61
+verdict `NON_DISTANCE_LIKE` (via `CaptureAnalysisResult.capture_status`) is returned when the per-lap span is
+far below the lap length — i.e. the field is not a lap-distance measure at all. A saved raw capture uses
+`format_version: "raw_live_road_distance_v1"` (`track_location_id`/`layout_id`/`calibration_car_id` +
+counters + `laps[]`), and can be persisted only to an explicit UAT path (`save_raw_capture_to_path`); the pure
+capture module itself writes nothing. See `docs/UAT_RACE_STRATEGY.md` (Group 61) for the capture procedure.
+
 ---
 
 ### `semantic_model.json` — `track_semantic_model_v1`

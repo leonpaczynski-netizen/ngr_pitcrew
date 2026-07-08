@@ -70,6 +70,12 @@ class LiveReplanResult:
     # Group 57: approved reference-path provenance (empty when none loaded).
     reference_path_source: str = ""
     reference_path_warnings: tuple = ()
+    # Group 61: display-only progress stabilisation (jitter/false-certainty guard).
+    # Does NOT affect pit-lane corroboration or strategy — it only annotates the
+    # rendered live-progress line. Empty when no stabiliser state was supplied.
+    stabilised_confidence: str = ""
+    stabiliser_notes: tuple = ()
+    stabiliser_jumped: bool = False
 
     @property
     def confidence(self) -> ReplanConfidence:
@@ -104,6 +110,7 @@ def build_live_replan_snapshot(
     lap_distance_m=None,
     road_distance=None,
     lap_length_m=None,
+    stabiliser_state=None,
     generated_at: str = "",
 ) -> LiveReplanResult:
     """Build a read-only live replan snapshot.
@@ -179,6 +186,23 @@ def build_live_replan_snapshot(
         warnings = tuple(warnings) + tuple(
             w for w in extracted.warnings if w not in warnings)
 
+        # Group 61: DISPLAY-ONLY progress stabilisation. Computed AFTER pit
+        # corroboration so it can never change pit evidence/count/confidence. It only
+        # annotates the rendered live-progress line (jitter/false-certainty guard).
+        stab_conf = ""
+        stab_notes: tuple = ()
+        stab_jumped = False
+        if stabiliser_state is not None and progress_result is not None \
+                and getattr(progress_result, "has_progress", False):
+            try:
+                _key = _stabiliser_identity(track_context, event_settings)
+                _sp = stabiliser_state.update(progress_result, identity_key=_key)
+                stab_conf = _sp.stabilised_confidence.value
+                stab_notes = tuple(_sp.notes)
+                stab_jumped = bool(_sp.jumped)
+            except Exception:
+                stab_conf, stab_notes, stab_jumped = "", (), False
+
         readiness = assess_replan_readiness(live_state)
 
         if latest_fuel_samples is None and live_fuel_per_lap > 0:
@@ -211,6 +235,9 @@ def build_live_replan_snapshot(
             track_progress=extracted.track_progress,
             reference_path_source=str(reference_path_source or ""),
             reference_path_warnings=tuple(reference_path_warnings or ()),
+            stabilised_confidence=stab_conf,
+            stabiliser_notes=stab_notes,
+            stabiliser_jumped=stab_jumped,
         )
     except Exception:
         # Absolute fallback — never raise out of the live runner.
@@ -290,6 +317,19 @@ def render_live_replan_text(result: LiveReplanResult) -> str:
                     "none", "no_mapping", "position_unknown"):
             found.append("pit-lane map used live track progress")
 
+        # Group 61: display-only stabilisation notes (never changes the value/pit).
+        if result.stabiliser_notes:
+            for _n in result.stabiliser_notes:
+                if _n not in prog_warnings and "stable match" not in _n:
+                    prog_warnings.append(_n)
+            if any("stable match" in _n for _n in result.stabiliser_notes):
+                found.append("position stability: stable match (jitter guard)")
+        if result.stabilised_confidence and getattr(tp, "confidence", None) is not None \
+                and result.stabilised_confidence != tp.confidence.value:
+            found.append(
+                f"stabilised progress confidence: {result.stabilised_confidence.lower()} "
+                "(jitter guard; position value unchanged)")
+
     # Group 55: pit-lane mapping corroboration (evidence-quality only).
     zone = str(result.pit_lane_zone or "UNKNOWN")
     corr = str(result.pit_corroboration or "none")
@@ -365,6 +405,22 @@ def _position_from_source(source):
         return None
     except Exception:
         return None
+
+
+def _stabiliser_identity(track_context, event_settings) -> str:
+    """A stable identity key (track|layout|car) so stabiliser state resets on change."""
+    try:
+        tid = lid = car = ""
+        if isinstance(track_context, dict):
+            tid = str(track_context.get("track_id", "") or "")
+            lid = str(track_context.get("layout_id", "") or "")
+        es = event_settings if isinstance(event_settings, dict) else {}
+        tid = tid or str(es.get("track_location_id", "") or es.get("track", "") or "")
+        lid = lid or str(es.get("layout_id", "") or "")
+        car = str(es.get("car_id", "") or es.get("car_name", "") or "")
+        return f"{tid}|{lid}|{car}"
+    except Exception:
+        return ""
 
 
 def _ref_source_label(source: str) -> str:

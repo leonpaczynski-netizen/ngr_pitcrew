@@ -676,17 +676,69 @@ wiring needs a stateful live loop that holds previous progress).
 
 ---
 
+## Group 61 additions (Raw Live-Packet Capture & Stateful Stabiliser Wiring)
+
+Group 61 added the **raw live-packet capture workflow** needed to finally settle GT7 `road_distance` live
+semantics, a **NON_DISTANCE_LIKE** verdict, and wired the Group 60 stabiliser into the live path as a
+**display-only** jitter guard. **No production strategy/pit/fallback behaviour changed**, and no new live
+semantics were confirmed (that is the manual capture step below).
+
+### Raw live-packet road-distance semantics — how to capture 3+ clean laps
+
+1. Set your event to the track/layout/car you want to test, and start live telemetry.
+2. Begin capture (diagnostic, read-only — it changes nothing):
+   `dash.start_raw_road_distance_capture(session_id="my_test")`
+3. Drive **≥3 clean consecutive laps** (no pit, no reset). The capturer records raw `road_distance` + world
+   position + lap markers for every packet.
+4. Read the verdict:
+   `for row in dash.raw_road_distance_capture_report(): print(row)`
+   (or `dash.stop_raw_road_distance_capture()` to end it and keep the accumulator).
+5. Interpret the **Capture verdict**:
+   - `CUMULATIVE_CONFIRMED` — per-lap delta ≈ lap length, continuous across laps → the field is cumulative.
+   - `PER_LAP_RESET_CONFIRMED` — each lap starts near zero, delta ≈ lap length → resets per lap.
+   - `NON_DISTANCE_LIKE` — per-lap span far below lap length → **not a lap-distance measure** (the Fuji/Daytona
+     lesson); fallback CANNOT be trusted for this capture.
+   - `INCONSISTENT` / `INSUFFICIENT_EVIDENCE` / `UNKNOWN` — recapture cleanly / capture more laps.
+
+The report shows per-lap start/end, deltas, span, trusted lap-length comparison, the verdict, red flags, and a
+clear next action. It says explicitly that **production behaviour is not changed** by the capture. Fallback
+confidence is promoted only after a `CUMULATIVE_CONFIRMED`/`PER_LAP_RESET_CONFIRMED` capture whose span covers
+the lap — and that promotion is a future, separately-reviewed change.
+
+Offline (no game): `run_raw_live_capture_uat("cumulative"|"reset"|"non_distance"|"inconsistent"|"insufficient")`
+returns the same analysis result; `save_raw_capture_to_path(capture, path)` persists a capture to an explicit
+file for later analysis.
+
+### Live-progress stabiliser (display-only)
+
+The live-replan render now shows a **jitter guard**: on an implausible progress jump it adds a
+`stabilised progress confidence: <lower> (jitter guard; position value unchanged)` line, and on a stable match
+a `position stability: stable match` line. This is **display-only** — it never changes the reported position,
+never inflates confidence, and **does not affect pit-lane corroboration, pit count, strategy, or any command**.
+It resets automatically when the track/layout/car changes.
+
+### Manual UAT checklist
+
+- Fuji/Daytona approved path: map match used; fallback does not override; no fallback/semantics disclosure on a
+  true match; **pit confidence unchanged by fallback or stabiliser**.
+- Raw capture: run ≥3 clean laps → confirm the Capture verdict + per-lap deltas + trusted lap-length comparison.
+- Jitter: on a noisy/teleport frame, confirm the render shows the jitter-guard downgrade while the pit path is
+  unchanged.
+
+---
+
 ## Known caveats
 
 - **Approved reference-path assets ship only for Fuji Full Course and Daytona Road Course** — no other
   trustworthy assets currently exist to import (do not fabricate). Other track/layouts use the
   **road-distance fallback** (when a trusted lap length exists) or report "approved reference path unavailable".
-- **GT7 `road_distance` live semantics remain formally unconfirmed.** Real calibration captures do NOT confirm
-  cumulative behaviour (Fuji INSUFFICIENT_EVIDENCE, Daytona INCONSISTENT; per-lap span far below lap length),
-  because that data is post-processed. A **raw live-packet** capture over ≥3 clean laps is still needed. The
-  fallback continues to assume cumulative semantics with capped confidence and discloses this.
-- The correctness-preserving progress stabiliser is implemented + tested but **not yet wired** into the live
-  pipeline (needs a stateful live loop). Wiring is **deferred to Group 61+**.
+- **GT7 `road_distance` live semantics remain formally unconfirmed.** Calibration captures classify as
+  NON_DISTANCE_LIKE (per-lap span far below lap length) because that data is post-processed. Use the Group 61
+  **raw live-packet capture** (`start_raw_road_distance_capture` → drive ≥3 clean laps → report) to settle it.
+  Until a raw capture CONFIRMS cumulative/reset semantics, the fallback stays lower-confidence, capped, and
+  disclosed, and production behaviour does not change.
+- The progress stabiliser is now wired **display-only** (a jitter guard on the rendered live-progress line). It
+  does not feed any decision path; doing so would be a future, separately-reviewed change.
 - **No Fuji track-library pit-lane entry ships** — pit-lane mapping is exercised via a
   test-only fixture; production tracks gain it only when a `pit_lane` block is added.
 - SessionDB has no explicit tyre-wear or pit-loss column, so **tyre degradation is

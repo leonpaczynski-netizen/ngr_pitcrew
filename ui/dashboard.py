@@ -431,6 +431,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._udp_listener    = udp_listener
         self._last_packet: Optional[GT7Packet] = None
         self._last_packet_received: float = 0.0  # Group 24 AC4: wall-clock of last received packet
+        # Group 61: display-only live-progress stabiliser state (created on first use).
+        self._live_stabiliser_state = None
+        # Group 61: OFF-by-default raw road-distance capture (diagnostic, read-only).
+        self._raw_rd_capture = None
         self._gear_ratios_captured: bool = False
         self._lap_compound_tags: dict[int, str] = {}
         self._default_lap_compound: str = ""
@@ -2406,6 +2410,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 break
             self._last_packet = packet
             self._last_packet_received = time.time()  # Group 24 AC4
+            # Group 61: read-only raw road-distance capture (inert unless started).
+            if self._raw_rd_capture is not None:
+                try:
+                    _ln = self._tracker.laps_recorded if self._tracker is not None else None
+                    self._raw_rd_capture.add_packet(packet, lap_number=_ln)
+                except Exception:
+                    pass
             self._update_live(packet)
         self._refresh_strategy_fuel_column()
         self._refresh_gear_ratios()
@@ -4880,6 +4891,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 lap_distance_m=lap_distance_m,    # Group 58: fallback inputs (or None)
                 road_distance=road_distance,
                 lap_length_m=lap_length_m,
+                stabiliser_state=self._live_progress_stabiliser(),  # Group 61: display-only
                 generated_at=time.strftime("%H:%M:%S"),
             )
             label.setText(render_live_replan_text(result))
@@ -4887,6 +4899,64 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             label.setText(
                 f"Live replan snapshot unavailable: {exc}. "
                 "Advisory only; no action is applied.")
+
+    def _live_progress_stabiliser(self):
+        """Lazily create + return the display-only live-progress stabiliser state (Group 61).
+
+        The stabiliser only annotates the rendered live-progress line (jitter / false-
+        certainty guard). It never changes the reported position value, never inflates
+        confidence, and never touches pit corroboration, pit count, setup, or commands.
+        """
+        try:
+            if self._live_stabiliser_state is None:
+                from data.live_progress_stabiliser import LiveProgressStabiliserState
+                self._live_stabiliser_state = LiveProgressStabiliserState()
+        except Exception:
+            self._live_stabiliser_state = None
+        return self._live_stabiliser_state
+
+    def start_raw_road_distance_capture(self, *, session_id: str = ""):
+        """Start an OFF-by-default, read-only raw road-distance capture (Group 61 UAT).
+
+        Diagnostic only: it records raw live-packet road_distance (+ position/lap) so a
+        UAT run over ≥3 clean laps can settle the field's live semantics. It affects no
+        strategy, setup, pit, or live-replan behaviour and writes no files.
+        """
+        try:
+            from data.live_road_distance_capture import LiveRoadDistanceCapture
+            ec = self._build_event_context()
+            car_name = ""
+            try:
+                car_name, _ = self._load_car_specs_for_current()
+            except Exception:
+                car_name = ""
+            self._raw_rd_capture = LiveRoadDistanceCapture(
+                track_id=str(getattr(ec, "track_location_id", "") or getattr(ec, "track", "") or ""),
+                layout_id=str(getattr(ec, "layout_id", "") or ""),
+                car_id=str(car_name or ""), session_id=str(session_id or ""))
+            return self._raw_rd_capture
+        except Exception:
+            self._raw_rd_capture = None
+            return None
+
+    def stop_raw_road_distance_capture(self):
+        """Stop the raw capture and return the accumulator (or None). Never raises."""
+        cap = self._raw_rd_capture
+        self._raw_rd_capture = None
+        return cap
+
+    def raw_road_distance_capture_report(self):
+        """Return report rows for the current/last raw capture, or a hint. Never raises."""
+        try:
+            cap = self._raw_rd_capture
+            if cap is None:
+                return ["No raw road-distance capture is running. "
+                        "Call start_raw_road_distance_capture() and drive ≥3 clean laps."]
+            from data.live_road_distance_capture import analyse_live_capture
+            from data.road_distance_capture_analysis import build_capture_report
+            return build_capture_report(analyse_live_capture(cap))
+        except Exception:
+            return ["Raw road-distance capture report unavailable."]
 
     def _resolve_live_pit_lane_context(self):
         """Resolve (track_context, live_progress) for Group 55 pit-lane corroboration.

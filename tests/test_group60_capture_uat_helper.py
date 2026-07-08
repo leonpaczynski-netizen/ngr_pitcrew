@@ -56,7 +56,7 @@ class TestNextAction:
     def test_report_renders(self):
         rows = build_capture_report(run("fuji"))
         assert any("Next action:" in r for r in rows)
-        assert any("Semantics status:" in r for r in rows)
+        assert any("Semantics status" in r for r in rows)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,9 @@ class RoadDistanceSemanticsStatus(str, Enum):
     PER_LAP_RESET_CONFIRMED = "PER_LAP_RESET_CONFIRMED"
     INCONSISTENT = "INCONSISTENT"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    # Group 61: the signal exists but does NOT behave like a lap-distance measure
+    # (e.g. its per-lap span is far below the lap length). Never usable for progress.
+    NON_DISTANCE_LIKE = "NON_DISTANCE_LIKE"
     UNKNOWN = "UNKNOWN"
 
 
