@@ -7443,11 +7443,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lap_table.setHorizontalHeaderLabels(columns)
         self._lap_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._lap_table.setAlternatingRowColors(True)
-        self._lap_table.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            f"QTableWidget::item:alternate {{ background: #222; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the global NGR table styling for a consistent pit-wall look.
         self._lap_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._lap_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         lap_data_layout.addWidget(self._lap_table)
@@ -7683,20 +7679,29 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         filter_bar.addStretch()
         layout.addLayout(filter_bar)
 
+        from ui import ngr_theme as _ngr
         self._tbl_history = QTableWidget()
         self._tbl_history.setColumnCount(6)
         self._tbl_history.setHorizontalHeaderLabels(["Date", "Car", "Track", "Type", "Laps", "Best Lap"])
         self._tbl_history.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._tbl_history.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._tbl_history.setAlternatingRowColors(True)
-        self._tbl_history.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the global NGR table styling (dark header / carbon rows / neon
+        # selection) rather than a one-off inline style.
         self._tbl_history.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._tbl_history.currentCellChanged.connect(
             lambda row, _col, _prow, _pcol: self._on_history_row_selected(row))
         layout.addWidget(self._tbl_history)
+
+        # Driver-facing empty state — tells the user exactly what to do next when
+        # no sessions are recorded (or none match the current filter). Hidden
+        # whenever the table has rows (toggled in _refresh_history).
+        self._hist_empty_lbl = _ngr.empty_state_label(
+            "No saved sessions yet. Drive a practice or race session with the app "
+            "connected — completed laps are recorded automatically and will appear "
+            "here.")
+        self._hist_empty_lbl.setVisible(False)
+        layout.addWidget(self._hist_empty_lbl)
 
         detail_group = QGroupBox("Session Detail")
         detail_group.setStyleSheet(self._group_style())
@@ -7707,17 +7712,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tbl_history_detail.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._tbl_history_detail.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._tbl_history_detail.setMaximumHeight(250)
-        self._tbl_history_detail.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit global NGR table styling.
         detail_layout.addWidget(self._tbl_history_detail)
 
         btn_load = QPushButton("Load into Practice Review")
-        btn_load.setStyleSheet(
-            "QPushButton { background: #1A3A5C; color: white; border-radius: 4px; padding: 5px 14px; }"
-            "QPushButton:hover { background: #2A5A8C; }"
-        )
+        btn_load.setStyleSheet(_ngr.secondary_button_qss())
+        btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_load.clicked.connect(self._on_history_load_session)
         load_row = QHBoxLayout()
         load_row.addStretch()
@@ -7733,10 +7733,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if not hasattr(self, "_tbl_history"):
             return
         if self._db is None:
+            self._set_history_empty_state(
+                "Session database unavailable — recorded laps can't be loaded "
+                "right now.")
             return
         try:
             sessions = self._db.get_all_sessions(limit=60)
         except Exception:
+            self._set_history_empty_state(
+                "Couldn't read the session database. Try reopening the app; your "
+                "recorded laps are not lost.")
             return
 
         car_filter   = self._hist_car_combo.currentText()
@@ -7790,6 +7796,34 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 self._tbl_history.setItem(row, col, QTableWidgetItem(val))
             session_ids.append(s["id"])
         self._tbl_history.setProperty("_session_ids", session_ids)
+
+        # Empty-state guidance: distinguish "nothing recorded yet" from "nothing
+        # matches this filter" so the next step is always clear.
+        if filtered:
+            self._set_history_empty_state(None)
+        elif sessions:
+            self._set_history_empty_state(
+                "No sessions match these filters. Widen Car / Track / Type — or set "
+                "them back to “All” — to see your recorded sessions.")
+        else:
+            self._set_history_empty_state(
+                "No saved sessions yet. Drive a practice or race session with the "
+                "app connected — completed laps are recorded automatically and will "
+                "appear here.")
+
+    def _set_history_empty_state(self, message: "str | None") -> None:
+        """Show the driver-facing empty-state message (None hides it).
+
+        Display-only; safe if the label was never built.
+        """
+        lbl = getattr(self, "_hist_empty_lbl", None)
+        if lbl is None:
+            return
+        if message:
+            lbl.setText(message)
+            lbl.setVisible(True)
+        else:
+            lbl.setVisible(False)
 
     def _on_history_row_selected(self, row: int) -> None:
         if row < 0:
@@ -8723,10 +8757,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._garage_setups_table.setHorizontalHeaderLabels(["Name", "Track", "Date", "Action"])
         self._garage_setups_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._garage_setups_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._garage_setups_table.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the global NGR table styling.
         setups_layout.addWidget(self._garage_setups_table)
         right_layout.addWidget(setups_group)
 
@@ -8758,10 +8789,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._garage_sessions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._garage_sessions_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._garage_sessions_table.setAlternatingRowColors(True)
-        self._garage_sessions_table.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the global NGR table styling.
         sessions_layout.addWidget(self._garage_sessions_table)
         right_layout.addWidget(sessions_group)
 
