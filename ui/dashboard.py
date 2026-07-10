@@ -3250,7 +3250,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         if self._db is None:
             self._lap_bank_combo.blockSignals(True)
             self._lap_bank_combo.clear()
-            self._lap_bank_combo.addItem("— no database connected —", None)
+            self._lap_bank_combo.addItem("— session database unavailable —", None)
             self._lap_bank_combo.blockSignals(False)
             return
         try:
@@ -3530,7 +3530,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """Delete only the session currently selected in the bank combo."""
         from PyQt6.QtWidgets import QMessageBox
         if self._db is None:
-            self._set_bank_status("No database connected.")
+            self._set_bank_status("Session database unavailable — recorded laps can't be loaded right now.")
             return
         session_id = self._lap_bank_combo.currentData()
         if not session_id:
@@ -3569,7 +3569,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """
         if self._db is None:
             if hasattr(self, "_lbl_bank_status"):
-                self._set_bank_status("No database connected.")
+                self._set_bank_status("Session database unavailable — recorded laps can't be loaded right now.")
             return
         laps = self._logger.records()
         if not laps:
@@ -5466,8 +5466,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._ai_results_text.setStyleSheet(
             f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
         self._ai_results_text.setPlaceholderText(
-            "Analysis results will appear here. "
-            "Tag your practice laps with compound names in the Practice Review tab first.")
+            "No strategy analysis yet. To get a reliable read, complete at least a "
+            "few clean timed laps, tag them with a tyre compound in Practice Review, "
+            "then run the analysis. Results are advisory only.")
         ai_layout.addWidget(self._ai_results_text)
 
         self._ai_apply_row = QHBoxLayout()
@@ -5510,7 +5511,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         btn_add = QPushButton("Add Stint")
         btn_remove = QPushButton("Remove Stint")
         btn_apply = QPushButton("Apply Plan")
-        btn_apply.setStyleSheet(f"background: {_ACCENT}; color: white; font-weight: bold;")
+        # Primary action of the Strategy Builder — loads the built stint plan into
+        # the strategy engine for the Live Race Engineer. Not a setup change and
+        # not a pit command. Consistent NGR primary CTA styling.
+        from ui import ngr_theme as _ngr_ap
+        btn_apply.setStyleSheet(_ngr_ap.primary_button_qss())
+        btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset = QPushButton("Reset")
         btn_add.clicked.connect(self._strategy_add_stint)
         btn_remove.clicked.connect(self._strategy_remove_stint)
