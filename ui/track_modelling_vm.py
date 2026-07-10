@@ -429,6 +429,40 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
     }
 
 
+def format_model_trust_badge(summary: dict) -> tuple[str, str]:
+    """Derive an honest, scannable model-trust badge from a resolver summary.
+
+    Returns ``(text, tone)`` where *text* carries the meaning (so it never relies
+    on colour alone) and *tone* is a semantic key for ui.ngr_theme.badge_qss
+    ("success"/"warn"/"info"/"danger"/"neutral").
+
+    Purely presentational: it reads the already-computed ``format_resolver_summary``
+    output and NEVER implies more certainty than that output supports. A seed
+    baseline reads as an ESTIMATE, an unreviewed detection reads as UNVERIFIED,
+    and only a genuinely AI-ready / engineer-validated model reads as VERIFIED.
+    """
+    source = str(summary.get("source_type", "") or "")
+    ai_ready = str(summary.get("ai_ready", "") or "")
+    src_l = source.lower()
+
+    # Precedence matters and substrings overlap ("reviewed" lives inside "no
+    # reviewed model"; "ai-ready" lives inside "not ai-ready") — so each branch
+    # is guarded precisely against the known source labels.
+    if "engineer-validated" in src_l:
+        return ("ENGINEER-VALIDATED MODEL", "success")
+    if ("ai-ready" in src_l and "not ai-ready" not in src_l) or ai_ready == "Yes":
+        return ("AI-READY MODEL · VERIFIED", "success")
+    if src_l.startswith("detected") or "not reviewed" in src_l:
+        return ("ESTIMATE · UNVERIFIED", "warn")
+    if "not ai-ready" in src_l:
+        return ("REVIEWED · NOT YET AI-READY", "warn")
+    if src_l.startswith("seed"):
+        return ("SEED ESTIMATE ONLY", "info")
+    if "missing" in src_l:
+        return ("NO MODEL FOR THIS LAYOUT", "danger")
+    return ("NO MODEL LOADED", "neutral")
+
+
 def format_next_step(resolver_result: Optional[object], has_station_map: bool) -> str:
     """One-line 'what to do next' for the Track Model Status panel.
 

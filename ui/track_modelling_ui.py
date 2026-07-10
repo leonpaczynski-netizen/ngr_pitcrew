@@ -33,6 +33,7 @@ from ui.track_modelling_vm import (
     format_segment_row       as _format_seg_row,
     format_review_summary    as _format_review_summary,
     format_resolver_summary  as _format_resolver_summary,
+    format_model_trust_badge as _format_model_trust_badge,
     format_next_step               as _format_next_step,
     format_lap_count_info          as _format_lap_count_info,
     format_file_audit_status       as _format_file_audit,
@@ -609,6 +610,18 @@ class TrackModellingMixin:
 
         _rs_val_s = "color: #AAE4AA; font-size: 11px;"
         _rs_key_s = f"color: {_TEXT}; font-size: 11px;"
+
+        # Model-trust badge — the 2-second scannable answer to "can I trust this
+        # model?". Text carries the meaning (VERIFIED / ESTIMATE / SEED ONLY),
+        # never colour alone. Derived read-only from the resolver summary in
+        # _tm_refresh_resolver; never implies more certainty than the data.
+        from ui import ngr_theme as _ngr_tm
+        self._tm_rs_trust_badge = QLabel("NO MODEL LOADED")
+        self._tm_rs_trust_badge.setStyleSheet(_ngr_tm.badge_qss("neutral"))
+        _trust_row = QHBoxLayout()
+        _trust_row.addWidget(self._tm_rs_trust_badge, 0, Qt.AlignmentFlag.AlignLeft)
+        _trust_row.addStretch()
+        resolver_form.addRow(_trust_row)
 
         # Prominent "what to do next" line so a track that has good calibration
         # laps but no reviewed model (the Fuji UAT case) tells the user exactly
@@ -2434,6 +2447,15 @@ class TrackModellingMixin:
         if ai_lbl is not None:
             colour = "#6AC46A" if summary.get("ai_ready") == "Yes" else "#CC4444"
             ai_lbl.setStyleSheet(f"color: {colour}; font-size: 11px; font-weight: bold;")
+
+        # Model-trust badge — honest verified-vs-estimated summary from the same
+        # resolver output (read-only; no new certainty introduced).
+        trust_lbl = getattr(self, "_tm_rs_trust_badge", None)
+        if trust_lbl is not None:
+            from ui import ngr_theme as _ngr_tm
+            _txt, _tone = _format_model_trust_badge(summary)
+            trust_lbl.setText(_txt)
+            trust_lbl.setStyleSheet(_ngr_tm.badge_qss(_tone))
 
         blk = getattr(self, "_tm_rs_blockers", None)
         if blk is not None:

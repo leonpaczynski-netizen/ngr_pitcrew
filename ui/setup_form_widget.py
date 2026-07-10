@@ -597,15 +597,23 @@ class SetupFormWidget(QWidget):
         self._setup_result_text = QTextEdit()
         self._setup_result_text.setReadOnly(True)
         self._setup_result_text.setMinimumHeight(180)
+        # Read-only advisory output — cool teal left-edge marks it as information,
+        # visibly distinct from the neon-green Apply action button below it.
+        from ui import ngr_theme as _ngr_rt
         self._setup_result_text.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
+            f"background: {_DARK_CARD}; color: {_TEXT}; "
+            f"border: 1px solid #444; border-left: 3px solid {_ngr_rt.ADVISORY_EDGE};")
         self._setup_result_text.setPlaceholderText(
             "AI setup suggestions will appear here after analysis.")
         outer.addWidget(self._setup_result_text)
 
+        # The single actionable control after a recommendation — styled as the
+        # unmistakable NGR primary CTA so it reads as distinct from the read-only
+        # advisory result text above it. Visibility stays gated by the engineering
+        # validation logic (setVisible(_show_apply)); styling never affects that.
+        from ui import ngr_theme as _ngr
         self._btn_apply_ai_setup = QPushButton("Apply Pit Crew recommendation")
-        self._btn_apply_ai_setup.setStyleSheet(
-            "background: #2E6A4A; color: white; font-weight: bold; padding: 6px 12px;")
+        self._btn_apply_ai_setup.setStyleSheet(_ngr.primary_button_qss())
         self._btn_apply_ai_setup.setToolTip(
             "Apply the Pit Crew's recommended changes to the setup form.\n"
             "Changed fields are highlighted until you click Save Setup to persist them.")

@@ -666,20 +666,51 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        header_row = QHBoxLayout()
-        title = QLabel("Race Engineer Command Centre")
-        title.setStyleSheet(f"color: {_TEXT}; font-size: 16px; font-weight: bold;")
-        header_row.addWidget(title)
-        header_row.addStretch()
-        self._home_btn_refresh = QPushButton("Refresh")
-        self._home_btn_refresh.setStyleSheet(
-            f"QPushButton {{ background: {_DARK_CARD}; color: {_TEXT};"
-            " border: 1px solid #555; border-radius: 4px; padding: 4px 14px; }"
-            "QPushButton:hover { background: #3A3A3A; }"
+        # NGR-branded command-centre header: official logo slot on the left, a
+        # strong uppercase identity, then the refresh control on the right. The
+        # logo is the official supplied asset (repo-root logo.png), read-only and
+        # scaled for display — never recoloured, cropped, or regenerated. If it is
+        # missing we show a clean text slot rather than inventing a mark.
+        from ui import ngr_theme as _ngr
+        header_bar = QWidget()
+        header_bar.setStyleSheet(
+            f"background: {_ngr.INK_BLACK}; border: 1px solid {_ngr.HAIRLINE};"
+            f" border-radius: {_ngr.RADIUS_MD}px;"
         )
+        header_row = QHBoxLayout(header_bar)
+        header_row.setContentsMargins(14, 10, 14, 10)
+        header_row.setSpacing(12)
+
+        self._home_logo_slot = QLabel()
+        self._home_logo_slot.setObjectName("ngrLogoSlot")
+        _pix = _ngr.logo_pixmap(height=34)
+        if _pix is not None:
+            self._home_logo_slot.setPixmap(_pix)
+        else:
+            self._home_logo_slot.setText(_ngr.logo_placeholder_text())
+            self._home_logo_slot.setStyleSheet(
+                f"color: {_ngr.NGR_GREEN}; font-weight: 700; letter-spacing: 1px;")
+        self._home_logo_slot.setToolTip("Next Gear Racing")
+        header_row.addWidget(self._home_logo_slot, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        _title_col = QVBoxLayout()
+        _title_col.setSpacing(0)
+        title = QLabel("RACE ENGINEER COMMAND CENTRE")
+        title.setStyleSheet(_ngr.heading_qss(1))
+        _subtitle = QLabel("NGR Pit Crew · Race Intelligence")
+        _subtitle.setStyleSheet(
+            f"color: {_ngr.TEXT_DIM}; font-size: {_ngr.FS_CAPTION}pt; letter-spacing: 1px;")
+        _title_col.addWidget(title)
+        _title_col.addWidget(_subtitle)
+        header_row.addLayout(_title_col)
+        header_row.addStretch()
+
+        self._home_btn_refresh = QPushButton("Refresh")
+        self._home_btn_refresh.setStyleSheet(_ngr.secondary_button_qss())
+        self._home_btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self._home_btn_refresh.clicked.connect(self._home_refresh)
-        header_row.addWidget(self._home_btn_refresh)
-        root.addLayout(header_row)
+        header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(header_bar)
 
         # Next-best-action banner + a click-to-navigate button (Home Dashboard
         # Promotion). The button opens the recommended tab via select_tab; its
@@ -4773,10 +4804,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         form.addRow(QLabel("Starting fuel (%):", styleSheet=lbl_style), self._rp_start_fuel)
         v.addLayout(form)
 
+        from ui import ngr_theme as _ngr
         btn_row = QHBoxLayout()
         self._btn_build_race_plan = QPushButton("Build Race Strategy")
-        self._btn_build_race_plan.setStyleSheet(
-            "background: #1F5E3A; color: white; font-weight: bold; padding: 6px 16px;")
+        # Primary CTA of this read-only surface: it COMPUTES a plan (never applies
+        # a setup or calls a pit), so the neon-green primary style is appropriate.
+        self._btn_build_race_plan.setStyleSheet(_ngr.primary_button_qss())
+        self._btn_build_race_plan.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_build_race_plan.setToolTip(
             "Generate an evidence-based race strategy from the current event + "
             "session data. No API key required. Cannot change any car setup.")
@@ -4788,8 +4822,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._race_plan_text = QTextEdit()
         self._race_plan_text.setReadOnly(True)
         self._race_plan_text.setMinimumHeight(240)
+        # Read-only advisory output — cool teal left-edge signals "information",
+        # not an action surface.
         self._race_plan_text.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
+            f"background: {_DARK_CARD}; color: {_TEXT}; "
+            f"border: 1px solid #444; border-left: 3px solid {_ngr.ADVISORY_EDGE};")
         self._race_plan_text.setPlaceholderText(
             "Click Build Race Strategy to generate an evidence-based race plan. "
             "Load a practice session for higher confidence.")
@@ -4803,10 +4840,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._race_plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._race_plan_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._race_plan_table.setAlternatingRowColors(True)
-        self._race_plan_table.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the polished global NGR table styling (dark header, carbon rows,
+        # neon selection) instead of a one-off inline style — keeps the pit-wall
+        # candidate table consistent with every other table in the app.
         self._race_plan_table.setMinimumHeight(140)
         v.addWidget(QLabel("Candidate comparison (legal strategies, ranked by total race time):",
                            styleSheet="color:#AAA; font-size:11px; padding-top:4px;"))
@@ -4819,8 +4855,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _replan_box.setStyleSheet(self._group_style())
         _rv = QVBoxLayout(_replan_box)
 
+        # Persistent advisory-only tag so this surface can never be mistaken for a
+        # pit command — reinforces the copy in the group title.
+        _replan_tag_row = QHBoxLayout()
+        _replan_tag = _ngr.status_badge("ADVISORY ONLY · NO PIT COMMAND", "advisory")
+        _replan_tag_row.addWidget(_replan_tag, 0, Qt.AlignmentFlag.AlignLeft)
+        _replan_tag_row.addStretch()
+        _rv.addLayout(_replan_tag_row)
+
         _replan_row = QHBoxLayout()
         self._btn_rp_replan_refresh = QPushButton("Refresh Live Replan Snapshot")
+        # A read action (reads live state), never an apply — quiet secondary style.
+        self._btn_rp_replan_refresh.setStyleSheet(_ngr.secondary_button_qss())
+        self._btn_rp_replan_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_rp_replan_refresh.setToolTip(
             "Read the current live race state (read-only) and check whether the "
             "pre-race plan is still on track. Advisory only — no pit call, no setup "
@@ -4837,7 +4884,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             _replan_msg = "Live Replan Readiness: not connected yet."
         self._rp_replan_status = QLabel(_replan_msg)
         self._rp_replan_status.setWordWrap(True)
-        self._rp_replan_status.setStyleSheet("color: #AAA; font-size: 11px; padding: 4px 2px;")
+        # Cool advisory panel styling — visibly read-only, distinct from actions.
+        self._rp_replan_status.setStyleSheet(_ngr.banner_qss("advisory"))
         _rv.addWidget(self._rp_replan_status)
 
         v.addWidget(_replan_box)
@@ -7057,21 +7105,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # ------------------------------------------------------------------ theme / style
 
     def _apply_dark_theme(self) -> None:
+        # NGR Enterprise pit-wall theme. The QPalette gives Fusion a cinematic
+        # charcoal base; the additive global stylesheet (ui/ngr_theme.app_stylesheet)
+        # then lifts the chrome that would otherwise render as generic default
+        # widgets — the top tab bar, buttons, inputs, tables, scrollbars, tooltips
+        # and status bar. It styles specific widget classes only (no blanket
+        # QWidget rule), so the app's existing inline stylesheets always win for
+        # their own widgets and nothing that already worked can change.
+        from ui import ngr_theme as _ngr
         app = QApplication.instance()
         app.setStyle("Fusion")
         pal = QPalette()
-        pal.setColor(QPalette.ColorRole.Window,          QColor(30,  30,  30))
-        pal.setColor(QPalette.ColorRole.WindowText,      QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Base,            QColor(42,  42,  42))
-        pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(37,  37,  37))
-        pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(255, 255, 255))
-        pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(0,   0,   0))
-        pal.setColor(QPalette.ColorRole.Text,            QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Button,          QColor(50,  50,  50))
-        pal.setColor(QPalette.ColorRole.ButtonText,      QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Highlight,       QColor(46, 160, 67))
-        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+        pal.setColor(QPalette.ColorRole.Window,          QColor(_ngr.CARBON))
+        pal.setColor(QPalette.ColorRole.WindowText,      QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Base,            QColor(_ngr.CARBON_RAISED))
+        pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(_ngr.CARBON))
+        pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(_ngr.INK_BLACK))
+        pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(_ngr.TEXT_HI))
+        pal.setColor(QPalette.ColorRole.Text,            QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Button,          QColor(_ngr.CARBON_HI))
+        pal.setColor(QPalette.ColorRole.ButtonText,      QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Highlight,       QColor(_ngr.NGR_GREEN_DIM))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(_ngr.TEXT_HI))
         app.setPalette(pal)
+        try:
+            app.setStyleSheet(_ngr.app_stylesheet())
+        except Exception as e:  # pragma: no cover - never block startup on styling
+            logging.warning("NGR global stylesheet not applied: %s", e)
 
     @staticmethod
     def _group_style() -> str:
