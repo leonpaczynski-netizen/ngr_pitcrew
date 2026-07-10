@@ -4804,10 +4804,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         form.addRow(QLabel("Starting fuel (%):", styleSheet=lbl_style), self._rp_start_fuel)
         v.addLayout(form)
 
+        from ui import ngr_theme as _ngr
         btn_row = QHBoxLayout()
         self._btn_build_race_plan = QPushButton("Build Race Strategy")
-        self._btn_build_race_plan.setStyleSheet(
-            "background: #1F5E3A; color: white; font-weight: bold; padding: 6px 16px;")
+        # Primary CTA of this read-only surface: it COMPUTES a plan (never applies
+        # a setup or calls a pit), so the neon-green primary style is appropriate.
+        self._btn_build_race_plan.setStyleSheet(_ngr.primary_button_qss())
+        self._btn_build_race_plan.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_build_race_plan.setToolTip(
             "Generate an evidence-based race strategy from the current event + "
             "session data. No API key required. Cannot change any car setup.")
@@ -4819,8 +4822,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._race_plan_text = QTextEdit()
         self._race_plan_text.setReadOnly(True)
         self._race_plan_text.setMinimumHeight(240)
+        # Read-only advisory output — cool teal left-edge signals "information",
+        # not an action surface.
         self._race_plan_text.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #444;")
+            f"background: {_DARK_CARD}; color: {_TEXT}; "
+            f"border: 1px solid #444; border-left: 3px solid {_ngr.ADVISORY_EDGE};")
         self._race_plan_text.setPlaceholderText(
             "Click Build Race Strategy to generate an evidence-based race plan. "
             "Load a practice session for higher confidence.")
@@ -4834,10 +4840,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._race_plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._race_plan_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._race_plan_table.setAlternatingRowColors(True)
-        self._race_plan_table.setStyleSheet(
-            f"QTableWidget {{ background: {_DARK_CARD}; color: {_TEXT}; gridline-color: #333; }}"
-            "QHeaderView::section { background: #2A2A2A; color: #E0E0E0; padding: 4px; border: none; }"
-        )
+        # Inherit the polished global NGR table styling (dark header, carbon rows,
+        # neon selection) instead of a one-off inline style — keeps the pit-wall
+        # candidate table consistent with every other table in the app.
         self._race_plan_table.setMinimumHeight(140)
         v.addWidget(QLabel("Candidate comparison (legal strategies, ranked by total race time):",
                            styleSheet="color:#AAA; font-size:11px; padding-top:4px;"))
@@ -4850,8 +4855,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _replan_box.setStyleSheet(self._group_style())
         _rv = QVBoxLayout(_replan_box)
 
+        # Persistent advisory-only tag so this surface can never be mistaken for a
+        # pit command — reinforces the copy in the group title.
+        _replan_tag_row = QHBoxLayout()
+        _replan_tag = _ngr.status_badge("ADVISORY ONLY · NO PIT COMMAND", "advisory")
+        _replan_tag_row.addWidget(_replan_tag, 0, Qt.AlignmentFlag.AlignLeft)
+        _replan_tag_row.addStretch()
+        _rv.addLayout(_replan_tag_row)
+
         _replan_row = QHBoxLayout()
         self._btn_rp_replan_refresh = QPushButton("Refresh Live Replan Snapshot")
+        # A read action (reads live state), never an apply — quiet secondary style.
+        self._btn_rp_replan_refresh.setStyleSheet(_ngr.secondary_button_qss())
+        self._btn_rp_replan_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_rp_replan_refresh.setToolTip(
             "Read the current live race state (read-only) and check whether the "
             "pre-race plan is still on track. Advisory only — no pit call, no setup "
@@ -4868,7 +4884,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             _replan_msg = "Live Replan Readiness: not connected yet."
         self._rp_replan_status = QLabel(_replan_msg)
         self._rp_replan_status.setWordWrap(True)
-        self._rp_replan_status.setStyleSheet("color: #AAA; font-size: 11px; padding: 4px 2px;")
+        # Cool advisory panel styling — visibly read-only, distinct from actions.
+        self._rp_replan_status.setStyleSheet(_ngr.banner_qss("advisory"))
         _rv.addWidget(self._rp_replan_status)
 
         v.addWidget(_replan_box)
