@@ -7398,19 +7398,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         toolbar.addWidget(self._lbl_lap_count)
         toolbar.addStretch()
 
+        from ui import ngr_theme as _ngr
         btn_save_session = QPushButton("Save Session")
-        btn_save_session.setStyleSheet(
-            "QPushButton { background: #1A3A5C; color: white; border-radius: 4px; padding: 4px 12px; }"
-            "QPushButton:hover { background: #2A5A8C; }"
-        )
+        btn_save_session.setStyleSheet(_ngr.secondary_button_qss())
+        btn_save_session.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save_session.clicked.connect(self._save_session_to_db)
         toolbar.addWidget(btn_save_session)
 
         btn_save_setup = QPushButton("Save Setup")
-        btn_save_setup.setStyleSheet(
-            "QPushButton { background: #1F5E3A; color: white; border-radius: 4px; padding: 4px 12px; }"
-            "QPushButton:hover { background: #2F8E5A; }"
-        )
+        btn_save_setup.setStyleSheet(_ngr.primary_button_qss())
+        btn_save_setup.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save_setup.clicked.connect(self._save_setup_from_lapdata)
         toolbar.addWidget(btn_save_setup)
 
@@ -7555,12 +7552,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         )
         form.addRow(notes_lbl, self._feedback_notes)
 
+        from ui import ngr_theme as _ngr_fb
         btn_submit = QPushButton("Submit Feedback → AI Fix")
-        btn_submit.setStyleSheet(
-            "QPushButton { background: #1F5E3A; color: white; font-weight: bold; "
-            "border-radius: 4px; padding: 6px 18px; }"
-            "QPushButton:hover { background: #2F8E5A; }"
-        )
+        btn_submit.setStyleSheet(_ngr_fb.primary_button_qss())
+        btn_submit.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_submit.clicked.connect(self._on_driver_feedback_submit)
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -8166,17 +8161,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         form.addRow(QLabel("Notes:", styleSheet=lbl_s), self._evt_notes)
 
         save_btn_row = QHBoxLayout()
+        from ui import ngr_theme as _ngr_ev
         btn_save_evt = QPushButton("Save Event")
-        btn_save_evt.setStyleSheet(
-            "QPushButton { background: #1A3A5C; color: white; border-radius: 4px; padding: 5px 14px; }"
-            "QPushButton:hover { background: #2A5A8C; }"
-        )
+        btn_save_evt.setStyleSheet(_ngr_ev.secondary_button_qss())
+        btn_save_evt.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save_evt.clicked.connect(self._on_event_save)
         btn_set_active = QPushButton("Set as Active")
-        btn_set_active.setStyleSheet(
-            "QPushButton { background: #1F5E3A; color: white; border-radius: 4px; padding: 5px 14px; }"
-            "QPushButton:hover { background: #2F8E5A; }"
-        )
+        btn_set_active.setStyleSheet(_ngr_ev.primary_button_qss())
+        btn_set_active.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_set_active.clicked.connect(self._on_event_set_active)
         save_btn_row.addStretch()
         save_btn_row.addWidget(btn_save_evt)
@@ -8740,11 +8732,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._garage_car_specs_lbl.setWordWrap(True)
         right_layout.addWidget(self._garage_car_specs_lbl)
 
+        from ui import ngr_theme as _ngr_g
         self._btn_garage_select_event = QPushButton("Load to Event ↩")
-        self._btn_garage_select_event.setStyleSheet(
-            "QPushButton { background: #1F5E3A; color: white; border-radius: 4px; padding: 5px 14px; }"
-            "QPushButton:hover { background: #2F8E5A; }"
-        )
+        self._btn_garage_select_event.setStyleSheet(_ngr_g.primary_button_qss())
+        self._btn_garage_select_event.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_garage_select_event.setVisible(False)
         self._btn_garage_select_event.clicked.connect(self._on_garage_select_for_event)
         right_layout.addWidget(self._btn_garage_select_event)
