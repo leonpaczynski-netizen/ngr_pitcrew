@@ -666,20 +666,51 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        header_row = QHBoxLayout()
-        title = QLabel("Race Engineer Command Centre")
-        title.setStyleSheet(f"color: {_TEXT}; font-size: 16px; font-weight: bold;")
-        header_row.addWidget(title)
-        header_row.addStretch()
-        self._home_btn_refresh = QPushButton("Refresh")
-        self._home_btn_refresh.setStyleSheet(
-            f"QPushButton {{ background: {_DARK_CARD}; color: {_TEXT};"
-            " border: 1px solid #555; border-radius: 4px; padding: 4px 14px; }"
-            "QPushButton:hover { background: #3A3A3A; }"
+        # NGR-branded command-centre header: official logo slot on the left, a
+        # strong uppercase identity, then the refresh control on the right. The
+        # logo is the official supplied asset (repo-root logo.png), read-only and
+        # scaled for display — never recoloured, cropped, or regenerated. If it is
+        # missing we show a clean text slot rather than inventing a mark.
+        from ui import ngr_theme as _ngr
+        header_bar = QWidget()
+        header_bar.setStyleSheet(
+            f"background: {_ngr.INK_BLACK}; border: 1px solid {_ngr.HAIRLINE};"
+            f" border-radius: {_ngr.RADIUS_MD}px;"
         )
+        header_row = QHBoxLayout(header_bar)
+        header_row.setContentsMargins(14, 10, 14, 10)
+        header_row.setSpacing(12)
+
+        self._home_logo_slot = QLabel()
+        self._home_logo_slot.setObjectName("ngrLogoSlot")
+        _pix = _ngr.logo_pixmap(height=34)
+        if _pix is not None:
+            self._home_logo_slot.setPixmap(_pix)
+        else:
+            self._home_logo_slot.setText(_ngr.logo_placeholder_text())
+            self._home_logo_slot.setStyleSheet(
+                f"color: {_ngr.NGR_GREEN}; font-weight: 700; letter-spacing: 1px;")
+        self._home_logo_slot.setToolTip("Next Gear Racing")
+        header_row.addWidget(self._home_logo_slot, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        _title_col = QVBoxLayout()
+        _title_col.setSpacing(0)
+        title = QLabel("RACE ENGINEER COMMAND CENTRE")
+        title.setStyleSheet(_ngr.heading_qss(1))
+        _subtitle = QLabel("NGR Pit Crew · Race Intelligence")
+        _subtitle.setStyleSheet(
+            f"color: {_ngr.TEXT_DIM}; font-size: {_ngr.FS_CAPTION}pt; letter-spacing: 1px;")
+        _title_col.addWidget(title)
+        _title_col.addWidget(_subtitle)
+        header_row.addLayout(_title_col)
+        header_row.addStretch()
+
+        self._home_btn_refresh = QPushButton("Refresh")
+        self._home_btn_refresh.setStyleSheet(_ngr.secondary_button_qss())
+        self._home_btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self._home_btn_refresh.clicked.connect(self._home_refresh)
-        header_row.addWidget(self._home_btn_refresh)
-        root.addLayout(header_row)
+        header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(header_bar)
 
         # Next-best-action banner + a click-to-navigate button (Home Dashboard
         # Promotion). The button opens the recommended tab via select_tab; its
@@ -7057,21 +7088,33 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
     # ------------------------------------------------------------------ theme / style
 
     def _apply_dark_theme(self) -> None:
+        # NGR Enterprise pit-wall theme. The QPalette gives Fusion a cinematic
+        # charcoal base; the additive global stylesheet (ui/ngr_theme.app_stylesheet)
+        # then lifts the chrome that would otherwise render as generic default
+        # widgets — the top tab bar, buttons, inputs, tables, scrollbars, tooltips
+        # and status bar. It styles specific widget classes only (no blanket
+        # QWidget rule), so the app's existing inline stylesheets always win for
+        # their own widgets and nothing that already worked can change.
+        from ui import ngr_theme as _ngr
         app = QApplication.instance()
         app.setStyle("Fusion")
         pal = QPalette()
-        pal.setColor(QPalette.ColorRole.Window,          QColor(30,  30,  30))
-        pal.setColor(QPalette.ColorRole.WindowText,      QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Base,            QColor(42,  42,  42))
-        pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(37,  37,  37))
-        pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(255, 255, 255))
-        pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(0,   0,   0))
-        pal.setColor(QPalette.ColorRole.Text,            QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Button,          QColor(50,  50,  50))
-        pal.setColor(QPalette.ColorRole.ButtonText,      QColor(224, 224, 224))
-        pal.setColor(QPalette.ColorRole.Highlight,       QColor(46, 160, 67))
-        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+        pal.setColor(QPalette.ColorRole.Window,          QColor(_ngr.CARBON))
+        pal.setColor(QPalette.ColorRole.WindowText,      QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Base,            QColor(_ngr.CARBON_RAISED))
+        pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(_ngr.CARBON))
+        pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(_ngr.INK_BLACK))
+        pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(_ngr.TEXT_HI))
+        pal.setColor(QPalette.ColorRole.Text,            QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Button,          QColor(_ngr.CARBON_HI))
+        pal.setColor(QPalette.ColorRole.ButtonText,      QColor(_ngr.TEXT))
+        pal.setColor(QPalette.ColorRole.Highlight,       QColor(_ngr.NGR_GREEN_DIM))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(_ngr.TEXT_HI))
         app.setPalette(pal)
+        try:
+            app.setStyleSheet(_ngr.app_stylesheet())
+        except Exception as e:  # pragma: no cover - never block startup on styling
+            logging.warning("NGR global stylesheet not applied: %s", e)
 
     @staticmethod
     def _group_style() -> str:
