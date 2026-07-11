@@ -129,6 +129,9 @@ class RaceStrategyEngine:
         self._consecutive_grip_laps: int = 0
         self._grip_recalc_done: bool = False
 
+        # No-ABS regulation state (Group 62)
+        self._no_abs: bool = False
+
         # Mid-race re-plan state
         self._replan_in_flight: bool = False
         self._adapted_plan: bool = False
@@ -157,6 +160,15 @@ class RaceStrategyEngine:
         """
         with self._lock:
             self._qualifying_mode = enabled
+
+    def set_abs_allowed(self, enabled: bool) -> None:
+        """Record whether ABS is allowed in the current event.
+
+        Called by the dashboard when the active event context changes.
+        When enabled=False the engine will announce per-lap no-ABS braking cues.
+        """
+        with self._lock:
+            self._no_abs = not bool(enabled)
 
     def set_degradation_cache(self, cache: dict) -> None:
         """Store the per-compound degradation dict on the engine.
@@ -472,6 +484,7 @@ class RaceStrategyEngine:
         self._check_damage_pace()
         self._check_fuel_drift()
         self._check_grip_loss(record)
+        self._check_no_abs_brake_cue(record)
 
         if self._bridge:
             self._bridge.strategy_status_changed.emit(self._build_status_str())
@@ -499,6 +512,7 @@ class RaceStrategyEngine:
         self._consecutive_grip_laps = 0
         self._grip_recalc_done = False
         self._grip_alert_until = 0.0
+        self._recent_lockups = []  # Group 62: reset no-ABS lock-up context for new stint
         # Re-arm the mid-race re-plan trigger for the new stint
         self._adapted_plan = False
         if self._bridge:
@@ -1038,3 +1052,41 @@ class RaceStrategyEngine:
         self._announcer.announce(msg, Priority.HIGH, "strategy_recalc", 30.0)
         if self._bridge:
             self._bridge.strategy_status_changed.emit(self._build_status_str())
+
+    # ------------------------------------------------------------------
+    # No-ABS regulation coaching (Group 62)
+    # ------------------------------------------------------------------
+
+    def _check_no_abs_brake_cue(self, record) -> None:
+        """Announce per-lap no-ABS braking coaching based on the lock-up trend.
+
+        Only active when set_abs_allowed(False) has been called.  Uses the
+        _recent_lockups window already maintained by _check_grip_loss (which
+        runs immediately before this method in _on_lap_completed).
+
+        Fires at most once per 60 seconds via the announcer's built-in cooldown.
+        """
+        if not self._no_abs:
+            return
+        if not self._recent_lockups:
+            return  # zero-lap baseline guard — no cue on a fresh/empty window
+
+        def _roll_avg(lst: list) -> float:
+            sample = lst[-5:]
+            return mean(sample) if len(sample) >= 2 else 0.0
+
+        # Exclude the most recent lap from the rolling average (as _compute_grip_score does)
+        avg = _roll_avg(self._recent_lockups[:-1])
+        latest = self._recent_lockups[-1]
+        prev = self._recent_lockups[-2] if len(self._recent_lockups) >= 2 else 0
+
+        if avg >= 1 or latest > prev:
+            msg = (
+                "Ease brake pressure or brake a touch earlier — fronts locking without ABS."
+            )
+            self._announcer.announce(msg, Priority.HIGH, "no_abs_brake_cue", 60.0)
+        else:
+            msg = (
+                "Brakes clean — you have margin to add brake pressure or brake later."
+            )
+            self._announcer.announce(msg, Priority.MEDIUM, "no_abs_brake_cue", 60.0)

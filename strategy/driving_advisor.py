@@ -1737,6 +1737,10 @@ class DrivingAdvisor:
                     else False
                 ),
             )
+            # Group 62: inject no_abs so NoABS1 rule can fire.
+            # Event dict key "abs": absent/None → True (ABS allowed by default).
+            _abs_raw = _event_ctx.get("abs")
+            diagnosis.setdefault("no_abs", not bool(_abs_raw if _abs_raw is not None else True))
 
         # B4: resolve rec_history for lsd_reversal_without_evidence validation.
         _rec_history_cs: dict | None = None
@@ -2394,6 +2398,16 @@ class DrivingAdvisor:
         notes = evt.get("notes", "")
         if notes:
             lines.append(f"Notes: {notes}")
+        # Group 62: no-ABS coaching block — only when ABS is explicitly disabled.
+        _abs_ctx = evt.get("abs")
+        if _abs_ctx is not None and not bool(_abs_ctx):
+            lines.append(
+                "ABS: DISABLED — threshold braking required. "
+                "Control rear lock via LSD decel, not front bias. "
+                "Avoid front lock-up. "
+                "Coaching intent: if locking, ease brake pressure; "
+                "if clean, you have margin to add pressure or brake later."
+            )
         return "\n".join(lines)
 
     # Keywords that indicate positive progress / relief in a driver feedback field.

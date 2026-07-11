@@ -96,6 +96,7 @@ UNSTABLE_WEATHER = "weather_unstable"
 POOR_DRIVER_CONSISTENCY = "driver_consistency_poor"
 MISSING_FUEL_MULTIPLIER = "fuel_multiplier_unknown"
 MISSING_TYRE_MULTIPLIER = "tyre_multiplier_unknown"
+ABS_DISABLED_LOCKUP_RISK = "abs_disabled_lockup_risk"
 
 # Human-readable descriptions keyed by code.  Used by the explanation surface so
 # the driver sees plain English, not an enum name.
@@ -111,6 +112,10 @@ MISSING_EVIDENCE_TEXT: dict[str, str] = {
     POOR_DRIVER_CONSISTENCY: "Driver lap-time consistency is poor — projections carry more spread.",
     MISSING_FUEL_MULTIPLIER: "Fuel multiplier is unknown.",
     MISSING_TYRE_MULTIPLIER: "Tyre-wear multiplier is unknown.",
+    ABS_DISABLED_LOCKUP_RISK: (
+        "ABS disabled — lock-ups flat-spot tyres; "
+        "a degradation and driver-error risk to factor into a purpose-built no-ABS setup."
+    ),
 }
 
 # Thresholds --------------------------------------------------------------
@@ -165,6 +170,7 @@ class RaceStrategyEvidence:
 
     # --- environment -----------------------------------------------------
     weather_context: str = "dry_stable"    # "dry_stable" | "random" | "wet" | "unstable" | "unknown"
+    no_abs: bool = False                   # True when the event disables ABS (informational only)
 
     # --- measured samples (never invented) -------------------------------
     lap_time_samples: tuple[float, ...] = ()     # clean lap times, seconds
@@ -272,6 +278,7 @@ def build_strategy_evidence(
     fuel_use_samples: Sequence[float] = (),
     tyre_wear_samples: Sequence[float] = (),
     compound_samples: dict | None = None,
+    no_abs: bool = False,
 ) -> RaceStrategyEvidence:
     """Build a :class:`RaceStrategyEvidence` from available event + session data.
 
@@ -340,6 +347,11 @@ def build_strategy_evidence(
             consistency_ok=(consistency <= POOR_CONSISTENCY_CV) if consistency > 0 else True,
         )
 
+        # Group 62: no-ABS is purely informational — appended AFTER confidence grading
+        # so it does NOT influence evidence_confidence or scoring/pit-window maths.
+        if no_abs:
+            missing.append(ABS_DISABLED_LOCKUP_RISK)
+
         return RaceStrategyEvidence(
             car_id=int(car_id or 0),
             track=str(track or ""),
@@ -363,6 +375,7 @@ def build_strategy_evidence(
             driver_consistency=consistency,
             evidence_confidence=confidence,
             missing_evidence=tuple(missing),
+            no_abs=no_abs,
         )
     except Exception:
         return RaceStrategyEvidence(

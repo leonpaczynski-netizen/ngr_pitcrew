@@ -514,6 +514,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # braces before its thread starts).
         self._push_session_tag()
 
+        # Group 62: startup-restore ABS regulation into the engine so that an
+        # already-active event keeps its ABS setting without the user having to
+        # click "Set as Active" again after app restart.
+        if getattr(self, "_strategy_engine", None) is not None:
+            _startup_ae = self._active_event()
+            if _startup_ae:
+                self._strategy_engine.set_abs_allowed(
+                    bool(_startup_ae.get("abs", True))
+                )
+
     # ------------------------------------------------------------------ UI setup
 
     def _setup_ui(self) -> None:
@@ -8072,6 +8082,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._evt_tuning.setStyleSheet(f"color: {_TEXT};")
         form.addRow(QLabel("Tuning:", styleSheet=lbl_s), self._evt_tuning)
 
+        self._evt_abs = QCheckBox("ABS allowed")
+        self._evt_abs.setChecked(True)
+        self._evt_abs.setStyleSheet(f"color: {_TEXT};")
+        form.addRow(QLabel("ABS:", styleSheet=lbl_s), self._evt_abs)
+
         self._tuning_perms_group = QGroupBox("Tuning Permissions")
         self._tuning_perms_group.setStyleSheet(
             f"QGroupBox {{ color: {_TEXT}; border: 1px solid #444; margin-top: 8px; padding-top: 8px; }}"
@@ -8427,6 +8442,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._evt_mand_pits.setValue(int(evt.get("mandatory_stops", evt.get("mand_pits", 0)) or 0))
             self._evt_bop.setChecked(bool(evt.get("bop", False)))
             self._evt_tuning.setChecked(bool(evt.get("tuning", False)))
+            self._evt_abs.setChecked(bool(evt.get("abs", True)))
             self._evt_weather.setCurrentIndex(max(0, self._evt_weather.findText(evt.get("weather", "Fixed Dry"))))
             self._evt_damage.setCurrentIndex(max(0, self._evt_damage.findText(evt.get("damage", "None"))))
             if hasattr(self, "_evt_refuel_rate"):
@@ -8474,6 +8490,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._evt_mand_pits.setValue(0)
             self._evt_bop.setChecked(False)
             self._evt_tuning.setChecked(False)
+            self._evt_abs.setChecked(True)
             self._evt_weather.setCurrentIndex(0)
             self._evt_damage.setCurrentIndex(0)
             if hasattr(self, "_evt_refuel_rate"):
@@ -8555,6 +8572,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 "mandatory_stops":           self._evt_mand_pits.value(),
                 "bop":                       self._evt_bop.isChecked(),
                 "tuning":                    self._evt_tuning.isChecked(),
+                "abs":                       self._evt_abs.isChecked(),
                 "weather":                   self._evt_weather.currentText(),
                 "damage":                    self._evt_damage.currentText(),
                 "refuel_rate_lps":           self._evt_refuel_rate.value() if hasattr(self, "_evt_refuel_rate") else 10,
@@ -8654,6 +8672,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 _evt_full = self._db.get_event(evt_name) if self._db is not None else {}
                 self._driving_advisor.set_event_context(
                     _evt_full or self._active_event() or strat)
+            # Group 62: push ABS regulation into the strategy engine so it can
+            # apply no-ABS driving advice from the moment the event is activated.
+            if getattr(self, "_strategy_engine", None) is not None:
+                _ae = self._db.get_event(evt_name) if self._db is not None else {}
+                _ae = _ae or self._active_event() or strat
+                self._strategy_engine.set_abs_allowed(bool(_ae.get("abs", True)))
             # Rule-Cache Deletion: the explicit _apply_setup_permissions call
             # that followed this sync was REDUNDANT since Phase 3 — the sync
             # itself applies permissions from the just-saved DB event

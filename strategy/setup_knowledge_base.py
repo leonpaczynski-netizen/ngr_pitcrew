@@ -857,6 +857,10 @@ _PACK_CD: list[SetupRule] = [
         },
         contraindications={
             "driver_feel_flags.entry_understeer": True,
+            # Under no-ABS, rear lock must be controlled via LSD decel (NoABS1),
+            # NOT by moving brake bias forward.  Front bias is wrong for any
+            # no-ABS setup — contraindicate so NoABS1 is the sole remedy.
+            "no_abs": True,
         },
         field="brake_bias",
         delta_fn="brake_bias_front",
@@ -1091,6 +1095,51 @@ _PACK_P: list[SetupRule] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Pack NOABS — No-ABS regulation rules
+# ---------------------------------------------------------------------------
+# Fires when the event disables ABS (no_abs injected into diagnosis by
+# driving_advisor.build_combined_setup_response) and lock-ups or braking
+# instability are confirmed.  Recommends increasing LSD decel to resist
+# rear-wheel differential rotation under hard braking without ABS.
+
+_PACK_NOABS: list[SetupRule] = [
+    SetupRule(
+        rule_id="NoABS1",
+        pack="NOABS",
+        phase=RulePhase.entry,
+        preconditions={
+            "no_abs": True,
+            "__any__": [
+                "driver_feel_flags.braking_instability",
+                "avg_lockups",
+            ],
+        },
+        contraindications={
+            # Avoids conflict with C1 (entry understeer → decrease lsd_decel).
+            # If entry understeer is present, the rotation-fix takes priority.
+            "driver_feel_flags.entry_understeer": True,
+        },
+        field="lsd_decel",
+        delta_fn="increase_lsd_decel",
+        title="Increase LSD decel — no-ABS braking stability",
+        symptom=(
+            "No-ABS event with lock-ups or braking instability — "
+            "rear unsettled under threshold braking."
+        ),
+        rationale=(
+            "Without ABS, unchecked wheel lock at the rear destabilises the car on entry. "
+            "Increasing LSD decel resistance limits differential rotation under braking, "
+            "keeping the rear planted. Control rear lock via LSD decel, not front bias. "
+            "Contraindicated when entry understeer is already present — "
+            "that scenario requires the C1 rotation fix (decrease lsd_decel) instead."
+        ),
+        risk=RiskLevel.med,
+        base_confidence=ConfidenceLevel.med,
+        driver_style_tags=[],
+    ),
+]
+
+# ---------------------------------------------------------------------------
 # Register all built-in packs at import time
 # ---------------------------------------------------------------------------
 
@@ -1098,3 +1147,4 @@ register_pack("A", _PACK_A)
 register_pack("B", _PACK_B)
 register_pack("CD", _PACK_CD)
 register_pack("P", _PACK_P)
+register_pack("NOABS", _PACK_NOABS)

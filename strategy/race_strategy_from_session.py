@@ -73,6 +73,7 @@ def build_strategy_evidence_from_session(
     mandatory_pit_stops: int = 0,
     weather_context: Optional[str] = None,
     derive_tyre_wear: bool = True,
+    no_abs: bool = False,
 ) -> SessionEvidenceResult:
     """Build :class:`RaceStrategyEvidence` from event settings + SessionDB samples.
 
@@ -117,6 +118,7 @@ def build_strategy_evidence_from_session(
             fuel_use_samples=samples.fuel_samples,
             tyre_wear_samples=samples.tyre_samples,
             compound_samples={c: list(v) for c, v in samples.compound_samples.items()},
+            no_abs=no_abs,
         )
 
         source_summary = _build_source_summary(
@@ -194,6 +196,7 @@ def build_strategy_evidence_from_event_context(
         mandatory_pit_stops=int(getattr(ec, "mandatory_stops", 0) or 0),
         weather_context=weather,
         derive_tyre_wear=derive_tyre_wear,
+        no_abs=not bool(getattr(ec, "abs_allowed", True)),
     )
 
 
