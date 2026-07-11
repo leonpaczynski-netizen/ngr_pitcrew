@@ -364,8 +364,8 @@ class TestAC10SafeFallback:
         """
         db = _make_temp_db(tmp_path)
         version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == DB_VERSION == 13, (
-            f"Expected user_version=DB_VERSION=13; got user_version={version}, DB_VERSION={DB_VERSION}"
+        assert version == DB_VERSION, (
+            f"Expected user_version=DB_VERSION={DB_VERSION}; got user_version={version}, DB_VERSION={DB_VERSION}"
         )
         db.close()
 
@@ -399,7 +399,7 @@ class TestAC10SafeFallback:
         # Second open must not raise
         db2 = SessionDB(db_path)
         version = db2._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 13  # Reconciled for Group 47 (v12 → v13)
+        assert version == DB_VERSION  # Reconciled for Group 62 (now v14 == DB_VERSION)
         db2.close()
 
 

@@ -103,7 +103,7 @@ def parse_recommendations_from_response(
     except (ValueError, TypeError):
         pass  # Plain-text response — all v11 fields stay None → default 'proposed'
 
-    created_at = _dt.datetime.utcnow().isoformat()
+    created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     base: dict[str, Any] = {
         "ai_interaction_id": ai_interaction_id,
         "session_id": session_id,

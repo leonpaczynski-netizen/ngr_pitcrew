@@ -26,6 +26,7 @@ REPO = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
 
 from data.session_db import SessionDB
+from strategy._setup_constants import DB_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +203,13 @@ class TestMigrationV6(unittest.TestCase):
             ).fetchall()
         col_names = [c[1] for c in cols]
         self.assertIn("before_metrics", col_names)
-        # Check user_version — v13 is the current schema (Group 47 added the 5
-        # additive outcome-verification columns; v12 (Group 46) added
-        # learning_outcomes; v11 added Rule-First columns; v10 added rating).
-        # Reconciled from v10 → v12 for Group 46, then v12 → v13 for Group 47.
+        # Check user_version — DB_VERSION is the current schema (Group 62 added
+        # events.abs at v14; Group 47 added the 5 additive outcome-verification
+        # columns; v12 (Group 46) added learning_outcomes; v11 added Rule-First
+        # columns; v10 added rating).
         with db._lock:
             version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 13)
+        self.assertEqual(version, DB_VERSION)
 
 
 class TestBuildCarSetupSignature(unittest.TestCase):

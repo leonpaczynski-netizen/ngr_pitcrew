@@ -1607,6 +1607,12 @@ class TestC1CombinedRebuildSetupFieldsAfterNoOpStrip:
         adv._tracker = None
         return adv
 
+    @pytest.mark.skip(reason=(
+        "Obsolete since the Group 42/43 rule-first refactor: the AI no longer "
+        "authors setup changes, so this test's injected AI changes/setup_fields "
+        "are ignored entirely. No-op stripping now applies to rule-engine-authored "
+        "changes via _normalise_changes; that behaviour is covered by the "
+        "test_group42/43 suites."))
     def test_stripped_noop_not_in_setup_fields(self, monkeypatch):
         """When a change is a no-op (from==to_clamped), it must be stripped from
         both changes AND setup_fields so the Apply button never sees it."""
@@ -1718,16 +1724,18 @@ class TestC2MaxTokensBehavioural:
         adv._tracker = None
         return adv
 
-    def test_build_combined_setup_response_max_tokens_2500(self, monkeypatch):
-        # Raised from 1500 → 2500: the combined-setup JSON (analysis + changes +
-        # setup_fields + diagnosis) was overrunning 1500 and truncating mid-JSON,
-        # which dumped raw text at the user (UAT: analyse button "returned jargon").
+    def test_build_combined_setup_response_max_tokens_audit_800(self, monkeypatch):
+        # Group 42/43 rule-first refactor: the AI no longer authors the setup JSON
+        # (the deterministic rule engine does). The only call_api in the combined
+        # path is now the AI *audit*, which uses max_tokens=800. Pinned here so a
+        # regression that re-enlarges (or removes) the audit budget is caught.
         captured: list = []
         adv = self._make_base_advisor(monkeypatch, captured)
         adv.build_combined_setup_response(setup_dict={}, car_name="")
         assert captured, "call_api was not invoked"
-        assert captured[0] == 2500, (
-            f"build_combined_setup_response must use max_tokens=2500, got {captured[0]}"
+        assert captured[0] == 800, (
+            f"build_combined_setup_response audit call must use max_tokens=800, "
+            f"got {captured[0]}"
         )
 
     def test_build_setup_advice_response_max_tokens_1500(self, monkeypatch):
@@ -1744,6 +1752,13 @@ class TestC2MaxTokensBehavioural:
 # C3a — Locked fields stripped from changes + setup_fields after validation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason=(
+    "Obsolete since the Group 42/43 rule-first refactor: the AI no longer authors "
+    "setup changes, so injecting a locked field via the AI JSON no longer exercises "
+    "a real path (the injected changes are ignored). Locked/allowed_tuning enforcement "
+    "now lives in the deterministic rule engine (it never authors a locked field) and "
+    "is covered by the test_group42/43 suites. The safety intent — a locked field can "
+    "never reach the Apply button — still holds via that path."))
 class TestC3aLockedFieldStripped:
     """When a field is locked (not in allowed_tuning), it must be stripped from
     BOTH changes and setup_fields so the UI Apply button can never write it."""

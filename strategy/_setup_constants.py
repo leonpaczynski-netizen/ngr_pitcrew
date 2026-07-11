@@ -84,7 +84,8 @@ HIGH_SUCCESS_RATE: float = 0.60
 
 # DB schema version — bump with each migration; tests may assert this value.
 # v13 (Group 47): added 5 additive outcome-verification columns to learning_outcomes.
-DB_VERSION: int = 13
+# v14 (Group 62): added additive `abs INTEGER NOT NULL DEFAULT 1` column to events.
+DB_VERSION: int = 14
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
