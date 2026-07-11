@@ -16,6 +16,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from strategy._setup_constants import DB_VERSION
+
 
 def _hash(path: Path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
@@ -142,14 +144,18 @@ class TestSetupGuaranteesUntouched:
 
 class TestNoSchemaMigration:
     def test_db_user_version_unchanged(self):
-        # Group 55 adds no migration — SQLite user_version stays 13.
+        # Group 62 introduced v14 (events.abs). This canary now tracks the
+        # current schema (DB_VERSION) and forbids an unexpected next bump.
         src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-        assert "PRAGMA user_version = 13" in src
-        assert "PRAGMA user_version = 14" not in src
+        assert f"PRAGMA user_version = {DB_VERSION}" in src
+        assert f"PRAGMA user_version = {DB_VERSION + 1}" not in src
 
     def test_no_new_migration_hook(self):
+        # Group 62 legitimately added _migrate_v14; an unexpected _migrate_v15
+        # must still be absent.
         src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-        assert "_migrate_v14" not in src
+        assert "_migrate_v14" in src
+        assert "_migrate_v15" not in src
 
 
 if __name__ == "__main__":

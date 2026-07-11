@@ -153,8 +153,9 @@ def _known_evidence(evidence: RaceStrategyEvidence) -> list[str]:
         )
     if evidence.tyre_wear_samples:
         known.append(
-            f"{len(evidence.tyre_wear_samples)} tyre-wear sample(s)"
-            + (" (long-run)." if evidence.has_long_run_data() else " (short sample).")
+            f"{len(evidence.tyre_wear_samples)} tyre-wear sample(s) "
+            "(proxy, derived from lap-time drift)"
+            + (" — long-run." if evidence.has_long_run_data() else " — short sample.")
         )
     if evidence.refuel_rate_lps > 0:
         known.append(f"Refuel rate {evidence.refuel_rate_lps:.2f} L/s.")

@@ -1296,6 +1296,16 @@ class SetupBuilderMixin:
             return
         d = self._current_setup_dict()
         _car_name, _car_specs = self._load_car_specs_for_current()
+        # Record the analysed car id so a later Apply can link the recommendation
+        # to the live session for the learning loop (apply_recommendation_for_car_track).
+        # The legacy build-with-AI path set this too, but it is disabled — the live
+        # Analyse→Apply flow is now the only path, so set it here.
+        _db_for_car = getattr(self, "_db", None)
+        self._car_id_build = (
+            _db_for_car.get_car_id(_car_name)
+            if _db_for_car and _car_name and _car_name != "Unknown"
+            else 0
+        )
 
         # Count laps tagged with this setup in the lap table so the AI
         # sees all relevant laps (not just the last 5).

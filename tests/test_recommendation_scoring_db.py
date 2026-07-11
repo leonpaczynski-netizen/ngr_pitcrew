@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from data.session_db import SessionDB
+from strategy._setup_constants import DB_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -123,10 +124,11 @@ def test_v9_columns_exist(db):
 
 
 def test_v9_schema_version(db):
-    """Schema version must be 10 after opening a fresh DB (v10 = driver_feedback
-    setup_id + rating)."""
+    """Schema version must equal the current schema (DB_VERSION) after opening a
+    fresh DB. Historically v10 (driver_feedback setup_id + rating); the fresh DB
+    always migrates to the latest (Group 62: v14)."""
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 10
+    assert version == DB_VERSION
 
 
 def test_v9_default_score_confidence(db):

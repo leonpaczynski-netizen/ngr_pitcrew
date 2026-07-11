@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from data.session_db import SessionDB
 from strategy._rec_parser import parse_recommendations_from_response
 from strategy._ai_client import AILogEntry
+from strategy._setup_constants import DB_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -386,15 +387,16 @@ def test_car_setup_recommendation_has_raw_response():
 
 # AC1 — schema version must be 9 after migration (v9 adds OFR-1 scoring columns)
 def test_schema_version_is_current(db):
-    """PRAGMA user_version must equal 13 after opening a fresh DB.
+    """PRAGMA user_version must equal the current schema (DB_VERSION) after
+    opening a fresh DB.
 
     History: v10 added driver_feedback setup_id + rating; v11 added Rule-First
     Setup Brain columns; v12 (Group 46) added learning_outcomes table; v13
-    (Group 47) added the 5 additive outcome-verification columns.
-    Reconciled from v10 → v12 for Group 46, then v12 → v13 for Group 47.
+    (Group 47) added the 5 additive outcome-verification columns; v14 (Group 62)
+    added the additive events.abs column.
     """
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 13, f"Expected schema version 13, got {version}"
+    assert version == DB_VERSION, f"Expected schema version {DB_VERSION}, got {version}"
 
 
 # AC3 — setup_recommendations table has correct columns

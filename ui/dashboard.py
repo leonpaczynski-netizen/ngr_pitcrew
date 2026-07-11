@@ -9000,6 +9000,20 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._persist_config()
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()
+            # Refresh the advisor's event context + analysed-car scope so a
+            # pre-drive Analyse for the newly selected car uses the correct
+            # learning scope rather than a stale/zero car. A live packet will
+            # re-sync _car_id_ref[0] the moment driving starts.
+            if getattr(self, "_driving_advisor", None) is not None:
+                try:
+                    self._driving_advisor.set_event_context(self._active_event() or {})
+                    if self._db is not None and car_name and car_name != "Unknown":
+                        _cid = self._db.get_car_id(car_name)
+                        _ref = getattr(self._driving_advisor, "_car_id_ref", None)
+                        if _cid and isinstance(_ref, list) and _ref:
+                            _ref[0] = int(_cid)
+                except Exception:
+                    pass
             self._bridge.event_log_entry.emit(f"Active car set: {car_name}")
             self.select_tab(TAB_EVENT_PLANNER)  # return to Event Planner
         except Exception:

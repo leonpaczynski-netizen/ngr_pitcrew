@@ -61,7 +61,7 @@ class TestFreshDb:
     def test_fresh_db_at_v13(self, tmp_path):
         db = SessionDB(str(tmp_path / "fresh.db"))
         version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == DB_VERSION == 13
+        assert version == DB_VERSION
         db.close()
 
     def test_v13_columns_present(self, tmp_path):
@@ -80,7 +80,7 @@ class TestMigration:
         p = str(tmp_path / "idem.db")
         db1 = SessionDB(p); db1.close()
         db2 = SessionDB(p)  # second open must not raise
-        assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
         db2.close()
         db3 = SessionDB(p)  # third open still fine
         assert _V13_COLUMNS <= _cols(db3, "learning_outcomes")
@@ -105,9 +105,9 @@ class TestMigration:
         chk.close()
         assert not (_V13_COLUMNS & pre_cols), "fixture should predate v13 columns"
 
-        # Open with SessionDB → migrates to v13.
+        # Open with SessionDB → migrates to the current schema (Group 62: v14).
         db = SessionDB(p)
-        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
         assert _V13_COLUMNS <= _cols(db, "learning_outcomes")
         # Old row survived, with new columns defaulted to ''.
         rows = db.get_learning_outcomes(7, "Fuji", "full_course")
