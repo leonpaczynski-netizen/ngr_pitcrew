@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS events (
     mandatory_stops INTEGER NOT NULL DEFAULT 0,
     bop             INTEGER NOT NULL DEFAULT 0,
     tuning          INTEGER NOT NULL DEFAULT 1,
+    abs             INTEGER NOT NULL DEFAULT 1,
     weather         TEXT    NOT NULL DEFAULT 'Fixed Dry',
     damage          TEXT    NOT NULL DEFAULT 'None',
     avail_tyres     TEXT    NOT NULL DEFAULT '[]',
@@ -363,6 +364,15 @@ _V13_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("learning_outcomes", "outcome_kind      TEXT NOT NULL DEFAULT ''"),
 ]
 
+# v14: Group 62 — ABS Regulation.
+# Additive INTEGER column on events so each event can record whether ABS is
+# allowed (1) or disabled (0).  DEFAULT 1 means all existing events keep ABS
+# allowed — the safe, non-restrictive default.  Duplicate-column guard follows
+# the V13 pattern.
+_V14_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("events", "abs INTEGER NOT NULL DEFAULT 1"),
+]
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -469,6 +479,10 @@ class SessionDB:
         if version < 13:
             self._migrate_v13()
             self._conn.execute("PRAGMA user_version = 13")
+            self._conn.commit()
+        if version < 14:
+            self._migrate_v14()
+            self._conn.execute("PRAGMA user_version = 14")
             self._conn.commit()
 
     def _migrate_v2(self) -> None:
@@ -617,6 +631,21 @@ class SessionDB:
         _migrate_v12 runs first because migrations apply in ascending order.
         """
         for table, col_def in _V13_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
+    def _migrate_v14(self) -> None:
+        """Group 62 — ABS Regulation additive column (schema version 14).
+
+        Adds abs INTEGER NOT NULL DEFAULT 1 to the events table so each event
+        can flag whether ABS is permitted.  Existing rows receive the default
+        value 1 (ABS allowed), leaving behaviour unchanged.  A duplicate-column
+        guard makes the migration idempotent on already-upgraded databases.
+        """
+        for table, col_def in _V14_ALTER_COLUMNS:
             try:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
             except Exception as exc:
@@ -843,7 +872,7 @@ class SessionDB:
                     """UPDATE events SET
                            track=?, race_type=?, laps=?, duration_mins=?,
                            tyre_wear=?, fuel_mult=?, refuel_rate_lps=?,
-                           mandatory_stops=?, bop=?, tuning=?,
+                           mandatory_stops=?, bop=?, tuning=?, abs=?,
                            weather=?, damage=?,
                            avail_tyres=?, req_tyres=?, allowed_tuning=?,
                            notes=?, updated_at=?
@@ -859,6 +888,7 @@ class SessionDB:
                         evt.get("mandatory_stops", 0),
                         1 if evt.get("bop") else 0,
                         1 if evt.get("tuning", True) else 0,
+                        1 if evt.get("abs", True) else 0,
                         evt.get("weather", "Fixed Dry"),
                         evt.get("damage", "None"),
                         json.dumps(evt.get("avail_tyres", [])),
@@ -875,11 +905,11 @@ class SessionDB:
                     """INSERT INTO events
                            (name, track, race_type, laps, duration_mins,
                             tyre_wear, fuel_mult, refuel_rate_lps,
-                            mandatory_stops, bop, tuning,
+                            mandatory_stops, bop, tuning, abs,
                             weather, damage,
                             avail_tyres, req_tyres, allowed_tuning,
                             notes, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         evt["name"],
                         evt.get("track", ""),
@@ -892,6 +922,7 @@ class SessionDB:
                         evt.get("mandatory_stops", 0),
                         1 if evt.get("bop") else 0,
                         1 if evt.get("tuning", True) else 0,
+                        1 if evt.get("abs", True) else 0,
                         evt.get("weather", "Fixed Dry"),
                         evt.get("damage", "None"),
                         json.dumps(evt.get("avail_tyres", [])),

@@ -47,7 +47,7 @@ from enum import Enum
 from typing import Optional, Tuple
 
 
-EVENT_CONTEXT_SCHEMA = "event_context_v1"
+EVENT_CONTEXT_SCHEMA = "event_context_v2"
 
 
 class EventContextSource(str, Enum):
@@ -168,6 +168,7 @@ class EventContext:
     # Provenance / change marker
     source: EventContextSource = EventContextSource.EMPTY
     change_hash: str = ""
+    abs_allowed: bool = True
 
     # -- convenience ------------------------------------------------------- #
     @property
@@ -197,13 +198,16 @@ class EventContext:
         car = self.car or "—"
         track = self.track or "—"
         name = self.event_name or "(no event)"
-        return (
+        base = (
             f"Event: {name}  |  Track: {track}  |  Car: {car}  |  "
             f"{self.race_length_text()}  |  Wear: {self.tyre_wear_multiplier:g}×  |  "
             f"Fuel: {self.fuel_multiplier:g}×  |  "
             f"BoP: {'ON' if self.bop_enabled else 'OFF'}  |  "
             f"Tuning: {'Allowed' if self.tuning_allowed else 'Locked'}"
         )
+        if not self.abs_allowed:
+            base += " | ABS: OFF"
+        return base
 
     def to_summary_lines(self) -> list:
         """Multi-line summary suitable for a small overview panel."""
@@ -214,7 +218,8 @@ class EventContext:
             f"Race: {self.race_length_text()}",
             f"Tyre wear: {self.tyre_wear_multiplier:g}×   Fuel: {self.fuel_multiplier:g}×",
             f"BoP: {'ON' if self.bop_enabled else 'OFF'}   "
-            f"Tuning: {'Allowed' if self.tuning_allowed else 'Locked'}",
+            f"Tuning: {'Allowed' if self.tuning_allowed else 'Locked'}"
+            + ("   ABS: OFF" if not self.abs_allowed else ""),
         ]
         if self.required_tyres:
             lines.append(f"Required tyres: {', '.join(self.required_tyres)}")
@@ -259,6 +264,7 @@ def _canonical_change_fields(**kw) -> dict:
         "mandatory_stops": kw["mandatory_stops"],
         "bop_enabled": kw["bop_enabled"],
         "tuning_allowed": kw["tuning_allowed"],
+        "abs_allowed": kw["abs_allowed"],
         "allowed_tuning_categories": list(kw["allowed_tuning_categories"]),
         "available_tyres": list(kw["available_tyres"]),
         "required_tyres": list(kw["required_tyres"]),
@@ -359,6 +365,10 @@ def build_event_context(
         _as_bool(event.get("tuning"), True) if (has_event and _present((event, "tuning")))
         else _as_bool(strategy.get("tuning"), True)
     )
+    abs_allowed = (
+        _as_bool(event.get("abs"), True) if (has_event and _present((event, "abs")))
+        else _as_bool(strategy.get("abs"), True)
+    )
     allowed_tuning_categories = _as_str_tuple(
         event.get("allowed_tuning_categories") if has_event and event.get("allowed_tuning_categories") is not None
         else strategy.get("allowed_tuning_categories")
@@ -381,6 +391,7 @@ def build_event_context(
         tyre_wear_multiplier=tyre_wear_multiplier, fuel_multiplier=fuel_multiplier,
         refuel_rate_lps=refuel_rate_lps, mandatory_stops=mandatory_stops,
         bop_enabled=bop_enabled, tuning_allowed=tuning_allowed,
+        abs_allowed=abs_allowed,
         allowed_tuning_categories=allowed_tuning_categories,
         available_tyres=available_tyres, required_tyres=required_tyres,
         weather=weather, damage=damage,
@@ -403,6 +414,7 @@ def build_event_context(
         mandatory_stops=mandatory_stops,
         bop_enabled=bop_enabled,
         tuning_allowed=tuning_allowed,
+        abs_allowed=abs_allowed,
         allowed_tuning_categories=allowed_tuning_categories,
         available_tyres=available_tyres,
         required_tyres=required_tyres,
