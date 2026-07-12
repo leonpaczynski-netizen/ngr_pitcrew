@@ -974,6 +974,31 @@ class SetupBuilderMixin:
 
         _threading.Thread(target=_worker, daemon=True).start()
 
+    def _successful_historical_setups(self, car_name: str = "", track: str = "") -> list:
+        """Phase 9: saved setups annotated with the driver's rating (from feedback),
+        so the historical prior can use only PROVEN (liked) setups. Best-effort —
+        returns [] on any failure; never raises into the analyse path."""
+        setups = list(getattr(self, "_saved_setups", []) or [])
+        if not setups:
+            return []
+        ratings: dict = {}
+        try:
+            car_id = int(getattr(self, "_car_id_build", 0) or 0)
+            if self._db is not None and car_id and track:
+                for fb in (self._db.get_recent_feedback(car_id, track, limit=100) or []):
+                    _sid, _rt = fb.get("setup_id"), fb.get("rating")
+                    if _sid and _rt:
+                        ratings.setdefault(_sid, _rt)
+        except Exception:
+            ratings = {}
+        out = []
+        for s in setups:
+            s2 = dict(s)
+            if not s2.get("rating") and s2.get("setup_id") in ratings:
+                s2["rating"] = ratings[s2["setup_id"]]
+            out.append(s2)
+        return out
+
     def _build_track_tune_profile_for_current(self):
         """Phase 5: build a TrackTuneProfile from the current track/layout's seed +
         accepted model, so the baseline is track-shaped. Returns None on any
@@ -1431,6 +1456,9 @@ class SetupBuilderMixin:
             if hasattr(self._race_form, "_setup_drivetrain")
             else ""
         ) or ""
+        # Phase 9: proven successful setups for the historical prior/comparison.
+        _track_bl = str(getattr(_ai_snap, "track", "") or "")
+        _hist_setups = self._successful_historical_setups(_car_name, _track_bl)
 
         def _worker():
             try:
@@ -1441,7 +1469,9 @@ class SetupBuilderMixin:
                     compound=_compound,
                     purpose=_purpose,
                     car_class=_car_class,
-                    drivetrain=_drivetrain)
+                    drivetrain=_drivetrain,
+                    historical_setups=_hist_setups,
+                    track_name=_track_bl)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))

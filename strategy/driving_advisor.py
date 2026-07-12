@@ -1750,6 +1750,8 @@ class DrivingAdvisor:
         purpose: str = "",
         car_class: str = "",
         drivetrain: str = "",
+        historical_setups: "list[dict] | None" = None,
+        track_name: str = "",
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -2091,6 +2093,32 @@ class DrivingAdvisor:
                     "balance or LSD braking."
                 )
 
+            # Phase 9: compare the rule-engine's proposed changes against the
+            # driver's PROVEN successful setups and flag any material deviation
+            # (e.g. recommending LSD accel 17 vs a proven 8). Advisory only — it
+            # never changes the deterministic plan, only explains it.
+            _hist_rows = []
+            if historical_setups:
+                try:
+                    from strategy.setup_history_intelligence import (
+                        find_historical_setups, build_historical_prior, compare_to_history,
+                    )
+                    _matches = find_historical_setups(
+                        car_name, track_name, str((diagnosis or {}).get("layout_id", "") or ""),
+                        purpose or "", historical_setups, car_category=car_class,
+                    )
+                    _prior = build_historical_prior(_matches)
+                    _rec_fields = {getattr(c, "field", None): getattr(c, "to_value", None)
+                                   for c in getattr(_plan, "proposed", [])}
+                    _hist_rows = compare_to_history(setup_dict, _rec_fields, _prior)
+                    _flagged = [r for r in _hist_rows if r.deviation_flagged]
+                    if _flagged:
+                        _analysis_text += (
+                            " Historical check: " + "; ".join(r.note for r in _flagged) + "."
+                        )
+                except Exception:
+                    _hist_rows = []
+
             # ------------------------------------------------------------------
             # Step 2: convert plan to raw_data shape
             # ------------------------------------------------------------------
@@ -2252,6 +2280,14 @@ class DrivingAdvisor:
                 _data["feedback_dispositions"] = build_feedback_dispositions(
                     diagnosis, {c.get("field") for c in _final.approved_changes}
                 )
+                # Phase 9: current/historical/recommended comparison (advisory).
+                _data["historical_comparison"] = [
+                    {"field": r.field, "current": r.current, "historical": r.historical,
+                     "recommended": r.recommended, "source": r.source, "tier": r.tier,
+                     "confidence": r.confidence, "deviation_flagged": r.deviation_flagged,
+                     "note": r.note}
+                    for r in _hist_rows
+                ]
 
                 # New Group 42 keys
                 _data["deterministic_plan"] = {
