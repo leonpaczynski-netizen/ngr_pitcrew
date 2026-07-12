@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from data.track_model_alignment import (
     SectorAlignmentResult,
     TrackModelAlignmentResult,
@@ -16,6 +18,8 @@ from data.track_model_alignment import (
     find_accepted_model_path,
     import_accepted_model_json,
 )
+from types import SimpleNamespace
+
 from data.track_refinement import (
     compare_models,
     export_candidate_model_json,
@@ -26,7 +30,16 @@ from data.track_refinement import (
     refine_from_session,
     promote_candidate,
     discard_candidate,
+    mean_path_shift_m,
+    export_candidate_reference_path,
+    find_candidate_reference_path,
+    MAX_MEAN_SHIFT_M,
 )
+
+
+def _pts(coords):
+    """Build reference-path-like points from a list of (x, y, z)."""
+    return [SimpleNamespace(x=x, y=y, z=z) for (x, y, z) in coords]
 
 LOC = "fuji"
 LAY = "fuji__full_course"
@@ -53,6 +66,63 @@ def _mk_align(**over) -> TrackModelAlignmentResult:
     )
     base.update(over)
     return TrackModelAlignmentResult(**base)
+
+
+# -------------------------------------------------- Phase 2·0 geometry guard
+
+def test_mean_path_shift_identical_is_zero():
+    pts = [(i * 1.0, 0.0, i * 2.0) for i in range(300)]
+    assert mean_path_shift_m(_pts(pts), _pts(pts)) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_mean_path_shift_offset_measured():
+    a = [(i * 1.0, 0.0, 0.0) for i in range(300)]
+    b = [(i * 1.0, 0.0, 5.0) for i in range(300)]  # shifted 5 m in z
+    assert mean_path_shift_m(_pts(a), _pts(b)) == pytest.approx(5.0, abs=1e-6)
+
+
+def test_mean_path_shift_none_when_too_short():
+    assert mean_path_shift_m(_pts([(0, 0, 0)]), _pts([(1, 1, 1), (2, 2, 2)])) is None
+
+
+def test_gate_large_geometry_shift_blocks_even_with_improvement():
+    accepted = _mk_align(model_corners_found=15)
+    candidate = _mk_align(model_corners_found=16)  # would improve
+    v = compare_models(accepted, candidate, geometry_shift_m=MAX_MEAN_SHIFT_M + 2.0)
+    assert v.improves is False
+    assert any("shifted" in r for r in v.regression_reasons)
+
+
+def test_gate_small_geometry_shift_allows_improvement():
+    accepted = _mk_align(model_corners_found=15)
+    candidate = _mk_align(model_corners_found=16)
+    v = compare_models(accepted, candidate, geometry_shift_m=1.0)
+    assert v.improves is True
+    assert v.regression_reasons == []
+
+
+def test_candidate_reference_path_persist_and_cleanup(tmp_path):
+    rp = SimpleNamespace(points=_pts([(i, 0.0, i) for i in range(50)]))
+    path = export_candidate_reference_path(rp, LOC, LAY, output_dir=tmp_path)
+    assert path is not None and path.exists()
+    assert find_candidate_reference_path(LOC, LAY, base_dir=tmp_path) is not None
+    # A candidate model + its companion are both cleared on discard.
+    export_candidate_model_json(_mk_align(accepted=False), LOC, LAY, {}, output_dir=tmp_path)
+    assert discard_candidate(LOC, LAY, models_dir=tmp_path) is True
+    assert find_candidate_reference_path(LOC, LAY, base_dir=tmp_path) is None
+
+
+def test_promote_refused_on_large_stored_shift(tmp_path):
+    _write_accepted(tmp_path, model_corners_found=15, accepted_at="T1")
+    cand = _mk_align(model_corners_found=16, accepted=False)  # metrics improve
+    export_candidate_model_json(
+        cand, LOC, LAY,
+        {"base_accepted_at": "T1", "geometry_shift_m": MAX_MEAN_SHIFT_M + 5.0},
+        output_dir=tmp_path,
+    )
+    # Re-check at promote applies the stored shift → blocked despite better metrics.
+    assert promote_candidate(LOC, LAY, models_dir=tmp_path) is None
+    assert find_candidate_model_path(LOC, LAY, base_dir=tmp_path) is not None
 
 
 # ----------------------------------------------------------------- the gate

@@ -22,6 +22,7 @@ Reuses the existing calibration pipeline unchanged: captured laps →
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -59,6 +60,76 @@ _MATCH_RANK: dict = {
 
 _CONF_EPS = 1e-3            # confidence changes below this are treated as noise
 _LAP_DELTA_IMPROVE_PP = 0.05   # lap-length delta must close by ≥0.05pp to count as improvement
+
+# Phase 2·0 geometry-shift guard: a candidate whose averaged path sits more than
+# this far (mean horizontal displacement, metres) from the accepted path is not a
+# refinement — it's contamination or a materially different racing line. Hard block.
+MAX_MEAN_SHIFT_M: float = 3.0
+CANDIDATE_REF_PATH_SCHEMA: str = "candidate_reference_path_v1"
+
+
+def _xyz_list(points) -> "List[tuple]":
+    """Extract (x, y, z) tuples from objects (or dicts) exposing x/y/z."""
+    out: List[tuple] = []
+    for p in points or []:
+        try:
+            if isinstance(p, dict):
+                out.append((float(p["x"]), float(p.get("y", 0.0)), float(p["z"])))
+            else:
+                out.append((float(p.x), float(getattr(p, "y", 0.0)), float(p.z)))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def _resample_indices(n: int, k: int) -> "List[int]":
+    if n <= 0:
+        return []
+    if n <= k:
+        return list(range(n))
+    return [round(i * (n - 1) / (k - 1)) for i in range(k)]
+
+
+def mean_path_shift_m(points_a, points_b, k: int = 200) -> Optional[float]:
+    """Mean horizontal (X/Z) displacement between two ordered lap paths.
+
+    Both paths are averaged reference paths normalised S/F→S/F in the same
+    direction, so index-alignment approximates progress-alignment. Coarse by
+    design (a contamination guard, not a fit metric): both are resampled to at
+    most ``k`` evenly-spaced points. Returns None when either path is too short.
+    """
+    a = _xyz_list(points_a)
+    b = _xyz_list(points_b)
+    if len(a) < 2 or len(b) < 2:
+        return None
+    m = min(k, len(a), len(b))
+    ia = _resample_indices(len(a), m)
+    ib = _resample_indices(len(b), m)
+    total = 0.0
+    for i in range(m):
+        ax, _ay, az = a[ia[i]]
+        bx, _by, bz = b[ib[i]]
+        total += math.hypot(ax - bx, az - bz)
+    return total / m if m else None
+
+
+def _load_accepted_path_points(track_location_id: str, layout_id: str) -> "List[tuple]":
+    """Best-effort load of the accepted reference-path geometry (for the shift guard).
+
+    Returns [] when no approved reference path can be resolved — the caller then
+    skips the geometry guard (the scalar-metric gate still applies).
+    """
+    try:
+        from data.reference_path_loader import (
+            load_reference_path_for_layout,
+            reference_path_to_track_stations,
+        )
+        res = load_reference_path_for_layout(track_location_id, layout_id)
+        if not getattr(res, "has_stations", False):
+            return []
+        return _xyz_list(reference_path_to_track_stations(res.asset))
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +180,48 @@ def find_candidate_model_path(
     d = Path(base_dir) if base_dir else STATION_MODELS_DIR
     p = d / candidate_model_filename(track_location_id, layout_id)
     return p if p.exists() else None
+
+
+def candidate_reference_path_filename(track_location_id: str, layout_id: str) -> str:
+    return f"{track_location_id}__{layout_id}.candidate_reference_path.json"
+
+
+def find_candidate_reference_path(
+    track_location_id: str, layout_id: str, base_dir: Optional[Path] = None
+) -> Optional[Path]:
+    d = Path(base_dir) if base_dir else STATION_MODELS_DIR
+    p = d / candidate_reference_path_filename(track_location_id, layout_id)
+    return p if p.exists() else None
+
+
+def export_candidate_reference_path(
+    reference_path, track_location_id: str, layout_id: str, output_dir: Optional[Path] = None
+) -> Optional[Path]:
+    """Persist the candidate's averaged path geometry (companion to the candidate
+    model) so promotion / reviewed-segment regen (Phase 2C) can rebuild from it."""
+    pts = _xyz_list(getattr(reference_path, "points", None) or [])
+    if not pts:
+        return None
+    out_dir = Path(output_dir) if output_dir else STATION_MODELS_DIR
+    path = out_dir / candidate_reference_path_filename(track_location_id, layout_id)
+    _atomic_write_json(path, {
+        "schema": CANDIDATE_REF_PATH_SCHEMA,
+        "track_location_id": track_location_id,
+        "layout_id": layout_id,
+        "points": [{"x": x, "y": y, "z": z} for (x, y, z) in pts],
+    })
+    return path
+
+
+def _remove_candidate_reference_path(
+    track_location_id: str, layout_id: str, models_dir: Optional[Path] = None
+) -> None:
+    p = find_candidate_reference_path(track_location_id, layout_id, base_dir=models_dir)
+    if p is not None:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def _status_str(status) -> str:
@@ -247,11 +360,23 @@ def build_candidate_alignment(
 def compare_models(
     accepted: TrackModelAlignmentResult,
     candidate: TrackModelAlignmentResult,
+    geometry_shift_m: Optional[float] = None,
 ) -> ImprovementVerdict:
     """Non-regression + improvement gate. ``improves`` is True only when the
-    candidate does NOT regress on any hard axis AND improves ≥1 axis."""
+    candidate does NOT regress on any hard axis AND improves ≥1 axis.
+
+    ``geometry_shift_m`` (Phase 2·0), when provided, is the mean horizontal
+    displacement of the candidate path from the accepted path; a shift beyond
+    ``MAX_MEAN_SHIFT_M`` is a hard block (contamination / different line)."""
     regression: List[str] = []
     improvement: List[str] = []
+
+    # --- Geometry-shift guard (Phase 2·0) ---
+    if geometry_shift_m is not None and geometry_shift_m > MAX_MEAN_SHIFT_M:
+        regression.append(
+            f"path shifted {geometry_shift_m:.1f}m from the accepted model "
+            f"(> {MAX_MEAN_SHIFT_M:.0f}m — likely contamination or a different line)"
+        )
 
     # --- Hard non-regression blocks ---
     if candidate.model_corners_found < accepted.model_corners_found:
@@ -341,7 +466,19 @@ def refine_from_session(
         return RefinementResult(False, reason, accepted_align=accepted_align,
                                 warnings=list(getattr(build_result, "warnings", [])))
 
-    verdict = compare_models(accepted_align, candidate_align)
+    # Phase 2·0 geometry-shift guard: mean horizontal displacement of the
+    # candidate path from the accepted path (None when accepted geometry can't be
+    # resolved — the scalar-metric gate still applies).
+    geometry_shift_m: Optional[float] = None
+    try:
+        _cand_pts = getattr(build_result.reference_path, "points", None)
+        _acc_pts = _load_accepted_path_points(track_location_id, layout_id)
+        if _acc_pts and _cand_pts:
+            geometry_shift_m = mean_path_shift_m(_acc_pts, _cand_pts)
+    except Exception:
+        geometry_shift_m = None
+
+    verdict = compare_models(accepted_align, candidate_align, geometry_shift_m=geometry_shift_m)
     usable = int(getattr(build_result, "usable_lap_count", 0))
 
     extras = {
@@ -352,6 +489,7 @@ def refine_from_session(
         "improves":           verdict.improves,
         "improvement_reasons": verdict.improvement_reasons,
         "regression_reasons": verdict.regression_reasons,
+        "geometry_shift_m":   geometry_shift_m,
         "delta_vs_accepted": {
             "corner_match_delta": candidate_align.model_corners_found - accepted_align.model_corners_found,
             "lap_length_delta_pct_change": candidate_align.lap_length_delta_pct - accepted_align.lap_length_delta_pct,
@@ -361,6 +499,13 @@ def refine_from_session(
     cand_path = export_candidate_model_json(
         candidate_align, track_location_id, layout_id, extras, output_dir=mdir
     )
+    # Persist the candidate geometry (companion) for promotion / segment regen.
+    try:
+        export_candidate_reference_path(
+            build_result.reference_path, track_location_id, layout_id, output_dir=mdir
+        )
+    except Exception:
+        pass
     append_refinement_ledger(track_location_id, layout_id, {
         "decision": "candidate_built",
         "improves": verdict.improves,
@@ -403,9 +548,15 @@ def promote_candidate(
     accepted_align = import_accepted_model_json(accepted_path) if accepted_path else None
 
     # S5: reject a candidate that was refined from a different (stale) accepted model.
+    # Also recover the geometry-shift recorded at build time for the S2 re-check.
+    base_accepted_at = ""
+    stored_shift: Optional[float] = None
     try:
         with open(cand_path, "r", encoding="utf-8") as fh:
-            base_accepted_at = json.load(fh).get("base_accepted_at", "")
+            _cand_data = json.load(fh)
+        base_accepted_at = _cand_data.get("base_accepted_at", "")
+        _sv = _cand_data.get("geometry_shift_m", None)
+        stored_shift = float(_sv) if isinstance(_sv, (int, float)) else None
     except OSError:
         base_accepted_at = ""
     if accepted_align is not None and base_accepted_at and base_accepted_at != accepted_align.accepted_at:
@@ -415,9 +566,10 @@ def promote_candidate(
         }, models_dir=mdir)
         return None
 
-    # S2: re-check the gate against the CURRENT accepted model before writing.
+    # S2: re-check the gate (incl. the geometry-shift guard) against the CURRENT
+    # accepted model before writing.
     if require_improvement and accepted_align is not None:
-        verdict = compare_models(accepted_align, candidate_align)
+        verdict = compare_models(accepted_align, candidate_align, geometry_shift_m=stored_shift)
         if not verdict.improves:
             append_refinement_ledger(track_location_id, layout_id, {
                 "decision": "promote_rejected_no_improvement",
@@ -433,6 +585,7 @@ def promote_candidate(
         cand_path.unlink()
     except OSError:  # pragma: no cover - defensive
         pass
+    _remove_candidate_reference_path(track_location_id, layout_id, models_dir=mdir)
     append_refinement_ledger(track_location_id, layout_id, {
         "decision": "promoted", "accepted_at": candidate_align.accepted_at,
     }, models_dir=mdir)
@@ -450,6 +603,7 @@ def discard_candidate(
         cand_path.unlink()
     except OSError:  # pragma: no cover - defensive
         return False
+    _remove_candidate_reference_path(track_location_id, layout_id, models_dir=models_dir)
     append_refinement_ledger(track_location_id, layout_id, {"decision": "discarded"},
                              models_dir=models_dir)
     return True
