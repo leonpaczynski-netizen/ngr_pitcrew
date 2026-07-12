@@ -768,6 +768,21 @@ class SetupFormWidget(QWidget):
             "captured_at":    time.strftime("%Y-%m-%d %H:%M"),
         }
 
+    @staticmethod
+    def _as_int(value, default: int) -> int:
+        """Coerce a setup-dict value to int for an integer QSpinBox.
+
+        Baseline/AI setup dicts store every numeric field as float (uniform
+        schema — see strategy/setup_baseline.py), but ride-height, damper, ARB,
+        aero and LSD spinboxes are integer ``QSpinBox``es whose ``setValue``
+        rejects floats with a TypeError. Coerce at this single consumer so any
+        source (baseline, AI, saved JSON) fills cleanly.
+        """
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
+
     def fill_setup_fields(self, d: dict) -> None:
         """Populate all form fields from a saved setup dict."""
         car = d.get("name", "")
@@ -775,25 +790,25 @@ class SetupFormWidget(QWidget):
             self._host._autofill_car_specs(car)
         if hasattr(self._host, "_rebound_setup_spinboxes"):
             self._host._rebound_setup_spinboxes(car or None)
-        self._setup_rh_f.setValue(d.get("ride_height_front", 80))
-        self._setup_rh_r.setValue(d.get("ride_height_rear", 80))
+        self._setup_rh_f.setValue(self._as_int(d.get("ride_height_front", 80), 80))
+        self._setup_rh_r.setValue(self._as_int(d.get("ride_height_rear", 80), 80))
         self._setup_spr_f.setValue(d.get("springs_front", 3.50))
         self._setup_spr_r.setValue(d.get("springs_rear",  3.00))
-        self._setup_dmp_f_comp.setValue(d.get("dampers_front_comp", d.get("dampers_front", 30)))
-        self._setup_dmp_f_ext.setValue(d.get("dampers_front_ext", d.get("dampers_front", 40)))
-        self._setup_dmp_r_comp.setValue(d.get("dampers_rear_comp", d.get("dampers_rear", 25)))
-        self._setup_dmp_r_ext.setValue(d.get("dampers_rear_ext", d.get("dampers_rear", 35)))
-        self._setup_arb_f.setValue(d.get("arb_front", 5))
-        self._setup_arb_r.setValue(d.get("arb_rear", 4))
+        self._setup_dmp_f_comp.setValue(self._as_int(d.get("dampers_front_comp", d.get("dampers_front", 30)), 30))
+        self._setup_dmp_f_ext.setValue(self._as_int(d.get("dampers_front_ext", d.get("dampers_front", 40)), 40))
+        self._setup_dmp_r_comp.setValue(self._as_int(d.get("dampers_rear_comp", d.get("dampers_rear", 25)), 25))
+        self._setup_dmp_r_ext.setValue(self._as_int(d.get("dampers_rear_ext", d.get("dampers_rear", 35)), 35))
+        self._setup_arb_f.setValue(self._as_int(d.get("arb_front", 5), 5))
+        self._setup_arb_r.setValue(self._as_int(d.get("arb_rear", 4), 4))
         self._setup_cam_f.setValue(abs(d.get("camber_front", 1.0)))
         self._setup_cam_r.setValue(abs(d.get("camber_rear", 1.5)))
         self._setup_toe_f.setValue(d.get("toe_front", 0.00))
         self._setup_toe_r.setValue(d.get("toe_rear", 0.05))
-        self._setup_aero_f.setValue(d.get("aero_front", 400))
-        self._setup_aero_r.setValue(d.get("aero_rear", 600))
-        self._setup_lsd_i.setValue(d.get("lsd_initial", 10))
-        self._setup_lsd_a.setValue(d.get("lsd_accel", 15))
-        self._setup_lsd_d.setValue(d.get("lsd_decel", 5))
+        self._setup_aero_f.setValue(self._as_int(d.get("aero_front", 400), 400))
+        self._setup_aero_r.setValue(self._as_int(d.get("aero_rear", 600), 600))
+        self._setup_lsd_i.setValue(self._as_int(d.get("lsd_initial", 10), 10))
+        self._setup_lsd_a.setValue(self._as_int(d.get("lsd_accel", 15), 15))
+        self._setup_lsd_d.setValue(self._as_int(d.get("lsd_decel", 5), 5))
         self._setup_lsd_f_i.setValue(int(d.get("lsd_front_initial", 10)))
         self._setup_lsd_f_a.setValue(int(d.get("lsd_front_accel", 15)))
         self._setup_lsd_f_d.setValue(int(d.get("lsd_front_decel", 5)))
