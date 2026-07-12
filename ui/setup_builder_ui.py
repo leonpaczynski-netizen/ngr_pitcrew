@@ -1019,6 +1019,14 @@ class SetupBuilderMixin:
         # Group 45: car_class from car_specs.category (empty string when no specs loaded).
         _, _car_specs_bl = self._load_car_specs_for_current()
         _car_class = (_car_specs_bl or {}).get("category", "")
+        # UAT: the Qualifying form's gear-count spinbox is NOT populated by the
+        # Race-form car-specs autofill (it writes only self._setup_num_gears, the
+        # Race alias), so a qualifying baseline built no gear ratios. Fall back to
+        # the car spec's gear count, then the Race form, so gears are authored.
+        if not _num_gears:
+            _num_gears = int((_car_specs_bl or {}).get("num_gears", 0) or 0)
+        if not _num_gears and hasattr(self, "_setup_num_gears"):
+            _num_gears = int(self._setup_num_gears.value() or 0)
         # Group 46: pass real race duration so build_baseline_setup_response can
         # classify session bias (race + duration>=60 → endurance bias).
         # _ai_snap.duration_mins is 0 when no event is configured — backend treats

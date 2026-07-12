@@ -271,12 +271,19 @@ def parse_audit_response(
 
     except Exception as exc:
         log.warning("parse_audit_response failed: %s", exc)
+        # The AI audit is advisory-only (Group 42) — it never authors changes. A
+        # malformed/truncated audit response must degrade cleanly: surface an
+        # honest, non-technical note rather than leaking the raw parser exception
+        # (e.g. "Unterminated string at char 2178") into the driver-facing UI.
         return AuditResult(
             status=AuditStatus.NEEDS_MORE_DATA,
             warnings=[],
             contradictions=[],
-            missing_evidence=[f"parse_error: {exc}"],
-            explanation_notes="Audit response could not be parsed.",
+            missing_evidence=[],
+            explanation_notes=(
+                "AI audit unavailable (the AI's review response was incomplete). "
+                "This does not affect the rule-based setup changes above."
+            ),
             stripped_fields=[],
         )
 
@@ -315,7 +322,12 @@ def map_audit_to_finaliser(
         return ("approved_with_warnings", concerns)
 
     if status == AuditStatus.NEEDS_MORE_DATA:
-        missing = list(audit.missing_evidence) or ["AI audit: insufficient data."]
+        missing = list(audit.missing_evidence)
+        if not missing:
+            # Nothing actionable from the audit (e.g. it couldn't be parsed, or it
+            # had no specific gaps). The rule-based changes stand — don't raise a
+            # warning banner over an advisory-only audit that stayed silent.
+            return ("approved", [])
         return ("approved_with_warnings", missing)
 
     if status == AuditStatus.APPROVED_WITH_WARNINGS:

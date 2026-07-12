@@ -2102,7 +2102,9 @@ class DrivingAdvisor:
                             _plan.protected_fields,
                         )
                         _audit_text = call_api(
-                            _audit_prompt, api_key, max_tokens=800,
+                            # 800 tokens truncated audit JSON mid-string on richer
+                            # plans (UAT: "Unterminated string"); 1500 gives headroom.
+                            _audit_prompt, api_key, max_tokens=1500,
                             feature="Setup Audit",
                             structured_payload={"lap_count": len(recent),
                                                 "car": car_name,
