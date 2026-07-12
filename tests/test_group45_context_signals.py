@@ -944,7 +944,7 @@ class TestAC14RuntimeHighTyreWearSuppression:
         )
 
     # -----------------------------------------------------------------------
-    # C3_mid_arb_rear — arb_rear -1
+    # C3_mid_arb_rear — arb_rear +1 (stiffen rear ARB to cure mid-corner understeer)
     # -----------------------------------------------------------------------
 
     def test_c3_fires_when_tyre_wear_low(self):
@@ -956,18 +956,15 @@ class TestAC14RuntimeHighTyreWearSuppression:
 
         plan = run_rule_engine(diag, setup, ranges, profile, session_type=None)
 
-        # C3 and C7 both target arb_rear; the higher-confidence one wins.
-        # Either rule may be in proposed (conflict resolution) — but at least one
-        # arb_rear -1 change must be present when tyre_wear_high=False.
-        arb_rear_neg = [
-            c for c in plan.proposed
-            if c.field == "arb_rear" and c.delta < 0
-        ]
+        # C3 (understeer → arb_rear +1) and C7 (kerb compliance → arb_rear -1) both
+        # target arb_rear and now oppose; conflict resolution keeps the higher-
+        # confidence one and rejects the other with a 'conflict' rationale. C3 must
+        # still FIRE — either winning (in proposed) or losing the conflict (in
+        # rejected). Assert on rule_id, not delta sign.
         c3_in_proposed = [c for c in plan.proposed if c.rule_id == "C3_mid_arb_rear"]
         c3_in_rejected = [c for c in plan.rejected_candidates if c.rule_id == "C3_mid_arb_rear"
                           and "conflict" in (c.rationale or "")]
-        # C3 must fire (either win the conflict or lose to C7 — both are arb_rear -1)
-        c3_fired = bool(c3_in_proposed or c3_in_rejected or arb_rear_neg)
+        c3_fired = bool(c3_in_proposed or c3_in_rejected)
         assert c3_fired, (
             "AC14-RUNTIME FAIL: C3_mid_arb_rear did not fire when "
             "dominant_problem='entry_understeer' (contains 'understeer'), tyre_wear_high=False.\n"
@@ -986,7 +983,7 @@ class TestAC14RuntimeHighTyreWearSuppression:
 
         c3_in_proposed = [c for c in plan.proposed if c.rule_id == "C3_mid_arb_rear"]
         assert not c3_in_proposed, (
-            "AC14-RUNTIME FAIL: C3_mid_arb_rear (arb_rear -1) appeared in proposed "
+            "AC14-RUNTIME FAIL: C3_mid_arb_rear (arb_rear +1) appeared in proposed "
             "when tyre_wear_high=True — contraindication NOT enforced.\n"
             f"proposed: {[(c.field, c.rule_id, c.delta) for c in plan.proposed]}"
         )

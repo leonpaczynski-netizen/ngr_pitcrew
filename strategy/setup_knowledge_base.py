@@ -886,19 +886,24 @@ _PACK_CD: list[SetupRule] = [
         contraindications={
             "driver_feel_flags.rear_loose_on_exit": True,
             "wheelspin_band": "__not_low__",
-            # Contraindicated under high tyre wear: softening rear ARB increases rear
-            # body roll and lateral load transfer, which scrubs worn rear tyres harder
-            # in mid-corner and increases rear-rotation risk under marginal grip.
+            # Contraindicated under high tyre wear: stiffening the rear ARB pulls more
+            # lateral load transfer onto worn rear tyres, which are the most load-
+            # sensitive, raising rear-breakaway / oversteer risk under marginal grip.
             "tyre_wear_high": True,
         },
         field="arb_rear",
-        delta_fn="decrease_rear_arb",
-        title="Reduce rear ARB — mid-corner understeer",
-        symptom="Mid-corner understeer — softening rear ARB transfers load to front.",
+        delta_fn="increase_rear_arb",
+        title="Stiffen rear ARB — mid-corner understeer",
+        symptom="Mid-corner understeer — stiffening rear ARB shifts load off the front.",
         rationale=(
-            "Reducing rear ARB softens the rear platform, transferring more "
-            "mid-corner lateral load to the front axle for better rotation. "
-            "Contraindicated when rear is loose or wheelspin is present."
+            "Roll-stiffness distribution sets the elastic lateral-load-transfer "
+            "split, and the stiffer axle sheds grip via tyre load sensitivity. "
+            "Stiffening the REAR ARB moves more lateral load transfer onto the rear "
+            "axle, reducing rear grip relative to the front so the car rotates more "
+            "and understeer eases. (Softening the rear bar does the opposite — it "
+            "adds rear grip and worsens understeer.) Contraindicated when the rear "
+            "is already loose, wheelspin is present, or tyres are worn, since "
+            "stiffening the rear then risks oversteer / reduced traction."
         ),
         risk=RiskLevel.med,
         base_confidence=ConfidenceLevel.med,

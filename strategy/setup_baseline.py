@@ -28,6 +28,11 @@ from __future__ import annotations
 
 import math
 
+# GENERIC_DEFAULTS is the canonical (min, max) for every range-managed field.
+# setup_ranges imports only json/pathlib/typing, so this module-level import is
+# cycle-free (setup_baseline is itself imported lazily by driving_advisor).
+from strategy.setup_ranges import GENERIC_DEFAULTS
+
 # ---------------------------------------------------------------------------
 # Neutral seed values — single source of truth (Group 44)
 # ---------------------------------------------------------------------------
@@ -89,6 +94,15 @@ _LABEL_NEUTRAL    = "neutral default"
 _LABEL_MIDPOINT   = "range midpoint"
 _LABEL_BIASED     = "driver-profile biased"
 _LABEL_CONSERV    = "conservative default, not diagnosed"
+# Provenance for a seed that was re-placed inside a narrow/shifted car range so
+# it did not pin to a boundary (see _place_seed_in_range). Distinct label so the
+# baseline-quality audit and the UI can see the value came from range adaptation,
+# not a blind clamp.
+_LABEL_CAR_RANGE  = "car-range adapted (neutral intent, off-boundary)"
+
+# When a neutral seed lands within this fraction of either end of a car's
+# resolved range, it is treated as boundary-hugging and re-placed by intent.
+_BOUNDARY_GUARD_FRACTION = 0.05
 
 # Fields that always receive the "conservative default, not diagnosed" label
 # (they lack the telemetry evidence needed to diagnose them from scratch)
@@ -162,6 +176,56 @@ def _round_for_field(field: str, value: float) -> float:
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value into [lo, hi]."""
     return max(lo, min(hi, value))
+
+
+def _place_seed_in_range(field: str, seed: float, ranges: dict) -> "tuple[float, bool]":
+    """Return (value, adjusted) for a neutral seed given the car's resolved range.
+
+    NEUTRAL_SEEDS are absolute values calibrated against the GENERIC range. When a
+    car's range is narrow or shifted — e.g. a high-downforce race car whose aero
+    floor is well above the generic seed, or a stiff-sprung car whose spring floor
+    exceeds the seed — a naive clamp pins the value to the car's MIN or MAX with no
+    engineering justification (the exact defect the ride-height special-case already
+    fixes for one field). This generalises that fix: when the seed would hug or
+    exceed a boundary of the car's range, re-place it by preserving its ENGINEERING
+    INTENT — its position within the GENERIC range — mapped into the car's range.
+
+    Key properties:
+    - If the field is not range-managed, the seed is returned unchanged.
+    - If the seed sits comfortably interior (>= 5% and <= 95% of the car range),
+      the physically-motivated absolute seed is kept unchanged — so cars with wide
+      ranges and every generic-range car are byte-for-byte unaffected.
+    - Otherwise the value is the seed's generic-range fraction mapped into the car
+      range. Each field keeps its OWN distinct intent (springs ~13%, aero_front
+      ~40%, aero_rear ~60%, …) — this is NOT a flat "50% of every range" rule, and
+      it never pins to a boundary unless the seed itself was at a generic boundary.
+
+    Returns adjusted=True only when the mapping was applied, so the caller can set
+    honest provenance (_LABEL_CAR_RANGE) on the change.
+    """
+    if field not in ranges:
+        return float(seed), False
+    lo, hi = ranges[field]
+    if hi <= lo:
+        return _clamp(float(seed), lo, hi), False
+    span = hi - lo
+    guard = _BOUNDARY_GUARD_FRACTION * span
+    if (lo + guard) <= float(seed) <= (hi - guard):
+        # Comfortably interior — keep the calibrated absolute seed.
+        return float(seed), False
+    gen = GENERIC_DEFAULTS.get(field)
+    if not gen or gen[1] <= gen[0]:
+        # No generic authority to map from — fall back to a plain clamp.
+        return _clamp(float(seed), lo, hi), False
+    gnorm = _clamp((float(seed) - gen[0]) / (gen[1] - gen[0]), 0.0, 1.0)
+    mapped = lo + gnorm * span
+    # Only report an adaptation when the mapping actually moves the value off where
+    # a naive clamp would land it. A seed sitting AT a generic boundary maps back to
+    # the same car boundary (e.g. power_restrictor 100 → 100); that is the field's
+    # genuine intent, not a clamp artefact, so it keeps its ordinary provenance.
+    if abs(mapped - _clamp(float(seed), lo, hi)) < 1e-9:
+        return _clamp(float(seed), lo, hi), False
+    return mapped, True
 
 
 def _build_gearbox_changes(
@@ -540,36 +604,48 @@ def build_baseline_setup(
                 _rh_lower_third = _rh_lo + (_rh_hi - _rh_lo) / 3.0
                 seed = min(float(seed), _rh_lower_third)
 
+        # Map the (possibly ride-height-pre-adjusted) seed into the car's range,
+        # preserving engineering intent instead of clamping to a boundary. For
+        # generic-range cars and wide-range fields this returns the seed unchanged.
+        base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
+
         # Compute value WITH combined bias (profile + session)
-        to_val = float(seed)
+        to_val = base_val
         is_biased = False
         if field in bias:
             to_val += bias[field]
             is_biased = True
 
-        # Clamp to per-car range
+        # Clamp to per-car range (safety net; base_val is already in range)
         if field in ranges:
             lo, hi = ranges[field]
             to_val = _clamp(to_val, lo, hi)
 
-        # Round to natural precision
+        # Round to natural precision. "from" mirrors the authored base (from-scratch
+        # baseline: from == to for non-biased fields), not the pre-mapping seed.
         to_val = _round_for_field(field, to_val)
-        seed_rounded = _round_for_field(field, float(seed))
+        seed_rounded = _round_for_field(field, base_val)
 
         # Group 46: compute value WITHOUT session bias to detect session_changed.
         # session_changed = True only when session bias actually changed the output.
         _profile_only_bias = bias.get(field, 0.0) - _session_bias_deltas.get(field, 0.0)
-        _val_without_session = float(seed) + _profile_only_bias
+        _val_without_session = base_val + _profile_only_bias
         if field in ranges:
             lo, hi = ranges[field]
             _val_without_session = _clamp(_val_without_session, lo, hi)
         _val_without_session_rounded = _round_for_field(field, _val_without_session)
         _session_changed = (to_val != _val_without_session_rounded)
 
-        # Determine source label and alignment
+        # Determine source label and alignment. A range-adapted value takes the
+        # _LABEL_CAR_RANGE provenance (unless it was also driver-profile biased, in
+        # which case the bias label wins) so a re-placed boundary value is never
+        # presented as an undiagnosed "neutral default".
         if is_biased:
             label = _LABEL_BIASED
             alignment = "aligned"
+        elif seed_adjusted:
+            label = _LABEL_CAR_RANGE
+            alignment = "neutral"
         elif field in _CONSERVATIVE_FIELDS:
             label = _LABEL_CONSERV
             alignment = "neutral"
