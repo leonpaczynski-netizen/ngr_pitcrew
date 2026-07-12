@@ -951,6 +951,7 @@ class SetupBuilderMixin:
         # _ai_snap.duration_mins is 0 when no event is configured — backend treats
         # 0 / <=0 as sprint/conservative (by design — safe default).
         _duration_mins_bl = float(_ai_snap.duration_mins)
+        _track_profile_bl = self._build_track_tune_profile_for_current()
 
         def _worker():
             try:
@@ -965,12 +966,38 @@ class SetupBuilderMixin:
                     tyre_wear_multiplier=_tyre_wear,
                     car_class=_car_class,
                     duration_mins=_duration_mins_bl,
+                    track_profile=_track_profile_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
             except Exception as exc:
                 self._baseline_result_queue.put(("error", str(exc), "baseline_setup", None))
 
         _threading.Thread(target=_worker, daemon=True).start()
+
+    def _build_track_tune_profile_for_current(self):
+        """Phase 5: build a TrackTuneProfile from the current track/layout's seed +
+        accepted model, so the baseline is track-shaped. Returns None on any
+        failure (the baseline then stays track-neutral and discloses it)."""
+        try:
+            strat = self._config.get("strategy", {}) if hasattr(self, "_config") else {}
+            loc = str(strat.get("track_location_id", "") or "").strip()
+            lay = str(strat.get("layout_id", "") or "").strip()
+            if not loc or not lay:
+                return None
+            from data.track_intelligence import resolve_track_layout
+            from data.track_model_alignment import (
+                import_accepted_model_json, find_accepted_model_path,
+            )
+            from strategy.track_tune_profile import build_track_tune_profile
+            seed_layout = resolve_track_layout(loc, lay)
+            accepted = None
+            _p = find_accepted_model_path(loc, lay)
+            if _p is not None:
+                accepted = import_accepted_model_json(_p)
+            return build_track_tune_profile(loc, lay, seed_layout=seed_layout,
+                                            accepted_model=accepted)
+        except Exception:
+            return None
 
     def _generate_baseline_setup_both(self) -> None:
         """Build baseline setups for BOTH the Race and Qualifying forms at once.
@@ -1056,6 +1083,7 @@ class SetupBuilderMixin:
         form._build_setup_result.setPlainText(
             "Building baseline setup from car ranges and driving profile…")
         form._build_setup_result.setVisible(True)
+        _track_profile_bl = self._build_track_tune_profile_for_current()
 
         def _worker():
             try:
@@ -1070,6 +1098,7 @@ class SetupBuilderMixin:
                     tyre_wear_multiplier=_tyre_wear,
                     car_class=_car_class,
                     duration_mins=_duration_mins_bl,
+                    track_profile=_track_profile_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
             except Exception as exc:

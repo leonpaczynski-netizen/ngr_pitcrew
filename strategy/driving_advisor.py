@@ -2330,6 +2330,7 @@ class DrivingAdvisor:
         tyre_wear_multiplier: "float | None" = None,
         car_class: str = "",
         duration_mins: float = 0.0,
+        track_profile=None,
     ) -> str:
         """Return a JSON string with a from-scratch baseline setup.
 
@@ -2417,6 +2418,7 @@ class DrivingAdvisor:
                 tyre_wear_multiplier=tyre_wear_multiplier,
                 car_class=car_class,
                 duration_mins=duration_mins,
+                track_profile=track_profile,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta

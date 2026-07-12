@@ -462,6 +462,7 @@ def build_baseline_setup(
     tyre_wear_multiplier: "float | None" = None,
     car_class: str = "",
     duration_mins: float = 0.0,
+    track_profile=None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -559,6 +560,18 @@ def build_baseline_setup(
     for _sb_field, _sb_delta in _session_bias_deltas.items():
         bias[_sb_field] = bias.get(_sb_field, 0.0) + _sb_delta
 
+    # Phase 5: track-specific aero shaping. A straight-heavy circuit trims drag
+    # (offsetting the driver-profile "add front aero" nudge that otherwise pins
+    # front aero to its ceiling — the base-max-aero UAT defect); a corner-dense
+    # circuit can carry more. Only shapes when a trustworthy track model exists.
+    _track_aero_bias = getattr(track_profile, "aero_bias", "neutral") if track_profile else "neutral"
+    _track_trustworthy = bool(getattr(track_profile, "trustworthy", False)) if track_profile else False
+    if _track_trustworthy:
+        _track_aero_delta = {"trim": -50.0, "add": +25.0, "neutral": 0.0}.get(_track_aero_bias, 0.0)
+        if _track_aero_delta:
+            bias["aero_front"] = bias.get("aero_front", 0.0) + _track_aero_delta
+            bias["aero_rear"] = bias.get("aero_rear", 0.0) + _track_aero_delta
+
     # Derive locked CATEGORY names for the analysis text (human-readable).
     # If allowed_tuning is set, locked categories = all categories minus allowed.
     # Import _ALL_TUNING_CATS from driving_advisor (already imported above at call site).
@@ -628,6 +641,12 @@ def build_baseline_setup(
         if field in ranges:
             lo, hi = ranges[field]
             to_val = _clamp(to_val, lo, hi)
+            # Phase 5: never pin aero to its ceiling from the driver-profile nudge
+            # alone. Max downforce is only authored when the track genuinely
+            # demands it (aero_bias == "add"); otherwise cap at 85% of the range so
+            # a straight-heavy/neutral circuit keeps a sane drag level.
+            if field in ("aero_front", "aero_rear") and _track_aero_bias != "add" and hi > lo:
+                to_val = min(to_val, lo + 0.85 * (hi - lo))
 
         # Round to natural precision. "from" mirrors the authored base (from-scratch
         # baseline: from == to for non-biased fields), not the pre-mapping seed.
@@ -727,11 +746,21 @@ def build_baseline_setup(
         f" Gearbox: geometric sequence for {min(6, max(0, num_gears))} gears."
         if num_gears > 0 else ""
     )
+    # Phase 5: disclose the track shaping (or its absence) honestly.
+    if _track_trustworthy:
+        track_text = (
+            f" Track-shaped: {getattr(track_profile, 'summary', lambda: '')()}"
+        )
+    elif track_profile is not None:
+        track_text = (" No trustworthy track model — aero/gearing use conservative, "
+                      "track-neutral defaults (nothing invented).")
+    else:
+        track_text = ""
     analysis = (
         f"From-scratch baseline setup generated using neutral physics defaults "
         f"and driver-profile mechanical nudges. No telemetry data available — "
         f"all values are conservative starting points requiring on-track validation."
-        f"{awd_text}{gear_text}{locked_text}"
+        f"{track_text}{awd_text}{gear_text}{locked_text}"
     )
 
     return {
