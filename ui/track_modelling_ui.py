@@ -843,6 +843,54 @@ class TrackModellingMixin:
         _truth_section_layout.addWidget(truth_grp)
         right_layout.addWidget(_truth_section_grp)
 
+        # ── 7. Continuous Refinement (UAT #6) ────────────────────────────────
+        _refine_section_grp = QGroupBox("7. Continuous Refinement")
+        _refine_section_grp.setStyleSheet(self._group_style())
+        _refine_layout = QVBoxLayout(_refine_section_grp)
+        _refine_layout.setContentsMargins(6, 12, 6, 6)
+        _refine_layout.setSpacing(6)
+        _refine_help = QLabel(
+            "Once this layout has an accepted model, capture your real event laps and "
+            "the app refines the mapping from them — but only ever proposes a change "
+            "that improves the model (never a downgrade). Start capture, drive your "
+            "laps, then Review the refined model and Accept or Discard it."
+        )
+        _refine_help.setStyleSheet("color: #8892A0; font-size: 10px;")
+        _refine_help.setWordWrap(True)
+        _refine_layout.addWidget(_refine_help)
+
+        self._tm_refine_status_lbl = QLabel("—")
+        self._tm_refine_status_lbl.setStyleSheet("color: #AAE4AA; font-size: 11px;")
+        self._tm_refine_status_lbl.setWordWrap(True)
+        _refine_layout.addWidget(self._tm_refine_status_lbl)
+
+        _refine_btn_row = QHBoxLayout()
+        self._tm_btn_refine_capture = QPushButton("Start capturing event laps")
+        self._tm_btn_refine_capture.clicked.connect(self._tm_toggle_refine_capture)
+        _refine_btn_row.addWidget(self._tm_btn_refine_capture)
+        self._tm_btn_refine_now = QPushButton("Refine now")
+        self._tm_btn_refine_now.setToolTip("Build a candidate model from the laps captured so far.")
+        self._tm_btn_refine_now.clicked.connect(self._tm_run_refinement)
+        _refine_btn_row.addWidget(self._tm_btn_refine_now)
+        _refine_btn_row.addStretch()
+        _refine_layout.addLayout(_refine_btn_row)
+
+        self._tm_refine_result_lbl = QLabel("")
+        self._tm_refine_result_lbl.setStyleSheet("color: #CCCCCC; font-size: 10px;")
+        self._tm_refine_result_lbl.setWordWrap(True)
+        _refine_layout.addWidget(self._tm_refine_result_lbl)
+
+        _refine_action_row = QHBoxLayout()
+        self._tm_btn_refine_accept = QPushButton("Accept refined model")
+        self._tm_btn_refine_accept.clicked.connect(self._tm_accept_refinement)
+        _refine_action_row.addWidget(self._tm_btn_refine_accept)
+        self._tm_btn_refine_discard = QPushButton("Discard")
+        self._tm_btn_refine_discard.clicked.connect(self._tm_discard_refinement)
+        _refine_action_row.addWidget(self._tm_btn_refine_discard)
+        _refine_action_row.addStretch()
+        _refine_layout.addLayout(_refine_action_row)
+        right_layout.addWidget(_refine_section_grp)
+
         right_layout.addStretch()
         splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 0)
@@ -884,6 +932,11 @@ class TrackModellingMixin:
 
     def _tm_on_tab_shown(self) -> None:
         """Called when the Track Modelling tab is first shown or re-shown."""
+        # Continuous-refinement panel reflects capture/candidate state every open.
+        try:
+            self._tm_refresh_refinement_panel()
+        except Exception:
+            pass
         if self._tm_seed_result is not None:
             return  # already loaded
         try:
@@ -991,6 +1044,8 @@ class TrackModellingMixin:
         self._tm_try_restore_calibration_session(loc_id, lay_id)
         # Group 18A: refresh Track Truth / Mapping panel
         self._tm_refresh_track_truth_panel()
+        # UAT #6: refresh continuous-refinement panel for the new layout
+        self._tm_refresh_refinement_panel()
 
     def _build_track_context(self):
         """Canonical read model of the selected track/layout + model state.
@@ -2210,6 +2265,169 @@ class TrackModellingMixin:
             "  4. If lap length still mismatches the seed, check the correct layout is "
             "selected and repeat calibration.",
         )
+
+    # ------------------------------------------------ UAT #6: continuous refinement
+
+    def _tm_refine_ids(self) -> "tuple[str, str]":
+        loc = (self._tm_location_combo.currentData() or "").strip() if hasattr(self, "_tm_location_combo") else ""
+        lay = (self._tm_layout_combo.currentData() or "").strip() if hasattr(self, "_tm_layout_combo") else ""
+        return loc, lay
+
+    def _tm_toggle_refine_capture(self) -> None:
+        """Start capturing live event laps for this layout, or stop and refine."""
+        if getattr(self, "_track_path_capture", None) is not None:
+            # Stop → build a candidate from what was captured.
+            self._tm_run_refinement()
+            return
+        loc_id, lay_id = self._tm_refine_ids()
+        if not loc_id or not lay_id:
+            self._tm_refine_status_lbl.setText("Select a track and layout first.")
+            return
+        from data.track_model_alignment import find_accepted_model_path
+        if find_accepted_model_path(loc_id, lay_id) is None:
+            self._tm_refine_status_lbl.setText(
+                "No accepted model for this layout yet — build and accept one "
+                "(sections 2–5) before refining.")
+            return
+        from data.live_track_path_capture import LiveTrackPathCapture
+        car = ""
+        try:
+            if hasattr(self, "_build_event_context"):
+                car = (self._build_event_context().car or "")
+        except Exception:
+            car = ""
+        self._track_path_capture = LiveTrackPathCapture(loc_id, lay_id, car_name=car)
+        self._tm_btn_refine_capture.setText("Stop capturing & refine")
+        self._tm_refine_status_lbl.setText(
+            f"Capturing event laps for {loc_id} / {lay_id}… drive your laps, then Stop.")
+        self._tm_refine_result_lbl.setText("")
+        if hasattr(self, "_tm_btn_refine_now"):
+            self._tm_btn_refine_now.setEnabled(True)
+
+    def _tm_run_refinement(self) -> None:
+        """Build a candidate model from captured laps (consumes the capture)."""
+        cap = getattr(self, "_track_path_capture", None)
+        loc_id, lay_id = self._tm_refine_ids()
+        if cap is None:
+            self._tm_refresh_refinement_panel()
+            return
+        from data.track_refinement import refine_from_session
+        session = cap.build_session()
+        cars = [cap.car_name] if cap.car_name else []
+        # Capture consumed once refined.
+        self._track_path_capture = None
+        self._tm_btn_refine_capture.setText("Start capturing event laps")
+        try:
+            result = refine_from_session(session, loc_id, lay_id, contributing_cars=cars)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._tm_refresh_refinement_panel()
+            self._tm_refine_status_lbl.setText(f"Refinement failed: {exc}")
+            return
+        # Refresh first (syncs buttons + candidate-derived status), then override the
+        # status only for the "no candidate produced" case (refresh reports the
+        # candidate cases — improving or not — correctly from the written file).
+        self._tm_refresh_refinement_panel()
+        if not result.success:
+            self._tm_refine_status_lbl.setText(f"No refinement: {result.reason}")
+            self._tm_refine_result_lbl.setText("")
+
+    def _tm_accept_refinement(self) -> None:
+        loc_id, lay_id = self._tm_refine_ids()
+        from data.track_refinement import promote_candidate
+        out = promote_candidate(loc_id, lay_id)
+        if out is not None:
+            # Reflect the new accepted model across the tab.
+            for _m in ("_tm_try_load_accepted_model",):
+                if hasattr(self, _m):
+                    try:
+                        getattr(self, _m)(loc_id, lay_id)
+                    except Exception:
+                        pass
+            for _m in ("_tm_refresh_resolver", "_tm_refresh_track_truth_panel"):
+                if hasattr(self, _m):
+                    try:
+                        getattr(self, _m)()
+                    except Exception:
+                        pass
+        # Refresh buttons/state first, then set the outcome message last so it sticks.
+        self._tm_refresh_refinement_panel()
+        if out is None:
+            self._tm_refine_status_lbl.setText(
+                "Nothing to accept — the candidate does not improve the current model.")
+        else:
+            self._tm_refine_status_lbl.setText(
+                "Refined model accepted — it is now the active model for this layout.")
+            self._tm_refine_result_lbl.setText("")
+
+    def _tm_discard_refinement(self) -> None:
+        loc_id, lay_id = self._tm_refine_ids()
+        from data.track_refinement import discard_candidate
+        removed = discard_candidate(loc_id, lay_id)
+        self._tm_refresh_refinement_panel()
+        if removed:
+            self._tm_refine_status_lbl.setText("Candidate discarded.")
+            self._tm_refine_result_lbl.setText("")
+
+    def _tm_refresh_refinement_panel(self) -> None:
+        """Reflect capture + candidate state and enable/disable buttons.
+
+        Called on tab open and layout change so the panel is always current.
+        """
+        if not hasattr(self, "_tm_refine_status_lbl"):
+            return
+        loc_id, lay_id = self._tm_refine_ids()
+        capturing = getattr(self, "_track_path_capture", None) is not None
+        from data.track_model_alignment import find_accepted_model_path
+        from data.track_refinement import find_candidate_model_path
+        has_accepted = bool(loc_id and lay_id and find_accepted_model_path(loc_id, lay_id) is not None)
+        cand_path = find_candidate_model_path(loc_id, lay_id) if (loc_id and lay_id) else None
+
+        cand_improves = False
+        cand_laps = 0
+        cand_reasons: list = []
+        if cand_path is not None:
+            try:
+                import json
+                data = json.loads(cand_path.read_text(encoding="utf-8"))
+                cand_improves = bool(data.get("improves", False))
+                cand_laps = int(data.get("contributing_laps", 0))
+                cand_reasons = (data.get("improvement_reasons", []) if cand_improves
+                                else (data.get("regression_reasons", []) or []))
+            except Exception:
+                cand_reasons = []
+
+        if hasattr(self, "_tm_btn_refine_capture"):
+            self._tm_btn_refine_capture.setEnabled(has_accepted or capturing)
+            self._tm_btn_refine_capture.setText(
+                "Stop capturing & refine" if capturing else "Start capturing event laps")
+        if hasattr(self, "_tm_btn_refine_now"):
+            self._tm_btn_refine_now.setEnabled(capturing)
+        if hasattr(self, "_tm_btn_refine_accept"):
+            self._tm_btn_refine_accept.setEnabled(cand_path is not None and cand_improves)
+        if hasattr(self, "_tm_btn_refine_discard"):
+            self._tm_btn_refine_discard.setEnabled(cand_path is not None)
+
+        if capturing:
+            return  # keep the live "capturing…" message
+        if not has_accepted:
+            self._tm_refine_status_lbl.setText(
+                "No accepted model for this layout yet — build and accept one before refining.")
+            self._tm_refine_result_lbl.setText("")
+            return
+        if cand_path is not None:
+            if cand_improves:
+                self._tm_refine_status_lbl.setText(
+                    f"Refined model available from {cand_laps} lap(s) — review and Accept or Discard.")
+                self._tm_refine_result_lbl.setText("Improvements: " + "; ".join(cand_reasons))
+            else:
+                self._tm_refine_status_lbl.setText(
+                    f"Candidate from {cand_laps} lap(s) does not improve the model (Discard to clear).")
+                self._tm_refine_result_lbl.setText(
+                    "Reason: " + ("; ".join(cand_reasons) if cand_reasons else "no measurable improvement"))
+        else:
+            self._tm_refine_status_lbl.setText(
+                "Ready. Start capture, drive your event laps, then Stop to refine.")
+            self._tm_refine_result_lbl.setText("")
 
     # ---------------------------------------------------------------- Group 20A
 

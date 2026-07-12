@@ -435,6 +435,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._live_stabiliser_state = None
         # Group 61: OFF-by-default raw road-distance capture (diagnostic, read-only).
         self._raw_rd_capture = None
+        # UAT #6 Phase 1b: OFF-by-default live event-lap path capture for
+        # continuous track-model refinement (started from the Track Modelling tab).
+        self._track_path_capture = None
         self._gear_ratios_captured: bool = False
         self._lap_compound_tags: dict[int, str] = {}
         self._default_lap_compound: str = ""
@@ -2483,6 +2486,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 try:
                     _ln = self._tracker.laps_recorded if self._tracker is not None else None
                     self._raw_rd_capture.add_packet(packet, lap_number=_ln)
+                except Exception:
+                    pass
+            # UAT #6 Phase 1b: feed the live path capture when active (inert otherwise).
+            if self._track_path_capture is not None:
+                try:
+                    _tln = self._tracker.laps_recorded if self._tracker is not None else 0
+                    self._track_path_capture.add_packet(packet, lap_number=_tln)
                 except Exception:
                     pass
             self._update_live(packet)

@@ -7,18 +7,25 @@ from data.live_track_path_capture import LiveTrackPathCapture
 
 
 class FakePacket:
-    """Duck-typed stand-in for a GT7 telemetry frame."""
-    def __init__(self, x, y, z, lap=1, elapsed_ms=0, speed=120.0):
+    """Duck-typed stand-in for a GT7 packet (fields packet_to_calibration_sample reads)."""
+    def __init__(self, x, y, z, lap=1, elapsed_ms=0, speed=120.0,
+                 car_on_track=True, paused=False, loading=False):
         self.pos_x = x
         self.pos_y = y
         self.pos_z = z
         self.speed_kmh = speed
-        self.gear = 4
-        self.rpm = 6000.0
+        self.current_gear = 4
+        self.engine_rpm = 6000.0
         self.throttle = 1.0
         self.brake = 0.0
-        self.elapsed_ms = elapsed_ms
+        self.time_of_day_ms = elapsed_ms
         self.road_distance = 0.0
+        self.angvel_z = 0.0
+        self.road_plane_y = 1.0
+        # On-track gate (can_capture_calibration_sample)
+        self.car_on_track = car_on_track
+        self.paused = paused
+        self.loading = loading
 
 
 def _cap():
@@ -71,6 +78,15 @@ def test_rejects_zero_and_nonfinite_xyz():
     assert cap.rejected_sample_count == 4
     assert cap.accepted_sample_count == 0
     assert cap.build_session().laps == []
+
+
+def test_offtrack_paused_loading_rejected():
+    cap = _cap()
+    assert not cap.add_packet(FakePacket(1.0, 0.5, 2.0, car_on_track=False), 1)  # off-track
+    assert not cap.add_packet(FakePacket(1.0, 0.5, 2.0, paused=True), 1)          # paused
+    assert not cap.add_packet(FakePacket(1.0, 0.5, 2.0, loading=True), 1)         # loading
+    assert cap.rejected_sample_count == 3
+    assert cap.accepted_sample_count == 0
 
 
 def test_invalid_lap_number_rejected():
