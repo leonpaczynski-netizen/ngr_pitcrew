@@ -979,9 +979,10 @@ class SetupBuilderMixin:
         accepted model, so the baseline is track-shaped. Returns None on any
         failure (the baseline then stays track-neutral and discloses it)."""
         try:
-            strat = self._config.get("strategy", {}) if hasattr(self, "_config") else {}
-            loc = str(strat.get("track_location_id", "") or "").strip()
-            lay = str(strat.get("layout_id", "") or "").strip()
+            # Canonical identity via EventContext (not a raw config["strategy"] read).
+            ec = self._build_event_context() if hasattr(self, "_build_event_context") else None
+            loc = str(getattr(ec, "track_location_id", "") or "").strip()
+            lay = str(getattr(ec, "layout_id", "") or "").strip()
             if not loc or not lay:
                 return None
             from data.track_intelligence import resolve_track_layout

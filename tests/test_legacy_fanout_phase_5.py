@@ -62,6 +62,7 @@ def _method_body(src: str, name: str) -> str:
 FROZEN_ALLOWLIST = {
     # -- ui/dashboard.py ---------------------------------------------------- #
     ("ui/dashboard.py", "__init__"): 1,                      # plan restore (stops)
+    ("ui/dashboard.py", "_config_pit_loss_secs"): 1,         # pit_loss_secs (working-config core; UAT seed fix)
     ("ui/dashboard.py", "_build_ai_analysis_group"): 2,      # fuel labels init
     ("ui/dashboard.py", "_build_event_context"): 1,          # bridge input
     ("ui/dashboard.py", "_build_practice_ai_snapshot"): 2,   # bridge input
