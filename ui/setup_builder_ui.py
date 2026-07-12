@@ -96,6 +96,24 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
             "and left unchanged (see details below)."
             "</div>"
         )
+    if status == "partial_recommendation":
+        return (
+            "<div style='background:#1A1A00; border:1px solid #C8A020; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+            "&#9888; <b>Partial recommendation.</b> The valid changes below can be "
+            "applied, but your dominant problem is NOT yet addressed &mdash; it is "
+            "deferred pending more evidence or a targeted test (see the analysis)."
+            "</div>"
+        )
+    if status == "evidence_required":
+        return (
+            "<div style='background:#2A0A0A; border:2px solid #E05050; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#E08080;'>"
+            "&#9940; <b>More evidence required.</b> Your dominant problem can't be "
+            "safely acted on from the current data &mdash; run more clean laps or "
+            "confirm the track model. No changes are applied (see the analysis)."
+            "</div>"
+        )
     if status == "fallback_generated":
         return (
             "<div style='background:#1A2A1A; border:1px solid #4CAF50; "

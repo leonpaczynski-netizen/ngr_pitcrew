@@ -52,8 +52,18 @@ APPROVED_STATUSES: frozenset[str] = frozenset({
     # The survivors are safe to surface/apply; engineering_errors names what
     # was dropped and why.
     "approved_with_rejections",
+    # Phase 3: valid changes are surfaced, but the diagnosis's dominant *required*
+    # problem is NOT among them — the survivors are safe to apply, with the
+    # untreated dominant problem flagged (coherence gate).
+    "partial_recommendation",
     "fallback_generated",
 })
+
+# Phase 3 coherence gate — the dominant *required* problem is unaddressed AND its
+# evidence is insufficient to act on. NON-approved (kept out of APPROVED_STATUSES):
+# routes to the deferred/rejected bucket; the driver is told what evidence is
+# needed rather than being handed changes that ignore the dominant problem.
+EVIDENCE_REQUIRED_STATUS: str = "evidence_required"
 
 # ---------------------------------------------------------------------------
 # Group 42 — Rule-First Setup Brain constants

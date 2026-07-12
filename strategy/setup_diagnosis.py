@@ -285,9 +285,17 @@ def _derive_dominant_problem(
     aero_front_near_min: bool,
     aero_rear_near_min: bool,
     aero_rear_healthy: bool = False,
+    bottoming_evidence_insufficient: bool = False,
 ) -> tuple[str, list[str]]:
-    """Return (dominant_problem, secondary_problems) as plain-English strings."""
+    """Return (dominant_problem, secondary_problems) as plain-English strings.
+
+    ``bottoming_evidence_insufficient`` (Phase 3): when True, a telemetry-only
+    "required" bottoming (low confidence + unusable location) is DEMOTED — it is
+    appended last so it cannot outrank confirmed driver-feedback issues. If it is
+    the only issue it still surfaces (and the coherence gate defers it).
+    """
     issues: list[str] = []
+    _defer_bottoming = False
 
     # Front aero / platform limited
     if (
@@ -304,7 +312,12 @@ def _derive_dominant_problem(
     _wheelspin_severe_ish = wheelspin_band in ("major", "severe")
     _driver_mentions_bottoming = driver_feel_flags.get("bottoming", False)
     if bottoming_band == "required":
-        issues.append("bottoming")
+        if bottoming_evidence_insufficient:
+            # Thin-data required bottoming: defer to the end so confirmed feedback
+            # (understeer, rear-loose, lockups) dominates instead.
+            _defer_bottoming = True
+        else:
+            issues.append("bottoming")
     elif bottoming_band == "consider":
         if not _wheelspin_severe_ish or _driver_mentions_bottoming:
             issues.append("bottoming")
@@ -335,6 +348,10 @@ def _derive_dominant_problem(
         if "rear_traction_aero" not in issues and "wheelspin" not in issues:
             issues.append("wheelspin")
 
+    # Deferred thin-data bottoming lands last — never outranks confirmed feedback.
+    if _defer_bottoming:
+        issues.append("bottoming")
+
     if not issues:
         if bottoming_band == "minor":
             dominant = "minor bottoming — no primary structural issue"
@@ -360,6 +377,46 @@ def _derive_dominant_problem(
     dominant_str = _readable.get(dominant, dominant)
     secondary_strs = [_readable.get(s, s) for s in secondary]
     return dominant_str, secondary_strs
+
+
+_DOMINANT_KEYS: tuple[str, ...] = (
+    "front_aero_platform_limited", "bottoming", "rear_traction_aero",
+    "snap_oversteer_exit", "braking_instability", "wheelspin",
+)
+
+# Fields that materially "address" each dominant problem — used by the Phase 3
+# coherence gate to check that a plan actually treats its dominant problem.
+DOMINANT_ADDRESSING_FIELDS: dict[str, frozenset] = {
+    "bottoming":                   frozenset({"ride_height_front", "ride_height_rear",
+                                              "springs_front", "springs_rear"}),
+    "front_aero_platform_limited": frozenset({"aero_front", "arb_front"}),
+    "rear_traction_aero":          frozenset({"aero_rear", "lsd_accel", "lsd_initial"}),
+    "snap_oversteer_exit":         frozenset({"lsd_accel", "lsd_decel", "aero_rear"}),
+    "braking_instability":         frozenset({"brake_bias", "lsd_decel", "ride_height_front",
+                                              "ride_height_rear", "springs_front"}),
+    "wheelspin":                   frozenset({"lsd_accel", "aero_rear", "final_drive",
+                                              "gear_1", "gear_2", "gear_3", "gear_4",
+                                              "gear_5", "gear_6"}),
+}
+
+
+def _dominant_problem_key(dominant_readable: str) -> str:
+    """Recover the machine-readable dominant-problem key from its readable string.
+
+    The readable strings are stable prefixes (see ``_derive_dominant_problem``),
+    so a prefix match is reliable. Returns "" when no structural issue dominates.
+    """
+    s = (dominant_readable or "").strip().lower()
+    if not s or s.startswith("no dominant") or s.startswith("minor bottoming"):
+        return ""
+    for key in _DOMINANT_KEYS:
+        # readable forms start with the key's first word(s): "bottoming (…", "wheelspin (…",
+        # "rear traction / aero …", "front aero / platform limited …", "braking instability …",
+        # "snap oversteer on exit …".
+        head = key.split("_")[0]
+        if s.startswith(head):
+            return key
+    return ""
 
 
 def _bottoming_band_readable(band: str) -> str:
@@ -1192,6 +1249,10 @@ def _build_setup_diagnosis_conservative() -> dict:
         "bottoming_confidence":       {"band": "minor", "subtype": "insufficient_data", "confidence": "low"},
         "driver_feel_traction_status": "unknown",
         "aero_rear_healthy":          False,
+        # Phase 3 coherence gate inputs — conservative defaults
+        "dominant_problem_key":       "",
+        "dominant_required":          False,
+        "dominant_evidence_sufficient": True,
     }
 
 
@@ -1543,9 +1604,25 @@ def _build_setup_diagnosis_inner(
     # ------------------------------------------------------------------
     # Dominant problem and tuning priority
     # ------------------------------------------------------------------
+    # Phase 3: telemetry-only "required" bottoming with low confidence AND unusable
+    # location evidence is not actionable — demote it so confirmed driver feedback
+    # dominates, and flag it EVIDENCE-insufficient for the coherence gate.
+    _bconf = (bottoming_confidence or {}).get("confidence", "low")
+    _bottoming_evidence_insufficient = (
+        b_band == "required" and _bconf == "low" and not loc_evidence_usable
+    )
     dominant_problem, secondary_problems = _derive_dominant_problem(
         driver_feel_flags, b_band, w_band, aero_front_near_min, aero_rear_near_min,
         aero_rear_healthy=aero_rear_healthy,
+        bottoming_evidence_insufficient=_bottoming_evidence_insufficient,
+    )
+    # Machine-readable dominant key + severity/evidence flags so the recommendation
+    # funnel can guarantee the dominant *required* problem is either addressed or
+    # explicitly deferred (never silently approved untreated).
+    dominant_problem_key = _dominant_problem_key(dominant_problem)
+    dominant_required = (dominant_problem_key == "bottoming" and b_band == "required")
+    dominant_evidence_sufficient = not (
+        dominant_problem_key == "bottoming" and _bottoming_evidence_insufficient
     )
     recommended_tuning_priority = _derive_tuning_priority(
         driver_feel_flags, b_band, w_band, aero_front_near_min, aero_rear_near_min,
@@ -1579,6 +1656,10 @@ def _build_setup_diagnosis_inner(
         "top_speed_target_kmh":       top_speed_target_kmh,
         # Gearbox
         "gearbox_flag":               gearbox_flag,
+        # Phase 3 coherence gate inputs
+        "dominant_problem_key":       dominant_problem_key,
+        "dominant_required":          dominant_required,
+        "dominant_evidence_sufficient": dominant_evidence_sufficient,
         # Aero
         "aero_front_value":           aero_front_value,
         "aero_front_near_min":        aero_front_near_min,

@@ -49,6 +49,7 @@ from strategy._rec_parser import parse_recommendations_from_response
 from strategy._setup_constants import (
     ENG_SAFETY_PREFIXES, APPROVED_STATUSES, RULE_ENGINE_VERSION,
     HIGH_TYRE_WEAR_THRESHOLD, HIGH_FUEL_MULTIPLIER_THRESHOLD,
+    EVIDENCE_REQUIRED_STATUS,
 )
 from strategy.setup_ranges import resolve_ranges
 from strategy.setup_diagnosis import (
@@ -474,6 +475,7 @@ def _finalise_recommendation(
     fallback_used: bool,
     retried: bool,
     failing_changes: "list | None" = None,
+    diagnosis: "dict | None" = None,
 ) -> "SetupRecommendationResult":
     """Compute the final lifecycle status and approved changes for a recommendation.
 
@@ -627,7 +629,49 @@ def _finalise_recommendation(
             if k not in _DISPLAY_ONLY_FIELDS
         }
 
-        if fallback_used and not approved_changes:
+        # ── Phase 3: dominant-problem coherence gate ──────────────────────────
+        # A plan whose dominant REQUIRED problem is neither addressed by an
+        # approved change nor explicitly deferred must NOT be reported as
+        # approved. Surface valid non-dominant changes as partial_recommendation;
+        # defer with evidence_required when nothing safe applies.
+        _coherence_override = None
+        _coherence_note = ""
+        _dg = diagnosis or {}
+        _dom_key = str(_dg.get("dominant_problem_key", "") or "")
+        if _dg.get("dominant_required") and _dom_key:
+            try:
+                from strategy.setup_diagnosis import DOMINANT_ADDRESSING_FIELDS
+                _addr_fields = DOMINANT_ADDRESSING_FIELDS.get(_dom_key, frozenset())
+            except Exception:
+                _addr_fields = frozenset()
+            _addressed = any(ch.get("field") in _addr_fields for ch in approved_changes)
+            if not _addressed:
+                _dom_readable = str(_dg.get("dominant_problem", _dom_key) or _dom_key)
+                _evidence_ok = bool(_dg.get("dominant_evidence_sufficient", True))
+                if not _evidence_ok:
+                    _coherence_note = (
+                        f" Action on the dominant problem ({_dom_readable}) is DEFERRED — "
+                        "event-rate and location evidence are insufficient; run more clean "
+                        "laps or confirm the track model before changing it."
+                    )
+                else:
+                    _coherence_note = (
+                        f" The dominant problem ({_dom_readable}) has no safe rule-based "
+                        "change yet — run a targeted test to confirm it."
+                    )
+                _coherence_override = (
+                    "partial_recommendation" if approved_changes else EVIDENCE_REQUIRED_STATUS
+                )
+
+        if _coherence_override == EVIDENCE_REQUIRED_STATUS:
+            status = EVIDENCE_REQUIRED_STATUS
+            approved_changes = []
+            approved_fields = {}
+            analysis = (analysis or "").rstrip() + _coherence_note
+        elif _coherence_override == "partial_recommendation":
+            status = "partial_recommendation"
+            analysis = (analysis or "").rstrip() + _coherence_note
+        elif fallback_used and not approved_changes:
             status = "blocked_no_safe_recommendation"
             analysis = (
                 analysis or
@@ -1654,6 +1698,7 @@ class DrivingAdvisor:
                     _final = _finalise_recommendation(
                         _data, _structured_failures, _fb_used, _retried,
                         failing_changes=_failing_ai_changes,
+                        diagnosis=diagnosis,
                     )
                     # Attach lifecycle status to raw dict for callers that read the JSON
                     _data["recommendation_status"] = _final.status
@@ -2134,6 +2179,7 @@ class DrivingAdvisor:
                 _final = _finalise_recommendation(
                     _data, _structured_failures, _fb_used, retried=False,
                     failing_changes=_failing_ai_changes,
+                    diagnosis=diagnosis,
                 )
 
                 # Step 8: optional audit-based status upgrade

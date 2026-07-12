@@ -1798,11 +1798,13 @@ class TestAdditionalEdgeCases:
     def test_approved_statuses_frozenset(self):
         from strategy._setup_constants import APPROVED_STATUSES
         assert isinstance(APPROVED_STATUSES, frozenset)
-        # approved_with_rejections added when per-field rejection landed: valid
-        # changes survive while a specific contradicted field is dropped.
+        # approved_with_rejections: per-field rejection survivors.
+        # partial_recommendation: Phase 3 coherence gate — survivors applyable while
+        # the dominant required problem is flagged as untreated/deferred.
         expected = {
             "approved", "approved_with_warnings",
-            "approved_with_rejections", "fallback_generated",
+            "approved_with_rejections", "partial_recommendation",
+            "fallback_generated",
         }
         assert APPROVED_STATUSES == expected, (
             f"APPROVED_STATUSES must be exactly {expected}; got {APPROVED_STATUSES}"
