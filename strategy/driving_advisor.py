@@ -2301,6 +2301,24 @@ class DrivingAdvisor:
                 _data["feedback_dispositions"] = build_feedback_dispositions(
                     diagnosis, {c.get("field") for c in _final.approved_changes}
                 )
+                # Phase 10: cross-symptom arbitration over the FINAL proposed set —
+                # flag when several changes push the front/rear balance the same way
+                # (overshoot risk) or offset each other. Advisory only.
+                try:
+                    from strategy.setup_arbitration import analyse_change_interactions
+                    _arb = analyse_change_interactions(_final.approved_changes)
+                    _data["arbitration"] = {
+                        "compounding": _arb.compounding,
+                        "offsetting": _arb.offsetting,
+                        "net_direction": _arb.net_direction,
+                        "contributors": list(_arb.contributors),
+                        "notes": list(_arb.notes),
+                    }
+                    if _arb.compounding and _arb.as_note():
+                        _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                             + " " + _arb.as_note()).strip()
+                except Exception:
+                    _data["arbitration"] = {}
                 # Phase 9: current/historical/recommended comparison (advisory).
                 _data["historical_comparison"] = [
                     {"field": r.field, "current": r.current, "historical": r.historical,

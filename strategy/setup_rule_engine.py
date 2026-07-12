@@ -82,6 +82,33 @@ def _downgrade_confidence(c: ConfidenceLevel) -> ConfidenceLevel:
 
 
 # ---------------------------------------------------------------------------
+# Arbitration (Phase 10): when two rules contend for the same field, the winner
+# records what it beat so "Considered alternatives" is real, not "none".
+# ---------------------------------------------------------------------------
+
+def _arbitration_note(loser: "SetupChangeIntent", reason: str) -> str:
+    """One-line record of a rule that lost a same-field contest, for the winner's
+    rejected_alternatives. Names the beaten rule, its symptom and direction."""
+    try:
+        direction = "raise" if float(loser.delta) > 0 else "lower"
+    except (TypeError, ValueError):
+        direction = "change"
+    sym = (loser.symptom or "").strip()
+    sym_txt = f" for {sym}" if sym else ""
+    rid = loser.rule_id or "rule"
+    return f"{rid}: {direction} {loser.field}{sym_txt} — not taken ({reason})"
+
+
+def _record_alternative(winner: "SetupChangeIntent", loser: "SetupChangeIntent",
+                        reason: str) -> "SetupChangeIntent":
+    """Return the winner with the beaten candidate appended to rejected_alternatives."""
+    note = _arbitration_note(loser, reason)
+    return winner._replace(
+        rejected_alternatives=list(winner.rejected_alternatives) + [note]
+    )
+
+
+# ---------------------------------------------------------------------------
 # NamedTuples
 # ---------------------------------------------------------------------------
 
@@ -1027,12 +1054,15 @@ def _process_rule(
                     rationale=f"conflict:{rule.rule_id} — lower confidence",
                 )
                 rejected.append(rej_existing)
-                proposed_by_field[rule.field] = intent
+                proposed_by_field[rule.field] = _record_alternative(
+                    intent, existing, "same direction, lower confidence")
             else:
                 # Existing wins — reject new with conflict reason
                 rejected.append(intent._replace(
                     rationale=f"conflict:{existing.rule_id} — lower confidence",
                 ))
+                proposed_by_field[rule.field] = _record_alternative(
+                    existing, intent, "same direction, lower confidence")
         else:
             # Opposite directions — conflict; keep higher (confidence, bonus) tuple
             if _new_tuple >= _existing_tuple:
@@ -1040,11 +1070,14 @@ def _process_rule(
                     rationale=f"conflict:{rule.rule_id} — opposite direction, lower or equal confidence",
                 )
                 rejected.append(rej_existing)
-                proposed_by_field[rule.field] = intent
+                proposed_by_field[rule.field] = _record_alternative(
+                    intent, existing, "opposite direction, lower or equal confidence")
             else:
                 rejected.append(intent._replace(
                     rationale=f"conflict:{existing.rule_id} — opposite direction, lower confidence",
                 ))
+                proposed_by_field[rule.field] = _record_alternative(
+                    existing, intent, "opposite direction, lower confidence")
     else:
         proposed_by_field[rule.field] = intent
 
@@ -1294,11 +1327,14 @@ def _emit_per_gear_changes(
                 rejected.append(existing._replace(
                     rationale=f"conflict:PG_{gear_n} — lower confidence",
                 ))
-                proposed_by_field[gear_key] = _pg_intent
+                proposed_by_field[gear_key] = _record_alternative(
+                    _pg_intent, existing, "lower confidence")
             else:
                 rejected.append(_pg_intent._replace(
                     rationale=f"conflict:{existing.rule_id} — lower confidence",
                 ))
+                proposed_by_field[gear_key] = _record_alternative(
+                    existing, _pg_intent, "lower confidence")
         else:
             proposed_by_field[gear_key] = _pg_intent
 
