@@ -128,12 +128,53 @@ def _normalise_camber_bounds(lo: float, hi: float) -> tuple[float, float]:
     return (lo, hi)
 
 
+def _normalise_car_key(name: str) -> str:
+    """Normalise a car name for tolerant range lookup.
+
+    Strips parenthetical chassis codes and collapses whitespace/case so
+    "Porsche 911 RSR '17" matches the ranges-JSON key
+    "Porsche 911 RSR (991) '17" (Phase 2: a name mismatch previously fell back to
+    the generic (0,1000) placeholder range and mis-scaled aero/spring position).
+    """
+    if not name:
+        return ""
+    import re as _re
+    n = _re.sub(r"\([^)]*\)", " ", name)          # drop "(991)" etc.
+    n = _re.sub(r"\s+", " ", n).strip().lower()
+    return n
+
+
+def _match_car_overrides(all_ranges: dict, car_name: str):
+    """Return the per-car overrides dict for car_name via exact then normalised
+    match, or None when the car is not in the ranges store."""
+    car_overrides = all_ranges.get(car_name)
+    if isinstance(car_overrides, dict):
+        return car_overrides
+    target = _normalise_car_key(car_name)
+    if not target:
+        return None
+    for key, val in all_ranges.items():
+        if isinstance(val, dict) and _normalise_car_key(key) == target:
+            return val
+    return None
+
+
+def car_has_range_overrides(car_name: str) -> bool:
+    """True when the car resolves to real per-car ranges (not the generic
+    placeholder). Consumers use this to avoid classifying range-position (e.g.
+    aero near-min) from the untrustworthy generic (0,1000) fallback."""
+    car_name = car_name.strip() if car_name else ""
+    if not car_name:
+        return False
+    return _match_car_overrides(_load_ranges_json(), car_name) is not None
+
+
 def resolve_ranges(car_name: str) -> dict[str, tuple]:
     """Return a COPY of GENERIC_DEFAULTS with per-car overrides applied.
 
-    car_name is stripped of whitespace before lookup.
-    Empty or unknown car returns pure defaults.
-    Never mutates GENERIC_DEFAULTS.
+    car_name is stripped of whitespace before lookup, then matched exactly or by
+    normalised name (parenthetical chassis code / case / whitespace tolerant).
+    Empty or unknown car returns pure defaults. Never mutates GENERIC_DEFAULTS.
 
     Camber normalisation: any per-car camber_front / camber_rear override
     whose bounds contain a negative value is converted to its absolute form
@@ -146,7 +187,7 @@ def resolve_ranges(car_name: str) -> dict[str, tuple]:
         return result
 
     all_ranges = _load_ranges_json()
-    car_overrides = all_ranges.get(car_name)
+    car_overrides = _match_car_overrides(all_ranges, car_name)
     if not isinstance(car_overrides, dict):
         return result
 

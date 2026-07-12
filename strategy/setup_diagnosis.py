@@ -256,11 +256,20 @@ def _wheelspin_band(avg: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _aero_near_min(value: float | None, lo: float, hi: float) -> bool:
-    """Return True when value <= lo + 10% of the (hi - lo) span."""
+    """Return True when value <= lo + 10% of the (hi - lo) span.
+
+    Hard integrity invariant (Phase 2): a value at or above the range maximum can
+    NEVER be near-min. This blocks the class of defect where a stale/zeroed aero
+    value or a wrong (placeholder) range made a car running MAX front aero read as
+    ``near_min`` and cascaded into a nonsensical "increase front downforce"
+    diagnosis. See tests/test_setup_snapshot_integrity.py.
+    """
     if value is None:
         return False
     span = hi - lo
     if span <= 0:
+        return False
+    if value >= hi:
         return False
     return value <= lo + 0.10 * span
 
@@ -1378,7 +1387,11 @@ def _build_setup_diagnosis_inner(
     except (TypeError, ValueError):
         aero_rear_value = 0.0
 
-    # Near-min check using per-car ranges
+    # Near-min check using per-car ranges. Phase 2 integrity: the range is now
+    # resolved by tolerant (normalised) car-name matching in resolve_ranges, so a
+    # name variant no longer falls back to the generic (0,1000) placeholder that
+    # mis-scaled position. The hard invariant that a value at/above the range MAX
+    # can never be near-min lives in _aero_near_min itself.
     _af_lo, _af_hi = ranges.get("aero_front", (0, 1000))
     _ar_lo, _ar_hi = ranges.get("aero_rear", (0, 1000))
     aero_front_near_min = _aero_near_min(aero_front_value, float(_af_lo), float(_af_hi))
