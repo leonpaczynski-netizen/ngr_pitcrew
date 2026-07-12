@@ -426,8 +426,9 @@ class TestAC26ClampBoundarySessionChanged:
         )
 
     def test_qualifying_bias_fields_correct(self):
-        """Qualifying (one-lap pace): sharper/more-rotation/lower-platform bias."""
+        """Qualifying (one-lap pace): sharper/more-rotation/lower-platform + aggressive camber/toe."""
         expected = {"brake_bias", "lsd_decel", "lsd_accel", "aero_front",
+                    "camber_front", "camber_rear", "toe_front",
                     "ride_height_front", "ride_height_rear"}
         actual = set(_SESSION_BIAS_TABLE["qualifying"].keys())
         assert actual == expected, (

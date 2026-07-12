@@ -410,8 +410,12 @@ def _make_change_dict(
 #
 # "practice" / "unknown" → no session-specific deltas (safe default)
 _SESSION_BIAS_TABLE: dict[str, dict[str, float]] = {
+    # Qualifying (one-lap outright pace) — camber/toe are genuinely aggressive, not
+    # race trim (UAT): more negative camber for peak cornering grip (tyre-life cost
+    # is irrelevant over one lap) and more front toe-out for sharper turn-in.
     "qualifying":  {"brake_bias": -1.0, "lsd_decel": -2.0, "lsd_accel": -1.0,
                     "aero_front": +25.0,
+                    "camber_front": +0.5, "camber_rear": +0.3, "toe_front": -0.05,
                     "ride_height_front": -3.0, "ride_height_rear": -3.0},
     "sprint":      {"lsd_accel": +2.0, "aero_rear": +25.0},
     "endurance":   {"lsd_accel": +2.0, "lsd_decel": +1.0, "aero_rear": +25.0,
