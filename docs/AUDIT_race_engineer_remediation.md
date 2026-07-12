@@ -37,12 +37,15 @@ plan was still `approved_with_warnings`.
   compares `dominant_problem` against the fields in `approved_changes`. So an untreated
   dominant-required plan returns `approved_with_warnings` ∈ APPROVED_STATUSES → shown as applyable.
 
-**Fix (Phase 3):** (a) upstream — demote "required→consider" (or don't make it *dominant*) when
-`bottoming_confidence.confidence == low` AND `location_evidence_usable is False`; (b) backstop —
-a coherence gate in `_finalise_recommendation` (thread the `diagnosis` dict through the 3 call
-sites `:1654/:2134/:2362`) that, when the dominant *required* problem is unaddressed, returns
-`EVIDENCE_REQUIRED` (new, NON-approved) or `PARTIAL_RECOMMENDATION` (new, surfaced-but-flagged).
-Add both statuses in `_setup_constants.py:47-56`; only `PARTIAL_RECOMMENDATION` joins APPROVED_STATUSES.
+**✅ FIXED (Phase 3):** (a) upstream — thin-data "required" bottoming (low confidence + unusable
+location) is DEMOTED below confirmed feedback in `_derive_dominant_problem`, so it no longer
+outranks real symptoms (verified: rear-lockup dominates, bottoming becomes secondary); (b) backstop
+— a coherence gate in `_finalise_recommendation` (diagnosis threaded through both telemetry call
+sites) returns `partial_recommendation` (surface valid non-dominant changes, flag the gap) or
+`evidence_required` (defer, nothing safe to apply) when the dominant *required* problem is
+unaddressed. New statuses in `_setup_constants.py`; `partial_recommendation` ∈ APPROVED_STATUSES,
+`evidence_required` not. AI audit cannot override either. UI banners added.
+`tests/test_phase3_coherence_gate.py`.
 
 ### DEFECT — Base tune pins front aero to MAX (race and quali identical, drag/fuel penalty)
 `build_baseline_setup` seeds `aero_front = 400` (mid of RSR range 350–450), but the driver-profile
@@ -111,16 +114,20 @@ editor is a follow-up if desired.)
 ---
 
 ## B. Phased implementation roadmap
-1. **Phase 2** — setup-snapshot integrity (aero-position facts; max-aero can never read near-min; stale/mismatched snapshot blocks with `SETUP_SNAPSHOT_MISMATCH`).
-2. **Phase 3** — dominant-problem coherence gate (+ EVIDENCE_REQUIRED / PARTIAL_RECOMMENDATION) + bottoming-from-thin-data demotion.
-3. **Phase 4** — every feedback item gets an explicit disposition.
-4. **Clean bugs** — track re-approval persistence; Strategy Builder pit-loss wiring.
-5. **Phase 11/12** — wheelspin-subtype gating of LSD; rear lock-up disposition.
-6. **Phase 5** — track-specific base tune builder (track-model-shaped, evidence-honest).
-7. **Phase 7** — qualifying-tune engine (distinct one-lap discipline).
-8. **Phase 9** — historical successful-setup intelligence (Watkins prior).
-9. **Phase 8** — race-time aero/fuel reasoning.
-10. **Phase 10/13/14** — cross-symptom arbitration, controlled test sequencing, candidate comparison.
-11. **Phase 15** — additive UI/explanation quality.
+
+**Foundation shipped (branch, unpushed) — the safety-critical spine:**
+1. ✅ **Phase 2** — setup-snapshot / aero-position integrity (max-aero can never read near-min; tolerant car-name range matching). `tests/test_setup_snapshot_integrity.py`.
+2. ✅ **Phase 3** — dominant-problem coherence gate (`partial_recommendation` / `evidence_required`) + thin-data bottoming demotion. `tests/test_phase3_coherence_gate.py`.
+3. ✅ **Phase 4** — every reported feedback item gets an explicit disposition (`build_feedback_dispositions`, response `feedback_dispositions`).
+4. ✅ **Clean bugs** — track re-approval persistence; Strategy Builder pit-loss seeding. `tests/test_uat_track_reapproval_pitloss.py`.
+5. ✅ **Phase 11/12** — wheelspin-subtype gating of LSD (B6/C5 block gear-too-short + rear-loose + snap); rear-lock + LSD-deferral dispositions. `tests/test_phase11_12_wheelspin_braking.py`.
+
+**Remaining — the large tune-architecture (each its own focused pass, behind existing gates):**
+6. **Phase 5** — track-specific base tune builder (track-model-shaped; also fixes the base-max-aero pin + generic base camber). LARGE.
+7. **Phase 7** — qualifying-tune engine (distinct one-lap discipline; also fixes quali camber/toe). LARGE.
+8. **Phase 9** — historical successful-setup intelligence (Watkins prior: LSD 22/8/33, aero 400/600, ARB 7/7, camber 2.5/2.1). LARGE.
+9. **Phase 8** — race-time aero/fuel reasoning (context-aware fuel note; comparison-run request; refuel-time arithmetic).
+10. **Phase 10/13/14** — cross-symptom arbitration; controlled test sequencing; candidate comparison.
+11. **Phase 15** — additive UI/explanation quality (surface dispositions, feedback matrix, evidence gaps).
 
 Each phase ships behind the existing safety/Apply gates with its own tests; nothing auto-applies.
