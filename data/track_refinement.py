@@ -261,6 +261,39 @@ def _publish_staged_review(track_location_id: str, layout_id: str,
         return False
 
 
+def detect_candidate_pit_lane(session: CalibrationSession, station_map) -> Optional[dict]:
+    """Phase 2D: detect the pit-lane corridor from event PIT laps against the
+    candidate station map. Returns a small dict (entry/exit station + progress +
+    pit-lap count) for visibility, or None when no pit laps / no detection.
+
+    Detection only — this does NOT write to the strategy pit-lane store (that
+    write needs live validation of the Group-55 segment schema/confidence and is
+    deferred). It surfaces to the user in the refinement Review panel.
+    """
+    try:
+        pit_laps = [lap for lap in getattr(session, "laps", []) if getattr(lap, "is_pit_lap", False)]
+        if not pit_laps or station_map is None:
+            return None
+        from data.track_station_map import detect_pit_lane_from_pit_laps
+        boundary = detect_pit_lane_from_pit_laps(pit_laps, station_map)
+        if boundary is None:
+            return None
+        lap_len = float(getattr(station_map, "lap_length_m", 0.0) or 0.0)
+        entry_m = float(boundary.entry_station_m)
+        exit_m = float(boundary.exit_station_m)
+        out = {
+            "entry_station_m": round(entry_m, 1),
+            "exit_station_m": round(exit_m, 1),
+            "source_pit_laps": len(pit_laps),
+        }
+        if lap_len > 0:
+            out["entry_progress"] = round(max(0.0, min(1.0, entry_m / lap_len)), 4)
+            out["exit_progress"] = round(max(0.0, min(1.0, exit_m / lap_len)), 4)
+        return out
+    except Exception:
+        return None
+
+
 def _remove_staged_review(track_location_id: str, layout_id: str, models_dir: Optional[Path]) -> None:
     pending = _staged_review_path(track_location_id, layout_id,
                                   Path(models_dir) if models_dir else STATION_MODELS_DIR)
@@ -635,6 +668,9 @@ def refine_from_session(
     verdict = compare_models(accepted_align, candidate_align, geometry_shift_m=geometry_shift_m)
     usable = int(getattr(build_result, "usable_lap_count", 0))
 
+    # Phase 2D: detect a pit-lane corridor from event pit laps (visibility only).
+    pit_lane_detected = detect_candidate_pit_lane(session, candidate_station_map)
+
     extras = {
         "base_accepted_at":   accepted_align.accepted_at,
         "contributing_laps":  usable,
@@ -646,6 +682,7 @@ def refine_from_session(
         "geometry_shift_m":   geometry_shift_m,
         "event_weight":       (event_weight if accepted_points else 1.0),
         "anchored":           bool(accepted_points),
+        "pit_lane_detected":  pit_lane_detected,
         "delta_vs_accepted": {
             "corner_match_delta": candidate_align.model_corners_found - accepted_align.model_corners_found,
             "lap_length_delta_pct_change": candidate_align.lap_length_delta_pct - accepted_align.lap_length_delta_pct,
@@ -675,6 +712,7 @@ def refine_from_session(
         "cars": cars,
         "improvement_reasons": verdict.improvement_reasons,
         "regression_reasons": verdict.regression_reasons,
+        "pit_lane_detected": pit_lane_detected,
     }, models_dir=mdir)
 
     return RefinementResult(

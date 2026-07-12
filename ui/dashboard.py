@@ -2504,11 +2504,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     self._raw_rd_capture.add_packet(packet, lap_number=_ln)
                 except Exception:
                     pass
-            # UAT #6 Phase 1b: feed the live path capture when active (inert otherwise).
+            # UAT #6 Phase 1b/2D: feed the live path capture when active (inert
+            # otherwise); flag pit laps so the pit-lane corridor can be refined.
             if self._track_path_capture is not None:
                 try:
                     _tln = self._tracker.laps_recorded if self._tracker is not None else 0
-                    self._track_path_capture.add_packet(packet, lap_number=_tln)
+                    _inpit = bool(getattr(self._tracker, "in_pit", False)) if self._tracker is not None else False
+                    self._track_path_capture.add_packet(packet, lap_number=_tln, in_pit=_inpit)
                 except Exception:
                     pass
             self._update_live(packet)

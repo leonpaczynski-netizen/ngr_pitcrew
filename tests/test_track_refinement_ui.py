@@ -109,7 +109,7 @@ def test_poll_ui_queue_feeds_active_capture(window):
     calls = {"n": 0}
 
     class _StubCapture:
-        def add_packet(self, packet, lap_number):
+        def add_packet(self, packet, lap_number, in_pit=False):
             calls["n"] += 1
             return True
 
@@ -236,6 +236,22 @@ def test_refine_banner_shows_and_click_clears(window):
     window._on_refine_banner_clicked()
     assert window._refine_notice == ""
     assert window._live_refine_banner.isHidden()
+
+
+def test_panel_shows_single_car_warning_and_pit_lane(window):
+    export_accepted_model_json(_mk_align(model_corners_found=15), LOC, LAY,
+                               output_dir=window._tmp_models)
+    cand = _mk_align(model_corners_found=16, accepted=False)
+    tr.export_candidate_model_json(cand, LOC, LAY, {
+        "base_accepted_at": "2026-07-12T09:00:00+00:00", "contributing_laps": 4,
+        "improves": True, "improvement_reasons": ["more corners found (16 > 15)"],
+        "contributing_cars": ["Porsche RSR"],
+        "pit_lane_detected": {"entry_progress": 0.10, "exit_progress": 0.15, "source_pit_laps": 2},
+    }, output_dir=window._tmp_models)
+    window._tm_refresh_refinement_panel()
+    txt = window._tm_refine_result_lbl.text()
+    assert "may be line-biased" in txt      # 2E single-car audit
+    assert "pit lane detected" in txt        # 2D pit-lane visibility
 
 
 def test_refine_banner_hidden_without_notice(window):

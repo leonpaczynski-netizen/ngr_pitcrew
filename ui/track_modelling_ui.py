@@ -2399,6 +2399,8 @@ class TrackModellingMixin:
         cand_improves = False
         cand_laps = 0
         cand_reasons: list = []
+        cand_cars: list = []
+        cand_pit: dict = {}
         if cand_path is not None:
             try:
                 import json
@@ -2407,6 +2409,8 @@ class TrackModellingMixin:
                 cand_laps = int(data.get("contributing_laps", 0))
                 cand_reasons = (data.get("improvement_reasons", []) if cand_improves
                                 else (data.get("regression_reasons", []) or []))
+                cand_cars = list(data.get("contributing_cars", []) or [])
+                cand_pit = dict(data.get("pit_lane_detected", {}) or {})
             except Exception:
                 cand_reasons = []
 
@@ -2428,16 +2432,33 @@ class TrackModellingMixin:
                 "No accepted model for this layout yet — build and accept one before refining.")
             self._tm_refine_result_lbl.setText("")
             return
+        # Phase 2E per-car line audit + 2D pit-lane detection — extra detail lines.
+        _detail: list = []
+        if cand_cars:
+            if len(cand_cars) == 1:
+                _detail.append(f"⚠ built from 1 car ({cand_cars[0]}) — may be line-biased")
+            else:
+                _detail.append(f"cars: {', '.join(cand_cars)}")
+        if cand_pit:
+            _ep = cand_pit.get("entry_progress")
+            _xp = cand_pit.get("exit_progress")
+            _n = cand_pit.get("source_pit_laps", 0)
+            if _ep is not None and _xp is not None:
+                _detail.append(f"pit lane detected from {_n} pit lap(s): entry {_ep*100:.0f}% / exit {_xp*100:.0f}%")
+            else:
+                _detail.append(f"pit lane detected from {_n} pit lap(s)")
+
         if cand_path is not None:
             if cand_improves:
                 self._tm_refine_status_lbl.setText(
                     f"Refined model available from {cand_laps} lap(s) — review and Accept or Discard.")
-                self._tm_refine_result_lbl.setText("Improvements: " + "; ".join(cand_reasons))
+                _lines = ["Improvements: " + "; ".join(cand_reasons)] + _detail
+                self._tm_refine_result_lbl.setText("  |  ".join(_lines))
             else:
                 self._tm_refine_status_lbl.setText(
                     f"Candidate from {cand_laps} lap(s) does not improve the model (Discard to clear).")
-                self._tm_refine_result_lbl.setText(
-                    "Reason: " + ("; ".join(cand_reasons) if cand_reasons else "no measurable improvement"))
+                _reason = "Reason: " + ("; ".join(cand_reasons) if cand_reasons else "no measurable improvement")
+                self._tm_refine_result_lbl.setText("  |  ".join([_reason] + _detail))
         else:
             self._tm_refine_status_lbl.setText(
                 "Ready. Start capture, drive your event laps, then Stop to refine.")

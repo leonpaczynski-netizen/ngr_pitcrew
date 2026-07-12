@@ -95,6 +95,18 @@ def test_invalid_lap_number_rejected():
     assert cap.rejected_sample_count == 1
 
 
+def test_pit_lap_flagged_from_in_pit_samples():
+    cap = _cap()
+    for i in range(5):
+        cap.add_packet(FakePacket(i, 0.5, i, lap=1), 1, in_pit=(i >= 2))  # lap 1 hits pit
+    for i in range(4):
+        cap.add_packet(FakePacket(i, 0.5, i, lap=2), 2)                    # lap 2 clean
+    session = cap.build_session()
+    flags = {l.lap_number: l.is_pit_lap for l in session.laps}
+    assert flags[1] is True
+    assert flags[2] is False
+
+
 def test_build_session_is_repeatable_and_appends():
     cap = _cap()
     for i in range(4):

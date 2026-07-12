@@ -28,6 +28,7 @@ from data.track_calibration import (
     CalibrationLapQuality,
     TelemetrySample,
 )
+from data.track_calibration_runtime import packet_to_calibration_sample
 
 
 def _finite(v) -> Optional[float]:
@@ -65,6 +66,7 @@ class LiveTrackPathCapture:
         self._laps: List[CalibrationLap] = []
         self._current_lap_number: Optional[int] = None
         self._current_samples: List[TelemetrySample] = []
+        self._current_lap_in_pit: bool = False   # any in-pit sample this lap → pit lap
 
         # Honest counters (surfaced in the refinement ledger / UI).
         self.accepted_sample_count: int = 0   # samples with valid finite XYZ
@@ -79,14 +81,18 @@ class LiveTrackPathCapture:
         )
 
     # ------------------------------------------------------------------ ingest
-    def add_packet(self, packet, lap_number: int) -> bool:
-        """Add one live packet to the capture under ``lap_number``.
+    def add_packet(self, packet, lap_number: int, in_pit: bool = False) -> bool:
+        """Add one live GT7 packet to the capture under ``lap_number``.
 
-        ``packet`` is duck-typed (``pos_x/pos_y/pos_z``, ``speed_kmh`` … — the
-        same fields ``TelemetrySample.from_frame`` reads). Returns True when the
-        sample was kept, False when it was rejected (non-finite or zero XYZ).
+        Uses the canonical ``packet_to_calibration_sample`` converter, which maps
+        the real GT7 packet fields AND rejects paused / loading / off-track
+        frames (so off-track excursions don't poison the averaged path). Returns
+        True when the sample was kept, False when it was rejected (off-track,
+        non-finite, or zero XYZ).
 
-        A change in ``lap_number`` finalises the previous lap.
+        ``in_pit`` (from the live tracker) flags the current lap as a pit lap so
+        the pit-lane corridor can be refined from it (Phase 2D). A change in
+        ``lap_number`` finalises the previous lap.
         """
         try:
             ln = int(lap_number)
@@ -94,24 +100,16 @@ class LiveTrackPathCapture:
             self.rejected_sample_count += 1
             return False
 
-        # Reject samples without a usable world position — zero/None/NaN XYZ carry
+        sample = packet_to_calibration_sample(packet, ln)
+        # None → off-track / paused / loading / malformed; zero/None/NaN XYZ carry
         # no geometry and would poison the averaged path.
-        px = _finite(getattr(packet, "pos_x", None))
-        py = _finite(getattr(packet, "pos_y", None))
-        pz = _finite(getattr(packet, "pos_z", None))
-        if px is None or py is None or pz is None or (px == 0.0 and py == 0.0 and pz == 0.0):
+        if sample is None or not sample.has_valid_xyz():
             self.rejected_sample_count += 1
             return False
-
-        try:
-            sample = TelemetrySample.from_frame(packet, ln)
-        except Exception:
-            self.rejected_sample_count += 1
-            return False
-        # from_frame falls back to 0.0 for missing coords; guard again defensively.
-        if not sample.has_valid_xyz():
-            self.rejected_sample_count += 1
-            return False
+        for _c in (sample.x, sample.y, sample.z):
+            if _finite(_c) is None:
+                self.rejected_sample_count += 1
+                return False
 
         if self._current_lap_number is None:
             self._current_lap_number = ln
@@ -120,6 +118,8 @@ class LiveTrackPathCapture:
             self._current_lap_number = ln
 
         self._current_samples.append(sample)
+        if in_pit:
+            self._current_lap_in_pit = True
         self.accepted_sample_count += 1
         return True
 
@@ -140,9 +140,11 @@ class LiveTrackPathCapture:
                 samples=list(samples),
                 # Quality is (re)assessed by build_reference_path/assess_session_laps.
                 quality=CalibrationLapQuality.REJECTED,
+                is_pit_lap=self._current_lap_in_pit,
             )
         )
         self._current_samples = []
+        self._current_lap_in_pit = False
 
     # ------------------------------------------------------------------ output
     def lap_count(self) -> int:

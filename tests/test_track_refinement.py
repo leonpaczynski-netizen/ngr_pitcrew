@@ -145,6 +145,24 @@ def test_promote_refused_on_large_stored_shift(tmp_path):
     assert find_candidate_model_path(LOC, LAY, base_dir=tmp_path) is not None
 
 
+# ------------------------------------------------ Phase 2D pit-lane detection
+
+def test_detect_pit_lane_none_without_pit_laps():
+    from data.track_refinement import detect_candidate_pit_lane
+    from data.track_calibration import CalibrationSession, CalibrationLap
+    s = CalibrationSession(session_id="s", track_location_id=LOC, layout_id=LAY,
+                           laps=[CalibrationLap(lap_number=1, lap_time_ms=1000)])  # not a pit lap
+    assert detect_candidate_pit_lane(s, object()) is None
+
+
+def test_detect_pit_lane_none_without_station_map():
+    from data.track_refinement import detect_candidate_pit_lane
+    from data.track_calibration import CalibrationSession, CalibrationLap
+    s = CalibrationSession(session_id="s", track_location_id=LOC, layout_id=LAY,
+                           laps=[CalibrationLap(lap_number=1, lap_time_ms=1000, is_pit_lap=True)])
+    assert detect_candidate_pit_lane(s, None) is None
+
+
 # ------------------------------------------------ Phase 2C reviewed-segments
 
 def _stage_a_review(models_dir, n_segments, loc=LOC, lay=LAY):
