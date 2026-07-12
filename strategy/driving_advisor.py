@@ -443,6 +443,31 @@ def _derive_locked_fields(allowed_tuning: "list[str] | None") -> "set[str]":
 # _finalise_recommendation — SINGLE funnel for all AI paths
 # ---------------------------------------------------------------------------
 
+def _indicted_fields(message: str) -> "set[str]":
+    """Return the canonical setup field(s) a validation-failure message names.
+
+    Safety-rule failure messages always name the offending field explicitly
+    (e.g. "lsd_blocked_driver_feel: AI increases lsd_accel (from 14.0 to 16.0)
+    but ..."). Extracting those tokens lets the funnel reject ONLY the
+    contradicted field instead of nuking the whole recommendation — so a bad
+    LSD proposal no longer discards a valid, aligned final_drive or arb_front
+    change in the same response.
+
+    Matching is whole-token (``\\b`` boundaries) against the actionable canonical
+    params; display-only fields are excluded (they are never applied anyway).
+    Returns an empty set when no field can be localised — the caller treats that
+    conservatively (full zero) so an un-attributable safety failure is never a
+    silent partial-approve.
+    """
+    found: "set[str]" = set()
+    for _param in _CANONICAL_SETUP_PARAMS:
+        if _param in _DISPLAY_ONLY_FIELDS:
+            continue
+        if _re.search(r"\b" + _re.escape(_param) + r"\b", message):
+            found.add(_param)
+    return found
+
+
 def _finalise_recommendation(
     raw_data: dict,
     structured_failures: list,
@@ -503,19 +528,37 @@ def _finalise_recommendation(
     raw_json = _json.dumps(raw_data, ensure_ascii=False)
 
     # Classify blocking failures into safety-rule vs structural/schema categories.
-    # BOTH categories force validation_failed + zeroed changes — the distinction only
-    # affects message routing (engineering_errors vs validation_warnings for banner text).
-    # EXCEPTION: out-of-range is now a WARNING (not blocking) because the clamping
-    # mechanism in _normalise_changes guarantees the applied value is always in range.
+    #   - safety-rule failures (ENG_SAFETY_PREFIXES) name a specific field and are
+    #     rejected PER-FIELD: only the contradicted change is dropped, valid
+    #     aligned changes in the same response survive.
+    #   - structural failures (malformed_schema, invalid_units, locked-field, …)
+    #     indict the WHOLE response — it can't be trusted, so all changes are
+    #     zeroed (historical behaviour).
+    # EXCEPTION: out-of-range is a WARNING (not blocking) because the clamping
+    # mechanism in _normalise_changes guarantees the applied value is in range.
     safety_blocking = [
         f for f in all_blocking
         if any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
     ]
     structural_blocking = [f for f in all_blocking if f not in safety_blocking]
 
-    if all_blocking:
-        # Any blocking failure — safety-rule OR structural (malformed_schema, invalid_units,
-        # locked-field, etc.) — zeroes approved_changes and forces a failed status.
+    # Fields indicted by safety failures. If any safety failure cannot be
+    # localised to a field, we cannot safely partial-approve → force a full zero.
+    blocked_fields: "set[str]" = set()
+    safety_unattributable = False
+    for _sf in safety_blocking:
+        _flds = _indicted_fields(_sf.message)
+        if _flds:
+            blocked_fields |= _flds
+        else:
+            safety_unattributable = True
+
+    # A structural blocking, or a safety failure we cannot attribute to a field,
+    # forces the historical zero-everything behaviour.
+    force_zero_all = bool(structural_blocking) or safety_unattributable
+
+    if force_zero_all:
+        # Whole-response distrust — zero approved_changes and force a failed status.
         # This ensures locked/malformed/invalid-unit changes are never applyable.
         status = "retry_failed" if retried else "validation_failed"
         approved_changes: list = []
@@ -536,6 +579,37 @@ def _finalise_recommendation(
                 "Engineering validation failed — the AI's recommended changes "
                 "were rejected. No changes will be applied."
             )
+    elif safety_blocking:
+        # Field-attributed safety failures: drop ONLY the contradicted field(s),
+        # keep every other valid, aligned change. Stops one bad field (e.g. an
+        # LSD increase that contradicts 'good traction') from discarding valid
+        # changes like final_drive or arb_front in the same recommendation.
+        approved_changes = [
+            ch for ch in raw_changes
+            if ch.get("field") not in blocked_fields
+            and ch.get("field") not in _DISPLAY_ONLY_FIELDS
+        ]
+        approved_fields = {
+            k: v for k, v in raw_sf.items()
+            if k not in blocked_fields and k not in _DISPLAY_ONLY_FIELDS
+        }
+        rejected_changes = [
+            ch for ch in raw_changes if ch.get("field") in blocked_fields
+        ]
+        engineering_errors = [f.message for f in safety_blocking]
+        validation_warnings = [f.message for f in warnings]
+        if approved_changes:
+            # Some valid changes survived — surface them; the driver sees which
+            # field(s) were rejected via engineering_errors.
+            status = "approved_with_rejections"
+        else:
+            # Every proposed change was the contradicted one — nothing to apply.
+            status = "retry_failed" if retried else "validation_failed"
+            if not analysis:
+                analysis = (
+                    "Engineering validation rejected every proposed change. "
+                    "No changes will be applied."
+                )
     else:
         # No blocking failures: approved_changes survive (out-of-range warnings are visible
         # but the applied value is always the clamped safe value per _normalise_changes).
@@ -1525,14 +1599,38 @@ class DrivingAdvisor:
                                 and any(f.code.startswith(p) for p in ENG_SAFETY_PREFIXES)
                             ]
                             if _retry_blocking:
-                                # Still failing after retry — build deterministic fallback
-                                _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
-                                _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
-                                _fb_used = True
-                                # Capture failing changes before the fallback zeros them out
-                                _failing_ai_changes = list(_retry_data.get("changes") or [])
-                                _retry_data.update(_fb)
-                                _structured_failures = _retry_structured
+                                # Per-field salvage: keep the retry's changes whose
+                                # field is NOT indicted by a safety failure. Only fall
+                                # back to the deterministic response when nothing safe
+                                # survives (or a failure can't be localised to a field),
+                                # so a single contradicted field no longer discards
+                                # valid, aligned changes.
+                                _blocked_after_retry: "set[str]" = set()
+                                _retry_unattributable = False
+                                for _bf in _retry_blocking:
+                                    _bf_fields = _indicted_fields(_bf.message)
+                                    if _bf_fields:
+                                        _blocked_after_retry |= _bf_fields
+                                    else:
+                                        _retry_unattributable = True
+                                _retry_survivors = [
+                                    _c for _c in (_retry_data.get("changes") or [])
+                                    if _c.get("field") not in _blocked_after_retry
+                                ]
+                                if _retry_survivors and not _retry_unattributable:
+                                    # Valid changes survive — let the funnel drop the
+                                    # blocked field(s) and mark approved_with_rejections.
+                                    _structured_failures = _retry_structured
+                                    _fb_used = False
+                                else:
+                                    # Nothing safe survives — deterministic fallback.
+                                    _fb_diag = diagnosis or _build_setup_diagnosis_conservative()
+                                    _fb = _build_deterministic_fallback(_fb_diag, setup_dict, _ranges)
+                                    _fb_used = True
+                                    # Capture failing changes before the fallback zeros them out
+                                    _failing_ai_changes = list(_retry_data.get("changes") or [])
+                                    _retry_data.update(_fb)
+                                    _structured_failures = _retry_structured
                             else:
                                 _structured_failures = _retry_structured
                                 _fb_used = False

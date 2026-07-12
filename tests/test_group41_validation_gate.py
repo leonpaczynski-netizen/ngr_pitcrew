@@ -261,22 +261,27 @@ class TestAC0EndToEndPayloadContract:
         result = json.loads(result_str)
         status = result.get("recommendation_status", "MISSING")
 
-        # Safety invariant: when the rule engine's own plan trips a blocking ENG_SAFETY
-        # rule, the status must NOT be in APPROVED_STATUSES (it must be validation_failed
-        # or another non-approved status, and changes must be []).
-        assert status not in APPROVED_STATUSES, (
-            f"Group 42 safety invariant violated: rule engine triggered a blocking "
-            f"ENG_SAFETY failure (rh_increment_exceeds_confidence) but status is "
-            f"{status!r} which is in APPROVED_STATUSES. "
-            f"changes={result.get('changes')!r}, "
-            f"engineering_validation_failed={result.get('engineering_validation_failed')!r}"
+        # Field-level safety invariant (per-field rejection): the CONTRADICTED field
+        # (ride_height_rear, blocked by rh_increment_exceeds_confidence) must never be
+        # applied. Valid non-blocked changes (e.g. ride_height_front) MAY survive and
+        # be surfaced under approved_with_rejections — one bad field no longer nukes
+        # the whole recommendation.
+        _applied_fields = [c.get("field") for c in result.get("changes", [])]
+        assert "ride_height_rear" not in _applied_fields, (
+            f"CRITICAL: contradicted field ride_height_rear must never be applied; "
+            f"got changes={result.get('changes')!r}"
         )
-        assert result.get("changes") == [], (
-            f"CRITICAL: blocking safety failure must produce changes==[]; got {result.get('changes')!r}"
-        )
-        assert result.get("setup_fields") == {}, (
-            f"CRITICAL: blocking safety failure must produce setup_fields=={{}}; "
+        assert "ride_height_rear" not in (result.get("setup_fields") or {}), (
+            f"CRITICAL: contradicted field ride_height_rear must never reach setup_fields; "
             f"got {result.get('setup_fields')!r}"
+        )
+        # The safety rule that dropped it must be surfaced to the driver.
+        assert any(
+            "rh_increment_exceeds_confidence" in e
+            for e in result.get("engineering_validation_errors", [])
+        ), (
+            f"Dropped field must be explained via engineering_validation_errors; "
+            f"got {result.get('engineering_validation_errors')!r}"
         )
 
     def test_build_combined_response_changes_empty_on_blocking(self, monkeypatch):
@@ -425,6 +430,86 @@ class TestAC1ValidationFailureBlocksDisplay:
             "rejected_changes must be non-empty (debug visibility)"
         )
 
+    def test_finalise_partial_approval_keeps_valid_changes(self):
+        """Per-field rejection: a safety failure indicting ONE field drops only
+        that field; valid, aligned changes in the same response survive under
+        approved_with_rejections.
+
+        Mirrors the real UAT scenario: the AI proposed a valid final_drive
+        (gearing too short) and arb_front alongside an lsd_accel increase that
+        contradicts 'good traction'. The old all-or-nothing funnel discarded all
+        three; per-field rejection keeps final_drive + arb_front and drops only
+        lsd_accel.
+        """
+        from strategy.driving_advisor import _finalise_recommendation
+        from strategy.setup_diagnosis import ValidationFailure
+        from strategy._setup_constants import APPROVED_STATUSES
+
+        raw_data = _minimal_ai_resp({
+            "changes": [
+                {"field": "final_drive", "from": 3.50, "to": 3.45,
+                 "setting": "Final Drive", "why": "gearing too short", "to_clamped": 3.45},
+                {"field": "arb_front", "from": 4, "to": 5,
+                 "setting": "ARB Front", "why": "turn-in", "to_clamped": 5},
+                {"field": "lsd_accel", "from": 14, "to": 16,
+                 "setting": "LSD Accel", "why": "traction", "to_clamped": 16},
+            ],
+            "setup_fields": {"final_drive": 3.45, "arb_front": 5, "lsd_accel": 16},
+        })
+        # Real production-shaped safety message naming lsd_accel.
+        failure = ValidationFailure(
+            code="lsd_blocked_driver_feel",
+            message=("lsd_blocked_driver_feel: AI increases lsd_accel (from 14.0 to 16.0) "
+                     "but driver_feel_traction_status is 'good'."),
+            severity="blocking",
+        )
+        result = _finalise_recommendation(raw_data, [failure], False, False)
+
+        assert result.status == "approved_with_rejections", (
+            f"Valid survivors must yield approved_with_rejections; got {result.status!r}"
+        )
+        assert result.status in APPROVED_STATUSES
+        _applied = {c["field"] for c in result.approved_changes}
+        assert _applied == {"final_drive", "arb_front"}, (
+            f"Valid changes must survive; got {_applied!r}"
+        )
+        assert "lsd_accel" not in result.approved_fields, (
+            "Contradicted field lsd_accel must never be applied"
+        )
+        assert {"final_drive", "arb_front"} <= set(result.approved_fields), (
+            f"Valid setup_fields must survive; got {result.approved_fields!r}"
+        )
+        assert any(c["field"] == "lsd_accel" for c in result.rejected_changes), (
+            "lsd_accel must be in rejected_changes for visibility"
+        )
+        assert any("lsd_blocked_driver_feel" in e for e in result.engineering_errors), (
+            "Dropped-field reason must be surfaced in engineering_errors"
+        )
+
+    def test_finalise_partial_all_changes_blocked_falls_to_failed(self):
+        """When the ONLY proposed change is the contradicted one, no survivors
+        remain → status stays validation_failed with zero approved changes
+        (preserves the single-change safety behaviour)."""
+        from strategy.driving_advisor import _finalise_recommendation
+        from strategy.setup_diagnosis import ValidationFailure
+
+        raw_data = _minimal_ai_resp({
+            "changes": [
+                {"field": "lsd_accel", "from": 14, "to": 16,
+                 "setting": "LSD Accel", "why": "traction", "to_clamped": 16},
+            ],
+            "setup_fields": {"lsd_accel": 16},
+        })
+        failure = ValidationFailure(
+            code="lsd_blocked_driver_feel",
+            message="lsd_blocked_driver_feel: AI increases lsd_accel (from 14.0 to 16.0) but traction good.",
+            severity="blocking",
+        )
+        result = _finalise_recommendation(raw_data, [failure], False, False)
+        assert result.status == "validation_failed"
+        assert result.approved_changes == []
+        assert result.approved_fields == {}
+
     def test_structural_blocking_also_zeroes_changes(self):
         """A structural blocking failure (malformed_schema, invalid_units, locked-field)
         must ALSO zero approved_changes and set status=validation_failed.
@@ -567,18 +652,19 @@ class TestAC2RetryFailure:
         result = json.loads(result_str)
         status = result.get("recommendation_status", "")
 
-        # Safety invariant (Group 42): rule engine blocking failure → NOT in APPROVED_STATUSES
-        assert status not in APPROVED_STATUSES, (
-            f"Group 42 safety invariant: deterministic blocking failure (rh_increment_exceeds_confidence) "
-            f"must produce a non-approved status; got {status!r}. "
-            f"In Group 42, 'retry_failed' is no longer reachable but the terminal-unsafe "
-            f"outcome (non-approved + changes==[]) must still be enforced."
+        # Field-level safety invariant (per-field rejection): the contradicted field
+        # (ride_height_rear, blocked by rh_increment_exceeds_confidence) must never be
+        # applied — but valid non-blocked changes may survive under
+        # approved_with_rejections. The real safety property is "the unsafe change is
+        # never applied", not "every change is discarded".
+        _applied_fields = [c.get("field") for c in result.get("changes", [])]
+        assert "ride_height_rear" not in _applied_fields, (
+            f"Safety invariant: contradicted field ride_height_rear must never be applied; "
+            f"got changes={result.get('changes')!r}"
         )
-
-        # Safety invariant: changes must be [] when the terminal-unsafe path is taken
-        assert result.get("changes") == [], (
-            f"Safety invariant: terminal-unsafe status must have changes==[]; "
-            f"got {result.get('changes')!r}"
+        assert "ride_height_rear" not in (result.get("setup_fields") or {}), (
+            f"Safety invariant: contradicted field ride_height_rear must never reach "
+            f"setup_fields; got {result.get('setup_fields')!r}"
         )
 
     def test_retry_failed_changes_empty(self, monkeypatch):
@@ -1712,7 +1798,12 @@ class TestAdditionalEdgeCases:
     def test_approved_statuses_frozenset(self):
         from strategy._setup_constants import APPROVED_STATUSES
         assert isinstance(APPROVED_STATUSES, frozenset)
-        expected = {"approved", "approved_with_warnings", "fallback_generated"}
+        # approved_with_rejections added when per-field rejection landed: valid
+        # changes survive while a specific contradicted field is dropped.
+        expected = {
+            "approved", "approved_with_warnings",
+            "approved_with_rejections", "fallback_generated",
+        }
         assert APPROVED_STATUSES == expected, (
             f"APPROVED_STATUSES must be exactly {expected}; got {APPROVED_STATUSES}"
         )

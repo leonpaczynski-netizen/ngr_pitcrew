@@ -87,6 +87,15 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
                 "</div>"
             )
         return ""
+    if status == "approved_with_rejections":
+        return (
+            "<div style='background:#1A1A00; border:1px solid #C8A020; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#C8A020;'>"
+            "&#10003; <b>Setup approved &mdash; valid changes applied.</b> "
+            "One or more contradicted fields were rejected by engineering validation "
+            "and left unchanged (see details below)."
+            "</div>"
+        )
     if status == "fallback_generated":
         return (
             "<div style='background:#1A2A1A; border:1px solid #4CAF50; "
@@ -1848,14 +1857,21 @@ class SetupBuilderMixin:
             )
 
         # --- Section 7: Engineering gate failures (for rejected statuses) ---
-        if _rec_status in {"validation_failed", "retry_failed"} and _eng_validation_errors:
+        # approved_with_rejections shows these too: the survivors are applied, but
+        # the driver must still see which field(s) were dropped and why.
+        if _rec_status in {"validation_failed", "retry_failed", "approved_with_rejections"} and _eng_validation_errors:
+            _gate_label = (
+                "Fields dropped by engineering validation (other changes still apply):"
+                if _rec_status == "approved_with_rejections"
+                else "Engineering gate failures:"
+            )
             _err_items = "".join(
                 f"<li style='margin:2px 0;'>{e}</li>" for e in _eng_validation_errors
             )
             html += (
                 "<div style='background:#2A0A0A; border:1px solid #883333; "
                 "border-radius:4px; padding:6px 10px; margin-top:6px; color:#CC8888; font-size:11px;'>"
-                "<b>Engineering gate failures:</b>"
+                f"<b>{_gate_label}</b>"
                 f"<ul style='margin:4px 0 0 0; padding-left:16px;'>{_err_items}</ul>"
                 "</div>"
             )

@@ -47,6 +47,11 @@ ENG_SAFETY_PREFIXES: tuple[str, ...] = (
 APPROVED_STATUSES: frozenset[str] = frozenset({
     "approved",
     "approved_with_warnings",
+    # Some proposed changes survived engineering validation while a specific
+    # contradicted field was rejected per-field (see _finalise_recommendation).
+    # The survivors are safe to surface/apply; engineering_errors names what
+    # was dropped and why.
+    "approved_with_rejections",
     "fallback_generated",
 })
 
