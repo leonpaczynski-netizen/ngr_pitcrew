@@ -145,6 +145,70 @@ def test_promote_refused_on_large_stored_shift(tmp_path):
     assert find_candidate_model_path(LOC, LAY, base_dir=tmp_path) is not None
 
 
+# ------------------------------------------------ Phase 2C reviewed-segments
+
+def _stage_a_review(models_dir, n_segments, loc=LOC, lay=LAY):
+    """Write a staged (pending) reviewed-segments file with n_segments segments."""
+    from data.track_segment_review import (
+        TrackModelReviewResult, ReviewedTrackSegment, SegmentReviewStatus, export_review_json,
+    )
+    from data.track_segment_detection import TrackSegmentType, TrackSegmentDetectionConfidence
+    segs = [
+        ReviewedTrackSegment(
+            segment_id=f"S{i}", segment_type=TrackSegmentType.APEX_ZONE,
+            original_display_name=f"Turn {i}",
+            lap_progress_start=i / n_segments, lap_progress_end=(i + 0.4) / n_segments,
+            lap_progress_mid=(i + 0.2) / n_segments,
+            confidence=TrackSegmentDetectionConfidence.HIGH,
+            review_status=SegmentReviewStatus.CONFIRMED,
+        )
+        for i in range(n_segments)
+    ]
+    review = TrackModelReviewResult(
+        track_location_id=loc, layout_id=lay, calibration_car_id="rsr",
+        source_lap_count=3, detected_corner_count=n_segments, expected_corner_count=n_segments,
+        detection_confidence=TrackSegmentDetectionConfidence.HIGH, segments=segs,
+    )
+    from pathlib import Path as _P
+    return export_review_json(review, output_dir=_P(models_dir) / "_refine_pending", session_id="pending")
+
+
+def test_publish_staged_review_makes_it_resolver_visible(tmp_path):
+    from data.track_refinement import _publish_staged_review
+    from data.track_model_resolver import find_reviewed_models_for_layout
+    _stage_a_review(tmp_path, n_segments=16)
+    # Staged file is NOT resolver-visible (it lives in the _refine_pending subdir).
+    assert find_reviewed_models_for_layout(LOC, LAY, base_dir=tmp_path) == []
+    ok = _publish_staged_review(LOC, LAY, tmp_path, min_segments=16)
+    assert ok is True
+    published = find_reviewed_models_for_layout(LOC, LAY, base_dir=tmp_path)
+    assert len(published) == 1
+    assert "_refine_pending" not in str(published[0])
+
+
+def test_publish_refused_when_would_downgrade_segments(tmp_path):
+    from data.track_refinement import _publish_staged_review
+    from data.track_model_resolver import find_reviewed_models_for_layout
+    _stage_a_review(tmp_path, n_segments=10)  # fewer than the model's 16 corners
+    ok = _publish_staged_review(LOC, LAY, tmp_path, min_segments=16)
+    assert ok is False
+    assert find_reviewed_models_for_layout(LOC, LAY, base_dir=tmp_path) == []
+
+
+def test_publish_noop_when_nothing_staged(tmp_path):
+    from data.track_refinement import _publish_staged_review
+    assert _publish_staged_review(LOC, LAY, tmp_path, min_segments=0) is False
+
+
+def test_discard_removes_staged_review(tmp_path):
+    from data.track_refinement import _staged_review_path
+    _stage_a_review(tmp_path, n_segments=16)
+    export_candidate_model_json(_mk_align(accepted=False), LOC, LAY, {}, output_dir=tmp_path)
+    assert _staged_review_path(LOC, LAY, tmp_path).exists()
+    assert discard_candidate(LOC, LAY, models_dir=tmp_path) is True
+    assert not _staged_review_path(LOC, LAY, tmp_path).exists()
+
+
 # ------------------------------------------------ Phase 2B weighted anchoring
 
 def test_blend_caps_event_influence_at_weight():

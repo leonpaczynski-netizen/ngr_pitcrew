@@ -195,8 +195,80 @@ def find_candidate_model_path(
     return p if p.exists() else None
 
 
+REVIEW_PENDING_SUBDIR: str = "_refine_pending"  # staged (resolver-invisible) reviewed segments
+
+
 def candidate_reference_path_filename(track_location_id: str, layout_id: str) -> str:
     return f"{track_location_id}__{layout_id}.candidate_reference_path.json"
+
+
+def _staged_review_path(track_location_id: str, layout_id: str, models_dir: Path) -> Path:
+    # export_review_json builds "<loc>__<lay>__reviewed_segments__<sid>.json".
+    return (Path(models_dir) / REVIEW_PENDING_SUBDIR /
+            f"{track_location_id}__{layout_id}__reviewed_segments__pending.json")
+
+
+def _stage_reviewed_segments(session, station_map, accepted_align,
+                             track_location_id: str, layout_id: str, models_dir: Path) -> bool:
+    """Phase 2C: detect segments from the (blended) candidate + event laps and stage a
+    CONFIRMED reviewed-segments file where the resolver can't see it yet. Best-effort:
+    returns False (and stages nothing) on any failure or a degenerate detection."""
+    try:
+        from data.track_segment_detection import detect_track_segments
+        from data.track_segment_review import (
+            create_review_from_detection, export_review_json, SegmentReviewStatus,
+        )
+        seed = SimpleNamespace(
+            corners_expected=accepted_align.seed_corners_expected,
+            length_m=accepted_align.lap_length_m_seed, sectors=None,
+        )
+        detection = detect_track_segments(session, layout_seed=seed, station_map=station_map)
+        if not getattr(detection, "segments", None):
+            return False  # nothing usable — never stage an empty review
+        review = create_review_from_detection(detection)
+        for seg in review.segments:
+            if seg.review_status == SegmentReviewStatus.UNREVIEWED:
+                seg.review_status = SegmentReviewStatus.CONFIRMED
+        review.track_location_id = track_location_id
+        review.layout_id = layout_id
+        pending_dir = Path(models_dir) / REVIEW_PENDING_SUBDIR
+        export_review_json(review, output_dir=pending_dir, session_id="pending")
+        return True
+    except Exception:
+        return False
+
+
+def _publish_staged_review(track_location_id: str, layout_id: str,
+                           models_dir: Path, min_segments: int = 0) -> bool:
+    """Phase 2C: publish the staged reviewed-segments as the live (resolver-visible)
+    file with a fresh timestamp (newest wins). Guarded: never publishes fewer
+    segments than ``min_segments`` (won't downgrade the AI-ready model)."""
+    pending = _staged_review_path(track_location_id, layout_id, models_dir)
+    if not pending.exists():
+        return False
+    try:
+        from data.track_segment_review import import_review_json, export_review_json
+        review = import_review_json(pending)
+        if review is None or len(getattr(review, "segments", []) or []) < max(0, min_segments):
+            return False  # would downgrade — leave the existing reviewed segments intact
+        export_review_json(review, output_dir=Path(models_dir))  # default sid = now() → newest
+        try:
+            pending.unlink()
+        except OSError:  # pragma: no cover - defensive
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _remove_staged_review(track_location_id: str, layout_id: str, models_dir: Optional[Path]) -> None:
+    pending = _staged_review_path(track_location_id, layout_id,
+                                  Path(models_dir) if models_dir else STATION_MODELS_DIR)
+    try:
+        if pending.exists():
+            pending.unlink()
+    except OSError:  # pragma: no cover - defensive
+        pass
 
 
 def find_candidate_reference_path(
@@ -526,7 +598,7 @@ def refine_from_session(
     accepted_points = _load_accepted_path_points(track_location_id, layout_id)
 
     try:
-        candidate_align, _sm, build_result = build_candidate_alignment(
+        candidate_align, candidate_station_map, build_result = build_candidate_alignment(
             session, accepted_align,
             anchor_points=(accepted_points or None),
             event_weight=(event_weight if accepted_points else None),
@@ -590,6 +662,11 @@ def refine_from_session(
         )
     except Exception:
         pass
+    # Phase 2C: stage refined reviewed-segments (best-effort; published on promote).
+    _stage_reviewed_segments(
+        session, candidate_station_map, accepted_align,
+        track_location_id, layout_id, mdir,
+    )
     append_refinement_ledger(track_location_id, layout_id, {
         "decision": "candidate_built",
         "improves": verdict.improves,
@@ -670,8 +747,15 @@ def promote_candidate(
     except OSError:  # pragma: no cover - defensive
         pass
     _remove_candidate_reference_path(track_location_id, layout_id, models_dir=mdir)
+    # Phase 2C: publish the refined reviewed-segments so the AI-ready model stays in
+    # sync (guarded — never publishes fewer segments than the model's corner count).
+    _seg_published = _publish_staged_review(
+        track_location_id, layout_id, mdir,
+        min_segments=int(getattr(candidate_align, "model_corners_found", 0) or 0),
+    )
     append_refinement_ledger(track_location_id, layout_id, {
         "decision": "promoted", "accepted_at": candidate_align.accepted_at,
+        "reviewed_segments_published": _seg_published,
     }, models_dir=mdir)
     return out
 
@@ -688,6 +772,7 @@ def discard_candidate(
     except OSError:  # pragma: no cover - defensive
         return False
     _remove_candidate_reference_path(track_location_id, layout_id, models_dir=models_dir)
+    _remove_staged_review(track_location_id, layout_id, models_dir)
     append_refinement_ledger(track_location_id, layout_id, {"decision": "discarded"},
                              models_dir=models_dir)
     return True
