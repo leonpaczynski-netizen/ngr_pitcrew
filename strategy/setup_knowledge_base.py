@@ -824,18 +824,26 @@ _PACK_B: list[SetupRule] = [
         phase=RulePhase.driver_style,
         preconditions={
             "wheelspin_band": "__not_low__",
+            # Phase 11: only a genuine traction-deficit subtype warrants MORE
+            # accel-locking (excludes snap_throttle_induced + insufficient_data).
+            "wheelspin_subtype": "__is_traction__",
         },
         contraindications={
             "driver_feel_flags.snap_oversteer_exit": True,
+            # Phase 11: NEVER increase accel-locking when the rear is loose on
+            # throttle (more locking worsens power oversteer), and defer to GEARING
+            # when the wheelspin is gear-too-short (test gearing before the diff).
+            "driver_feel_flags.rear_loose_on_exit": True,
+            "wheelspin_subtype": "gear_too_short_spin",
         },
         field="lsd_accel",
         delta_fn="increase_lsd_accel",
         title="Increase LSD accel — wheelspin (progressive throttle fix)",
-        symptom="Wheelspin without snap exit — LSD accel can be increased for progressive throttle.",
+        symptom="Traction-deficit wheelspin without snap or rear-loose — LSD accel can be increased.",
         rationale=(
-            "Driver prefers progressive throttle traction. "
-            "Increasing LSD accel reduces wheelspin without causing snap "
-            "when snap exit is not already reported."
+            "Driver prefers progressive throttle traction. Increasing LSD accel "
+            "reduces traction-deficit wheelspin — but only when the rear is not "
+            "already loose on throttle and the cause is not short gearing."
         ),
         risk=RiskLevel.low,
         base_confidence=ConfidenceLevel.med,
@@ -975,15 +983,19 @@ _PACK_CD: list[SetupRule] = [
         },
         contraindications={
             "driver_feel_flags.snap_oversteer_exit": True,
+            # Phase 11: never add accel-locking with a loose rear on throttle, and
+            # defer to gearing when the wheelspin is gear-too-short.
+            "driver_feel_flags.rear_loose_on_exit": True,
+            "wheelspin_subtype": "gear_too_short_spin",
         },
         field="lsd_accel",
         delta_fn="increase_lsd_accel",
         title="Increase LSD accel — exit wheelspin (traction subtype)",
         symptom="Exit wheelspin from traction deficit — LSD accel increase helps.",
         rationale=(
-            "When wheelspin subtype is traction (not snap), increasing LSD accel "
-            "locks the rear axle more on throttle, reducing wheelspin. "
-            "Contraindicated when snap oversteer is also present."
+            "When wheelspin subtype is traction (not snap or gear-too-short) and "
+            "the rear is not already loose on throttle, increasing LSD accel locks "
+            "the rear axle more on throttle, reducing wheelspin."
         ),
         risk=RiskLevel.low,
         base_confidence=ConfidenceLevel.med,

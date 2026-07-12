@@ -791,7 +791,10 @@ def _b6_control_diag(tyre_wear_high: bool = False) -> dict:
         "aero_rear_healthy": False,
         "dominant_problem": "wheelspin",
         "gearing_diagnosis_category": "insufficient_data",
-        "wheelspin_subtype": "insufficient_data",
+        # Phase 11: B6/C5 now require a genuine traction-deficit subtype (not
+        # insufficient_data) before increasing LSD accel. Use both_rear_spin so
+        # this control diag still fires B6 (the test's concern is tyre-wear, not subtype).
+        "wheelspin_subtype": "both_rear_spin",
         "bottoming_confidence": {"band": "minor", "subtype": "insufficient_data", "confidence": "low"},
         "avg_rev_limiter_total": 0.0,
         "rev_limiter_by_gear": None,
@@ -1083,10 +1086,14 @@ class TestAC14RuntimeHighTyreWearSuppression:
 
         plan = run_rule_engine(diag, setup, ranges, profile, session_type=None)
 
-        b6_changes = [c for c in plan.proposed if c.rule_id == "B6"]
+        # An LSD-accel increase (B6 or its equivalent C5 — they conflict-resolve to
+        # one winner) must survive high tyre wear; the increase stabilises worn tyres.
+        b6_changes = [c for c in plan.proposed
+                      if c.rule_id in ("B6", "C5_exit_lsd_accel")
+                      and c.field == "lsd_accel" and c.delta > 0]
         assert b6_changes, (
-            "AC14-RUNTIME FAIL: B6 (lsd_accel +2) was suppressed under tyre_wear_high=True — "
-            "B6 must NOT be wired to the high-wear contraindication (it stabilises tyres).\n"
+            "AC14-RUNTIME FAIL: the LSD-accel increase (B6/C5) was suppressed under "
+            "tyre_wear_high=True — it must NOT be wired to the high-wear contraindication.\n"
             f"proposed: {[(c.field, c.rule_id, c.delta) for c in plan.proposed]}\n"
             f"rejected: {[(c.field, c.rule_id, c.rationale[:60]) for c in plan.rejected_candidates]}"
         )

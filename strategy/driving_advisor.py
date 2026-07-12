@@ -2054,6 +2054,42 @@ class DrivingAdvisor:
                     "review it in the Strategy tab."
                 )
 
+            # Phase 11/12 dispositions: explain feedback that received NO setup change
+            # (LSD deferred, rear lock) instead of silently omitting it.
+            _dg = diagnosis or {}
+            _flags = _dg.get("driver_feel_flags", {}) or {}
+            _proposed_fields = {getattr(c, "field", None) for c in getattr(_plan, "proposed", [])}
+            _ws_band = _dg.get("wheelspin_band", "low")
+            _ws_subtype = _dg.get("wheelspin_subtype", "insufficient_data")
+            if _ws_band != "low" and "lsd_accel" not in _proposed_fields:
+                if _ws_subtype == "gear_too_short_spin":
+                    _analysis_text += (
+                        " LSD accel change DEFERRED — the wheelspin is gear-too-short; "
+                        "test the gearing (final drive) change first before touching the "
+                        "differential."
+                    )
+                elif _flags.get("rear_loose_on_exit"):
+                    _analysis_text += (
+                        " LSD accel change DEFERRED — you reported the rear loose on "
+                        "throttle, so adding accel-locking is unsafe (it would worsen "
+                        "power oversteer)."
+                    )
+                elif _ws_subtype in ("insufficient_data", "mixed"):
+                    _analysis_text += (
+                        " LSD accel change DEFERRED — confirm whether the traction loss is "
+                        "isolated inside-wheel spin or whole-axle power oversteer before "
+                        "changing the differential."
+                    )
+            if (_flags.get("braking_instability")
+                    and "brake_bias" not in _proposed_fields
+                    and "lsd_decel" not in _proposed_fields):
+                _analysis_text += (
+                    " Rear lock under braking NOTED — brake bias cannot move rearward "
+                    "during braking instability (safety invariant); confirm straight-line "
+                    "vs trail-braking lock (and downshift timing) before changing brake "
+                    "balance or LSD braking."
+                )
+
             # ------------------------------------------------------------------
             # Step 2: convert plan to raw_data shape
             # ------------------------------------------------------------------
