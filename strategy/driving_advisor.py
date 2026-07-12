@@ -2000,6 +2000,14 @@ class DrivingAdvisor:
                 f"Dominant problem: {(diagnosis or {}).get('dominant_problem', 'unknown')}. "
                 f"Rule engine proposed {len(_plan.proposed)} change(s)."
             )
+            # Acknowledge fuel feedback rather than silently ignoring it — fuel use
+            # is a driving/strategy matter, not a setup lever (UAT).
+            if (diagnosis or {}).get("driver_feel_flags", {}).get("fuel_use_high"):
+                _analysis_text += (
+                    " Note: you flagged higher-than-expected fuel use — fuel economy "
+                    "comes from driving and race strategy, not these setup levers; "
+                    "review it in the Strategy tab."
+                )
 
             # ------------------------------------------------------------------
             # Step 2: convert plan to raw_data shape

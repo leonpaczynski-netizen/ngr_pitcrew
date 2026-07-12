@@ -134,9 +134,27 @@ DRIVER_HARD_CONSTRAINTS: str = (
 
 # Each key maps to a list of substrings (lower-case) that identify that flag.
 _FEEL_VOCABULARY: dict[str, list[str]] = {
+    # Floaty / vague TURN-IN only. "understeer" / "push" / "washes" were removed
+    # here (UAT): "Pushes wide" is mid-corner understeer, a distinct problem whose
+    # fix is the OPPOSITE of the floaty-front turn-in fix. They now route to
+    # mid_corner_understeer below.
     "floaty_front": [
-        "floaty", "floats", "understeer", "push", "washes",
-        "won't turn", "front doesn't bite", "no front", "lazy turn",
+        "floaty", "floats",
+        "won't turn", "front doesn't bite", "no front bite", "lazy turn",
+        "vague front", "front feels light",
+    ],
+    # Mid-corner / apex understeer — the front lacks grip THROUGH the corner
+    # (car "pushes wide" / "runs wide"). Fixed by ADDING front grip (soften front
+    # ARB / add front aero), never by stiffening the front.
+    "mid_corner_understeer": [
+        "pushes wide", "push wide", "pushing wide", "runs wide", "running wide",
+        "washes wide", "washes out", "won't rotate", "mid understeer",
+        "mid-corner understeer", "apex understeer", "understeer mid",
+    ],
+    # Driver is happy with turn-in / entry balance — suppress turn-in changes.
+    "entry_balance_good": [
+        "good balance", "balance is good", "good turn-in", "good turn in",
+        "turn-in good", "turn in good", "happy with turn", "entry good",
     ],
     "entry_understeer": [
         "entry understeer", "pushes on entry", "braking understeer",
@@ -161,6 +179,12 @@ _FEEL_VOCABULARY: dict[str, list[str]] = {
     ],
     "bottoming": [
         "bottoming", "grounds out", "scrapes", "bottoms",
+    ],
+    # Driver flagged high fuel use. Not a setup lever (driving/strategy owns fuel);
+    # captured only so the analysis can acknowledge it instead of silently ignoring.
+    "fuel_use_high": [
+        "fuel use: higher", "higher than expected", "using too much fuel",
+        "burning too much fuel", "fuel too high",
     ],
 }
 

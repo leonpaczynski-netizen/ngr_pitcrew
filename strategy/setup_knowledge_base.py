@@ -645,6 +645,11 @@ _PACK_B: list[SetupRule] = [
         },
         contraindications={
             "aero_front_near_min": True,  # already handled by B1
+            # UAT: don't sharpen turn-in when the driver is happy with entry
+            # balance, and never stiffen the front when the real complaint is
+            # mid-corner understeer (that would make the push worse).
+            "driver_feel_flags.entry_balance_good": True,
+            "driver_feel_flags.mid_corner_understeer": True,
         },
         field="arb_front",
         delta_fn="increase_front_arb",
@@ -658,6 +663,32 @@ _PACK_B: list[SetupRule] = [
         risk=RiskLevel.low,
         base_confidence=ConfidenceLevel.med,
         driver_style_tags=["dislikes_floaty_front", "prefers_front_bite"],
+    ),
+    SetupRule(
+        rule_id="B2b",
+        pack="B",
+        phase=RulePhase.driver_style,
+        preconditions={
+            "driver_feel_flags.mid_corner_understeer": True,
+        },
+        contraindications={
+            # Front already at minimum stiffness — softening further is a no-op;
+            # a floaty/vague front means the front is grip-starved differently.
+            "driver_feel_flags.floaty_front": True,
+        },
+        field="arb_front",
+        delta_fn="decrease_front_arb",
+        title="Soften front ARB — mid-corner understeer (add front grip)",
+        symptom="Car pushes wide mid-corner (understeer through the apex).",
+        rationale=(
+            "Driver reports mid-corner understeer (pushes wide). Softening the "
+            "front ARB adds front mechanical grip through the apex — the correct "
+            "direction for apex understeer — without destabilising the rear. "
+            "Stiffening the front (the floaty-turn-in fix) would make the push worse."
+        ),
+        risk=RiskLevel.low,
+        base_confidence=ConfidenceLevel.med,
+        driver_style_tags=["prefers_front_bite"],
     ),
     SetupRule(
         rule_id="B3",
