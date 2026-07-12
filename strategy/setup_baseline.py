@@ -389,25 +389,33 @@ def _make_change_dict(
 #   lsd_accel/decel:  integer 0-60 → ±1 or ±2 = one "click"
 #   brake_bias:       integer range, ±1 = one step forward/rearward
 #
-# "qualifying" bias: sharper response, less trailing-edge heat build, lighter
-#   rear/rotation setup so the car changes direction more crisply.
+# "qualifying" bias — ONE-LAP OUTRIGHT PACE: sharper, more rotation, lower aero
+#   platform. Fuel-light and no tyre-saving, so we can attack the peak.
 #   brake_bias: -1 → one step forward (more front braking = bite / trail rotation)
-#   lsd_decel:  -1 → easier decel diff → freer rotation on entry
-#   aero_front: +25 → more front downforce for mid-corner stability at speed
+#   lsd_decel:  -2 → freer decel diff → more corner-entry rotation for one lap
+#   lsd_accel:  -1 → freer accel diff → more exit rotation (accept slight slip)
+#   aero_front: +25 → more front downforce for sharper turn-in / mid-corner
+#   ride_height_front/rear: -3 → lower platform = more aero, no bottoming worry
 #
-# "sprint" bias (race, duration unknown/short, < 60 mins):
-#   lsd_accel: +1 → mild traction nudge (race starts matter, but no long wear concerns)
+# "sprint" bias (race, duration unknown/short, < 60 mins) — STABILITY/CONSISTENCY:
+#   lsd_accel: +2 → more exit traction and stability
+#   aero_rear: +25 → more rear downforce → high-speed stability (via aero, not
+#                    ARB — stiffer rear ARB would REDUCE rear grip)
 #
-# "endurance" bias (race, duration >= 60 mins):
-#   lsd_accel: +2 → more consistent traction over a long stint
+# "endurance" bias (race, duration >= 60 mins) — CONSISTENCY over a long stint:
+#   lsd_accel: +2 → consistent traction over a long stint
 #   lsd_decel: +1 → less rotation wear / more predictable entry over many laps
 #   aero_rear:  +25 → more rear stability for high-fuel early stints
+#   ride_height_front/rear: +2 → a touch of platform margin over fuel burn / bumps
 #
 # "practice" / "unknown" → no session-specific deltas (safe default)
 _SESSION_BIAS_TABLE: dict[str, dict[str, float]] = {
-    "qualifying":  {"brake_bias": -1.0, "lsd_decel": -1.0, "aero_front": +25.0},
-    "sprint":      {"lsd_accel": +1.0},
-    "endurance":   {"lsd_accel": +2.0, "lsd_decel": +1.0, "aero_rear": +25.0},
+    "qualifying":  {"brake_bias": -1.0, "lsd_decel": -2.0, "lsd_accel": -1.0,
+                    "aero_front": +25.0,
+                    "ride_height_front": -3.0, "ride_height_rear": -3.0},
+    "sprint":      {"lsd_accel": +2.0, "aero_rear": +25.0},
+    "endurance":   {"lsd_accel": +2.0, "lsd_decel": +1.0, "aero_rear": +25.0,
+                    "ride_height_front": +2.0, "ride_height_rear": +2.0},
     "practice":    {},
     "unknown":     {},
 }
