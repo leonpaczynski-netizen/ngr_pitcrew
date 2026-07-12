@@ -739,6 +739,11 @@ class SetupBuilderMixin:
             if hasattr(form, "_setup_drivetrain")
             else ""
         ) or ""
+        # Candidate columns (Race/Quali forms + from-scratch base) — Qt read on the
+        # main thread here, before the worker.
+        _tp_form = self._build_track_tune_profile_for_current()
+        _extra_candidates = self._build_candidate_columns(
+            _car_name, _drivetrain, _allowed, _locked, _tp_form)
 
         def _worker():
             try:
@@ -749,7 +754,8 @@ class SetupBuilderMixin:
                     compound=_compound,
                     purpose=_purpose,
                     car_class=_car_class,
-                    drivetrain=_drivetrain)
+                    drivetrain=_drivetrain,
+                    extra_candidates=_extra_candidates)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None, form))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
@@ -952,6 +958,9 @@ class SetupBuilderMixin:
         # 0 / <=0 as sprint/conservative (by design — safe default).
         _duration_mins_bl = float(_ai_snap.duration_mins)
         _track_profile_bl = self._build_track_tune_profile_for_current()
+        # Phase 9 baseline lift: proven successful setups so the from-scratch base
+        # can seed personal-fit geometry (camber/toe) from validated history.
+        _hist_setups_bl = self._successful_historical_setups(car, track)
 
         def _worker():
             try:
@@ -967,6 +976,8 @@ class SetupBuilderMixin:
                     car_class=_car_class,
                     duration_mins=_duration_mins_bl,
                     track_profile=_track_profile_bl,
+                    track_name=track,
+                    historical_setups=_hist_setups_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None))
             except Exception as exc:
@@ -998,6 +1009,45 @@ class SetupBuilderMixin:
                 s2["rating"] = ratings[s2["setup_id"]]
             out.append(s2)
         return out
+
+    def _build_candidate_columns(self, car_name, drivetrain, allowed, locked,
+                                 track_profile) -> list:
+        """Assemble candidate columns for the comparison table: the driver's own
+        Race and Quali setups plus a from-scratch base. Qt widgets are read on the
+        calling (main) thread. Best-effort — returns [] on any failure and never
+        raises into the analyse path. Fabricates nothing: a form with no values or a
+        failed base generation simply contributes no column."""
+        cols: list = []
+        try:
+            _rf = getattr(self, "_race_form", None)
+            if _rf is not None:
+                _rv = _rf.current_setup_dict() or {}
+                if _rv:
+                    cols.append({"name": "race", "label": "Race setup",
+                                 "source": "your Race form", "values": _rv})
+            _qf = getattr(self, "_qual_form", None)
+            if _qf is not None:
+                _qv = _qf.current_setup_dict() or {}
+                if _qv:
+                    cols.append({"name": "quali", "label": "Quali setup",
+                                 "source": "your Qualifying form", "values": _qv})
+            # From-scratch base — pure generator (no AI, no Qt); num_gears read here.
+            try:
+                from strategy.setup_baseline import build_baseline_setup as _bbs
+                from strategy.setup_driver_profile import build_driver_profile as _bdp
+                from strategy.setup_ranges import resolve_ranges as _rr
+                _ng = int(self._setup_num_gears.value()) if hasattr(self, "_setup_num_gears") else 0
+                _base = _bbs(car_name, _rr(car_name), drivetrain or "", _ng,
+                             _bdp(), allowed, locked, track_profile=track_profile)
+                _bf = _base.get("setup_fields") or {}
+                if _bf:
+                    cols.append({"name": "base", "label": "Base (from scratch)",
+                                 "source": "neutral generator", "values": _bf})
+            except Exception:
+                pass
+        except Exception:
+            return cols
+        return cols
 
     def _build_track_tune_profile_for_current(self):
         """Phase 5: build a TrackTuneProfile from the current track/layout's seed +
@@ -1110,6 +1160,9 @@ class SetupBuilderMixin:
             "Building baseline setup from car ranges and driving profile…")
         form._build_setup_result.setVisible(True)
         _track_profile_bl = self._build_track_tune_profile_for_current()
+        # Phase 9 baseline lift: proven successful setups to seed personal-fit
+        # geometry (camber/toe) from validated history.
+        _hist_setups_bl = self._successful_historical_setups(car, track)
 
         def _worker():
             try:
@@ -1125,6 +1178,8 @@ class SetupBuilderMixin:
                     car_class=_car_class,
                     duration_mins=_duration_mins_bl,
                     track_profile=_track_profile_bl,
+                    track_name=track,
+                    historical_setups=_hist_setups_bl,
                 )
                 self._baseline_result_queue.put(("ok", json_str, "baseline_setup", None, form))
             except Exception as exc:
@@ -1470,6 +1525,11 @@ class SetupBuilderMixin:
         except Exception:
             _fuel_mult_bl, _refuel_rate_bl = 1.0, 0.0
         _track_profile_an = self._build_track_tune_profile_for_current()
+        # Candidate columns for the comparison table — the driver's own Race and
+        # Quali setups plus a from-scratch base, so the recommended values sit in
+        # context. Qt widgets are read HERE on the main thread (never in the worker).
+        _extra_candidates = self._build_candidate_columns(
+            _car_name, _drivetrain, _allowed, _locked, _track_profile_an)
 
         def _worker():
             try:
@@ -1485,7 +1545,8 @@ class SetupBuilderMixin:
                     track_name=_track_bl,
                     fuel_multiplier=_fuel_mult_bl,
                     refuel_rate_lps=_refuel_rate_bl,
-                    track_profile=_track_profile_an)
+                    track_profile=_track_profile_an,
+                    extra_candidates=_extra_candidates)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))

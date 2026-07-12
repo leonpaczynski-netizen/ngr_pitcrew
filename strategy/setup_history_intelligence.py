@@ -177,6 +177,44 @@ def build_historical_prior(matches: List[HistoricalSetup]) -> Dict[str, dict]:
     return prior
 
 
+# Fields where a STRONG proven prior should seed the from-scratch baseline. These
+# are personal-fit handling geometry the driver has already validated at this
+# car+track — NOT safety diffs, aero, brakes or gearing (those are track/strategy
+# driven, not driver-fit, and stay with the deterministic generator).
+BASELINE_LIFT_FIELDS = frozenset({"camber_front", "camber_rear", "toe_front", "toe_rear"})
+
+
+def build_baseline_seed_overrides(
+    prior: Dict[str, dict],
+    *,
+    allowed_fields=BASELINE_LIFT_FIELDS,
+    max_tier: int = TIER_SAME_CAR_SIMILAR_TRACK,
+) -> Dict[str, dict]:
+    """field -> {value, tier, source} for STRONG (tier <= max_tier) proven priors in
+    the lift-allowed set, to seed the from-scratch baseline from geometry the driver
+    has already validated instead of a generic neutral default.
+
+    Only strong scopes (same car+track+layout, or same car + similar track) qualify —
+    a weak/neutral prior never moves the base. Empty when no strong prior exists.
+    Never invents a value and never touches a field outside ``allowed_fields``."""
+    out: Dict[str, dict] = {}
+    for f, d in (prior or {}).items():
+        if f not in allowed_fields or not isinstance(d, dict):
+            continue
+        try:
+            tier = int(d.get("tier", TIER_NEUTRAL))
+        except (TypeError, ValueError):
+            continue
+        if tier > max_tier:
+            continue
+        try:
+            value = float(d.get("value"))
+        except (TypeError, ValueError):
+            continue
+        out[f] = {"value": value, "tier": tier, "source": str(d.get("source", ""))}
+    return out
+
+
 def compare_to_history(
     current_setup: dict,
     recommended_fields: dict,

@@ -1755,6 +1755,7 @@ class DrivingAdvisor:
         fuel_multiplier: float = 1.0,
         refuel_rate_lps: float = 0.0,
         track_profile=None,
+        extra_candidates: "list[dict] | None" = None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -2354,6 +2355,18 @@ class DrivingAdvisor:
                         make_candidate("historical", "Proven (history)", _hist_values,
                                        source="your liked/strong-result setups"),
                     ]
+                    # Caller-supplied candidate columns (e.g. base / race / quali setups
+                    # from the UI). Each is {name, label, source, values}; scoped to the
+                    # same focus fields so the table stays about the fields in question.
+                    for _ex in (extra_candidates or []):
+                        try:
+                            _ex_vals = {f: (_ex.get("values") or {}).get(f) for f in _focus}
+                            _cands.append(make_candidate(
+                                str(_ex.get("name", "extra")),
+                                str(_ex.get("label", _ex.get("name", "extra"))),
+                                _ex_vals, source=str(_ex.get("source", ""))))
+                        except Exception:
+                            continue
                     _cmp = build_candidate_comparison(
                         [c for c in _cands if c.available], fields=_focus)
                     _data["candidate_comparison"] = candidate_comparison_to_json(_cmp)
@@ -2467,6 +2480,9 @@ class DrivingAdvisor:
         car_class: str = "",
         duration_mins: float = 0.0,
         track_profile=None,
+        track_name: str = "",
+        layout_id: str = "",
+        historical_setups: "list[dict] | None" = None,
     ) -> str:
         """Return a JSON string with a from-scratch baseline setup.
 
@@ -2547,6 +2563,26 @@ class DrivingAdvisor:
             # Step 2: build the baseline raw_data dict
             # Group 45: wire session_type, tyre_wear_multiplier, car_class through
             # Group 46: also wire duration_mins through for session bias classification
+            # Phase 9 baseline lift: seed personal-fit geometry (camber/toe) from the
+            # driver's STRONG proven history so the from-scratch base starts from a
+            # validated value, not a neutral guess. Strong-scope only; never touches
+            # safety diffs / aero / brakes / gearing.
+            _seed_overrides = {}
+            if historical_setups:
+                try:
+                    from strategy.setup_history_intelligence import (
+                        find_historical_setups, build_historical_prior,
+                        build_baseline_seed_overrides,
+                    )
+                    _bl_matches = find_historical_setups(
+                        car_name, track_name, layout_id, session_type,
+                        historical_setups, car_category=car_class,
+                    )
+                    _seed_overrides = build_baseline_seed_overrides(
+                        build_historical_prior(_bl_matches))
+                except Exception:
+                    _seed_overrides = {}
+
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
                 _profile, allowed_tuning, tuning_locked,
@@ -2555,6 +2591,7 @@ class DrivingAdvisor:
                 car_class=car_class,
                 duration_mins=duration_mins,
                 track_profile=track_profile,
+                historical_seed_overrides=_seed_overrides,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta

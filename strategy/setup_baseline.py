@@ -99,6 +99,9 @@ _LABEL_CONSERV    = "conservative default, not diagnosed"
 # baseline-quality audit and the UI can see the value came from range adaptation,
 # not a blind clamp.
 _LABEL_CAR_RANGE  = "car-range adapted (neutral intent, off-boundary)"
+# Provenance for a seed lifted from the driver's PROVEN historical setup (Phase 9
+# baseline lift) — the base starts from validated geometry, not a neutral guess.
+_LABEL_HISTORY    = "seeded from your proven setup"
 
 # When a neutral seed lands within this fraction of either end of a car's
 # resolved range, it is treated as boundary-hugging and re-placed by intent.
@@ -467,6 +470,7 @@ def build_baseline_setup(
     car_class: str = "",
     duration_mins: float = 0.0,
     track_profile=None,
+    historical_seed_overrides: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -589,6 +593,7 @@ def build_baseline_setup(
 
     changes: list[dict] = []
     setup_fields: dict = {}
+    _lifted_fields: list[dict] = []   # Phase 9 baseline lift: fields seeded from history
 
     # Actionable canonical fields (excluding display-only and gearbox)
     _GEARBOX_FIELDS: frozenset[str] = frozenset({
@@ -616,6 +621,21 @@ def build_baseline_setup(
             continue
 
         seed = NEUTRAL_SEEDS[field]
+
+        # Phase 9 baseline lift: for personal-fit geometry (camber/toe) the driver
+        # has a STRONG proven prior for, start from that validated value instead of
+        # the neutral seed. Profile + session bias still stack on top (e.g. quali
+        # adds camber to the proven base). Only fields the caller pre-vetted arrive
+        # here — safety diffs / aero / brakes / gearing are never in this map.
+        _hist_seeded = False
+        _hist_override = (historical_seed_overrides or {}).get(field)
+        if _hist_override is not None:
+            try:
+                _hv = _hist_override["value"] if isinstance(_hist_override, dict) else _hist_override
+                seed = float(_hv)
+                _hist_seeded = True
+            except (TypeError, ValueError, KeyError):
+                _hist_seeded = False
 
         # Ride height: the flat 80mm neutral seed collides with tight race-car
         # ceilings — e.g. the Porsche 911 RSR front range is {55, 80}, so the
@@ -671,7 +691,12 @@ def build_baseline_setup(
         # _LABEL_CAR_RANGE provenance (unless it was also driver-profile biased, in
         # which case the bias label wins) so a re-placed boundary value is never
         # presented as an undiagnosed "neutral default".
-        if is_biased:
+        if _hist_seeded:
+            # History provenance wins — the base value came from a proven setup, even
+            # if profile/session bias then stacked on top.
+            label = _LABEL_HISTORY
+            alignment = "aligned"
+        elif is_biased:
             label = _LABEL_BIASED
             alignment = "aligned"
         elif seed_adjusted:
@@ -720,6 +745,8 @@ def build_baseline_setup(
             car_drivetrain_influence="",
         )
         changes.append(change)
+        if _hist_seeded:
+            _lifted_fields.append({"field": field, "seed": seed_rounded, "value": to_val})
 
         if field not in _DISPLAY_ONLY_FIELDS:
             try:
@@ -760,11 +787,20 @@ def build_baseline_setup(
                       "track-neutral defaults (nothing invented).")
     else:
         track_text = ""
+    # Phase 9 baseline lift: disclose which fields were seeded from proven history.
+    if _lifted_fields:
+        _lift_names = ", ".join(
+            f"{lf['field'].replace('_', ' ')} {lf['value']:g}" for lf in _lifted_fields
+        )
+        lift_text = (f" Seeded from your proven setup (not a neutral guess): "
+                     f"{_lift_names}.")
+    else:
+        lift_text = ""
     analysis = (
         f"From-scratch baseline setup generated using neutral physics defaults "
         f"and driver-profile mechanical nudges. No telemetry data available — "
         f"all values are conservative starting points requiring on-track validation."
-        f"{track_text}{awd_text}{gear_text}{locked_text}"
+        f"{lift_text}{track_text}{awd_text}{gear_text}{locked_text}"
     )
 
     return {
@@ -772,6 +808,7 @@ def build_baseline_setup(
         "primary_issue": "no_telemetry_baseline",
         "changes": changes,
         "setup_fields": setup_fields,
+        "historical_lift": _lifted_fields,
         "diagnosis": {},
         # validation_targets: required by malformed_schema validator (presence check only)
         "validation_targets": {},
