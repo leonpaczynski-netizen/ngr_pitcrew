@@ -56,6 +56,7 @@ from strategy.setup_diagnosis import (
     PERSONAL_DRIVER_TUNING_MODEL,
     DRIVER_HARD_CONSTRAINTS,
     build_setup_diagnosis,
+    build_feedback_dispositions,
     validate_setup_engineering,
     validate_setup_engineering_structured,
     format_diagnosis_for_prompt,
@@ -2247,6 +2248,10 @@ class DrivingAdvisor:
                 except Exception:
                     pass
                 _data["rejected_changes"] = list(_final.rejected_changes) + _rj_extra
+                # Phase 4: explicit disposition for every reported feedback item.
+                _data["feedback_dispositions"] = build_feedback_dispositions(
+                    diagnosis, {c.get("field") for c in _final.approved_changes}
+                )
 
                 # New Group 42 keys
                 _data["deterministic_plan"] = {

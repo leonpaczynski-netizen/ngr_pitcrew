@@ -101,3 +101,44 @@ def test_disposition_rear_lock_noted(monkeypatch):
     res = json.loads(adv.build_combined_setup_response(
         setup_dict=setup, car_name="", feeling="Rear Under Braking: Locks up rear"))
     assert "Rear lock under braking NOTED" in res.get("analysis", "")
+
+
+# ------------------------------------------------------------- Phase 4 dispositions
+
+def _flags(**kw):
+    base = {k: False for k in ("entry_balance_good", "mid_corner_understeer", "floaty_front",
+                               "entry_understeer", "rear_loose_on_exit", "snap_oversteer_exit",
+                               "braking_instability", "fuel_use_high")}
+    base.update(kw)
+    return {"driver_feel_flags": base}
+
+
+def test_feedback_disposition_addressed_vs_deferred():
+    from strategy.setup_diagnosis import build_feedback_dispositions
+    diag = _flags(mid_corner_understeer=True, braking_instability=True, fuel_use_high=True,
+                  entry_balance_good=True)
+    diag["wheelspin_band"] = "low"
+    # arb_front addresses the understeer; nothing addresses the rear lock.
+    disp = build_feedback_dispositions(diag, {"arb_front"})
+    by = {d["feedback"]: d["state"] for d in disp}
+    assert by["Mid-corner understeer (pushes wide)"] == "addressed"
+    assert by["Rear lock / instability under braking"] == "deferred"
+    assert by["High fuel use"] == "strategy"
+    assert by["Entry balance good"] == "preserved"
+
+
+def test_every_reported_feedback_gets_a_disposition():
+    from strategy.setup_diagnosis import build_feedback_dispositions
+    diag = _flags(mid_corner_understeer=True, rear_loose_on_exit=True, braking_instability=True)
+    diag["wheelspin_band"] = "severe"
+    disp = build_feedback_dispositions(diag, set())   # no changes applied
+    labels = {d["feedback"] for d in disp}
+    assert "Mid-corner understeer (pushes wide)" in labels
+    assert "Rear loose on throttle" in labels
+    assert "Rear lock / instability under braking" in labels
+    assert all(d["state"] in ("addressed", "deferred", "strategy", "preserved") for d in disp)
+
+
+def test_no_feedback_yields_empty_dispositions():
+    from strategy.setup_diagnosis import build_feedback_dispositions
+    assert build_feedback_dispositions(_flags(), {"arb_front"}) == []

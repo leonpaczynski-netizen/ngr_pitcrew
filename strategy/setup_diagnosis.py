@@ -400,6 +400,66 @@ DOMINANT_ADDRESSING_FIELDS: dict[str, frozenset] = {
 }
 
 
+# Phase 4 — every driver-feedback item must receive an explicit disposition.
+_FEEDBACK_LABELS: dict[str, str] = {
+    "entry_balance_good":    "Entry balance good",
+    "mid_corner_understeer": "Mid-corner understeer (pushes wide)",
+    "floaty_front":          "Floaty / vague front (turn-in)",
+    "entry_understeer":      "Entry understeer",
+    "rear_loose_on_exit":    "Rear loose on throttle",
+    "snap_oversteer_exit":   "Snap oversteer on exit",
+    "braking_instability":   "Rear lock / instability under braking",
+    "fuel_use_high":         "High fuel use",
+}
+_FEEDBACK_ADDRESSING_FIELDS: dict[str, frozenset] = {
+    "mid_corner_understeer": frozenset({"arb_front", "aero_front", "toe_front"}),
+    "floaty_front":          frozenset({"arb_front", "aero_front"}),
+    "entry_understeer":      frozenset({"lsd_decel", "aero_front", "arb_front"}),
+    "rear_loose_on_exit":    frozenset({"lsd_accel", "aero_rear", "arb_rear"}),
+    "snap_oversteer_exit":   frozenset({"lsd_accel", "lsd_decel"}),
+    "braking_instability":   frozenset({"brake_bias", "lsd_decel"}),
+}
+
+
+def build_feedback_dispositions(diagnosis: dict, proposed_fields) -> "list[dict]":
+    """Return one disposition per reported driver-feedback item (Phase 4).
+
+    Each entry: {feedback, state, detail}. state ∈ {addressed, deferred,
+    strategy, preserved}. Nothing the driver reported disappears silently.
+    """
+    flags = (diagnosis or {}).get("driver_feel_flags", {}) or {}
+    proposed = set(proposed_fields or ())
+    ws_band = (diagnosis or {}).get("wheelspin_band", "low")
+    out: "list[dict]" = []
+    for flag, label in _FEEDBACK_LABELS.items():
+        if not flags.get(flag):
+            continue
+        if flag == "entry_balance_good":
+            out.append({"feedback": label, "state": "preserved",
+                        "detail": "Turn-in is fine — intentionally left unchanged."})
+            continue
+        if flag == "fuel_use_high":
+            out.append({"feedback": label, "state": "strategy",
+                        "detail": "Fuel economy is a driving/strategy matter; review in the Strategy tab."})
+            continue
+        addr = _FEEDBACK_ADDRESSING_FIELDS.get(flag, frozenset())
+        if addr & proposed:
+            applied = sorted(addr & proposed)
+            out.append({"feedback": label, "state": "addressed",
+                        "detail": f"Change(s) applied: {', '.join(applied)}."})
+        else:
+            if flag == "braking_instability":
+                detail = ("Brake bias cannot move rearward during instability (safety "
+                          "invariant); confirm straight-line vs trail-braking lock first.")
+            elif flag == "rear_loose_on_exit" and ws_band != "low":
+                detail = ("LSD accel not increased (would worsen power oversteer); "
+                          "confirm inside-wheel spin vs whole-axle oversteer.")
+            else:
+                detail = "No safe rule-based change from the current evidence — run a targeted test."
+            out.append({"feedback": label, "state": "deferred", "detail": detail})
+    return out
+
+
 def _dominant_problem_key(dominant_readable: str) -> str:
     """Recover the machine-readable dominant-problem key from its readable string.
 
