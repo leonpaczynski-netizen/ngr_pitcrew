@@ -426,24 +426,26 @@ class TestAC26ClampBoundarySessionChanged:
         )
 
     def test_qualifying_bias_fields_correct(self):
-        """Qualifying bias must apply to brake_bias, lsd_decel, aero_front per brief."""
-        expected = {"brake_bias", "lsd_decel", "aero_front"}
+        """Qualifying (one-lap pace): sharper/more-rotation/lower-platform bias."""
+        expected = {"brake_bias", "lsd_decel", "lsd_accel", "aero_front",
+                    "ride_height_front", "ride_height_rear"}
         actual = set(_SESSION_BIAS_TABLE["qualifying"].keys())
         assert actual == expected, (
             f"AC26 FAIL: qualifying bias fields differ; expected={expected}, got={actual}"
         )
 
     def test_endurance_bias_fields_correct(self):
-        """Endurance bias must apply to lsd_accel, lsd_decel, aero_rear per brief."""
-        expected = {"lsd_accel", "lsd_decel", "aero_rear"}
+        """Endurance: consistency bias (LSD + rear aero + ride-height margin)."""
+        expected = {"lsd_accel", "lsd_decel", "aero_rear",
+                    "ride_height_front", "ride_height_rear"}
         actual = set(_SESSION_BIAS_TABLE["endurance"].keys())
         assert actual == expected, (
             f"AC26 FAIL: endurance bias fields differ; expected={expected}, got={actual}"
         )
 
     def test_sprint_bias_fields_correct(self):
-        """Sprint bias must apply to lsd_accel per brief."""
-        expected = {"lsd_accel"}
+        """Sprint (race): stability bias via LSD + rear aero."""
+        expected = {"lsd_accel", "aero_rear"}
         actual = set(_SESSION_BIAS_TABLE["sprint"].keys())
         assert actual == expected, (
             f"AC26 FAIL: sprint bias fields differ; expected={expected}, got={actual}"

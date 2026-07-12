@@ -1724,17 +1724,17 @@ class TestC2MaxTokensBehavioural:
         adv._tracker = None
         return adv
 
-    def test_build_combined_setup_response_max_tokens_audit_800(self, monkeypatch):
+    def test_build_combined_setup_response_max_tokens_audit_1500(self, monkeypatch):
         # Group 42/43 rule-first refactor: the AI no longer authors the setup JSON
         # (the deterministic rule engine does). The only call_api in the combined
-        # path is now the AI *audit*, which uses max_tokens=800. Pinned here so a
-        # regression that re-enlarges (or removes) the audit budget is caught.
+        # path is now the AI *audit*. Budget raised 800->1500 (UAT: 800 truncated
+        # the audit JSON mid-string -> "Unterminated string"). Pinned here.
         captured: list = []
         adv = self._make_base_advisor(monkeypatch, captured)
         adv.build_combined_setup_response(setup_dict={}, car_name="")
         assert captured, "call_api was not invoked"
-        assert captured[0] == 800, (
-            f"build_combined_setup_response audit call must use max_tokens=800, "
+        assert captured[0] == 1500, (
+            f"build_combined_setup_response audit call must use max_tokens=1500, "
             f"got {captured[0]}"
         )
 
