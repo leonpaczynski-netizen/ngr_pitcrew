@@ -1752,6 +1752,9 @@ class DrivingAdvisor:
         drivetrain: str = "",
         historical_setups: "list[dict] | None" = None,
         track_name: str = "",
+        fuel_multiplier: float = 1.0,
+        refuel_rate_lps: float = 0.0,
+        track_profile=None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -2048,14 +2051,32 @@ class DrivingAdvisor:
                 f"Dominant problem: {(diagnosis or {}).get('dominant_problem', 'unknown')}. "
                 f"Rule engine proposed {len(_plan.proposed)} change(s)."
             )
-            # Acknowledge fuel feedback rather than silently ignoring it — fuel use
-            # is a driving/strategy matter, not a setup lever (UAT).
+            # Phase 8: context-aware fuel/aero reasoning. The old note ("fuel is not a
+            # setup lever") was too absolute — on a fuel-heavy, drag-sensitive circuit
+            # aero/gearing DO affect fuel-per-lap and total race time. When that holds,
+            # recommend a comparison run (never a fabricated saving); otherwise route
+            # fuel to strategy honestly.
             if (diagnosis or {}).get("driver_feel_flags", {}).get("fuel_use_high"):
-                _analysis_text += (
-                    " Note: you flagged higher-than-expected fuel use — fuel economy "
-                    "comes from driving and race strategy, not these setup levers; "
-                    "review it in the Strategy tab."
-                )
+                try:
+                    from strategy.race_time_reasoning import assess_aero_fuel_tradeoff
+                    _af_lo, _af_hi = resolve_ranges(car_name).get("aero_front", (0, 1000))
+                    _rt = assess_aero_fuel_tradeoff(
+                        fuel_multiplier=fuel_multiplier, refuel_rate_lps=refuel_rate_lps,
+                        track_profile=track_profile,
+                        aero_front_value=(diagnosis or {}).get("aero_front_value"),
+                        aero_front_lo=_af_lo, aero_front_hi=_af_hi,
+                        fuel_use_high=True,
+                    )
+                except Exception:
+                    _rt = None
+                if _rt is not None and _rt.fuel_relevant_to_setup:
+                    _analysis_text += " " + _rt.as_note()
+                else:
+                    _analysis_text += (
+                        " Note: you flagged higher-than-expected fuel use — on this "
+                        "circuit it is primarily a driving/strategy matter (review it in "
+                        "the Strategy tab); setup drag is not the limiting factor here."
+                    )
 
             # Phase 11/12 dispositions: explain feedback that received NO setup change
             # (LSD deferred, rear lock) instead of silently omitting it.

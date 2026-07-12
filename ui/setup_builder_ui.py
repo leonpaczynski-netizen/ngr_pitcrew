@@ -1459,6 +1459,17 @@ class SetupBuilderMixin:
         # Phase 9: proven successful setups for the historical prior/comparison.
         _track_bl = str(getattr(_ai_snap, "track", "") or "")
         _hist_setups = self._successful_historical_setups(_car_name, _track_bl)
+        # Phase 8: race-time fuel/aero context (event fuel multiplier + refuel rate,
+        # Phase-5 track profile) so a fuel-heavy drag-sensitive circuit gets an aero
+        # comparison-run recommendation instead of a blanket "fuel isn't setup".
+        _fuel_mult_bl, _refuel_rate_bl = 1.0, 0.0
+        try:
+            _ec_bl = self._build_event_context() if hasattr(self, "_build_event_context") else None
+            _fuel_mult_bl = float(getattr(_ec_bl, "fuel_multiplier", 1.0) or 1.0)
+            _refuel_rate_bl = float(getattr(_ec_bl, "refuel_rate_lps", 0.0) or 0.0)
+        except Exception:
+            _fuel_mult_bl, _refuel_rate_bl = 1.0, 0.0
+        _track_profile_an = self._build_track_tune_profile_for_current()
 
         def _worker():
             try:
@@ -1471,7 +1482,10 @@ class SetupBuilderMixin:
                     car_class=_car_class,
                     drivetrain=_drivetrain,
                     historical_setups=_hist_setups,
-                    track_name=_track_bl)
+                    track_name=_track_bl,
+                    fuel_multiplier=_fuel_mult_bl,
+                    refuel_rate_lps=_refuel_rate_bl,
+                    track_profile=_track_profile_an)
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))
