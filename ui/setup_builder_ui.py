@@ -272,7 +272,10 @@ class SetupBuilderMixin:
         self._race_form._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
         self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
-        self._race_form._btn_baseline.clicked.connect(self._generate_baseline_setup)
+        # Race-form baseline button builds BOTH race + qualifying baselines in one
+        # go (UAT); the Qualifying form's own button still builds just qualifying.
+        self._race_form._btn_baseline.setText("Build Baseline (Race + Quali)")
+        self._race_form._btn_baseline.clicked.connect(self._generate_baseline_setup_both)
         self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
         self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
@@ -951,6 +954,19 @@ class SetupBuilderMixin:
 
         _threading.Thread(target=_worker, daemon=True).start()
 
+    def _generate_baseline_setup_both(self) -> None:
+        """Build baseline setups for BOTH the Race and Qualifying forms at once.
+
+        UAT: the initial base build should produce a race and a qualifying setup
+        together. Fires the existing per-form baseline builders; each runs in its
+        own worker thread and routes its result to the correct form via
+        _display_baseline_result. The Qualifying form's own button still builds
+        just the qualifying baseline when needed.
+        """
+        self._generate_baseline_setup()
+        if getattr(self, "_qual_form", None) is not None:
+            self._generate_baseline_setup_for_form(self._qual_form)
+
     def _generate_baseline_setup_for_form(self, form: "SetupFormWidget") -> None:
         """Handler for the Qualifying form 'Build Baseline Setup' button.
 
@@ -1047,7 +1063,7 @@ class SetupBuilderMixin:
         # Re-enable the race-form baseline button (aliased on self)
         if hasattr(self, "_btn_baseline"):
             self._btn_baseline.setEnabled(True)
-            self._btn_baseline.setText("Build Baseline Setup")
+            self._btn_baseline.setText("Build Baseline (Race + Quali)")
 
         # Re-enable the per-form button if a form is in the tuple (position 4)
         _form = result[4] if len(result) > 4 else None

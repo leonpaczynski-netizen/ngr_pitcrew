@@ -948,8 +948,9 @@ class TestDisplayBaselineResultTupleArity:
         assert race_form._btn_baseline.isEnabled(), (
             "Integration A FAIL: Race _btn_baseline not re-enabled after 4-tuple result"
         )
-        assert race_form._btn_baseline.text() == "Build Baseline Setup", (
-            "Integration A FAIL: Race _btn_baseline text not restored to 'Build Baseline Setup'"
+        # Race baseline button now builds BOTH race + qualifying baselines (UAT).
+        assert race_form._btn_baseline.text() == "Build Baseline (Race + Quali)", (
+            "Integration A FAIL: Race _btn_baseline text not restored to 'Build Baseline (Race + Quali)'"
         )
 
     def test_qual_5_tuple_does_not_raise(self, host_and_forms):
