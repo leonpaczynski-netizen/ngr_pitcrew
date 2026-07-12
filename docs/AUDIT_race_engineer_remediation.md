@@ -122,10 +122,12 @@ editor is a follow-up if desired.)
 4. ✅ **Clean bugs** — track re-approval persistence; Strategy Builder pit-loss seeding. `tests/test_uat_track_reapproval_pitloss.py`.
 5. ✅ **Phase 11/12** — wheelspin-subtype gating of LSD (B6/C5 block gear-too-short + rear-loose + snap); rear-lock + LSD-deferral dispositions. `tests/test_phase11_12_wheelspin_braking.py`.
 
+6. ✅ **Phase 5** — track-specific base tune builder (`strategy/track_tune_profile.py`; track-model-shaped aero; fixes base-max-aero pin — Fuji RSR front aero 450→400). `tests/test_phase5_track_tune.py`.
+7. ✅ **Quali camber/toe** (bug 4) — qualifying session bias now carries aggressive camber (+0.5/+0.3) + front toe (-0.05), so quali ≠ race trim.
+
 **Remaining — the large tune-architecture (each its own focused pass, behind existing gates):**
-6. **Phase 5** — track-specific base tune builder (track-model-shaped; also fixes the base-max-aero pin + generic base camber). LARGE.
-7. **Phase 7** — qualifying-tune engine (distinct one-lap discipline; also fixes quali camber/toe). LARGE.
-8. **Phase 9** — historical successful-setup intelligence (Watkins prior: LSD 22/8/33, aero 400/600, ARB 7/7, camber 2.5/2.1). LARGE.
+8. **Phase 7 (full)** — qualifying-tune-engine discipline output (objectives / expected strengths+compromises / one-lap warning). The camber/toe defect is fixed; the separate-discipline surface remains.
+9. **Phase 9** — historical successful-setup intelligence (Watkins prior: LSD 22/8/33, aero 400/600, ARB 7/7, camber 2.5/2.1) — also lifts the generically-low base camber. LARGE.
 9. **Phase 8** — race-time aero/fuel reasoning (context-aware fuel note; comparison-run request; refuel-time arithmetic).
 10. **Phase 10/13/14** — cross-symptom arbitration; controlled test sequencing; candidate comparison.
 11. **Phase 15** — additive UI/explanation quality (surface dispositions, feedback matrix, evidence gaps).
