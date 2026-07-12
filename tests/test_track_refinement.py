@@ -33,13 +33,33 @@ from data.track_refinement import (
     mean_path_shift_m,
     export_candidate_reference_path,
     find_candidate_reference_path,
+    blend_reference_path,
     MAX_MEAN_SHIFT_M,
+    EVENT_WEIGHT_DEFAULT,
 )
+from data.track_calibration import ReferencePath, ReferencePathPoint
 
 
 def _pts(coords):
     """Build reference-path-like points from a list of (x, y, z)."""
     return [SimpleNamespace(x=x, y=y, z=z) for (x, y, z) in coords]
+
+
+def _refpath(coords):
+    """Build a ReferencePath from a list of (x, y, z)."""
+    n = len(coords)
+    pts = [
+        ReferencePathPoint(
+            lap_progress=(i / (n - 1)) if n > 1 else 0.0,
+            distance_along_lap_m=float(i),
+            x=x, y=y, z=z, speed_kph_avg=120.0, source_lap_count=3,
+        )
+        for i, (x, y, z) in enumerate(coords)
+    ]
+    return ReferencePath(
+        track_location_id="fuji", layout_id="fuji__full_course",
+        calibration_car_id="rsr", source_lap_count=3, points=pts, confidence=0.9,
+    )
 
 LOC = "fuji"
 LAY = "fuji__full_course"
@@ -123,6 +143,40 @@ def test_promote_refused_on_large_stored_shift(tmp_path):
     # Re-check at promote applies the stored shift → blocked despite better metrics.
     assert promote_candidate(LOC, LAY, models_dir=tmp_path) is None
     assert find_candidate_model_path(LOC, LAY, base_dir=tmp_path) is not None
+
+
+# ------------------------------------------------ Phase 2B weighted anchoring
+
+def test_blend_caps_event_influence_at_weight():
+    # Candidate 10 m off the accepted path; blend at 0.30 → 3 m off (30%).
+    cand = _refpath([(10.0, 0.0, 0.0) for _ in range(100)])
+    acc = [(0.0, 0.0, 0.0) for _ in range(100)]
+    blended = blend_reference_path(cand, acc, 0.30)
+    assert blended.points[0].x == pytest.approx(3.0, abs=1e-6)
+    assert blended.points[50].x == pytest.approx(3.0, abs=1e-6)
+
+
+def test_blend_weight_zero_yields_accepted():
+    cand = _refpath([(10.0, 0.0, 5.0) for _ in range(100)])
+    acc = [(0.0, 0.0, 0.0) for _ in range(100)]
+    blended = blend_reference_path(cand, acc, 0.0)
+    assert blended.points[0].x == pytest.approx(0.0, abs=1e-6)
+    assert blended.points[0].z == pytest.approx(0.0, abs=1e-6)
+
+
+def test_blend_no_accepted_returns_unchanged():
+    cand = _refpath([(10.0, 0.0, 0.0) for _ in range(100)])
+    assert blend_reference_path(cand, [], 0.30) is cand
+
+
+def test_blend_reduces_geometry_shift_proportionally():
+    cand = _refpath([(i * 1.0, 0.0, 10.0) for i in range(200)])   # 10 m off in z
+    acc = [(i * 1.0, 0.0, 0.0) for i in range(200)]
+    raw_shift = mean_path_shift_m(acc, _pts([(p.x, p.y, p.z) for p in cand.points]))
+    blended = blend_reference_path(cand, acc, EVENT_WEIGHT_DEFAULT)
+    blended_shift = mean_path_shift_m(acc, _pts([(p.x, p.y, p.z) for p in blended.points]))
+    assert raw_shift == pytest.approx(10.0, abs=1e-6)
+    assert blended_shift == pytest.approx(10.0 * EVENT_WEIGHT_DEFAULT, abs=1e-6)
 
 
 # ----------------------------------------------------------------- the gate

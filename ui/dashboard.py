@@ -4713,6 +4713,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             return True
 
+    def _refine_event_weight(self) -> float:
+        """Phase 2B anchoring weight (event-lap influence, 0..1). Default 0.30;
+        override via config['track_refinement']['event_weight']. Clamped to a sane
+        band so a misconfig can't let event laps overturn the model."""
+        from data.track_refinement import EVENT_WEIGHT_DEFAULT
+        try:
+            w = float(self._config.get("track_refinement", {}).get("event_weight", EVENT_WEIGHT_DEFAULT))
+        except (TypeError, ValueError):
+            w = EVENT_WEIGHT_DEFAULT
+        return max(0.05, min(0.5, w))
+
     def _maybe_autostart_refine_capture(self) -> None:
         """Start (or re-target) live path capture when the driven track/layout has an
         accepted model. Cheap-guarded; called throttled from _poll_ui_queue.
@@ -4766,7 +4777,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             session = cap.build_session()
             cars = [cap.car_name] if getattr(cap, "car_name", "") else []
             result = refine_from_session(
-                session, cap.track_location_id, cap.layout_id, contributing_cars=cars
+                session, cap.track_location_id, cap.layout_id, contributing_cars=cars,
+                event_weight=self._refine_event_weight(),
             )
             if result.success and result.verdict is not None and result.verdict.improves:
                 self._refine_notice = (

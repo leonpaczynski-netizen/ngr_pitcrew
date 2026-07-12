@@ -2317,8 +2317,10 @@ class TrackModellingMixin:
         # Capture consumed once refined.
         self._track_path_capture = None
         self._tm_btn_refine_capture.setText("Start capturing event laps")
+        _ew = self._refine_event_weight() if hasattr(self, "_refine_event_weight") else 0.30
         try:
-            result = refine_from_session(session, loc_id, lay_id, contributing_cars=cars)
+            result = refine_from_session(session, loc_id, lay_id, contributing_cars=cars,
+                                         event_weight=_ew)
         except Exception as exc:  # pragma: no cover - defensive
             self._tm_refresh_refinement_panel()
             self._tm_refine_status_lbl.setText(f"Refinement failed: {exc}")

@@ -30,7 +30,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional, Tuple
 
-from data.track_calibration import CalibrationSession, build_reference_path
+from data.track_calibration import (
+    CalibrationSession,
+    ReferencePath,
+    ReferencePathPoint,
+    build_reference_path,
+)
 from data.track_station_map import (
     TrackStationMap,
     STATION_MODELS_DIR,
@@ -67,17 +72,25 @@ _LAP_DELTA_IMPROVE_PP = 0.05   # lap-length delta must close by ≥0.05pp to cou
 MAX_MEAN_SHIFT_M: float = 3.0
 CANDIDATE_REF_PATH_SCHEMA: str = "candidate_reference_path_v1"
 
+# Phase 2B weighted anchoring: event laps may only NUDGE an established model.
+# The candidate path is blended toward the accepted path so event laps contribute
+# at most EVENT_WEIGHT_DEFAULT of each point — a bad session can't overturn a
+# calibrated model, but consistent laps still refine it.
+EVENT_WEIGHT_DEFAULT: float = 0.30
+
 
 def _xyz_list(points) -> "List[tuple]":
-    """Extract (x, y, z) tuples from objects (or dicts) exposing x/y/z."""
+    """Extract (x, y, z) tuples from objects, dicts, or plain (x, y, z) sequences."""
     out: List[tuple] = []
     for p in points or []:
         try:
             if isinstance(p, dict):
                 out.append((float(p["x"]), float(p.get("y", 0.0)), float(p["z"])))
+            elif isinstance(p, (tuple, list)) and len(p) >= 3:
+                out.append((float(p[0]), float(p[1]), float(p[2])))
             else:
                 out.append((float(p.x), float(getattr(p, "y", 0.0)), float(p.z)))
-        except (KeyError, TypeError, ValueError, AttributeError):
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
             continue
     return out
 
@@ -336,13 +349,64 @@ def append_refinement_ledger(
 # Candidate build + gate
 # ---------------------------------------------------------------------------
 
+def _acc_index(i: int, n_cand: int, n_acc: int) -> int:
+    """Map candidate index i (0..n_cand-1) to the aligned accepted index."""
+    if n_cand <= 1:
+        return 0
+    return max(0, min(n_acc - 1, round(i * (n_acc - 1) / (n_cand - 1))))
+
+
+def blend_reference_path(ref_path: ReferencePath, accepted_xyz, event_weight: float) -> ReferencePath:
+    """Blend a candidate reference path toward the accepted path (Phase 2B).
+
+    Returns a new ReferencePath whose points are
+    ``event_weight * candidate + (1 - event_weight) * accepted`` (index-aligned,
+    both ordered S/F→S/F). ``event_weight`` is clamped to [0, 1]; the accepted
+    path is index-mapped to the candidate length. Returns ``ref_path`` unchanged
+    when there is nothing to blend (no accepted geometry, or weight ≥ 1)."""
+    acc = _xyz_list(accepted_xyz)
+    w = max(0.0, min(1.0, float(event_weight)))
+    cand_pts = list(getattr(ref_path, "points", []) or [])
+    if len(acc) < 2 or len(cand_pts) < 2 or w >= 1.0:
+        return ref_path
+    n_cand, n_acc = len(cand_pts), len(acc)
+    blended: List[ReferencePathPoint] = []
+    for i, cp in enumerate(cand_pts):
+        ax, ay, az = acc[_acc_index(i, n_cand, n_acc)]
+        blended.append(ReferencePathPoint(
+            lap_progress=cp.lap_progress,
+            distance_along_lap_m=cp.distance_along_lap_m,
+            x=w * cp.x + (1.0 - w) * ax,
+            y=w * cp.y + (1.0 - w) * ay,
+            z=w * cp.z + (1.0 - w) * az,
+            speed_kph_avg=cp.speed_kph_avg,
+            source_lap_count=cp.source_lap_count,
+            yaw_rate_avg=cp.yaw_rate_avg,
+        ))
+    return ReferencePath(
+        track_location_id=ref_path.track_location_id,
+        layout_id=ref_path.layout_id,
+        calibration_car_id=ref_path.calibration_car_id,
+        source_lap_count=ref_path.source_lap_count,
+        points=blended,
+        confidence=ref_path.confidence,
+        warnings=list(getattr(ref_path, "warnings", []) or []),
+    )
+
+
 def build_candidate_alignment(
     session: CalibrationSession,
     accepted_align: TrackModelAlignmentResult,
+    anchor_points=None,
+    event_weight: Optional[float] = None,
 ) -> Tuple[Optional[TrackModelAlignmentResult], Optional[TrackStationMap], object]:
     """Build a candidate alignment from captured laps, using the accepted model's
-    seed truth (corners_expected / seed lap length). Returns
-    (candidate_align | None, station_map | None, build_result)."""
+    seed truth (corners_expected / seed lap length).
+
+    When ``anchor_points`` (the accepted path geometry) is supplied, the built
+    path is blended toward it at ``event_weight`` (Phase 2B) so event laps only
+    nudge an established model. Returns (candidate_align | None, station_map |
+    None, build_result)."""
     seed = SimpleNamespace(
         corners_expected=accepted_align.seed_corners_expected,
         length_m=accepted_align.lap_length_m_seed,
@@ -352,8 +416,15 @@ def build_candidate_alignment(
     ref_path = getattr(build_result, "reference_path", None)
     if not getattr(build_result, "success", False) or ref_path is None or not ref_path.points:
         return None, None, build_result
+    if anchor_points and event_weight is not None:
+        ref_path = blend_reference_path(ref_path, anchor_points, event_weight)
     station_map = build_track_station_map(ref_path, seed)
     candidate_align = align_track_model(station_map, seed)
+    # Expose the (possibly blended) path used, so callers persist the real geometry.
+    try:
+        build_result.reference_path = ref_path
+    except Exception:  # pragma: no cover - defensive (namedtuple/frozen)
+        pass
     return candidate_align, station_map, build_result
 
 
@@ -430,12 +501,15 @@ def refine_from_session(
     contributing_cars: Optional[List[str]] = None,
     source_session_ids: Optional[List[int]] = None,
     models_dir: Optional[Path] = None,
+    event_weight: float = EVENT_WEIGHT_DEFAULT,
 ) -> RefinementResult:
     """Build (never promote) a candidate model from captured event laps.
 
     Requires an existing accepted model (else refinement is a no-op — there is
-    nothing to refine). Writes the candidate file + a ledger line. The caller
-    decides whether to ``promote_candidate`` based on ``result.promotable``.
+    nothing to refine). Event laps are anchored to the accepted geometry at
+    ``event_weight`` (Phase 2B) so they nudge, not overturn. Writes the candidate
+    file + a ledger line. The caller decides whether to ``promote_candidate``
+    based on ``result.promotable``.
     """
     mdir = Path(models_dir) if models_dir else STATION_MODELS_DIR
     cars = sorted({c.strip() for c in (contributing_cars or []) if c and c.strip()})
@@ -447,8 +521,16 @@ def refine_from_session(
     if accepted_align is None:
         return RefinementResult(False, "accepted model unreadable")
 
+    # Accepted geometry (for anchoring + the shift guard); [] when unresolved, in
+    # which case anchoring is skipped and the candidate is event-laps-only.
+    accepted_points = _load_accepted_path_points(track_location_id, layout_id)
+
     try:
-        candidate_align, _sm, build_result = build_candidate_alignment(session, accepted_align)
+        candidate_align, _sm, build_result = build_candidate_alignment(
+            session, accepted_align,
+            anchor_points=(accepted_points or None),
+            event_weight=(event_weight if accepted_points else None),
+        )
     except Exception as exc:  # pragma: no cover - defensive
         append_refinement_ledger(track_location_id, layout_id, {
             "decision": "build_error", "error": str(exc), "cars": cars,
@@ -468,13 +550,13 @@ def refine_from_session(
 
     # Phase 2·0 geometry-shift guard: mean horizontal displacement of the
     # candidate path from the accepted path (None when accepted geometry can't be
-    # resolved — the scalar-metric gate still applies).
+    # resolved — the scalar-metric gate still applies). With Phase 2B anchoring
+    # this stays small by construction, but still guards pathological cases.
     geometry_shift_m: Optional[float] = None
     try:
         _cand_pts = getattr(build_result.reference_path, "points", None)
-        _acc_pts = _load_accepted_path_points(track_location_id, layout_id)
-        if _acc_pts and _cand_pts:
-            geometry_shift_m = mean_path_shift_m(_acc_pts, _cand_pts)
+        if accepted_points and _cand_pts:
+            geometry_shift_m = mean_path_shift_m(accepted_points, _cand_pts)
     except Exception:
         geometry_shift_m = None
 
@@ -490,6 +572,8 @@ def refine_from_session(
         "improvement_reasons": verdict.improvement_reasons,
         "regression_reasons": verdict.regression_reasons,
         "geometry_shift_m":   geometry_shift_m,
+        "event_weight":       (event_weight if accepted_points else 1.0),
+        "anchored":           bool(accepted_points),
         "delta_vs_accepted": {
             "corner_match_delta": candidate_align.model_corners_found - accepted_align.model_corners_found,
             "lap_length_delta_pct_change": candidate_align.lap_length_delta_pct - accepted_align.lap_length_delta_pct,
