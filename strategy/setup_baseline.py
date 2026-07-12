@@ -528,6 +528,18 @@ def build_baseline_setup(
 
         seed = NEUTRAL_SEEDS[field]
 
+        # Ride height: the flat 80mm neutral seed collides with tight race-car
+        # ceilings — e.g. the Porsche 911 RSR front range is {55, 80}, so the
+        # generic clamp pins the seed to the MAX, the exact opposite of the low
+        # ride height a race car wants. Cap the ride-height seed at the lower
+        # third of the car's resolved range so it biases low and can never
+        # clamp to the maximum. All other fields keep their flat neutral seed.
+        if field in ("ride_height_front", "ride_height_rear") and field in ranges:
+            _rh_lo, _rh_hi = ranges[field]
+            if _rh_hi > _rh_lo:
+                _rh_lower_third = _rh_lo + (_rh_hi - _rh_lo) / 3.0
+                seed = min(float(seed), _rh_lower_third)
+
         # Compute value WITH combined bias (profile + session)
         to_val = float(seed)
         is_biased = False
