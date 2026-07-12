@@ -465,6 +465,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._saved_setups = list(config.get("car_setup", {}).get("setups", []))
             self._migrate_setup_ids()
 
+        # Declared "setup running this stint" (label string). Set from the Live
+        # practice panel, editable in Practice Review, and passed to the AI with
+        # driver feedback so the setup fix knows which setup was on the car.
+        self._live_running_setup: str = ""
+
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
@@ -1335,6 +1340,28 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         layout = QVBoxLayout(w)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        # Declare which saved setup is on the car this stint. Carries into
+        # Practice Review (editable there) and is passed to the AI with feedback.
+        setup_box = QGroupBox("Setup Running This Stint")
+        setup_box.setStyleSheet(self._group_style())
+        setup_layout = QFormLayout(setup_box)
+        setup_layout.setSpacing(6)
+        self._live_running_setup_combo = QComboBox()
+        self._live_running_setup_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; "
+            "border-radius: 3px; padding: 2px 6px; }"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._live_running_setup_combo.setToolTip(
+            "Tell the app which saved setup you're running this stint.\n"
+            "It carries into Practice Review and is sent to the AI with your feedback.")
+        self._live_running_setup_combo.currentTextChanged.connect(self._on_running_setup_changed)
+        _lrs_lbl = QLabel("Setup on car:")
+        _lrs_lbl.setStyleSheet(f"color: {_TEXT};")
+        setup_layout.addRow(_lrs_lbl, self._live_running_setup_combo)
+        layout.addWidget(setup_box)
+        self._refresh_running_setup_combos()
 
         stats_box = QGroupBox("Practice Stats")
         stats_box.setStyleSheet(self._group_style())
@@ -7193,6 +7220,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         reg = getattr(self, "_tab_registry", None)
         key = reg.key_at(index) if reg is not None else None
         if key == TAB_HISTORY:            self._refresh_history()
+        elif key == TAB_LIVE:             self._refresh_running_setup_combos()
         elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
         elif key == TAB_STRATEGY_BUILDER:
             self._sync_strategy_from_event()
@@ -7283,7 +7311,45 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             pass
 
+    # -----------------------------------------------------------------------
+    # "Setup running this stint" — declared in Live practice, editable in
+    # Practice Review, passed to the AI with driver feedback (no schema change).
+    # -----------------------------------------------------------------------
+
+    def _running_setup_label_for(self, s: dict) -> str:
+        """Concise, stable label for a saved-setup dict used by the running-setup combos."""
+        lbl = s.get("setup_label") or "Setup"
+        st = s.get("setup_type") or s.get("session") or ""
+        return f"{lbl} [{st}]" if st else lbl
+
+    def _refresh_running_setup_combos(self) -> None:
+        """Repopulate both running-setup combos from saved setups, preserving the
+        declared selection (``_live_running_setup``). Safe to call before either
+        combo exists."""
+        labels = [self._running_setup_label_for(s) for s in getattr(self, "_saved_setups", [])]
+        current = getattr(self, "_live_running_setup", "") or ""
+        for combo in (getattr(self, "_live_running_setup_combo", None),
+                      getattr(self, "_prac_running_setup_combo", None)):
+            if combo is None:
+                continue
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("— none —")
+            for lbl in labels:
+                combo.addItem(lbl)
+            idx = combo.findText(current) if current else -1
+            combo.setCurrentIndex(idx if idx > 0 else 0)
+            combo.blockSignals(False)
+
+    def _on_running_setup_changed(self, text: str) -> None:
+        """Store the declared running setup and keep both combos in sync."""
+        self._live_running_setup = "" if (not text or text == "— none —") else text
+        self._refresh_running_setup_combos()
+
     def _sync_practice_from_event(self) -> None:
+        # Keep the "setup run this stint" selector current with saved setups +
+        # whatever was declared live.
+        self._refresh_running_setup_combos()
         try:
             evt = self._active_event()
             if not evt:
@@ -7534,6 +7600,24 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             lbl_widget.setStyleSheet(f"color: {_TEXT};")
             form.addRow(lbl_widget, combo)
 
+        # Which saved setup was run this stint — defaults to whatever was
+        # declared in the Live practice panel, editable here. Passed to the AI
+        # with the feedback so the setup fix knows which setup was on the car.
+        setup_run_lbl = QLabel("Setup run this stint:")
+        setup_run_lbl.setStyleSheet(f"color: {_TEXT};")
+        self._prac_running_setup_combo = QComboBox()
+        self._prac_running_setup_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; "
+            "border-radius: 3px; padding: 2px 6px; }"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._prac_running_setup_combo.setToolTip(
+            "The setup you ran this stint (carried over from the Live tab). "
+            "Change it here if needed before submitting feedback.")
+        self._prac_running_setup_combo.currentTextChanged.connect(self._on_running_setup_changed)
+        form.addRow(setup_run_lbl, self._prac_running_setup_combo)
+        self._refresh_running_setup_combos()
+
         # Overall subjective take on the setup run this stint. Moved here from
         # the Setup Builder so the "did I like it?" rating sits with the rest of
         # the per-run feedback; it is attributed to the setup that was running.
@@ -7579,6 +7663,20 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         parts = []
         feedback_dict: dict = {}
+
+        # Which setup was on the car this stint (declared in Live practice /
+        # editable here). Prepended to the feedback text so it flows into the
+        # setup-fix AI prompt via _setup_feeling_input, and recorded in the dict.
+        running_setup = ""
+        if hasattr(self, "_prac_running_setup_combo"):
+            _rs = self._prac_running_setup_combo.currentText()
+            running_setup = "" if (not _rs or _rs == "— none —") else _rs
+        elif getattr(self, "_live_running_setup", ""):
+            running_setup = self._live_running_setup
+        feedback_dict["setup_run"] = running_setup
+        if running_setup:
+            parts.append(f"Setup run this stint: {running_setup}")
+
         for label, combo in self._feedback_combos.items():
             val = combo.currentText()
             key = label.lower().replace(" ", "_").replace("/", "_")
