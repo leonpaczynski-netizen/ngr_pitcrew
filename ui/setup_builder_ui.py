@@ -743,6 +743,9 @@ class SetupBuilderMixin:
         # Keep the form's structured Q/R setup name — do NOT rename to "AI Fix N".
         # Save advances the structured name to the next numbered attempt.
         form.last_ai_fields = {}
+        # Auto-save the applied setup (see _autosave_applied_setup) — applying it
+        # means it is now the current setup on the car.
+        self._autosave_applied_setup(form)
         form._btn_apply_ai_setup.setVisible(False)
 
     def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
@@ -1965,7 +1968,6 @@ class SetupBuilderMixin:
         # convention is preserved. The AI-fix linkage for learning is recorded in
         # the DB (apply_recommendation_for_car_track) and setup_history, not here.
         # Highlight changed fields so the user can see what was modified.
-        # The save is intentionally deferred — click Save Setup to persist.
         self._highlight_changed_fields(list(self._last_setup_ai_fields.keys()))
         # Link recommendation to this session
         _car_id_apply = getattr(self, "_car_id_build", 0)
@@ -1982,9 +1984,32 @@ class SetupBuilderMixin:
                 )
             except Exception as _are:
                 print(f"[SetupHistory] apply_recommendation failed: {_are}")
+        # Auto-save (UAT): applying a setup means it is now the current setup on
+        # the car, so persist it immediately instead of requiring a separate Save
+        # click. Only auto-saves when an active event exists (the save path needs
+        # one to name/group the setup); with no event the user can still Save
+        # manually, and we avoid interrupting the apply with a modal warning.
+        self._autosave_applied_setup()
         if hasattr(self, "_btn_apply_ai_setup"):
             self._btn_apply_ai_setup.setVisible(False)
         self._last_setup_ai_fields = {}
+
+    def _autosave_applied_setup(self, form: "SetupFormWidget | None" = None) -> None:
+        """Persist the just-applied setup when an active event exists.
+
+        Best-effort: never raises into the apply path. Skips silently when no
+        active event is selected so no modal warning interrupts the apply.
+        """
+        try:
+            _evt = self._active_event() if hasattr(self, "_active_event") else None
+            if not (_evt and _evt.get("name")):
+                return
+            if form is not None and form is not self._race_form:
+                self._setup_save_for_form(form)
+            else:
+                self._setup_save()
+        except Exception as _asv:  # pragma: no cover - defensive
+            print(f"[SetupSave] auto-save on apply failed: {_asv}")
 
     def _resolve_recent_laps(self, car_id: int, track: str) -> list:
         """Return per-lap telemetry rows for the most recent session of car+track.

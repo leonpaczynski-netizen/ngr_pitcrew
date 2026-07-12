@@ -612,11 +612,11 @@ class SetupFormWidget(QWidget):
         # advisory result text above it. Visibility stays gated by the engineering
         # validation logic (setVisible(_show_apply)); styling never affects that.
         from ui import ngr_theme as _ngr
-        self._btn_apply_ai_setup = QPushButton("Apply Pit Crew recommendation")
+        self._btn_apply_ai_setup = QPushButton("Apply && Save recommendation")
         self._btn_apply_ai_setup.setStyleSheet(_ngr.primary_button_qss())
         self._btn_apply_ai_setup.setToolTip(
-            "Apply the Pit Crew's recommended changes to the setup form.\n"
-            "Changed fields are highlighted until you click Save Setup to persist them.")
+            "Apply the Pit Crew's recommended changes to the setup form and save them\n"
+            "as the current setup for this event (auto-saved when an event is active).")
         self._btn_apply_ai_setup.setVisible(False)
         outer.addWidget(self._btn_apply_ai_setup)
 
