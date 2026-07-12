@@ -2035,6 +2035,15 @@ class SetupBuilderMixin:
                 "</div>"
             )
 
+        # --- Sections 9-14: Race-Engineer remediation surfaces (additive) ---
+        # Read-only presentation of fields the deterministic backend now emits.
+        # Wrapped so a malformed field can never break the core render above;
+        # every section self-guards and is simply absent on legacy responses.
+        try:
+            html += self._render_race_engineer_surfaces(data)
+        except Exception as _re_exc:
+            print(f"[SetupBuilder] race-engineer surfaces render skipped: {_re_exc}")
+
         _result_text.setHtml(html)
 
         # Save to history
@@ -2061,6 +2070,195 @@ class SetupBuilderMixin:
         # Home tab current (display-only; no-op when Home is not visible).
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
+
+    def _render_race_engineer_surfaces(self, data: dict) -> str:
+        """Build the additive Race-Engineer panels from the response dict.
+
+        Every panel is optional: absent/empty backend fields render nothing, so
+        legacy responses are unaffected. Pure presentation — no data is authored.
+        """
+        if not isinstance(data, dict):
+            return ""
+        html = ""
+
+        # --- Section 9: Qualifying discipline (Phase 7) ---
+        _qb = data.get("qualifying_brief") or {}
+        if _qb.get("is_qualifying"):
+            _q_strengths = _qb.get("strengths") or []
+            _q_compromises = _qb.get("compromises") or []
+            _q_body = (
+                f"<p style='margin:2px 0; color:#EED8B0; font-size:11px;'>"
+                f"{_qb.get('objective', '')}</p>"
+            )
+            if _q_strengths:
+                _q_body += (
+                    "<p style='margin:4px 0 0 0; color:#AAA; font-size:11px;'>"
+                    "<b style='color:#8BC34A;'>Buys:</b> "
+                    + "; ".join(_q_strengths) + ".</p>"
+                )
+            if _q_compromises:
+                _q_body += (
+                    "<p style='margin:2px 0 0 0; color:#AAA; font-size:11px;'>"
+                    "<b style='color:#E0A060;'>Trades away:</b> "
+                    + "; ".join(_q_compromises) + ".</p>"
+                )
+            _q_warn = _qb.get("one_lap_warning", "")
+            if _q_warn:
+                _q_body += (
+                    f"<p style='margin:5px 0 0 0; color:#E86A5E; font-size:11px;'>"
+                    f"&#9888; {_q_warn}</p>"
+                )
+            html += (
+                "<div style='background:#2A1D0A; border:1px solid #886633; "
+                "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+                "<b style='color:#F5A623; font-size:12px;'>"
+                "&#127937; Qualifying tune &mdash; one flying lap</b>"
+                f"{_q_body}</div>"
+            )
+
+        # --- Section 10: Candidate comparison (Phase 14) ---
+        _cc = data.get("candidate_comparison") or {}
+        _cc_cols = _cc.get("columns") or []
+        _cc_rows = _cc.get("rows") or []
+        if _cc_cols and _cc_rows:
+            _hdr = "<th style='text-align:left; color:#888; padding:2px 8px 2px 0;'>Field</th>"
+            for _c in _cc_cols:
+                _hdr += (f"<th style='text-align:left; color:#7AB3D4; "
+                         f"padding:2px 8px 2px 0;' title='{_c.get('source', '')}'>"
+                         f"{_c.get('label', _c.get('name', ''))}</th>")
+            _body = ""
+            for _r in _cc_rows:
+                _differs = _r.get("differs")
+                _fname_col = "#F5A623" if _differs else "#CCC"
+                _row_cells = (f"<td style='color:{_fname_col}; padding:2px 8px 2px 0;'>"
+                              f"<code>{_r.get('field', '')}</code></td>")
+                _vals = _r.get("values") or {}
+                for _c in _cc_cols:
+                    _v = _vals.get(_c.get("name"))
+                    _vtxt = "&mdash;" if _v is None else (
+                        f"{_v:g}" if isinstance(_v, (int, float)) else str(_v))
+                    _row_cells += (f"<td style='color:#CCC; padding:2px 8px 2px 0;'>"
+                                   f"{_vtxt}</td>")
+                _body += f"<tr>{_row_cells}</tr>"
+            html += (
+                "<div style='background:#12202A; border:1px solid #2E4A5A; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details><summary style='color:#7AB3D4; font-size:11px; cursor:pointer;'>"
+                "Candidate comparison (current vs proven vs recommended)</summary>"
+                "<table style='font-size:11px; border-collapse:collapse; margin-top:6px;'>"
+                f"<tr>{_hdr}</tr>{_body}</table>"
+                "<p style='color:#666; font-size:10px; margin:4px 0 0 0;'>"
+                "Amber field = candidates disagree.</p>"
+                "</details></div>"
+            )
+
+        # --- Section 11: Controlled test sequence (Phase 13) ---
+        _ts = data.get("test_sequence") or {}
+        _ts_stages = _ts.get("stages") or []
+        if _ts_stages:
+            _stage_html = ""
+            for _s in _ts_stages:
+                _iso = _s.get("isolate_note", "")
+                _stage_html += (
+                    "<div style='padding:4px 0; border-bottom:1px solid #223022;'>"
+                    f"<b style='color:#8BC34A;'>{_s.get('order', '')}. "
+                    f"{_s.get('change', '')}</b>"
+                    f"<span style='color:#666; font-size:10px;'>&nbsp;&nbsp;"
+                    f"({_s.get('rationale', '')})</span>"
+                    f"<br><span style='color:#AAA; font-size:11px;'>"
+                    f"&#10003; {_s.get('success_criterion', '')}</span>"
+                    f"<br><span style='color:#C89060; font-size:11px;'>"
+                    f"&#8630; {_s.get('rollback', '')}</span>"
+                    + (f"<br><span style='color:#E0A060; font-size:10px;'>"
+                       f"&#9888; {_iso}</span>" if _iso else "")
+                    + "</div>"
+                )
+            _ts_note = _ts.get("note", "")
+            html += (
+                "<div style='background:#12220E; border:1px solid #3A5A2E; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details><summary style='color:#8BC34A; font-size:11px; cursor:pointer;'>"
+                "How to test these changes (one at a time)</summary>"
+                f"<div style='margin-top:6px;'>{_stage_html}</div>"
+                + (f"<p style='color:#888; font-size:10px; margin:6px 0 0 0;'>{_ts_note}</p>"
+                   if _ts_note else "")
+                + "</details></div>"
+            )
+
+        # --- Section 12: Feedback dispositions (Phase 4) ---
+        _fd = data.get("feedback_dispositions") or []
+        if _fd:
+            _state_colour = {"addressed": "#8BC34A", "deferred": "#F5A623",
+                             "strategy": "#7AB3D4", "preserved": "#AAAAAA"}
+            _fd_rows = ""
+            for _d in _fd:
+                _st = str(_d.get("state", "")).lower()
+                _col = _state_colour.get(_st, "#AAAAAA")
+                _fd_rows += (
+                    "<div style='padding:3px 0; border-bottom:1px solid #222;'>"
+                    f"<span style='color:{_col}; font-weight:bold; font-size:11px;'>"
+                    f"[{_st or '?'}]</span> "
+                    f"<span style='color:#CCC; font-size:11px;'>{_d.get('feedback', '')}</span>"
+                    + (f"<br><span style='color:#888; font-size:10px;'>"
+                       f"&nbsp;&nbsp;{_d.get('detail', '')}</span>"
+                       if _d.get('detail') else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#161622; border:1px solid #444466; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details><summary style='color:#AAAACC; font-size:11px; cursor:pointer;'>"
+                "What happened to each thing you reported</summary>"
+                f"<div style='margin-top:6px;'>{_fd_rows}</div>"
+                "</details></div>"
+            )
+
+        # --- Section 13: Historical comparison (Phase 9) ---
+        _hc = data.get("historical_comparison") or []
+        if _hc:
+            _hc_rows = ""
+            for _r in _hc:
+                _flag = _r.get("deviation_flagged")
+                _fcol = "#F5A623" if _flag else "#CCC"
+                _hc_rows += (
+                    "<div style='padding:3px 0; border-bottom:1px solid #2A2A1A;'>"
+                    f"<b style='color:{_fcol};'><code>{_r.get('field', '')}</code></b> "
+                    f"<span style='color:#888; font-size:11px;'>"
+                    f"current {_r.get('current', '—')} &nbsp;|&nbsp; "
+                    f"proven {_r.get('historical', '—')} &nbsp;|&nbsp; "
+                    f"rec {_r.get('recommended', '—')}</span>"
+                    + (f"<br><span style='color:#C8AA66; font-size:10px;'>"
+                       f"&#9888; {_r.get('note', '')}</span>" if _flag and _r.get('note') else "")
+                    + "</div>"
+                )
+            html += (
+                "<div style='background:#1A1A0A; border:1px solid #665533; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<details><summary style='color:#C8AA66; font-size:11px; cursor:pointer;'>"
+                "Compared to your proven setups</summary>"
+                f"<div style='margin-top:6px;'>{_hc_rows}</div>"
+                "<p style='color:#666; font-size:10px; margin:4px 0 0 0;'>"
+                "Amber = the recommendation moves materially away from a proven value.</p>"
+                "</details></div>"
+            )
+
+        # --- Section 14: Balance interaction (Phase 10) ---
+        _arb = data.get("arbitration") or {}
+        _arb_notes = _arb.get("notes") or []
+        _arb_contrib = _arb.get("contributors") or []
+        if _arb_notes and _arb_contrib:
+            _arb_body = "".join(
+                f"<p style='margin:2px 0; color:#CCC; font-size:11px;'>{_n}</p>"
+                for _n in _arb_notes
+            )
+            html += (
+                "<div style='background:#20161A; border:1px solid #5A3E4A; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<b style='color:#D48AB3; font-size:11px;'>&#9878; Balance interaction</b>"
+                f"{_arb_body}</div>"
+            )
+
+        return html
 
     def _apply_and_save_ai_setup(self) -> None:
         """Apply approved AI setup fields to the form.
