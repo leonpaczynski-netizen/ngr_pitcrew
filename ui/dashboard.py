@@ -7563,7 +7563,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         form.addRow(notes_lbl, self._feedback_notes)
 
         from ui import ngr_theme as _ngr_fb
-        btn_submit = QPushButton("Submit Feedback → AI Fix")
+        btn_submit = QPushButton("Analyse Feedback → Setup Fix")
         btn_submit.setStyleSheet(_ngr_fb.primary_button_qss())
         btn_submit.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_submit.clicked.connect(self._on_driver_feedback_submit)
