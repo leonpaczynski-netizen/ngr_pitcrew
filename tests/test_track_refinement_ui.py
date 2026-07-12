@@ -56,8 +56,12 @@ def window(_main_window, tmp_path, monkeypatch):
     monkeypatch.setattr(tr, "STATION_MODELS_DIR", tmp_path, raising=False)
     _main_window._tmp_models = tmp_path
     _main_window._track_path_capture = None
+    _main_window._refine_notice = ""
+    _main_window._last_refine_autostart_check = 0.0
     _main_window._tm_refine_status_lbl.setText("—")
     _main_window._tm_refine_result_lbl.setText("")
+    # Restore the real _build_event_context (2A tests override it per-test).
+    _main_window.__dict__.pop("_build_event_context", None)
     yield _main_window
 
 
@@ -160,3 +164,62 @@ def test_discard_removes_candidate(window):
     window._tm_discard_refinement()
     assert tr.find_candidate_model_path(LOC, LAY, base_dir=window._tmp_models) is None
     assert "discarded" in window._tm_refine_status_lbl.text().lower()
+
+
+# ------------------------------------------------ Phase 2A: auto-capture
+
+def _set_event(window, loc=LOC, lay=LAY, car="Porsche RSR"):
+    from types import SimpleNamespace
+    window._build_event_context = lambda: SimpleNamespace(
+        track_location_id=loc, layout_id=lay, car=car)
+
+
+def test_autostart_begins_capture_when_model_present(window):
+    export_accepted_model_json(_mk_align(), LOC, LAY, output_dir=window._tmp_models)
+    _set_event(window)
+    window._maybe_autostart_refine_capture()
+    assert window._track_path_capture is not None
+    assert window._track_path_capture.matches(LOC, LAY)
+
+
+def test_autostart_inert_without_accepted_model(window):
+    _set_event(window)  # identity resolves, but no accepted model in temp dir
+    window._maybe_autostart_refine_capture()
+    assert window._track_path_capture is None
+
+
+def test_autostart_disabled_by_config(window):
+    export_accepted_model_json(_mk_align(), LOC, LAY, output_dir=window._tmp_models)
+    _set_event(window)
+    window._config.setdefault("track_refinement", {})["auto_capture"] = False
+    try:
+        window._maybe_autostart_refine_capture()
+        assert window._track_path_capture is None
+    finally:
+        window._config["track_refinement"]["auto_capture"] = True
+
+
+def test_autostart_inert_without_identity(window):
+    export_accepted_model_json(_mk_align(), LOC, LAY, output_dir=window._tmp_models)
+    _set_event(window, loc="", lay="")  # no canonical ids
+    window._maybe_autostart_refine_capture()
+    assert window._track_path_capture is None
+
+
+def test_track_change_refines_old_capture(window):
+    from data.live_track_path_capture import LiveTrackPathCapture
+    export_accepted_model_json(_mk_align(), LOC, LAY, output_dir=window._tmp_models)
+    # Capturing Fuji, but the event identity is now a different track.
+    window._track_path_capture = LiveTrackPathCapture(LOC, LAY, car_name="RSR")
+    _set_event(window, loc="suzuka", lay="suzuka__east")
+    window._maybe_autostart_refine_capture()
+    # Old Fuji capture was consumed (refined/cleared); no Suzuka model → no restart.
+    assert window._track_path_capture is None
+
+
+def test_reset_triggers_autorefine(window):
+    # A reset ends the stint and consumes the capture (empty → cleared, no crash).
+    from data.live_track_path_capture import LiveTrackPathCapture
+    window._track_path_capture = LiveTrackPathCapture(LOC, LAY, car_name="RSR")
+    window._on_reset_clicked()
+    assert window._track_path_capture is None

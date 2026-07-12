@@ -435,9 +435,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._live_stabiliser_state = None
         # Group 61: OFF-by-default raw road-distance capture (diagnostic, read-only).
         self._raw_rd_capture = None
-        # UAT #6 Phase 1b: OFF-by-default live event-lap path capture for
-        # continuous track-model refinement (started from the Track Modelling tab).
+        # UAT #6 Phase 1b/2A: live event-lap path capture for continuous
+        # track-model refinement (auto-started during events when an accepted
+        # model exists; also manually from the Track Modelling tab).
         self._track_path_capture = None
+        self._last_refine_autostart_check = 0.0  # throttle for the auto-start probe
+        self._refine_notice = ""                 # last "refined model available" notice
         self._gear_ratios_captured: bool = False
         self._lap_compound_tags: dict[int, str] = {}
         self._default_lap_compound: str = ""
@@ -2496,6 +2499,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 except Exception:
                     pass
             self._update_live(packet)
+        # UAT #6 Phase 2A: throttled auto-start of refinement capture while driving
+        # a track that already has an accepted model (inert when disabled/no model).
+        try:
+            _now = time.time()
+            if _now - self._last_refine_autostart_check > 3.0:
+                self._last_refine_autostart_check = _now
+                self._maybe_autostart_refine_capture()
+        except Exception:
+            pass
         self._refresh_strategy_fuel_column()
         self._refresh_gear_ratios()
         self._update_telemetry_labels()
@@ -4685,10 +4697,92 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._ai_results_text.setHtml(loaded_html)
 
     def _on_reset_clicked(self) -> None:
+        # UAT #6 Phase 2A: a reset ends the stint — refine from whatever was captured.
+        self._autorefine_capture(reason="reset")
         if self._tracker is not None:
             self._tracker.reset()
             self._tracker.set_session_type_override(None)
         self._bridge.race_state_changed.emit("IDLE")
+
+    # ---------------------------------------------- UAT #6 Phase 2A: auto refinement
+
+    def _refine_auto_capture_enabled(self) -> bool:
+        """Auto-capture defaults ON; opt out via config['track_refinement']['auto_capture']."""
+        try:
+            return bool(self._config.get("track_refinement", {}).get("auto_capture", True))
+        except Exception:
+            return True
+
+    def _maybe_autostart_refine_capture(self) -> None:
+        """Start (or re-target) live path capture when the driven track/layout has an
+        accepted model. Cheap-guarded; called throttled from _poll_ui_queue.
+
+        If a capture is already running for a DIFFERENT track/layout (the driver
+        switched tracks without a reset), refine the old one first, then restart.
+        """
+        if not self._refine_auto_capture_enabled():
+            return
+        try:
+            ec = self._build_event_context()
+            loc = str(getattr(ec, "track_location_id", "") or "").strip()
+            lay = str(getattr(ec, "layout_id", "") or "").strip()
+            car = str(getattr(ec, "car", "") or "").strip()
+        except Exception:
+            return
+        cap = getattr(self, "_track_path_capture", None)
+        if cap is not None:
+            # Already capturing — only act if the identity changed.
+            if loc and lay and not cap.matches(loc, lay):
+                self._autorefine_capture(reason="track_change")
+            else:
+                return
+        if not loc or not lay:
+            return
+        from data.track_model_alignment import find_accepted_model_path
+        if find_accepted_model_path(loc, lay) is None:
+            return  # no model to refine — stay inert
+        from data.live_track_path_capture import LiveTrackPathCapture
+        self._track_path_capture = LiveTrackPathCapture(loc, lay, car_name=car)
+        print(f"[Refine] auto-capture started for {loc}/{lay}")
+        if hasattr(self, "_tm_refresh_refinement_panel"):
+            try:
+                self._tm_refresh_refinement_panel()
+            except Exception:
+                pass
+
+    def _autorefine_capture(self, reason: str = "") -> None:
+        """Build a candidate from the active capture (if any) and clear it.
+
+        Non-destructive: produces a gated candidate the user reviews/accepts in
+        the Track Modelling tab. Sets a one-line notice when an improving
+        candidate is available. Best-effort; never raises into the caller.
+        """
+        cap = getattr(self, "_track_path_capture", None)
+        self._track_path_capture = None
+        if cap is None or cap.lap_count() == 0:
+            return
+        try:
+            from data.track_refinement import refine_from_session
+            session = cap.build_session()
+            cars = [cap.car_name] if getattr(cap, "car_name", "") else []
+            result = refine_from_session(
+                session, cap.track_location_id, cap.layout_id, contributing_cars=cars
+            )
+            if result.success and result.verdict is not None and result.verdict.improves:
+                self._refine_notice = (
+                    f"Refined model available for {cap.track_location_id} "
+                    f"({result.contributing_laps} lap(s)) — review in Track Modelling."
+                )
+                print(f"[Refine] {self._refine_notice} (trigger: {reason})")
+            else:
+                self._refine_notice = ""
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[Refine] auto-refine failed: {exc}")
+        if hasattr(self, "_tm_refresh_refinement_panel"):
+            try:
+                self._tm_refresh_refinement_panel()
+            except Exception:
+                pass
 
     def _build_workflow_guide_group(self) -> QGroupBox:
         guide_box = QGroupBox("How to use this tab")
