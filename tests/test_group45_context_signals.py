@@ -913,7 +913,11 @@ class TestAC14RuntimeHighTyreWearSuppression:
     def test_c1_fires_when_tyre_wear_low(self):
         """C1_entry_lsd_decel fires when entry_understeer=True and tyre_wear_high=False."""
         diag = _c1_firing_diag(tyre_wear_high=False)
-        setup = {"lsd_decel": 5}
+        # Interior lsd_decel so the anti-ratchet movement cap does not confound this
+        # tyre-wear gate assertion (lsd_decel=5 sits in the bottom operating-band
+        # reserve, where a further -2 decrease is intentionally held — covered by
+        # test_movement_cap_* instead).
+        setup = {"lsd_decel": 30}
         ranges = resolve_ranges("")
         profile = _make_neutral_profile()
 
@@ -930,7 +934,7 @@ class TestAC14RuntimeHighTyreWearSuppression:
     def test_c1_suppressed_when_tyre_wear_high(self):
         """C1_entry_lsd_decel must NOT fire when tyre_wear_high=True."""
         diag = _c1_firing_diag(tyre_wear_high=True)
-        setup = {"lsd_decel": 5}
+        setup = {"lsd_decel": 30}   # interior — isolate the tyre-wear gate from the movement cap
         ranges = resolve_ranges("")
         profile = _make_neutral_profile()
 

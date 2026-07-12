@@ -26,6 +26,10 @@ import pytest
 
 from strategy.setup_baseline import build_baseline_setup, _LABEL_CAR_RANGE
 from strategy.setup_ranges import resolve_ranges, GENERIC_DEFAULTS
+from strategy.setup_rule_engine import (
+    run_rule_engine, _apply_movement_cap, _MOVEMENT_CAP_RESERVE_FRAC,
+)
+from strategy.setup_driver_profile import build_driver_profile
 import strategy.setup_knowledge_base as kb
 
 
@@ -263,3 +267,72 @@ class TestPhysicsDirection:
         assert c7.field == "arb_rear"
         delta = kb._DELTA_RESOLVERS[c7.delta_fn]({}, {}, {})
         assert delta < 0, f"C7_kerb_arb_rear delta={delta}: kerb compliance softens rear ARB."
+
+
+# ---------------------------------------------------------------------------
+# Defect D6 — anti-ratchet movement cap
+# ---------------------------------------------------------------------------
+
+class TestMovementCap:
+
+    def test_cap_holds_increase_out_of_upper_reserve(self):
+        ranges = {"lsd_accel": (0, 60)}          # 90% guard = 54
+        capped, hit, reason = _apply_movement_cap("lsd_accel", 53, 55, ranges)
+        assert hit and capped == 54, (capped, reason)
+
+    def test_cap_zeroes_move_when_already_in_reserve(self):
+        ranges = {"lsd_accel": (0, 60)}
+        capped, hit, reason = _apply_movement_cap("lsd_accel", 55, 57, ranges)
+        assert hit and capped == 55, "must not push a near-max field further up"
+
+    def test_cap_never_restricts_movement_away_from_boundary(self):
+        ranges = {"lsd_accel": (0, 60)}
+        # decreasing from deep in the top reserve is always allowed
+        capped, hit, _ = _apply_movement_cap("lsd_accel", 58, 56, ranges)
+        assert not hit and capped == 56
+
+    def test_cap_symmetric_at_lower_reserve(self):
+        ranges = {"lsd_decel": (0, 60)}          # 10% guard = 6
+        capped, hit, _ = _apply_movement_cap("lsd_decel", 5, 3, ranges)
+        assert hit and capped == 5, "must not push a near-min field lower"
+
+    def test_gearbox_fields_exempt(self):
+        # final_drive / gear_N are not range-managed → not in ranges → never capped
+        capped, hit, _ = _apply_movement_cap("final_drive", 5.9, 5.95, {})
+        assert not hit and capped == 5.95
+
+    def test_no_ratchet_to_limit_under_persistent_symptom(self):
+        """Repeated Analyse+virtual-Apply on a persistent traction deficit must NOT
+        walk lsd_accel to its hard maximum — it converges inside the operating band
+        and then surfaces a movement_cap rejection."""
+        diag = {
+            "wheelspin_band": "high",
+            "wheelspin_subtype": "traction_limited",
+            "dominant_problem": "rear_traction_limited",
+            "driver_feel_flags": {"rear_loose_on_exit": True},
+        }
+        ranges = resolve_ranges("")
+        lo, hi = ranges["lsd_accel"]
+        guard = hi - _MOVEMENT_CAP_RESERVE_FRAC * (hi - lo)
+        profile = build_driver_profile()
+        setup = {"lsd_accel": 15, "lsd_decel": 15, "arb_rear": 4,
+                 "aero_rear": 600, "ride_height_rear": 80, "aero_front": 400}
+
+        saw_cap_rejection = False
+        for _ in range(60):
+            plan = run_rule_engine(diag, setup, ranges, profile, session_type=None)
+            moved = False
+            for ch in plan.proposed:
+                if ch.field == "lsd_accel":
+                    setup["lsd_accel"] = ch.to_value
+                    moved = True
+            if not moved:
+                saw_cap_rejection = any(
+                    c.field == "lsd_accel" and c.rationale.startswith("movement_cap")
+                    for c in plan.rejected_candidates
+                )
+                break
+
+        assert setup["lsd_accel"] < hi, "RATCHET: lsd_accel reached the hard maximum"
+        assert setup["lsd_accel"] <= guard + 1e-9, "exceeded the operating-band reserve"
+        assert saw_cap_rejection, "field pinned at the band edge must surface a movement_cap rejection"

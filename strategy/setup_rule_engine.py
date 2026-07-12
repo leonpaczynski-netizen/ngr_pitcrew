@@ -573,6 +573,84 @@ def _run_rule_engine_inner(
     )
 
 
+# ---------------------------------------------------------------------------
+# Anti-ratchet movement cap
+# ---------------------------------------------------------------------------
+# Automated rule proposals apply a FIXED increment to the current value and clamp
+# only to the static per-car range. Across successive Analyse/Apply cycles a
+# persistent symptom therefore walks a field toward its mechanical limit in fixed
+# steps, bounded only by the range wall. The movement cap reserves the outer
+# fraction of every range: proposals may move a field freely in the interior but
+# cannot push it INTO (or deeper into) the reserve at either end. Movement AWAY
+# from a boundary is never restricted. Gearbox fields are naturally exempt — they
+# are not range-managed (absent from `ranges`), so their monotonicity logic is
+# untouched. This generalises the pre-existing `aero_rear_healthy` soft ceiling
+# (which caps rear-aero increases at ~80%) to every range-managed field.
+_MOVEMENT_CAP_RESERVE_FRAC = 0.10
+
+
+def _apply_movement_cap(
+    field: str, from_value: float, to_value: float, ranges: dict
+) -> "tuple[float, bool, str]":
+    """Hold an automated proposal out of the outer operating-band reserve.
+
+    Returns (capped_to_value, cap_hit, reason).
+
+    - Movement away from the nearer boundary is never restricted (cap_hit False).
+    - Movement toward a boundary is capped at the reserve edge. A field already
+      inside the reserve cannot be pushed further toward that limit — the value is
+      held at the current value (a no-op the caller surfaces as a 'near-limit'
+      rejection). cap_hit is True whenever the reserve altered the proposal.
+    """
+    try:
+        lo, hi = float(ranges[field][0]), float(ranges[field][1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return to_value, False, ""
+    span = hi - lo
+    if span <= 0:
+        return to_value, False, ""
+    reserve = _MOVEMENT_CAP_RESERVE_FRAC * span
+    hi_guard = hi - reserve
+    lo_guard = lo + reserve
+    if to_value > from_value and to_value > hi_guard:
+        capped = max(from_value, hi_guard)
+        if capped < to_value:
+            return capped, True, f"near its upper limit ({hi:g}); held at the operating-band edge ({hi_guard:g})"
+    elif to_value < from_value and to_value < lo_guard:
+        capped = min(from_value, lo_guard)
+        if capped > to_value:
+            return capped, True, f"near its lower limit ({lo:g}); held at the operating-band edge ({lo_guard:g})"
+    return to_value, False, ""
+
+
+def _movement_cap_rejection(
+    rule: "SetupRule", from_value: float, delta: float, reason: str
+) -> "SetupChangeIntent":
+    """Rejected candidate explaining a field is already at its operating-band edge."""
+    return SetupChangeIntent(
+        field=rule.field,
+        delta=0.0,
+        from_value=from_value,
+        to_value=from_value,
+        symptom=rule.symptom,
+        evidence=[],
+        rule_id=rule.rule_id,
+        rationale=(
+            f"movement_cap: {rule.field} is already {reason} — automated tuning "
+            "will not drive it further toward its limit; a persisting symptom "
+            "likely has another root cause."
+        ),
+        rejected_alternatives=[],
+        risk=rule.risk,
+        confidence=rule.base_confidence,
+        driver_style_alignment=DriverStyleAlignment.caution,
+        source_label="Porsche-specific rule" if rule.pack == "P" else "generic rule",
+        session_influence="",
+        car_drivetrain_influence="",
+        pack=rule.pack,
+    )
+
+
 def _process_rule(
     rule: SetupRule,
     diagnosis: dict,
@@ -709,10 +787,34 @@ def _process_rule(
         except (TypeError, ValueError):
             pass
 
-    # --- No-op after clamp ---
+    # --- Movement cap (anti-ratchet) ---
+    # Hold automated proposals out of the outer operating-band reserve so repeated
+    # fixed-increment changes cannot walk a field to its mechanical limit across
+    # successive Analyse/Apply cycles. Gearbox fields are exempt (not in `ranges`).
+    _cap_hit = False
+    _cap_reason = ""
+    if to_value is not None and from_value is not None and rule.field in ranges:
+        to_value, _cap_hit, _cap_reason = _apply_movement_cap(
+            rule.field, from_value, to_value, ranges
+        )
+
+    # --- No-op after clamp / cap ---
     if from_value is not None and to_value is not None:
         if abs(to_value - from_value) < 1e-9:
+            if _cap_hit:
+                # The reserve fully absorbed the proposal: the field is already at
+                # the edge of its safe operating band. Surface a rejected candidate
+                # so the driver learns the field is near its limit rather than the
+                # recommendation vanishing silently.
+                rejected.append(
+                    _movement_cap_rejection(rule, from_value, delta, _cap_reason)
+                )
             return
+
+    # If the reserve reduced (but did not zero) the movement, keep the change but
+    # make delta reflect the capped magnitude so the intent stays self-consistent.
+    if _cap_hit and from_value is not None and to_value is not None:
+        delta = to_value - from_value
 
     # --- Gear inversion check (Group 45: strict > to allow equal adjacent ratios) ---
     # Reject reason MUST start with "monotonic ordering violation" (brief contract).
@@ -893,6 +995,12 @@ def _process_rule(
         learning_influence=_learning_influence,
         fuel_influence=_fuel_influence,
     )
+
+    # If the reserve trimmed the proposal to the operating-band edge, disclose it.
+    if _cap_hit:
+        intent = intent._replace(
+            rationale=f"{intent.rationale} (movement capped — {_cap_reason})"
+        )
 
     # --- Conflict resolution: same field, check existing candidate ---
     # Group 45: tiebreaker is a tuple (confidence_rank, profile_rank_bonus)
