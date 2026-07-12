@@ -305,11 +305,15 @@ class TestMovementCap:
         """Repeated Analyse+virtual-Apply on a persistent traction deficit must NOT
         walk lsd_accel to its hard maximum — it converges inside the operating band
         and then surfaces a movement_cap rejection."""
+        # NB: a genuine traction-deficit subtype WITHOUT a loose rear — Phase 11 now
+        # (correctly) blocks the LSD-accel increase when rear_loose_on_exit is set, so
+        # this movement-cap test uses both_rear_spin so B6/C5 still fire and the
+        # ratchet-prevention path is exercised.
         diag = {
             "wheelspin_band": "high",
-            "wheelspin_subtype": "traction_limited",
+            "wheelspin_subtype": "both_rear_spin",
             "dominant_problem": "rear_traction_limited",
-            "driver_feel_flags": {"rear_loose_on_exit": True},
+            "driver_feel_flags": {},
         }
         ranges = resolve_ranges("")
         lo, hi = ranges["lsd_accel"]

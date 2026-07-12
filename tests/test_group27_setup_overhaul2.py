@@ -579,10 +579,12 @@ class TestStory4_ButtonLabel:
         # Accept either the old label (pre-G42) or the new one so the assertion
         # remains meaningful across both forms of the source.
         has_old = '"Apply to Setup"' in _SETUP_BUILDER_SRC or "'Apply to Setup'" in _SETUP_BUILDER_SRC
-        has_new = "Apply Pit Crew recommendation" in _SETUP_BUILDER_SRC
+        # UAT auto-save: the Apply button now also saves ("Apply && Save recommendation").
+        has_new = ("Apply Pit Crew recommendation" in _SETUP_BUILDER_SRC
+                   or "Save recommendation" in _SETUP_BUILDER_SRC)
         assert has_old or has_new, (
             "setup_builder_ui.py / setup_form_widget.py must contain the Apply button label "
-            "('Apply to Setup' pre-G42 or 'Apply Pit Crew recommendation' post-G42)"
+            "('Apply to Setup' pre-G42 / 'Apply Pit Crew recommendation' / 'Apply && Save recommendation')"
         )
 
     def test_apply_to_setup_and_save_label_absent(self):
