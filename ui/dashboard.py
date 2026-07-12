@@ -4979,10 +4979,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._rp_pit_loss.setRange(0.0, 120.0)
         self._rp_pit_loss.setDecimals(1)
         self._rp_pit_loss.setSingleStep(0.5)
-        self._rp_pit_loss.setValue(0.0)
+        # UAT: seed from the persisted strategy pit loss so the field shows the real
+        # value (e.g. 20s) instead of 0. The strategy math already used the config
+        # value; the field just never reflected it. Re-synced on tab show via
+        # _sync_race_plan_pit_loss.
+        self._rp_pit_loss.setValue(self._config_pit_loss_secs())
         self._rp_pit_loss.setToolTip(
-            "Pit-lane time loss in seconds (entry to racing line). 0 = use the "
-            "event/strategy value if known. SessionDB has no measured pit loss.")
+            "Pit-lane time loss in seconds (entry to racing line). Seeded from the "
+            "event/strategy value; edit to override for this plan.")
         form.addRow(QLabel("Pit loss (s):", styleSheet=lbl_style), self._rp_pit_loss)
 
         self._rp_start_fuel = QDoubleSpinBox()
@@ -5324,6 +5328,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             lap_length_m = None
         return lap_distance_m, road_distance, lap_length_m
+
+    def _config_pit_loss_secs(self) -> float:
+        """The persisted strategy pit loss (seconds), default 20."""
+        try:
+            return float(self._config.get("strategy", {}).get("pit_loss_secs", 20.0) or 20.0)
+        except (TypeError, ValueError):
+            return 20.0
+
+    def _sync_race_plan_pit_loss(self) -> None:
+        """Re-seed the Race Plan pit-loss field from config on tab show, unless the
+        driver has set a non-zero override (preserve a deliberate manual value)."""
+        if not hasattr(self, "_rp_pit_loss"):
+            return
+        if self._rp_pit_loss.value() <= 0.0:
+            self._rp_pit_loss.setValue(self._config_pit_loss_secs())
 
     def _assemble_race_plan_inputs(self) -> dict:
         """Collect deterministic strategy inputs from event context + session.
@@ -7380,6 +7399,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             # Group 51: refresh the read-only Race Plan session selector + readiness.
             if hasattr(self, "_rp_session_combo"):
                 self._populate_race_plan_sessions()
+            # UAT: keep the Race Plan pit-loss field seeded from config (was stuck at 0).
+            self._sync_race_plan_pit_loss()
         elif key == TAB_PRACTICE_REVIEW:  self._sync_practice_from_event()
         elif key == TAB_TELEMETRY:        self._refresh_telemetry_context()
         elif key == TAB_AI_LOG:           self._flush_ai_log_pending_select()

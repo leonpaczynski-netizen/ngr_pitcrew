@@ -1095,6 +1095,22 @@ class TrackModellingMixin:
                 except Exception:
                     event_ctx = None
 
+            # UAT: a previously ACCEPTED track model must show as approved on every
+            # launch. self._tm_alignment_result is None until the Track Modelling tab
+            # is opened, so the Home/startup path reported "not accepted". Fall back
+            # to the persisted accepted-model file so approval survives restart.
+            _alignment = getattr(self, "_tm_alignment_result", None)
+            if _alignment is None and loc_id and lay_id:
+                try:
+                    from data.track_model_alignment import (
+                        import_accepted_model_json, find_accepted_model_path,
+                    )
+                    _acc_path = find_accepted_model_path(loc_id, lay_id)
+                    if _acc_path is not None:
+                        _alignment = import_accepted_model_json(_acc_path)
+                except Exception:
+                    _alignment = None
+
             return build_track_context(
                 selected_location_id=loc_id,
                 selected_layout_id=lay_id,
@@ -1104,7 +1120,7 @@ class TrackModellingMixin:
                 layout_seed=layout_seed,
                 seed_audit=seed_audit,
                 file_audit=file_audit,
-                alignment=getattr(self, "_tm_alignment_result", None),
+                alignment=_alignment,
                 station_map=getattr(self, "_tm_station_map", None),
                 offset_calibration=getattr(self, "_tm_offset_calibration", None),
             )

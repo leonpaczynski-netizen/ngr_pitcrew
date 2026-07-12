@@ -75,11 +75,38 @@ phenotypes; rule rationales ("driver prefers progressive throttle") are generic,
 a known-good setup. **Fix:** Phase 9 — scoped historical retrieval + explicit current/historical/
 recommended/deviation-reason comparison, as a weighted prior (never overrides validators).
 
-### DEFECT — `aero_front_near_min=True` on a max-aero car  *(agent tracing — section pending)*
+### DEFECT — `aero_front_near_min=True` on a max-aero car  ✅ FIXED (Phase 2)
+`_aero_near_min(value, lo, hi)` (`setup_diagnosis.py:258`) is mathematically sound, but two
+integrity failures produced the contradiction: (a) **car-name mismatch** — history stores
+`"Porsche 911 RSR '17"` while the ranges-JSON key is `"Porsche 911 RSR (991) '17"`, so the
+exact-match `resolve_ranges` fell back to `GENERIC_DEFAULTS["aero_front"]=(0,1000)`
+(`setup_ranges.py:38,149`), mis-scaling the near-min threshold; (b) a stale/zero aero value reads
+near-min against any range. False `aero_front_near_min` then cascaded into
+`front_aero_platform_limited` dominant, a nonsensical "increase front downforce" top priority,
+false telemetry corroboration, and the `aero_at_min_floaty` validator block.
+**Fixed:** hard invariant `value >= hi → never near-min`; tolerant normalised car-name matching so
+variants resolve real per-car ranges; `car_has_range_overrides()` helper. Regression tests in
+`tests/test_setup_snapshot_integrity.py`.
 
-### DEFECT — Track model needs re-approval every app open  *(agent tracing — section pending)*
+### DEFECT — Track model needs re-approval every app open  ✅ FIXED
+The approved flag is derived only from in-memory `self._tm_alignment_result`, which is `None` at
+startup and only populated when the Track Modelling tab is opened. The Home/startup path
+(`_home_refresh` → `_build_track_context`, `track_modelling_ui.py:1107`) therefore built context
+with `alignment=None` → `accepted_model_available=False`. Persistence itself is fine.
+**Fixed:** `_build_track_context` now falls back to loading the persisted
+`import_accepted_model_json(find_accepted_model_path(loc, lay))` when the in-memory alignment is
+None, so approval survives restart. Test in `tests/test_uat_track_reapproval_pitloss.py`.
 
-### DEFECT — Strategy Builder pit loss = 0 despite track data  *(agent tracing — section pending)*
+### DEFECT — Strategy Builder pit loss = 0  ✅ FIXED
+Pit loss is NOT in track/event data — it lives in `config["strategy"]["pit_loss_secs"]` (20). The
+Race Plan `_rp_pit_loss` field was hard-init to 0 and never seeded from config (the strategy math
+used 20, but the field the driver read showed 0). **Fixed:** seed the field from config at build +
+re-sync on Strategy tab show (`_config_pit_loss_secs` / `_sync_race_plan_pit_loss`), preserving a
+manual override. (Note: no UI currently *persists* a pit-loss edit per event — restoring that
+editor is a follow-up if desired.)
+
+> Security aside (from the audit): `config.json` holds a live `anthropic.api_key` — rotate it and
+> keep the file gitignored.
 
 ---
 
