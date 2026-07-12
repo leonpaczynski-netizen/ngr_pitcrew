@@ -1071,6 +1071,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "voice alerts. Next: pick Practice or Race mode and start driving; "
             "alerts and push-to-talk queries run automatically."))
 
+        # UAT #6 Phase 2A: "refined track model available" notice — click to review
+        # in Track Modelling. Hidden until a refinement produces an improving candidate.
+        self._live_refine_banner = QPushButton("")
+        self._live_refine_banner.setStyleSheet(
+            "QPushButton { background: #1A2A1A; border: 1px solid #4CAF50; "
+            "border-radius: 4px; padding: 6px 10px; color: #AAE4AA; font-size: 12px; "
+            "text-align: left; }"
+            "QPushButton:hover { background: #22371F; }")
+        self._live_refine_banner.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._live_refine_banner.clicked.connect(self._on_refine_banner_clicked)
+        self._live_refine_banner.setVisible(False)
+        root.addWidget(self._live_refine_banner)
+
         # Row 1: Race info bar
         info_row = QHBoxLayout()
         self._lbl_speed    = BigValueLabel("—",  "km/h", 28)
@@ -4782,19 +4795,41 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             )
             if result.success and result.verdict is not None and result.verdict.improves:
                 self._refine_notice = (
-                    f"Refined model available for {cap.track_location_id} "
-                    f"({result.contributing_laps} lap(s)) — review in Track Modelling."
+                    f"Refined track model available for {cap.track_location_id} "
+                    f"({result.contributing_laps} lap(s)) — click to review in Track Modelling."
                 )
                 print(f"[Refine] {self._refine_notice} (trigger: {reason})")
             else:
                 self._refine_notice = ""
         except Exception as exc:  # pragma: no cover - defensive
             print(f"[Refine] auto-refine failed: {exc}")
+        self._update_refine_banner()
         if hasattr(self, "_tm_refresh_refinement_panel"):
             try:
                 self._tm_refresh_refinement_panel()
             except Exception:
                 pass
+
+    def _update_refine_banner(self) -> None:
+        """Show/hide the Live-tab 'refined model available' notice from _refine_notice."""
+        if not hasattr(self, "_live_refine_banner"):
+            return
+        notice = getattr(self, "_refine_notice", "") or ""
+        self._live_refine_banner.setText(("✓  " + notice) if notice else "")
+        self._live_refine_banner.setVisible(bool(notice))
+
+    def _on_refine_banner_clicked(self) -> None:
+        """Clear the notice and jump to the Track Modelling tab to review the candidate."""
+        self._refine_notice = ""
+        self._update_refine_banner()
+        try:
+            reg = getattr(self, "_tab_registry", None)
+            if reg is not None and hasattr(self, "_tabs"):
+                idx = reg.index_of(TAB_TRACK_MODELLING)
+                if idx is not None and idx >= 0:
+                    self._tabs.setCurrentIndex(idx)
+        except Exception:
+            pass
 
     def _build_workflow_guide_group(self) -> QGroupBox:
         guide_box = QGroupBox("How to use this tab")

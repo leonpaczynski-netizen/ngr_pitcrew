@@ -223,3 +223,32 @@ def test_reset_triggers_autorefine(window):
     window._track_path_capture = LiveTrackPathCapture(LOC, LAY, car_name="RSR")
     window._on_reset_clicked()
     assert window._track_path_capture is None
+
+
+# ------------------------------------------------ Phase 2A: Live-tab banner
+
+def test_refine_banner_shows_and_click_clears(window):
+    window._refine_notice = "Refined track model available for fuji (3 laps)"
+    window._update_refine_banner()
+    assert not window._live_refine_banner.isHidden()
+    assert "Refined" in window._live_refine_banner.text()
+    # Clicking clears the notice and hides the banner.
+    window._on_refine_banner_clicked()
+    assert window._refine_notice == ""
+    assert window._live_refine_banner.isHidden()
+
+
+def test_refine_banner_hidden_without_notice(window):
+    window._refine_notice = ""
+    window._update_refine_banner()
+    assert window._live_refine_banner.isHidden()
+
+
+def test_discard_clears_refine_banner(window):
+    export_accepted_model_json(_mk_align(), LOC, LAY, output_dir=window._tmp_models)
+    tr.export_candidate_model_json(_mk_align(accepted=False), LOC, LAY, {}, output_dir=window._tmp_models)
+    window._refine_notice = "notice"
+    window._update_refine_banner()
+    window._tm_discard_refinement()
+    assert window._refine_notice == ""
+    assert window._live_refine_banner.isHidden()

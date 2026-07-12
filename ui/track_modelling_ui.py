@@ -2352,6 +2352,7 @@ class TrackModellingMixin:
                     except Exception:
                         pass
         # Refresh buttons/state first, then set the outcome message last so it sticks.
+        self._tm_clear_refine_notice()
         self._tm_refresh_refinement_panel()
         if out is None:
             self._tm_refine_status_lbl.setText(
@@ -2365,10 +2366,21 @@ class TrackModellingMixin:
         loc_id, lay_id = self._tm_refine_ids()
         from data.track_refinement import discard_candidate
         removed = discard_candidate(loc_id, lay_id)
+        self._tm_clear_refine_notice()
         self._tm_refresh_refinement_panel()
         if removed:
             self._tm_refine_status_lbl.setText("Candidate discarded.")
             self._tm_refine_result_lbl.setText("")
+
+    def _tm_clear_refine_notice(self) -> None:
+        """Clear the Live-tab 'refined model available' banner once resolved."""
+        if hasattr(self, "_refine_notice"):
+            self._refine_notice = ""
+        if hasattr(self, "_update_refine_banner"):
+            try:
+                self._update_refine_banner()
+            except Exception:
+                pass
 
     def _tm_refresh_refinement_panel(self) -> None:
         """Reflect capture + candidate state and enable/disable buttons.
