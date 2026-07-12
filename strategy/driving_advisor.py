@@ -2359,6 +2359,27 @@ class DrivingAdvisor:
                     _data["candidate_comparison"] = candidate_comparison_to_json(_cmp)
                 except Exception:
                     _data["candidate_comparison"] = {"columns": [], "rows": []}
+
+                # Phase 7: qualifying-discipline surface — when this is a qualifying
+                # session, state the one-lap objective, what it buys, what it trades
+                # away, and the plain "do not race it" warning.
+                try:
+                    from strategy.qualifying_discipline import (
+                        build_qualifying_brief, qualifying_brief_to_json,
+                    )
+                    from strategy.setup_baseline import _SESSION_BIAS_TABLE
+                    if str(_session_type_str).lower().startswith("qual") or \
+                       "qual" in str(purpose or "").lower():
+                        _qb = build_qualifying_brief(
+                            "qualifying", _SESSION_BIAS_TABLE.get("qualifying", {}))
+                        _data["qualifying_brief"] = qualifying_brief_to_json(_qb)
+                        if _qb.one_lap_warning:
+                            _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                                 + " " + _qb.one_lap_warning).strip()
+                    else:
+                        _data["qualifying_brief"] = {"is_qualifying": False}
+                except Exception:
+                    _data["qualifying_brief"] = {"is_qualifying": False}
                 # Phase 9: current/historical/recommended comparison (advisory).
                 _data["historical_comparison"] = [
                     {"field": r.field, "current": r.current, "historical": r.historical,
@@ -2591,6 +2612,25 @@ class DrivingAdvisor:
             }
             _resp["protected_fields"] = []
             _resp["rule_engine_version"] = RULE_ENGINE_VERSION
+
+            # Phase 7: qualifying-discipline surface — on a qualifying baseline the
+            # applied deltas ARE the quali bias, so the brief is exactly accurate.
+            try:
+                from strategy.qualifying_discipline import (
+                    build_qualifying_brief, qualifying_brief_to_json,
+                )
+                from strategy.setup_baseline import (
+                    _SESSION_BIAS_TABLE, _normalise_session_for_bias,
+                )
+                _cat = _normalise_session_for_bias(session_type, duration_mins)
+                _qb = build_qualifying_brief(
+                    _cat, _SESSION_BIAS_TABLE.get(_cat, {}))
+                _resp["qualifying_brief"] = qualifying_brief_to_json(_qb)
+                if _qb.is_qualifying and _qb.one_lap_warning:
+                    _resp["analysis"] = (str(_resp.get("analysis", "")).rstrip()
+                                         + " " + _qb.one_lap_warning).strip()
+            except Exception:
+                _resp["qualifying_brief"] = {"is_qualifying": False}
 
             return _json.dumps(_resp, ensure_ascii=False)
 
