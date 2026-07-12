@@ -2119,6 +2119,7 @@ class DrivingAdvisor:
             # (e.g. recommending LSD accel 17 vs a proven 8). Advisory only — it
             # never changes the deterministic plan, only explains it.
             _hist_rows = []
+            _prior = {}
             if historical_setups:
                 try:
                     from strategy.setup_history_intelligence import (
@@ -2319,6 +2320,45 @@ class DrivingAdvisor:
                                              + " " + _arb.as_note()).strip()
                 except Exception:
                     _data["arbitration"] = {}
+
+                # Phase 13: controlled test sequence — order the approved changes into
+                # a one-at-a-time programme with success criteria + rollback.
+                try:
+                    from strategy.setup_test_plan import (
+                        build_test_sequence, test_sequence_to_json,
+                    )
+                    _seq = build_test_sequence(_data.get("changes") or [], diagnosis)
+                    _data["test_sequence"] = test_sequence_to_json(_seq)
+                except Exception:
+                    _data["test_sequence"] = {"note": "", "stages": []}
+
+                # Phase 14: candidate comparison — current vs proven-historical vs
+                # rule-recommended, per field. Only candidates actually computed here
+                # are shown; base/race/quali slot in when supplied. Never fabricated.
+                try:
+                    from strategy.setup_candidates import (
+                        make_candidate, build_candidate_comparison,
+                        candidate_comparison_to_json,
+                    )
+                    _hist_values = {f: d.get("value") for f, d in (_prior or {}).items()}
+                    # Focus on fields actually under discussion (changed or with a
+                    # proven prior) — not the whole current setup.
+                    _focus = list(dict.fromkeys(
+                        list(_final.approved_fields) + list(_hist_values)))
+                    _current_focus = {f: setup_dict.get(f) for f in _focus}
+                    _cands = [
+                        make_candidate("current", "Current", _current_focus, source="on-car now"),
+                        make_candidate("recommended", "Recommended (rules)",
+                                       _final.approved_fields,
+                                       source=f"rule engine {RULE_ENGINE_VERSION}"),
+                        make_candidate("historical", "Proven (history)", _hist_values,
+                                       source="your liked/strong-result setups"),
+                    ]
+                    _cmp = build_candidate_comparison(
+                        [c for c in _cands if c.available], fields=_focus)
+                    _data["candidate_comparison"] = candidate_comparison_to_json(_cmp)
+                except Exception:
+                    _data["candidate_comparison"] = {"columns": [], "rows": []}
                 # Phase 9: current/historical/recommended comparison (advisory).
                 _data["historical_comparison"] = [
                     {"field": r.field, "current": r.current, "historical": r.historical,
