@@ -196,3 +196,30 @@ def test_fresh_profile_invents_no_history():
     assert (dfp.get("seeded_from_history") or []) == []
     for r in dfp.get("rows") or []:
         assert r.get("proven") is None
+
+
+# ---------------------------------------------------------------- discipline UI table
+
+def test_discipline_table_renders_side_by_side():
+    """The Base/Quali/Race side-by-side table renders from the plan (Qt-free — the
+    render method only uses class constants + staticmethods, so it can be called
+    unbound without constructing the widget)."""
+    from ui.setup_builder_ui import SetupBuilderMixin
+    adv = _baseline_advisor()
+    raw = adv.build_baseline_setup_response(
+        _CAR, resolve_ranges(_CAR), "RR", 6, None, False,
+        session_type="Race", duration_mins=45.0,
+        track_name="NGR Porsche Cup Rd7", layout_id="full",
+        historical_setups=_uat_history(),
+    )
+    dfp = json.loads(raw).get("discipline_field_plan")
+    html = SetupBuilderMixin._render_discipline_field_plan(SetupBuilderMixin, dfp)
+    assert "<table" in html
+    for col in ("Base", "Qualifying", "Race", "Proven"):
+        assert col in html
+    assert "Seeded from your proven" in html  # proven LSD reached the table
+    # Self-guards: empty / None / no-rows render nothing.
+    assert SetupBuilderMixin._render_discipline_field_plan(SetupBuilderMixin, {}) == ""
+    assert SetupBuilderMixin._render_discipline_field_plan(SetupBuilderMixin, None) == ""
+    assert SetupBuilderMixin._render_discipline_field_plan(
+        SetupBuilderMixin, {"rows": []}) == ""
