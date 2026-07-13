@@ -2099,11 +2099,20 @@ class DrivingAdvisor:
                         "throttle, so adding accel-locking is unsafe (it would worsen "
                         "power oversteer)."
                     )
-                elif _ws_subtype in ("insufficient_data", "mixed"):
+                elif _ws_subtype == "conflicting_evidence":
                     _analysis_text += (
-                        " LSD accel change DEFERRED — confirm whether the traction loss is "
-                        "isolated inside-wheel spin or whole-axle power oversteer before "
-                        "changing the differential."
+                        " LSD accel change DEFERRED — the wheelspin evidence conflicts "
+                        "(telemetry hints short gearing, but you reported the top gear is "
+                        "unused). Run a controlled test to settle the cause before touching "
+                        "the differential or the gearing."
+                    )
+                elif _ws_subtype in ("insufficient_data", "mixed", "unknown"):
+                    _analysis_text += (
+                        " LSD accel change DEFERRED — the wheelspin cause is not proven "
+                        "(location/per-gear evidence is insufficient). Confirm with a "
+                        "controlled test whether it is isolated inside-wheel spin, "
+                        "whole-axle power oversteer, or gear-too-short before changing the "
+                        "differential."
                     )
             if (_flags.get("braking_instability")
                     and "brake_bias" not in _proposed_fields
@@ -2413,14 +2422,65 @@ class DrivingAdvisor:
                 # Braking evaluated independently against the proven same-car prior,
                 # each with an executable controlled test. Advisory: it authors no
                 # values; the rule-first engine + Apply gate are unchanged.
+                _lsd_tested_fields: set = set()
                 try:
                     from strategy.lsd_reasoning import build_lsd_triplet_assessment
                     _lsd = build_lsd_triplet_assessment(diagnosis or {}, setup_dict, _prior)
                     _data["lsd_assessment"] = _lsd.as_json()
                     if _lsd.controlled_tests:
                         _data.setdefault("_targeted_tests", []).extend(_lsd.controlled_tests)
+                    # Fields the LSD triplet covered with an executable controlled test —
+                    # they count as "treated" for the completeness verdict below.
+                    _lsd_tested_fields = {
+                        f.field for f in _lsd.fields
+                        if getattr(f, "evaluated", False) and getattr(f, "controlled_test", "")
+                    }
                 except Exception:
                     pass
+
+                # ── Group 64: recommendation-completeness verdict ─────────────────
+                # A change being safe does not make the SETUP complete. Downgrade a
+                # plain "approved" to "partial_recommendation" when confirmed handling
+                # problems remain untreated (neither an approved change nor a targeted
+                # test covers them), so a lone ARB/final-drive change can never be
+                # presented as a finished setup. This never authors values and never
+                # lifts an unsafe/blocked plan into apply-eligibility.
+                try:
+                    from strategy.setup_diagnosis import (
+                        assess_recommendation_completeness, RECO_PARTIAL,
+                        RECO_TARGETED_TEST, RECO_CONFLICTING_EVIDENCE,
+                    )
+                    _approved_field_set = {
+                        c.get("field") for c in (_data.get("changes") or [])
+                        if isinstance(c, dict) and c.get("field")
+                    }
+                    _tested_field_set = set(_lsd_tested_fields)
+                    _dg2 = diagnosis or {}
+                    _conflicting = (
+                        str(_dg2.get("gearing_state", "")) == "conflicting"
+                        or str(_dg2.get("gearing_diagnosis_category", "")) == "conflicting_evidence"
+                        or str(_dg2.get("wheelspin_subtype", "")) == "conflicting_evidence"
+                    )
+                    _completeness = assess_recommendation_completeness(
+                        _dg2, _approved_field_set, _tested_field_set,
+                        base_status=str(_data.get("recommendation_status", "")),
+                        has_conflicting_evidence=_conflicting,
+                    )
+                    _data["recommendation_completeness"] = _completeness
+                    # Downgrade the *displayed* status when the plan is incomplete but
+                    # currently sits in the plain approved family (not already partial /
+                    # evidence_required). partial_recommendation stays apply-eligible.
+                    _cur_status = str(_data.get("recommendation_status", ""))
+                    if (_completeness.get("is_partial")
+                            and _cur_status in ("approved", "approved_with_warnings",
+                                                "approved_with_rejections")):
+                        _data["recommendation_status"] = "partial_recommendation"
+                        _note = str(_completeness.get("note", "")).strip()
+                        if _note:
+                            _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                                 + " " + _note).strip()
+                except Exception:
+                    _data.setdefault("recommendation_completeness", {})
 
                 # New Group 42 keys
                 _data["deterministic_plan"] = {
@@ -2585,9 +2645,11 @@ class DrivingAdvisor:
             # Group 46: also wire duration_mins through for session bias classification
             # Phase 9 baseline lift: seed personal-fit geometry (camber/toe) from the
             # driver's STRONG proven history so the from-scratch base starts from a
-            # validated value, not a neutral guess. Strong-scope only; never touches
-            # safety diffs / aero / brakes / gearing.
+            # validated value, not a neutral guess. Strong-scope only. Group 64: the
+            # lift set now includes the proven LSD triplet (a personal-fit starting
+            # window); aero / brakes / gearing / ride height are still never lifted.
             _seed_overrides = {}
+            _bl_prior: dict = {}
             if historical_setups:
                 try:
                     from strategy.setup_history_intelligence import (
@@ -2598,10 +2660,11 @@ class DrivingAdvisor:
                         car_name, track_name, layout_id, session_type,
                         historical_setups, car_category=car_class,
                     )
-                    _seed_overrides = build_baseline_seed_overrides(
-                        build_historical_prior(_bl_matches))
+                    _bl_prior = build_historical_prior(_bl_matches)
+                    _seed_overrides = build_baseline_seed_overrides(_bl_prior)
                 except Exception:
                     _seed_overrides = {}
+                    _bl_prior = {}
 
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
@@ -2688,6 +2751,62 @@ class DrivingAdvisor:
                                          + " " + _qb.one_lap_warning).strip()
             except Exception:
                 _resp["qualifying_brief"] = {"is_qualifying": False}
+
+            # Group 64: canonical discipline field-plan surface — author Base,
+            # Qualifying and Race as separate full-field setups from ONE context so
+            # the UI can prove (not just label) where they differ, with a disposition
+            # for every adjustable field. Advisory/read-only; authors no applied value
+            # beyond the deterministic generator + validators already used above.
+            try:
+                from strategy.setup_authoring import (
+                    SetupObjective, SetupAuthoringContext, author_discipline_setups,
+                    objective_from_session_type,
+                )
+
+                def _mk_ctx(_obj):
+                    return SetupAuthoringContext(
+                        car=car_name, objective=_obj, ranges=ranges,
+                        drivetrain=drivetrain, num_gears=num_gears, profile=_profile,
+                        allowed_tuning=allowed_tuning, tuning_locked=tuning_locked,
+                        track_profile=track_profile, history_prior=_bl_prior or None,
+                        current_setup=None, duration_mins=duration_mins,
+                        tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
+                    )
+
+                _plans = author_discipline_setups(_mk_ctx)
+                _rows: list = []
+                _all_fields: set = set()
+                for _p in _plans.values():
+                    if _p is not None:
+                        _all_fields.update(_p.setup_fields.keys())
+                for _f in sorted(_all_fields):
+                    _bv = _plans.get("base") and _plans["base"].setup_fields.get(_f)
+                    _qv = _plans.get("qualifying") and _plans["qualifying"].setup_fields.get(_f)
+                    _rv = _plans.get("race") and _plans["race"].setup_fields.get(_f)
+                    _differs = not (_bv == _qv == _rv)
+                    _disp = ""
+                    _pv = None
+                    _rp = _plans.get("race")
+                    if _rp is not None:
+                        for _e in _rp.entries:
+                            if _e.field == _f:
+                                _disp = _e.disposition.value
+                                _pv = _e.proven_value
+                                break
+                    _rows.append({"field": _f, "base": _bv, "qualifying": _qv,
+                                  "race": _rv, "differs": _differs,
+                                  "disposition": _disp, "proven": _pv})
+                _resp["discipline_field_plan"] = {
+                    "objective": objective_from_session_type(session_type).value,
+                    "rows": _rows,
+                    "differing_fields": [r["field"] for r in _rows if r["differs"]],
+                    "seeded_from_history": (
+                        list(_plans["race"].seeded_from_history)
+                        if _plans.get("race") is not None else []
+                    ),
+                }
+            except Exception:
+                _resp["discipline_field_plan"] = {"rows": [], "differing_fields": []}
 
             return _json.dumps(_resp, ensure_ascii=False)
 

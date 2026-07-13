@@ -622,11 +622,13 @@ def build_baseline_setup(
 
         seed = NEUTRAL_SEEDS[field]
 
-        # Phase 9 baseline lift: for personal-fit geometry (camber/toe) the driver
-        # has a STRONG proven prior for, start from that validated value instead of
-        # the neutral seed. Profile + session bias still stack on top (e.g. quali
-        # adds camber to the proven base). Only fields the caller pre-vetted arrive
-        # here — safety diffs / aero / brakes / gearing are never in this map.
+        # Phase 9 baseline lift: for personal-fit levers the driver has a STRONG
+        # proven prior for — geometry (camber/toe) and, from Group 64, the LSD
+        # triplet (a proven same-car diff is a valid starting window) — start from
+        # that validated value instead of the neutral seed. Profile + session bias
+        # still stack on top (e.g. quali adds camber and frees the diff on the proven
+        # base). Only fields the caller pre-vetted arrive here — aero / brakes /
+        # gearing / ride height are never in this map (they are track/strategy driven).
         _hist_seeded = False
         _hist_override = (historical_seed_overrides or {}).get(field)
         if _hist_override is not None:

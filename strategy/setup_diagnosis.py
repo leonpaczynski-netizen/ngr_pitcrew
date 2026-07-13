@@ -360,6 +360,52 @@ def _classify_bottoming_impact(
                       "driver mention; run a targeted test before treating it as dominant"}
 
 
+# Group 64 — ONE canonical bottoming truth state for EVERY surface.
+# Before Group 64 the UI header printed the raw count-based band ("required" when
+# events/lap > 2.0) while a separate panel printed the consequence-graded impact
+# ("NORMAL_OR_EXPECTED"), so the same run could read as *required* AND *normal* at
+# once. This reconciles the two: the CONSEQUENCE (impact) governs urgency, and the
+# raw count band is demoted to a supporting detail. No surface may render "required"
+# unless the impact is genuinely performance-relevant.
+_BOTTOMING_DISPLAY_BY_IMPACT: dict[str, dict] = {
+    BOTTOMING_REQUIRED:           {"state": "address",     "severity": 4,
+                                   "label": "address — frequent contact with a measured consequence"},
+    BOTTOMING_PERFORMANCE:        {"state": "confirm",     "severity": 3,
+                                   "label": "performance-relevant — confirm before a large ride-height change"},
+    BOTTOMING_ADVISORY:           {"state": "advisory",    "severity": 2,
+                                   "label": "advisory — noticed, no measured performance effect"},
+    BOTTOMING_UNKNOWN:            {"state": "unconfirmed", "severity": 1,
+                                   "label": "high contact rate, impact unconfirmed — run a targeted test"},
+    BOTTOMING_NORMAL_OR_EXPECTED: {"state": "normal",      "severity": 0,
+                                   "label": "normal / expected contact — no action"},
+}
+
+
+def _bottoming_display_state(b_band: str, bottoming_impact: dict) -> dict:
+    """Return the single canonical bottoming state every surface must render.
+
+    ``{"state", "label", "severity", "impact", "band", "performance_relevant"}``.
+    ``state`` is derived from the CONSEQUENCE-graded impact, never the raw count
+    band, so "required" can only appear when the impact is performance-relevant.
+    The raw ``band`` is carried through for context but never governs the headline.
+    """
+    impact_cls = str((bottoming_impact or {}).get("impact") or BOTTOMING_UNKNOWN)
+    perf = bool((bottoming_impact or {}).get("performance_relevant", False))
+    disp = _BOTTOMING_DISPLAY_BY_IMPACT.get(
+        impact_cls,
+        {"state": "unconfirmed", "severity": 1, "label": "impact unconfirmed"},
+    )
+    return {
+        "state": disp["state"],
+        "label": disp["label"],
+        "severity": disp["severity"],
+        "impact": impact_cls,
+        "band": str(b_band or ""),
+        "performance_relevant": perf,
+        "reason": str((bottoming_impact or {}).get("reason", "")),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Wheelspin band thresholds
 # ---------------------------------------------------------------------------
@@ -587,6 +633,131 @@ _FEEDBACK_ADDRESSING_FIELDS: dict[str, frozenset] = {
     # upper indexed gears; never by lengthening (final_drive_down).
     "gearing_too_long":      frozenset({"final_drive", "gear_5", "gear_6"}),
 }
+
+# Handling-critical problems that must EACH be treated (addressed by a change,
+# safely preserved, or converted into an explicit targeted test) before a plan may
+# be called complete. `fuel_use_high` and `entry_balance_good` are excluded (fuel is
+# a Strategy-Brain concern; entry_balance_good is a "leave it" report, not a problem).
+_COMPLETENESS_FEEDBACK_PROBLEMS: frozenset = frozenset(_FEEDBACK_ADDRESSING_FIELDS)
+
+# ---------------------------------------------------------------------------
+# Group 64 — one canonical recommendation-completeness vocabulary.
+# A change being *safe* is not the same as the setup being *complete*. These
+# states let every surface (status banner, AI-audit, Apply gate label) agree on
+# whether the plan is a finished setup, an incremental test, or still partial.
+# ---------------------------------------------------------------------------
+RECO_APPROVED_COMPLETE     = "approved_complete"
+RECO_APPROVED_INCREMENTAL  = "approved_incremental_test"
+RECO_PARTIAL               = "partial_recommendation"
+RECO_TARGETED_TEST         = "targeted_test_required"
+RECO_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+RECO_CONFLICTING_EVIDENCE  = "conflicting_evidence"
+RECO_BLOCKED_UNSAFE        = "blocked_unsafe"
+RECO_REJECTED_INCOHERENT   = "rejected_incoherent"
+
+
+def _active_confirmed_problems(diagnosis: dict) -> "list[str]":
+    """Return the handling-critical problems the driver actually reported, plus a
+    synthetic ``wheelspin`` problem when telemetry shows major/severe wheelspin.
+
+    These are the problems a *complete* setup must each treat. Telemetry-only
+    wheelspin is included because the UAT setup left severe wheelspin untreated
+    while claiming completeness.
+    """
+    flags = (diagnosis or {}).get("driver_feel_flags", {}) or {}
+    problems = [p for p in _COMPLETENESS_FEEDBACK_PROBLEMS if flags.get(p)]
+    ws_band = str((diagnosis or {}).get("wheelspin_band", "low"))
+    if ws_band in ("major", "severe") and "wheelspin" not in problems:
+        problems.append("wheelspin")
+    return problems
+
+
+def _problem_addressing_fields(problem: str) -> frozenset:
+    """Fields that materially treat a problem (feedback set, falling back to the
+    dominant-addressing set for the synthetic ``wheelspin`` problem)."""
+    return _FEEDBACK_ADDRESSING_FIELDS.get(
+        problem, DOMINANT_ADDRESSING_FIELDS.get(problem, frozenset()))
+
+
+def assess_recommendation_completeness(
+    diagnosis: dict,
+    approved_fields,
+    tested_fields=None,
+    *,
+    base_status: str = "approved",
+    has_conflicting_evidence: bool = False,
+) -> dict:
+    """Decide whether an APPROVED plan is genuinely COMPLETE (Group 64).
+
+    A plan is complete only when every active confirmed handling problem is either
+    addressed by an approved change or covered by an explicit targeted test. A plan
+    that treats only the dominant while leaving confirmed secondaries untreated is
+    a ``partial_recommendation`` — never "approved (complete)".
+
+    Returns ``{state, complete, is_partial, treated, untreated,
+    treated_by_test_only, note}``. It NEVER authors values and NEVER makes an
+    unsafe/blocked plan apply-eligible — it only distinguishes complete from
+    incomplete within the approved family.
+    """
+    approved = {f for f in (approved_fields or ())}
+    tested = {f for f in (tested_fields or ())}
+    problems = _active_confirmed_problems(diagnosis)
+
+    treated: list[str] = []
+    untreated: list[str] = []
+    treated_by_test_only: list[str] = []
+    for p in problems:
+        addr = _problem_addressing_fields(p)
+        if addr & approved:
+            treated.append(p)
+        elif addr & tested:
+            treated.append(p)
+            treated_by_test_only.append(p)
+        else:
+            untreated.append(p)
+
+    # Non-approved base statuses keep their meaning; completeness is not asserted.
+    _APPROVED_FAMILY = {"approved", "approved_with_warnings", "approved_with_rejections",
+                        "partial_recommendation", "fallback_generated"}
+    if base_status not in _APPROVED_FAMILY:
+        if base_status in ("blocked_no_safe_recommendation", "validation_failed", "retry_failed"):
+            state = RECO_BLOCKED_UNSAFE
+        else:
+            state = RECO_INSUFFICIENT_EVIDENCE
+        return {"state": state, "complete": False, "is_partial": False,
+                "treated": treated, "untreated": untreated,
+                "treated_by_test_only": treated_by_test_only,
+                "note": ""}
+
+    if has_conflicting_evidence and not approved:
+        return {"state": RECO_CONFLICTING_EVIDENCE, "complete": False, "is_partial": True,
+                "treated": treated, "untreated": untreated,
+                "treated_by_test_only": treated_by_test_only,
+                "note": "Evidence conflicts on at least one field — settle it with a "
+                        "controlled test before applying."}
+
+    if untreated:
+        _readable = ", ".join(_FEEDBACK_LABELS.get(p, p) for p in untreated)
+        note = (f"Partial: this plan does not yet treat {len(untreated)} confirmed "
+                f"problem(s) — {_readable}. Run the targeted tests before treating the "
+                "setup as race-ready.")
+        return {"state": RECO_PARTIAL, "complete": False, "is_partial": True,
+                "treated": treated, "untreated": untreated,
+                "treated_by_test_only": treated_by_test_only, "note": note}
+
+    # Everything treated. If the ONLY treatment for every problem was a test (no
+    # applied change), this is a "go and test" plan, not a finished setup.
+    if problems and not approved:
+        return {"state": RECO_TARGETED_TEST, "complete": False, "is_partial": True,
+                "treated": treated, "untreated": untreated,
+                "treated_by_test_only": treated_by_test_only,
+                "note": "Every confirmed problem needs a controlled test before a value "
+                        "can be applied — this is a test plan, not a finished setup."}
+
+    return {"state": RECO_APPROVED_COMPLETE, "complete": True, "is_partial": False,
+            "treated": treated, "untreated": untreated,
+            "treated_by_test_only": treated_by_test_only,
+            "note": ""}
 
 
 def build_feedback_dispositions(diagnosis: dict, proposed_fields) -> "list[dict]":
@@ -966,11 +1137,14 @@ def _classify_wheelspin_subtype(
     avg_snap: float,
     aero_rear_near_min: bool,
     laps: list,
+    location_trustworthy: bool = False,
+    driver_says_gearing_too_long: bool = False,
 ) -> str:
     """Classify the wheelspin mechanism from available telemetry signals.
 
     Returns one of: both_rear_spin | snap_throttle_induced | kerb_unload_spin |
-    gear_too_short_spin | aero_instability | mixed | insufficient_data.
+    gear_too_short_spin | aero_instability | mixed | unknown |
+    conflicting_evidence | insufficient_data.
 
     NOTE: inside_wheel_spin is NEVER emitted — per-wheel slip data is not
     available in GT7 telemetry at this level; the signal would require individual
@@ -980,6 +1154,15 @@ def _classify_wheelspin_subtype(
     that the app does not currently track.  We emit "mixed" as a safe placeholder
     and leave this as a future extension when spring data is captured.
     # future extension: rear_platform_stiffness needs spring/damper baseline delta
+
+    Group 64 — ``gear_too_short_spin`` is a STRONG, load-bearing claim (it defers
+    all LSD-Acceleration reasoning downstream). A single intermediate-gear limiter
+    tap must NOT be enough to commit to it. It is only returned when the limiter
+    evidence is location-trustworthy (``location_trustworthy=True``) AND the driver
+    does not contradict it. A limiter-in-lower-gear signal that cannot be proven to
+    come from the straight resolves to ``unknown`` (→ controlled test), never a
+    speculative gearing certainty; a driver "sixth not used / too long" report over
+    the same telemetry resolves to ``conflicting_evidence``.
     """
     _SEVERE_ISH = ("major", "severe")
 
@@ -999,13 +1182,26 @@ def _classify_wheelspin_subtype(
     total_oversteer = sum(getattr(l, "oversteer_count", 0) for l in laps)
     throttle_on_oversteer = sum(getattr(l, "oversteer_throttle_on_count", 0) for l in laps)
 
-    # gear_too_short_spin: limiter hits in gears strictly below top gear + severe-ish wheelspin
+    # gear_too_short_spin: limiter hits in gears strictly below top gear + severe-ish
+    # wheelspin — but only committed to on TRUSTWORTHY, non-contradicted evidence
+    # (Group 64). Otherwise the weak signal is remembered and either resolves to a
+    # controlled test ("unknown") or a driver contradiction ("conflicting_evidence").
+    _weak_gear_signal = False
     if wheelspin_band in _SEVERE_ISH and top_gear > 0:
         lower_gear_hits = sum(
             int(cnt) for g, cnt in rlbg.items() if int(g) < top_gear
         )
         if lower_gear_hits > 0:
-            return "gear_too_short_spin"
+            if driver_says_gearing_too_long:
+                # Telemetry hints short, driver reports the top gear is unused / too
+                # long — a genuine contradiction. Never author a gearing certainty.
+                return "conflicting_evidence"
+            if location_trustworthy:
+                return "gear_too_short_spin"
+            # Limiter hit in a lower gear but we cannot prove it happened on the
+            # straight (location evidence not usable). Defer the gearing claim and
+            # try the other detectors; if none commit, this becomes "unknown".
+            _weak_gear_signal = True
 
     # snap_throttle_induced: high snap count + severe-ish wheelspin
     if avg_snap > 5 and wheelspin_band in _SEVERE_ISH:
@@ -1027,6 +1223,11 @@ def _classify_wheelspin_subtype(
         throttle_fraction = throttle_on_oversteer / total_oversteer
         if throttle_fraction > 0.60:
             return "both_rear_spin"
+
+    # A severe-ish spin whose ONLY structured signal was an unprovable lower-gear
+    # limiter hit resolves to "unknown" — a controlled test, not a gearing guess.
+    if _weak_gear_signal:
+        return "unknown"
 
     # mixed: meaningful+ wheelspin but signals don't point to one cause
     if wheelspin_band in ("meaningful",) + _SEVERE_ISH:
@@ -1518,6 +1719,10 @@ def _build_setup_diagnosis_conservative() -> dict:
         "bottoming_confidence":       {"band": "minor", "subtype": "insufficient_data", "confidence": "low"},
         "bottoming_impact":           {"impact": "ADVISORY", "performance_relevant": False,
                                        "reason": "no session data"},
+        # Group 64: canonical bottoming state (conservative = advisory / no action)
+        "bottoming_display_state":    {"state": "advisory", "label": "advisory — no session data",
+                                       "severity": 2, "impact": "ADVISORY", "band": "minor",
+                                       "performance_relevant": False, "reason": "no session data"},
         "driver_feel_traction_status": "unknown",
         "aero_rear_healthy":          False,
         # Phase 3 coherence gate inputs — conservative defaults
@@ -1797,7 +2002,9 @@ def _build_setup_diagnosis_inner(
     else:
         gearing_diagnosis_category = _raw_gearing_category
 
-    # Wheelspin subtype
+    # Wheelspin subtype — Group 64: pass location trustworthiness and the driver's
+    # own gearing report so a speculative gear_too_short_spin cannot be committed to
+    # on weak, unlocated evidence (it would otherwise block all LSD-accel reasoning).
     wheelspin_subtype = _classify_wheelspin_subtype(
         all_frames,
         rev_limiter_by_gear,
@@ -1805,6 +2012,8 @@ def _build_setup_diagnosis_inner(
         avg_snap,
         aero_rear_near_min,
         laps,
+        location_trustworthy=loc_evidence_usable,
+        driver_says_gearing_too_long=bool(driver_feel_flags.get("gearing_too_long")),
     )
 
     # Compliance priority
@@ -1942,6 +2151,9 @@ def _build_setup_diagnosis_inner(
         accel_fade_detected=_accel_fade,
         location_trustworthy=loc_evidence_usable,
     )
+    # Group 64: reconcile the raw count band and the consequence impact into ONE
+    # canonical state so no surface can render "required" + "normal" simultaneously.
+    bottoming_display = _bottoming_display_state(b_band, bottoming_impact)
     _bottoming_evidence_insufficient = (
         b_band == "required" and not bottoming_impact["performance_relevant"]
     )
@@ -1963,9 +2175,16 @@ def _build_setup_diagnosis_inner(
         "mid_corner_understeer", "lsd_connection", "rear_loose_under_braking",
         "front_aero_platform_limited", "snap_oversteer_exit", "braking_instability",
     }
+    # Group 64 — wheelspin (a telemetry dominant) previously never armed the gate,
+    # so a lone bare change could be "approved" while severe wheelspin went untreated.
+    # Arm it only when the wheelspin is genuinely major/severe (its dominance
+    # threshold), so a low/meaningful band never forces a partial.
+    _wheelspin_confirmed = (dominant_problem_key == "wheelspin"
+                            and w_band in ("major", "severe"))
     dominant_required = (
         (dominant_problem_key == "bottoming" and b_band == "required")
         or (dominant_problem_key in _CONFIRMED_FEEDBACK_DOMINANTS)
+        or _wheelspin_confirmed
     )
     dominant_evidence_sufficient = not (
         dominant_problem_key == "bottoming" and _bottoming_evidence_insufficient
@@ -2041,6 +2260,10 @@ def _build_setup_diagnosis_inner(
         "bottoming_confidence":       bottoming_confidence,
         # Group 63: bottoming graded by demonstrated consequence, not event count.
         "bottoming_impact":           bottoming_impact,
+        # Group 64: the ONE canonical bottoming state every surface renders — derived
+        # from the consequence impact, never the raw count band. No panel may show
+        # "required" unless this state's impact is performance-relevant.
+        "bottoming_display_state":    bottoming_display,
         "driver_feel_traction_status": driver_feel_traction_status,
         "aero_rear_healthy":          aero_rear_healthy,
     }

@@ -1,6 +1,24 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-13) — Group 63: Setup Brain UAT-2 remediation (Porsche RSR race setup)
+## Current Objective (2026-07-13) — Group 64: Setup-authoring architecture & discipline intelligence remediation
+
+**Branch `group64-setup-authoring-discipline-intelligence` from `master` @ `9d2b276` — committed, NOT pushed / no PR.** The manual UAT after Group 63 still produced near-identical Base/Qualifying/Race setups and a lone `ARB Front 6→5` labelled "approved", plus a contradictory bottoming state and a weak `gear_too_short_spin`. Group 63 fixed the *incremental* evidence pipeline; the remaining failures were **structural**: no single deterministic path authored a COMPLETE, objective-specific, full-field setup, and several "one canonical truth / safe ≠ complete" guarantees were re-derived or ignored at the render/status layer. Root-cause report: `docs/AUDIT_setup_brain_group64.md`. UAT guide: `docs/UAT_setup_brain_group64.md`.
+
+**What changed (all additive; deterministic/rule-first/AI-audit-only + Apply gate + Strategy-Brain authority intact; no schema migration — `RULE_ENGINE_VERSION` unchanged, `user_version` 14):**
+- **NEW `strategy/setup_authoring.py`** — `SetupObjective` (BASE/QUALIFYING/RACE, first-class not a label), immutable `SetupAuthoringContext`, `EVIDENCE_PRECEDENCE` (documented), `FieldDisposition` (11 states), `author_full_field_plan` (full-field plan with a disposition for EVERY adjustable field + objective-specific justification), `author_discipline_setups`, `objective_from_session_type`.
+- **RC1** discipline `discipline_field_plan` surface on the baseline response (`driving_advisor.build_baseline_setup_response`) — Base/Quali/Race authored separately from ONE context; the UI can prove (not just label) where they differ. Rows carry base/quali/race value + `differs` + disposition + proven value.
+- **RC2** `build_baseline_seed_overrides` lifts the LSD triplet (geometry tier ≤2, LSD tier ≤3 cross-track starting window) → proven LSD reaches deterministic authoring (`PROVEN_HISTORY_SEED`). Aero/brakes/gearing/ride-height still never lifted.
+- **RC3** `setup_diagnosis._bottoming_display_state` + `diagnosis["bottoming_display_state"]`; UI header renders the reconciled state (consequence governs; "required" only when performance-relevant).
+- **RC4** `_classify_wheelspin_subtype(location_trustworthy, driver_says_gearing_too_long)` — gates `gear_too_short_spin`; weak → `unknown`, contradiction → `conflicting_evidence`.
+- **RC5** `setup_diagnosis` `RECO_*` states + `assess_recommendation_completeness`; wired into `build_combined_setup_response` → `recommendation_completeness` + downgrade plain-approved → `partial_recommendation` when confirmed problems are untreated. `wheelspin` arms the finaliser dominant gate. UI Section 18 completeness panel.
+
+**Tests:** `tests/test_group64_setup_authoring.py` (13) + `tests/test_group64_uat_integration.py` (12); updated `test_group39` + `test_followups_history_lift_candidates`. **Full suite in halves: 7347 passed, 32 skipped, 0 failed.** Runtime files untouched (the pre-existing data/setup_history.json + track-model diffs came from the manual UAT and are NOT staged).
+
+**Deferred / limitations:** the `discipline_field_plan` is surfaced in the baseline JSON response but the UI renders only the completeness verdict + reconciled bottoming state; a full base/quali/race side-by-side table render in `ui/setup_builder_ui.py` is available data but not yet a dedicated panel. The analyse path still authors incremental changes via the rule engine (correct for post-practice); the full-field objective authoring is the baseline path.
+
+---
+
+## Prior Objective (2026-07-13) — Group 63: Setup Brain UAT-2 remediation (Porsche RSR race setup)
 
 **Branch `group63-setup-brain-race-engineer-uat2` from `master` @ `b951e06` — committed, NOT pushed / no PR.** A second Setup Brain UAT (Porsche 911 RSR (991) '17, race setup) exposed connected defects that survived the 16-phase Race-Engineer remediation. A four-thread code trace produced a root-cause report (`docs/AUDIT_setup_brain_uat2_group63.md`); the fix is the smallest coherent repair of the **evidence pipeline** (the prior sprint added rich *advisory* surfaces beside the diagnosis→rule-engine core but did not repair where evidence is lost / inverted / treated-as-valid-when-unknown).
 

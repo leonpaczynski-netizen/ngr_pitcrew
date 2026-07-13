@@ -179,24 +179,41 @@ def build_historical_prior(matches: List[HistoricalSetup]) -> Dict[str, dict]:
 
 # Fields where a STRONG proven prior should seed the from-scratch baseline. These
 # are personal-fit handling geometry the driver has already validated at this
-# car+track — NOT safety diffs, aero, brakes or gearing (those are track/strategy
-# driven, not driver-fit, and stay with the deterministic generator).
+# car+track.
 BASELINE_LIFT_FIELDS = frozenset({"camber_front", "camber_rear", "toe_front", "toe_rear"})
+
+# Group 64 — the differential is also a personal-fit lever. A proven same-car LSD
+# triplet is a legitimate STARTING WINDOW for the base setup (the driver has already
+# validated how they like the diff), even from another track — track-specific demands
+# and the discipline bias then adjust it. Aero, brakes, gearing and ride height stay
+# with the deterministic/track-driven generator (they are track/strategy, not fit).
+BASELINE_LSD_LIFT_FIELDS = frozenset({"lsd_initial", "lsd_accel", "lsd_decel"})
+
+# The full default lift set: personal-fit geometry + differential.
+BASELINE_LIFT_FIELDS_ALL = BASELINE_LIFT_FIELDS | BASELINE_LSD_LIFT_FIELDS
 
 
 def build_baseline_seed_overrides(
     prior: Dict[str, dict],
     *,
-    allowed_fields=BASELINE_LIFT_FIELDS,
+    allowed_fields=BASELINE_LIFT_FIELDS_ALL,
     max_tier: int = TIER_SAME_CAR_SIMILAR_TRACK,
 ) -> Dict[str, dict]:
-    """field -> {value, tier, source} for STRONG (tier <= max_tier) proven priors in
-    the lift-allowed set, to seed the from-scratch baseline from geometry the driver
-    has already validated instead of a generic neutral default.
+    """field -> {value, tier, source} for STRONG proven priors in the lift-allowed
+    set, to seed the from-scratch baseline from geometry and the differential the
+    driver has already validated instead of a generic neutral default.
 
-    Only strong scopes (same car+track+layout, or same car + similar track) qualify —
-    a weak/neutral prior never moves the base. Empty when no strong prior exists.
-    Never invents a value and never touches a field outside ``allowed_fields``."""
+    Group 64: the default lift set is personal-fit geometry (camber/toe) PLUS the LSD
+    triplet (a proven same-car diff is a valid starting window). Aero, brakes, gearing
+    and ride height are never lifted — they are track/strategy driven.
+
+    Per-field scope gating: geometry (camber/toe) is track-sensitive and seeds only
+    from a same-car same/similar-track prior (tier <= ``max_tier``, default 2). The LSD
+    triplet is a personal-fit lever that transfers across tracks, so it also seeds from
+    a same-car prior at ANOTHER track (tier <= TIER_SAME_CAR_DISCIPLINE=3) — a legitimate
+    starting window that discipline/track demands then adjust. A weak/neutral prior
+    (tier >= 4) never moves the base. Never invents a value; never touches a field
+    outside ``allowed_fields``."""
     out: Dict[str, dict] = {}
     for f, d in (prior or {}).items():
         if f not in allowed_fields or not isinstance(d, dict):
@@ -205,7 +222,10 @@ def build_baseline_seed_overrides(
             tier = int(d.get("tier", TIER_NEUTRAL))
         except (TypeError, ValueError):
             continue
-        if tier > max_tier:
+        # LSD transfers across tracks (personal-fit); geometry does not.
+        _field_max = (TIER_SAME_CAR_DISCIPLINE if f in BASELINE_LSD_LIFT_FIELDS
+                      else max_tier)
+        if tier > _field_max:
             continue
         try:
             value = float(d.get("value"))

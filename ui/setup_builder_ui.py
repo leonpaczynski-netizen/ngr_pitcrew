@@ -1678,7 +1678,12 @@ class SetupBuilderMixin:
         _diagnosis_html = ""
         if _diagnosis:
             _dom   = _diagnosis.get("dominant_problem") or "—"
-            _btm   = _diagnosis.get("bottoming_band") or "—"
+            # Group 64: render the ONE canonical bottoming state (consequence-graded),
+            # never the raw count band — so the header can no longer contradict the
+            # bottoming-impact panel ("required" vs "normal / expected").
+            _bds   = _diagnosis.get("bottoming_display_state") or {}
+            _btm   = (_bds.get("state") if isinstance(_bds, dict) and _bds.get("state")
+                      else (_diagnosis.get("bottoming_band") or "—"))
             _ws    = _diagnosis.get("wheelspin_band") or "—"
             _gbx   = _diagnosis.get("gearbox_flag") or "none"
             _conf  = _diagnosis.get("location_confidence") or "—"
@@ -2383,6 +2388,40 @@ class SetupBuilderMixin:
                 "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
                 "<b style='color:#5FA8D3; font-size:11px;'>&#128300; Precise targeted tests</b>"
                 f"{_tt_body}</div>"
+            )
+
+        # --- Section 18: Recommendation completeness verdict (Group 64) ---
+        # A change being safe is not the same as the setup being complete. Show the
+        # driver whether this is a finished setup, a partial, or a test plan — and
+        # which confirmed problems are still untreated.
+        _comp = data.get("recommendation_completeness") or {}
+        if isinstance(_comp, dict) and _comp.get("state"):
+            _state = str(_comp.get("state", ""))
+            _complete = bool(_comp.get("complete"))
+            _untreated = _comp.get("untreated") or []
+            _colour = "#8BC34A" if _complete else "#E0A458"
+            _label_map = {
+                "approved_complete": "Complete setup",
+                "approved_incremental_test": "Incremental controlled test",
+                "partial_recommendation": "Partial recommendation",
+                "targeted_test_required": "Targeted test required",
+                "insufficient_evidence": "Insufficient evidence",
+                "conflicting_evidence": "Conflicting evidence",
+                "blocked_unsafe": "Blocked — unsafe",
+                "rejected_incoherent": "Rejected — incoherent",
+            }
+            _readable = _label_map.get(_state, _state.replace("_", " ").title())
+            _untreated_html = ""
+            if _untreated and not _complete:
+                _names = ", ".join(str(u).replace("_", " ") for u in _untreated)
+                _untreated_html = (
+                    f"<p style='margin:2px 0; color:#CCC; font-size:11px;'>"
+                    f"Still untreated: {_names}</p>")
+            html += (
+                "<div style='background:#14100A; border:1px solid #5A4A2E; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                f"<b style='color:{_colour}; font-size:11px;'>&#9878; Setup completeness: "
+                f"{_readable}</b>{_untreated_html}</div>"
             )
 
         return html

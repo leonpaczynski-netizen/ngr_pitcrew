@@ -5,6 +5,19 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-13 — Group 64: Setup-authoring architecture & discipline intelligence)
+
+**Branch `group64-setup-authoring-discipline-intelligence` from `master` @ `9d2b276` — committed locally, NOT pushed.** The manual UAT after Group 63 still produced near-identical Base/Qualifying/Race setups, a lone `ARB Front 6→5` labelled "approved", a contradictory bottoming state (`required` header vs `NORMAL_OR_EXPECTED` panel), a weak `gear_too_short_spin`, and proven values that never reached authoring. Group 63 had repaired the *incremental* evidence pipeline; Group 64 adds the missing **complete, objective-specific, full-field authoring architecture** and closes the render/status-layer gaps. Root-cause report: `docs/AUDIT_setup_brain_group64.md`. Deterministic/rule-first/AI-audit-only preserved; **no schema migration** (`RULE_ENGINE_VERSION` unchanged, `user_version` 14).
+
+- **NEW `strategy/setup_authoring.py`** — canonical `SetupObjective` (BASE/QUALIFYING/RACE), immutable `SetupAuthoringContext`, documented `EVIDENCE_PRECEDENCE`, `FieldDisposition` (11 states), `author_full_field_plan` (composes the deterministic generator, assigns a disposition to EVERY adjustable field, attaches objective-specific per-field justification) + `author_discipline_setups`.
+- **RC1 discipline** — baseline response gains a `discipline_field_plan` surface authoring Base/Quali/Race as separate full-field setups from ONE context (per-field base/quali/race values + `differing_fields` + dispositions). Base/Quali/Race genuinely diverge (≥9 fields for the RSR).
+- **RC2 proven history → authoring** — `build_baseline_seed_overrides` now lifts the LSD triplet (geometry tier ≤2, LSD tier ≤3 as a cross-track starting window), marked `PROVEN_HISTORY_SEED`.
+- **RC3 bottoming** — new `bottoming_display_state` reconciles count band + consequence impact into ONE canonical state; UI header reads it (no more `required`+`normal`).
+- **RC4 wheelspin** — `_classify_wheelspin_subtype` requires location-trustworthy, non-contradicted evidence before `gear_too_short_spin`; else `unknown` (→ test) / `conflicting_evidence`.
+- **RC5 completeness** — `RECO_*` state vocabulary + `assess_recommendation_completeness`: a plan is complete only when every active confirmed problem (incl. telemetry wheelspin + secondaries) is addressed or covered by a targeted test, else downgraded to `partial_recommendation`; `wheelspin` now arms the finaliser gate; UI shows a completeness verdict + untreated list.
+
+**Tests:** NEW `tests/test_group64_setup_authoring.py` (13) + `tests/test_group64_uat_integration.py` (12); updated `test_group39` (wheelspin gate) + `test_followups_history_lift_candidates` (LSD lift). **Full suite run in halves (documented PyQt full-run segfault): 4755 + 2592 = 7347 passed, 32 skipped, 0 failed.** Runtime files git-verified untouched (data/setup_history.json + track models were modified by the manual UAT before this work and are intentionally NOT staged).
+
 ## Repository / Build Status (2026-07-13 — Group 63: Setup Brain UAT-2 remediation)
 
 **Branch `group63-setup-brain-race-engineer-uat2` from `master` @ `b951e06` — committed locally, NOT pushed.** A second Setup Brain UAT (Porsche 911 RSR race setup) exposed connected defects that survived the 16-phase Race-Engineer remediation: a wrong `Final Drive 4.25→4.20` (lengthening) for an unused sixth, bottoming marked dominant/required on event count with no impact, and the LSD triplet + camber never meaningfully evaluated. Root-cause report: `docs/AUDIT_setup_brain_uat2_group63.md`. The repair fixes the **evidence pipeline** (deterministic/rule-first/AI-audit-only preserved; no schema migration; `RULE_ENGINE_VERSION` unchanged; `user_version` stays 14):
