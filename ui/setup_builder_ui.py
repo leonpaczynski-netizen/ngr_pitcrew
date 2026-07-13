@@ -2319,6 +2319,72 @@ class SetupBuilderMixin:
                 f"{_arb_body}</div>"
             )
 
+        # --- Section 15: Bottoming impact verdict (Group 63) ---
+        _bi = data.get("bottoming_impact") or {}
+        if _bi.get("impact"):
+            _bi_class = str(_bi.get("impact", ""))
+            _bi_colour = {
+                "REQUIRED": "#E86A5E", "PERFORMANCE_RELEVANT": "#E0A060",
+                "ADVISORY": "#C9C075", "NORMAL_OR_EXPECTED": "#8BC34A",
+                "UNKNOWN": "#9AA0A6",
+            }.get(_bi_class, "#9AA0A6")
+            html += (
+                "<div style='background:#141A20; border:1px solid #33414E; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<b style='color:#7AB3D4; font-size:11px;'>&#128207; Bottoming &mdash; impact, not just count</b>"
+                f"<p style='margin:3px 0 0 0; font-size:11px;'>"
+                f"<b style='color:{_bi_colour};'>{_bi_class}</b> "
+                f"<span style='color:#AAA;'>&mdash; {_bi.get('reason', '')}</span></p></div>"
+            )
+
+        # --- Section 16: LSD triplet assessment (Group 63) ---
+        _lsd = data.get("lsd_assessment") or {}
+        _lsd_fields = _lsd.get("fields") or []
+        if _lsd_fields:
+            _lsd_body = ""
+            for _lf in _lsd_fields:
+                _ev = "&#10003;" if _lf.get("evaluated") else "&#8211;"
+                _cur = _lf.get("current")
+                _pv = _lf.get("proven")
+                _cur_s = f"{_cur:g}" if isinstance(_cur, (int, float)) else "?"
+                _pv_s = (f", proven <b style='color:#8BC34A;'>{_pv:g}</b>"
+                         if isinstance(_pv, (int, float)) else "")
+                _lsd_body += (
+                    f"<p style='margin:3px 0; color:#CCC; font-size:11px;'>"
+                    f"{_ev} <b style='color:#DDD;'>{_lf.get('label', _lf.get('field',''))}</b> "
+                    f"<span style='color:#888;'>(current {_cur_s}{_pv_s})</span> "
+                    f"&mdash; {_lf.get('direction','')}: {_lf.get('evidence','')}</p>"
+                )
+                _ct = _lf.get("controlled_test")
+                if _ct:
+                    _lsd_body += (
+                        f"<p style='margin:0 0 4px 16px; color:#7AB3D4; font-size:10px;'>"
+                        f"&#128295; {_ct}</p>"
+                    )
+            html += (
+                "<div style='background:#161A14; border:1px solid #3E5A3E; "
+                "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+                "<b style='color:#8BC34A; font-size:12px;'>&#9881; Differential (LSD) &mdash; all three fields</b>"
+                f"<div style='margin-top:4px;'>{_lsd_body}</div>"
+                "<p style='color:#666; font-size:10px; margin:4px 0 0 0;'>"
+                "Initial / Acceleration / Braking evaluated independently against your proven "
+                "same-car values; confirm direction by controlled test before applying.</p></div>"
+            )
+
+        # --- Section 17: Targeted tests to resolve unknowns (Group 63) ---
+        _tt = data.get("_targeted_tests") or []
+        if _tt:
+            _tt_body = "".join(
+                f"<p style='margin:2px 0; color:#CCC; font-size:11px;'>&#128295; {_t}</p>"
+                for _t in _tt
+            )
+            html += (
+                "<div style='background:#101820; border:1px solid #2E4658; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                "<b style='color:#5FA8D3; font-size:11px;'>&#128300; Precise targeted tests</b>"
+                f"{_tt_body}</div>"
+            )
+
         return html
 
     def _apply_and_save_ai_setup(self) -> None:

@@ -665,14 +665,36 @@ class TestGearboxPreservation:
         )
 
     def test_gearbox_flag_may_change_without_driver_good(self):
-        """Without gearbox_good flag, rev limiter hits -> may_change."""
+        """Without gearbox_good flag, a CONFIRMED gear_too_short (top-gear limiter +
+        a real top-speed deficit + trustworthy location) -> may_change.
+
+        Group 63: gear_too_short now requires a valid top-speed target AND
+        trustworthy location — a limiter reading with no target (transmission_max_
+        speed_kmh=0) or low location confidence is honest UNKNOWN, not may_change.
+        """
+        laps = [_make_lap(rev_limiter_by_gear={6: 5}, max_speed_kmh=200.0)]
+        diag = build_setup_diagnosis(
+            laps=laps,
+            setup={"transmission_max_speed_kmh": 300, "num_gears": 6},
+            car_name="",
+            event_ctx={}, feeling="car feels great",
+            location_confidence="high",
+        )
+        assert diag["gearbox_flag"] == "may_change"
+        assert diag["gearing_diagnosis_category"] == "gear_too_short"
+
+    def test_gearbox_flag_preserve_without_speed_target(self):
+        """Group 63: a top-gear limiter reading with NO valid top-speed target
+        (transmission_max_speed_kmh uncaptured / 0) is honest UNKNOWN -> preserve,
+        never a gear_too_short 'may_change' default."""
         laps = [_make_lap(rev_limiter_by_gear={6: 5})]
         diag = build_setup_diagnosis(
             laps=laps, setup={}, car_name="",
             event_ctx={}, feeling="car feels great",
             location_confidence="low",
         )
-        assert diag["gearbox_flag"] == "may_change"
+        assert diag["gearing_diagnosis_category"] == "insufficient_data"
+        assert diag["gearbox_flag"] == "preserve"
 
 
 # ===========================================================================

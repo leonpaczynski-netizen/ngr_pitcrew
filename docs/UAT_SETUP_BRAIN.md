@@ -351,3 +351,43 @@ tyre + high fuel.
 verdict (not yet the feedback-aware Group 47 verdict); understeer/front-bite
 verification has no telemetry signal; baseline learning-record wiring and
 `learning_outcomes.session_type` population remain deferred from Group 46.
+
+## Group 63 UAT — Setup Brain UAT-2 (Porsche 911 RSR race setup)
+
+Retest the failed scenario end-to-end. Root causes + design:
+`docs/AUDIT_setup_brain_uat2_group63.md`, `docs/RULE_FIRST_SETUP_BRAIN.md` §17.
+
+**Fixture:** Porsche 911 RSR (991) '17, Race setup. Current: final_drive 4.25,
+`transmission_max_speed_kmh` uncaptured (0), max front aero, low LSD, low camber.
+Feedback: entry understeer, mid-corner push, rear loose on throttle, rear steps out
+under braking, high fuel use, "LSD not how I like … not hooking up on the apex",
+sixth not fully used. Proven same-car history available (Watkins Race 22/8/33,
+Quali 20/9/31; camber 2.5/2.1 & 2.6/1.9).
+
+**Test 1 — gearbox.** Confirm NO `Final Drive 4.25→4.20` is recommended; no
+rev-limiter claim without limiter evidence; gearing classified UNKNOWN /
+CONFLICTING (not gear_too_short).
+
+**Test 2 — bottoming.** Confirm the bottoming-impact verdict is UNKNOWN/ADVISORY/
+NORMAL (not REQUIRED) when the count is high but no consequence is measured; a
+genuinely harmful event (driver report or measured accel-fade) can still be REQUIRED.
+
+**Test 3 — LSD.** Confirm Initial / Acceleration / Braking are all evaluated,
+current values compared with 22/8/33 (and 20/9/31 for quali), and an unknown
+wheelspin subtype yields a controlled test.
+
+**Test 4 — camber & feedback.** Confirm every feedback item receives a disposition
+(nothing disappears) and proven camber values surface.
+
+**Test 5 — result honesty.** Confirm the result is `evidence_required` /
+targeted-test (NOT shown ready-to-apply) when the dominant handling issue has no
+safe rule-based change; the dominant problem is the driver's real complaint
+(mid-corner understeer), not bottoming.
+
+**Known limitations (honest):** proven values are surfaced as a prior + drive
+controlled tests but the engine does not auto-author LSD/camber changes on
+contraindicated evidence (it prescribes tests); a full proven-Race vs proven-Quali
+split in the comparison columns and a cross-candidate relevance scorer remain
+deferred (the coherence gate covers the "irrelevant change wins" case for now).
+No tyre-temperature telemetry, so camber recommendations stay historical+driver
+evidence, confidence-limited.

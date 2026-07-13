@@ -269,6 +269,25 @@ def _delta_decrease_lsd_accel(setup: dict, ranges: dict, diagnosis: dict) -> flo
     return -2.0
 
 
+def _delta_increase_lsd_initial(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Increase LSD Initial Torque (preload) by 2 — a conservative one-step move.
+
+    Group 63: Initial Torque was a structurally dead field (no resolver, no rule).
+    More preload connects the diff earlier off the apex (fixes a "floaty / won't
+    hook up" feel); it is authored only under an explicit driver LSD complaint and
+    a strong same-car proven prior, never blindly.
+    """
+    return 2.0
+
+
+def _delta_decrease_lsd_initial(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """Decrease LSD Initial Torque (preload) by 2 — conservative one-step move.
+
+    Less preload frees low-speed rotation when excessive preload causes understeer.
+    """
+    return -2.0
+
+
 def _delta_increase_lsd_decel(setup: dict, ranges: dict, diagnosis: dict) -> float:
     """Increase LSD decel by 2 (entry stability fix)."""
     return 2.0
@@ -356,6 +375,8 @@ _DELTA_RESOLVERS: dict[str, object] = {
     "decrease_rear_aero": _delta_decrease_rear_aero,
     "increase_lsd_accel": _delta_increase_lsd_accel,
     "decrease_lsd_accel": _delta_decrease_lsd_accel,
+    "increase_lsd_initial": _delta_increase_lsd_initial,
+    "decrease_lsd_initial": _delta_decrease_lsd_initial,
     "increase_lsd_decel": _delta_increase_lsd_decel,
     "decrease_lsd_decel": _delta_decrease_lsd_decel,
     "increase_rear_arb": _delta_increase_rear_arb,

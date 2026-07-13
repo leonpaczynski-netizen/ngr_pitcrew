@@ -5,6 +5,17 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-13 — Group 63: Setup Brain UAT-2 remediation)
+
+**Branch `group63-setup-brain-race-engineer-uat2` from `master` @ `b951e06` — committed locally, NOT pushed.** A second Setup Brain UAT (Porsche 911 RSR race setup) exposed connected defects that survived the 16-phase Race-Engineer remediation: a wrong `Final Drive 4.25→4.20` (lengthening) for an unused sixth, bottoming marked dominant/required on event count with no impact, and the LSD triplet + camber never meaningfully evaluated. Root-cause report: `docs/AUDIT_setup_brain_uat2_group63.md`. The repair fixes the **evidence pipeline** (deterministic/rule-first/AI-audit-only preserved; no schema migration; `RULE_ENGINE_VERSION` unchanged; `user_version` stays 14):
+- **Feedback parsing** — new `lsd_feel_wrong` / `rear_loose_under_braking` / `gearing_too_long` flags + braking-vs-exit phase disambiguation (`strategy/setup_diagnosis.py`).
+- **Gearbox** — new pure `strategy/gearbox_evidence.py` (final-drive directional invariant `4.25→4.20=LONGER`; five-state `TOO_SHORT/APPROPRIATE/TOO_LONG/UNKNOWN/CONFLICTING`); `_classify_gearing` uses the real gear count, treats a 0 top-speed target as UNKNOWN, gates the straight-specific claim on location confidence, and a driver "unused sixth" report → `conflicting_evidence` (preserve). Wrong final-drive rejected at diagnosis AND by the validator.
+- **Bottoming** — `_classify_bottoming_impact` grades by demonstrated consequence (5 classes); count-only "required" → UNKNOWN + demoted; handling complaints (incl. `mid_corner_understeer`) can now be dominant.
+- **LSD triplet** — new pure `strategy/lsd_reasoning.py` + `lsd_initial` resolvers; all three fields evaluated vs the proven same-car prior with executable controlled tests.
+- **Coherence** — `dominant_required` generalised beyond bottoming; a bare `final_drive` no longer "addresses" wheelspin; UI gains LSD-triplet / bottoming-impact / targeted-test panels.
+
+**Tests:** `tests/test_group63_setup_brain_uat2.py` (40, incl. the full Porsche RSR integration fixture); ~2791 setup-brain/advisor + 13 UI-smoke green; runtime files git-verified untouched. Pre-existing unrelated failure: `test_home_dashboard_promotion::test_no_new_raw_setcurrentindex` (dashboard.py byte-identical to master).
+
 ## Repository / Build Status (2026-07-11 — Group 62 Delivered + Pre-UAT Audit & Defect Resolution)
 
 **Current tip: `master` @ `0b73d0d` (PR #41, Group 62).** Beyond the Group 61 entry below, master now also carries **Group 62 — No-ABS Awareness** (per-event "ABS allowed" toggle into setup/strategy/coaching) and **UI Passes 1–6** (NGR Enterprise theme foundation, action-hierarchy, Track Modelling trust badge, driver-facing copy, History empty-state, button hierarchy).
