@@ -94,10 +94,16 @@ a strong authoring input that resolves ambiguous trade-offs, not a ±1 tiebreake
 **Root cause.** The profile is additive metadata, not a first-class authoring input scaled
 to the decision.
 
-**Correct design.** Feed the driver tendencies into the same engineering-intent layer so
-they *bias direction* on the fields the car/track leave open (front bite, rear stability,
-brake bias). **Implemented (partial)** — driver tendencies are one input to
-`derive_engineering_intents`; deeper evidence-scaling is staged.
+**Correct design — DELIVERED (`strategy/driver_fit.py`).** Each preference is a DIRECTION +
+a COMFORT THRESHOLD (fraction of the car's range); the nudge fires only when the current
+value actively VIOLATES the preference, scaled by how far past the threshold it sits, by
+strength, and by the field's range — and is ZERO once the car is on the driver's side (don't
+fix what fits). Opposing preferences net-resolve into a comfort band (e.g. rotation-without-
+snap vs consistency on the braking diff). Wired into baseline/discipline authoring (against
+the neutral seed; proven-history-seeded fields are excluded so it never double-counts a
+validated value) AND the telemetry path (composed into the balance set for fields the solver
+neither moved nor deferred; plus an advisory `driver_fit_reasoning` surface). This closes the
+"zero on the telemetry path" finding.
 
 ## Gap 4 — No objective functions (Base/Quali/Race are a delta table)
 
@@ -175,7 +181,7 @@ otherwise defer to `evidence_required`/partial, the app now authors a real setup
 | 2 | Track → one aero knob | **Highest** | **Done** — track drives gearing, ride-height, ARB, balance |
 | 4 | No objective functions | High | **Done (reasoning)** — objective shapes intents |
 | 5 | No coupling | High | **Foundation** — intent `couples_with` + cascade |
-| 3 | Thin driver layer | Medium | **Partial** — driver tendencies feed intents |
+| 3 | Thin driver layer | Medium | **Done** — evidence-scaled driver-fit, reaches the telemetry path |
 | 6 | Defer instead of engineer | High | **Done** — balance solver authors a coordinated setup |
 
 The implementation is `strategy/setup_engineering.py` (pure, first-principles, direction +

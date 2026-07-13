@@ -267,6 +267,18 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
         eng_lean = eng_plan.final_drive_lean
     except Exception:
         eng_bias, eng_lean = {}, 0.0
+    # Evidence-scaled driver fit — tailor the neutral base toward the driver's window.
+    try:
+        from strategy.driver_fit import derive_driver_fit, driver_fit_bias
+        from strategy.setup_baseline import NEUTRAL_SEEDS
+        # A proven-history seed already reflects the driver's validated preference —
+        # exclude those fields from driver-fit so it does not double-count/overshoot.
+        _df = [i for i in derive_driver_fit(ctx.profile, NEUTRAL_SEEDS, ctx.ranges)
+               if i.field not in (seed_overrides or {})]
+        for _dff, _dfd in driver_fit_bias(_df).items():
+            eng_bias[_dff] = eng_bias.get(_dff, 0.0) + _dfd
+    except Exception:
+        pass
 
     raw = build_baseline_setup(
         ctx.car, ctx.ranges, ctx.drivetrain, ctx.num_gears,

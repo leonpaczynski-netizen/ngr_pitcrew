@@ -102,6 +102,7 @@ class BalanceSolution:
     targeted_tests: list              # levers left to a controlled test (ambiguous)
     summary: str
     test_protocol: str
+    deferred_fields: tuple = ()       # fields the solver deliberately left to a test
 
     def as_change_dicts(self) -> list:
         return [m.as_change_dict() for m in self.moves]
@@ -186,6 +187,7 @@ def solve_balance(
     moves: list[BalanceMove] = []
     tradeoffs: list[str] = []
     tests: list[str] = []
+    deferred: set = set()   # fields deliberately left to a controlled test
 
     def _emit(field: str, direction: int, reason: str, addresses: tuple, axis: str):
         if field in locked:
@@ -235,6 +237,7 @@ def solve_balance(
         tests.append("LSD Acceleration: do NOT add lock (it would worsen power oversteer) — "
                      "test a small REDUCTION only if traction is still poor after the aero/toe "
                      "change")
+        deferred.add("lsd_accel")
 
     # ---- BRAKING instability: STABLE STOP (brake bias forward, never rearward) ----
     if braking:
@@ -245,6 +248,7 @@ def solve_balance(
         tests.append("LSD Braking Sensitivity: confirm straight-line vs trail-braking lock "
                      "over 3 laps before changing coast lock (direction is ambiguous from "
                      "the data)")
+        deferred.add("lsd_decel")
 
     # ---- Coherence trade-off note: the understeer/power-oversteer resolution ----
     if understeer and power_os:
@@ -274,4 +278,5 @@ def solve_balance(
         "before touching the rear. If the rear is still loose on power, run the LSD "
         "Acceleration test noted above. Re-check braking stability after the bias move."
     )
-    return BalanceSolution(True, tuple(complaints), moves, tradeoffs, tests, summary, protocol)
+    return BalanceSolution(True, tuple(complaints), moves, tradeoffs, tests, summary,
+                           protocol, deferred_fields=tuple(sorted(deferred)))

@@ -346,6 +346,35 @@ def _balance_solution_html(sol: dict) -> str:
     )
 
 
+def _driver_fit_html(reasoning: dict) -> str:
+    """Render how the setup was tailored to the driver's style, evidence-scaled.
+    Module-level, self-guarding — absent/empty renders nothing."""
+    if not isinstance(reasoning, dict):
+        return ""
+    intents = reasoning.get("intents") or []
+    if not intents:
+        return ""
+    _rows = ""
+    for i in intents:
+        _fld = str(i.get("field", "")).replace("_", " ")
+        _conf = str(i.get("confidence", ""))
+        _rows += (
+            f"<p style='margin:1px 0; color:#CBC8D8; font-size:11px;'>"
+            f"<b>{_fld}</b> {i.get('from')} &rarr; {i.get('to')} "
+            f"<span style='color:#8F8CA6;'>({_conf}) — {i.get('reason', '')}</span></p>"
+        )
+    _note = str(reasoning.get("note", ""))
+    _note_html = (f"<p style='margin:4px 0 0 0; color:#9A97AE; font-size:10px;'>{_note}</p>"
+                  if _note else "")
+    return (
+        "<div style='background:#12101A; border:1px solid #4A3E64; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#B0A0D0; font-size:12px;'>&#128100; Tailored to your driving "
+        "style</b>"
+        f"{_rows}{_note_html}</div>"
+    )
+
+
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
 
@@ -2323,6 +2352,7 @@ class SetupBuilderMixin:
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
         html += _balance_solution_html(data.get("balance_solution"))
+        html += _driver_fit_html(data.get("driver_fit_reasoning"))
         html += _discipline_field_plan_html(data.get("discipline_field_plan"))
 
         # --- Section 9: Qualifying discipline (Phase 7) ---

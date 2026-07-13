@@ -2509,11 +2509,31 @@ class DrivingAdvisor:
                         _sol = solve_balance(diagnosis or {}, setup_dict, _bal_ranges,
                                              locked_fields=_bal_locked)
                         if _sol.solved and _sol.moves:
+                            # Compose evidence-scaled driver-fit moves for fields the
+                            # balance did NOT touch (so driver influence reaches the
+                            # telemetry path too, without conflicting with the balance).
+                            _bal_change_dicts = _sol.as_change_dicts()
+                            _bal_touched = {c.get("field") for c in _bal_change_dicts}
+                            # Respect the balance solver's DEFERRED fields (it chose to
+                            # test them, not author them) — driver-fit only tailors the
+                            # fields the solver neither moved nor deliberately deferred.
+                            _bal_off_limits = (_bal_touched | _bal_locked
+                                               | set(_sol.deferred_fields))
+                            _df_setup_fields = dict(_sol.setup_fields())
+                            try:
+                                from strategy.driver_fit import derive_driver_fit
+                                for _dfi in derive_driver_fit(_profile, setup_dict, _bal_ranges):
+                                    if _dfi.field in _bal_off_limits:
+                                        continue
+                                    _bal_change_dicts.append(_dfi.as_change_dict())
+                                    _df_setup_fields[_dfi.field] = _dfi.to_value
+                            except Exception:
+                                pass
                             _bal_raw = {
                                 "analysis": _sol.summary,
                                 "primary_issue": "balance_compromise",
-                                "changes": _sol.as_change_dicts(),
-                                "setup_fields": _sol.setup_fields(),
+                                "changes": _bal_change_dicts,
+                                "setup_fields": _df_setup_fields,
                                 "diagnosis": diagnosis or {},
                                 "validation_targets": {},
                                 "confidence": {"overall": "medium",
@@ -2545,6 +2565,19 @@ class DrivingAdvisor:
                                         base_status="approved"))
                                 _data["analysis"] = (
                                     _sol.summary + " " + _sol.test_protocol).strip()
+                except Exception:
+                    pass
+
+                # Driver-fit reasoning surface (advisory) — how the CURRENT setup fits
+                # or works against the driver's stated style, evidence-scaled. Shown on
+                # the telemetry path even when nothing is authored, so driver influence
+                # is always visible (the audit's Gap 3: it was zero on this path).
+                try:
+                    from strategy.driver_fit import derive_driver_fit, driver_fit_reasoning
+                    _df_a = derive_driver_fit(
+                        _profile, setup_dict, resolve_ranges(car_name))
+                    if _df_a:
+                        _data["driver_fit_reasoning"] = driver_fit_reasoning(_profile, _df_a)
                 except Exception:
                     pass
 
@@ -2738,6 +2771,7 @@ class DrivingAdvisor:
             # ride-height for elevation, ARB balance, RR rear-stability, etc.). Flows through
             # the SAME clamp/validate pipeline; degrades to no-op if anything is missing.
             _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            _driver_fit_reasoning = None
             try:
                 from strategy.setup_engineering import (
                     build_vehicle_model, derive_engineering_intents, resolve_car_specs,
@@ -2755,6 +2789,23 @@ class DrivingAdvisor:
                 _eng_reasoning["coupling"] = coupling_report(_eng_plan)
             except Exception:
                 _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            # Evidence-scaled driver fit: tailor the neutral base toward the driver's
+            # stated style IN PROPORTION to how far each seed sits from their window.
+            try:
+                from strategy.driver_fit import (
+                    derive_driver_fit, driver_fit_bias, driver_fit_reasoning,
+                )
+                from strategy.setup_baseline import NEUTRAL_SEEDS
+                # A proven-history seed already IS the driver's validated preference —
+                # don't nudge those fields again (that would double-count and overshoot).
+                _df_intents = [i for i in derive_driver_fit(_profile, NEUTRAL_SEEDS, ranges)
+                               if i.field not in (_seed_overrides or {})]
+                for _dff, _dfd in driver_fit_bias(_df_intents).items():
+                    _eng_bias[_dff] = _eng_bias.get(_dff, 0.0) + _dfd
+                if _df_intents:
+                    _driver_fit_reasoning = driver_fit_reasoning(_profile, _df_intents)
+            except Exception:
+                _driver_fit_reasoning = None
 
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
@@ -2848,6 +2899,10 @@ class DrivingAdvisor:
             # (vehicle model, track-driven gearing/support, objective, coupling notes).
             if _eng_reasoning:
                 _resp["engineering_reasoning"] = _eng_reasoning
+            # Driver-fit reasoning — how the base was tailored to the driver's style,
+            # scaled to how far each field sat from their window.
+            if _driver_fit_reasoning:
+                _resp["driver_fit_reasoning"] = _driver_fit_reasoning
 
             # Group 64: canonical discipline field-plan surface — author Base,
             # Qualifying and Race as separate full-field setups from ONE context so

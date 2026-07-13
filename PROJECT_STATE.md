@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 3 — evidence-scaled driver fit)
+
+**Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed + pushed; part of PR #44.** Closes audit Gap 3 (thin driver layer): the driver profile applied fixed one-click nudges (two self-cancelling), scaled to nothing, and touched no value on the telemetry path.
+
+**NEW `strategy/driver_fit.py` (pure):** each driver preference is a DIRECTION + a COMFORT THRESHOLD (fraction of the car's legal range). `derive_driver_fit(profile, current_setup, ranges)` fires a move ONLY when the current value actively violates the preference, scaled by how far past the threshold it sits × strength × range — and is ZERO once the field is on the driver's side ("don't fix what fits"). Opposing preferences net-resolve into a comfort band (rotation-without-snap vs consistency on the braking diff). Range-aware (one "click" = the same fraction of a 1–10 and a 1–40 bar). Wired into: (a) baseline + discipline authoring (against the neutral seed; **proven-history-seeded fields excluded** so it never double-counts a validated value), and (b) the **telemetry path** — composed into the balance set for fields the solver neither moved nor deferred (`BalanceSolution.deferred_fields` respected), plus an advisory `driver_fit_reasoning` surface shown on every analyse (the audit's "zero on the telemetry path" is closed). UI: `_driver_fit_html` panel.
+
+**Tests:** NEW `tests/test_driver_fit.py` (9) — evidence-scaling, already-fits-no-move, range-awareness, band resolution, honesty, both-path integration. Full suite (halves; some UI files individual due to the documented PyQt teardown segfault): **~7392 passed, 32 skipped, 0 failed.** Safety spine intact; driver-fit moves flow through the same validator + Apply gate; no schema migration.
+
 ## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 2 — balance solver)
 
 **Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed locally, NOT pushed.** Closes audit Gap 6 ("defer instead of engineer"): when several conflicting complaints (entry understeer + mid push + rear loose on power + rear locks under braking) previously collapsed to one dominant, emptied the proposed set via per-field contraindications, and returned `evidence_required` with NO setup — the app now **authors a coherent setup**.

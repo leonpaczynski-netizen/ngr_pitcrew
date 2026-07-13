@@ -330,19 +330,10 @@ def derive_engineering_intents(
     else:
         notes.append("Base: balanced platform to learn from; deliberately leaves headroom.")
 
-    # ---- DRIVER: bias the open trade-offs toward the driver ---------------
-    if driver is not None:
-        if getattr(driver, "prefers_front_bite", False):
-            intents.append(EngineeringIntent(
-                "toe_front", -1, 0.5,
-                "driver wants immediate nose response — a touch more front toe-out for bite",
-                "driver:front_bite", ("arb_front",)))
-        if getattr(driver, "prefers_rear_stability", False) and \
-                vehicle.balance_tendency != BAL_ENTRY_US_POWER_OS:
-            intents.append(EngineeringIntent(
-                "toe_rear", +1, 0.5,
-                "driver prizes a planted rear — add a little rear toe-in",
-                "driver:rear_stability", ("aero_rear",)))
+    # DRIVER fit is handled by the dedicated evidence-scaled layer (strategy/driver_fit)
+    # so the driver's preferences move each field in proportion to how far the current
+    # value sits from their window — not a fixed nudge. It is composed alongside this
+    # plan by the caller, keeping vehicle/track/objective reasoning separate and clean.
 
     return EngineeringPlan(
         vehicle=vehicle, objective=obj, intents=intents,
