@@ -14,7 +14,9 @@
 
 **Tests:** `tests/test_group64_setup_authoring.py` (13) + `tests/test_group64_uat_integration.py` (12); updated `test_group39` + `test_followups_history_lift_candidates`. **Full suite in halves: 7347 passed, 32 skipped, 0 failed.** Runtime files untouched (the pre-existing data/setup_history.json + track-model diffs came from the manual UAT and are NOT staged).
 
-**Deferred / limitations:** the `discipline_field_plan` is surfaced in the baseline JSON response but the UI renders only the completeness verdict + reconciled bottoming state; a full base/quali/race side-by-side table render in `ui/setup_builder_ui.py` is available data but not yet a dedicated panel. The analyse path still authors incremental changes via the rule engine (correct for post-practice); the full-field objective authoring is the baseline path.
+**UI:** the `discipline_field_plan` now renders as a **Base · Qualifying · Race side-by-side table** in the setup result panel (`_render_discipline_field_plan` in `ui/setup_builder_ui.py`, first section of `_render_race_engineer_surfaces`): Field | Base | Qualifying | Race | Proven | Source(disposition), differing fields sorted first + highlighted, proven-seed note. Plus the Section 18 completeness verdict panel and the reconciled bottoming header.
+
+**Deferred / limitations:** the analyse path still authors incremental changes via the rule engine (correct for post-practice); the full-field objective authoring is the baseline path.
 
 ---
 
