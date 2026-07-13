@@ -4825,11 +4825,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._refine_notice = ""
         self._update_refine_banner()
         try:
-            reg = getattr(self, "_tab_registry", None)
-            if reg is not None and hasattr(self, "_tabs"):
-                idx = reg.index_of(TAB_TRACK_MODELLING)
-                if idx is not None and idx >= 0:
-                    self._tabs.setCurrentIndex(idx)
+            # Navigate via the single sanctioned path (select_tab → the one
+            # permitted _tabs.setCurrentIndex call site) rather than a raw jump.
+            self.select_tab(TAB_TRACK_MODELLING)
         except Exception:
             pass
 
