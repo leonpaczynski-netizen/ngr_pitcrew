@@ -1108,3 +1108,69 @@ version tests: DB version → **13** (`test_session_db`, `test_group18b_rec_pers
 `test_group46_learning_persistence`). `RULE_ENGINE_VERSION` stays `46.0` (Group 47
 does not change rule proposals). All Group 38–47 setup-brain tests pass; run UI
 files individually on Win/Py3.14 (known cross-file PyQt segfault).
+
+## 17. Group 63 — Setup Brain UAT-2 (Porsche RSR race setup) evidence-pipeline repair
+
+The 16-phase Race-Engineer remediation added rich **advisory** surfaces (history
+comparison, race-time note, candidate table, dispositions) but they sit *beside*
+the diagnosis→rule-engine core; a second UAT (Porsche 911 RSR race setup) showed
+the core evidence pipeline still lost, inverted or trusted-when-unknown the
+driver's evidence. Group 63 is the smallest coherent repair of that pipeline.
+Deterministic/rule-first/AI-audit-only preserved; no schema migration;
+`RULE_ENGINE_VERSION` unchanged. Full root-cause report:
+`docs/AUDIT_setup_brain_uat2_group63.md`.
+
+### 17.1 Feedback-parsing integrity (`setup_diagnosis._FEEL_VOCABULARY`)
+- `lsd_feel_wrong` — the driver's DIRECT differential complaint ("LSD not how I
+  like / not hooking up at the apex"); previously misfiled as front-aero "floaty".
+- `rear_loose_under_braking` — braking-phase rear instability, distinct from the
+  throttle-exit `rear_loose_on_exit`. `_parse_driver_feel` now runs a
+  phase-disambiguation pass: a braking-only mention clears the exit flag (both
+  stay set when both phases are reported, as in the UAT).
+- `gearing_too_long` — "sixth not fully used"; can VETO a lengthening recommendation.
+
+### 17.2 Gearbox evidence model (`strategy/gearbox_evidence.py`, `_classify_gearing`)
+- **Directional invariant** (single source of truth): lower numerical final-drive
+  ratio = LONGER gearing; so `4.25→4.20` (−0.05) *lengthens* — the wrong direction
+  for an unused sixth. Helpers `final_drive_effect` / `final_drive_lengthens` /
+  `final_drive_shortens`.
+- **Five-state model** `derive_gearing_state` → `too_short | appropriate | too_long
+  | unknown | conflicting_evidence`, exposed as `diagnosis["gearing_state"]`.
+- `_classify_gearing` fixes: `top_gear` = the car's real gear count (or highest gear
+  driven), never `max(rev_limiter_by_gear)` (a too-long, never-limited sixth was
+  invisible); a 0/absent `transmission_max_speed_kmh` → `insufficient_data`
+  (UNKNOWN), never a `gear_too_short` default; a `gear_too_short` (straight-specific)
+  claim is downgraded to UNKNOWN when the track location is not trustworthy.
+- Driver `gearing_too_long` + telemetry `gear_too_short` → `conflicting_evidence`
+  (a preserve category) → targeted test, never an applyable change. The validator's
+  preserve set gained `conflicting_evidence` and a `gearing_too_long` guard.
+
+### 17.3 Bottoming impact model (`_classify_bottoming_impact`)
+Severity by demonstrated CONSEQUENCE, not event count. Five classes:
+`NORMAL_OR_EXPECTED` (kerb contact) · `ADVISORY` · `PERFORMANCE_RELEVANT` ·
+`REQUIRED` · `UNKNOWN`. A "required" (>2/lap) rate with no driver mention and no
+measured accel-fade is UNKNOWN and demoted (replacing the Phase-3 gate whose
+`confidence=="low"` precondition was disarmed by `len(laps)>=4 ⇒ medium`).
+`mid_corner_understeer` + the new handling flags can now be the dominant problem.
+
+### 17.4 LSD triplet (`strategy/lsd_reasoning.py` + `lsd_initial` resolvers)
+`build_lsd_triplet_assessment` evaluates Initial / Acceleration / Braking
+independently against the proven same-car prior (advisory, never forced), each with
+an executable controlled A/B test. Unknown wheelspin subtype → a concrete test
+(log rear-wheel slip by wheel/gear/throttle), not silence. `lsd_initial` gained
+increase/decrease resolvers so the field is no longer structurally dead.
+
+### 17.5 History + coherence (`driving_advisor`, `dominant_required`)
+Proven values surface unconditionally and drive the LSD tests (cross-track prior,
+never blindly copied). The coherence gate now arms for confirmed handling dominants
+(not only bottoming), so a lone weakly-supported change can't be plain "approved"
+while the dominant issue is untreated; a bare `final_drive` no longer counts as
+"addressing" wheelspin. UI: three self-guarding panels (LSD triplet, bottoming
+impact verdict, precise targeted tests).
+
+### 17.6 Tests
+`tests/test_group63_setup_brain_uat2.py` — 40 pure/offline tests incl. the full
+Porsche RSR integration fixture (proves: no final-drive lengthening, gearing
+UNKNOWN not short, bottoming not required, all 3 LSD fields evaluated with proven
+22/8/33 transferred cross-track, targeted tests present, every feedback item
+dispositioned, `recommendation_status=evidence_required` — NOT applyable).

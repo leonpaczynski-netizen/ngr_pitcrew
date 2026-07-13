@@ -2402,6 +2402,26 @@ class DrivingAdvisor:
                     for r in _hist_rows
                 ]
 
+                # Group 63: surface the bottoming IMPACT verdict (consequence, not
+                # just an event count) so the driver sees why bottoming was or was
+                # not prioritised.
+                _bimpact = (diagnosis or {}).get("bottoming_impact")
+                if isinstance(_bimpact, dict):
+                    _data["bottoming_impact"] = dict(_bimpact)
+
+                # Group 63: complete LSD triplet assessment — Initial / Acceleration /
+                # Braking evaluated independently against the proven same-car prior,
+                # each with an executable controlled test. Advisory: it authors no
+                # values; the rule-first engine + Apply gate are unchanged.
+                try:
+                    from strategy.lsd_reasoning import build_lsd_triplet_assessment
+                    _lsd = build_lsd_triplet_assessment(diagnosis or {}, setup_dict, _prior)
+                    _data["lsd_assessment"] = _lsd.as_json()
+                    if _lsd.controlled_tests:
+                        _data.setdefault("_targeted_tests", []).extend(_lsd.controlled_tests)
+                except Exception:
+                    pass
+
                 # New Group 42 keys
                 _data["deterministic_plan"] = {
                     "proposed_count": len(_plan.proposed),

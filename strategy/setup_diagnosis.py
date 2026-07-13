@@ -159,11 +159,51 @@ _FEEL_VOCABULARY: dict[str, list[str]] = {
     "entry_understeer": [
         "entry understeer", "pushes on entry", "braking understeer",
         "front tucks", "can't trail",
+        # Structured "Corner Entry" dropdown phrasing (ui/dashboard.py feedback form).
+        "corner entry: too much understeer", "too much understeer on entry",
+        "understeer on entry",
     ],
     "rear_loose_on_exit": [
         "rear loose", "rear steps", "oversteer on exit", "rear kicks",
         "rear slides", "loose on exit", "tail slides", "loose on throttle",
         "rear loose on exit",
+    ],
+    # Rear instability specifically UNDER BRAKING / on entry — a distinct problem
+    # from throttle-exit looseness. Its fix lives on the coast/brake side
+    # (lsd_decel / brake bias), NOT the accel side. Group 63: previously "rear
+    # steps out under braking" was swallowed by the rear_loose_on_exit substring
+    # "rear steps" and never reached lsd_decel. These phrases are braking-qualified
+    # so they only fire with genuine braking context; the parser then re-attributes
+    # a braking-only mention away from the exit flag.
+    "rear_loose_under_braking": [
+        "steps out under brak", "rear steps out under", "loose under brak",
+        "rear loose under brak", "steps under brak", "unstable under brak",
+        "rear wag under brak", "steps out on the brake", "steps out braking",
+        "rear steps out under braking", "rear under braking: steps",
+        "rear steps out on entry", "loose on the brakes", "rear light under brak",
+    ],
+    # Driver reports the DIFFERENTIAL itself feels wrong / the car will not connect
+    # to the apex under power. This is the driver's direct LSD evidence and must
+    # trigger evaluation of the full LSD triplet (initial / accel / decel), not be
+    # misfiled as a front-aero "floaty" problem. Group 63.
+    "lsd_feel_wrong": [
+        "lsd is not", "lsd not set", "lsd isn't", "lsd feels", "lsd doesn't",
+        "diff is not", "diff feels", "diff isn't", "differential feels",
+        "not hooking up", "won't hook up", "doesn't hook up", "not hooking",
+        "won't connect", "not connecting", "not driving off the apex",
+        "won't drive off the apex", "not hooked up", "lsd is not set how i like",
+    ],
+    # Driver reports the gearing is too LONG — top gear is not fully used / the
+    # car is not reaching the limiter on the main straight. This directly
+    # contradicts a telemetry "gear too short" call and must be able to veto a
+    # lengthening (final-drive-down) recommendation. Group 63.
+    "gearing_too_long": [
+        "not using all of sixth", "not using all of 6th", "sixth not fully used",
+        "6th not fully used", "not using all of top gear", "gearing too long",
+        "gear too long", "sixth gear not fully used", "6th gear not fully used",
+        "not reaching the limiter", "never hits the limiter", "top gear too long",
+        "not using sixth", "sixth is too long", "runs out of revs before",
+        "not using full sixth", "not using all of the top gear",
     ],
     "gearbox_good": [
         "gearbox fine", "gears fine", "gearing ok", "gearing good",
@@ -204,7 +244,34 @@ def _parse_driver_feel(feeling: str | None) -> dict[str, bool]:
             if kw in text:
                 result[flag] = True
                 break
+    # Group 63 — phase disambiguation for rear instability. A rear-instability
+    # complaint qualified only by a BRAKING context is an entry/braking problem,
+    # NOT a throttle-exit problem, even though "rear steps"/"rear loose" overlap
+    # the exit vocabulary by substring. Re-attribute it: clear the exit flag when
+    # the braking flag fired and there is no independent throttle/exit cue (when
+    # BOTH are reported — as in the UAT — both flags legitimately remain).
+    if result.get("rear_loose_under_braking") and not _has_throttle_exit_context(text):
+        result["rear_loose_on_exit"] = False
     return result
+
+
+# Throttle / corner-exit context cues — used to decide whether a rear-instability
+# mention belongs to the exit phase (throttle) or the braking phase (coast).
+_THROTTLE_EXIT_CUES: tuple[str, ...] = (
+    "on throttle", "on the throttle", "on exit", "exit stability", "on the power",
+    "power on", "corner exit", "getting on the power", "on power", "throttle exit",
+    "off the apex", "on the gas", "loose on throttle", "rear loose on exit",
+)
+
+
+def _has_throttle_exit_context(text: str) -> bool:
+    """True when the feedback contains an explicit throttle/corner-exit cue.
+
+    Used to keep the exit flag alive when the driver reports BOTH throttle-exit
+    looseness and braking looseness; a braking-only report clears the exit flag.
+    """
+    t = (text or "").lower()
+    return any(cue in t for cue in _THROTTLE_EXIT_CUES)
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +294,70 @@ def _bottoming_band(avg: float) -> str:
     if avg <= 2.0:
         return "consider"
     return "required"
+
+
+# ---------------------------------------------------------------------------
+# Bottoming impact model (Group 63) — severity by CONSEQUENCE, not by frequency
+# ---------------------------------------------------------------------------
+# The old model made a bottoming EVENT COUNT (> 2.0/lap) automatically "required"
+# and dominant, with no measured performance consequence. A high count of expected
+# kerb contact then buried the driver's real handling complaints. This model grades
+# the same event count by whether a CONSEQUENCE is demonstrated.
+BOTTOMING_NORMAL_OR_EXPECTED = "NORMAL_OR_EXPECTED"   # e.g. expected kerb contact
+BOTTOMING_ADVISORY           = "ADVISORY"             # noticed, no measured effect
+BOTTOMING_PERFORMANCE        = "PERFORMANCE_RELEVANT"  # a measured consequence exists
+BOTTOMING_REQUIRED           = "REQUIRED"             # relevant AND well-evidenced
+BOTTOMING_UNKNOWN            = "UNKNOWN"              # count-only, impact unmeasured
+
+
+def _classify_bottoming_impact(
+    b_band: str,
+    subtype: str,
+    confidence: str,
+    driver_mentions_bottoming: bool,
+    accel_fade_detected: bool,
+    location_trustworthy: bool,
+) -> dict:
+    """Grade bottoming by demonstrated CONSEQUENCE, returning
+    ``{"impact": <class>, "performance_relevant": bool, "reason": str}``.
+
+    A high event count alone never yields REQUIRED. A measurable consequence is a
+    driver-confirmed complaint OR a measured accel-fade (throttle held but speed not
+    building — the closest available proxy for a real speed loss). Expected kerb
+    contact is classified separately and never dominates on its own. When the count
+    is high but no consequence can be measured, the honest verdict is UNKNOWN — a
+    targeted test, not a ride-height change.
+    """
+    sub = str(subtype or "")
+    has_consequence = bool(driver_mentions_bottoming or accel_fade_detected)
+
+    # Expected kerb contact is normal race-craft, not a ride-height failure.
+    if sub == "kerb_strike":
+        if driver_mentions_bottoming:
+            return {"impact": BOTTOMING_ADVISORY, "performance_relevant": False,
+                    "reason": "kerb contact the driver noticed — expected on kerbs, monitor only"}
+        return {"impact": BOTTOMING_NORMAL_OR_EXPECTED, "performance_relevant": False,
+                "reason": "kerb contact — expected behaviour, no measured performance effect"}
+
+    if b_band in ("minor", "moderate"):
+        return {"impact": BOTTOMING_ADVISORY, "performance_relevant": False,
+                "reason": f"{b_band} contact rate — below the action threshold, advisory only"}
+
+    # consider / required bands
+    if has_consequence:
+        well_evidenced = b_band == "required" and (location_trustworthy or driver_mentions_bottoming)
+        if well_evidenced:
+            return {"impact": BOTTOMING_REQUIRED, "performance_relevant": True,
+                    "reason": "frequent contact WITH a demonstrated consequence "
+                              "(driver report / accel-fade) at a trustworthy location"}
+        return {"impact": BOTTOMING_PERFORMANCE, "performance_relevant": True,
+                "reason": "contact with a measured consequence (driver report / accel-fade) — "
+                          "performance-relevant, confirm before a large ride-height change"}
+
+    # High count, no measured consequence — honest UNKNOWN, never dominant.
+    return {"impact": BOTTOMING_UNKNOWN, "performance_relevant": False,
+            "reason": f"{b_band} contact RATE only — no measured speed/stability loss and no "
+                      "driver mention; run a targeted test before treating it as dominant"}
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +453,13 @@ def _derive_dominant_problem(
         if not _wheelspin_severe_ish or _driver_mentions_bottoming:
             issues.append("bottoming")
 
+    # Group 63: mid-corner understeer ("pushes wide") is a confirmed front-grip
+    # complaint. It was previously invisible to dominance selection (it could never
+    # be dominant), so count-only bottoming buried it. It ranks above rear-traction
+    # noise because a car that cannot rotate cannot use its rear grip.
+    if driver_feel_flags.get("mid_corner_understeer"):
+        issues.append("mid_corner_understeer")
+
     # Rear traction / aero
     # When aero_rear_healthy, skip the rear-aero/low-downforce issue
     if (
@@ -338,6 +476,18 @@ def _derive_dominant_problem(
     # Snap oversteer exit
     if driver_feel_flags.get("snap_oversteer_exit"):
         issues.append("snap_oversteer_exit")
+
+    # Group 63: rear instability specifically UNDER BRAKING is a distinct confirmed
+    # complaint (coast/brake side — lsd_decel / brake bias), not the same as
+    # throttle-exit looseness. Previously it was swallowed by the exit flag.
+    if driver_feel_flags.get("rear_loose_under_braking"):
+        issues.append("rear_loose_under_braking")
+
+    # Group 63: the driver's direct LSD complaint ("not hooking up at the apex /
+    # LSD not how I like") is confirmed differential feedback that must be a
+    # first-class issue rather than being misfiled as front-aero.
+    if driver_feel_flags.get("lsd_feel_wrong"):
+        issues.append("lsd_connection")
 
     # Braking instability / lockups
     if driver_feel_flags.get("braking_instability"):
@@ -368,8 +518,11 @@ def _derive_dominant_problem(
             "front aero / platform limited — near minimum front downforce with floaty / understeer feel"
         ),
         "bottoming": f"bottoming ({bottoming_band} — {_bottoming_band_readable(bottoming_band)})",
+        "mid_corner_understeer": "mid-corner understeer — the car pushes wide through the corner (front grip)",
         "rear_traction_aero": "rear traction / aero — wheelspin or rear instability with low rear downforce",
         "snap_oversteer_exit": "snap oversteer on exit — abrupt rear rotation at throttle application",
+        "rear_loose_under_braking": "rear instability under braking — the rear steps out on the brakes (coast/brake side)",
+        "lsd_connection": "differential connection — LSD does not hook up the car through the apex under power",
         "braking_instability": "braking instability — lockups or rear wag under braking",
         "wheelspin": f"wheelspin ({wheelspin_band})",
     }
@@ -380,21 +533,27 @@ def _derive_dominant_problem(
 
 
 _DOMINANT_KEYS: tuple[str, ...] = (
-    "front_aero_platform_limited", "bottoming", "rear_traction_aero",
-    "snap_oversteer_exit", "braking_instability", "wheelspin",
+    "front_aero_platform_limited", "bottoming", "mid_corner_understeer",
+    "rear_traction_aero", "snap_oversteer_exit", "rear_loose_under_braking",
+    "lsd_connection", "braking_instability", "wheelspin",
 )
 
 # Fields that materially "address" each dominant problem — used by the Phase 3
 # coherence gate to check that a plan actually treats its dominant problem.
+# Group 63: a bare final_drive change must NOT count as "addressing" wheelspin —
+# gearing is not a differential/traction fix and was the exact false-address defect.
 DOMINANT_ADDRESSING_FIELDS: dict[str, frozenset] = {
     "bottoming":                   frozenset({"ride_height_front", "ride_height_rear",
                                               "springs_front", "springs_rear"}),
     "front_aero_platform_limited": frozenset({"aero_front", "arb_front"}),
+    "mid_corner_understeer":       frozenset({"arb_front", "aero_front", "toe_front"}),
     "rear_traction_aero":          frozenset({"aero_rear", "lsd_accel", "lsd_initial"}),
     "snap_oversteer_exit":         frozenset({"lsd_accel", "lsd_decel", "aero_rear"}),
+    "rear_loose_under_braking":    frozenset({"lsd_decel", "brake_bias"}),
+    "lsd_connection":              frozenset({"lsd_initial", "lsd_accel", "lsd_decel"}),
     "braking_instability":         frozenset({"brake_bias", "lsd_decel", "ride_height_front",
                                               "ride_height_rear", "springs_front"}),
-    "wheelspin":                   frozenset({"lsd_accel", "aero_rear", "final_drive",
+    "wheelspin":                   frozenset({"lsd_accel", "aero_rear",
                                               "gear_1", "gear_2", "gear_3", "gear_4",
                                               "gear_5", "gear_6"}),
 }
@@ -407,8 +566,11 @@ _FEEDBACK_LABELS: dict[str, str] = {
     "floaty_front":          "Floaty / vague front (turn-in)",
     "entry_understeer":      "Entry understeer",
     "rear_loose_on_exit":    "Rear loose on throttle",
+    "rear_loose_under_braking": "Rear steps out under braking",
     "snap_oversteer_exit":   "Snap oversteer on exit",
     "braking_instability":   "Rear lock / instability under braking",
+    "lsd_feel_wrong":        "LSD feels wrong / not hooking up at the apex",
+    "gearing_too_long":      "Sixth gear not fully used (gearing too long)",
     "fuel_use_high":         "High fuel use",
 }
 _FEEDBACK_ADDRESSING_FIELDS: dict[str, frozenset] = {
@@ -416,8 +578,14 @@ _FEEDBACK_ADDRESSING_FIELDS: dict[str, frozenset] = {
     "floaty_front":          frozenset({"arb_front", "aero_front"}),
     "entry_understeer":      frozenset({"lsd_decel", "aero_front", "arb_front"}),
     "rear_loose_on_exit":    frozenset({"lsd_accel", "aero_rear", "arb_rear"}),
+    "rear_loose_under_braking": frozenset({"lsd_decel", "brake_bias"}),
     "snap_oversteer_exit":   frozenset({"lsd_accel", "lsd_decel"}),
     "braking_instability":   frozenset({"brake_bias", "lsd_decel"}),
+    # The driver's direct LSD complaint must evaluate the whole triplet.
+    "lsd_feel_wrong":        frozenset({"lsd_initial", "lsd_accel", "lsd_decel"}),
+    # Gearing-too-long is addressed by shortening the final drive (up) or the
+    # upper indexed gears; never by lengthening (final_drive_down).
+    "gearing_too_long":      frozenset({"final_drive", "gear_5", "gear_6"}),
 }
 
 
@@ -454,27 +622,52 @@ def build_feedback_dispositions(diagnosis: dict, proposed_fields) -> "list[dict]
             elif flag == "rear_loose_on_exit" and ws_band != "low":
                 detail = ("LSD accel not increased (would worsen power oversteer); "
                           "confirm inside-wheel spin vs whole-axle oversteer.")
+            elif flag == "lsd_feel_wrong":
+                detail = ("LSD evaluated across Initial / Acceleration / Braking against your "
+                          "proven same-car values — run a controlled Initial-Torque A/B to "
+                          "confirm the apex-connection preference before committing.")
+            elif flag == "rear_loose_under_braking":
+                detail = ("Braking-phase rear instability routes to LSD braking sensitivity / "
+                          "brake bias (not throttle-side LSD) — confirm trail-braking vs "
+                          "straight-line lock.")
+            elif flag == "gearing_too_long":
+                detail = ("Sixth not fully used means the gearing is too LONG — any "
+                          "lengthening (final-drive-down) change is rejected; record terminal "
+                          "sixth-gear RPM and limiter activation on the main straight.")
             else:
                 detail = "No safe rule-based change from the current evidence — run a targeted test."
             out.append({"feedback": label, "state": "deferred", "detail": detail})
     return out
 
 
+# Distinctive readable-string prefixes → machine dominant key. Ordered most-
+# specific first so overlapping heads (e.g. two "rear …" issues) resolve
+# unambiguously. Kept in lock-step with ``_derive_dominant_problem``'s _readable.
+_DOMINANT_READABLE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("front aero / platform limited", "front_aero_platform_limited"),
+    ("mid-corner understeer",         "mid_corner_understeer"),
+    ("rear traction / aero",          "rear_traction_aero"),
+    ("rear instability under braking", "rear_loose_under_braking"),
+    ("snap oversteer on exit",        "snap_oversteer_exit"),
+    ("differential connection",       "lsd_connection"),
+    ("braking instability",           "braking_instability"),
+    ("bottoming",                     "bottoming"),
+    ("wheelspin",                     "wheelspin"),
+)
+
+
 def _dominant_problem_key(dominant_readable: str) -> str:
     """Recover the machine-readable dominant-problem key from its readable string.
 
-    The readable strings are stable prefixes (see ``_derive_dominant_problem``),
-    so a prefix match is reliable. Returns "" when no structural issue dominates.
+    Uses distinctive, ordered readable prefixes (not the fragile first-word head,
+    which collided for the two "rear …" issues). Returns "" when no structural
+    issue dominates.
     """
     s = (dominant_readable or "").strip().lower()
     if not s or s.startswith("no dominant") or s.startswith("minor bottoming"):
         return ""
-    for key in _DOMINANT_KEYS:
-        # readable forms start with the key's first word(s): "bottoming (…", "wheelspin (…",
-        # "rear traction / aero …", "front aero / platform limited …", "braking instability …",
-        # "snap oversteer on exit …".
-        head = key.split("_")[0]
-        if s.startswith(head):
+    for prefix, key in _DOMINANT_READABLE_PREFIXES:
+        if s.startswith(prefix):
             return key
     return ""
 
@@ -678,6 +871,8 @@ def _classify_gearing(
     avg_top_speed_kmh: float,
     top_speed_target_kmh: float,
     wheelspin_band: str,
+    num_gears: int = 0,
+    location_trustworthy: bool = True,
 ) -> str:
     """Classify the gearing situation from telemetry signals.
 
@@ -694,29 +889,42 @@ def _classify_gearing(
          → top_gear_power_band_limited
       5. speed_ratio < 0.93 (uncovered) → drag_or_power_limited
       6. speed_ratio >= 0.98 AND no top-gear limiter → gear_too_long
-      7. target 0 / no limiter data / frames empty AND no speed → insufficient_data
+      7. no valid speed target / no limiter data / frames empty → insufficient_data
+
+    Group 63 fixes (the "Final Drive 4.25 -> 4.20 for an unused sixth" defect):
+      * ``top_gear`` is the car's ACTUAL top gear (``num_gears`` or the highest gear
+        SEEN in frames), NOT ``max(rev_limiter_by_gear)`` — otherwise a too-long,
+        never-limited sixth is invisible and a limiter tap in an intermediate gear
+        is misread as a top-gear hit → false ``gear_too_short``.
+      * a missing/zero top-speed target (``transmission_max_speed_kmh`` = 0) yields
+        ``insufficient_data`` (UNKNOWN), never a ``gear_too_short`` default — an
+        uncaptured value is not evidence.
+      * ``gear_too_short`` is a straight-specific claim; when the track location is
+        not trustworthy it is downgraded to ``insufficient_data`` (we cannot confirm
+        the limiter contact happened on a straight rather than a slow-corner exit).
 
     "severe-ish" wheelspin: "major" or "severe" (from _wheelspin_band).
     """
     _SEVERE_ISH = ("major", "severe")
 
-    # Resolve top gear
-    top_gear = 0
+    # Resolve the car's ACTUAL top gear — prefer the declared gear count, else the
+    # highest gear actually driven; only fall back to limiter-hit keys when nothing
+    # else is known. (Using limiter-hit keys alone is the root-cause defect.)
     rlbg = rev_limiter_by_gear or {}
-    if rlbg:
-        top_gear = max(int(g) for g in rlbg)
+    top_gear = int(num_gears) if isinstance(num_gears, (int, float)) and num_gears > 0 else 0
     if top_gear <= 0 and frames:
-        # Fallback: highest gear seen in frames
         for f in frames:
             g = getattr(f, "gear", 0)
             if g > top_gear:
                 top_gear = g
+    if top_gear <= 0 and rlbg:
+        top_gear = max(int(g) for g in rlbg)
 
     top_gear_limiter_hits = float(rlbg.get(top_gear, 0)) if top_gear > 0 else 0.0
 
-    # Speed ratio — guard divide-by-zero
+    # Speed ratio — guard divide-by-zero. A missing/zero target is UNKNOWN, not a
+    # licence to guess.
     if top_speed_target_kmh <= 0:
-        # Cannot compute ratio — fall through to insufficient_data
         speed_ratio: float | None = None
     elif avg_top_speed_kmh <= 0:
         speed_ratio = None
@@ -731,7 +939,10 @@ def _classify_gearing(
     # Decision table (first match wins)
     if speed_ratio is not None:
         if top_gear_limiter_hits > 0 and speed_ratio < 0.93:
-            return "gear_too_short"
+            # gear_too_short asserts "limiter on a straight" — only trust it when the
+            # track location is trustworthy; otherwise the limiter contact may be a
+            # slow-corner-exit tap, not a straight-line top-speed limit.
+            return "gear_too_short" if location_trustworthy else "insufficient_data"
         if top_gear_limiter_hits > 0 and speed_ratio >= 0.93:
             return "limiter_limited"
         if speed_ratio < 0.93 and wheelspin_band in _SEVERE_ISH and top_gear_limiter_hits == 0:
@@ -742,14 +953,9 @@ def _classify_gearing(
             return "drag_or_power_limited"
         if speed_ratio >= 0.98 and top_gear_limiter_hits == 0:
             return "gear_too_long"
-    else:
-        # No speed target — can still classify from limiter signals alone.
-        # Top-gear limiter hits with no speed target = can't confirm gearing is good;
-        # treat as a "may_change" signal (gear_too_short is the most conservative
-        # classification when the driver might be hitting the limiter prematurely).
-        if top_gear_limiter_hits > 0:
-            return "gear_too_short"
 
+    # No valid speed target (e.g. transmission_max_speed_kmh = 0) — an uncaptured
+    # target is NOT evidence. Return UNKNOWN rather than defaulting to gear_too_short.
     return "insufficient_data"
 
 
@@ -1303,10 +1509,15 @@ def _build_setup_diagnosis_conservative() -> dict:
         "location_evidence_usable":   False,
         # A7: new keys — safe defaults (conservative / no data)
         "gearing_diagnosis_category": "insufficient_data",
+        "gearing_state":              "unknown",
+        "gearing_raw_category":       "insufficient_data",
+        "gearing_location_confident": False,
         "wheelspin_subtype":          "insufficient_data",
         "compliance_priority":        False,
         # Group 40: new keys — conservative defaults
         "bottoming_confidence":       {"band": "minor", "subtype": "insufficient_data", "confidence": "low"},
+        "bottoming_impact":           {"impact": "ADVISORY", "performance_relevant": False,
+                                       "reason": "no session data"},
         "driver_feel_traction_status": "unknown",
         "aero_rear_healthy":          False,
         # Phase 3 coherence gate inputs — conservative defaults
@@ -1540,14 +1751,51 @@ def _build_setup_diagnosis_inner(
 
     avg_kerb = sum(getattr(l, "kerb_count", 0) for l in laps) / len(laps) if laps else 0.0
 
+    # Number of gears the car actually has — used so a too-long, never-limited top
+    # gear is not invisible to the gearing classifier (Group 63). Prefer an explicit
+    # num_gears, else the count of populated indexed-gear fields in the setup.
+    _num_gears = 0
+    try:
+        _ng_raw = setup.get("num_gears")
+        if isinstance(_ng_raw, (int, float)) and _ng_raw > 0:
+            _num_gears = int(_ng_raw)
+        else:
+            _num_gears = sum(
+                1 for _gi in range(1, 9)
+                if isinstance(setup.get(f"gear_{_gi}"), (int, float)) and setup.get(f"gear_{_gi}")
+            )
+    except Exception:
+        _num_gears = 0
+
     # Gearing diagnosis category (replaces the flat 93%-threshold logic)
-    gearing_diagnosis_category = _classify_gearing(
+    _raw_gearing_category = _classify_gearing(
         all_frames,
         rev_limiter_by_gear,
         avg_top_speed_kmh,
         top_speed_target_kmh,
         w_band,
+        num_gears=_num_gears,
+        location_trustworthy=loc_evidence_usable,
     )
+    # Fold the telemetry category + the driver's own report into the canonical
+    # five-state gearing model, then map back to the category the rules consume so
+    # a driver "sixth not fully used" report can VETO a lengthening recommendation.
+    from strategy.gearbox_evidence import (
+        derive_gearing_state, GEARING_CONFLICTING, GEARING_TOO_LONG,
+    )
+    gearing_state = derive_gearing_state(
+        _raw_gearing_category,
+        driver_says_too_long=bool(driver_feel_flags.get("gearing_too_long")),
+        driver_says_gearbox_good=bool(driver_feel_flags.get("gearbox_good")),
+    )
+    if gearing_state == GEARING_CONFLICTING:
+        # Telemetry says short but the driver reports an unused top gear — a
+        # conflicting result must lead to a targeted test, never an applyable change.
+        gearing_diagnosis_category = "conflicting_evidence"
+    elif gearing_state == GEARING_TOO_LONG and _raw_gearing_category == "gear_too_long":
+        gearing_diagnosis_category = "gear_too_long"
+    else:
+        gearing_diagnosis_category = _raw_gearing_category
 
     # Wheelspin subtype
     wheelspin_subtype = _classify_wheelspin_subtype(
@@ -1565,11 +1813,14 @@ def _build_setup_diagnosis_inner(
     # Gearbox flag: derived from the gearing_diagnosis_category rather than
     # the old flat 93%/limiter heuristic, so the AI block and the validation
     # rule are consistent.
-    # "preserve" categories: insufficient_data, gear_too_long, limiter_limited
-    #   (limiter_limited = hitting the limiter at the right speed — gearbox correct)
+    # "preserve" categories: insufficient_data, gear_too_long, limiter_limited,
+    #   conflicting_evidence
+    #   (limiter_limited = hitting the limiter at the right speed — gearbox correct;
+    #    conflicting_evidence = telemetry vs driver disagree → targeted test, no change)
     # "may_change" categories: gear_too_short, top_gear_power_band_limited,
     #   traction_limited_acceleration, drag_or_power_limited
-    _PRESERVE_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited"}
+    _PRESERVE_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited",
+                            "conflicting_evidence"}
     gearbox_flag = (
         "preserve"
         if gearing_diagnosis_category in _PRESERVE_CATEGORIES
@@ -1664,12 +1915,35 @@ def _build_setup_diagnosis_inner(
     # ------------------------------------------------------------------
     # Dominant problem and tuning priority
     # ------------------------------------------------------------------
-    # Phase 3: telemetry-only "required" bottoming with low confidence AND unusable
-    # location evidence is not actionable — demote it so confirmed driver feedback
-    # dominates, and flag it EVIDENCE-insufficient for the coherence gate.
+    # Group 63: grade bottoming by demonstrated CONSEQUENCE, not by event count.
+    # A "required" (>2.0/lap) rate is EVIDENCE-insufficient — demoted so confirmed
+    # handling feedback dominates — unless it is performance-relevant (driver report
+    # or measured accel-fade). This replaces the Phase-3 gate whose `confidence=="low"`
+    # precondition was disarmed by the `len(laps)>=4 ⇒ medium` rule, so any multi-lap
+    # session let count-only bottoming become dominant.
     _bconf = (bottoming_confidence or {}).get("confidence", "low")
+    _bsub = (bottoming_confidence or {}).get("subtype", "insufficient_data")
+    _accel_fade = False
+    try:
+        _tg_for_fade = _num_gears if _num_gears > 0 else 0
+        if _tg_for_fade <= 0 and all_frames:
+            for _f in all_frames:
+                _g = getattr(_f, "gear", 0)
+                if _g > _tg_for_fade:
+                    _tg_for_fade = _g
+        if _tg_for_fade > 0 and all_frames:
+            _accel_fade = bool(_derive_top_gear_frame_signals(
+                all_frames, _tg_for_fade).get("accel_fade_detected"))
+    except Exception:
+        _accel_fade = False
+    bottoming_impact = _classify_bottoming_impact(
+        b_band, _bsub, _bconf,
+        driver_mentions_bottoming=bool(driver_feel_flags.get("bottoming")),
+        accel_fade_detected=_accel_fade,
+        location_trustworthy=loc_evidence_usable,
+    )
     _bottoming_evidence_insufficient = (
-        b_band == "required" and _bconf == "low" and not loc_evidence_usable
+        b_band == "required" and not bottoming_impact["performance_relevant"]
     )
     dominant_problem, secondary_problems = _derive_dominant_problem(
         driver_feel_flags, b_band, w_band, aero_front_near_min, aero_rear_near_min,
@@ -1680,7 +1954,19 @@ def _build_setup_diagnosis_inner(
     # funnel can guarantee the dominant *required* problem is either addressed or
     # explicitly deferred (never silently approved untreated).
     dominant_problem_key = _dominant_problem_key(dominant_problem)
-    dominant_required = (dominant_problem_key == "bottoming" and b_band == "required")
+    # Group 63: the coherence gate previously armed ONLY for "required" bottoming, so
+    # a lone weakly-supported change (e.g. final_drive) was returned as plain
+    # "approved" while a confirmed dominant HANDLING complaint went untreated. Arm it
+    # for confirmed driver-feedback dominants too — the plan must address the dominant
+    # problem or explicitly defer it (partial_recommendation / targeted test).
+    _CONFIRMED_FEEDBACK_DOMINANTS = {
+        "mid_corner_understeer", "lsd_connection", "rear_loose_under_braking",
+        "front_aero_platform_limited", "snap_oversteer_exit", "braking_instability",
+    }
+    dominant_required = (
+        (dominant_problem_key == "bottoming" and b_band == "required")
+        or (dominant_problem_key in _CONFIRMED_FEEDBACK_DOMINANTS)
+    )
     dominant_evidence_sufficient = not (
         dominant_problem_key == "bottoming" and _bottoming_evidence_insufficient
     )
@@ -1744,10 +2030,17 @@ def _build_setup_diagnosis_inner(
         "location_evidence_usable":   loc_evidence_usable,
         # A6: advanced gearing / wheelspin / compliance diagnosis
         "gearing_diagnosis_category": gearing_diagnosis_category,
+        # Group 63: canonical five-state gearing model + whether the straight-
+        # specific claim is location-trustworthy + the raw telemetry category.
+        "gearing_state":              gearing_state,
+        "gearing_raw_category":       _raw_gearing_category,
+        "gearing_location_confident": loc_evidence_usable,
         "wheelspin_subtype":          wheelspin_subtype,
         "compliance_priority":        compliance_priority,
         # Group 40: bottoming confidence, traction status, rear aero health
         "bottoming_confidence":       bottoming_confidence,
+        # Group 63: bottoming graded by demonstrated consequence, not event count.
+        "bottoming_impact":           bottoming_impact,
         "driver_feel_traction_status": driver_feel_traction_status,
         "aero_rear_healthy":          aero_rear_healthy,
     }
@@ -2040,10 +2333,14 @@ def validate_setup_engineering(
     # needed (insufficient_data or preserve categories) AND the driver has not
     # flagged gearbox as good already.  For "may_change" categories the AI is
     # allowed to adjust gearing — this is the primary difference from the old rule.
-    _PRESERVE_GEARBOX_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited"}
+    _PRESERVE_GEARBOX_CATEGORIES = {"insufficient_data", "gear_too_long", "limiter_limited",
+                                    "conflicting_evidence"}
     _gearbox_blocked = (
         gearing_diagnosis_category in _PRESERVE_GEARBOX_CATEGORIES
         or feel_flags.get("gearbox_good")
+        # A driver "sixth not fully used" report means the gearing is too LONG —
+        # never author a lengthening (final-drive-down) change against it.
+        or feel_flags.get("gearing_too_long")
     )
     # Canonical gearbox fields that must never be changed when gearbox is in a preserve category.
     # Includes legacy display-only field, old gear_ratios blob, and AC6 individual gear fields.

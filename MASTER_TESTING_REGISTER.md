@@ -7300,3 +7300,36 @@ UAT helper are ready for it. No approved reference-path assets exist beyond Fuji
 The stabiliser is display-only by design; feeding stabilised confidence back into any decision path would be a
 future change requiring its own safety review. Run UI test files individually on Win/Py3.14 (PyQt cross-file
 segfault); Group 61's suites are Qt-free.
+
+---
+
+## Setup Brain UAT-2 — Porsche RSR Race Setup Evidence-Pipeline Repair (Group 63)
+
+Branch `group63-setup-brain-race-engineer-uat2` from `master` `b951e06` — committed, NOT pushed. A second Setup
+Brain UAT (Porsche 911 RSR (991) '17 race setup) exposed connected defects surviving the 16-phase remediation:
+a wrong `Final Drive 4.25→4.20` (lengthening) for an unused sixth, bottoming marked dominant/required on event
+count with no impact, LSD triplet + camber not evaluated. Root-cause report: `docs/AUDIT_setup_brain_uat2_group63.md`;
+design: `docs/RULE_FIRST_SETUP_BRAIN.md` §17. Deterministic/rule-first/AI-audit-only preserved; **no schema
+migration** (`RULE_ENGINE_VERSION` unchanged, `user_version` 14); no auto-Apply; no fabrication.
+
+**Repairs.** (RC-A) feedback flags `lsd_feel_wrong` / `rear_loose_under_braking` / `gearing_too_long` + braking-vs-exit
+phase disambiguation (`setup_diagnosis.py`). (RC-B) new pure `strategy/gearbox_evidence.py` — final-drive directional
+invariant (`4.25→4.20 = LONGER`) + five-state `derive_gearing_state`; `_classify_gearing` uses the real gear count,
+treats a 0 top-speed target as UNKNOWN, gates the straight-specific claim on location confidence, and a driver
+"unused sixth" report → `conflicting_evidence` (preserve, validator-enforced). (RC-C) `_classify_bottoming_impact`
+(5 classes) grades by consequence not count; `mid_corner_understeer` + new flags can be dominant. (RC-D) new pure
+`strategy/lsd_reasoning.py` + `lsd_initial` resolvers — all three LSD fields evaluated vs the proven prior with
+executable controlled tests. (RC-E/F) proven values surface unconditionally + drive the tests; `dominant_required`
+generalised beyond bottoming; bare `final_drive` no longer "addresses" wheelspin; three new self-guarding UI panels.
+
+**Tests:** `tests/test_group63_setup_brain_uat2.py` — **40 pure/offline tests, all pass ~0.5 s**, incl. the full
+Porsche RSR integration fixture (proves: no final-drive lengthening; gearing UNKNOWN not gear_too_short; bottoming
+not REQUIRED; all 3 LSD fields evaluated with proven 22/8/33 transferred cross-track; targeted tests present; every
+feedback item dispositioned; `recommendation_status=evidence_required` — NOT applyable). One assertion in
+`tests/test_group38_setup_diagnosis.py` was updated to the corrected invariant (a limiter reading with no top-speed
+target is now UNKNOWN→preserve, not gear_too_short→may_change) + a companion preserve test added. Regression:
+~2791 setup-brain/advisor tests + 13 `test_ui_structure_smoke` green. Runtime files git-verified untouched.
+**Pre-existing unrelated failure:** `test_home_dashboard_promotion::test_no_new_raw_setcurrentindex` (two
+`_tabs.setCurrentIndex(idx)` sites in `ui/dashboard.py`, byte-identical to master — not caused by Group 63).
+Safety: new pure modules have no Qt/AI/DB import and no file writes; AI stays audit-only (cannot author values,
+cannot validate invalid evidence, cannot bypass the Apply gate); disabled AI-build stays disabled.
