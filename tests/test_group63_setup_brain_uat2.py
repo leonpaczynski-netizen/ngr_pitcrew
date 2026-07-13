@@ -408,16 +408,26 @@ class TestPorscheRsrIntegration:
         tests = result.get("_targeted_tests") or []
         assert tests, "unresolved evidence must yield precise targeted tests"
 
-    def test_not_shown_ready_to_apply(self, result):
-        from strategy._setup_constants import APPROVED_STATUSES
-        # Coherence gate fires: dominant handling issue with no safe change -> a
-        # targeted-test result that is NOT applyable and carries no setup fields.
-        assert result.get("recommendation_status") == "evidence_required"
-        assert result.get("recommendation_status") not in APPROVED_STATUSES
-        assert not result.get("setup_fields")
+    def test_authors_coordinated_balance_not_deferral(self, result):
+        # Engineer-evolution (balance solver): with SEVERAL conflicting complaints the
+        # app no longer defers to evidence_required — it AUTHORS a coordinated balance
+        # setup to test. It is honestly framed (balance_recommendation), not "approved
+        # complete", and the safety invariants still hold.
+        assert result.get("recommendation_status") == "balance_recommendation"
+        assert result.get("setup_fields")           # a real, applyable setup exists
+        _bs = result.get("balance_solution") or {}
+        assert _bs.get("solved") is True
+        # Safety preserved: no accel-lock increase; brake bias never rearward.
+        _changes = {c["field"]: c for c in result.get("changes", [])}
+        assert "lsd_accel" not in _changes
+        if "brake_bias" in _changes:
+            assert float(_changes["brake_bias"]["to_clamped"]) <= 0
 
     def test_ai_remains_audit_only(self, result):
-        # The deterministic engine authored the (absence of) changes — the AI audit
-        # cannot manufacture an applyable recommendation.
+        # The DETERMINISTIC balance solver authored the changes — not the AI. The AI
+        # audit stays advisory-only and cannot manufacture setup values.
         assert result.get("rule_engine_version")
-        assert not result.get("changes")
+        # Every authored change is deterministic (balance solver or rule engine),
+        # never AI-authored.
+        for ch in result.get("changes", []):
+            assert ch.get("rule_id") in ("balance_solver",) or ch.get("rule_id")

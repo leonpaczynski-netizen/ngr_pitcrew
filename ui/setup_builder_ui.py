@@ -105,6 +105,16 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
             "deferred pending more evidence or a targeted test (see the analysis)."
             "</div>"
         )
+    if status == "balance_recommendation":
+        return (
+            "<div style='background:#0E1A16; border:1px solid #3FA07A; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#7FD0AC;'>"
+            "&#9878; <b>Coordinated balance setup.</b> Several problems interact, so "
+            "these changes were engineered as a SET (free the front, plant the rear, "
+            "brake forward). Apply them together and validate over a few clean laps "
+            "&mdash; see the balance breakdown and test plan below."
+            "</div>"
+        )
     if status == "evidence_required":
         return (
             "<div style='background:#2A0A0A; border:2px solid #E05050; "
@@ -280,6 +290,59 @@ def _discipline_field_plan_html(plan: dict) -> str:
         "<table style='border-collapse:collapse; margin-top:6px; width:100%;'>"
         f"<tr>{_hdr}</tr>{_body}</table>"
         f"{_diff_note}{_seeded_note}</div>"
+    )
+
+
+_BALANCE_AXIS_LABEL = {"entry": "Turn-in / entry", "exit": "Corner exit / traction",
+                       "braking": "Braking stability"}
+
+
+def _balance_solution_html(sol: dict) -> str:
+    """Render the coordinated balance solution (moves grouped by axis + trade-off +
+    test protocol). Module-level, self-guarding — absent/unsolved renders nothing."""
+    if not isinstance(sol, dict) or not sol.get("solved"):
+        return ""
+    moves = sol.get("moves") or []
+    if not moves:
+        return ""
+    by_axis: dict = {}
+    for m in moves:
+        by_axis.setdefault(str(m.get("axis", "")), []).append(m)
+    _body = ""
+    for axis in ("entry", "exit", "braking"):
+        ax_moves = by_axis.get(axis) or []
+        if not ax_moves:
+            continue
+        _rows = ""
+        for m in ax_moves:
+            _fld = str(m.get("field", "")).replace("_", " ")
+            _rows += (
+                f"<p style='margin:1px 0; color:#CBD8D0; font-size:11px;'>"
+                f"<b>{_fld}</b> {m.get('from')} &rarr; {m.get('to')} "
+                f"<span style='color:#8FA69A;'>— {m.get('reason', '')}</span></p>"
+            )
+        _body += (
+            f"<p style='margin:5px 0 1px 0; color:#7FD0AC; font-size:11px;'>"
+            f"<b>{_BALANCE_AXIS_LABEL.get(axis, axis.title())}</b></p>{_rows}"
+        )
+    _trade = ""
+    for t in (sol.get("tradeoffs") or []):
+        _trade += (f"<p style='margin:4px 0 0 0; color:#E0C890; font-size:10px;'>"
+                   f"&#8644; {t}</p>")
+    _tests = ""
+    for t in (sol.get("targeted_tests") or []):
+        _tests += (f"<p style='margin:1px 0; color:#9FB6C4; font-size:10px;'>"
+                   f"&#128300; {t}</p>")
+    _proto = ""
+    if sol.get("test_protocol"):
+        _proto = (f"<p style='margin:5px 0 0 0; color:#AAB; font-size:10px;'>"
+                  f"<b>How to test:</b> {sol['test_protocol']}</p>")
+    return (
+        "<div style='background:#0C1512; border:1px solid #2E5044; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#7FD0AC; font-size:12px;'>&#9878; Coordinated balance change "
+        "&mdash; engineered as a set</b>"
+        f"{_body}{_trade}{_tests}{_proto}</div>"
     )
 
 
@@ -2259,6 +2322,7 @@ class SetupBuilderMixin:
         # Base / Qualifying / Race authored side-by-side so the driver can SEE where
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
+        html += _balance_solution_html(data.get("balance_solution"))
         html += _discipline_field_plan_html(data.get("discipline_field_plan"))
 
         # --- Section 9: Qualifying discipline (Phase 7) ---

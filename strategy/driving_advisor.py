@@ -2482,6 +2482,72 @@ class DrivingAdvisor:
                 except Exception:
                     _data.setdefault("recommendation_completeness", {})
 
+                # ── Balance solver: author instead of defer ──────────────────────
+                # When several conflicting complaints would otherwise leave the driver
+                # with evidence_required / a partial with untreated problems, an engineer
+                # authors a COORDINATED balance change (free the front, plant the rear,
+                # brake forward) rather than asking for more evidence. Deterministic and
+                # rule-first; the moves flow through the SAME engineering validator and
+                # Apply gate, and are honestly framed as a balance change to test.
+                try:
+                    from strategy.setup_balance_solver import (
+                        solve_balance, confirmed_handling_complaints,
+                    )
+                    from strategy.setup_diagnosis import assess_recommendation_completeness
+                    _comp2 = _data.get("recommendation_completeness") or {}
+                    _status_now = str(_data.get("recommendation_status", ""))
+                    _complaints = confirmed_handling_complaints(diagnosis or {})
+                    _deferred = (
+                        _status_now == EVIDENCE_REQUIRED_STATUS
+                        or (_comp2.get("is_partial") and _comp2.get("untreated"))
+                        or not (_data.get("changes") or [])
+                    )
+                    if len(_complaints) >= 2 and _deferred:
+                        _bal_ranges = resolve_ranges(car_name)
+                        _bal_locked = (_derive_locked_fields(allowed_tuning)
+                                       if allowed_tuning else set())
+                        _sol = solve_balance(diagnosis or {}, setup_dict, _bal_ranges,
+                                             locked_fields=_bal_locked)
+                        if _sol.solved and _sol.moves:
+                            _bal_raw = {
+                                "analysis": _sol.summary,
+                                "primary_issue": "balance_compromise",
+                                "changes": _sol.as_change_dicts(),
+                                "setup_fields": _sol.setup_fields(),
+                                "diagnosis": diagnosis or {},
+                                "validation_targets": {},
+                                "confidence": {"overall": "medium",
+                                               "reason": "coordinated balance change to test"},
+                            }
+                            _bal_fail = validate_setup_engineering_structured(
+                                _bal_raw, diagnosis=diagnosis or {}, setup=setup_dict,
+                                ranges=_bal_ranges, event_ctx={}, car_name=car_name,
+                                rec_history=None)
+                            _bal_final = _finalise_recommendation(
+                                _bal_raw, _bal_fail, fallback_used=False, retried=False)
+                            if (_bal_final.status in APPROVED_STATUSES
+                                    and _bal_final.approved_fields):
+                                _data["recommendation_status"] = "balance_recommendation"
+                                _data["changes"] = _bal_final.approved_changes
+                                _data["setup_fields"] = _bal_final.approved_fields
+                                _data["engineering_validation_failed"] = False
+                                _data["engineering_validation_errors"] = _bal_final.engineering_errors
+                                _data["balance_solution"] = _sol.as_json()
+                                if _sol.targeted_tests:
+                                    _data.setdefault("_targeted_tests", []).extend(
+                                        _sol.targeted_tests)
+                                _bal_fields = {c.get("field")
+                                               for c in _bal_final.approved_changes}
+                                _data["recommendation_completeness"] = (
+                                    assess_recommendation_completeness(
+                                        diagnosis or {}, _bal_fields,
+                                        set(_sol.targeted_tests and [] or []),
+                                        base_status="approved"))
+                                _data["analysis"] = (
+                                    _sol.summary + " " + _sol.test_protocol).strip()
+                except Exception:
+                    pass
+
                 # New Group 42 keys
                 _data["deterministic_plan"] = {
                     "proposed_count": len(_plan.proposed),

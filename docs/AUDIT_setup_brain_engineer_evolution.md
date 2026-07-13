@@ -153,10 +153,17 @@ back with more evidence."
 **Root cause.** Isolated single-field safety gating with no whole-car compromise layer, and
 a coherence gate that treats "no single dominant fix" as "no setup".
 
-**Correct design (staged, next increment).** A balance-solver that, given the confirmed
-complaint set, authors a conservative coordinated compromise (bounded, safety-clamped,
-clearly labelled as a *balance change to test*) instead of returning nothing. Kept out of
-this increment to kee the safety spine unchanged while it is designed and tested.
+**Correct design — DELIVERED (`strategy/setup_balance_solver.py`).** Given the confirmed
+complaint set, `solve_balance` authors a conservative coordinated compromise: free the
+front (soften front bar, front toe-out, more front aero), plant the rear (more rear aero
++ toe-in, softer rear bar), move brake bias forward — with a trade-off note and a test
+protocol. It respects every safety invariant it knows about (brake bias only forward under
+instability; LSD accel never increased when the rear is loose — left to a test; ambiguous
+LSD braking left to a test). The moves flow through the SAME
+`validate_setup_engineering_structured` funnel and Apply gate, and the result is a new
+apply-eligible `balance_recommendation` status, honestly framed as a *balance change to
+test*. Wired into `build_combined_setup_response`: when ≥2 conflicting complaints would
+otherwise defer to `evidence_required`/partial, the app now authors a real setup instead.
 
 ---
 
@@ -169,7 +176,7 @@ this increment to kee the safety spine unchanged while it is designed and tested
 | 4 | No objective functions | High | **Done (reasoning)** — objective shapes intents |
 | 5 | No coupling | High | **Foundation** — intent `couples_with` + cascade |
 | 3 | Thin driver layer | Medium | **Partial** — driver tendencies feed intents |
-| 6 | Defer instead of engineer | High | **Staged** — balance-solver designed, not yet wired |
+| 6 | Defer instead of engineer | High | **Done** — balance solver authors a coordinated setup |
 
 The implementation is `strategy/setup_engineering.py` (pure, first-principles, direction +
 reason + coupling + evidence, conservatively bounded, safety-clamped through the existing

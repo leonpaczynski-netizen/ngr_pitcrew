@@ -1805,6 +1805,9 @@ class TestAdditionalEdgeCases:
             "approved", "approved_with_warnings",
             "approved_with_rejections", "partial_recommendation",
             "fallback_generated",
+            # Engineer-evolution: the balance solver's coordinated set is apply-eligible
+            # (validated through the same funnel; framed as a balance change to test).
+            "balance_recommendation",
         }
         assert APPROVED_STATUSES == expected, (
             f"APPROVED_STATUSES must be exactly {expected}; got {APPROVED_STATUSES}"
