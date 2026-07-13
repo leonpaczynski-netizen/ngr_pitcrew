@@ -180,6 +180,109 @@ def _set_spin_readonly(spin, readonly: bool) -> None:
     )
 
 
+# Human-readable disposition labels for the discipline table (Group 64).
+_DISCIPLINE_DISPOSITION_LABELS = {
+    "AUTHORED": ("authored", "#8BC34A"),
+    "PROVEN_HISTORY_SEED": ("proven", "#5FA8D3"),
+    "DRIVER_PROFILE_SEED": ("profile", "#B0A0D0"),
+    "TRACK_MODEL_SEED": ("track", "#5FA8D3"),
+    "EVENT_CONSTRAINT": ("locked", "#E0A458"),
+    "CONTROLLED_TEST_REQUIRED": ("test", "#E0A458"),
+    "INSUFFICIENT_EVIDENCE": ("default", "#999999"),
+    "NOT_ADJUSTABLE": ("n/a", "#666666"),
+    "NOT_RELEVANT": ("n/a", "#666666"),
+    "REJECTED_FOR_SAFETY": ("blocked", "#E86A5E"),
+}
+
+
+def _fmt_plan_value(v) -> str:
+    """Format a setup value for the discipline table (numbers trimmed, None → —)."""
+    if v is None:
+        return "<span style='color:#666;'>&mdash;</span>"
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:g}"
+    return str(v)
+
+
+def _discipline_field_plan_html(plan: dict) -> str:
+    """Render Base / Qualifying / Race as a side-by-side field table (Group 64).
+
+    Module-level (needs no widget) and self-guarding: an absent/empty plan renders
+    nothing. Rows where all three disciplines share a value are dimmed; genuinely
+    differing fields are highlighted so the driver sees what each discipline changes.
+    """
+    if not isinstance(plan, dict):
+        return ""
+    rows = plan.get("rows") or []
+    rows = [r for r in rows if isinstance(r, dict)
+            and any(r.get(k) is not None for k in ("base", "qualifying", "race"))]
+    if not rows:
+        return ""
+    differing = plan.get("differing_fields") or []
+    seeded = plan.get("seeded_from_history") or []
+    rows = sorted(rows, key=lambda r: (not r.get("differs"), str(r.get("field", ""))))
+
+    _hdr = (
+        "<th style='text-align:left; color:#888; padding:2px 10px 4px 0;'>Field</th>"
+        "<th style='text-align:right; color:#9FB6C4; padding:2px 10px 4px 0;'>Base</th>"
+        "<th style='text-align:right; color:#F5A623; padding:2px 10px 4px 0;'>Qualifying</th>"
+        "<th style='text-align:right; color:#8BC34A; padding:2px 10px 4px 0;'>Race</th>"
+        "<th style='text-align:right; color:#5FA8D3; padding:2px 10px 4px 0;'>Proven</th>"
+        "<th style='text-align:left; color:#888; padding:2px 0 4px 0;'>Source</th>"
+    )
+    _body = ""
+    for r in rows:
+        _field = str(r.get("field", "")).replace("_", " ")
+        _differs = bool(r.get("differs"))
+        _name_col = "#EDE3C8" if _differs else "#999"
+        _row_bg = "background:#141C10;" if _differs else ""
+        _disp = str(r.get("disposition", ""))
+        _disp_label, _disp_colour = _DISCIPLINE_DISPOSITION_LABELS.get(
+            _disp, (_disp.lower().replace("_", " "), "#888"))
+        _mark = " &#9679;" if _differs else ""
+        _body += (
+            f"<tr style='{_row_bg}'>"
+            f"<td style='color:{_name_col}; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_field}<span style='color:#8BC34A;'>{_mark}</span></td>"
+            f"<td style='text-align:right; color:#9FB6C4; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('base'))}</td>"
+            f"<td style='text-align:right; color:#F5C77E; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('qualifying'))}</td>"
+            f"<td style='text-align:right; color:#A9D275; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('race'))}</td>"
+            f"<td style='text-align:right; color:#7FBEDF; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('proven'))}</td>"
+            f"<td style='color:{_disp_colour}; padding:2px 0 2px 0; font-size:10px;'>"
+            f"{_disp_label}</td>"
+            "</tr>"
+        )
+
+    _seeded_note = ""
+    if seeded:
+        _seeded_note = (
+            "<p style='margin:5px 0 0 0; color:#7FBEDF; font-size:10px;'>"
+            "&#10003; Seeded from your proven setup: "
+            + ", ".join(str(s).replace("_", " ") for s in seeded) + ".</p>"
+        )
+    _diff_note = (
+        f"<p style='margin:3px 0 0 0; color:#999; font-size:10px;'>"
+        f"&#9679; {len(differing)} field(s) genuinely differ between disciplines "
+        "(Qualifying = one-lap attack; Race = repeatable pace over the stint).</p>"
+        if differing else ""
+    )
+    return (
+        "<div style='background:#0E1410; border:1px solid #2E4636; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#8BC34A; font-size:12px;'>"
+        "&#128203; Base &middot; Qualifying &middot; Race &mdash; side by side</b>"
+        "<table style='border-collapse:collapse; margin-top:6px; width:100%;'>"
+        f"<tr>{_hdr}</tr>{_body}</table>"
+        f"{_diff_note}{_seeded_note}</div>"
+    )
+
+
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
 
@@ -2137,109 +2240,10 @@ class SetupBuilderMixin:
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
-    @staticmethod
-    def _fmt_plan_value(v) -> str:
-        """Format a setup value for the discipline table (numbers trimmed, None → —)."""
-        if v is None:
-            return "<span style='color:#666;'>&mdash;</span>"
-        if isinstance(v, bool):
-            return str(v)
-        if isinstance(v, (int, float)):
-            return f"{v:g}"
-        return str(v)
-
-    # Human-readable disposition labels for the discipline table (Group 64).
-    _DISPOSITION_LABELS = {
-        "AUTHORED": ("authored", "#8BC34A"),
-        "PROVEN_HISTORY_SEED": ("proven", "#5FA8D3"),
-        "DRIVER_PROFILE_SEED": ("profile", "#B0A0D0"),
-        "TRACK_MODEL_SEED": ("track", "#5FA8D3"),
-        "EVENT_CONSTRAINT": ("locked", "#E0A458"),
-        "CONTROLLED_TEST_REQUIRED": ("test", "#E0A458"),
-        "INSUFFICIENT_EVIDENCE": ("default", "#999999"),
-        "NOT_ADJUSTABLE": ("n/a", "#666666"),
-        "NOT_RELEVANT": ("n/a", "#666666"),
-        "REJECTED_FOR_SAFETY": ("blocked", "#E86A5E"),
-    }
-
     def _render_discipline_field_plan(self, plan: dict) -> str:
-        """Render Base / Qualifying / Race as a side-by-side field table (Group 64).
-
-        Self-guarding: an absent/empty plan renders nothing. Rows where all three
-        disciplines share the same value are dimmed; genuinely differing fields are
-        highlighted so the driver can see what each discipline actually changes.
-        """
-        if not isinstance(plan, dict):
-            return ""
-        rows = plan.get("rows") or []
-        # Only show rows that carry at least one authored value.
-        rows = [r for r in rows if isinstance(r, dict)
-                and any(r.get(k) is not None for k in ("base", "qualifying", "race"))]
-        if not rows:
-            return ""
-        differing = plan.get("differing_fields") or []
-        seeded = plan.get("seeded_from_history") or []
-
-        # Differing fields first (the interesting ones), then the shared platform.
-        rows.sort(key=lambda r: (not r.get("differs"), str(r.get("field", ""))))
-
-        _hdr = (
-            "<th style='text-align:left; color:#888; padding:2px 10px 4px 0;'>Field</th>"
-            "<th style='text-align:right; color:#9FB6C4; padding:2px 10px 4px 0;'>Base</th>"
-            "<th style='text-align:right; color:#F5A623; padding:2px 10px 4px 0;'>Qualifying</th>"
-            "<th style='text-align:right; color:#8BC34A; padding:2px 10px 4px 0;'>Race</th>"
-            "<th style='text-align:right; color:#5FA8D3; padding:2px 10px 4px 0;'>Proven</th>"
-            "<th style='text-align:left; color:#888; padding:2px 0 4px 0;'>Source</th>"
-        )
-        _body = ""
-        for r in rows:
-            _field = str(r.get("field", "")).replace("_", " ")
-            _differs = bool(r.get("differs"))
-            _name_col = "#EDE3C8" if _differs else "#999"
-            _row_bg = "background:#141C10;" if _differs else ""
-            _disp = str(r.get("disposition", ""))
-            _disp_label, _disp_colour = self._DISPOSITION_LABELS.get(
-                _disp, (_disp.lower().replace("_", " "), "#888"))
-            _mark = " &#9679;" if _differs else ""
-            _body += (
-                f"<tr style='{_row_bg}'>"
-                f"<td style='color:{_name_col}; padding:2px 10px 2px 0; font-size:11px;'>"
-                f"{_field}<span style='color:#8BC34A;'>{_mark}</span></td>"
-                f"<td style='text-align:right; color:#9FB6C4; padding:2px 10px 2px 0; font-size:11px;'>"
-                f"{self._fmt_plan_value(r.get('base'))}</td>"
-                f"<td style='text-align:right; color:#F5C77E; padding:2px 10px 2px 0; font-size:11px;'>"
-                f"{self._fmt_plan_value(r.get('qualifying'))}</td>"
-                f"<td style='text-align:right; color:#A9D275; padding:2px 10px 2px 0; font-size:11px;'>"
-                f"{self._fmt_plan_value(r.get('race'))}</td>"
-                f"<td style='text-align:right; color:#7FBEDF; padding:2px 10px 2px 0; font-size:11px;'>"
-                f"{self._fmt_plan_value(r.get('proven'))}</td>"
-                f"<td style='color:{_disp_colour}; padding:2px 0 2px 0; font-size:10px;'>"
-                f"{_disp_label}</td>"
-                "</tr>"
-            )
-
-        _seeded_note = ""
-        if seeded:
-            _seeded_note = (
-                "<p style='margin:5px 0 0 0; color:#7FBEDF; font-size:10px;'>"
-                "&#10003; Seeded from your proven setup: "
-                + ", ".join(str(s).replace("_", " ") for s in seeded) + ".</p>"
-            )
-        _diff_note = (
-            f"<p style='margin:3px 0 0 0; color:#999; font-size:10px;'>"
-            f"&#9679; {len(differing)} field(s) genuinely differ between disciplines "
-            "(Qualifying = one-lap attack; Race = repeatable pace over the stint).</p>"
-            if differing else ""
-        )
-        return (
-            "<div style='background:#0E1410; border:1px solid #2E4636; "
-            "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
-            "<b style='color:#8BC34A; font-size:12px;'>"
-            "&#128203; Base &middot; Qualifying &middot; Race &mdash; side by side</b>"
-            "<table style='border-collapse:collapse; margin-top:6px; width:100%;'>"
-            f"<tr>{_hdr}</tr>{_body}</table>"
-            f"{_diff_note}{_seeded_note}</div>"
-        )
+        """Thin wrapper — delegates to the module-level renderer so the surfaces
+        method (which is sometimes called with self=None in tests) never needs self."""
+        return _discipline_field_plan_html(plan)
 
     def _render_race_engineer_surfaces(self, data: dict) -> str:
         """Build the additive Race-Engineer panels from the response dict.
@@ -2255,7 +2259,7 @@ class SetupBuilderMixin:
         # Base / Qualifying / Race authored side-by-side so the driver can SEE where
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
-        html += self._render_discipline_field_plan(data.get("discipline_field_plan"))
+        html += _discipline_field_plan_html(data.get("discipline_field_plan"))
 
         # --- Section 9: Qualifying discipline (Phase 7) ---
         _qb = data.get("qualifying_brief") or {}

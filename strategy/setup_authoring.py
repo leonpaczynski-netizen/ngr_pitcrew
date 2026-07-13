@@ -249,6 +249,25 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
         except Exception:
             seed_overrides = {}
 
+    # Engineering-reasoning layer — vehicle + track + objective + driver coupled
+    # intents (gearing to the straight, ride-height for elevation, ARB balance, RR
+    # rear-stability). Flows through the same clamp/validate pipeline; degrades to
+    # no-op on any missing input so a bare context still authors deterministically.
+    eng_bias: dict = {}
+    eng_lean: float = 0.0
+    try:
+        from strategy.setup_engineering import (
+            build_vehicle_model, derive_engineering_intents, resolve_car_specs,
+        )
+        vehicle = build_vehicle_model(
+            ctx.car, ctx.drivetrain, ctx.num_gears, resolve_car_specs(ctx.car))
+        eng_plan = derive_engineering_intents(
+            vehicle, ctx.track_profile, objective.value, ctx.profile)
+        eng_bias = eng_plan.bias()
+        eng_lean = eng_plan.final_drive_lean
+    except Exception:
+        eng_bias, eng_lean = {}, 0.0
+
     raw = build_baseline_setup(
         ctx.car, ctx.ranges, ctx.drivetrain, ctx.num_gears,
         ctx.profile, ctx.allowed_tuning, ctx.tuning_locked,
@@ -258,6 +277,8 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
         duration_mins=ctx.duration_mins,
         track_profile=ctx.track_profile,
         historical_seed_overrides=seed_overrides or None,
+        engineering_bias=eng_bias,
+        final_drive_lean=eng_lean,
     )
 
     changes_by_field = {c.get("field"): c for c in (raw.get("changes") or []) if c.get("field")}

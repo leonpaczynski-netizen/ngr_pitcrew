@@ -2666,6 +2666,30 @@ class DrivingAdvisor:
                     _seed_overrides = {}
                     _bl_prior = {}
 
+            # Engineering-reasoning layer (audit: docs/AUDIT_setup_brain_engineer_evolution.md).
+            # Build a vehicle model from the car specs and reason over vehicle + track +
+            # objective + driver into coupled directional intents (gearing to the straight,
+            # ride-height for elevation, ARB balance, RR rear-stability, etc.). Flows through
+            # the SAME clamp/validate pipeline; degrades to no-op if anything is missing.
+            _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            try:
+                from strategy.setup_engineering import (
+                    build_vehicle_model, derive_engineering_intents, resolve_car_specs,
+                    coupling_report,
+                )
+                from strategy.setup_authoring import objective_from_session_type
+                _specs = resolve_car_specs(car_name)
+                _vehicle = build_vehicle_model(car_name, drivetrain or "", num_gears, _specs)
+                _objective = objective_from_session_type(session_type).value
+                _eng_plan = derive_engineering_intents(
+                    _vehicle, track_profile, _objective, _profile)
+                _eng_bias = _eng_plan.bias()
+                _eng_lean = _eng_plan.final_drive_lean
+                _eng_reasoning = _eng_plan.as_json()
+                _eng_reasoning["coupling"] = coupling_report(_eng_plan)
+            except Exception:
+                _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
                 _profile, allowed_tuning, tuning_locked,
@@ -2675,6 +2699,8 @@ class DrivingAdvisor:
                 duration_mins=duration_mins,
                 track_profile=track_profile,
                 historical_seed_overrides=_seed_overrides,
+                engineering_bias=_eng_bias,
+                final_drive_lean=_eng_lean,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta
@@ -2751,6 +2777,11 @@ class DrivingAdvisor:
                                          + " " + _qb.one_lap_warning).strip()
             except Exception:
                 _resp["qualifying_brief"] = {"is_qualifying": False}
+
+            # Engineering reasoning surface — the engineer's "why" behind the values
+            # (vehicle model, track-driven gearing/support, objective, coupling notes).
+            if _eng_reasoning:
+                _resp["engineering_reasoning"] = _eng_reasoning
 
             # Group 64: canonical discipline field-plan surface — author Base,
             # Qualifying and Race as separate full-field setups from ONE context so
