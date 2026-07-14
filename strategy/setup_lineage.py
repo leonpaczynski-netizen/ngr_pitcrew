@@ -343,6 +343,19 @@ def failed_directions_from_learning_outcomes(
     return out
 
 
+# Explicit driver "vs my last setup" report → the persisted lineage verdict vocabulary.
+_VS_PREVIOUS_VERDICT = {
+    "better": "improved", "improved": "improved",
+    "worse": "worsened", "worsened": "worsened",
+    "unchanged": "neutral", "same": "neutral", "no change": "neutral", "neutral": "neutral",
+}
+
+
+def vs_previous_to_verdict(vs_previous: str) -> str:
+    """Map a driver's 'compared to your last setup' report to the learning verdict."""
+    return _VS_PREVIOUS_VERDICT.get(str(vs_previous or "").strip().lower(), "")
+
+
 def rollback_target(experiment: SetupExperiment, outcome: ExperimentOutcome) -> Optional[str]:
     """The parent setup id to roll back to when the experiment made the car worse
     overall (or every change in it was harmful). None when there is nothing to undo."""

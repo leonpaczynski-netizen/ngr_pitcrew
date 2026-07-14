@@ -7815,6 +7815,24 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "from this to shape future setup advice.")
         form.addRow(rating_lbl, self._feedback_rating_combo)
 
+        # Phase 7: explicit directional outcome vs the previous setup — closes the loop
+        # (feeds the setup development timeline + rollback). Distinct from the absolute
+        # Liked/Hated feel above.
+        vs_lbl = QLabel("Compared to your last setup:")
+        vs_lbl.setStyleSheet(f"color: {_TEXT};")
+        self._feedback_vs_prev_combo = QComboBox()
+        self._feedback_vs_prev_combo.addItems(["—", "Better", "Unchanged", "Worse"])
+        self._feedback_vs_prev_combo.setStyleSheet(
+            f"QComboBox {{ background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; "
+            "border-radius: 3px; padding: 2px 6px; }"
+            f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
+        )
+        self._feedback_vs_prev_combo.setToolTip(
+            "Did this setup make the car better or worse than the one before it? The app "
+            "records this on the setup timeline and will not repeat a change that made it "
+            "worse.")
+        form.addRow(vs_lbl, self._feedback_vs_prev_combo)
+
         notes_lbl = QLabel("Notes:")
         notes_lbl.setStyleSheet(f"color: {_TEXT};")
         self._feedback_notes = QTextEdit()
@@ -7874,8 +7892,18 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             _rt = self._feedback_rating_combo.currentText()
             rating = {"Liked": "liked", "Hated": "hated", "Neutral": "neutral"}.get(_rt, "")
 
-        # Submit if there's any structured feedback, notes, or at least a rating.
-        if not parts and not rating:
+        # Phase 7: directional outcome vs the previous setup.
+        _vs_prev = ""
+        if hasattr(self, "_feedback_vs_prev_combo"):
+            _vsp = self._feedback_vs_prev_combo.currentText()
+            _vs_prev = {"Better": "better", "Unchanged": "unchanged",
+                        "Worse": "worse"}.get(_vsp, "")
+        feedback_dict["vs_previous"] = _vs_prev
+        if _vs_prev:
+            parts.append(f"Compared to last setup: {_vsp}")
+
+        # Submit if there's any structured feedback, notes, a rating, or a vs-previous call.
+        if not parts and not rating and not _vs_prev:
             return
 
         feedback_str = "\n".join(parts)
@@ -7924,6 +7952,22 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     setup_id=_setup_id,
                     rating=rating,
                 )
+                # Phase 7: an explicit better/worse-vs-previous call stamps the latest
+                # setup-lineage node (feeds the timeline + rollback + failed-direction
+                # lockout). Best-effort; only fills an unscored node.
+                if _vs_prev:
+                    try:
+                        from strategy.setup_lineage import vs_previous_to_verdict
+                        _verdict = vs_previous_to_verdict(_vs_prev)
+                        _cid = int(self._car_id_ref[0]) if getattr(self, "_car_id_ref", None) else 0
+                        # Canonical EventContext (DB-first) — not a raw config["strategy"]
+                        # read (frozen fan-out allowlist).
+                        _evc = self._build_event_context()
+                        if _verdict and _cid > 0:
+                            self._db.record_latest_lineage_outcome(
+                                _cid, _evc.track, _evc.layout_id, _verdict, _sid)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

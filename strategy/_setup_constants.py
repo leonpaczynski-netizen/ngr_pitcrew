@@ -107,7 +107,8 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v13 (Group 47): added 5 additive outcome-verification columns to learning_outcomes.
 # v14 (Group 62): added additive `abs INTEGER NOT NULL DEFAULT 1` column to events.
 # v15 (Engineering-Brain Phase 1): added standalone additive `setup_lineage` table.
-DB_VERSION: int = 15
+# v16 (Engineering-Brain Phase 7): additive driver_feedback vs_previous/corner/phase.
+DB_VERSION: int = 16
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

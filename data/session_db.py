@@ -373,6 +373,16 @@ _V14_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("events", "abs INTEGER NOT NULL DEFAULT 1"),
 ]
 
+# v16: Engineering-Brain Phase 7 — structured Practice Review capture.
+# Additive TEXT columns on driver_feedback so a stint can record the DIRECTIONAL
+# outcome vs the previous setup (better/worse/unchanged) and an optional corner+phase
+# for per-corner diagnosis. Duplicate-column guard follows the v14 pattern.
+_V16_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("driver_feedback", "vs_previous TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "corner      TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "phase       TEXT NOT NULL DEFAULT ''"),
+]
+
 # v15: Engineering-Brain Phase 1 — closed-loop setup lineage.
 # A dedicated, ADDITIVE table (touches no existing table) recording each applied
 # setup as a node derived from a PARENT node by a set of field changes, with the
@@ -513,6 +523,23 @@ class SessionDB:
             self._migrate_v15()
             self._conn.execute("PRAGMA user_version = 15")
             self._conn.commit()
+        if version < 16:
+            self._migrate_v16()
+            self._conn.execute("PRAGMA user_version = 16")
+            self._conn.commit()
+
+    def _migrate_v16(self) -> None:
+        """Engineering-Brain Phase 7 — additive driver_feedback columns (schema v16).
+
+        Adds vs_previous / corner / phase TEXT columns (DEFAULT '') for structured
+        Practice Review capture. Existing rows keep '' — behaviour-preserving. A
+        duplicate-column guard makes the migration idempotent."""
+        for table, col_def in _V16_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _migrate_v15(self) -> None:
         """Engineering-Brain Phase 1 — additive setup_lineage table (schema v15).
@@ -902,6 +929,32 @@ class SessionDB:
                     (str(verdict or ""), outcome_session_id, int(rec_id)),
                 )
                 self._conn.commit()
+        except Exception:
+            pass
+
+    def record_latest_lineage_outcome(
+        self, car_id: int, track: str, layout_id: str, verdict: str,
+        outcome_session_id: "int | None" = None
+    ) -> None:
+        """Stamp the verdict onto the MOST RECENT lineage node at this scope — used when
+        the driver gives an explicit better/worse-vs-previous report (Phase 7). Only
+        overwrites an unscored node so a measured telemetry verdict is not clobbered.
+        Best-effort, never raises."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    """SELECT id FROM setup_lineage
+                       WHERE car_id=? AND track=? AND layout_id=? AND outcome_verdict=''
+                       ORDER BY id DESC LIMIT 1""",
+                    (car_id, track, layout_id),
+                ).fetchone()
+                if row is not None:
+                    self._conn.execute(
+                        """UPDATE setup_lineage
+                           SET outcome_verdict=?, outcome_session_id=? WHERE id=?""",
+                        (str(verdict or ""), outcome_session_id, int(row[0])),
+                    )
+                    self._conn.commit()
         except Exception:
             pass
 
@@ -2602,8 +2655,9 @@ class SessionDB:
                        (session_id, lap_num, submitted_at,
                         corner_entry, mid_corner, exit_stability,
                         rear_braking, tyre_condition, fuel_use,
-                        notes, config_id, setup_id, rating)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        notes, config_id, setup_id, rating,
+                        vs_previous, corner, phase)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id, lap_num, submitted_at,
                     feedback.get("corner_entry", ""),
@@ -2616,6 +2670,10 @@ class SessionDB:
                     config_id,
                     int(setup_id or 0),
                     rating or "",
+                    # Phase 7: directional outcome vs the previous setup + optional corner.
+                    feedback.get("vs_previous", ""),
+                    feedback.get("corner", ""),
+                    feedback.get("phase", ""),
                 ),
             )
             self._conn.commit()
