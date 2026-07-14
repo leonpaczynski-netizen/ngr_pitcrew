@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 6: strategy handoff)
+
+**Branch `engineering-brain-phase6-strategy-handoff` from `master` @ `fa4c586` (PR #48 merged Phase 5).** The clean boundary between the Setup and Strategy brains.
+
+**NEW `strategy/setup_strategy_handoff.py` (pure):** `build_setup_strategy_handoff` packages a RACE setup's strategy-relevant characteristics (tyre preservation / traction stability / fuel-drag efficiency / consistency, from the target handling model) as EVIDENCE for the Strategy Brain, with readable strengths/weaknesses (None for base/quali). `STRATEGY_OWNED` enumerates what the Strategy Brain owns (degradation curve, crossover lap, fuel-per-lap, refuel/pit loss, legal candidates, compound + pit timing, total-race-time). `handoff_respects_boundary` guard: the handoff carries the `setup_provides_evidence_only` marker and NO strategy-authoring keys. Surfaced as `setup_strategy_handoff`.
+
+**Tests:** NEW `tests/test_setup_strategy_handoff.py` (6). Full suite (halves + UI files individual): **~7364 passed, 0 failed.** No schema migration. **Phase 7 (workflow UI)** remains — large UI; key panels already shipped; a full editor/comparison/lineage-timeline overhaul is best done with visual review.
+
 ## Repository / Build Status (2026-07-14 — Engineering Brain Phase 5: per-corner diagnosis)
 
 **Branch `engineering-brain-phase5-corner-diagnosis` from `master` @ `f827678` (PR #47 merged Phase 4).** Corner-scoped complaints → precise engineering.

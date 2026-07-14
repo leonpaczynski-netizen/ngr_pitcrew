@@ -3074,6 +3074,15 @@ class DrivingAdvisor:
                         available_tyres=None, required_tyres=None)
                 except Exception:
                     pass
+                # Phase 6: setup -> strategy handoff — the race setup's tyre/fuel/
+                # consistency evidence for the Strategy Brain (authors no strategy).
+                try:
+                    from strategy.setup_strategy_handoff import build_setup_strategy_handoff
+                    _hoff = build_setup_strategy_handoff(_ctx)
+                    if _hoff is not None:
+                        _resp["setup_strategy_handoff"] = _hoff.as_json()
+                except Exception:
+                    pass
             except Exception:
                 pass
 
