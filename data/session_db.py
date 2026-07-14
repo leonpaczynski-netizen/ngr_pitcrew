@@ -408,6 +408,39 @@ CREATE INDEX IF NOT EXISTS idx_setup_lineage_scope
     ON setup_lineage (car_id, track, layout_id);
 """
 
+# Engineering-Brain (live telemetry): cross-session per-corner slip accumulation.
+# One row per (car, track, layout, segment, run). UPSERT on the unique key so a run's
+# totals are replaced (never duplicated) when re-saved mid-session; reads SUM across
+# runs to accumulate the driver's slip history at each corner across sessions.
+_DDL_V17 = """
+CREATE TABLE IF NOT EXISTS corner_slip_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_id INTEGER NOT NULL,
+    track TEXT NOT NULL DEFAULT '',
+    layout_id TEXT NOT NULL DEFAULT '',
+    segment_id TEXT NOT NULL DEFAULT '',
+    run_id INTEGER NOT NULL DEFAULT 0,
+    turn INTEGER,
+    display_name TEXT NOT NULL DEFAULT '',
+    direction TEXT NOT NULL DEFAULT '',
+    samples INTEGER NOT NULL DEFAULT 0,
+    wheelspin_events INTEGER NOT NULL DEFAULT 0,
+    lockup_events INTEGER NOT NULL DEFAULT 0,
+    wheelspin_by_phase TEXT NOT NULL DEFAULT '{}',
+    lockup_by_phase TEXT NOT NULL DEFAULT '{}',
+    spin_axle_counts TEXT NOT NULL DEFAULT '{}',
+    lock_axle_counts TEXT NOT NULL DEFAULT '{}',
+    throttle_sum REAL NOT NULL DEFAULT 0.0,
+    brake_sum REAL NOT NULL DEFAULT 0.0,
+    exit_gear INTEGER,
+    exit_rpm_avg REAL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (car_id, track, layout_id, segment_id, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_corner_slip_scope
+    ON corner_slip_telemetry (car_id, track, layout_id);
+"""
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,7 +462,8 @@ CREATE TABLE IF NOT EXISTS race_plans (
 );
 """
 
-_DDL = _DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
+_DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
+        + _DDL_V17)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -527,6 +561,16 @@ class SessionDB:
             self._migrate_v16()
             self._conn.execute("PRAGMA user_version = 16")
             self._conn.commit()
+        if version < 17:
+            self._migrate_v17()
+            self._conn.execute("PRAGMA user_version = 17")
+            self._conn.commit()
+
+    def _migrate_v17(self) -> None:
+        """Engineering-Brain (live telemetry) — additive corner_slip_telemetry table
+        (schema v17). Cross-session per-corner slip accumulation. Standalone table
+        (CREATE IF NOT EXISTS, idempotent); touches no existing table."""
+        self._conn.executescript(_DDL_V17)
 
     def _migrate_v16(self) -> None:
         """Engineering-Brain Phase 7 — additive driver_feedback columns (schema v16).
@@ -2460,6 +2504,80 @@ class SessionDB:
                    ORDER BY detected_at DESC""",
                 (car_id, track, exclude_session_id),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_corner_slip_aggregates(self, car_id: int, track: str, layout_id: str,
+                                    run_id: int, aggregates: list) -> None:
+        """Upsert this run's per-corner slip aggregates (idempotent per run).
+
+        Accepts CornerTelemetryAggregate instances or plain dicts. Re-saving the same
+        (car, track, layout, segment, run) REPLACES the row, so calling this repeatedly
+        during a session never double-counts. Reads accumulate across runs.
+        """
+        if not aggregates or not track:
+            return
+
+        def _v(a, k, default=None):
+            return getattr(a, k, default) if not isinstance(a, dict) else a.get(k, default)
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        rows = []
+        for a in aggregates:
+            samples = int(_v(a, "samples", 0) or 0)
+            rows.append((
+                int(car_id or 0), track, layout_id or "", str(_v(a, "segment_id", "") or ""),
+                int(run_id or 0), _v(a, "turn"), str(_v(a, "display_name", "") or ""),
+                str(_v(a, "direction", "") or ""), samples,
+                int(_v(a, "wheelspin_events", 0) or 0), int(_v(a, "lockup_events", 0) or 0),
+                json.dumps(_v(a, "wheelspin_by_phase", {}) or {}),
+                json.dumps(_v(a, "lockup_by_phase", {}) or {}),
+                json.dumps(_v(a, "spin_axle_counts", {}) or {}),
+                json.dumps(_v(a, "lock_axle_counts", {}) or {}),
+                float(_v(a, "avg_throttle", 0.0) or 0.0) * samples,
+                float(_v(a, "avg_brake", 0.0) or 0.0) * samples,
+                _v(a, "exit_gear"), _v(a, "exit_rpm_avg"), now,
+            ))
+        with self._lock:
+            self._conn.executemany(
+                """INSERT INTO corner_slip_telemetry
+                   (car_id, track, layout_id, segment_id, run_id, turn, display_name,
+                    direction, samples, wheelspin_events, lockup_events,
+                    wheelspin_by_phase, lockup_by_phase, spin_axle_counts,
+                    lock_axle_counts, throttle_sum, brake_sum, exit_gear, exit_rpm_avg,
+                    updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(car_id, track, layout_id, segment_id, run_id) DO UPDATE SET
+                     turn=excluded.turn, display_name=excluded.display_name,
+                     direction=excluded.direction, samples=excluded.samples,
+                     wheelspin_events=excluded.wheelspin_events,
+                     lockup_events=excluded.lockup_events,
+                     wheelspin_by_phase=excluded.wheelspin_by_phase,
+                     lockup_by_phase=excluded.lockup_by_phase,
+                     spin_axle_counts=excluded.spin_axle_counts,
+                     lock_axle_counts=excluded.lock_axle_counts,
+                     throttle_sum=excluded.throttle_sum, brake_sum=excluded.brake_sum,
+                     exit_gear=excluded.exit_gear, exit_rpm_avg=excluded.exit_rpm_avg,
+                     updated_at=excluded.updated_at""",
+                rows)
+            self._conn.commit()
+
+    def get_corner_slip_rows(self, car_id: int, track: str,
+                             layout_id: str = "") -> list[dict]:
+        """Return raw per-run per-corner slip rows for this car/track(/layout).
+
+        JSON columns are returned as strings; the pure merger parses + accumulates them.
+        """
+        if not track:
+            return []
+        if layout_id:
+            where = "car_id = ? AND track = ? AND layout_id = ?"
+            params: tuple = (int(car_id or 0), track, layout_id)
+        else:
+            where = "car_id = ? AND track = ?"
+            params = (int(car_id or 0), track)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM corner_slip_telemetry WHERE {where}", params).fetchall()
         return [dict(r) for r in rows]
 
     def get_car_track_summary(

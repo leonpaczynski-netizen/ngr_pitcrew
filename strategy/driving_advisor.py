@@ -2710,15 +2710,28 @@ class DrivingAdvisor:
                         _data["corner_diagnosis"] = _cd.as_json()
                         if _cd.controlled_test:
                             _data.setdefault("_targeted_tests", []).append(_cd.controlled_test)
-                    # Live per-corner telemetry → measured Phase-5 diagnoses. When the
-                    # session captured per-corner slip evidence, diagnose each affected
-                    # corner from DATA (telemetry_available=True) instead of only the
-                    # driver's free-text feeling. Advisory/read-only.
-                    if live_corner_aggregates:
-                        from strategy.live_corner_aggregator import (
-                            diagnoses_from_telemetry,
-                        )
-                        _tel_diags = diagnoses_from_telemetry(live_corner_aggregates, _segs)
+                    # Live per-corner telemetry → measured Phase-5 diagnoses. Prefer the
+                    # PERSISTED cross-session slip history (accumulated across runs) when
+                    # available — a corner that slips run after run is stronger evidence
+                    # than one bad lap; otherwise fall back to the current session's live
+                    # aggregates. Diagnose each affected corner from DATA
+                    # (telemetry_available=True) rather than only the driver's feeling.
+                    from strategy.live_corner_aggregator import (
+                        diagnoses_from_telemetry, merge_corner_slip_rows,
+                    )
+                    _agg_source = None
+                    try:
+                        if self._db is not None and _car_id_learn > 0 and _track_learn:
+                            _rows = self._db.get_corner_slip_rows(
+                                _car_id_learn, _track_learn, _layout_learn)
+                            if _rows:
+                                _agg_source = merge_corner_slip_rows(_rows)
+                    except Exception:
+                        _agg_source = None
+                    if not _agg_source and live_corner_aggregates:
+                        _agg_source = live_corner_aggregates
+                    if _agg_source:
+                        _tel_diags = diagnoses_from_telemetry(_agg_source, _segs)
                         if _tel_diags:
                             _data["corner_telemetry_diagnoses"] = _tel_diags
                 except Exception:

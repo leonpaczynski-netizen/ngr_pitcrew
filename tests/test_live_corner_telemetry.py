@@ -14,7 +14,7 @@ from strategy.wheel_slip import (
 )
 from strategy.live_corner_aggregator import (
     LiveCornerAggregator, CornerTelemetryAggregate, observed_symptom,
-    diagnoses_from_telemetry, phase_from_segment_type,
+    diagnoses_from_telemetry, phase_from_segment_type, merge_corner_slip_rows,
 )
 
 
@@ -280,3 +280,76 @@ def test_advisor_omits_surface_without_aggregates(monkeypatch):
         historical_setups=_uat_history(), track_name="NGR Porsche Cup Rd7",
         fuel_multiplier=3.0, refuel_rate_lps=1.0)
     assert "corner_telemetry_diagnoses" not in json.loads(raw)
+
+
+# ------------------------------------------------------------- cross-session persistence
+
+def _agg(seg="s_t3", turn=3, samples=40, spin=4, gear=2, rpm=6500):
+    return CornerTelemetryAggregate(
+        seg, turn, "Turn 3", "left", samples=samples, wheelspin_events=spin,
+        lockup_events=0, wheelspin_by_phase={"exit": spin}, lockup_by_phase={},
+        spin_axle_counts={"rear": spin}, lock_axle_counts={}, avg_throttle=0.9,
+        avg_brake=0.0, exit_gear=gear, exit_rpm_avg=rpm)
+
+
+def test_db_v17_schema_and_table():
+    from data.session_db import SessionDB
+    db = SessionDB(":memory:")
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    cols = [r[1] for r in db._conn.execute(
+        "PRAGMA table_info(corner_slip_telemetry)").fetchall()]
+    assert {"segment_id", "run_id", "wheelspin_events", "throttle_sum"} <= set(cols)
+
+
+def test_save_get_and_upsert_idempotent():
+    from data.session_db import SessionDB
+    db = SessionDB(":memory:")
+    db.save_corner_slip_aggregates(7, "Fuji", "full", run_id=100, aggregates=[_agg(spin=4)])
+    rows = db.get_corner_slip_rows(7, "Fuji", "full")
+    assert len(rows) == 1
+    assert rows[0]["wheelspin_events"] == 4
+    assert abs(rows[0]["throttle_sum"] - 0.9 * 40) < 1e-6   # avg_throttle * samples
+    # Re-saving the SAME run replaces the row (idempotent) — not a second row.
+    db.save_corner_slip_aggregates(7, "Fuji", "full", run_id=100, aggregates=[_agg(spin=6)])
+    rows = db.get_corner_slip_rows(7, "Fuji", "full")
+    assert len(rows) == 1 and rows[0]["wheelspin_events"] == 6
+    # A different run adds a second row.
+    db.save_corner_slip_aggregates(7, "Fuji", "full", run_id=200, aggregates=[_agg(spin=3)])
+    assert len(db.get_corner_slip_rows(7, "Fuji", "full")) == 2
+
+
+def test_merge_accumulates_across_runs():
+    from data.session_db import SessionDB
+    db = SessionDB(":memory:")
+    db.save_corner_slip_aggregates(7, "Fuji", "full", 100, [_agg(spin=4, samples=40)])
+    db.save_corner_slip_aggregates(7, "Fuji", "full", 200, [_agg(spin=3, samples=20)])
+    merged = merge_corner_slip_rows(db.get_corner_slip_rows(7, "Fuji", "full"))
+    assert len(merged) == 1
+    m = merged[0]
+    assert m.wheelspin_events == 7          # 4 + 3 across the two runs
+    assert m.samples == 60
+    assert m.sessions == 2                  # two distinct runs
+    assert m.wheelspin_by_phase.get("exit") == 7
+    assert abs(m.avg_throttle - 0.9) < 1e-6
+
+
+def test_merge_filters_car_and_track():
+    from data.session_db import SessionDB
+    db = SessionDB(":memory:")
+    db.save_corner_slip_aggregates(7, "Fuji", "full", 100, [_agg()])
+    db.save_corner_slip_aggregates(9, "Fuji", "full", 100, [_agg()])   # other car
+    db.save_corner_slip_aggregates(7, "Suzuka", "full", 100, [_agg()])  # other track
+    assert len(db.get_corner_slip_rows(7, "Fuji", "full")) == 1
+
+
+def test_diagnoses_report_session_count():
+    merged = merge_corner_slip_rows([
+        {"segment_id": "s_t3", "turn": 3, "display_name": "Turn 3", "direction": "left",
+         "run_id": r, "samples": 40, "wheelspin_events": 4, "lockup_events": 0,
+         "wheelspin_by_phase": '{"exit": 4}', "lockup_by_phase": "{}",
+         "spin_axle_counts": '{"rear": 4}', "lock_axle_counts": "{}",
+         "throttle_sum": 36.0, "brake_sum": 0.0, "exit_gear": 2, "exit_rpm_avg": 6500}
+        for r in (100, 200, 300)])
+    out = diagnoses_from_telemetry(merged, _segments())
+    assert out and out[0]["sessions"] == 3
+    assert "across 3 sessions" in out[0]["telemetry_evidence"]

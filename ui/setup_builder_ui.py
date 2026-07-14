@@ -785,6 +785,28 @@ class SetupBuilderMixin:
         except Exception:
             return []
 
+    def _persist_live_corner_slip(self) -> None:
+        """Upsert the current run's per-corner slip aggregates so they accumulate across
+        sessions. Keyed by the event's track/layout (matching the advisor's read) and the
+        consumer's run_id (idempotent). Best-effort; inert without a DB/aggregator."""
+        tel = getattr(self, "_live_corner_tel", None)
+        db = getattr(self, "_db", None)
+        if tel is None or db is None:
+            return
+        try:
+            aggs = tel.aggregates()
+            if not aggs:
+                return
+            ec = self._build_event_context()
+            track = str(getattr(ec, "track", "") or "")
+            layout = str(getattr(ec, "layout_id", "") or "")
+            cid = int(self._car_id_ref[0]) if getattr(self, "_car_id_ref", None) else 0
+            if cid <= 0 or not track:
+                return
+            db.save_corner_slip_aggregates(cid, track, layout, tel.run_id, aggs)
+        except Exception:
+            pass
+
     def _active_form(self) -> "SetupFormWidget":
         """Return the currently-active setup form (Race form by default).
 
@@ -1401,6 +1423,9 @@ class SetupBuilderMixin:
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
 
+        # Persist the live per-corner slip evidence (UI thread) so the advisor's
+        # cross-session read includes this run before it diagnoses.
+        self._persist_live_corner_slip()
         _threading.Thread(target=_worker, daemon=True).start()
 
     def _apply_ai_setup_for_form(self, form: "SetupFormWidget") -> None:
@@ -2286,6 +2311,9 @@ class SetupBuilderMixin:
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))
 
+        # Persist the live per-corner slip evidence (UI thread) so the advisor's
+        # cross-session read includes this run before it diagnoses.
+        self._persist_live_corner_slip()
         _threading.Thread(target=_worker, daemon=True).start()
 
     def _display_setup_result(self, result: tuple) -> None:

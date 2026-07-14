@@ -108,7 +108,9 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v14 (Group 62): added additive `abs INTEGER NOT NULL DEFAULT 1` column to events.
 # v15 (Engineering-Brain Phase 1): added standalone additive `setup_lineage` table.
 # v16 (Engineering-Brain Phase 7): additive driver_feedback vs_previous/corner/phase.
-DB_VERSION: int = 16
+# v17 (Engineering-Brain live telemetry): additive corner_slip_telemetry table
+#     (cross-session per-corner slip accumulation).
+DB_VERSION: int = 17
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

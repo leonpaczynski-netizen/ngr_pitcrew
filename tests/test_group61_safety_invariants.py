@@ -144,9 +144,10 @@ class TestNoSchemaMigration:
         # must still be absent.
         src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
         assert "_migrate_v14" in src
-        # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
-        # guard now protects against an unexpected _migrate_v16.
-        assert "_migrate_v17" not in src
+        # Engineering-Brain live telemetry legitimately added _migrate_v17
+        # (corner_slip_telemetry); guard now protects against an unexpected _migrate_v18.
+        assert "_migrate_v17" in src
+        assert "_migrate_v18" not in src
 
 
 class TestStrategyDeterministic:
