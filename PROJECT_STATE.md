@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 4 — per-corner authoring)
+
+**Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed + pushed; PR #44.** Adds resolution beyond corner density: the setup now shapes to the track's ACTUAL per-corner character.
+
+**NEW `strategy/corner_profile.py` (pure):** `load_reviewed_segments(loc, layout)` merges the track's reviewed per-corner segment files (read-only; corner entry/apex/exit windows + direction, plus car-behaviour zones — kerb/bump, braking, traction, limiter). `build_corner_profile` derives the corner character; `corner_profile_intents` maps it to engineering intents. **Honesty:** the shipped per-corner data has NO speed/radius, so the tight-vs-open window-width ratio is retained for reporting only — authoring fires only on the RELIABLE signals: kerb load (→ ride-height margin + front compliance), braking zones (→ front support under braking), traction zones / traction-limited exits (→ rear downforce for drive-off). Confidence capped at MEDIUM (proxy); per-corner note surfaced in `engineering_reasoning`. Wired into the engineering layer (supersedes the coarse corner-density mechanical-grip heuristic when present) via both authoring entry points. **Real result:** Fuji's 24 detected kerb/bump zones now lift ride height (63→66) and soften the front spring for compliance.
+
+**Tests:** NEW `tests/test_corner_profile.py` (8). Full suite (halves + UI files individual): **~7400 passed, 32 skipped, 0 failed.** Safety spine intact; reviewed-segments loader is read-only and defensive (files may be absent); no schema migration. This completes the four staged engineer-evolution items.
+
 ## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 3 — evidence-scaled driver fit)
 
 **Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed + pushed; part of PR #44.** Closes audit Gap 3 (thin driver layer): the driver profile applied fixed one-click nudges (two self-cancelling), scaled to nothing, and touched no value on the telemetry path.

@@ -188,3 +188,17 @@ The implementation is `strategy/setup_engineering.py` (pure, first-principles, d
 reason + coupling + evidence, conservatively bounded, safety-clamped through the existing
 pipeline). It is wired into the deterministic baseline/discipline authoring — it authors no
 value the range/legality validators would not, calls no AI, and never auto-applies.
+
+## Per-corner authoring — DELIVERED (`strategy/corner_profile.py`)
+
+Adds resolution beyond corner *density*: `load_reviewed_segments` merges the track's
+reviewed per-corner segment files (corner entry/apex/exit windows + direction, plus
+car-behaviour zones — kerb/bump, braking, traction, limiter), and `build_corner_profile`
+derives the corner character. **Honesty:** the shipped per-corner data has NO speed/radius,
+so the tight-vs-open window-width ratio is kept for *reporting only* — the layer authors
+only on the RELIABLE signals: **kerb load** (→ ride-height margin + front compliance),
+**braking zones** (→ front support under braking), **traction zones / traction-limited
+exits** (→ rear downforce for drive-off). Confidence is capped at MEDIUM (a proxy) and the
+per-corner note is surfaced. Wired into the engineering layer (it supersedes the coarse
+corner-density mechanical-grip heuristic when present). Real result: Fuji's 24 detected
+kerb/bump zones now lift ride height and soften the front spring for compliance.

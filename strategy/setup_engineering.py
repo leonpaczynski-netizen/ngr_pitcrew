@@ -211,6 +211,7 @@ def derive_engineering_intents(
     track,                       # TrackTuneProfile (duck-typed) or None
     objective: str,
     driver=None,                 # DriverProfile (duck-typed) or None
+    corner_profile=None,         # CornerProfile (duck-typed) or None
 ) -> EngineeringPlan:
     """Reason like a race engineer over vehicle + track + objective + driver.
 
@@ -277,15 +278,20 @@ def derive_engineering_intents(
             fd_lean = +1.0   # shorter gearing for acceleration out of slow corners
             fd_reason = (f"corner-dense ({corner_density:.1f}/km) — gear shorter for stronger "
                          "acceleration out of the many slow corners")
-            intents.append(EngineeringIntent(
-                "arb_front", -1, 0.5,
-                "twisty circuit rewards mechanical grip and rotation — softer front bar",
-                "track:corner_dense", ("springs_front",)))
-            intents.append(EngineeringIntent(
-                "springs_front", -1, 0.5,
-                "low-speed mechanical grip matters more than high-speed platform here — "
-                "soften the front spring a touch",
-                "track:corner_dense", ("ride_height_front",)))
+            # The higher-resolution per-corner profile (when available) owns the
+            # mechanical-grip reasoning; only fall back to the coarse density heuristic
+            # when no reviewed per-corner segments exist.
+            _have_corner_profile = bool(getattr(corner_profile, "available", False))
+            if not _have_corner_profile:
+                intents.append(EngineeringIntent(
+                    "arb_front", -1, 0.5,
+                    "twisty circuit rewards mechanical grip and rotation — softer front bar",
+                    "track:corner_dense", ("springs_front",)))
+                intents.append(EngineeringIntent(
+                    "springs_front", -1, 0.5,
+                    "low-speed mechanical grip matters more than high-speed platform here — "
+                    "soften the front spring a touch",
+                    "track:corner_dense", ("ride_height_front",)))
         else:
             fd_lean, fd_reason = 0.0, "balanced circuit — neutral gearing"
 
@@ -303,6 +309,21 @@ def derive_engineering_intents(
         fd_lean, fd_reason = 0.0, "no trustworthy track model — neutral gearing (nothing invented)"
         notes.append("No trustworthy track model — track-specific gearing/support stays "
                      "conservative; only vehicle and objective reasoning applied.")
+
+    # ---- PER-CORNER: shape to the actual corner character -----------------
+    # Higher-resolution than corner density: tight-vs-open mix, traction-limited exits,
+    # kerb load — from the track's reviewed segments (a geometric proxy, so conservative).
+    if getattr(corner_profile, "available", False):
+        try:
+            from strategy.corner_profile import corner_profile_intents
+            for _ci in corner_profile_intents(corner_profile, obj):
+                intents.append(EngineeringIntent(
+                    _ci["field"], int(_ci["direction"]), float(_ci.get("strength", 0.5)),
+                    _ci.get("reason", ""), _ci.get("evidence", "corners"),
+                    tuple(_ci.get("couples_with", ()))))
+            notes.append("Per-corner: " + corner_profile.summary())
+        except Exception:
+            pass
 
     # ---- OBJECTIVE: what are we optimising? -------------------------------
     if obj == OBJ_QUALI:

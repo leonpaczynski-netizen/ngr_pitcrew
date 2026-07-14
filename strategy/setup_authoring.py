@@ -261,8 +261,21 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
         )
         vehicle = build_vehicle_model(
             ctx.car, ctx.drivetrain, ctx.num_gears, resolve_car_specs(ctx.car))
+        corner_profile = None
+        try:
+            from strategy.corner_profile import (
+                load_reviewed_segments, build_corner_profile,
+            )
+            _loc = getattr(ctx.track_profile, "track_location_id", "") or ""
+            _lay = getattr(ctx.track_profile, "layout_id", "") or ""
+            _segs = load_reviewed_segments(_loc, _lay)
+            if _segs:
+                corner_profile = build_corner_profile(_segs)
+        except Exception:
+            corner_profile = None
         eng_plan = derive_engineering_intents(
-            vehicle, ctx.track_profile, objective.value, ctx.profile)
+            vehicle, ctx.track_profile, objective.value, ctx.profile,
+            corner_profile=corner_profile)
         eng_bias = eng_plan.bias()
         eng_lean = eng_plan.final_drive_lean
     except Exception:

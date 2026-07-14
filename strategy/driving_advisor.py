@@ -2781,8 +2781,21 @@ class DrivingAdvisor:
                 _specs = resolve_car_specs(car_name)
                 _vehicle = build_vehicle_model(car_name, drivetrain or "", num_gears, _specs)
                 _objective = objective_from_session_type(session_type).value
+                _corner_profile = None
+                try:
+                    from strategy.corner_profile import (
+                        load_reviewed_segments, build_corner_profile,
+                    )
+                    _loc = getattr(track_profile, "track_location_id", "") or ""
+                    _lay = getattr(track_profile, "layout_id", "") or layout_id or ""
+                    _segs = load_reviewed_segments(_loc, _lay)
+                    if _segs:
+                        _corner_profile = build_corner_profile(_segs)
+                except Exception:
+                    _corner_profile = None
                 _eng_plan = derive_engineering_intents(
-                    _vehicle, track_profile, _objective, _profile)
+                    _vehicle, track_profile, _objective, _profile,
+                    corner_profile=_corner_profile)
                 _eng_bias = _eng_plan.bias()
                 _eng_lean = _eng_plan.final_drive_lean
                 _eng_reasoning = _eng_plan.as_json()
