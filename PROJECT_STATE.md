@@ -5,6 +5,16 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 7: UI surfacing)
+
+**Branch `engineering-brain-phase7-ui` from `master` @ `30562e2` (PR #49 merged Phase 6).** The engineering brain's reasoning is now shown to the driver.
+
+**`ui/setup_builder_ui.py`:** NEW self-guarding module-level `_engineering_brain_html` panel (Qt-free, same pattern as the closed-loop/balance/driver-fit panels), wired into `_render_race_engineer_surfaces`, rendering the Phase 3–6 surfaces: discipline objective (+ enforced quali tyre + RPM intent), complete-setup synthesis (target drivers + best candidate + scores), per-corner diagnosis (corner/phase/causes/test), and the setup→strategy handoff. **Tests:** NEW `tests/test_engineering_brain_ui.py` (3) + UI smoke + phase15 green. Full suite green.
+
+**Deferred (needs visual review):** the full layout overhaul — one-setup-editor segmented switch, a dedicated Base/Quali/Race comparison workspace, a lineage/development timeline with rollback buttons, structured Practice Review controls, tablet/mobile — visual-design changes on the large PyQt files not verifiable in the headless test env.
+
+## Status: Engineering-Brain Phases 1–6 complete + merged to master; Phase 7 surfacing done, layout overhaul deferred for interactive review.
+
 ## Repository / Build Status (2026-07-14 — Engineering Brain Phase 6: strategy handoff)
 
 **Branch `engineering-brain-phase6-strategy-handoff` from `master` @ `fa4c586` (PR #48 merged Phase 5).** The clean boundary between the Setup and Strategy brains.
