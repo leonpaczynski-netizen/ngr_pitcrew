@@ -352,6 +352,103 @@ class SynthesisResult:
         }
 
 
+# ---------------------------------------------------------------------------
+# Synthesis-as-primary reconciliation. The complete-setup synthesis becomes the
+# PRIMARY author for the handling fields it reasons about — but only where the
+# evidence supports it (confidence-gated), and never over a proven personal value.
+# ---------------------------------------------------------------------------
+# The handling domain synthesis reasons about (its interaction-graph fields). It does
+# NOT author gearing / tyres / ECU / ballast — those stay with the baseline generator.
+SYNTHESIS_PRIMARY_FIELDS = frozenset({
+    "arb_front", "arb_rear", "aero_front", "aero_rear",
+    "toe_front", "toe_rear", "lsd_accel", "lsd_decel", "lsd_initial",
+    "brake_bias", "ride_height_front", "ride_height_rear",
+    "springs_front", "springs_rear", "camber_front", "camber_rear",
+})
+_STRONG_CONFIDENCE = frozenset({"high", "medium"})
+# A from-scratch baseline is a starting point, not a max-attack setup. When synthesis
+# authors a NON-proven field (full-range window), temper its move toward the target to
+# this fraction of the distance from the window centre — keeps the directional intent
+# without slamming a legal-but-edgy range extreme onto the driver.
+_PRIMARY_MODERATION = 0.6
+
+
+def _num_eq(a, b, tol: float = 1e-6) -> bool:
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except (TypeError, ValueError):
+        return a == b
+
+
+def reconcile_synthesis_primary(baseline_setup_fields: dict, synthesis_result,
+                                context, fields=SYNTHESIS_PRIMARY_FIELDS) -> dict:
+    """Confidence-gated merge that makes synthesis the PRIMARY author for the handling
+    fields where the evidence supports it.
+
+    A field is authored by synthesis only when ALL hold:
+      * it is in the handling domain (``fields``) and the best candidate assigned a value;
+      * its working window is present and not event-locked;
+      * it carries NO proven personal value (``preferred``) — a proven value already IS
+        the strongest evidence and stays primary (synthesis never overrides it);
+      * the track model's ``setup_shaping`` confidence is high/medium (the evidence that
+        makes synthesis's track-coupled value trustworthy for a non-proven field);
+      * synthesis actually took a directional view (moved the field off the neutral
+        window centre), and that value differs from the baseline's.
+
+    Pure and Qt-free — proposes only values synthesis already chose inside the legal
+    working window. Returns ``{overrides, provenance, applied, skipped, kept_proven,
+    reason}``; the caller feeds the overrides through the SAME validation + Apply gate.
+    """
+    out = {"overrides": {}, "provenance": {}, "applied": [], "skipped": [],
+           "kept_proven": [], "reason": ""}
+    best = getattr(synthesis_result, "best", None)
+    if best is None or not getattr(best, "values", None):
+        out["reason"] = "no synthesis candidate"
+        return out
+    tconf = getattr(context, "track_confidence", {}) or {}
+    shaping = str(tconf.get("setup_shaping", "none")).lower()
+    if shaping not in _STRONG_CONFIDENCE:
+        out["reason"] = (f"track shaping confidence '{shaping}' is too low for "
+                         "synthesis-primary — baseline authoring stands")
+        return out
+    windows = getattr(context, "working_windows", {}) or {}
+    base = baseline_setup_fields or {}
+    for f in fields:
+        if f not in best.values:
+            continue
+        w = windows.get(f)
+        if w is None or getattr(w, "locked", False):
+            out["skipped"].append(f)
+            continue
+        if getattr(w, "preferred", None) is not None:
+            out["kept_proven"].append(f)        # proven anchor — never overridden
+            continue
+        lo, hi = float(w.low), float(w.high)
+        if hi <= lo:
+            out["skipped"].append(f)
+            continue
+        sv = best.values[f]
+        centre = (lo + hi) / 2.0
+        if abs(float(sv) - centre) < (hi - lo) * 0.05:
+            out["skipped"].append(f)            # no directional view — leave baseline
+            continue
+        # Temper the move toward the target so a from-scratch baseline never ships a
+        # range extreme; keeps the direction, drops the aggression.
+        val = _place_in_window(f, centre + (float(sv) - centre) * _PRIMARY_MODERATION,
+                               lo, hi)
+        if _num_eq(base.get(f), val):
+            continue                            # already equal — nothing to change
+        out["overrides"][f] = val
+        out["provenance"][f] = best.provenance.get(f, "synthesis")
+        out["applied"].append(f)
+    out["reason"] = (
+        f"synthesis authored {len(out['applied'])} handling field(s) as primary "
+        f"(track shaping {shaping}); {len(out['kept_proven'])} proven value(s) kept"
+        if out["applied"] else
+        "no non-proven handling field met the synthesis-primary evidence bar")
+    return out
+
+
 def synthesize_setup(context) -> SynthesisResult:
     """Build the target handling model, generate scored full-field candidates, and select
     the best for the objective — the complete-setup-synthesis path."""

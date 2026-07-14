@@ -306,6 +306,43 @@ def _expand_gear_ratios(changes: list[dict], setup_fields: dict[str, object]) ->
     return ch_out, sf_out
 
 
+def _apply_synthesis_primary(raw_data: dict, overrides: dict, provenance: dict) -> dict:
+    """Merge confidence-gated synthesis overrides into a baseline ``raw_data`` in place.
+
+    Rewrites ``setup_fields`` and reconciles the matching ``changes`` row (or appends
+    one) so the (changes <-> setup_fields) pair stays consistent for the validation
+    funnel. The overridden values were already selected inside the legal working window
+    by :func:`strategy.setup_synthesis.reconcile_synthesis_primary`; here they simply
+    become the authored value. Returns the same ``raw_data`` for convenience.
+    """
+    if not overrides:
+        return raw_data
+    sf = dict(raw_data.get("setup_fields") or {})
+    changes = [dict(c) for c in (raw_data.get("changes") or [])]
+    by_field = {c.get("field"): c for c in changes if c.get("field")}
+    for f, v in overrides.items():
+        prev = sf.get(f)
+        sf[f] = v
+        src = provenance.get(f, "synthesis")
+        if f in by_field:
+            c = by_field[f]
+            c["to"] = str(v)
+            c["to_clamped"] = v
+            c["source_label"] = "complete-setup synthesis (primary)"
+            _why = str(c.get("why") or c.get("reason") or "").strip().rstrip(".")
+            c["why"] = (f"{_why}. " if _why else "") + f"Synthesis-primary: {src}"
+        else:
+            changes.append({
+                "field": f, "from": str(prev), "to": str(v), "to_clamped": v,
+                "confidence_level": "medium",
+                "source_label": "complete-setup synthesis (primary)",
+                "why": f"Synthesis-primary: {src}",
+            })
+    raw_data["setup_fields"] = sf
+    raw_data["changes"] = changes
+    return raw_data
+
+
 def _normalise_changes(
     changes: list[dict],
     setup_fields: dict[str, object],
@@ -2967,6 +3004,47 @@ class DrivingAdvisor:
             # from seed — the baseline IS the proposed setup)
             _neutral_setup = dict(_raw_data.get("setup_fields") or {})
 
+            # Step 3b: setup_synthesis as PRIMARY author (confidence-gated). Build the
+            # canonical engineering context + complete-setup synthesis ONCE here, and
+            # where the synthesis has strong track-shaping evidence for a NON-proven
+            # handling field, let its coupled best-candidate value author that field
+            # (proven personal values are never overridden). The merged values flow
+            # through the SAME validation + Apply gate below. Best-effort: any failure
+            # leaves the deterministic baseline exactly as it was. _ctx/_synth are
+            # reused by the surfaces block later so nothing is computed twice.
+            _ctx = None
+            _synth = None
+            _synth_primary = None
+            try:
+                from strategy.setup_engineering_context import (
+                    build_setup_engineering_context,
+                )
+                from strategy.setup_authoring import objective_from_session_type
+                from strategy.setup_synthesis import (
+                    synthesize_setup, reconcile_synthesis_primary,
+                )
+                _ctx = build_setup_engineering_context(
+                    car=car_name,
+                    objective=objective_from_session_type(session_type).value,
+                    ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
+                    profile=_profile, allowed_tuning=allowed_tuning,
+                    tuning_locked=tuning_locked, track_profile=track_profile,
+                    corner_profile=_corner_profile, history_prior=_bl_prior or {},
+                    duration_mins=duration_mins,
+                    tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class)
+                _synth = synthesize_setup(_ctx)
+                _synth_primary = reconcile_synthesis_primary(
+                    _neutral_setup, _synth, _ctx)
+                if _synth_primary.get("overrides"):
+                    _apply_synthesis_primary(
+                        _raw_data, _synth_primary["overrides"],
+                        _synth_primary["provenance"])
+                    _neutral_setup = dict(_raw_data.get("setup_fields") or {})
+            except Exception:
+                _ctx = None
+                _synth = None
+                _synth_primary = None
+
             # Step 4: engineering validation
             # Pass empty diagnosis and event_ctx (no telemetry — by design).
             # validate_setup_engineering_structured never raises.
@@ -3056,22 +3134,35 @@ class DrivingAdvisor:
                     build_setup_engineering_context,
                 )
                 from strategy.setup_authoring import objective_from_session_type
-                _ctx = build_setup_engineering_context(
-                    car=car_name, objective=objective_from_session_type(session_type).value,
-                    ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
-                    profile=_profile, allowed_tuning=allowed_tuning,
-                    tuning_locked=tuning_locked, track_profile=track_profile,
-                    corner_profile=_corner_profile, history_prior=_bl_prior or {},
-                    duration_mins=duration_mins, tyre_wear_multiplier=tyre_wear_multiplier,
-                    car_class=car_class)
+                # Reuse the context/synthesis computed in Step 3b (synthesis-primary)
+                # so nothing is recomputed; fall back to building them if that failed.
+                if _ctx is None:
+                    _ctx = build_setup_engineering_context(
+                        car=car_name,
+                        objective=objective_from_session_type(session_type).value,
+                        ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
+                        profile=_profile, allowed_tuning=allowed_tuning,
+                        tuning_locked=tuning_locked, track_profile=track_profile,
+                        corner_profile=_corner_profile, history_prior=_bl_prior or {},
+                        duration_mins=duration_mins,
+                        tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class)
                 _resp["engineering_context"] = _ctx.as_json()
                 # Phase 3: complete setup synthesis — target handling model → scored
                 # full-field candidates from the working windows → the best for the
-                # objective. Advisory surface; the deterministic authoring/Apply gate
-                # are unchanged. Never authors outside the legal windows.
+                # objective. Where confidence-gated, its handling values are now the
+                # PRIMARY authored baseline (Step 3b); this surface shows the full
+                # candidate + which fields it authored. Never authors outside windows.
                 try:
                     from strategy.setup_synthesis import synthesize_setup
-                    _resp["setup_synthesis"] = synthesize_setup(_ctx).as_json()
+                    _resp["setup_synthesis"] = (
+                        _synth if _synth is not None else synthesize_setup(_ctx)).as_json()
+                    if _synth_primary is not None:
+                        _resp["synthesis_primary"] = {
+                            "applied": list(_synth_primary.get("applied", [])),
+                            "kept_proven": list(_synth_primary.get("kept_proven", [])),
+                            "provenance": dict(_synth_primary.get("provenance", {})),
+                            "reason": _synth_primary.get("reason", ""),
+                        }
                 except Exception:
                     pass
                 # Phase 4: discipline intelligence — what THIS objective is engineering
