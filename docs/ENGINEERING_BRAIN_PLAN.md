@@ -13,7 +13,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 |-------|------|--------|
 | **1** | **Stop harmful behaviour (closed loop)** | **In progress** — lineage/attribution/lockout/rollback core done + rule-level lockout wired |
 | 2 | Canonical engineering context | **done** — `SetupEngineeringContext` + working windows + capability confidence |
-| 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | partial (engineering + balance + per-corner layers exist; not yet a candidate generator/solver) |
+| 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | **core done** — `setup_synthesis.py` (surfaced additively; not yet the primary authoring path) |
 | 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | partial (session bias + engineering objective shaping; no objective SCORING model yet) |
 | 5 | Per-corner + telemetry calibration | partial (per-corner authoring from reviewed segments; no wheel-slip/speed calibration) |
 | 6 | Strategy handoff | mostly exists (Strategy Brain owns total-race-time; setup provides evidence) |
@@ -106,6 +106,28 @@ current evidence (setup, diagnosis, proven history), built ONCE, and derives:
 Surfaced on the baseline/discipline response as `engineering_context` (`as_json`).
 `tests/test_engineering_context.py` (11). Full suite green (~7369 passed, 0 failed).
 
-Next: Phase 3 (target handling model + parameter interaction graph + full-field
-candidate generator + coupled objective solver) — the solver selects values from these
-working windows.
+## Phase 3 — complete setup synthesis (CORE DELIVERED)
+
+**NEW `strategy/setup_synthesis.py`** — the deterministic engineer that builds a whole
+car toward a goal:
+- **Target handling model** (`build_target_handling_model`): the desired car behaviour
+  across 10 handling axes (entry rotation, apex front support, exit traction, power-
+  oversteer resistance, trail-braking stability, high-speed stability, kerb compliance,
+  tyre preservation, fuel efficiency, consistency), from driver × car × track ×
+  objective × current diagnosis.
+- **Parameter interaction graph** (`PARAMETER_INTERACTIONS`): how raising each field
+  moves each handling axis — reason in systems, not sliders.
+- **Full-field candidate generator** (`generate_candidates`): several complete
+  candidates (balance / driver-history / aggressive lenses), each field chosen within
+  its Phase-2 working window toward the target-desired direction.
+- **Coupled objective solver** (`score_candidate` + `synthesize_setup`): objective-
+  weighted match between predicted and target handling minus a coherence penalty, then
+  select the best — with per-field provenance and honest confidence.
+
+Surfaced as `setup_synthesis`. Qualifying vs Race select materially different complete
+setups from the same evidence. `tests/test_setup_synthesis.py` (8). Full suite green
+(~7366 passed, 0 failed).
+
+**Not yet:** making synthesis the PRIMARY authoring path (currently an additive,
+validated surface beside the existing authoring); richer per-axis magnitudes. Next:
+Phase 4 (objective SCORING models — the synthesis scorer is the foundation).
