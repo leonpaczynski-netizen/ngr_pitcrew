@@ -435,6 +435,66 @@ def _closed_loop_html(data: dict) -> str:
     return html
 
 
+_VERDICT_STYLE = {
+    "improved": ("&#9650; better", "#8BC34A"),
+    "worsened": ("&#9660; worse", "#E86A5E"),
+    "neutral": ("&#9644; no change", "#C8A020"),
+    "": ("&#9679; not yet tested", "#7A7A7A"),
+}
+
+
+def _development_timeline_html(data: dict) -> str:
+    """Render the setup DEVELOPMENT TIMELINE (Phase 7): the chain of applied setups, what
+    each changed from its parent, and whether it made the car better or worse — plus the
+    rollback recommendation. Module-level + self-guarding."""
+    if not isinstance(data, dict):
+        return ""
+    import json as _json
+    nodes = data.get("setup_lineage") or []
+    if not nodes:
+        return ""
+    # Oldest → newest for a readable chain.
+    ordered = sorted(nodes, key=lambda n: (n.get("id") or 0))
+    _rows = ""
+    for i, n in enumerate(ordered):
+        verdict = str(n.get("outcome_verdict") or "").strip().lower()
+        label = str(n.get("label") or f"Setup {n.get('id')}")
+        vtext, vcol = _VERDICT_STYLE.get(verdict, _VERDICT_STYLE[""])
+        try:
+            changes = _json.loads(n.get("changes_json") or "[]")
+        except Exception:
+            changes = []
+        chg = ", ".join(
+            f"{str(c.get('field', '')).replace('_', ' ')} {c.get('from')}&rarr;{c.get('to')}"
+            for c in changes if isinstance(c, dict) and c.get("field"))[:120]
+        _connector = ("<div style='color:#556; font-size:12px; margin:0 0 0 6px;'>"
+                      "&#8615;</div>") if i > 0 else ""
+        _chg_line = (f"<span style='color:#8A93A6; font-size:10px;'> &mdash; {chg}</span>"
+                     if chg else "")
+        _rows += (
+            f"{_connector}"
+            f"<div style='margin:1px 0; font-size:11px;'>"
+            f"<b style='color:#CDD6E0;'>{label}</b>{_chg_line} "
+            f"<span style='color:{vcol};'>{vtext}</span></div>"
+        )
+    _rb = data.get("rollback") or {}
+    _rb_line = ""
+    if isinstance(_rb, dict) and _rb.get("recommend_rollback"):
+        _rev = ", ".join(
+            f"{str(c.get('field', '')).replace('_', ' ')}&rarr;{c.get('to')}"
+            for c in (_rb.get("revert_changes") or []) if isinstance(c, dict))
+        _rb_line = (
+            "<p style='margin:5px 0 0 0; color:#E08A5E; font-size:11px;'>"
+            "&#8617; <b>Roll back</b> — the last setup tested worse. Revert: "
+            f"{_rev or 'to the previous setup'}.</p>")
+    return (
+        "<div style='background:#0C1016; border:1px solid #2E3A4E; border-radius:4px; "
+        "padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#9FB6D4; font-size:12px;'>&#128203; Setup development timeline</b>"
+        f"<div style='margin-top:4px;'>{_rows}</div>{_rb_line}</div>"
+    )
+
+
 def _engineering_brain_html(data: dict) -> str:
     """Surface the engineering-brain reasoning (Phases 2-6) — synthesis target + best
     candidate, discipline objective, per-corner diagnosis, and the strategy handoff.
@@ -2492,6 +2552,7 @@ class SetupBuilderMixin:
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
         html += _closed_loop_html(data)
+        html += _development_timeline_html(data)
         html += _engineering_brain_html(data)
         html += _balance_solution_html(data.get("balance_solution"))
         html += _driver_fit_html(data.get("driver_fit_reasoning"))

@@ -2681,6 +2681,16 @@ class DrivingAdvisor:
                     if self._db is not None and _car_id_learn > 0:
                         from strategy.setup_lineage import rollback_from_lineage
                         _lin = self._db.get_lineage(_car_id_learn, _track_learn, _layout_learn)
+                        # Surface the development timeline (newest first, trimmed) so the UI
+                        # can render the chain of setups + their outcomes.
+                        if _lin:
+                            _data["setup_lineage"] = [
+                                {"id": n.get("id"), "parent_id": n.get("parent_id"),
+                                 "label": n.get("label", ""),
+                                 "changes_json": n.get("changes_json", "[]"),
+                                 "outcome_verdict": n.get("outcome_verdict", ""),
+                                 "objective": n.get("objective", "")}
+                                for n in _lin[:8]]
                         _rb = rollback_from_lineage(_lin)
                         if _rb.get("recommend_rollback"):
                             _data["rollback"] = _rb
