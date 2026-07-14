@@ -146,9 +146,11 @@ def test_schema_version_is_v10(db):
     # Reconciled again for Group 62: 13 → 14 (_migrate_v14 added abs column to events).
     # Reconciled for Engineering-Brain Phase 1: 14 → 15 (_migrate_v15 added the
     # standalone additive setup_lineage table).
+    # Reconciled for Engineering-Brain Phase 7: 15 → 16 (_migrate_v16 added additive
+    # vs_previous/corner/phase columns to driver_feedback).
     # The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 15
+    assert version == 16
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):
