@@ -2019,6 +2019,15 @@ class DrivingAdvisor:
                         )
                     # worsened / neutral → fire only (no success)
 
+                # Closed-loop lockout (Phase 1): block rules that decisively worsened
+                # the car at this scope from being re-recommended. Consumes the same
+                # persisted learning_outcomes already loaded above; empty when no history.
+                _blocked_rules = {}
+                try:
+                    from strategy.setup_lineage import blocked_rules_from_outcomes
+                    _blocked_rules = blocked_rules_from_outcomes(_outcomes)
+                except Exception:
+                    _blocked_rules = {}
                 _plan = run_rule_engine(
                     diagnosis or {},
                     setup_dict,
@@ -2033,6 +2042,7 @@ class DrivingAdvisor:
                     car=_car_key_learn,
                     track=_track_learn,
                     profile_version=_profile_ver_learn,
+                    blocked_rule_ids=_blocked_rules,
                 )
             except Exception:
                 # Rule engine failure → fall through to empty plan (deterministic fallback handles)
@@ -2600,6 +2610,16 @@ class DrivingAdvisor:
                     )
                 else:
                     _data["_learning_note"] = "no cross-session learning history available"
+                # Closed-loop lockout surface (Phase 1): which changes are blocked from
+                # being re-recommended because they previously worsened the car here.
+                try:
+                    _lk = _blocked_rules  # noqa: F821 (defined in the rule-engine block)
+                except NameError:
+                    _lk = {}
+                if _lk:
+                    _data["closed_loop_lockouts"] = [
+                        {"rule_id": rid, "reason": reason} for rid, reason in _lk.items()
+                    ]
                 # Group 47: honest outcome-verification explanation (confidence/
                 # ranking/explanation only — never authors values or bypasses
                 # validation).  Empty string when there is nothing to say.

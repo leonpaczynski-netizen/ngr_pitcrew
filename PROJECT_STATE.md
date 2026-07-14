@@ -5,6 +5,16 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 1: closed-loop lockout)
+
+**Branch `engineering-brain-phase1-closed-loop` from `master` @ merge `b2da2bf` — committed locally.** First slice of the "Engineering Intelligence Plan of Attack" (docs/ENGINEERING_BRAIN_PLAN.md): stop the app repeatedly making the car worse.
+
+**NEW `strategy/setup_lineage.py` (pure):** `SetupExperiment` (parent + changes + each change's expected symptoms) / `ExperimentOutcome` (better/worse/unchanged + per-symptom + new problems); `attribute_change_outcomes` → EFFECTIVE/INEFFECTIVE/HARMFUL/UNKNOWN (harm attributed only via targeted-worse or a DIRECT side effect, so an ineffective change isn't blamed for another's damage — matches the plan's ARB=ineffective / LSD-accel=harmful example); `failed_directions` scoped to car+track+objective+field+direction (a Fuji failure is never a global ban); `apply_direction_lockout` (overturnable by explicit new evidence); `rollback_target`/`rollback_advice`; `blocked_rules_from_outcomes` (block a rule that worsened the car ≥2× and never improved; a later `improved` lifts it).
+
+**Rule-engine lockout wired:** `run_rule_engine(..., blocked_rule_ids=…)` — a locked rule is surfaced as REJECTED (with reason), never proposed; Pack-A safety protection still runs first. `build_combined_setup_response` builds the lockout from the `learning_outcomes` it already loads (scoped car+track+layout) and surfaces `closed_loop_lockouts`. **No schema migration** — consumes data already captured by `_trigger_scoring_pass`.
+
+**Tests:** NEW `tests/test_setup_lineage.py` (12). Full suite (halves + UI files individual): **~7370 passed, 32 skipped, 0 failed.** Safety spine intact. **Next in Phase 1:** explicit parent→child lineage persistence (small additive migration), structured better/worse capture in Practice Review, rollback UI, contradiction hard-fail.
+
 ## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 4 — per-corner authoring)
 
 **Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed + pushed; PR #44.** Adds resolution beyond corner density: the setup now shapes to the track's ACTUAL per-corner character.
