@@ -435,6 +435,86 @@ def _closed_loop_html(data: dict) -> str:
     return html
 
 
+def _engineering_brain_html(data: dict) -> str:
+    """Surface the engineering-brain reasoning (Phases 2-6) — synthesis target + best
+    candidate, discipline objective, per-corner diagnosis, and the strategy handoff.
+    Module-level + self-guarding: absent/empty fields render nothing."""
+    if not isinstance(data, dict):
+        return ""
+    html = ""
+
+    # Phase 4 — discipline objective (what this setup optimises + soft-tyre + RPM).
+    _do = data.get("discipline_objective") or {}
+    if _do.get("objective"):
+        _tyre = _do.get("tyre") or {}
+        _rpm = _do.get("rpm") or {}
+        _tyre_line = (f"<p style='margin:1px 0; color:#CBD; font-size:11px;'>Tyre: "
+                      f"<b>{_tyre.get('name', _tyre.get('compound', ''))}</b> — "
+                      f"{_tyre.get('reason', '')}</p>" if _tyre.get("compound") else "")
+        html += (
+            "<div style='background:#0E141C; border:1px solid #2E4A66; border-radius:4px; "
+            "padding:8px 10px; margin-top:8px;'>"
+            f"<b style='color:#6FB0E0; font-size:12px;'>&#127942; {_do['objective'].title()} "
+            "objective</b>"
+            f"{_tyre_line}"
+            f"<p style='margin:1px 0; color:#9FB6C4; font-size:11px;'>{_rpm.get('note', '')}</p>"
+            "</div>"
+        )
+
+    # Phase 3 — setup synthesis (target handling + best candidate).
+    _ss = data.get("setup_synthesis") or {}
+    _best = _ss.get("best") or {}
+    if _best:
+        _th = (_ss.get("target_handling") or {}).get("drivers") or []
+        _drv = "".join(f"<p style='margin:1px 0; color:#B8D0B8; font-size:10px;'>&bull; {d}</p>"
+                       for d in _th[:4])
+        _cands = ", ".join(f"{c.get('lens')} {c.get('score')}"
+                           for c in (_ss.get("candidates") or [])[:3])
+        html += (
+            "<div style='background:#0C1410; border:1px solid #2E5040; border-radius:4px; "
+            "padding:8px 10px; margin-top:8px;'>"
+            "<b style='color:#7FD0A0; font-size:12px;'>&#129504; Complete-setup synthesis</b>"
+            f"<p style='margin:2px 0; color:#CBD8D0; font-size:11px;'>Target for "
+            f"<b>{_ss.get('objective', '')}</b> — best candidate: <b>{_best.get('lens', '')}</b> "
+            f"(confidence {_ss.get('confidence', '')})</p>"
+            f"{_drv}"
+            f"<p style='margin:2px 0 0 0; color:#889; font-size:10px;'>Candidates scored: {_cands}</p>"
+            "</div>"
+        )
+
+    # Phase 5 — per-corner diagnosis.
+    _cd = data.get("corner_diagnosis") or {}
+    _corner = _cd.get("corner") or {}
+    if _corner.get("name"):
+        _causes = "".join(
+            f"<p style='margin:1px 0; color:#CCC; font-size:11px;'>&bull; {c.get('cause', '')}</p>"
+            for c in (_cd.get("causes") or []))
+        _test = (f"<p style='margin:3px 0 0 0; color:#9FB6C4; font-size:10px;'>&#128300; "
+                 f"{_cd.get('controlled_test', '')}</p>" if _cd.get("controlled_test") else "")
+        html += (
+            "<div style='background:#14100A; border:1px solid #5A4A2E; border-radius:4px; "
+            "padding:8px 10px; margin-top:8px;'>"
+            f"<b style='color:#E0B84A; font-size:12px;'>&#128205; {_corner.get('name', '')} "
+            f"({_cd.get('phase', '')}) — {_cd.get('confidence', '')} confidence</b>"
+            f"{_causes}{_test}</div>"
+        )
+
+    # Phase 6 — setup -> strategy handoff.
+    _hoff = data.get("setup_strategy_handoff") or {}
+    if _hoff.get("characteristics"):
+        _str = "".join(f"<p style='margin:1px 0; color:#B8C8D8; font-size:10px;'>&#10003; {s}</p>"
+                       for s in (_hoff.get("strengths") or []))
+        html += (
+            "<div style='background:#0A1014; border:1px solid #2E4658; border-radius:4px; "
+            "padding:8px 10px; margin-top:8px;'>"
+            "<b style='color:#7FB0C8; font-size:12px;'>&#127937; For the Strategy tab</b>"
+            f"<p style='margin:2px 0; color:#9FB6C4; font-size:11px;'>This race setup's "
+            "tyre/fuel/consistency evidence — the Strategy Brain owns the pit plan.</p>"
+            f"{_str}</div>"
+        )
+    return html
+
+
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
 
@@ -2412,6 +2492,7 @@ class SetupBuilderMixin:
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
         html += _closed_loop_html(data)
+        html += _engineering_brain_html(data)
         html += _balance_solution_html(data.get("balance_solution"))
         html += _driver_fit_html(data.get("driver_fit_reasoning"))
         html += _discipline_field_plan_html(data.get("discipline_field_plan"))

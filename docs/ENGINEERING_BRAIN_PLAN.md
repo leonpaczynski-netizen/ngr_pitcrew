@@ -17,7 +17,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 | 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | **done** — `discipline_objectives.py` (soft-tyre quali + RPM/shift targets + scoring priorities) |
 | 5 | Per-corner + telemetry calibration | **core done** — `corner_diagnosis.py` (corner resolution + phase-separated causes + precise-test-on-missing-telemetry) |
 | 6 | Strategy handoff | **done** — `setup_strategy_handoff.py` (clean evidence handoff + boundary guard) |
-| 7 | Workflow-first UI | partial (discipline table, balance/driver-fit panels) |
+| 7 | Workflow-first UI | **surfacing done** — engineering-brain panels shipped; full editor/tablet overhaul deferred for visual review |
 
 ## Phase 1 — delivered so far
 
@@ -185,6 +185,28 @@ captures (the causes + tests are ready to consume it); structured per-corner fee
 
 `tests/test_setup_strategy_handoff.py` (6). Full suite green (~7364 passed, 0 failed).
 
-Next: Phase 7 (workflow-first UI) — large UI work; several panels already shipped
-incrementally (discipline table, balance/driver-fit/closed-loop). A full one-setup-editor
-+ comparison + lineage-timeline + tablet/mobile overhaul is best done with visual review.
+## Phase 7 — workflow-first UI (SURFACING DELIVERED)
+
+The engineering brain's reasoning is now shown to the driver in the Setup Builder result
+via self-guarding, Qt-free, module-level render panels (`_engineering_brain_html` +
+the earlier `_closed_loop_html` / `_balance_solution_html` / `_driver_fit_html` /
+`_discipline_field_plan_html`):
+- **Discipline objective** — what this setup optimises + the enforced qualifying tyre +
+  the RPM/shift intent.
+- **Complete-setup synthesis** — the target handling drivers + the best candidate lens +
+  candidate scores.
+- **Per-corner diagnosis** — the resolved corner, phase, candidate causes and the precise
+  test when evidence is missing.
+- **Setup → Strategy handoff** — the race setup's tyre/fuel/consistency evidence "for the
+  Strategy tab", with the boundary stated.
+
+`tests/test_engineering_brain_ui.py` (3) + UI smoke + phase15 green. Full suite green.
+
+**Deferred (needs interactive visual review):** the full layout overhaul — one-setup-
+editor segmented switch, a dedicated Base/Quali/Race comparison workspace, a setup
+lineage/development timeline with rollback buttons, structured Practice Review controls,
+and tablet/mobile responsiveness. These are visual-design changes on the large PyQt files
+that cannot be verified in the headless (segfault-prone) test environment; they should be
+done with the app running in front of a reviewer.
+
+## Status: Phases 1–6 complete + merged to master; Phase 7 surfacing done, layout overhaul deferred.
