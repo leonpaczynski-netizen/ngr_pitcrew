@@ -450,6 +450,7 @@ def run_rule_engine(
     car: str = "",
     track: str = "",
     profile_version: str = "",
+    blocked_rule_ids: "dict | None" = None,
 ) -> SetupPlan:
     """Evaluate all registered rules against diagnosis and return a SetupPlan.
 
@@ -485,6 +486,7 @@ def run_rule_engine(
             car=car,
             track=track,
             profile_version=profile_version,
+            blocked_rule_ids=blocked_rule_ids,
         )
     except Exception as exc:
         log.warning("run_rule_engine failed: %s", exc, exc_info=True)
@@ -505,9 +507,11 @@ def _run_rule_engine_inner(
     car: str = "",
     track: str = "",
     profile_version: str = "",
+    blocked_rule_ids: "dict | None" = None,
 ) -> SetupPlan:
     proposed: list[SetupChangeIntent] = []
     rejected: list[SetupChangeIntent] = []
+    _blocked_rules = blocked_rule_ids or {}
     protected_fields: list[str] = []
 
     # Fields protected unconditionally (Pack A A6 etc.)
@@ -555,6 +559,7 @@ def _run_rule_engine_inner(
                 car=car,
                 track=track,
                 profile_version=profile_version,
+                blocked_rule_ids=_blocked_rules,
             )
         except Exception as exc:
             log.debug("Rule %s failed: %s", rule.rule_id, exc)
@@ -696,6 +701,7 @@ def _process_rule(
     car: str = "",
     track: str = "",
     profile_version: str = "",
+    blocked_rule_ids: "dict | None" = None,
 ) -> None:
     """Process a single rule — updates proposed_by_field, rejected, protected_fields.
 
@@ -716,6 +722,24 @@ def _process_rule(
     if rule.rule_id in _PACK_A_UNCONDITIONAL_PROTECT:
         if rule.field not in protected_fields and rule.field not in _PACK_A_VIRTUAL_FIELDS:
             protected_fields.append(rule.field)
+        return
+
+    # --- Closed-loop lockout (Phase 1) ---
+    # A rule whose recorded outcomes at this scope are decisively negative (worsened,
+    # never improved) is LOCKED OUT — surfaced as a rejected candidate with the reason,
+    # never proposed — so the app stops re-recommending a change that made the car
+    # worse. Pack A safety protection above still runs first; this only blocks
+    # NON-safety proposals. Lifted automatically once a later 'improved' outcome exists.
+    _lockout_reason = (blocked_rule_ids or {}).get(rule.rule_id)
+    if _lockout_reason:
+        rejected.append(SetupChangeIntent(
+            field=rule.field, delta=0.0, from_value=setup.get(rule.field),
+            to_value=setup.get(rule.field), symptom=rule.symptom, evidence=[],
+            rule_id=rule.rule_id, rationale=str(_lockout_reason),
+            rejected_alternatives=[], risk=RiskLevel.high, confidence=ConfidenceLevel.low,
+            driver_style_alignment=DriverStyleAlignment.caution,
+            source_label="closed-loop lockout", session_influence="",
+            car_drivetrain_influence="", pack=rule.pack))
         return
 
     # --- Skip virtual (meta) Pack A rules that have no real field ---

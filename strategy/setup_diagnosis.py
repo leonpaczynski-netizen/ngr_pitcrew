@@ -760,6 +760,59 @@ def assess_recommendation_completeness(
             "note": ""}
 
 
+def detect_diagnosis_contradictions(diagnosis: dict) -> "list[dict]":
+    """Central coherence check (Engineering-Brain Phase 1, "contradiction hard-fail").
+
+    A setup must never be authored from an internally-contradictory diagnosis. This
+    returns one entry per genuine contradiction — ``{kind, fields, detail}`` — where
+    ``fields`` are the setup fields that must NOT be authored while the contradiction
+    stands (they are converted to a controlled test instead). Empty when coherent.
+    """
+    d = diagnosis or {}
+    out: "list[dict]" = []
+
+    # Gearing: telemetry says short but the driver reports an unused/too-long top gear.
+    if (str(d.get("gearing_state", "")).lower() == "conflicting"
+            or str(d.get("gearing_diagnosis_category", "")) == "conflicting_evidence"):
+        out.append({
+            "kind": "gearing_conflicting",
+            "fields": ("final_drive", "gear_5", "gear_6"),
+            "detail": "telemetry and your report disagree on gearing — settle it with a "
+                      "controlled test before changing the final drive or upper gears",
+        })
+
+    # Wheelspin: the wheelspin cause conflicts (telemetry vs the driver's report).
+    if str(d.get("wheelspin_subtype", "")) == "conflicting_evidence":
+        out.append({
+            "kind": "wheelspin_conflicting",
+            "fields": ("lsd_accel",),
+            "detail": "the wheelspin cause conflicts (telemetry vs your report) — test "
+                      "before changing the differential acceleration lock",
+        })
+
+    # Bottoming: the ONE canonical state must never say 'address' while the impact is
+    # not performance-relevant (that was the original required-vs-normal contradiction).
+    bds = d.get("bottoming_display_state") or {}
+    if bds.get("state") in ("address", "required") and not bds.get("performance_relevant", False):
+        out.append({
+            "kind": "bottoming_incoherent",
+            "fields": ("ride_height_front", "ride_height_rear", "springs_front", "springs_rear"),
+            "detail": "bottoming is flagged to address but no measured performance impact "
+                      "exists — resolve before any ride-height/spring change",
+        })
+
+    return out
+
+
+def contradicted_fields(contradictions: "list[dict]") -> set:
+    """Flatten the fields blocked by any active contradiction."""
+    out: set = set()
+    for c in contradictions or []:
+        for f in (c.get("fields") or ()):  # type: ignore[union-attr]
+            out.add(f)
+    return out
+
+
 def build_feedback_dispositions(diagnosis: dict, proposed_fields) -> "list[dict]":
     """Return one disposition per reported driver-feedback item (Phase 4).
 

@@ -373,6 +373,31 @@ _V14_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("events", "abs INTEGER NOT NULL DEFAULT 1"),
 ]
 
+# v15: Engineering-Brain Phase 1 — closed-loop setup lineage.
+# A dedicated, ADDITIVE table (touches no existing table) recording each applied
+# setup as a node derived from a PARENT node by a set of field changes, with the
+# measured outcome once scored. This gives a clean parent→child chain for rollback
+# and per-change attribution. CREATE IF NOT EXISTS makes the migration idempotent.
+_DDL_V15 = """
+CREATE TABLE IF NOT EXISTS setup_lineage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    car_id INTEGER NOT NULL,
+    track TEXT NOT NULL DEFAULT '',
+    layout_id TEXT NOT NULL DEFAULT '',
+    objective TEXT NOT NULL DEFAULT '',
+    parent_id INTEGER,                       -- prior setup_lineage.id this was derived from
+    rec_id INTEGER,                          -- setup_recommendations.id that produced it
+    session_id INTEGER,                      -- the session it was applied for
+    changes_json TEXT NOT NULL DEFAULT '[]', -- [{field, from, to}] applied vs the parent
+    label TEXT NOT NULL DEFAULT '',
+    outcome_verdict TEXT NOT NULL DEFAULT '', -- improved/worsened/neutral/'' (unscored)
+    outcome_session_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_setup_lineage_scope
+    ON setup_lineage (car_id, track, layout_id);
+"""
+
 _DDL_V8 = """
 CREATE TABLE IF NOT EXISTS race_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -394,7 +419,7 @@ CREATE TABLE IF NOT EXISTS race_plans (
 );
 """
 
-_DDL = _DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8
+_DDL = _DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -484,6 +509,18 @@ class SessionDB:
             self._migrate_v14()
             self._conn.execute("PRAGMA user_version = 14")
             self._conn.commit()
+        if version < 15:
+            self._migrate_v15()
+            self._conn.execute("PRAGMA user_version = 15")
+            self._conn.commit()
+
+    def _migrate_v15(self) -> None:
+        """Engineering-Brain Phase 1 — additive setup_lineage table (schema v15).
+
+        Creates a new, standalone lineage table (CREATE IF NOT EXISTS, idempotent).
+        Touches no existing table, so it is behaviour-preserving for all prior data.
+        """
+        self._conn.executescript(_DDL_V15)
 
     def _migrate_v2(self) -> None:
         """Add fuel_start and fuel_end to lap_records (schema version 2)."""
@@ -798,6 +835,91 @@ class SessionDB:
                 self._conn.commit()
         except Exception:
             pass  # never raise outward — learning persistence is best-effort
+
+    def record_lineage(
+        self,
+        car_id: int,
+        track: str,
+        layout_id: str,
+        *,
+        objective: str = "",
+        rec_id: "int | None" = None,
+        session_id: "int | None" = None,
+        changes_json: str = "[]",
+        label: str = "",
+    ) -> "int | None":
+        """Insert a setup_lineage node, auto-resolving its PARENT as the most-recent
+        existing node at this car+track+layout scope. Returns the new node id, or None
+        on any error (never raises — lineage is best-effort, like learning outcomes)."""
+        try:
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                prow = self._conn.execute(
+                    """SELECT id FROM setup_lineage
+                       WHERE car_id=? AND track=? AND layout_id=?
+                       ORDER BY id DESC LIMIT 1""",
+                    (car_id, track, layout_id),
+                ).fetchone()
+                parent_id = prow[0] if prow else None
+                cur = self._conn.execute(
+                    """INSERT INTO setup_lineage
+                           (ts, car_id, track, layout_id, objective, parent_id, rec_id,
+                            session_id, changes_json, label)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (ts, car_id, track, layout_id, objective, parent_id, rec_id,
+                     session_id, changes_json, label),
+                )
+                self._conn.commit()
+                return int(cur.lastrowid)
+        except Exception:
+            return None
+
+    def record_lineage_outcome(
+        self, lineage_id: int, verdict: str, outcome_session_id: "int | None" = None
+    ) -> None:
+        """Stamp the measured verdict (improved/worsened/neutral) onto a lineage node."""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """UPDATE setup_lineage
+                       SET outcome_verdict=?, outcome_session_id=? WHERE id=?""",
+                    (str(verdict or ""), outcome_session_id, int(lineage_id)),
+                )
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def record_lineage_outcome_by_rec(
+        self, rec_id: int, verdict: str, outcome_session_id: "int | None" = None
+    ) -> None:
+        """Stamp the verdict onto the lineage node produced by a given recommendation
+        (used by the scoring pass, which knows the rec_id). Best-effort, never raises."""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """UPDATE setup_lineage
+                       SET outcome_verdict=?, outcome_session_id=? WHERE rec_id=?""",
+                    (str(verdict or ""), outcome_session_id, int(rec_id)),
+                )
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def get_lineage(
+        self, car_id: int, track: str, layout_id: str, limit: int = 50
+    ) -> list[dict]:
+        """Return setup_lineage nodes for a scope, newest first. [] on any error."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM setup_lineage
+                       WHERE car_id=? AND track=? AND layout_id=?
+                       ORDER BY id DESC LIMIT ?""",
+                    (car_id, track, layout_id, int(limit)),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
@@ -1466,6 +1588,26 @@ class SessionDB:
                 (session_id, before_metrics, rec_id),
             )
             self._conn.commit()
+
+        # Engineering-Brain Phase 1: record a lineage node for this applied change set
+        # (auto-parented to the prior node at this scope). Best-effort — never blocks
+        # the apply. Pulls the applied changes + layout/objective off the rec row.
+        try:
+            with self._lock:
+                meta = self._conn.execute(
+                    """SELECT approved_changes_json, layout_id
+                       FROM setup_recommendations WHERE id = ?""",
+                    (rec_id,),
+                ).fetchone()
+            if meta is not None:
+                changes_json = meta[0] or "[]"
+                layout_id = meta[1] or ""
+                self.record_lineage(
+                    car_id, track, layout_id, rec_id=rec_id,
+                    session_id=session_id, changes_json=changes_json,
+                    label=f"rec {rec_id}")
+        except Exception:
+            pass
         return rec_id
 
     def get_setup_history_for_car_track(

@@ -5,6 +5,18 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 1: closed-loop lockout)
+
+**Branch `engineering-brain-phase1-closed-loop` from `master` @ merge `b2da2bf` — committed locally.** First slice of the "Engineering Intelligence Plan of Attack" (docs/ENGINEERING_BRAIN_PLAN.md): stop the app repeatedly making the car worse.
+
+**NEW `strategy/setup_lineage.py` (pure):** `SetupExperiment` (parent + changes + each change's expected symptoms) / `ExperimentOutcome` (better/worse/unchanged + per-symptom + new problems); `attribute_change_outcomes` → EFFECTIVE/INEFFECTIVE/HARMFUL/UNKNOWN (harm attributed only via targeted-worse or a DIRECT side effect, so an ineffective change isn't blamed for another's damage — matches the plan's ARB=ineffective / LSD-accel=harmful example); `failed_directions` scoped to car+track+objective+field+direction (a Fuji failure is never a global ban); `apply_direction_lockout` (overturnable by explicit new evidence); `rollback_target`/`rollback_advice`; `blocked_rules_from_outcomes` (block a rule that worsened the car ≥2× and never improved; a later `improved` lifts it).
+
+**Rule-engine lockout wired:** `run_rule_engine(..., blocked_rule_ids=…)` — a locked rule is surfaced as REJECTED (with reason), never proposed; Pack-A safety protection still runs first. `build_combined_setup_response` builds the lockout from the `learning_outcomes` it already loads (scoped car+track+layout) and surfaces `closed_loop_lockouts`. **No schema migration** — consumes data already captured by `_trigger_scoring_pass`.
+
+**Then delivered (same branch): field-level lockout across all authors** (`_rule_field_directions` + `failed_directions_from_learning_outcomes` → the balance solver + driver-fit changes respect failed directions, not just the rule engine); **lineage persistence** (additive **DB migration v15**: standalone `setup_lineage` table; `record_lineage`/`get_lineage`/`record_lineage_outcome_by_rec`; wired into `apply_recommendation_for_car_track` + the scoring pass); **contradiction hard-fail** (`detect_diagnosis_contradictions` — gearing/wheelspin/bottoming; withholds changes on contradicted fields, surfaces `diagnosis_contradictions`); **rollback advisory** (`rollback_from_lineage` → `rollback` surface when the last scored setup tested worse). **DB_VERSION 14→15** (`strategy/_setup_constants.py`); the migration is additive + idempotent (new table only, `CREATE IF NOT EXISTS`), touching no existing table.
+
+**Tests:** `tests/test_setup_lineage.py` (20) + `test_session_db` (v15) + 7 stale "no-new-migration" guards (Groups 55–61, read-only sprints) updated to allow v15 / guard v16. Full suite (halves + UI files individual): **~7377 passed, 0 failed.** Safety spine intact. **Remaining Phase 1 (UI-only, low value):** explicit better/worse combo + rollback button in Practice Review (direction is already derived + feeds lineage).
+
 ## Repository / Build Status (2026-07-14 — Setup Brain: Engineer Evolution, phase 4 — per-corner authoring)
 
 **Branch `group64-setup-authoring-discipline-intelligence` (continued) — committed + pushed; PR #44.** Adds resolution beyond corner density: the setup now shapes to the track's ACTUAL per-corner character.

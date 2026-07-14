@@ -2019,6 +2019,15 @@ class DrivingAdvisor:
                         )
                     # worsened / neutral → fire only (no success)
 
+                # Closed-loop lockout (Phase 1): block rules that decisively worsened
+                # the car at this scope from being re-recommended. Consumes the same
+                # persisted learning_outcomes already loaded above; empty when no history.
+                _blocked_rules = {}
+                try:
+                    from strategy.setup_lineage import blocked_rules_from_outcomes
+                    _blocked_rules = blocked_rules_from_outcomes(_outcomes)
+                except Exception:
+                    _blocked_rules = {}
                 _plan = run_rule_engine(
                     diagnosis or {},
                     setup_dict,
@@ -2033,6 +2042,7 @@ class DrivingAdvisor:
                     car=_car_key_learn,
                     track=_track_learn,
                     profile_version=_profile_ver_learn,
+                    blocked_rule_ids=_blocked_rules,
                 )
             except Exception:
                 # Rule engine failure → fall through to empty plan (deterministic fallback handles)
@@ -2529,6 +2539,30 @@ class DrivingAdvisor:
                                     _df_setup_fields[_dfi.field] = _dfi.to_value
                             except Exception:
                                 pass
+                            # Closed-loop lockout at the FIELD level: the balance solver
+                            # and driver-fit don't consult outcomes, so filter any move
+                            # whose (field, direction) previously worsened the car here.
+                            _bal_blocked_moves = []
+                            try:
+                                from strategy.setup_lineage import (
+                                    failed_directions_from_learning_outcomes,
+                                    apply_direction_lockout, ExperimentScope,
+                                )
+                                # The loaded _outcomes are already scoped to this
+                                # car+track+layout; the scope key only needs to be
+                                # consistent between building and applying the lockout.
+                                _lk_scope = ExperimentScope(
+                                    car=car_name, track=track_name, layout="",
+                                    objective=str(purpose or ""))
+                                _fd = failed_directions_from_learning_outcomes(_outcomes, _lk_scope)
+                                if _fd:
+                                    _bal_change_dicts, _bal_blocked_moves = apply_direction_lockout(
+                                        _bal_change_dicts, _fd, _lk_scope)
+                                    _blk_fields = {c.get("field") for c in _bal_blocked_moves}
+                                    _df_setup_fields = {k: v for k, v in _df_setup_fields.items()
+                                                        if k not in _blk_fields}
+                            except Exception:
+                                _bal_blocked_moves = []
                             _bal_raw = {
                                 "analysis": _sol.summary,
                                 "primary_issue": "balance_compromise",
@@ -2553,6 +2587,11 @@ class DrivingAdvisor:
                                 _data["engineering_validation_failed"] = False
                                 _data["engineering_validation_errors"] = _bal_final.engineering_errors
                                 _data["balance_solution"] = _sol.as_json()
+                                if _bal_blocked_moves:
+                                    _data.setdefault("closed_loop_lockouts", []).extend(
+                                        {"field": m.get("field"),
+                                         "reason": m.get("_lockout_reason", "")}
+                                        for m in _bal_blocked_moves)
                                 if _sol.targeted_tests:
                                     _data.setdefault("_targeted_tests", []).extend(
                                         _sol.targeted_tests)
@@ -2568,6 +2607,40 @@ class DrivingAdvisor:
                 except Exception:
                     pass
 
+                # ── Contradiction hard-fail (Phase 1) ────────────────────────────
+                # A setup must never be authored from an internally-contradictory
+                # diagnosis. Remove any authored change on a contradicted field (it
+                # becomes a controlled test instead) and surface the contradiction, so
+                # the plan can never be presented as complete over conflicting evidence.
+                try:
+                    from strategy.setup_diagnosis import (
+                        detect_diagnosis_contradictions, contradicted_fields,
+                    )
+                    _contras = detect_diagnosis_contradictions(diagnosis or {})
+                    if _contras:
+                        _data["diagnosis_contradictions"] = _contras
+                        _cf = contradicted_fields(_contras)
+                        _kept = [c for c in (_data.get("changes") or [])
+                                 if c.get("field") not in _cf]
+                        _removed = [c for c in (_data.get("changes") or [])
+                                    if c.get("field") in _cf]
+                        if _removed:
+                            _data["changes"] = _kept
+                            _data["setup_fields"] = {
+                                k: v for k, v in (_data.get("setup_fields") or {}).items()
+                                if k not in _cf}
+                            for _c in _contras:
+                                _data.setdefault("_targeted_tests", []).append(
+                                    str(_c.get("detail", "")))
+                            _data["analysis"] = (
+                                str(_data.get("analysis", "")).rstrip()
+                                + " Some changes were withheld: the diagnosis is "
+                                "internally contradictory on "
+                                + ", ".join(sorted(_cf & {c.get('field') for c in _removed}))
+                                + " — settle it with a controlled test first.").strip()
+                except Exception:
+                    pass
+
                 # Driver-fit reasoning surface (advisory) — how the CURRENT setup fits
                 # or works against the driver's stated style, evidence-scaled. Shown on
                 # the telemetry path even when nothing is authored, so driver influence
@@ -2578,6 +2651,20 @@ class DrivingAdvisor:
                         _profile, setup_dict, resolve_ranges(car_name))
                     if _df_a:
                         _data["driver_fit_reasoning"] = driver_fit_reasoning(_profile, _df_a)
+                except Exception:
+                    pass
+
+                # Rollback advisory (Phase 1): if the driver's LAST applied setup at this
+                # scope tested worse, recommend rolling it back to the previous setup.
+                try:
+                    if self._db is not None and _car_id_learn > 0:
+                        from strategy.setup_lineage import rollback_from_lineage
+                        _lin = self._db.get_lineage(_car_id_learn, _track_learn, _layout_learn)
+                        _rb = rollback_from_lineage(_lin)
+                        if _rb.get("recommend_rollback"):
+                            _data["rollback"] = _rb
+                            _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                                 + " " + str(_rb.get("reason", ""))).strip()
                 except Exception:
                     pass
 
@@ -2600,6 +2687,18 @@ class DrivingAdvisor:
                     )
                 else:
                     _data["_learning_note"] = "no cross-session learning history available"
+                # Closed-loop lockout surface (Phase 1): which changes are blocked from
+                # being re-recommended because they previously worsened the car here.
+                try:
+                    _lk = _blocked_rules  # noqa: F821 (defined in the rule-engine block)
+                except NameError:
+                    _lk = {}
+                if _lk:
+                    # Merge (do NOT overwrite) — the balance block may already have
+                    # surfaced field-level lockouts earlier in this response.
+                    _data.setdefault("closed_loop_lockouts", []).extend(
+                        {"rule_id": rid, "reason": reason} for rid, reason in _lk.items()
+                    )
                 # Group 47: honest outcome-verification explanation (confidence/
                 # ranking/explanation only — never authors values or bypasses
                 # validation).  Empty string when there is nothing to say.
@@ -2916,6 +3015,27 @@ class DrivingAdvisor:
             # scaled to how far each field sat from their window.
             if _driver_fit_reasoning:
                 _resp["driver_fit_reasoning"] = _driver_fit_reasoning
+
+            # Phase 2: the ONE canonical engineering context — driver + car + track +
+            # event + evidence, with a WORKING WINDOW (range + provenance) per field and
+            # confidence separated by capability. The shared, evidence-honest picture the
+            # authoring (and the Phase-3 solver) select from.
+            try:
+                from strategy.setup_engineering_context import (
+                    build_setup_engineering_context,
+                )
+                from strategy.setup_authoring import objective_from_session_type
+                _ctx = build_setup_engineering_context(
+                    car=car_name, objective=objective_from_session_type(session_type).value,
+                    ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
+                    profile=_profile, allowed_tuning=allowed_tuning,
+                    tuning_locked=tuning_locked, track_profile=track_profile,
+                    corner_profile=_corner_profile, history_prior=_bl_prior or {},
+                    duration_mins=duration_mins, tyre_wear_multiplier=tyre_wear_multiplier,
+                    car_class=car_class)
+                _resp["engineering_context"] = _ctx.as_json()
+            except Exception:
+                pass
 
             # Group 64: canonical discipline field-plan surface — author Base,
             # Qualifying and Race as separate full-field setups from ONE context so

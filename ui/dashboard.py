@@ -995,6 +995,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 self._db.persist_score(
                     result.rec_id, result.verdict, result.confidence, result.details
                 )
+                # Engineering-Brain Phase 1: stamp the measured verdict onto the setup
+                # lineage node this rec produced, so rollback can find a worse setup.
+                if result.verdict != "insufficient_data":
+                    try:
+                        self._db.record_lineage_outcome_by_rec(
+                            result.rec_id, result.verdict, after_sid)
+                    except Exception:
+                        pass
                 # Group 46: record per-rule learning outcomes (best-effort, never raises).
                 # Only when verdict is not "insufficient_data" (no signal — skip).
                 if result.verdict != "insufficient_data":
