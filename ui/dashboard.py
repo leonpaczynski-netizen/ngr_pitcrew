@@ -441,6 +441,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._track_path_capture = None
         self._last_refine_autostart_check = 0.0  # throttle for the auto-start probe
         self._refine_notice = ""                 # last "refined model available" notice
+        # Live per-corner telemetry aggregation (inert until a track/layout is active).
+        self._live_corner_tel = None
+        self._live_corner_tel_key = None
         self._gear_ratios_captured: bool = False
         self._lap_compound_tags: dict[int, str] = {}
         self._default_lap_compound: str = ""
@@ -2521,6 +2524,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     self._track_path_capture.add_packet(packet, lap_number=_tln, in_pit=_inpit)
                 except Exception:
                     pass
+            # Live per-corner telemetry aggregation (inert until a track is active).
+            if self._live_corner_tel is not None:
+                try:
+                    self._live_corner_tel.add_packet(packet)
+                except Exception:
+                    pass
             self._update_live(packet)
         # UAT #6 Phase 2A: throttled auto-start of refinement capture while driving
         # a track that already has an accepted model (inert when disabled/no model).
@@ -2529,6 +2538,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             if _now - self._last_refine_autostart_check > 3.0:
                 self._last_refine_autostart_check = _now
                 self._maybe_autostart_refine_capture()
+                self._maybe_init_live_corner_tel()
         except Exception:
             pass
         self._refresh_strategy_fuel_column()
@@ -4783,6 +4793,34 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 self._tm_refresh_refinement_panel()
             except Exception:
                 pass
+
+    def _maybe_init_live_corner_tel(self) -> None:
+        """Create/re-target the live per-corner telemetry aggregator for the active
+        track/layout. Cheap-guarded; called throttled from _poll_ui_queue. Inert (stays
+        None) when there is no active track. Rebuilds on a track/layout/car change so a
+        prior track's corners never bleed into a new one."""
+        try:
+            ec = self._build_event_context()
+            loc = str(getattr(ec, "track_location_id", "") or "").strip()
+            lay = str(getattr(ec, "layout_id", "") or "").strip()
+        except Exception:
+            return
+        if not loc or not lay:
+            return
+        try:
+            _dt = self._setup_drivetrain.currentData() if hasattr(self, "_setup_drivetrain") else ""
+        except Exception:
+            _dt = ""
+        key = (loc, lay, str(_dt or ""))
+        if key == self._live_corner_tel_key and self._live_corner_tel is not None:
+            return
+        try:
+            from telemetry.live_corner_telemetry import LiveCornerTelemetry
+            self._live_corner_tel = LiveCornerTelemetry(loc, lay, drivetrain=str(_dt or ""))
+            self._live_corner_tel_key = key
+        except Exception:
+            self._live_corner_tel = None
+            self._live_corner_tel_key = None
 
     def _autorefine_capture(self, reason: str = "") -> None:
         """Build a candidate from the active capture (if any) and clear it.
