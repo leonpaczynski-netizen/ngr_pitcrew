@@ -3104,7 +3104,7 @@ class DrivingAdvisor:
             try:
                 from strategy.setup_authoring import (
                     SetupObjective, SetupAuthoringContext, author_discipline_setups,
-                    objective_from_session_type,
+                    objective_from_session_type, _OBJECTIVE_GENERIC_REASON,
                 )
 
                 def _mk_ctx(_obj):
@@ -3118,6 +3118,12 @@ class DrivingAdvisor:
                     )
 
                 _plans = author_discipline_setups(_mk_ctx)
+                # Per-field objective-contribution lookups so the workspace can show
+                # WHY a discipline diverges (not just that it does). Additive only.
+                _qentry = {e.field: e for e in (
+                    _plans["qualifying"].entries if _plans.get("qualifying") else [])}
+                _rentry = {e.field: e for e in (
+                    _plans["race"].entries if _plans.get("race") else [])}
                 _rows: list = []
                 _all_fields: set = set()
                 for _p in _plans.values():
@@ -3137,13 +3143,36 @@ class DrivingAdvisor:
                                 _disp = _e.disposition.value
                                 _pv = _e.proven_value
                                 break
-                    _rows.append({"field": _f, "base": _bv, "qualifying": _qv,
-                                  "race": _rv, "differs": _differs,
-                                  "disposition": _disp, "proven": _pv})
+                    _row = {"field": _f, "base": _bv, "qualifying": _qv,
+                            "race": _rv, "differs": _differs,
+                            "disposition": _disp, "proven": _pv}
+                    if _differs:
+                        # Only differing fields carry a divergence rationale.
+                        _qe = _qentry.get(_f)
+                        _re = _rentry.get(_f)
+                        if _qe is not None and _qv != _bv:
+                            _row["why_qualifying"] = _qe.objective_contribution
+                        if _re is not None and _rv != _bv:
+                            _row["why_race"] = _re.objective_contribution
+                    _rows.append(_row)
+                # Per-discipline objective cards — concise objective + confidence for
+                # the comparison workspace header.
+                _disciplines = []
+                for _k in ("base", "qualifying", "race"):
+                    _p = _plans.get(_k)
+                    if _p is None:
+                        continue
+                    _disciplines.append({
+                        "key": _k,
+                        "label": _k.title(),
+                        "objective": _OBJECTIVE_GENERIC_REASON.get(_p.objective, ""),
+                        "confidence": _p.confidence,
+                    })
                 _resp["discipline_field_plan"] = {
                     "objective": objective_from_session_type(session_type).value,
                     "rows": _rows,
                     "differing_fields": [r["field"] for r in _rows if r["differs"]],
+                    "disciplines": _disciplines,
                     "seeded_from_history": (
                         list(_plans["race"].seeded_from_history)
                         if _plans.get("race") is not None else []
