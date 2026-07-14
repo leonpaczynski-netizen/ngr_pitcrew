@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 3: complete setup synthesis)
+
+**Branch `engineering-brain-phase3-synthesis` from `master` @ `eab102a` (PR #45 merged Phases 1–2).** The plan's "major transformation from rule stack to engineering brain."
+
+**NEW `strategy/setup_synthesis.py` (pure):** builds a whole car toward a goal. `build_target_handling_model` → the desired behaviour across 10 handling axes (entry rotation, apex front support, exit traction, power-oversteer resistance, trail-braking stability, high-speed stability, kerb compliance, tyre preservation, fuel efficiency, consistency) from driver × car × track × objective × current diagnosis. `PARAMETER_INTERACTIONS` (field → handling-axis effect signs — coupled dependency graph). `generate_candidates` (full-field candidates, balance/driver-history/aggressive lenses, each value chosen within its Phase-2 working window toward the target-desired direction). `score_candidate` + `synthesize_setup` (objective-weighted target match minus a coherence penalty → best complete candidate + per-field provenance + honest confidence). Surfaced as `setup_synthesis` on the baseline/discipline response; Qualifying vs Race select materially different complete setups from the same evidence.
+
+**Tests:** NEW `tests/test_setup_synthesis.py` (8). Full suite (halves + UI files individual): **~7366 passed, 0 failed.** No schema migration. **Not yet:** synthesis as the PRIMARY authoring path (currently an additive validated surface beside the existing authoring); richer per-axis magnitudes.
+
 ## Repository / Build Status (2026-07-14 — Engineering Brain Phase 1: closed-loop lockout)
 
 **Branch `engineering-brain-phase1-closed-loop` from `master` @ merge `b2da2bf` — committed locally.** First slice of the "Engineering Intelligence Plan of Attack" (docs/ENGINEERING_BRAIN_PLAN.md): stop the app repeatedly making the car worse.

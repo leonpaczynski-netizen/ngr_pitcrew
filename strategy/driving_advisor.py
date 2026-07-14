@@ -3034,6 +3034,15 @@ class DrivingAdvisor:
                     duration_mins=duration_mins, tyre_wear_multiplier=tyre_wear_multiplier,
                     car_class=car_class)
                 _resp["engineering_context"] = _ctx.as_json()
+                # Phase 3: complete setup synthesis — target handling model → scored
+                # full-field candidates from the working windows → the best for the
+                # objective. Advisory surface; the deterministic authoring/Apply gate
+                # are unchanged. Never authors outside the legal windows.
+                try:
+                    from strategy.setup_synthesis import synthesize_setup
+                    _resp["setup_synthesis"] = synthesize_setup(_ctx).as_json()
+                except Exception:
+                    pass
             except Exception:
                 pass
 
