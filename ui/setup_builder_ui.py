@@ -685,6 +685,20 @@ def _engineering_brain_html(data: dict) -> str:
                        for d in _th[:4])
         _cands = ", ".join(f"{c.get('lens')} {c.get('score')}"
                            for c in (_ss.get("candidates") or [])[:3])
+        # When synthesis authored fields as PRIMARY (confidence-gated), name them so the
+        # driver sees the coupled engineer — not the one-field rule stack — built the base.
+        _sp = data.get("synthesis_primary") or {}
+        _applied = _sp.get("applied") or []
+        _primary_line = ""
+        if _applied:
+            _fields = ", ".join(str(f).replace("_", " ") for f in _applied)
+            _kept = _sp.get("kept_proven") or []
+            _kept_line = (f" Kept your proven {', '.join(str(k).replace('_', ' ') for k in _kept)}."
+                          if _kept else "")
+            _primary_line = (
+                f"<p style='margin:3px 0 0 0; color:#7FD0A0; font-size:10px;'>"
+                f"&#10003; Authored {len(_applied)} handling field(s) as primary: "
+                f"{_fields}.{_kept_line}</p>")
         html += (
             "<div style='background:#0C1410; border:1px solid #2E5040; border-radius:4px; "
             "padding:8px 10px; margin-top:8px;'>"
@@ -692,7 +706,7 @@ def _engineering_brain_html(data: dict) -> str:
             f"<p style='margin:2px 0; color:#CBD8D0; font-size:11px;'>Target for "
             f"<b>{_ss.get('objective', '')}</b> — best candidate: <b>{_best.get('lens', '')}</b> "
             f"(confidence {_ss.get('confidence', '')})</p>"
-            f"{_drv}"
+            f"{_drv}{_primary_line}"
             f"<p style='margin:2px 0 0 0; color:#889; font-size:10px;'>Candidates scored: {_cands}</p>"
             "</div>"
         )
