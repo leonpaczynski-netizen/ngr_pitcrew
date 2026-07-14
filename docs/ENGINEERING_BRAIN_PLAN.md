@@ -16,7 +16,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 | 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | **core done** — `setup_synthesis.py` (surfaced additively; not yet the primary authoring path) |
 | 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | **done** — `discipline_objectives.py` (soft-tyre quali + RPM/shift targets + scoring priorities) |
 | 5 | Per-corner + telemetry calibration | **core done** — `corner_diagnosis.py` (corner resolution + phase-separated causes + precise-test-on-missing-telemetry) |
-| 6 | Strategy handoff | mostly exists (Strategy Brain owns total-race-time; setup provides evidence) |
+| 6 | Strategy handoff | **done** — `setup_strategy_handoff.py` (clean evidence handoff + boundary guard) |
 | 7 | Workflow-first UI | partial (discipline table, balance/driver-fit panels) |
 
 ## Phase 1 — delivered so far
@@ -168,4 +168,23 @@ engineering:
 
 **Not yet:** live per-corner telemetry aggregation + wheel-slip classification from real
 captures (the causes + tests are ready to consume it); structured per-corner feedback UI.
-Next: Phase 6 (Strategy handoff — mostly exists) and Phase 7 (workflow-first UI).
+
+## Phase 6 — Strategy handoff (DELIVERED)
+
+**NEW `strategy/setup_strategy_handoff.py`** — the clean boundary between the two brains:
+- `build_setup_strategy_handoff(context, synthesis)` packages the race setup's
+  strategy-relevant CHARACTERISTICS (tyre preservation, traction stability, fuel/drag
+  efficiency, consistency — from the target handling model) as EVIDENCE for the Strategy
+  Brain, with readable strengths/weaknesses. Only meaningful for a race setup.
+- `STRATEGY_OWNED` names what the Strategy Brain owns (degradation curve, crossover lap,
+  fuel-per-lap, refuel/pit loss, legal candidates, compound + pit timing, total-race-time)
+  and the Setup Brain must not author.
+- `handoff_respects_boundary` — a guard (asserted in tests + callable by callers): the
+  handoff carries the `setup_provides_evidence_only` marker and NO strategy-authoring
+  keys (pit_lap/compound/stint/total_race_time/…). Surfaced as `setup_strategy_handoff`.
+
+`tests/test_setup_strategy_handoff.py` (6). Full suite green (~7364 passed, 0 failed).
+
+Next: Phase 7 (workflow-first UI) — large UI work; several panels already shipped
+incrementally (discipline table, balance/driver-fit/closed-loop). A full one-setup-editor
++ comparison + lineage-timeline + tablet/mobile overhaul is best done with visual review.
