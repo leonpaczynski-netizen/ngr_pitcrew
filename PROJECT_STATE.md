@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 5: per-corner diagnosis)
+
+**Branch `engineering-brain-phase5-corner-diagnosis` from `master` @ `f827678` (PR #47 merged Phase 4).** Corner-scoped complaints → precise engineering.
+
+**NEW `strategy/corner_diagnosis.py` (pure):** `parse_corner_number` + `resolve_corner_reference` (resolve "Corner 2"/"T2" against reviewed track segments → real apex progress + direction; honest low-conf when unmatched); `diagnose_corner_feedback` (phase-separated candidate causes — front-grip/LSD-preload/accel-lock/rear-support/gear/compliance — each with fields + handling targets; reduces confidence + prescribes a precise controlled test when speed/wheel-slip telemetry is absent, never a guessed single cause); `diagnose_from_feeling` wires free-text; surfaced as `corner_diagnosis` on the analyse response.
+
+**Tests:** NEW `tests/test_corner_diagnosis.py` (8). Full suite (halves + UI files individual): **~7366 passed, 0 failed.** No schema migration. **Not yet:** live per-corner telemetry aggregation + wheel-slip classification (causes/tests ready to consume it); per-corner feedback UI.
+
 ## Repository / Build Status (2026-07-14 — Engineering Brain Phase 4: discipline intelligence)
 
 **Branch `engineering-brain-phase4-discipline` from `master` @ `946cebc` (PR #46 merged Phase 3).** Base/Qualifying/Race as independent engineering products.

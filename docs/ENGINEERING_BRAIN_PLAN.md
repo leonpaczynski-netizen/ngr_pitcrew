@@ -15,7 +15,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 | 2 | Canonical engineering context | **done** — `SetupEngineeringContext` + working windows + capability confidence |
 | 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | **core done** — `setup_synthesis.py` (surfaced additively; not yet the primary authoring path) |
 | 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | **done** — `discipline_objectives.py` (soft-tyre quali + RPM/shift targets + scoring priorities) |
-| 5 | Per-corner + telemetry calibration | partial (per-corner authoring from reviewed segments; no wheel-slip/speed calibration) |
+| 5 | Per-corner + telemetry calibration | **core done** — `corner_diagnosis.py` (corner resolution + phase-separated causes + precise-test-on-missing-telemetry) |
 | 6 | Strategy handoff | mostly exists (Strategy Brain owns total-race-time; setup provides evidence) |
 | 7 | Workflow-first UI | partial (discipline table, balance/driver-fit panels) |
 
@@ -147,6 +147,25 @@ products:
 
 `tests/test_discipline_objectives.py` (9). Full suite green (~7367 passed, 0 failed).
 
-Next: Phase 5 (per-corner + telemetry calibration — wheel-slip classification, per-corner
-telemetry aggregation, setup-effect measurement), then Phase 6 (Strategy handoff) and
-Phase 7 (workflow-first UI).
+## Phase 5 — per-corner + telemetry calibration (CORE DELIVERED)
+
+**NEW `strategy/corner_diagnosis.py`** — a corner-scoped complaint is turned into precise
+engineering:
+- **Corner resolution** — `parse_corner_number` + `resolve_corner_reference`: "Corner 2"
+  / "T2" / "turn 2" resolves against the reviewed track segments to the real apex
+  (progress + direction), honestly low-confidence when it cannot be matched.
+- **Phase-separated causes** — `diagnose_corner_feedback`: buckets the complaint by phase
+  (entry/apex/exit/braking) and lists the candidate causes (front-grip limit vs LSD
+  preload vs excessive accel-lock vs insufficient rear support vs wrong gear vs
+  compliance), each with the fields + handling targets involved.
+- **Precise test on missing evidence** — when the speed/wheel-slip telemetry to pick
+  between causes is unavailable, confidence is reduced and a concrete controlled test is
+  prescribed (capture X, Y, Z over 3 clean laps) — never a guessed single cause.
+- `diagnose_from_feeling` wires it to free-text feedback; surfaced as `corner_diagnosis`
+  on the analyse response.
+
+`tests/test_corner_diagnosis.py` (8). Full suite green (~7366 passed, 0 failed).
+
+**Not yet:** live per-corner telemetry aggregation + wheel-slip classification from real
+captures (the causes + tests are ready to consume it); structured per-corner feedback UI.
+Next: Phase 6 (Strategy handoff — mostly exists) and Phase 7 (workflow-first UI).

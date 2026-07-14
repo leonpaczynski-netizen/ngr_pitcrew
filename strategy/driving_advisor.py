@@ -2654,6 +2654,27 @@ class DrivingAdvisor:
                 except Exception:
                     pass
 
+                # Phase 5: per-corner diagnosis — when the driver names a corner in their
+                # feedback, resolve it against the reviewed track segments, separate the
+                # candidate causes by phase, and prescribe a precise test when the
+                # telemetry to pick between them is unavailable.
+                try:
+                    from strategy.corner_diagnosis import diagnose_from_feeling
+                    from strategy.corner_profile import load_reviewed_segments
+                    _loc = (_event_ctx.get("track_location_id")
+                            or _event_ctx.get("loc_id") or "")
+                    _lay = _event_ctx.get("layout_id") or _layout_learn or ""
+                    _segs = load_reviewed_segments(_loc, _lay) if _loc else []
+                    _cd = diagnose_from_feeling(feeling, _segs,
+                                                telemetry_available=bool(diagnosis.get(
+                                                    "location_evidence_usable")))
+                    if _cd is not None:
+                        _data["corner_diagnosis"] = _cd.as_json()
+                        if _cd.controlled_test:
+                            _data.setdefault("_targeted_tests", []).append(_cd.controlled_test)
+                except Exception:
+                    pass
+
                 # Rollback advisory (Phase 1): if the driver's LAST applied setup at this
                 # scope tested worse, recommend rolling it back to the previous setup.
                 try:
