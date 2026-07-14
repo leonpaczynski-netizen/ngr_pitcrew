@@ -14,7 +14,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 | **1** | **Stop harmful behaviour (closed loop)** | **In progress** — lineage/attribution/lockout/rollback core done + rule-level lockout wired |
 | 2 | Canonical engineering context | **done** — `SetupEngineeringContext` + working windows + capability confidence |
 | 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | **core done** — `setup_synthesis.py` (surfaced additively; not yet the primary authoring path) |
-| 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | partial (session bias + engineering objective shaping; no objective SCORING model yet) |
+| 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | **done** — `discipline_objectives.py` (soft-tyre quali + RPM/shift targets + scoring priorities) |
 | 5 | Per-corner + telemetry calibration | partial (per-corner authoring from reviewed segments; no wheel-slip/speed calibration) |
 | 6 | Strategy handoff | mostly exists (Strategy Brain owns total-race-time; setup provides evidence) |
 | 7 | Workflow-first UI | partial (discipline table, balance/driver-fit panels) |
@@ -129,5 +129,24 @@ setups from the same evidence. `tests/test_setup_synthesis.py` (8). Full suite g
 (~7366 passed, 0 failed).
 
 **Not yet:** making synthesis the PRIMARY authoring path (currently an additive,
-validated surface beside the existing authoring); richer per-axis magnitudes. Next:
-Phase 4 (objective SCORING models — the synthesis scorer is the foundation).
+validated surface beside the existing authoring); richer per-axis magnitudes.
+
+## Phase 4 — discipline intelligence (DELIVERED)
+
+**NEW `strategy/discipline_objectives.py`** — Base/Qualifying/Race as independent
+products:
+- **Soft-tyre qualifying enforcement** — `softest_dry_compound` / `qualifying_tyre_plan`:
+  qualifying runs the softest legal dry compound (peak one-lap grip; tyre life ignored),
+  honest when only wet compounds exist, and respects a required-compound constraint.
+- **Objective RPM/shift targets** — `objective_rpm_target`: qualifying revs each gear out
+  over one lap; race short-shifts and leaves headroom for traction/fuel; base balanced.
+- **Scoring priorities** — `objective_priorities`: the readable factor weighting each
+  discipline optimises (quali = one-lap pace/rotation/peak grip; race = tyre deg / lap-
+  time variance / traction / fuel).
+- `discipline_objective_summary` surfaced as `discipline_objective` on the response.
+
+`tests/test_discipline_objectives.py` (9). Full suite green (~7367 passed, 0 failed).
+
+Next: Phase 5 (per-corner + telemetry calibration — wheel-slip classification, per-corner
+telemetry aggregation, setup-effect measurement), then Phase 6 (Strategy handoff) and
+Phase 7 (workflow-first UI).
