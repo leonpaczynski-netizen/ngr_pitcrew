@@ -353,6 +353,39 @@ def rollback_target(experiment: SetupExperiment, outcome: ExperimentOutcome) -> 
     return None
 
 
+def rollback_from_lineage(lineage_rows: list) -> dict:
+    """Given persisted setup_lineage rows (newest first, each a dict with id/parent_id/
+    changes_json/outcome_verdict/label), decide whether to recommend a ROLLBACK.
+
+    If the newest SCORED node worsened the car, recommend reverting its changes back to
+    its parent. Returns ``{recommend_rollback, target_id, revert_changes, reason}``.
+    """
+    import json as _json
+    rows = [r for r in (lineage_rows or []) if isinstance(r, dict)]
+    for r in rows:   # newest first
+        verdict = str(r.get("outcome_verdict") or "").strip().lower()
+        if verdict == "":
+            continue          # unscored — keep looking for the newest scored node
+        if verdict == "worsened" and r.get("parent_id") is not None:
+            try:
+                changes = _json.loads(r.get("changes_json") or "[]")
+            except Exception:
+                changes = []
+            revert = [{"field": c.get("field"), "from": c.get("to", c.get("to_clamped")),
+                       "to": c.get("from")} for c in changes if isinstance(c, dict)
+                      and c.get("field")]
+            return {
+                "recommend_rollback": True,
+                "target_id": r.get("parent_id"),
+                "revert_changes": revert,
+                "reason": (f"Your last applied setup ({r.get('label') or r.get('id')}) "
+                           "tested WORSE — roll back to the previous setup and try a "
+                           "different direction."),
+            }
+        break             # newest scored node was fine → nothing to roll back
+    return {"recommend_rollback": False, "target_id": None, "revert_changes": [], "reason": ""}
+
+
 def rollback_advice(experiment: SetupExperiment, outcome: ExperimentOutcome,
                     attributed: "list | None" = None) -> dict:
     """A rollback recommendation surface: whether to revert, to what, and why."""

@@ -2607,6 +2607,40 @@ class DrivingAdvisor:
                 except Exception:
                     pass
 
+                # ── Contradiction hard-fail (Phase 1) ────────────────────────────
+                # A setup must never be authored from an internally-contradictory
+                # diagnosis. Remove any authored change on a contradicted field (it
+                # becomes a controlled test instead) and surface the contradiction, so
+                # the plan can never be presented as complete over conflicting evidence.
+                try:
+                    from strategy.setup_diagnosis import (
+                        detect_diagnosis_contradictions, contradicted_fields,
+                    )
+                    _contras = detect_diagnosis_contradictions(diagnosis or {})
+                    if _contras:
+                        _data["diagnosis_contradictions"] = _contras
+                        _cf = contradicted_fields(_contras)
+                        _kept = [c for c in (_data.get("changes") or [])
+                                 if c.get("field") not in _cf]
+                        _removed = [c for c in (_data.get("changes") or [])
+                                    if c.get("field") in _cf]
+                        if _removed:
+                            _data["changes"] = _kept
+                            _data["setup_fields"] = {
+                                k: v for k, v in (_data.get("setup_fields") or {}).items()
+                                if k not in _cf}
+                            for _c in _contras:
+                                _data.setdefault("_targeted_tests", []).append(
+                                    str(_c.get("detail", "")))
+                            _data["analysis"] = (
+                                str(_data.get("analysis", "")).rstrip()
+                                + " Some changes were withheld: the diagnosis is "
+                                "internally contradictory on "
+                                + ", ".join(sorted(_cf & {c.get('field') for c in _removed}))
+                                + " — settle it with a controlled test first.").strip()
+                except Exception:
+                    pass
+
                 # Driver-fit reasoning surface (advisory) — how the CURRENT setup fits
                 # or works against the driver's stated style, evidence-scaled. Shown on
                 # the telemetry path even when nothing is authored, so driver influence
@@ -2617,6 +2651,20 @@ class DrivingAdvisor:
                         _profile, setup_dict, resolve_ranges(car_name))
                     if _df_a:
                         _data["driver_fit_reasoning"] = driver_fit_reasoning(_profile, _df_a)
+                except Exception:
+                    pass
+
+                # Rollback advisory (Phase 1): if the driver's LAST applied setup at this
+                # scope tested worse, recommend rolling it back to the previous setup.
+                try:
+                    if self._db is not None and _car_id_learn > 0:
+                        from strategy.setup_lineage import rollback_from_lineage
+                        _lin = self._db.get_lineage(_car_id_learn, _track_learn, _layout_learn)
+                        _rb = rollback_from_lineage(_lin)
+                        if _rb.get("recommend_rollback"):
+                            _data["rollback"] = _rb
+                            _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                                 + " " + str(_rb.get("reason", ""))).strip()
                 except Exception:
                     pass
 

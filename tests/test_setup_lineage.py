@@ -209,6 +209,72 @@ def test_balance_solver_respects_field_lockout_end_to_end():
     assert any(l.get("field") == "aero_rear" for l in lockouts)
 
 
+# ------------------------------------------------------------------ contradiction hard-fail
+
+def test_detect_contradictions():
+    from strategy.setup_diagnosis import detect_diagnosis_contradictions, contradicted_fields
+    assert [c["kind"] for c in detect_diagnosis_contradictions(
+        {"gearing_state": "conflicting"})] == ["gearing_conflicting"]
+    assert [c["kind"] for c in detect_diagnosis_contradictions(
+        {"wheelspin_subtype": "conflicting_evidence"})] == ["wheelspin_conflicting"]
+    assert [c["kind"] for c in detect_diagnosis_contradictions(
+        {"bottoming_display_state": {"state": "address", "performance_relevant": False}})] \
+        == ["bottoming_incoherent"]
+    # Coherent diagnosis → no contradictions.
+    assert detect_diagnosis_contradictions(
+        {"gearing_state": "appropriate", "wheelspin_subtype": "unknown"}) == []
+    contras = detect_diagnosis_contradictions({"gearing_state": "conflicting"})
+    assert contradicted_fields(contras) == {"final_drive", "gear_5", "gear_6"}
+
+
+# ------------------------------------------------------------------ lineage persistence (DB)
+
+def test_lineage_persistence_and_rollback_db():
+    import json as _json
+    from data.session_db import SessionDB
+    from strategy.setup_lineage import rollback_from_lineage
+    db = SessionDB(":memory:")
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 15
+    for ch in ([{"field": "arb_front", "from": "6", "to": "5"}],
+               [{"field": "lsd_accel", "from": "15", "to": "17"}]):
+        db._conn.execute(
+            "INSERT INTO setup_recommendations (car_id, track, layout_id, status, "
+            "approved_changes_json, created_at) VALUES (1,'Fuji','full','proposed',?,'t')",
+            (_json.dumps(ch),))
+    db._conn.commit()
+    r_first = db.apply_recommendation_for_car_track(1, "Fuji", 101)   # newest rec first
+    r_second = db.apply_recommendation_for_car_track(1, "Fuji", 102)
+    lin = db.get_lineage(1, "Fuji", "full")
+    assert len(lin) == 2
+    # The second node is auto-parented to the first.
+    assert lin[0]["parent_id"] == lin[1]["id"]
+    # Stamp the last-applied setup as worse → rollback recommends reverting it.
+    db.record_lineage_outcome_by_rec(r_second, "worsened", 103)
+    rb = rollback_from_lineage(db.get_lineage(1, "Fuji", "full"))
+    assert rb["recommend_rollback"] is True
+    assert rb["target_id"] == lin[1]["id"]
+    assert rb["revert_changes"]                       # a concrete revert exists
+
+
+def test_rollback_none_when_last_setup_improved():
+    from strategy.setup_lineage import rollback_from_lineage
+    rows = [{"id": 2, "parent_id": 1, "changes_json": "[]", "outcome_verdict": "improved"},
+            {"id": 1, "parent_id": None, "changes_json": "[]", "outcome_verdict": "neutral"}]
+    assert rollback_from_lineage(rows)["recommend_rollback"] is False
+
+
+def test_rollback_skips_unscored_to_newest_scored():
+    from strategy.setup_lineage import rollback_from_lineage
+    import json as _json
+    rows = [{"id": 3, "parent_id": 2, "changes_json": "[]", "outcome_verdict": ""},   # unscored
+            {"id": 2, "parent_id": 1,
+             "changes_json": _json.dumps([{"field": "aero_rear", "from": "600", "to": "630"}]),
+             "outcome_verdict": "worsened"},
+            {"id": 1, "parent_id": None, "changes_json": "[]", "outcome_verdict": "improved"}]
+    rb = rollback_from_lineage(rows)
+    assert rb["recommend_rollback"] and rb["target_id"] == 1
+
+
 def test_rule_engine_honours_lockout():
     from strategy.setup_rule_engine import run_rule_engine
     from strategy.setup_driver_profile import build_driver_profile

@@ -56,16 +56,35 @@ consult outcomes itself. Blocked moves are surfaced (and merged, not overwritten
 
 **Tests:** `tests/test_setup_lineage.py` (15). Full suite green (~7373 passed, 0 failed).
 
-## Phase 1 — still to do (next increments)
+## Phase 1 — lineage persistence, contradiction hard-fail, rollback (DELIVERED)
 
-- **Explicit parent→child lineage persistence** (a `parent_setup_id`/`origin_rec_id`
-  on the setup/recommendation rows) so per-CHANGE attribution and rollback work on real
-  saved setups, not just in-memory experiments. (Needs a small, additive migration.)
-- **Structured better/worse-vs-baseline capture** in Practice Review (today only
-  Liked/Hated/Neutral + free text; direction is derived).
-- **Rollback UI** (revert to parent; branch instead of stacking on a failed child).
-- **Contradiction hard-fail** in the canonical diagnosis (bottoming already reconciled;
-  extend to wheelspin/gearing).
+**Lineage persistence (additive DB migration v15):** a standalone `setup_lineage` table
+(touches no existing table; `DB_VERSION` 14→15) recording each applied setup as a node
+derived from a PARENT node by a set of changes, with the measured outcome once scored.
+`SessionDB.record_lineage` (auto-resolves the parent as the latest node at this
+car+track+layout scope), `record_lineage_outcome_by_rec`, `get_lineage`. Wired:
+`apply_recommendation_for_car_track` records a node from the rec's applied changes; the
+scoring pass (`_trigger_scoring_pass`) stamps each node's verdict.
+
+**Contradiction hard-fail:** `detect_diagnosis_contradictions(diagnosis)` — a central
+coherence check (gearing conflicting, wheelspin conflicting, bottoming incoherent). Any
+authored change on a contradicted field is withheld (→ a controlled test) and surfaced
+as `diagnosis_contradictions`, so a setup is never authored over conflicting evidence.
+
+**Rollback advisory:** `rollback_from_lineage(rows)` — if the driver's last SCORED setup
+tested worse, recommend reverting its changes to the parent; surfaced as `rollback` on
+the analyse response.
+
+**Tests:** `tests/test_setup_lineage.py` (20) + `test_session_db` schema. Full suite green
+(~7377 passed, 0 failed). 7 stale "no new migration" guards (Groups 55–61, read-only
+sprints) updated to allow the legitimate v15 and guard v16.
+
+## Phase 1 — still to do
+
+- **Structured better/worse-vs-baseline UI** in Practice Review (today the direction is
+  DERIVED from telemetry scoring + feedback classification, which now feeds lineage — an
+  explicit combo would strengthen the signal). Low incremental value; UI-only.
+- **Rollback UI button** (the advisory + revert set now exist on the backend).
 
 Then Phase 2 (canonical `SetupEngineeringContext`) and Phase 3 (target handling model +
 interaction graph + full-field candidate generator + coupled objective solver).
