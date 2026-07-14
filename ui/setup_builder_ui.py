@@ -9,9 +9,9 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QGroupBox, QLabel, QPushButton,
+    QGroupBox, QLabel, QPushButton, QButtonGroup,
     QDoubleSpinBox, QSpinBox, QAbstractSpinBox, QLineEdit, QTextEdit,
-    QComboBox, QScrollArea, QSplitter,
+    QComboBox, QScrollArea, QSplitter, QMessageBox,
 )
 
 from strategy.setup_ranges import resolve_ranges, save_car_ranges, GENERIC_DEFAULTS
@@ -819,7 +819,7 @@ class SetupBuilderMixin:
             "_setup_locked_banner",
             # Action/result widgets for existing mixin methods
             "_setup_result_text", "_btn_analyse_setup",
-            "_btn_apply_ai_setup",
+            "_btn_apply_ai_setup", "_btn_revert_setup",
             "_setup_feeling_input",
             "_build_setup_result", "_btn_build_setup", "_btn_set_car_ranges",
             "_btn_baseline",
@@ -839,6 +839,7 @@ class SetupBuilderMixin:
         self._race_form._btn_load_setup.clicked.connect(self._setup_load_selected)
         self._race_form._btn_analyse_setup.clicked.connect(self._setup_analyse_ai)
         self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
+        self._race_form._btn_revert_setup.clicked.connect(self._revert_last_change)
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
         # Race-form baseline button builds BOTH race + qualifying baselines in one
         # go (UAT); the Qualifying form's own button still builds just qualifying.
@@ -862,6 +863,9 @@ class SetupBuilderMixin:
         qf._btn_apply_ai_setup.clicked.connect(
             lambda: self._apply_ai_setup_for_form(self._qual_form)
         )
+        qf._btn_revert_setup.clicked.connect(
+            lambda: self._revert_last_change_for_form(self._qual_form)
+        )
         qf._btn_build_setup.clicked.connect(
             lambda: self._run_build_setup_for_form(self._qual_form)
         )
@@ -880,6 +884,35 @@ class SetupBuilderMixin:
         self._race_form._setup_tyre_f.currentTextChanged.connect(
             lambda _: self._refresh_live_tyre_label()
         )
+
+        # ── Segmented discipline-view switch ──────────────────────────────────
+        # One focused editor at a time (Race / Qualifying) or both side-by-side.
+        # A pure visibility toggle over the two existing forms — no data moves.
+        _seg_row = QHBoxLayout()
+        _seg_row.setSpacing(0)
+        _seg_row.addWidget(QLabel("Editor view:", styleSheet=lbl_s))
+        self._discipline_view_group = QButtonGroup(container)
+        self._disc_view_btns: dict = {}
+        _seg_qss = (
+            "QPushButton { background:#242424; color:#BBB; border:1px solid #444; "
+            "padding:4px 14px; } "
+            "QPushButton:checked { background:#1A5C2A; color:white; font-weight:bold; } ")
+        for _i, (_key, _label) in enumerate(
+                [("race", "Race"), ("qualifying", "Qualifying"), ("both", "Both")]):
+            _b = QPushButton(_label)
+            _b.setCheckable(True)
+            _b.setStyleSheet(_seg_qss)
+            _b.setToolTip(
+                "Show only the Race setup editor." if _key == "race"
+                else "Show only the Qualifying setup editor." if _key == "qualifying"
+                else "Show both editors side by side (default).")
+            self._discipline_view_group.addButton(_b, _i)
+            _b.clicked.connect(
+                lambda _checked=False, k=_key: self._on_discipline_view_changed(k))
+            self._disc_view_btns[_key] = _b
+            _seg_row.addWidget(_b)
+        _seg_row.addStretch()
+        outer_layout.addLayout(_seg_row)
 
         # ── QSplitter — Race left, Qualifying right ───────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -900,6 +933,11 @@ class SetupBuilderMixin:
         splitter.addWidget(qual_scroll)
         splitter.setSizes([1, 1])  # equal initial split
         outer_layout.addWidget(splitter, 1)  # the splitter takes all extra height
+
+        # Keep scroll-area refs so the view switch can toggle their visibility.
+        self._race_scroll = race_scroll
+        self._qual_scroll = qual_scroll
+        self._disc_view_btns["both"].setChecked(True)  # default: side-by-side
 
         # ── Shift RPM display (shared, below the splitter) ────────────────────
         _sb = self._config.get("shift_beep", {})
@@ -1324,6 +1362,99 @@ class SetupBuilderMixin:
         # means it is now the current setup on the car.
         self._autosave_applied_setup(form)
         form._btn_apply_ai_setup.setVisible(False)
+        self._refresh_revert_buttons()
+
+    # ------------------------------------------------------------------
+    # Discipline-view switch + rollback controls (one-setup editor)
+    # ------------------------------------------------------------------
+
+    def _on_discipline_view_changed(self, mode: str) -> None:
+        """Toggle which setup editor(s) are visible: 'race', 'qualifying' or 'both'.
+
+        Pure visibility switch over the two existing forms — no data is moved or
+        cleared, so the aliased Race-form mixin methods keep working unchanged.
+        """
+        _r = getattr(self, "_race_scroll", None)
+        _q = getattr(self, "_qual_scroll", None)
+        if _r is None or _q is None:
+            return
+        _r.setVisible(mode in ("race", "both"))
+        _q.setVisible(mode in ("qualifying", "both"))
+
+    def _refresh_revert_buttons(self) -> None:
+        """Re-evaluate the 'Revert last change' control on both editor forms."""
+        for _f in (getattr(self, "_race_form", None), getattr(self, "_qual_form", None)):
+            if _f is not None:
+                self._refresh_revert_button_for_form(_f)
+
+    def _revert_state_for_current_event(self) -> dict:
+        """Pure rollback decision for the active car/track/layout (empty when none)."""
+        from strategy.setup_lineage import revert_button_state
+        try:
+            evc = self._build_event_context()
+            cid = int(self._car_id_ref[0]) if getattr(self, "_car_id_ref", None) else 0
+            if cid <= 0 or not getattr(evc, "track", ""):
+                return {"visible": False, "revert_changes": [], "reason": "", "count": 0}
+            lineage = self._db.get_lineage(cid, evc.track, evc.layout_id)
+            return revert_button_state(lineage)
+        except Exception:
+            return {"visible": False, "revert_changes": [], "reason": "", "count": 0}
+
+    def _refresh_revert_button_for_form(self, form: "SetupFormWidget") -> None:
+        """Show/hide ``form``'s revert button from the (pure) rollback decision."""
+        btn = getattr(form, "_btn_revert_setup", None)
+        if btn is None:
+            return
+        st = self._revert_state_for_current_event()
+        btn.setVisible(bool(st.get("visible")))
+        if st.get("visible"):
+            btn.setToolTip(st.get("tooltip") or btn.toolTip())
+
+    def _revert_last_change(self) -> None:
+        """Race-form revert handler (delegates to the per-form implementation)."""
+        self._revert_last_change_for_form(self._race_form)
+
+    def _revert_last_change_for_form(self, form: "SetupFormWidget") -> None:
+        """Revert ``form`` to the previous setup when the last change tested worse.
+
+        Restores the changed fields to their proven prior values (from the lineage
+        delta), records the rollback as a new lineage node so the chain stays honest,
+        and auto-saves — mirroring the Apply idiom. Never authors a new value; only
+        puts back a value the driver has already run. Requires confirmation.
+        """
+        from strategy.setup_lineage import apply_revert_to_setup
+        st = self._revert_state_for_current_event()
+        if not st.get("visible") or not st.get("revert_changes"):
+            QMessageBox.information(
+                self, "Nothing to revert",
+                "There's no worse-rated change to roll back right now.")
+            self._refresh_revert_button_for_form(form)
+            return
+        _fields = ", ".join(
+            str(c.get("field", "")).replace("_", " ") for c in st["revert_changes"])
+        _resp = QMessageBox.question(
+            self, "Revert last change",
+            f"Revert {st['count']} field(s) to your previous setup?\n\n"
+            f"{_fields}\n\n{st.get('reason', '')}")
+        if _resp != QMessageBox.StandardButton.Yes:
+            return
+        reverted = apply_revert_to_setup(form.current_setup_dict(), st["revert_changes"])
+        form.fill_setup_fields(reverted)
+        # Record the rollback as a new lineage node (best-effort) so subsequent
+        # rollback decisions see that this direction was already reverted.
+        try:
+            import json as _json
+            evc = self._build_event_context()
+            cid = int(self._car_id_ref[0]) if getattr(self, "_car_id_ref", None) else 0
+            if cid > 0 and getattr(evc, "track", ""):
+                self._db.record_lineage(
+                    cid, evc.track, evc.layout_id,
+                    changes_json=_json.dumps(st["revert_changes"]), label="rollback")
+        except Exception:
+            pass
+        self._autosave_applied_setup(form)
+        form._btn_revert_setup.setVisible(False)
+        self._refresh_revert_buttons()
 
     def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
         """Build a complete setup with AI for the given form (Qualifying panel)."""
@@ -3047,6 +3178,7 @@ class SetupBuilderMixin:
         if hasattr(self, "_btn_apply_ai_setup"):
             self._btn_apply_ai_setup.setVisible(False)
         self._last_setup_ai_fields = {}
+        self._refresh_revert_buttons()
 
     def _autosave_applied_setup(self, form: "SetupFormWidget | None" = None) -> None:
         """Persist the just-applied setup when an active event exists.
