@@ -141,6 +141,74 @@ def test_blocked_rules_ignores_neutral_and_missing():
 
 # ------------------------------------------------------------------ rule-engine integration
 
+def test_rule_to_field_direction_resolver():
+    from strategy.setup_lineage import _rule_field_directions, _delta_fn_direction
+    assert _delta_fn_direction("increase_rear_aero") == 1
+    assert _delta_fn_direction("decrease_front_arb") == -1
+    assert _delta_fn_direction("final_drive_up") == 1
+    assert _delta_fn_direction("brake_bias_front") == -1
+    assert _delta_fn_direction("brake_bias_rear") == 1
+    assert _delta_fn_direction("noop") == 0
+    res = _rule_field_directions()
+    assert res.get("B4") == ("aero_rear", 1)          # increase_rear_aero
+    assert res.get("A3") == ("ride_height_front", 1)  # raise_front_rh
+
+
+def test_field_lockout_from_learning_outcomes_blocks_balance_move():
+    from strategy.setup_lineage import (
+        failed_directions_from_learning_outcomes, apply_direction_lockout,
+    )
+    scope = _scope()
+    outcomes = [{"rule_id": "B4", "verdict": "worsened"},
+                {"rule_id": "B4", "verdict": "worsened"}]   # raising rear aero worsened it
+    fd = failed_directions_from_learning_outcomes(outcomes, scope)
+    assert {(k.field, k.direction) for k in fd} == {("aero_rear", 1)}
+    # A balance-shaped set that raises rear aero → that move is blocked, others allowed.
+    changes = [{"field": "aero_rear", "delta": 30}, {"field": "toe_rear", "delta": 0.05},
+               {"field": "brake_bias", "delta": -1}]
+    allowed, blocked = apply_direction_lockout(changes, fd, scope)
+    assert [c["field"] for c in allowed] == ["toe_rear", "brake_bias"]
+    assert [c["field"] for c in blocked] == ["aero_rear"]
+
+
+def test_balance_solver_respects_field_lockout_end_to_end():
+    """A worsened 'increase rear aero' history blocks the balance solver's rear-aero
+    move on the telemetry path (the balance solver doesn't consult outcomes itself)."""
+    import json
+    from types import SimpleNamespace
+    import strategy.driving_advisor as da
+    from tests.test_group63_setup_brain_uat2 import (
+        _uat_advisor, _uat_history, _UAT_FEELING, _CAR as UCAR,
+    )
+    da.call_api = lambda *a, **k: json.dumps(
+        {"status": "APPROVED", "warnings": [], "contradictions": [],
+         "missing_evidence": [], "explanation_notes": "ok"})
+
+    class _StubDB:
+        def get_learning_outcomes(self, car_id, track, layout):
+            return [{"rule_id": "B4", "verdict": "worsened"},
+                    {"rule_id": "B4", "verdict": "worsened"}]
+        def __getattr__(self, name):
+            return lambda *a, **k: []      # every other DB call → benign empty result
+
+    adv = _uat_advisor()
+    adv._db = _StubDB()
+    adv._car_id_ref = [1]
+    setup = {"final_drive": 4.25, "transmission_max_speed_kmh": 0, "num_gears": 6,
+             "aero_front": 450, "aero_rear": 590, "lsd_initial": 10, "lsd_accel": 15,
+             "lsd_decel": 10, "camber_front": 1.0, "camber_rear": 1.5, "arb_front": 6,
+             "arb_rear": 5, "toe_front": 0.0, "toe_rear": 0.05, "brake_bias": 0}
+    r = json.loads(adv.build_combined_setup_response(
+        setup_dict=setup, car_name=UCAR, feeling=_UAT_FEELING, purpose="Race",
+        drivetrain="RR", historical_setups=_uat_history(), track_name="Fuji",
+        fuel_multiplier=3.0, refuel_rate_lps=1.0))
+    # The balance solver would normally raise rear aero; the lockout blocks it.
+    authored = {c["field"] for c in r.get("changes", [])}
+    assert "aero_rear" not in authored
+    lockouts = r.get("closed_loop_lockouts") or []
+    assert any(l.get("field") == "aero_rear" for l in lockouts)
+
+
 def test_rule_engine_honours_lockout():
     from strategy.setup_rule_engine import run_rule_engine
     from strategy.setup_driver_profile import build_driver_profile

@@ -46,7 +46,15 @@ protection still runs first. `build_combined_setup_response` builds the lockout 
 `closed_loop_lockouts`. **No schema migration** — it consumes data already captured by
 `_trigger_scoring_pass`.
 
-**Tests:** `tests/test_setup_lineage.py` (12). Full suite green (~7370 passed, 0 failed).
+**Field-level lockout across ALL authors (wired):** `_rule_field_directions` maps each
+rule to the (field, direction) it authors (from the delta_fn names); `failed_directions_
+from_learning_outcomes` turns worsened outcomes into field-direction `DirectionKey`s, and
+`apply_direction_lockout` filters the **balance solver + driver-fit** changes on the
+telemetry path — so a harmful direction is not re-introduced by an author that doesn't
+consult outcomes itself. Blocked moves are surfaced (and merged, not overwritten) in
+`closed_loop_lockouts`.
+
+**Tests:** `tests/test_setup_lineage.py` (15). Full suite green (~7373 passed, 0 failed).
 
 ## Phase 1 — still to do (next increments)
 

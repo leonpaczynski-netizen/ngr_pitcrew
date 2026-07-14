@@ -292,6 +292,57 @@ def blocked_rules_from_outcomes(outcomes: list, *, min_worsened: int = LOCKOUT_M
     return blocked
 
 
+# Map a rule to the (field, direction) it authors, so a blocked rule can also lock out
+# the SAME field-direction produced by another author (the balance solver, driver-fit).
+_RULE_DIR_CACHE: "dict | None" = None
+
+
+def _delta_fn_direction(delta_fn: str) -> int:
+    s = str(delta_fn or "").strip().lower()
+    if not s or s == "noop":
+        return 0
+    if s.startswith(("increase", "raise")) or s.endswith(("_up", "_rear")):
+        return +1
+    if s.startswith("decrease") or s.endswith(("_down", "_front")):
+        return -1
+    return 0
+
+
+def _rule_field_directions() -> dict:
+    """{rule_id: (field, direction)} built once from the knowledge base delta_fn names."""
+    global _RULE_DIR_CACHE
+    if _RULE_DIR_CACHE is None:
+        m: dict = {}
+        try:
+            from strategy.setup_knowledge_base import get_all_rules
+            for r in get_all_rules():
+                d = _delta_fn_direction(getattr(r, "delta_fn", ""))
+                if d != 0 and getattr(r, "field", None):
+                    m[r.rule_id] = (r.field, d)
+        except Exception:
+            m = {}
+        _RULE_DIR_CACHE = m
+    return _RULE_DIR_CACHE
+
+
+def failed_directions_from_learning_outcomes(
+    outcomes: list, scope: ExperimentScope,
+    *, min_worsened: int = LOCKOUT_MIN_WORSENED,
+) -> set:
+    """DirectionKeys for field-directions that decisively worsened the car, derived from
+    the persisted learning-outcome rows (rule_id + verdict) via the rule→direction map.
+    Lets the field-level lockout cover EVERY author (rules, balance solver, driver-fit),
+    not just the rule engine."""
+    blocked = blocked_rules_from_outcomes(outcomes, min_worsened=min_worsened)
+    res = _rule_field_directions()
+    out: set = set()
+    for rid in blocked:
+        fd = res.get(rid)
+        if fd:
+            out.add(DirectionKey(scope.key(), fd[0], fd[1]))
+    return out
+
+
 def rollback_target(experiment: SetupExperiment, outcome: ExperimentOutcome) -> Optional[str]:
     """The parent setup id to roll back to when the experiment made the car worse
     overall (or every change in it was harmful). None when there is nothing to undo."""

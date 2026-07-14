@@ -2539,6 +2539,30 @@ class DrivingAdvisor:
                                     _df_setup_fields[_dfi.field] = _dfi.to_value
                             except Exception:
                                 pass
+                            # Closed-loop lockout at the FIELD level: the balance solver
+                            # and driver-fit don't consult outcomes, so filter any move
+                            # whose (field, direction) previously worsened the car here.
+                            _bal_blocked_moves = []
+                            try:
+                                from strategy.setup_lineage import (
+                                    failed_directions_from_learning_outcomes,
+                                    apply_direction_lockout, ExperimentScope,
+                                )
+                                # The loaded _outcomes are already scoped to this
+                                # car+track+layout; the scope key only needs to be
+                                # consistent between building and applying the lockout.
+                                _lk_scope = ExperimentScope(
+                                    car=car_name, track=track_name, layout="",
+                                    objective=str(purpose or ""))
+                                _fd = failed_directions_from_learning_outcomes(_outcomes, _lk_scope)
+                                if _fd:
+                                    _bal_change_dicts, _bal_blocked_moves = apply_direction_lockout(
+                                        _bal_change_dicts, _fd, _lk_scope)
+                                    _blk_fields = {c.get("field") for c in _bal_blocked_moves}
+                                    _df_setup_fields = {k: v for k, v in _df_setup_fields.items()
+                                                        if k not in _blk_fields}
+                            except Exception:
+                                _bal_blocked_moves = []
                             _bal_raw = {
                                 "analysis": _sol.summary,
                                 "primary_issue": "balance_compromise",
@@ -2563,6 +2587,11 @@ class DrivingAdvisor:
                                 _data["engineering_validation_failed"] = False
                                 _data["engineering_validation_errors"] = _bal_final.engineering_errors
                                 _data["balance_solution"] = _sol.as_json()
+                                if _bal_blocked_moves:
+                                    _data.setdefault("closed_loop_lockouts", []).extend(
+                                        {"field": m.get("field"),
+                                         "reason": m.get("_lockout_reason", "")}
+                                        for m in _bal_blocked_moves)
                                 if _sol.targeted_tests:
                                     _data.setdefault("_targeted_tests", []).extend(
                                         _sol.targeted_tests)
@@ -2617,9 +2646,11 @@ class DrivingAdvisor:
                 except NameError:
                     _lk = {}
                 if _lk:
-                    _data["closed_loop_lockouts"] = [
+                    # Merge (do NOT overwrite) — the balance block may already have
+                    # surfaced field-level lockouts earlier in this response.
+                    _data.setdefault("closed_loop_lockouts", []).extend(
                         {"rule_id": rid, "reason": reason} for rid, reason in _lk.items()
-                    ]
+                    )
                 # Group 47: honest outcome-verification explanation (confidence/
                 # ranking/explanation only — never authors values or bypasses
                 # validation).  Empty string when there is nothing to say.
