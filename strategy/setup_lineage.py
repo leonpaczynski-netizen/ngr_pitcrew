@@ -399,6 +399,74 @@ def rollback_from_lineage(lineage_rows: list) -> dict:
     return {"recommend_rollback": False, "target_id": None, "revert_changes": [], "reason": ""}
 
 
+def _coerce_setup_value(v):
+    """Coerce a lineage delta value (often a JSON string) back to a setup number.
+
+    Setup fields are numeric (arb 6, camber 1.5); changes_json may store them as
+    strings. Return an int for whole values, a float for fractional ones, and the
+    original value unchanged when it is not a number.
+    """
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return v
+        try:
+            if "." in s or "e" in s.lower():
+                return float(s)
+            return int(s)
+        except ValueError:
+            try:
+                return float(s)
+            except ValueError:
+                return v
+    return v
+
+
+def apply_revert_to_setup(setup: dict, revert_changes: list) -> dict:
+    """Return a COPY of ``setup`` with each revert change applied.
+
+    ``revert_changes`` come from :func:`rollback_from_lineage` — each is
+    ``{field, from, to}`` where ``to`` is the pre-change (parent) value to restore.
+    Pure and Qt-free: authors no new value, only puts proven prior values back.
+    Unknown/blank fields and non-dict entries are skipped.
+    """
+    out = dict(setup or {})
+    for ch in (revert_changes or []):
+        if not isinstance(ch, dict):
+            continue
+        field = ch.get("field")
+        if not field:
+            continue
+        out[field] = _coerce_setup_value(ch.get("to"))
+    return out
+
+
+def revert_button_state(lineage_rows: list) -> dict:
+    """Decide whether a 'revert last change' control should show, and with what copy.
+
+    Thin, pure wrapper over :func:`rollback_from_lineage` so the UI keeps no rollback
+    logic of its own. Returns ``{visible, count, target_id, revert_changes, reason,
+    tooltip}``; ``visible`` is True only when the newest scored setup worsened the car
+    and there is a parent to revert to.
+    """
+    rb = rollback_from_lineage(lineage_rows)
+    changes = rb.get("revert_changes") or []
+    if rb.get("recommend_rollback") and changes:
+        reason = rb.get("reason") or "You reported the last change made the car worse."
+        return {
+            "visible": True,
+            "count": len(changes),
+            "target_id": rb.get("target_id"),
+            "revert_changes": changes,
+            "reason": reason,
+            "tooltip": "Revert the last change back to your previous setup. " + reason,
+        }
+    return {"visible": False, "count": 0, "target_id": None,
+            "revert_changes": [], "reason": "", "tooltip": ""}
+
+
 def rollback_advice(experiment: SetupExperiment, outcome: ExperimentOutcome,
                     attributed: "list | None" = None) -> dict:
     """A rollback recommendation surface: whether to revert, to what, and why."""

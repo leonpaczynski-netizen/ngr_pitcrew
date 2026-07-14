@@ -7966,6 +7966,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                         if _verdict and _cid > 0:
                             self._db.record_latest_lineage_outcome(
                                 _cid, _evc.track, _evc.layout_id, _verdict, _sid)
+                            # A 'worse' verdict may now warrant a rollback — refresh
+                            # the editor's revert controls so they surface.
+                            if hasattr(self, "_refresh_revert_buttons"):
+                                self._refresh_revert_buttons()
                     except Exception:
                         pass
             except Exception:

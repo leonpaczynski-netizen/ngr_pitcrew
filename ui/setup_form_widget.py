@@ -620,6 +620,20 @@ class SetupFormWidget(QWidget):
         self._btn_apply_ai_setup.setVisible(False)
         outer.addWidget(self._btn_apply_ai_setup)
 
+        # Rollback control — closes the development loop from the editor: when the
+        # driver has reported the last applied setup WORSE, this reverts the changed
+        # fields back to the previous (proven) values. Hidden until the lineage says
+        # a rollback is warranted; the host gates visibility and owns the click.
+        self._btn_revert_setup = QPushButton("Revert last change")
+        self._btn_revert_setup.setStyleSheet(
+            "background: #3A2A12; color: #F0C070; font-weight: bold; "
+            "border: 1px solid #7A5A20; padding: 6px 16px;")
+        self._btn_revert_setup.setToolTip(
+            "Roll the last change back to your previous setup.\n"
+            "Appears when you have reported the latest setup made the car worse.")
+        self._btn_revert_setup.setVisible(False)
+        outer.addWidget(self._btn_revert_setup)
+
         # NOTE: the old "Rate this result" combo + "Applied" checkbox were removed.
 
         # ── Build Setup with AI + Set Car Ranges ──────────────────────────────

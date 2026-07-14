@@ -234,7 +234,8 @@ def test_lineage_persistence_and_rollback_db():
     from data.session_db import SessionDB
     from strategy.setup_lineage import rollback_from_lineage
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 15
+    # DB_VERSION reached 16 with the Practice Review capture columns (_migrate_v16).
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 16
     for ch in ([{"field": "arb_front", "from": "6", "to": "5"}],
                [{"field": "lsd_accel", "from": "15", "to": "17"}]):
         db._conn.execute(
