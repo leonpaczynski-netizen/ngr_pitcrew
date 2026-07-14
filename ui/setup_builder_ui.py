@@ -293,6 +293,161 @@ def _discipline_field_plan_html(plan: dict) -> str:
     )
 
 
+# Subsystem grouping for the comparison workspace — ordered so related fields sit
+# together (aero, then the mechanical platform, alignment, diff, gearing, brakes).
+# Each entry: (group label, predicate over the field name). First match wins.
+_SETUP_SUBSYSTEMS = [
+    ("Aerodynamics", lambda f: f.startswith("aero") or "downforce" in f or "wing" in f),
+    ("Springs & ride height", lambda f: f.startswith("spring") or f.startswith("ride_height")
+        or "natural_freq" in f),
+    ("Dampers", lambda f: f.startswith("damper") or "bump" in f or "rebound" in f),
+    ("Anti-roll bars", lambda f: f.startswith("arb") or "anti_roll" in f or "roll_bar" in f),
+    ("Alignment", lambda f: f.startswith("camber") or f.startswith("toe")
+        or f.startswith("caster")),
+    ("Differential", lambda f: f.startswith("lsd") or "differential" in f or f == "diff"),
+    ("Gearing", lambda f: f.startswith("gear") or f == "final_drive"),
+    ("Brakes", lambda f: f.startswith("brake")),
+    ("Tyres & pressure", lambda f: f.startswith("tyre") or f.startswith("tire")
+        or "pressure" in f),
+    ("Ballast & weight", lambda f: "ballast" in f or "weight" in f),
+]
+
+
+def _subsystem_for_field(field: str) -> str:
+    """Classify a setup field name into a human subsystem group (workspace)."""
+    f = (field or "").lower()
+    for label, pred in _SETUP_SUBSYSTEMS:
+        try:
+            if pred(f):
+                return label
+        except Exception:
+            continue
+    return "Other adjustments"
+
+
+def _discipline_comparison_workspace_html(plan: dict) -> str:
+    """Render the Base / Qualifying / Race comparison workspace (Phase 7).
+
+    A fuller, self-contained view than the compact field table: three objective
+    header cards, a shared-foundation summary, and the genuinely-differing fields
+    grouped by subsystem — each divergence annotated with WHY that discipline
+    leans the way it does. Module-level and self-guarding: an absent/empty plan
+    (or one with no differing fields) renders nothing, so the caller can fall back
+    to the compact table.
+    """
+    if not isinstance(plan, dict):
+        return ""
+    rows = [r for r in (plan.get("rows") or []) if isinstance(r, dict)]
+    rows = [r for r in rows
+            if any(r.get(k) is not None for k in ("base", "qualifying", "race"))]
+    if not rows:
+        return ""
+    differing = [r for r in rows if r.get("differs")]
+    # Nothing genuinely differs → the compact table is the better surface.
+    if not differing:
+        return ""
+
+    # --- Objective header cards (Base / Qualifying / Race) ---
+    _card_colour = {"base": "#9FB6C4", "qualifying": "#F5A623", "race": "#8BC34A"}
+    _discs = [d for d in (plan.get("disciplines") or []) if isinstance(d, dict)]
+    _cards = ""
+    for d in _discs:
+        _k = str(d.get("key", ""))
+        _col = _card_colour.get(_k, "#AAA")
+        _conf = str(d.get("confidence", "")).lower()
+        _conf_chip = (
+            f"<span style='color:#888; font-size:9px;'> &middot; {_conf} confidence</span>"
+            if _conf and _conf != "n/a" else ""
+        )
+        _cards += (
+            f"<td style='vertical-align:top; padding:0 6px 0 0; width:33%;'>"
+            f"<div style='background:#12160F; border:1px solid #2E3A2A; border-top:2px solid {_col}; "
+            f"border-radius:4px; padding:6px 8px;'>"
+            f"<b style='color:{_col}; font-size:11px;'>{d.get('label', _k.title())}</b>{_conf_chip}"
+            f"<p style='margin:3px 0 0 0; color:#AEB8AE; font-size:10px; line-height:1.35;'>"
+            f"{d.get('objective', '')}</p></div></td>"
+        )
+    _cards_row = (
+        f"<table style='border-collapse:separate; border-spacing:0; width:100%; "
+        f"margin-top:6px;'><tr>{_cards}</tr></table>" if _cards else ""
+    )
+
+    # --- Shared-foundation summary ---
+    _shared = len(rows) - len(differing)
+    _shared_note = (
+        f"<p style='margin:7px 0 2px 0; color:#7FBEDF; font-size:10px;'>"
+        f"&#128279; <b>{_shared}</b> of {len(rows)} fields are identical across all "
+        f"three disciplines &mdash; your shared platform. The "
+        f"<b style='color:#8BC34A;'>{len(differing)}</b> below are where they diverge.</p>"
+    )
+
+    # --- Differing fields grouped by subsystem ---
+    _by_sub: dict = {}
+    for r in differing:
+        _by_sub.setdefault(_subsystem_for_field(str(r.get("field", ""))), []).append(r)
+    _ordered_subs = [lbl for lbl, _ in _SETUP_SUBSYSTEMS if lbl in _by_sub]
+    _ordered_subs += [s for s in _by_sub if s not in _ordered_subs]  # "Other" last
+
+    _groups = ""
+    for _sub in _ordered_subs:
+        _sub_rows = ""
+        for r in _by_sub[_sub]:
+            _field = str(r.get("field", "")).replace("_", " ")
+            _bv, _qv, _rv = r.get("base"), r.get("qualifying"), r.get("race")
+            _q_hl = "#F5C77E" if _qv != _bv else "#6B6B6B"
+            _r_hl = "#A9D275" if _rv != _bv else "#6B6B6B"
+            _proven = ""
+            if r.get("proven") is not None:
+                _proven = (f"<span style='color:#5FA8D3; font-size:9px;'> "
+                           f"(proven {_fmt_plan_value(r.get('proven'))})</span>")
+            _why_bits = []
+            if r.get("why_qualifying"):
+                _why_bits.append(
+                    f"<span style='color:#F5A623;'>Q:</span> {r['why_qualifying']}")
+            if r.get("why_race"):
+                _why_bits.append(
+                    f"<span style='color:#8BC34A;'>R:</span> {r['why_race']}")
+            _why = ""
+            if _why_bits:
+                _why = (
+                    "<div style='margin:0 0 3px 0; color:#8FA69A; font-size:9px; "
+                    "line-height:1.35;'>" + " &nbsp; ".join(_why_bits) + "</div>"
+                )
+            _sub_rows += (
+                f"<div style='padding:3px 0; border-top:1px solid #1C241A;'>"
+                f"<div style='color:#EDE3C8; font-size:11px;'>{_field}{_proven}</div>"
+                f"<div style='color:#999; font-size:10px; margin:1px 0;'>"
+                f"<span style='color:#9FB6C4;'>Base {_fmt_plan_value(_bv)}</span> "
+                f"&rarr; <span style='color:{_q_hl};'>Q {_fmt_plan_value(_qv)}</span> "
+                f"&nbsp; <span style='color:{_r_hl};'>R {_fmt_plan_value(_rv)}</span></div>"
+                f"{_why}</div>"
+            )
+        _sub_label = _sub.replace("&", "&amp;")
+        _groups += (
+            f"<div style='margin-top:6px;'>"
+            f"<p style='margin:0; color:#7FD0AC; font-size:10px; "
+            f"text-transform:uppercase; letter-spacing:0.5px;'><b>{_sub_label}</b></p>"
+            f"{_sub_rows}</div>"
+        )
+
+    _seeded = plan.get("seeded_from_history") or []
+    _seeded_note = ""
+    if _seeded:
+        _seeded_note = (
+            "<p style='margin:6px 0 0 0; color:#7FBEDF; font-size:10px;'>"
+            "&#10003; Seeded from your proven setup: "
+            + ", ".join(str(s).replace("_", " ") for s in _seeded) + ".</p>"
+        )
+
+    return (
+        "<div style='background:#0E1410; border:1px solid #2E4636; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#8BC34A; font-size:12px;'>"
+        "&#128295; Base &middot; Qualifying &middot; Race &mdash; comparison workspace</b>"
+        f"{_cards_row}{_shared_note}{_groups}{_seeded_note}</div>"
+    )
+
+
 _BALANCE_AXIS_LABEL = {"entry": "Turn-in / entry", "exit": "Corner exit / traction",
                        "braking": "Braking stability"}
 
@@ -2537,6 +2692,10 @@ class SetupBuilderMixin:
         method (which is sometimes called with self=None in tests) never needs self."""
         return _discipline_field_plan_html(plan)
 
+    def _render_discipline_comparison_workspace(self, plan: dict) -> str:
+        """Thin wrapper — delegates to the module-level workspace renderer."""
+        return _discipline_comparison_workspace_html(plan)
+
     def _render_race_engineer_surfaces(self, data: dict) -> str:
         """Build the additive Race-Engineer panels from the response dict.
 
@@ -2556,7 +2715,11 @@ class SetupBuilderMixin:
         html += _engineering_brain_html(data)
         html += _balance_solution_html(data.get("balance_solution"))
         html += _driver_fit_html(data.get("driver_fit_reasoning"))
-        html += _discipline_field_plan_html(data.get("discipline_field_plan"))
+        # Prefer the richer comparison workspace; fall back to the compact side-by-side
+        # table when nothing genuinely differs between the disciplines.
+        _dfp = data.get("discipline_field_plan")
+        _workspace = _discipline_comparison_workspace_html(_dfp)
+        html += _workspace if _workspace else _discipline_field_plan_html(_dfp)
 
         # --- Section 9: Qualifying discipline (Phase 7) ---
         _qb = data.get("qualifying_brief") or {}
