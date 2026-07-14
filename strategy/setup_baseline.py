@@ -102,6 +102,9 @@ _LABEL_CAR_RANGE  = "car-range adapted (neutral intent, off-boundary)"
 # Provenance for a seed lifted from the driver's PROVEN historical setup (Phase 9
 # baseline lift) — the base starts from validated geometry, not a neutral guess.
 _LABEL_HISTORY    = "seeded from your proven setup"
+# Provenance for a value shaped by the engineering-reasoning layer (vehicle + track
+# + objective coupling) — an engineer's directional call, not a neutral default.
+_LABEL_ENGINEERING = "engineered for car + track + objective"
 
 # When a neutral seed lands within this fraction of either end of a car's
 # resolved range, it is treated as boundary-hugging and re-placed by intent.
@@ -235,6 +238,7 @@ def _build_gearbox_changes(
     ranges: dict,
     num_gears: int,
     locked_fields: set,
+    final_drive_lean: float = 0.0,
 ) -> list[dict]:
     """Build change dicts for gearbox fields (final_drive + gear_1..gear_N).
 
@@ -270,16 +274,19 @@ def _build_gearbox_changes(
     _gear_lo, _gear_hi = _GRR
     _fd_lo, _fd_hi = _FDR
 
-    # final_drive (only if not locked)
+    # final_drive (only if not locked). The engineering lean shifts it off the
+    # neutral midpoint toward longer (lower) or shorter (higher) gearing.
     if "final_drive" not in locked_fields:
         _fd_range = ranges.get("final_drive", (_fd_lo, _fd_hi))
         _fd_mid = (_fd_range[0] + _fd_range[1]) / 2.0
-        _fd_val = _round_for_field("final_drive", _clamp(_fd_mid, _fd_range[0], _fd_range[1]))
+        _fd_target = _fd_mid + (float(final_drive_lean) or 0.0)
+        _fd_val = _round_for_field("final_drive", _clamp(_fd_target, _fd_range[0], _fd_range[1]))
+        _fd_label = _LABEL_ENGINEERING if final_drive_lean else _LABEL_MIDPOINT
         changes.append(_make_change_dict(
             field="final_drive",
             from_val=_fd_val,   # from-scratch: "from" == "to" (starting point)
             to_val=_fd_val,
-            label=_LABEL_MIDPOINT,
+            label=_fd_label,
             alignment="neutral",
         ))
 
@@ -471,6 +478,8 @@ def build_baseline_setup(
     duration_mins: float = 0.0,
     track_profile=None,
     historical_seed_overrides: "dict | None" = None,
+    engineering_bias: "dict | None" = None,
+    final_drive_lean: float = 0.0,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -568,6 +577,17 @@ def build_baseline_setup(
     for _sb_field, _sb_delta in _session_bias_deltas.items():
         bias[_sb_field] = bias.get(_sb_field, 0.0) + _sb_delta
 
+    # Engineering-reasoning layer (strategy/setup_engineering) — vehicle + track +
+    # objective + driver directional intents. Additive into the SAME bias dict, so
+    # everything is clamped/rounded by the pipeline unchanged. Default None → the
+    # baseline output is byte-for-byte identical to before (no caller passes it).
+    _eng_fields: set = set()
+    if engineering_bias:
+        for _eb_field, _eb_delta in engineering_bias.items():
+            if _eb_delta:
+                bias[_eb_field] = bias.get(_eb_field, 0.0) + float(_eb_delta)
+                _eng_fields.add(_eb_field)
+
     # Phase 5: track-specific aero shaping. A straight-heavy circuit trims drag
     # (offsetting the driver-profile "add front aero" nudge that otherwise pins
     # front aero to its ceiling — the base-max-aero UAT defect); a corner-dense
@@ -622,11 +642,13 @@ def build_baseline_setup(
 
         seed = NEUTRAL_SEEDS[field]
 
-        # Phase 9 baseline lift: for personal-fit geometry (camber/toe) the driver
-        # has a STRONG proven prior for, start from that validated value instead of
-        # the neutral seed. Profile + session bias still stack on top (e.g. quali
-        # adds camber to the proven base). Only fields the caller pre-vetted arrive
-        # here — safety diffs / aero / brakes / gearing are never in this map.
+        # Phase 9 baseline lift: for personal-fit levers the driver has a STRONG
+        # proven prior for — geometry (camber/toe) and, from Group 64, the LSD
+        # triplet (a proven same-car diff is a valid starting window) — start from
+        # that validated value instead of the neutral seed. Profile + session bias
+        # still stack on top (e.g. quali adds camber and frees the diff on the proven
+        # base). Only fields the caller pre-vetted arrive here — aero / brakes /
+        # gearing / ride height are never in this map (they are track/strategy driven).
         _hist_seeded = False
         _hist_override = (historical_seed_overrides or {}).get(field)
         if _hist_override is not None:
@@ -696,6 +718,11 @@ def build_baseline_setup(
             # if profile/session bias then stacked on top.
             label = _LABEL_HISTORY
             alignment = "aligned"
+        elif field in _eng_fields:
+            # Engineering-reasoning provenance ranks above a plain profile nudge — the
+            # value was shaped by vehicle + track + objective reasoning.
+            label = _LABEL_ENGINEERING
+            alignment = "aligned"
         elif is_biased:
             label = _LABEL_BIASED
             alignment = "aligned"
@@ -754,8 +781,11 @@ def build_baseline_setup(
             except (TypeError, ValueError):
                 setup_fields[field] = to_val
 
-    # Gearbox fields — always authored (from-scratch baseline, no prior setup)
-    gb_changes = _build_gearbox_changes(ranges, num_gears, locked_fields)
+    # Gearbox fields — always authored (from-scratch baseline, no prior setup).
+    # final_drive_lean gears the car to the circuit (longer for top speed on a
+    # straight-heavy track, shorter for acceleration on a corner-dense one).
+    gb_changes = _build_gearbox_changes(ranges, num_gears, locked_fields,
+                                        final_drive_lean=final_drive_lean)
     for ch in gb_changes:
         changes.append(ch)
         f = ch.get("field")

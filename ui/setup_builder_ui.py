@@ -105,6 +105,16 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
             "deferred pending more evidence or a targeted test (see the analysis)."
             "</div>"
         )
+    if status == "balance_recommendation":
+        return (
+            "<div style='background:#0E1A16; border:1px solid #3FA07A; "
+            "border-radius:4px; padding:8px; margin-bottom:8px; color:#7FD0AC;'>"
+            "&#9878; <b>Coordinated balance setup.</b> Several problems interact, so "
+            "these changes were engineered as a SET (free the front, plant the rear, "
+            "brake forward). Apply them together and validate over a few clean laps "
+            "&mdash; see the balance breakdown and test plan below."
+            "</div>"
+        )
     if status == "evidence_required":
         return (
             "<div style='background:#2A0A0A; border:2px solid #E05050; "
@@ -177,6 +187,191 @@ def _set_spin_readonly(spin, readonly: bool) -> None:
         QAbstractSpinBox.ButtonSymbols.NoButtons
         if readonly
         else QAbstractSpinBox.ButtonSymbols.UpDownArrows
+    )
+
+
+# Human-readable disposition labels for the discipline table (Group 64).
+_DISCIPLINE_DISPOSITION_LABELS = {
+    "AUTHORED": ("authored", "#8BC34A"),
+    "PROVEN_HISTORY_SEED": ("proven", "#5FA8D3"),
+    "DRIVER_PROFILE_SEED": ("profile", "#B0A0D0"),
+    "TRACK_MODEL_SEED": ("track", "#5FA8D3"),
+    "EVENT_CONSTRAINT": ("locked", "#E0A458"),
+    "CONTROLLED_TEST_REQUIRED": ("test", "#E0A458"),
+    "INSUFFICIENT_EVIDENCE": ("default", "#999999"),
+    "NOT_ADJUSTABLE": ("n/a", "#666666"),
+    "NOT_RELEVANT": ("n/a", "#666666"),
+    "REJECTED_FOR_SAFETY": ("blocked", "#E86A5E"),
+}
+
+
+def _fmt_plan_value(v) -> str:
+    """Format a setup value for the discipline table (numbers trimmed, None → —)."""
+    if v is None:
+        return "<span style='color:#666;'>&mdash;</span>"
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:g}"
+    return str(v)
+
+
+def _discipline_field_plan_html(plan: dict) -> str:
+    """Render Base / Qualifying / Race as a side-by-side field table (Group 64).
+
+    Module-level (needs no widget) and self-guarding: an absent/empty plan renders
+    nothing. Rows where all three disciplines share a value are dimmed; genuinely
+    differing fields are highlighted so the driver sees what each discipline changes.
+    """
+    if not isinstance(plan, dict):
+        return ""
+    rows = plan.get("rows") or []
+    rows = [r for r in rows if isinstance(r, dict)
+            and any(r.get(k) is not None for k in ("base", "qualifying", "race"))]
+    if not rows:
+        return ""
+    differing = plan.get("differing_fields") or []
+    seeded = plan.get("seeded_from_history") or []
+    rows = sorted(rows, key=lambda r: (not r.get("differs"), str(r.get("field", ""))))
+
+    _hdr = (
+        "<th style='text-align:left; color:#888; padding:2px 10px 4px 0;'>Field</th>"
+        "<th style='text-align:right; color:#9FB6C4; padding:2px 10px 4px 0;'>Base</th>"
+        "<th style='text-align:right; color:#F5A623; padding:2px 10px 4px 0;'>Qualifying</th>"
+        "<th style='text-align:right; color:#8BC34A; padding:2px 10px 4px 0;'>Race</th>"
+        "<th style='text-align:right; color:#5FA8D3; padding:2px 10px 4px 0;'>Proven</th>"
+        "<th style='text-align:left; color:#888; padding:2px 0 4px 0;'>Source</th>"
+    )
+    _body = ""
+    for r in rows:
+        _field = str(r.get("field", "")).replace("_", " ")
+        _differs = bool(r.get("differs"))
+        _name_col = "#EDE3C8" if _differs else "#999"
+        _row_bg = "background:#141C10;" if _differs else ""
+        _disp = str(r.get("disposition", ""))
+        _disp_label, _disp_colour = _DISCIPLINE_DISPOSITION_LABELS.get(
+            _disp, (_disp.lower().replace("_", " "), "#888"))
+        _mark = " &#9679;" if _differs else ""
+        _body += (
+            f"<tr style='{_row_bg}'>"
+            f"<td style='color:{_name_col}; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_field}<span style='color:#8BC34A;'>{_mark}</span></td>"
+            f"<td style='text-align:right; color:#9FB6C4; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('base'))}</td>"
+            f"<td style='text-align:right; color:#F5C77E; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('qualifying'))}</td>"
+            f"<td style='text-align:right; color:#A9D275; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('race'))}</td>"
+            f"<td style='text-align:right; color:#7FBEDF; padding:2px 10px 2px 0; font-size:11px;'>"
+            f"{_fmt_plan_value(r.get('proven'))}</td>"
+            f"<td style='color:{_disp_colour}; padding:2px 0 2px 0; font-size:10px;'>"
+            f"{_disp_label}</td>"
+            "</tr>"
+        )
+
+    _seeded_note = ""
+    if seeded:
+        _seeded_note = (
+            "<p style='margin:5px 0 0 0; color:#7FBEDF; font-size:10px;'>"
+            "&#10003; Seeded from your proven setup: "
+            + ", ".join(str(s).replace("_", " ") for s in seeded) + ".</p>"
+        )
+    _diff_note = (
+        f"<p style='margin:3px 0 0 0; color:#999; font-size:10px;'>"
+        f"&#9679; {len(differing)} field(s) genuinely differ between disciplines "
+        "(Qualifying = one-lap attack; Race = repeatable pace over the stint).</p>"
+        if differing else ""
+    )
+    return (
+        "<div style='background:#0E1410; border:1px solid #2E4636; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#8BC34A; font-size:12px;'>"
+        "&#128203; Base &middot; Qualifying &middot; Race &mdash; side by side</b>"
+        "<table style='border-collapse:collapse; margin-top:6px; width:100%;'>"
+        f"<tr>{_hdr}</tr>{_body}</table>"
+        f"{_diff_note}{_seeded_note}</div>"
+    )
+
+
+_BALANCE_AXIS_LABEL = {"entry": "Turn-in / entry", "exit": "Corner exit / traction",
+                       "braking": "Braking stability"}
+
+
+def _balance_solution_html(sol: dict) -> str:
+    """Render the coordinated balance solution (moves grouped by axis + trade-off +
+    test protocol). Module-level, self-guarding — absent/unsolved renders nothing."""
+    if not isinstance(sol, dict) or not sol.get("solved"):
+        return ""
+    moves = sol.get("moves") or []
+    if not moves:
+        return ""
+    by_axis: dict = {}
+    for m in moves:
+        by_axis.setdefault(str(m.get("axis", "")), []).append(m)
+    _body = ""
+    for axis in ("entry", "exit", "braking"):
+        ax_moves = by_axis.get(axis) or []
+        if not ax_moves:
+            continue
+        _rows = ""
+        for m in ax_moves:
+            _fld = str(m.get("field", "")).replace("_", " ")
+            _rows += (
+                f"<p style='margin:1px 0; color:#CBD8D0; font-size:11px;'>"
+                f"<b>{_fld}</b> {m.get('from')} &rarr; {m.get('to')} "
+                f"<span style='color:#8FA69A;'>— {m.get('reason', '')}</span></p>"
+            )
+        _body += (
+            f"<p style='margin:5px 0 1px 0; color:#7FD0AC; font-size:11px;'>"
+            f"<b>{_BALANCE_AXIS_LABEL.get(axis, axis.title())}</b></p>{_rows}"
+        )
+    _trade = ""
+    for t in (sol.get("tradeoffs") or []):
+        _trade += (f"<p style='margin:4px 0 0 0; color:#E0C890; font-size:10px;'>"
+                   f"&#8644; {t}</p>")
+    _tests = ""
+    for t in (sol.get("targeted_tests") or []):
+        _tests += (f"<p style='margin:1px 0; color:#9FB6C4; font-size:10px;'>"
+                   f"&#128300; {t}</p>")
+    _proto = ""
+    if sol.get("test_protocol"):
+        _proto = (f"<p style='margin:5px 0 0 0; color:#AAB; font-size:10px;'>"
+                  f"<b>How to test:</b> {sol['test_protocol']}</p>")
+    return (
+        "<div style='background:#0C1512; border:1px solid #2E5044; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#7FD0AC; font-size:12px;'>&#9878; Coordinated balance change "
+        "&mdash; engineered as a set</b>"
+        f"{_body}{_trade}{_tests}{_proto}</div>"
+    )
+
+
+def _driver_fit_html(reasoning: dict) -> str:
+    """Render how the setup was tailored to the driver's style, evidence-scaled.
+    Module-level, self-guarding — absent/empty renders nothing."""
+    if not isinstance(reasoning, dict):
+        return ""
+    intents = reasoning.get("intents") or []
+    if not intents:
+        return ""
+    _rows = ""
+    for i in intents:
+        _fld = str(i.get("field", "")).replace("_", " ")
+        _conf = str(i.get("confidence", ""))
+        _rows += (
+            f"<p style='margin:1px 0; color:#CBC8D8; font-size:11px;'>"
+            f"<b>{_fld}</b> {i.get('from')} &rarr; {i.get('to')} "
+            f"<span style='color:#8F8CA6;'>({_conf}) — {i.get('reason', '')}</span></p>"
+        )
+    _note = str(reasoning.get("note", ""))
+    _note_html = (f"<p style='margin:4px 0 0 0; color:#9A97AE; font-size:10px;'>{_note}</p>"
+                  if _note else "")
+    return (
+        "<div style='background:#12101A; border:1px solid #4A3E64; "
+        "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+        "<b style='color:#B0A0D0; font-size:12px;'>&#128100; Tailored to your driving "
+        "style</b>"
+        f"{_rows}{_note_html}</div>"
     )
 
 
@@ -1678,7 +1873,12 @@ class SetupBuilderMixin:
         _diagnosis_html = ""
         if _diagnosis:
             _dom   = _diagnosis.get("dominant_problem") or "—"
-            _btm   = _diagnosis.get("bottoming_band") or "—"
+            # Group 64: render the ONE canonical bottoming state (consequence-graded),
+            # never the raw count band — so the header can no longer contradict the
+            # bottoming-impact panel ("required" vs "normal / expected").
+            _bds   = _diagnosis.get("bottoming_display_state") or {}
+            _btm   = (_bds.get("state") if isinstance(_bds, dict) and _bds.get("state")
+                      else (_diagnosis.get("bottoming_band") or "—"))
             _ws    = _diagnosis.get("wheelspin_band") or "—"
             _gbx   = _diagnosis.get("gearbox_flag") or "none"
             _conf  = _diagnosis.get("location_confidence") or "—"
@@ -2132,6 +2332,11 @@ class SetupBuilderMixin:
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
+    def _render_discipline_field_plan(self, plan: dict) -> str:
+        """Thin wrapper — delegates to the module-level renderer so the surfaces
+        method (which is sometimes called with self=None in tests) never needs self."""
+        return _discipline_field_plan_html(plan)
+
     def _render_race_engineer_surfaces(self, data: dict) -> str:
         """Build the additive Race-Engineer panels from the response dict.
 
@@ -2141,6 +2346,14 @@ class SetupBuilderMixin:
         if not isinstance(data, dict):
             return ""
         html = ""
+
+        # --- Section 8b: Discipline field plan (Group 64) ---
+        # Base / Qualifying / Race authored side-by-side so the driver can SEE where
+        # the three disciplines genuinely differ (not just a relabelled setup), with
+        # the proven-history value and each field's disposition.
+        html += _balance_solution_html(data.get("balance_solution"))
+        html += _driver_fit_html(data.get("driver_fit_reasoning"))
+        html += _discipline_field_plan_html(data.get("discipline_field_plan"))
 
         # --- Section 9: Qualifying discipline (Phase 7) ---
         _qb = data.get("qualifying_brief") or {}
@@ -2383,6 +2596,40 @@ class SetupBuilderMixin:
                 "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
                 "<b style='color:#5FA8D3; font-size:11px;'>&#128300; Precise targeted tests</b>"
                 f"{_tt_body}</div>"
+            )
+
+        # --- Section 18: Recommendation completeness verdict (Group 64) ---
+        # A change being safe is not the same as the setup being complete. Show the
+        # driver whether this is a finished setup, a partial, or a test plan — and
+        # which confirmed problems are still untreated.
+        _comp = data.get("recommendation_completeness") or {}
+        if isinstance(_comp, dict) and _comp.get("state"):
+            _state = str(_comp.get("state", ""))
+            _complete = bool(_comp.get("complete"))
+            _untreated = _comp.get("untreated") or []
+            _colour = "#8BC34A" if _complete else "#E0A458"
+            _label_map = {
+                "approved_complete": "Complete setup",
+                "approved_incremental_test": "Incremental controlled test",
+                "partial_recommendation": "Partial recommendation",
+                "targeted_test_required": "Targeted test required",
+                "insufficient_evidence": "Insufficient evidence",
+                "conflicting_evidence": "Conflicting evidence",
+                "blocked_unsafe": "Blocked — unsafe",
+                "rejected_incoherent": "Rejected — incoherent",
+            }
+            _readable = _label_map.get(_state, _state.replace("_", " ").title())
+            _untreated_html = ""
+            if _untreated and not _complete:
+                _names = ", ".join(str(u).replace("_", " ") for u in _untreated)
+                _untreated_html = (
+                    f"<p style='margin:2px 0; color:#CCC; font-size:11px;'>"
+                    f"Still untreated: {_names}</p>")
+            html += (
+                "<div style='background:#14100A; border:1px solid #5A4A2E; "
+                "border-radius:4px; padding:6px 10px; margin-top:8px;'>"
+                f"<b style='color:{_colour}; font-size:11px;'>&#9878; Setup completeness: "
+                f"{_readable}</b>{_untreated_html}</div>"
             )
 
         return html

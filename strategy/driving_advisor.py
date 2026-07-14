@@ -2099,11 +2099,20 @@ class DrivingAdvisor:
                         "throttle, so adding accel-locking is unsafe (it would worsen "
                         "power oversteer)."
                     )
-                elif _ws_subtype in ("insufficient_data", "mixed"):
+                elif _ws_subtype == "conflicting_evidence":
                     _analysis_text += (
-                        " LSD accel change DEFERRED — confirm whether the traction loss is "
-                        "isolated inside-wheel spin or whole-axle power oversteer before "
-                        "changing the differential."
+                        " LSD accel change DEFERRED — the wheelspin evidence conflicts "
+                        "(telemetry hints short gearing, but you reported the top gear is "
+                        "unused). Run a controlled test to settle the cause before touching "
+                        "the differential or the gearing."
+                    )
+                elif _ws_subtype in ("insufficient_data", "mixed", "unknown"):
+                    _analysis_text += (
+                        " LSD accel change DEFERRED — the wheelspin cause is not proven "
+                        "(location/per-gear evidence is insufficient). Confirm with a "
+                        "controlled test whether it is isolated inside-wheel spin, "
+                        "whole-axle power oversteer, or gear-too-short before changing the "
+                        "differential."
                     )
             if (_flags.get("braking_instability")
                     and "brake_bias" not in _proposed_fields
@@ -2413,12 +2422,162 @@ class DrivingAdvisor:
                 # Braking evaluated independently against the proven same-car prior,
                 # each with an executable controlled test. Advisory: it authors no
                 # values; the rule-first engine + Apply gate are unchanged.
+                _lsd_tested_fields: set = set()
                 try:
                     from strategy.lsd_reasoning import build_lsd_triplet_assessment
                     _lsd = build_lsd_triplet_assessment(diagnosis or {}, setup_dict, _prior)
                     _data["lsd_assessment"] = _lsd.as_json()
                     if _lsd.controlled_tests:
                         _data.setdefault("_targeted_tests", []).extend(_lsd.controlled_tests)
+                    # Fields the LSD triplet covered with an executable controlled test —
+                    # they count as "treated" for the completeness verdict below.
+                    _lsd_tested_fields = {
+                        f.field for f in _lsd.fields
+                        if getattr(f, "evaluated", False) and getattr(f, "controlled_test", "")
+                    }
+                except Exception:
+                    pass
+
+                # ── Group 64: recommendation-completeness verdict ─────────────────
+                # A change being safe does not make the SETUP complete. Downgrade a
+                # plain "approved" to "partial_recommendation" when confirmed handling
+                # problems remain untreated (neither an approved change nor a targeted
+                # test covers them), so a lone ARB/final-drive change can never be
+                # presented as a finished setup. This never authors values and never
+                # lifts an unsafe/blocked plan into apply-eligibility.
+                try:
+                    from strategy.setup_diagnosis import (
+                        assess_recommendation_completeness, RECO_PARTIAL,
+                        RECO_TARGETED_TEST, RECO_CONFLICTING_EVIDENCE,
+                    )
+                    _approved_field_set = {
+                        c.get("field") for c in (_data.get("changes") or [])
+                        if isinstance(c, dict) and c.get("field")
+                    }
+                    _tested_field_set = set(_lsd_tested_fields)
+                    _dg2 = diagnosis or {}
+                    _conflicting = (
+                        str(_dg2.get("gearing_state", "")) == "conflicting"
+                        or str(_dg2.get("gearing_diagnosis_category", "")) == "conflicting_evidence"
+                        or str(_dg2.get("wheelspin_subtype", "")) == "conflicting_evidence"
+                    )
+                    _completeness = assess_recommendation_completeness(
+                        _dg2, _approved_field_set, _tested_field_set,
+                        base_status=str(_data.get("recommendation_status", "")),
+                        has_conflicting_evidence=_conflicting,
+                    )
+                    _data["recommendation_completeness"] = _completeness
+                    # Downgrade the *displayed* status when the plan is incomplete but
+                    # currently sits in the plain approved family (not already partial /
+                    # evidence_required). partial_recommendation stays apply-eligible.
+                    _cur_status = str(_data.get("recommendation_status", ""))
+                    if (_completeness.get("is_partial")
+                            and _cur_status in ("approved", "approved_with_warnings",
+                                                "approved_with_rejections")):
+                        _data["recommendation_status"] = "partial_recommendation"
+                        _note = str(_completeness.get("note", "")).strip()
+                        if _note:
+                            _data["analysis"] = (str(_data.get("analysis", "")).rstrip()
+                                                 + " " + _note).strip()
+                except Exception:
+                    _data.setdefault("recommendation_completeness", {})
+
+                # ── Balance solver: author instead of defer ──────────────────────
+                # When several conflicting complaints would otherwise leave the driver
+                # with evidence_required / a partial with untreated problems, an engineer
+                # authors a COORDINATED balance change (free the front, plant the rear,
+                # brake forward) rather than asking for more evidence. Deterministic and
+                # rule-first; the moves flow through the SAME engineering validator and
+                # Apply gate, and are honestly framed as a balance change to test.
+                try:
+                    from strategy.setup_balance_solver import (
+                        solve_balance, confirmed_handling_complaints,
+                    )
+                    from strategy.setup_diagnosis import assess_recommendation_completeness
+                    _comp2 = _data.get("recommendation_completeness") or {}
+                    _status_now = str(_data.get("recommendation_status", ""))
+                    _complaints = confirmed_handling_complaints(diagnosis or {})
+                    _deferred = (
+                        _status_now == EVIDENCE_REQUIRED_STATUS
+                        or (_comp2.get("is_partial") and _comp2.get("untreated"))
+                        or not (_data.get("changes") or [])
+                    )
+                    if len(_complaints) >= 2 and _deferred:
+                        _bal_ranges = resolve_ranges(car_name)
+                        _bal_locked = (_derive_locked_fields(allowed_tuning)
+                                       if allowed_tuning else set())
+                        _sol = solve_balance(diagnosis or {}, setup_dict, _bal_ranges,
+                                             locked_fields=_bal_locked)
+                        if _sol.solved and _sol.moves:
+                            # Compose evidence-scaled driver-fit moves for fields the
+                            # balance did NOT touch (so driver influence reaches the
+                            # telemetry path too, without conflicting with the balance).
+                            _bal_change_dicts = _sol.as_change_dicts()
+                            _bal_touched = {c.get("field") for c in _bal_change_dicts}
+                            # Respect the balance solver's DEFERRED fields (it chose to
+                            # test them, not author them) — driver-fit only tailors the
+                            # fields the solver neither moved nor deliberately deferred.
+                            _bal_off_limits = (_bal_touched | _bal_locked
+                                               | set(_sol.deferred_fields))
+                            _df_setup_fields = dict(_sol.setup_fields())
+                            try:
+                                from strategy.driver_fit import derive_driver_fit
+                                for _dfi in derive_driver_fit(_profile, setup_dict, _bal_ranges):
+                                    if _dfi.field in _bal_off_limits:
+                                        continue
+                                    _bal_change_dicts.append(_dfi.as_change_dict())
+                                    _df_setup_fields[_dfi.field] = _dfi.to_value
+                            except Exception:
+                                pass
+                            _bal_raw = {
+                                "analysis": _sol.summary,
+                                "primary_issue": "balance_compromise",
+                                "changes": _bal_change_dicts,
+                                "setup_fields": _df_setup_fields,
+                                "diagnosis": diagnosis or {},
+                                "validation_targets": {},
+                                "confidence": {"overall": "medium",
+                                               "reason": "coordinated balance change to test"},
+                            }
+                            _bal_fail = validate_setup_engineering_structured(
+                                _bal_raw, diagnosis=diagnosis or {}, setup=setup_dict,
+                                ranges=_bal_ranges, event_ctx={}, car_name=car_name,
+                                rec_history=None)
+                            _bal_final = _finalise_recommendation(
+                                _bal_raw, _bal_fail, fallback_used=False, retried=False)
+                            if (_bal_final.status in APPROVED_STATUSES
+                                    and _bal_final.approved_fields):
+                                _data["recommendation_status"] = "balance_recommendation"
+                                _data["changes"] = _bal_final.approved_changes
+                                _data["setup_fields"] = _bal_final.approved_fields
+                                _data["engineering_validation_failed"] = False
+                                _data["engineering_validation_errors"] = _bal_final.engineering_errors
+                                _data["balance_solution"] = _sol.as_json()
+                                if _sol.targeted_tests:
+                                    _data.setdefault("_targeted_tests", []).extend(
+                                        _sol.targeted_tests)
+                                _bal_fields = {c.get("field")
+                                               for c in _bal_final.approved_changes}
+                                _data["recommendation_completeness"] = (
+                                    assess_recommendation_completeness(
+                                        diagnosis or {}, _bal_fields,
+                                        set(_sol.targeted_tests and [] or []),
+                                        base_status="approved"))
+                                _data["analysis"] = (
+                                    _sol.summary + " " + _sol.test_protocol).strip()
+                except Exception:
+                    pass
+
+                # Driver-fit reasoning surface (advisory) — how the CURRENT setup fits
+                # or works against the driver's stated style, evidence-scaled. Shown on
+                # the telemetry path even when nothing is authored, so driver influence
+                # is always visible (the audit's Gap 3: it was zero on this path).
+                try:
+                    from strategy.driver_fit import derive_driver_fit, driver_fit_reasoning
+                    _df_a = derive_driver_fit(
+                        _profile, setup_dict, resolve_ranges(car_name))
+                    if _df_a:
+                        _data["driver_fit_reasoning"] = driver_fit_reasoning(_profile, _df_a)
                 except Exception:
                     pass
 
@@ -2585,9 +2744,11 @@ class DrivingAdvisor:
             # Group 46: also wire duration_mins through for session bias classification
             # Phase 9 baseline lift: seed personal-fit geometry (camber/toe) from the
             # driver's STRONG proven history so the from-scratch base starts from a
-            # validated value, not a neutral guess. Strong-scope only; never touches
-            # safety diffs / aero / brakes / gearing.
+            # validated value, not a neutral guess. Strong-scope only. Group 64: the
+            # lift set now includes the proven LSD triplet (a personal-fit starting
+            # window); aero / brakes / gearing / ride height are still never lifted.
             _seed_overrides = {}
+            _bl_prior: dict = {}
             if historical_setups:
                 try:
                     from strategy.setup_history_intelligence import (
@@ -2598,10 +2759,66 @@ class DrivingAdvisor:
                         car_name, track_name, layout_id, session_type,
                         historical_setups, car_category=car_class,
                     )
-                    _seed_overrides = build_baseline_seed_overrides(
-                        build_historical_prior(_bl_matches))
+                    _bl_prior = build_historical_prior(_bl_matches)
+                    _seed_overrides = build_baseline_seed_overrides(_bl_prior)
                 except Exception:
                     _seed_overrides = {}
+                    _bl_prior = {}
+
+            # Engineering-reasoning layer (audit: docs/AUDIT_setup_brain_engineer_evolution.md).
+            # Build a vehicle model from the car specs and reason over vehicle + track +
+            # objective + driver into coupled directional intents (gearing to the straight,
+            # ride-height for elevation, ARB balance, RR rear-stability, etc.). Flows through
+            # the SAME clamp/validate pipeline; degrades to no-op if anything is missing.
+            _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            _driver_fit_reasoning = None
+            try:
+                from strategy.setup_engineering import (
+                    build_vehicle_model, derive_engineering_intents, resolve_car_specs,
+                    coupling_report,
+                )
+                from strategy.setup_authoring import objective_from_session_type
+                _specs = resolve_car_specs(car_name)
+                _vehicle = build_vehicle_model(car_name, drivetrain or "", num_gears, _specs)
+                _objective = objective_from_session_type(session_type).value
+                _corner_profile = None
+                try:
+                    from strategy.corner_profile import (
+                        load_reviewed_segments, build_corner_profile,
+                    )
+                    _loc = getattr(track_profile, "track_location_id", "") or ""
+                    _lay = getattr(track_profile, "layout_id", "") or layout_id or ""
+                    _segs = load_reviewed_segments(_loc, _lay)
+                    if _segs:
+                        _corner_profile = build_corner_profile(_segs)
+                except Exception:
+                    _corner_profile = None
+                _eng_plan = derive_engineering_intents(
+                    _vehicle, track_profile, _objective, _profile,
+                    corner_profile=_corner_profile)
+                _eng_bias = _eng_plan.bias()
+                _eng_lean = _eng_plan.final_drive_lean
+                _eng_reasoning = _eng_plan.as_json()
+                _eng_reasoning["coupling"] = coupling_report(_eng_plan)
+            except Exception:
+                _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            # Evidence-scaled driver fit: tailor the neutral base toward the driver's
+            # stated style IN PROPORTION to how far each seed sits from their window.
+            try:
+                from strategy.driver_fit import (
+                    derive_driver_fit, driver_fit_bias, driver_fit_reasoning,
+                )
+                from strategy.setup_baseline import NEUTRAL_SEEDS
+                # A proven-history seed already IS the driver's validated preference —
+                # don't nudge those fields again (that would double-count and overshoot).
+                _df_intents = [i for i in derive_driver_fit(_profile, NEUTRAL_SEEDS, ranges)
+                               if i.field not in (_seed_overrides or {})]
+                for _dff, _dfd in driver_fit_bias(_df_intents).items():
+                    _eng_bias[_dff] = _eng_bias.get(_dff, 0.0) + _dfd
+                if _df_intents:
+                    _driver_fit_reasoning = driver_fit_reasoning(_profile, _df_intents)
+            except Exception:
+                _driver_fit_reasoning = None
 
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
@@ -2612,6 +2829,8 @@ class DrivingAdvisor:
                 duration_mins=duration_mins,
                 track_profile=track_profile,
                 historical_seed_overrides=_seed_overrides,
+                engineering_bias=_eng_bias,
+                final_drive_lean=_eng_lean,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta
@@ -2688,6 +2907,71 @@ class DrivingAdvisor:
                                          + " " + _qb.one_lap_warning).strip()
             except Exception:
                 _resp["qualifying_brief"] = {"is_qualifying": False}
+
+            # Engineering reasoning surface — the engineer's "why" behind the values
+            # (vehicle model, track-driven gearing/support, objective, coupling notes).
+            if _eng_reasoning:
+                _resp["engineering_reasoning"] = _eng_reasoning
+            # Driver-fit reasoning — how the base was tailored to the driver's style,
+            # scaled to how far each field sat from their window.
+            if _driver_fit_reasoning:
+                _resp["driver_fit_reasoning"] = _driver_fit_reasoning
+
+            # Group 64: canonical discipline field-plan surface — author Base,
+            # Qualifying and Race as separate full-field setups from ONE context so
+            # the UI can prove (not just label) where they differ, with a disposition
+            # for every adjustable field. Advisory/read-only; authors no applied value
+            # beyond the deterministic generator + validators already used above.
+            try:
+                from strategy.setup_authoring import (
+                    SetupObjective, SetupAuthoringContext, author_discipline_setups,
+                    objective_from_session_type,
+                )
+
+                def _mk_ctx(_obj):
+                    return SetupAuthoringContext(
+                        car=car_name, objective=_obj, ranges=ranges,
+                        drivetrain=drivetrain, num_gears=num_gears, profile=_profile,
+                        allowed_tuning=allowed_tuning, tuning_locked=tuning_locked,
+                        track_profile=track_profile, history_prior=_bl_prior or None,
+                        current_setup=None, duration_mins=duration_mins,
+                        tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
+                    )
+
+                _plans = author_discipline_setups(_mk_ctx)
+                _rows: list = []
+                _all_fields: set = set()
+                for _p in _plans.values():
+                    if _p is not None:
+                        _all_fields.update(_p.setup_fields.keys())
+                for _f in sorted(_all_fields):
+                    _bv = _plans.get("base") and _plans["base"].setup_fields.get(_f)
+                    _qv = _plans.get("qualifying") and _plans["qualifying"].setup_fields.get(_f)
+                    _rv = _plans.get("race") and _plans["race"].setup_fields.get(_f)
+                    _differs = not (_bv == _qv == _rv)
+                    _disp = ""
+                    _pv = None
+                    _rp = _plans.get("race")
+                    if _rp is not None:
+                        for _e in _rp.entries:
+                            if _e.field == _f:
+                                _disp = _e.disposition.value
+                                _pv = _e.proven_value
+                                break
+                    _rows.append({"field": _f, "base": _bv, "qualifying": _qv,
+                                  "race": _rv, "differs": _differs,
+                                  "disposition": _disp, "proven": _pv})
+                _resp["discipline_field_plan"] = {
+                    "objective": objective_from_session_type(session_type).value,
+                    "rows": _rows,
+                    "differing_fields": [r["field"] for r in _rows if r["differs"]],
+                    "seeded_from_history": (
+                        list(_plans["race"].seeded_from_history)
+                        if _plans.get("race") is not None else []
+                    ),
+                }
+            except Exception:
+                _resp["discipline_field_plan"] = {"rows": [], "differing_fields": []}
 
             return _json.dumps(_resp, ensure_ascii=False)
 

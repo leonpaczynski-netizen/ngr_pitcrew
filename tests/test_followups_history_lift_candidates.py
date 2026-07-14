@@ -40,11 +40,26 @@ def test_weak_prior_excluded():
 
 
 def test_non_lift_fields_excluded():
-    # aero / lsd / brake must NEVER be lifted from history into the base
+    # aero / brake / gearing / ride height must NEVER be lifted from history into
+    # the base — they are track/strategy driven, not driver-fit.
     prior = {"aero_front": {"value": 999, "tier": 1, "source": "x"},
-             "lsd_accel": {"value": 30, "tier": 1, "source": "x"},
-             "brake_bias": {"value": 5, "tier": 1, "source": "x"}}
+             "brake_bias": {"value": 5, "tier": 1, "source": "x"},
+             "final_drive": {"value": 4.1, "tier": 1, "source": "x"},
+             "ride_height_front": {"value": 60, "tier": 1, "source": "x"}}
     assert build_baseline_seed_overrides(prior) == {}
+
+
+def test_proven_lsd_is_lifted():
+    # Group 64: a STRONG proven same-car LSD triplet IS a valid starting window for
+    # the base setup (the diff is a personal-fit lever); aero/brake alongside are not.
+    prior = {"lsd_initial": {"value": 22, "tier": 1, "source": "Watkins"},
+             "lsd_accel": {"value": 8, "tier": 2, "source": "sim"},
+             "lsd_decel": {"value": 33, "tier": 1, "source": "Watkins"},
+             "aero_front": {"value": 999, "tier": 1, "source": "x"}}
+    ov = build_baseline_seed_overrides(prior)
+    assert set(ov) == {"lsd_initial", "lsd_accel", "lsd_decel"}
+    assert ov["lsd_initial"]["value"] == 22
+    assert ov["lsd_decel"]["value"] == 33
 
 
 def test_non_numeric_prior_ignored():

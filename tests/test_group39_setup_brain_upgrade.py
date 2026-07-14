@@ -628,14 +628,42 @@ class TestAC5WheelspinSubtype:
         )
 
     def test_gear_too_short_spin(self):
-        """lower-gear limiter hits + severe wheelspin → gear_too_short_spin.
-        Takes precedence before snap/aero checks when wheelspin is severe-ish."""
+        """lower-gear limiter hits + severe wheelspin → gear_too_short_spin, but ONLY
+        when the limiter evidence is location-trustworthy (Group 64). A speculative,
+        unlocated signal must not commit to the gearing certainty."""
+        # Group 64: location-trustworthy evidence is required for the strong claim.
         result = _classify_wheelspin_subtype(
             frames=[], rev_limiter_by_gear={5: 3, 6: 0}, wheelspin_band="severe",
             avg_snap=0.0, aero_rear_near_min=False, laps=[],
+            location_trustworthy=True,
         )
         assert result == "gear_too_short_spin", (
             f"Expected gear_too_short_spin, got {result!r}"
+        )
+
+    def test_gear_too_short_spin_gated_without_location(self):
+        """Group 64: the SAME telemetry without a trustworthy location must NOT
+        become a gearing certainty — it resolves to 'unknown' (→ controlled test)."""
+        result = _classify_wheelspin_subtype(
+            frames=[], rev_limiter_by_gear={5: 3, 6: 0}, wheelspin_band="severe",
+            avg_snap=0.0, aero_rear_near_min=False, laps=[],
+            location_trustworthy=False,
+        )
+        assert result == "unknown", (
+            f"Weak/unlocated evidence must not be gear_too_short_spin, got {result!r}"
+        )
+
+    def test_gear_too_short_spin_driver_contradiction(self):
+        """Group 64: a driver 'top gear unused / too long' report over lower-gear
+        limiter telemetry is a genuine conflict → conflicting_evidence, never a
+        gear_too_short certainty (even with a trustworthy location)."""
+        result = _classify_wheelspin_subtype(
+            frames=[], rev_limiter_by_gear={5: 3, 6: 0}, wheelspin_band="severe",
+            avg_snap=0.0, aero_rear_near_min=False, laps=[],
+            location_trustworthy=True, driver_says_gearing_too_long=True,
+        )
+        assert result == "conflicting_evidence", (
+            f"Driver contradiction must yield conflicting_evidence, got {result!r}"
         )
 
     def test_inside_wheel_spin_never_returned(self):

@@ -57,6 +57,12 @@ APPROVED_STATUSES: frozenset[str] = frozenset({
     # untreated dominant problem flagged (coherence gate).
     "partial_recommendation",
     "fallback_generated",
+    # Engineer-evolution: a COORDINATED balance change authored by the balance solver
+    # when several conflicting complaints would otherwise defer to evidence_required.
+    # Apply-eligible (the driver applies the set then validates on track); the moves
+    # still passed the same engineering validator, and it is honestly framed as a
+    # balance change to TEST, not a certainty.
+    "balance_recommendation",
 })
 
 # Phase 3 coherence gate — the dominant *required* problem is unaddressed AND its
