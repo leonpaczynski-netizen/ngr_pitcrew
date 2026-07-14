@@ -25,14 +25,27 @@ class LiveCornerTelemetry:
     """Accumulate per-corner slip evidence for one car/track/layout over a session."""
 
     def __init__(self, track_location_id: str, layout_id: str, drivetrain: str = "",
-                 offset_calibration=None, sample_every: int = 6):
+                 offset_calibration=None, sample_every: int = 6, run_id: int = 0):
         self._loc = track_location_id or ""
         self._lay = layout_id or ""
         self._drivetrain = drivetrain or ""
         self._cal = offset_calibration
         self._sample_every = max(1, int(sample_every))
+        self._run_id = int(run_id or 0)
         self._n = 0
         self._agg = LiveCornerAggregator()
+
+    @property
+    def track_location_id(self) -> str:
+        return self._loc
+
+    @property
+    def layout_id(self) -> str:
+        return self._lay
+
+    @property
+    def run_id(self) -> int:
+        return self._run_id
 
     def add_packet(self, packet) -> None:
         """Fold one live packet into the per-corner accumulator (best-effort)."""

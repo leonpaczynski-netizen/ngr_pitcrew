@@ -55,6 +55,7 @@ class CornerTelemetryAggregate:
     avg_brake: float
     exit_gear: Optional[int]         # modal gear seen in exit/traction phase
     exit_rpm_avg: Optional[float]
+    sessions: int = 1                # distinct recorded runs behind this aggregate
 
     def as_json(self) -> dict:
         return {
@@ -69,6 +70,7 @@ class CornerTelemetryAggregate:
             "avg_throttle": round(self.avg_throttle, 3),
             "avg_brake": round(self.avg_brake, 3),
             "exit_gear": self.exit_gear, "exit_rpm_avg": self.exit_rpm_avg,
+            "sessions": self.sessions,
         }
 
 
@@ -230,8 +232,79 @@ def diagnoses_from_telemetry(aggregates: list, segments: list) -> list:
                             severity=severity)
         diag = diagnose_corner_feedback(fb, segments, telemetry_available=True)
         d = diag.as_json()
+        _sessions = getattr(agg, "sessions", 1) or 1
+        if _sessions > 1:
+            evidence = f"{evidence} across {_sessions} sessions"
         d["telemetry_evidence"] = evidence
         d["source"] = "live_telemetry"
         d["samples"] = agg.samples
+        d["sessions"] = _sessions
         out.append(d)
+    return out
+
+
+def _loads(v):
+    import json as _json
+    if isinstance(v, dict):
+        return v
+    try:
+        return _json.loads(v) if v else {}
+    except Exception:
+        return {}
+
+
+def merge_corner_slip_rows(rows: list) -> list:
+    """Accumulate persisted per-run slip rows into per-corner aggregates (cross-session).
+
+    ``rows`` are dicts from ``SessionDB.get_corner_slip_rows`` (one per run × segment,
+    JSON columns as strings). Rows for the same segment are summed — events/samples add,
+    phase/axle dicts merge, throttle/brake sums re-average, ``sessions`` counts distinct
+    runs. Pure; returns CornerTelemetryAggregate list ready for diagnoses_from_telemetry.
+    """
+    by_seg: dict = {}
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        seg = str(r.get("segment_id") or "")
+        if not seg:
+            continue
+        acc = by_seg.get(seg)
+        if acc is None:
+            acc = {"turn": r.get("turn"), "display_name": r.get("display_name") or "",
+                   "direction": r.get("direction") or "", "samples": 0,
+                   "spin": 0, "lock": 0, "spin_phase": {}, "lock_phase": {},
+                   "spin_axle": {}, "lock_axle": {}, "throttle_sum": 0.0,
+                   "brake_sum": 0.0, "runs": set(), "best_gear": (None, -1),
+                   "rpms": []}
+            by_seg[seg] = acc
+        _s = int(r.get("samples") or 0)
+        acc["samples"] += _s
+        acc["spin"] += int(r.get("wheelspin_events") or 0)
+        acc["lock"] += int(r.get("lockup_events") or 0)
+        acc["throttle_sum"] += float(r.get("throttle_sum") or 0.0)
+        acc["brake_sum"] += float(r.get("brake_sum") or 0.0)
+        acc["runs"].add(r.get("run_id"))
+        for _key, _col in (("spin_phase", "wheelspin_by_phase"),
+                           ("lock_phase", "lockup_by_phase"),
+                           ("spin_axle", "spin_axle_counts"),
+                           ("lock_axle", "lock_axle_counts")):
+            for k, v in _loads(r.get(_col)).items():
+                acc[_key][k] = acc[_key].get(k, 0) + int(v or 0)
+        if r.get("exit_gear") is not None and _s > acc["best_gear"][1]:
+            acc["best_gear"] = (int(r["exit_gear"]), _s)
+        if r.get("exit_rpm_avg") is not None:
+            acc["rpms"].append(float(r["exit_rpm_avg"]))
+
+    out = []
+    for seg, a in by_seg.items():
+        n = max(1, a["samples"])
+        rpm = round(sum(a["rpms"]) / len(a["rpms"]), 0) if a["rpms"] else None
+        out.append(CornerTelemetryAggregate(
+            segment_id=seg, turn=a["turn"], display_name=a["display_name"],
+            direction=a["direction"], samples=a["samples"], wheelspin_events=a["spin"],
+            lockup_events=a["lock"], wheelspin_by_phase=a["spin_phase"],
+            lockup_by_phase=a["lock_phase"], spin_axle_counts=a["spin_axle"],
+            lock_axle_counts=a["lock_axle"], avg_throttle=a["throttle_sum"] / n,
+            avg_brake=a["brake_sum"] / n, exit_gear=a["best_gear"][0], exit_rpm_avg=rpm,
+            sessions=max(1, len(a["runs"]))))
     return out

@@ -148,9 +148,11 @@ def test_schema_version_is_v10(db):
     # standalone additive setup_lineage table).
     # Reconciled for Engineering-Brain Phase 7: 15 → 16 (_migrate_v16 added additive
     # vs_previous/corner/phase columns to driver_feedback).
+    # Reconciled for Engineering-Brain live telemetry: 16 → 17 (_migrate_v17 added the
+    # standalone additive corner_slip_telemetry table).
     # The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 16
+    assert version == 17
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

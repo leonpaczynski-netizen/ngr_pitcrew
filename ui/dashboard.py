@@ -4816,7 +4816,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             return
         try:
             from telemetry.live_corner_telemetry import LiveCornerTelemetry
-            self._live_corner_tel = LiveCornerTelemetry(loc, lay, drivetrain=str(_dt or ""))
+            # A per-run id makes cross-session persistence idempotent (re-saving the same
+            # run replaces its row rather than double-counting).
+            self._live_corner_tel = LiveCornerTelemetry(
+                loc, lay, drivetrain=str(_dt or ""), run_id=int(time.time()))
             self._live_corner_tel_key = key
         except Exception:
             self._live_corner_tel = None
