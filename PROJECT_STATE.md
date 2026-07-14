@@ -5,6 +5,14 @@ Architecture Stabilisation Mode.
 
 Do not add new features until core data flow, persistence, telemetry storage, and AI context are stable.
 
+## Repository / Build Status (2026-07-14 — Engineering Brain Phase 4: discipline intelligence)
+
+**Branch `engineering-brain-phase4-discipline` from `master` @ `946cebc` (PR #46 merged Phase 3).** Base/Qualifying/Race as independent engineering products.
+
+**NEW `strategy/discipline_objectives.py` (pure):** `softest_dry_compound`/`qualifying_tyre_plan` (soft-tyre qualifying enforcement — softest legal dry compound; honest on wet-only; respects required compounds); `objective_rpm_target` (quali rev-out / race short-shift / base balanced); `objective_priorities` (readable per-discipline scoring factors — quali one-lap-pace/rotation/peak-grip, race tyre-deg/variance/traction/fuel); `discipline_objective_summary` surfaced as `discipline_objective` on the response.
+
+**Tests:** NEW `tests/test_discipline_objectives.py` (9). Full suite (halves + UI files individual): **~7367 passed, 0 failed.** No schema migration.
+
 ## Repository / Build Status (2026-07-14 — Engineering Brain Phase 3: complete setup synthesis)
 
 **Branch `engineering-brain-phase3-synthesis` from `master` @ `eab102a` (PR #45 merged Phases 1–2).** The plan's "major transformation from rule stack to engineering brain."

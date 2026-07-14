@@ -3043,6 +3043,16 @@ class DrivingAdvisor:
                     _resp["setup_synthesis"] = synthesize_setup(_ctx).as_json()
                 except Exception:
                     pass
+                # Phase 4: discipline intelligence — what THIS objective is engineering
+                # for (RPM/shift intent + scoring priorities; soft-tyre enforcement when
+                # the event's available tyres are known).
+                try:
+                    from strategy.discipline_objectives import discipline_objective_summary
+                    _resp["discipline_objective"] = discipline_objective_summary(
+                        objective_from_session_type(session_type).value,
+                        available_tyres=None, required_tyres=None)
+                except Exception:
+                    pass
             except Exception:
                 pass
 
