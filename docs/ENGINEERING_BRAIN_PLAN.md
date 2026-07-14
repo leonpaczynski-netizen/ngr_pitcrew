@@ -12,7 +12,7 @@ learned from run to run. Full plan: the "Engineering Intelligence Plan of Attack
 | Phase | Goal | Status |
 |-------|------|--------|
 | **1** | **Stop harmful behaviour (closed loop)** | **In progress** — lineage/attribution/lockout/rollback core done + rule-level lockout wired |
-| 2 | Canonical engineering context | not started |
+| 2 | Canonical engineering context | **done** — `SetupEngineeringContext` + working windows + capability confidence |
 | 3 | Complete setup synthesis (target model, interaction graph, full-field candidate generator, coupled solver) | partial (engineering + balance + per-corner layers exist; not yet a candidate generator/solver) |
 | 4 | Discipline intelligence (independent Base/Quali/Race objectives, soft-tyre quali) | partial (session bias + engineering objective shaping; no objective SCORING model yet) |
 | 5 | Per-corner + telemetry calibration | partial (per-corner authoring from reviewed segments; no wheel-slip/speed calibration) |
@@ -86,5 +86,26 @@ sprints) updated to allow the legitimate v15 and guard v16.
   explicit combo would strengthen the signal). Low incremental value; UI-only.
 - **Rollback UI button** (the advisory + revert set now exist on the backend).
 
-Then Phase 2 (canonical `SetupEngineeringContext`) and Phase 3 (target handling model +
-interaction graph + full-field candidate generator + coupled objective solver).
+## Phase 2 — canonical engineering context (DELIVERED)
+
+**NEW `strategy/setup_engineering_context.py`** — one immutable `SetupEngineeringContext`
+that bundles Driver + Car (vehicle model) + Track (tune profile + per-corner) + Event +
+current evidence (setup, diagnosis, proven history), built ONCE, and derives:
+- **Working windows** — `build_working_windows`: every adjustable field gets a WINDOW
+  (`low..high` + `preferred` + `sources` + `confidence`) assembled through the documented
+  `EVIDENCE_PRECEDENCE`. A strong proven value narrows the window toward what worked
+  (high/medium confidence); no proven value → the full legal range at low confidence; a
+  locked field collapses to its current value. It is a *range with evidence*, not a
+  forced value — the substrate the Phase-3 solver will select from.
+- **Confidence separated by capability** — `track_confidence_by_capability`
+  (setup_shaping / corner_detail / geometry), not a single flag.
+- **Current-vs-historical feedback state** — `feedback_state` distinguishes what the
+  driver reports NOW from their proven historical preferences.
+- Honest `missing_evidence`.
+
+Surfaced on the baseline/discipline response as `engineering_context` (`as_json`).
+`tests/test_engineering_context.py` (11). Full suite green (~7369 passed, 0 failed).
+
+Next: Phase 3 (target handling model + parameter interaction graph + full-field
+candidate generator + coupled objective solver) — the solver selects values from these
+working windows.

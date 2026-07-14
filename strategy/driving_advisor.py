@@ -3016,6 +3016,27 @@ class DrivingAdvisor:
             if _driver_fit_reasoning:
                 _resp["driver_fit_reasoning"] = _driver_fit_reasoning
 
+            # Phase 2: the ONE canonical engineering context — driver + car + track +
+            # event + evidence, with a WORKING WINDOW (range + provenance) per field and
+            # confidence separated by capability. The shared, evidence-honest picture the
+            # authoring (and the Phase-3 solver) select from.
+            try:
+                from strategy.setup_engineering_context import (
+                    build_setup_engineering_context,
+                )
+                from strategy.setup_authoring import objective_from_session_type
+                _ctx = build_setup_engineering_context(
+                    car=car_name, objective=objective_from_session_type(session_type).value,
+                    ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
+                    profile=_profile, allowed_tuning=allowed_tuning,
+                    tuning_locked=tuning_locked, track_profile=track_profile,
+                    corner_profile=_corner_profile, history_prior=_bl_prior or {},
+                    duration_mins=duration_mins, tyre_wear_multiplier=tyre_wear_multiplier,
+                    car_class=car_class)
+                _resp["engineering_context"] = _ctx.as_json()
+            except Exception:
+                pass
+
             # Group 64: canonical discipline field-plan surface — author Base,
             # Qualifying and Race as separate full-field setups from ONE context so
             # the UI can prove (not just label) where they differ, with a disposition
