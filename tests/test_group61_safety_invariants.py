@@ -27,6 +27,10 @@ _NEW_PURE_MODULES = (
     "data/live_progress_stabiliser.py",
     "data/road_distance_capture_analysis.py",
     "data/road_distance_semantics.py",
+    # Live per-corner telemetry: pure classifier + aggregator + consumer.
+    "strategy/wheel_slip.py",
+    "strategy/live_corner_aggregator.py",
+    "telemetry/live_corner_telemetry.py",
 )
 
 

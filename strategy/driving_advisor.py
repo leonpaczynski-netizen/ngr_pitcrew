@@ -1793,6 +1793,7 @@ class DrivingAdvisor:
         refuel_rate_lps: float = 0.0,
         track_profile=None,
         extra_candidates: "list[dict] | None" = None,
+        live_corner_aggregates: "list | None" = None,
     ) -> str:
         """Return a JSON string: {"analysis": str, "changes": [...], "setup_fields": {...}}.
 
@@ -2709,6 +2710,17 @@ class DrivingAdvisor:
                         _data["corner_diagnosis"] = _cd.as_json()
                         if _cd.controlled_test:
                             _data.setdefault("_targeted_tests", []).append(_cd.controlled_test)
+                    # Live per-corner telemetry → measured Phase-5 diagnoses. When the
+                    # session captured per-corner slip evidence, diagnose each affected
+                    # corner from DATA (telemetry_available=True) instead of only the
+                    # driver's free-text feeling. Advisory/read-only.
+                    if live_corner_aggregates:
+                        from strategy.live_corner_aggregator import (
+                            diagnoses_from_telemetry,
+                        )
+                        _tel_diags = diagnoses_from_telemetry(live_corner_aggregates, _segs)
+                        if _tel_diags:
+                            _data["corner_telemetry_diagnoses"] = _tel_diags
                 except Exception:
                     pass
 

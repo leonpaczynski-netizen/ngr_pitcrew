@@ -728,6 +728,30 @@ def _engineering_brain_html(data: dict) -> str:
             f"{_causes}{_test}</div>"
         )
 
+    # Phase 5 (live) — telemetry-measured per-corner diagnoses. Each corner where the
+    # session's slip/lock evidence was strong enough to diagnose from DATA, not feeling.
+    _tel = [d for d in (data.get("corner_telemetry_diagnoses") or []) if isinstance(d, dict)]
+    if _tel:
+        _rows = ""
+        for d in _tel[:6]:
+            _c = d.get("corner") or {}
+            _causes = "".join(
+                f"<p style='margin:1px 0 1px 8px; color:#CCC; font-size:10px;'>&bull; "
+                f"{c.get('cause', '')}</p>" for c in (d.get("causes") or [])[:2])
+            _rows += (
+                f"<p style='margin:4px 0 0 0; color:#A9D275; font-size:11px;'>"
+                f"<b>{_c.get('name', 'Corner')}</b> ({d.get('phase', '')}, "
+                f"{d.get('symptom', '')}) — {d.get('confidence', '')} confidence "
+                f"<span style='color:#7FA070;'>&middot; {d.get('telemetry_evidence', '')}</span></p>"
+                f"{_causes}")
+        html += (
+            "<div style='background:#0C140C; border:1px solid #2E5A2E; border-radius:4px; "
+            "padding:8px 10px; margin-top:8px;'>"
+            "<b style='color:#8BC34A; font-size:12px;'>&#128225; Measured per-corner "
+            "diagnosis (live telemetry)</b>"
+            f"{_rows}</div>"
+        )
+
     # Phase 6 — setup -> strategy handoff.
     _hoff = data.get("setup_strategy_handoff") or {}
     if _hoff.get("characteristics"):
@@ -746,6 +770,20 @@ def _engineering_brain_html(data: dict) -> str:
 
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
+
+    def _live_corner_aggregates(self) -> list:
+        """Snapshot of the live per-corner telemetry aggregates ([] when inert).
+
+        Reads the optional live aggregator the dashboard maintains; returns [] on any
+        host that doesn't run one, so the analyse worker can always call it.
+        """
+        tel = getattr(self, "_live_corner_tel", None)
+        if tel is None:
+            return []
+        try:
+            return tel.aggregates()
+        except Exception:
+            return []
 
     def _active_form(self) -> "SetupFormWidget":
         """Return the currently-active setup form (Race form by default).
@@ -1357,7 +1395,8 @@ class SetupBuilderMixin:
                     purpose=_purpose,
                     car_class=_car_class,
                     drivetrain=_drivetrain,
-                    extra_candidates=_extra_candidates)
+                    extra_candidates=_extra_candidates,
+                    live_corner_aggregates=self._live_corner_aggregates())
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None, form))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None, form))
@@ -2241,7 +2280,8 @@ class SetupBuilderMixin:
                     fuel_multiplier=_fuel_mult_bl,
                     refuel_rate_lps=_refuel_rate_bl,
                     track_profile=_track_profile_an,
-                    extra_candidates=_extra_candidates)
+                    extra_candidates=_extra_candidates,
+                    live_corner_aggregates=self._live_corner_aggregates())
                 self._setup_result_queue.put(("ok", resp, "analyse_setup", feeling or None))
             except Exception as exc:
                 self._setup_result_queue.put(("error", str(exc), "analyse_setup", None))
