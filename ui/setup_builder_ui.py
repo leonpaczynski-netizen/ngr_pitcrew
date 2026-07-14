@@ -375,6 +375,66 @@ def _driver_fit_html(reasoning: dict) -> str:
     )
 
 
+def _closed_loop_html(data: dict) -> str:
+    """Render the closed-loop signals (Engineering-Brain Phase 1): a rollback advisory,
+    changes withheld for conflicting evidence, and changes NOT repeated because they
+    previously worsened the car. Module-level + self-guarding — nothing renders when the
+    fields are absent (legacy responses unaffected)."""
+    if not isinstance(data, dict):
+        return ""
+    html = ""
+    _rb = data.get("rollback") or {}
+    if isinstance(_rb, dict) and _rb.get("recommend_rollback"):
+        _rev = _rb.get("revert_changes") or []
+        _rev_txt = ", ".join(
+            f"{str(c.get('field', '')).replace('_', ' ')} &rarr; {c.get('to')}"
+            for c in _rev if isinstance(c, dict))
+        html += (
+            "<div style='background:#2A1410; border:1px solid #A0562E; "
+            "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+            "<b style='color:#E08A5E; font-size:12px;'>&#8617; Consider rolling back</b>"
+            f"<p style='margin:2px 0; color:#D8B8A8; font-size:11px;'>{_rb.get('reason', '')}</p>"
+            + (f"<p style='margin:1px 0; color:#B89888; font-size:10px;'>Revert: {_rev_txt}</p>"
+               if _rev_txt else "")
+            + "</div>"
+        )
+    _contra = data.get("diagnosis_contradictions") or []
+    if _contra:
+        _body = "".join(
+            f"<p style='margin:1px 0; color:#CCC; font-size:11px;'>&#9888; {c.get('detail', '')}</p>"
+            for c in _contra if isinstance(c, dict))
+        html += (
+            "<div style='background:#201A0A; border:1px solid #8A6A2A; "
+            "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+            "<b style='color:#E0B84A; font-size:12px;'>&#9878; Withheld — conflicting "
+            "evidence</b>"
+            f"{_body}</div>"
+        )
+    _lk = data.get("closed_loop_lockouts") or []
+    if _lk:
+        _seen = set()
+        _rows = ""
+        for m in _lk:
+            if not isinstance(m, dict):
+                continue
+            _key = m.get("field") or m.get("rule_id")
+            if _key in _seen:
+                continue
+            _seen.add(_key)
+            _label = str(m.get("field") or m.get("rule_id") or "").replace("_", " ")
+            _rows += (f"<p style='margin:1px 0; color:#CCC; font-size:11px;'>&#128683; "
+                      f"<b>{_label}</b> — {m.get('reason', '')}</p>")
+        if _rows:
+            html += (
+                "<div style='background:#1A1414; border:1px solid #6A4A4A; "
+                "border-radius:4px; padding:8px 10px; margin-top:8px;'>"
+                "<b style='color:#D08A8A; font-size:12px;'>&#128260; Not repeating "
+                "(made the car worse before)</b>"
+                f"{_rows}</div>"
+            )
+    return html
+
+
 class SetupBuilderMixin:
     """Setup Builder tab methods — mixed into MainWindow."""
 
@@ -2351,6 +2411,7 @@ class SetupBuilderMixin:
         # Base / Qualifying / Race authored side-by-side so the driver can SEE where
         # the three disciplines genuinely differ (not just a relabelled setup), with
         # the proven-history value and each field's disposition.
+        html += _closed_loop_html(data)
         html += _balance_solution_html(data.get("balance_solution"))
         html += _driver_fit_html(data.get("driver_fit_reasoning"))
         html += _discipline_field_plan_html(data.get("discipline_field_plan"))

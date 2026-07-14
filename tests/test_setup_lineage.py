@@ -275,6 +275,22 @@ def test_rollback_skips_unscored_to_newest_scored():
     assert rb["recommend_rollback"] and rb["target_id"] == 1
 
 
+def test_closed_loop_ui_render():
+    from ui.setup_builder_ui import _closed_loop_html
+    data = {
+        "rollback": {"recommend_rollback": True, "reason": "Last setup tested worse.",
+                     "revert_changes": [{"field": "aero_rear", "to": "600"}]},
+        "diagnosis_contradictions": [{"kind": "gearing_conflicting",
+                                      "detail": "telemetry vs report disagree"}],
+        "closed_loop_lockouts": [{"field": "lsd_accel", "reason": "worsened the car"}],
+    }
+    h = _closed_loop_html(data)
+    assert "<table" not in h  # (grouped divs, not a table) but the three sections render
+    assert "roll" in h.lower() and "Withheld" in h and "Not repeating" in h
+    # Self-guards.
+    assert _closed_loop_html({}) == "" and _closed_loop_html(None) == ""
+
+
 def test_rule_engine_honours_lockout():
     from strategy.setup_rule_engine import run_rule_engine
     from strategy.setup_driver_profile import build_driver_profile
