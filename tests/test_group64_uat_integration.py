@@ -42,11 +42,7 @@ def _uat_setup():
 
 
 @pytest.fixture
-def result(monkeypatch):
-    import strategy.driving_advisor as da
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "audit ok"}))
+def result():
     adv = _uat_advisor()
     raw = adv.build_combined_setup_response(
         setup_dict=_uat_setup(), car_name=_CAR, feeling=_UAT_FEELING,

@@ -49,7 +49,7 @@ class TestTabRoles:
 
     def test_diagnostic_tabs_are_exactly_the_tools(self):
         assert set(pf.diagnostic_tabs()) == {
-            "Telemetry", "Diagnostics", "AI Log", "Track Modelling",
+            "Telemetry", "Diagnostics", "Track Modelling",
         }
 
     def test_support_tabs(self):
@@ -58,7 +58,6 @@ class TestTabRoles:
 
     def test_is_diagnostic_tab(self):
         assert pf.is_diagnostic_tab("Track Modelling") is True
-        assert pf.is_diagnostic_tab("AI Log") is True
         assert pf.is_diagnostic_tab("Event Planner") is False
         assert pf.is_diagnostic_tab("Setup Builder") is False
 
@@ -199,9 +198,9 @@ class TestDashboardWiring:
 
     def test_tab_indices_preserved(self, dash_src):
         # Home Dashboard Promotion (2026-07-03): Home leads at index 0, so the
-        # tool tabs shifted down one — Track Modelling index 13, AI Log index 12.
+        # tool tabs shifted down one. The AI Log tab was removed in the
+        # determinism rebuild; Track Modelling remains a diagnostic tool tab.
         assert 'self._build_track_modelling_tab(), "Track Modelling")  # 12' in dash_src
-        assert '"AI Log")           # 11' in dash_src
 
 
 # --------------------------------------------------------------------------- #
@@ -215,13 +214,6 @@ class TestTrackModellingRenames:
     def test_section5_renamed_from_misleading_alignment_title(self, tm_src):
         assert 'QGroupBox("5. Seed Geometry")' in tm_src
         assert 'QGroupBox("5. Track Model Alignment")' not in tm_src
-
-    def test_corner_verify_api_key_not_read_from_nonexistent_ai_section(self, tm_src):
-        # Field-consistency fix: the AI corner-verify key must come from the
-        # editable field / config["anthropic"], never config["ai"] (which never
-        # exists, so the old read always yielded an empty key).
-        assert 'self._config.get("ai", {}).get("api_key"' not in tm_src
-        assert "self._ai_api_key.text().strip()" in tm_src
 
     def test_accept_exports_reviewed_segments(self, tm_src):
         # The Accept button must write the reviewed-segments file — without it the

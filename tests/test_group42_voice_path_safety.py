@@ -122,105 +122,30 @@ def _full_ai_tune_json() -> str:
 
 
 # ===========================================================================
-# test_voice_path_strips_ai_setup_fields
+# Voice path narration — build_setup_advice_response is now a deterministic
+# spoken-text narrator (no JSON, no AI). It reuses the rule-engine result from
+# build_combined_setup_response and narrates only APPROVED changes. The old
+# "strip AI setup fields from the voice JSON" contract is gone (there is no AI
+# and no actionable JSON on this path), so those JSON-contract tests were
+# removed. The narration is verified to be a plain string below.
 # ===========================================================================
 
-class TestVoicePathStripsAISetupFields:
-    """build_setup_advice_response always returns changes==[] and setup_fields=={}."""
+class TestVoicePathNarration:
+    """build_setup_advice_response returns a plain-text spoken narration string."""
 
-    def test_voice_path_changes_always_empty(self, monkeypatch):
-        """build_setup_advice_response must return changes==[] regardless of AI output."""
+    def test_voice_path_returns_plain_string(self):
         laps = [_make_lap(wheelspin_count=15)]
         setup = {"lsd_accel": 20, "arb_rear": 4, "ride_height_rear": 82}
         adv = _make_voice_advisor({}, laps)
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: _full_ai_tune_json())
-
-        result_str = adv.build_setup_advice_response(setup_dict=setup, car_name="")
-        result = json.loads(result_str)
-
-        changes = result.get("changes", "NOT_PRESENT")
-        assert changes == [], (
-            f"Voice path FAIL: build_setup_advice_response must return changes==[] "
-            f"regardless of AI output; got {changes!r}"
+        result = adv.build_setup_advice_response(setup_dict=setup, car_name="")
+        assert isinstance(result, str) and result.strip(), (
+            f"Voice path must return a non-empty narration string; got {result!r}"
         )
 
-    def test_voice_path_setup_fields_always_empty(self, monkeypatch):
-        """build_setup_advice_response must return setup_fields=={} regardless of AI output."""
-        laps = [_make_lap(wheelspin_count=15)]
-        setup = {"lsd_accel": 20, "arb_rear": 4, "ride_height_rear": 82}
-        adv = _make_voice_advisor({}, laps)
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: _full_ai_tune_json())
-
-        result_str = adv.build_setup_advice_response(setup_dict=setup, car_name="")
-        result = json.loads(result_str)
-
-        sf = result.get("setup_fields", "NOT_PRESENT")
-        assert sf == {}, (
-            f"Voice path FAIL: build_setup_advice_response must return setup_fields=={{}} "
-            f"regardless of AI output; got {sf!r}"
-        )
-
-    def test_voice_path_no_lsd_accel_in_actionable(self, monkeypatch):
-        """Specific canonical field lsd_accel must not appear in actionable output."""
-        laps = [_make_lap(wheelspin_count=15)]
-        setup = {"lsd_accel": 20}
-        adv = _make_voice_advisor({}, laps)
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: _full_ai_tune_json())
-
-        result_str = adv.build_setup_advice_response(setup_dict=setup, car_name="")
-        result = json.loads(result_str)
-
-        # lsd_accel=25 from AI must not surface
-        sf = result.get("setup_fields", {})
-        assert "lsd_accel" not in sf, (
-            f"Voice path FAIL: lsd_accel from AI must not appear in setup_fields; "
-            f"got setup_fields={sf!r}"
-        )
-
-        for ch in result.get("changes", []):
-            assert ch.get("field") != "lsd_accel", (
-                f"Voice path FAIL: lsd_accel from AI must not appear in changes; "
-                f"got change: {ch}"
-            )
-
-    def test_voice_path_analysis_preserved(self, monkeypatch):
-        """Voice path preserves the analysis text for narration."""
-        laps = [_make_lap()]
-        adv = _make_voice_advisor({}, laps)
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: _full_ai_tune_json())
-
-        result_str = adv.build_setup_advice_response(setup_dict={}, car_name="")
-        result = json.loads(result_str)
-
-        # Analysis text must be non-empty for narration
-        analysis = result.get("analysis", "")
-        assert isinstance(analysis, str), "Voice path must return analysis string"
-
-    def test_voice_path_no_approved_status_with_ai_changes(self, monkeypatch):
-        """Voice path must not surface status==approved with AI-authored changes present."""
-        laps = [_make_lap(wheelspin_count=10)]
-        setup = {"lsd_accel": 20, "arb_rear": 4}
-        adv = _make_voice_advisor({}, laps)
-
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: _full_ai_tune_json())
-
-        result_str = adv.build_setup_advice_response(setup_dict=setup, car_name="")
-        result = json.loads(result_str)
-
-        status = result.get("recommendation_status", "")
-        changes = result.get("changes", [])
-
-        # If status is in APPROVED_STATUSES, changes must be [] (no AI-authored fields)
-        if status in APPROVED_STATUSES:
-            assert changes == [], (
-                f"Voice path FAIL: Status {status!r} in APPROVED_STATUSES but "
-                f"changes is non-empty: {changes!r}. "
-                f"AI-authored actionable changes must never surface through the voice path."
-            )
+    def test_voice_path_no_laps_is_safe_string(self):
+        adv = _make_voice_advisor({}, [_make_lap()])
+        result = adv.build_setup_advice_response(setup_dict={}, car_name="")
+        assert isinstance(result, str), "Voice path must always return a string"
 
 
 # ===========================================================================

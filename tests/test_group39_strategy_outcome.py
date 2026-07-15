@@ -42,8 +42,7 @@ from strategy.outcome import (
     compute_outcome,
     format_outcome_comparison_for_prompt,
 )
-import strategy.ai_planner as ap
-from strategy.ai_planner import RaceParams, StrategyOption
+from strategy.race_params import RaceParams, StrategyOption
 
 
 # ---------------------------------------------------------------------------
@@ -602,146 +601,6 @@ class TestFormatOutcomeComparisonForPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Wiring smoke tests — StrategyOption gets deterministic fields
-# ---------------------------------------------------------------------------
-
-class TestWiringSmoke:
-    """Build StrategyOptions via _parse_strategies and verify deterministic fields."""
-
-    def _build_json(self, strategies: list[dict]) -> str:
-        return json.dumps({"strategies": strategies})
-
-    def _make_strategy_json(
-        self, rank: int = 1, compound: str = "RM",
-        laps: int = 10, ref_lap_ms: int = 90_000,
-    ) -> dict:
-        return {
-            "rank": rank,
-            "name": f"Strategy {rank}",
-            "stints": [{"compound": compound, "laps": laps,
-                         "ref_lap_ms": ref_lap_ms, "pace_threshold_ms": 2500}],
-            "estimated_time_s": 900.0,
-            "pit_time_s": 0.0,
-            "summary": "test",
-            "risks": "none",
-            "positives": "",
-            "negatives": "",
-            "tyre_risk": "low",
-            "fuel_risk": "low",
-            "traffic_risk": "low",
-            "undercut_risk": "low",
-            "confidence_score": 0.8,
-            "why_label": "test label",
-            "estimated_speed_rank": rank,
-        }
-
-    def test_deterministic_fields_populated_when_params_given(self):
-        """deterministic_time_s, delta_vs_fastest_s, rank_by_time, outcome_confidence
-        are populated when params is passed to _parse_strategies."""
-        raw = self._build_json([
-            self._make_strategy_json(rank=1, compound="RS", laps=10, ref_lap_ms=88_000),
-            self._make_strategy_json(rank=2, compound="RH", laps=10, ref_lap_ms=96_000),
-        ])
-        params = _make_params(total_laps=10, pit_loss_secs=0.0,
-                              fuel_burn_per_lap=3.0, refuel_speed_lps=1.0)
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        # All options should have deterministic_time_s > 0
-        for opt in result.strategies:
-            assert opt.deterministic_time_s > 0.0, (
-                f"{opt.name}.deterministic_time_s should be > 0"
-            )
-        # Fastest should have delta 0.0
-        fastest = min(result.strategies, key=lambda o: o.deterministic_time_s)
-        assert fastest.delta_vs_fastest_s == pytest.approx(0.0)
-        # rank_by_time assigned
-        ranks = [o.rank_by_time for o in result.strategies]
-        assert 1 in ranks
-
-    def test_deterministic_fields_default_when_no_params(self):
-        """When params is None (old call style), deterministic fields stay at safe defaults."""
-        raw = self._build_json([self._make_strategy_json(rank=1)])
-        result = ap._parse_strategies(raw)
-        opt = result.strategies[0]
-        assert opt.deterministic_time_s == 0.0
-        assert opt.delta_vs_fastest_s == 0.0
-        assert opt.outcome_confidence == ""
-        assert opt.rank_by_time == 0
-
-    def test_stints_shape_unchanged(self):
-        """stints dicts still contain exactly {compound, laps, ref_lap_ms, pace_threshold_ms}."""
-        stints_json = [
-            {"compound": "RS", "laps": 10, "ref_lap_ms": 88_000, "pace_threshold_ms": 2000},
-            {"compound": "RH", "laps": 15, "ref_lap_ms": 94_000, "pace_threshold_ms": 3000},
-        ]
-        raw = json.dumps({
-            "strategies": [{
-                "rank": 1,
-                "name": "1-Stop RS/RH",
-                "stints": stints_json,
-                "estimated_time_s": 2400.0,
-                "pit_time_s": 45.0,
-                "summary": "test",
-                "risks": "none",
-            }]
-        })
-        params = _make_params(total_laps=25, pit_loss_secs=20.0,
-                              fuel_burn_per_lap=3.0, refuel_speed_lps=1.0)
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        opt = result.strategies[0]
-        assert len(opt.stints) == 2
-        for s in opt.stints:
-            assert "compound" in s
-            assert "laps" in s
-            assert "ref_lap_ms" in s
-            assert "pace_threshold_ms" in s
-
-    def test_existing_fields_not_overwritten(self):
-        """estimated_time_s (AI-supplied) and other fields are not changed."""
-        raw = self._build_json([self._make_strategy_json(rank=1)])
-        params = _make_params()
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        opt = result.strategies[0]
-        # AI-supplied estimated_time_s must remain 900.0 (from fixture)
-        assert opt.estimated_time_s == pytest.approx(900.0)
-        # deterministic_time_s is DIFFERENT (computed separately)
-        # (they may coincidentally be equal in some cases, but both should be > 0)
-        assert opt.deterministic_time_s > 0.0
-
-    def test_single_option_via_parse_strategies(self):
-        """Single option: rank_by_time=1, delta=0."""
-        raw = self._build_json([self._make_strategy_json(rank=1)])
-        params = _make_params()
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        opt = result.strategies[0]
-        assert opt.rank_by_time == 1
-        assert opt.delta_vs_fastest_s == pytest.approx(0.0)
-
-    def test_two_options_delta_correct(self):
-        """Slower option has delta_vs_fastest_s > 0."""
-        raw = self._build_json([
-            self._make_strategy_json(rank=1, compound="RS", laps=10, ref_lap_ms=88_000),
-            self._make_strategy_json(rank=2, compound="RH", laps=10, ref_lap_ms=96_000),
-        ])
-        params = _make_params(total_laps=10, pit_loss_secs=0.0,
-                              fuel_burn_per_lap=3.0, refuel_speed_lps=1.0)
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        opts = result.strategies
-        # The 88s/lap option is faster
-        fast = next(o for o in opts if "RS" in [s["compound"] for s in o.stints])
-        slow = next(o for o in opts if "RH" in [s["compound"] for s in o.stints])
-        assert fast.delta_vs_fastest_s == pytest.approx(0.0)
-        assert slow.delta_vs_fastest_s > 0.0
-
-    def test_wiring_does_not_break_with_empty_degradation(self):
-        """degradation={} does not raise; confidence fields are set to 'low'."""
-        raw = self._build_json([self._make_strategy_json(rank=1)])
-        params = _make_params()
-        result = ap._parse_strategies(raw, params=params, degradation={})
-        opt = result.strategies[0]
-        assert opt.outcome_confidence == "low"
-
-
-# ---------------------------------------------------------------------------
 # Guard test: StrategyOption.stints dict key contract
 # ---------------------------------------------------------------------------
 
@@ -761,29 +620,6 @@ class TestStintsShapeContract:
                 f"stints dict missing keys: {self.REQUIRED_KEYS - s.keys()}"
             )
 
-    def test_stints_keys_after_parse_strategies(self):
-        """stints dict keys are unchanged after _parse_strategies wiring call."""
-        raw = json.dumps({
-            "strategies": [{
-                "rank": 1,
-                "name": "Test",
-                "stints": [
-                    {"compound": "RM", "laps": 20, "ref_lap_ms": 91_000, "pace_threshold_ms": 2500},
-                ],
-                "estimated_time_s": 1820.0,
-                "pit_time_s": 0.0,
-                "summary": "",
-                "risks": "",
-            }]
-        })
-        params = _make_params(total_laps=20)
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        for opt in result.strategies:
-            for s in opt.stints:
-                assert self.REQUIRED_KEYS <= s.keys(), (
-                    f"stints dict missing required keys: {self.REQUIRED_KEYS - s.keys()}"
-                )
-
     def test_new_dataclass_fields_have_safe_defaults(self):
         """New deterministic fields have safe defaults when StrategyOption is constructed
         without them — old callers are not broken."""
@@ -801,28 +637,23 @@ class TestStintsShapeContract:
         assert opt.outcome_confidence == ""
         assert opt.rank_by_time == 0
 
-    def test_stints_field_not_rewritten_by_wiring(self):
-        """Wiring must not replace or reshape the stints list; it must only add
-        the four deterministic scalar fields to the StrategyOption."""
+    def test_stints_field_shape_preserved_on_construction(self):
+        """StrategyOption preserves the stints list shape and AI-supplied fields
+        exactly as constructed (the _parse_strategies wiring was a generative-AI
+        parser and has been removed)."""
         original_stints = [
             {"compound": "RM", "laps": 15, "ref_lap_ms": 92_000, "pace_threshold_ms": 2500},
             {"compound": "RH", "laps": 15, "ref_lap_ms": 95_000, "pace_threshold_ms": 3000},
         ]
-        raw = json.dumps({
-            "strategies": [{
-                "rank": 1,
-                "name": "1-Stop",
-                "stints": original_stints,
-                "estimated_time_s": 2850.0,
-                "pit_time_s": 65.0,
-                "summary": "test",
-                "risks": "none",
-            }]
-        })
-        params = _make_params(total_laps=30, pit_loss_secs=20.0,
-                              fuel_burn_per_lap=3.0, refuel_speed_lps=1.0)
-        result = ap._parse_strategies(raw, params=params, degradation=None)
-        opt = result.strategies[0]
+        opt = StrategyOption(
+            rank=1,
+            name="1-Stop",
+            stints=original_stints,
+            estimated_time_s=2850.0,
+            pit_time_s=65.0,
+            summary="test",
+            risks="none",
+        )
         # Stints list identity is preserved
         assert len(opt.stints) == 2
         assert opt.stints[0]["compound"] == "RM"

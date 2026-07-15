@@ -51,7 +51,6 @@ TAB_ROLES: Dict[str, str] = {
     "Settings": ROLE_SUPPORT,
     "Telemetry": ROLE_DIAGNOSTIC,
     "Diagnostics": ROLE_DIAGNOSTIC,
-    "AI Log": ROLE_DIAGNOSTIC,
     "Track Modelling": ROLE_DIAGNOSTIC,
 }
 

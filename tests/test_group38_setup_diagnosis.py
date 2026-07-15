@@ -64,7 +64,6 @@ from strategy.setup_diagnosis import (
     validate_setup_engineering,
     format_diagnosis_for_prompt,
 )
-from strategy._ai_client import format_setup_for_prompt
 from strategy import driving_advisor as da
 from data import setup_history as sh
 
@@ -245,84 +244,11 @@ class TestTimedRaceNotSingularLap:
 
 
 # ===========================================================================
-# Section 3 — Natural frequency in Hz not N/mm
-# ===========================================================================
-
-class TestSpringUnitsHz:
-    """Criterion 3: format_setup_for_prompt uses 'Hz' not 'N/mm'.
-
-    The format is 'Springs F/R: 3.5/3.0 Hz' — Hz appears after both values.
-    We verify: the springs line contains 'Hz', and the values 3.5 and 3.0 appear,
-    and 'N/mm' does not appear anywhere.
-    """
-
-    def test_springs_labelled_hz(self):
-        setup = {
-            "springs_front": 3.5,
-            "springs_rear": 3.0,
-        }
-        prompt = format_setup_for_prompt(setup)
-        # The format is "Springs F/R: 3.5/3.0 Hz" — find the springs line
-        springs_line = next(
-            (ln for ln in prompt.splitlines() if "Springs" in ln),
-            None,
-        )
-        assert springs_line is not None, f"No 'Springs' line in prompt:\n{prompt}"
-        assert "Hz" in springs_line, (
-            f"Expected 'Hz' unit in springs line, got: {springs_line!r}"
-        )
-        assert "3.5" in springs_line, (
-            f"Expected spring value 3.5 in springs line: {springs_line!r}"
-        )
-        assert "3.0" in springs_line, (
-            f"Expected spring value 3.0 in springs line: {springs_line!r}"
-        )
-
-    def test_nm_per_mm_not_in_prompt(self):
-        setup = {"springs_front": 3.5, "springs_rear": 3.0}
-        prompt = format_setup_for_prompt(setup)
-        assert "N/mm" not in prompt, f"'N/mm' must not appear in setup prompt:\n{prompt}"
-
-
-# ===========================================================================
-# Section 4 — Driver hard constraints present in the prompt
+# Section 4 — Driver hard constraints constants (deterministic)
 # ===========================================================================
 
 class TestDriverHardConstraintsInPrompt:
-    """Criterion 4: DRIVER_HARD_CONSTRAINTS + PERSONAL_DRIVER_TUNING_MODEL appear in prompt
-    before telemetry / current setup section."""
-
-    def _build_prompt(self) -> str:
-        laps = [_make_lap(bottoming_count=0, wheelspin_count=5, lock_up_count=1)]
-        adv = _make_stubbed_advisor({})
-        adv._config = {}
-        return adv._build_combined_prompt(
-            laps, setup={}, history_str="",
-            car_name="Test Car", car_specs={},
-        )
-
-    def test_personal_driver_tuning_model_in_prompt(self):
-        prompt = self._build_prompt()
-        assert "Driver Tuning Model" in prompt, (
-            "PERSONAL_DRIVER_TUNING_MODEL heading not found in prompt"
-        )
-
-    def test_driver_hard_constraints_in_prompt(self):
-        prompt = self._build_prompt()
-        assert "Driver Hard Constraints" in prompt, (
-            "DRIVER_HARD_CONSTRAINTS heading not found in prompt"
-        )
-
-    def test_constraints_appear_before_telemetry_section(self):
-        prompt = self._build_prompt()
-        constraints_idx = prompt.find("Driver Hard Constraints")
-        telemetry_idx = prompt.find("## Telemetry summary")
-        assert constraints_idx != -1, "Driver Hard Constraints not found in prompt"
-        assert telemetry_idx != -1, "Telemetry summary section not found in prompt"
-        assert constraints_idx < telemetry_idx, (
-            f"Driver Hard Constraints (idx={constraints_idx}) must appear before "
-            f"Telemetry summary (idx={telemetry_idx})"
-        )
+    """Criterion 4: DRIVER_HARD_CONSTRAINTS + PERSONAL_DRIVER_TUNING_MODEL constants."""
 
     def test_eight_constraint_numbers_in_block(self):
         """DRIVER_HARD_CONSTRAINTS must contain numbered items 1-8 (constraint #9 was
@@ -1436,7 +1362,6 @@ class TestRegenerateOnceOrchestration:
                 "explanation_notes": "Rule engine plan looks sound.",
             })
 
-        monkeypatch.setattr(da, "call_api", fake_call_api)
 
         result_str = adv.build_combined_setup_response(
             setup_dict=_ORCH_SETUP,
@@ -1486,7 +1411,6 @@ class TestRegenerateOnceOrchestration:
                 "explanation_notes": "ok",
             })
 
-        monkeypatch.setattr(da, "call_api", fake_call_api)
 
         result_str = adv.build_combined_setup_response(
             setup_dict=_ORCH_SETUP,
@@ -1537,7 +1461,6 @@ class TestRegenerateOnceOrchestration:
                 "explanation_notes": "All good.",
             })
 
-        monkeypatch.setattr(da, "call_api", fake_call_api)
 
         result_str = adv.build_combined_setup_response(
             setup_dict=_ORCH_SETUP,
@@ -1594,39 +1517,6 @@ class TestRSRFujiArtifacts:
         assert written["gearbox_flag"] == "preserve"
         assert written["aero_front_near_min"] is True
         assert written["aero_rear_near_min"] is True
-
-    def test_save_rsr_fuji_prompt_txt(self):
-        """Save rsr_fuji_prompt.txt to scratchpad."""
-        laps = _make_rsr_laps()
-        diag = build_setup_diagnosis(
-            laps=laps,
-            setup=_RSR_SETUP,
-            car_name="Porsche 911 RSR '17",
-            event_ctx=_RSR_EVENT_CTX,
-            feeling=_RSR_FEELING,
-            location_confidence="low",
-        )
-        adv = _make_stubbed_advisor(_RSR_EVENT_CTX)
-        adv._config = {}
-
-        prompt = adv._build_combined_prompt(
-            laps=laps,
-            setup=_RSR_SETUP,
-            history_str="(no history for this test run)",
-            car_name="Porsche 911 RSR '17",
-            car_specs={},
-            feeling=_RSR_FEELING,
-            diagnosis=diag,
-        )
-        out_path = _SCRATCHPAD / "rsr_fuji_prompt.txt"
-        out_path.write_text(prompt, encoding="utf-8")
-
-        # Verify key content is in the prompt
-        assert "Driver Hard Constraints" in prompt
-        assert "Driver Tuning Model" in prompt
-        written = out_path.read_text(encoding="utf-8")
-        assert len(written) > 500, "Prompt appears too short"
-
 
 # ===========================================================================
 # Section 19 — Truncated-response guard (UAT: analyse button dumped raw JSON)

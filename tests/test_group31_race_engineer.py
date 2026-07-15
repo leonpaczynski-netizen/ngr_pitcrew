@@ -118,17 +118,8 @@ def _setup_prompt(adv=None, laps=None, setup=None, car_name="", **kwargs):
 # ---------------------------------------------------------------------------
 
 class TestAC1RangeAuthority:
-    def test_combined_prompt_has_range_authority(self):
-        p = _combined_prompt()
-        assert "FINAL AUTHORITY" in p
 
-    def test_setup_prompt_has_range_authority(self):
-        p = _setup_prompt()
-        assert "FINAL AUTHORITY" in p
 
-    def test_combined_prompt_mentions_override(self):
-        p = _combined_prompt()
-        assert "override" in p.lower()
 
     def test_normalise_clamps_out_of_range_to_car_max(self, monkeypatch):
         monkeypatch.setattr(sr, "_load_ranges_json", lambda: {
@@ -144,23 +135,9 @@ class TestAC1RangeAuthority:
 # ---------------------------------------------------------------------------
 
 class TestAC2Units:
-    def test_combined_prompt_hz_text(self):
-        p = _combined_prompt()
-        assert "Hz" in p
 
-    def test_setup_prompt_hz_text(self):
-        p = _setup_prompt()
-        assert "Hz" in p
 
-    def test_combined_prompt_positive_camber(self):
-        p = _combined_prompt()
-        low = p.lower()
-        assert "negative camber" in low or "positive" in low
 
-    def test_setup_prompt_positive_camber(self):
-        p = _setup_prompt()
-        low = p.lower()
-        assert "negative camber" in low or "positive" in low
 
     def test_normalise_negative_camber_clamped_to_zero(self):
         changes = [{"setting": "Front Camber", "field": "camber_front", "from": "1.0", "to": -2.5}]
@@ -198,110 +175,26 @@ class TestAC3RideHeightEscalation:
         result = da._normalise_changes(changes, {}, "")
         assert len(result) == 1, "Unparseable from must keep the change"
 
-    def test_combined_prompt_escalation_text(self):
-        p = _combined_prompt()
-        low = p.lower()
-        assert "escalate" in low or "platform-control" in low
 
-    def test_setup_prompt_escalation_text(self):
-        p = _setup_prompt()
-        low = p.lower()
-        assert "escalate" in low or "platform-control" in low
 
-    def test_combined_prompt_no_noop_instruction(self):
-        p = _combined_prompt()
-        assert "no-op" in p.lower() or "never output a no-op" in p.lower()
 
 
 # ---------------------------------------------------------------------------
 # AC4 — Stable braking preservation
 # ---------------------------------------------------------------------------
 
-class TestAC4StableBraking:
-    def _lap_stable(self):
-        """Lap with zero lockups and good braking consistency."""
-        lap = _Lap()
-        lap.lock_up_count = 0
-        lap.brake_consistency_m = 8.0  # good
-        return lap
-
-    def _lap_unstable(self):
-        lap = _Lap()
-        lap.lock_up_count = 3
-        lap.brake_consistency_m = 30.0
-        return lap
-
-    def test_combined_stable_braking_text_present(self):
-        laps = [self._lap_stable()]
-        p = _combined_prompt(laps=laps)
-        assert "stable" in p.lower() or "brake_bias" in p.lower()
-
-    def test_setup_stable_braking_text_present(self):
-        laps = [self._lap_stable()]
-        p = _setup_prompt(laps=laps)
-        assert "stable" in p.lower()
-
-    def test_combined_no_stable_braking_text_when_unstable(self):
-        laps = [self._lap_unstable()]
-        p = _combined_prompt(laps=laps)
-        # AC4 instruction only fires when avg_lockups < 0.5 AND avg_consist < 15
-        # With 3 lockups the instruction should NOT be present
-        # (it might still say "stable" elsewhere so check for the specific phrase)
-        assert "do NOT change brake_bias" not in p
 
 
 # ---------------------------------------------------------------------------
 # AC5 — Issue classification strings
 # ---------------------------------------------------------------------------
 
-class TestAC5IssueClassification:
-    def test_combined_has_all_four_classification_strings(self):
-        p = _combined_prompt()
-        assert "setup-limited" in p
-        assert "driver-input-limited" in p
-        assert "mixed" in p
-        assert "insufficient-data" in p
-
-    def test_setup_prompt_has_all_four_classification_strings(self):
-        p = _setup_prompt()
-        assert "setup-limited" in p
-        assert "driver-input-limited" in p
-        assert "mixed" in p
-        assert "insufficient-data" in p
 
 
 # ---------------------------------------------------------------------------
 # AC6 — Snap-throttle driver input separation
 # ---------------------------------------------------------------------------
 
-class TestAC6SnapThrottleDriverInput:
-    def _lap_with_snap_and_oversteer_throttle(self):
-        lap = _Lap()
-        lap.snap_throttle_count = 2
-        lap.oversteer_throttle_on_count = 2
-        return lap
-
-    def _lap_no_snap(self):
-        lap = _Lap()
-        lap.snap_throttle_count = 0
-        lap.oversteer_throttle_on_count = 0
-        return lap
-
-    def test_combined_snap_throttle_text_when_both_nonzero(self):
-        laps = [self._lap_with_snap_and_oversteer_throttle()]
-        p = _combined_prompt(laps=laps)
-        assert "driver" in p.lower() and ("snap" in p.lower() or "wheelspin" in p.lower())
-
-    def test_setup_snap_throttle_text_when_both_nonzero(self):
-        laps = [self._lap_with_snap_and_oversteer_throttle()]
-        p = _setup_prompt(laps=laps)
-        assert "driver" in p.lower()
-
-    def test_combined_no_snap_throttle_text_when_both_zero(self):
-        laps = [self._lap_no_snap()]
-        p = _combined_prompt(laps=laps)
-        # AC6 text should not fire when snap_throttle=0
-        assert "snap throttle" not in p.lower() or "AC6" not in p
 
 
 # ---------------------------------------------------------------------------
@@ -359,87 +252,18 @@ class TestAC7PriorOutcomes:
         ctx = adv._get_previous_ai_context("Setup", prior_outcomes=None)
         assert ctx == ""
 
-    def test_prompt_injects_prior_outcomes(self):
-        adv = _make_advisor()
-        # override _get_previous_ai_context to return a recognisable string
-        # when prior_outcomes is forwarded
-        outcomes = [{"setting": "ARB", "from_value": "4", "to_value": "3",
-                     "applied": True, "result": "improved"}]
-        sentinel = "PRIOR_OUTCOMES_FORWARDED"
-        def fake_ctx(*a, **k):
-            # If called with the outcomes list, return sentinel
-            if len(a) >= 2 and a[1] == outcomes:
-                return sentinel
-            if k.get("prior_outcomes") == outcomes:
-                return sentinel
-            return ""
-        adv._get_previous_ai_context = fake_ctx
-        p = adv._build_combined_prompt(
-            [_Lap()], {}, "", car_name="", car_specs={},
-            prior_outcomes=outcomes,
-        )
-        assert sentinel in p, \
-            "prior_outcomes must be forwarded to _get_previous_ai_context and injected into prompt"
 
 
 # ---------------------------------------------------------------------------
 # AC8 — Extended JSON schema keys in both prompts
 # ---------------------------------------------------------------------------
 
-class TestAC8ExtendedSchema:
-    SCHEMA_KEYS = [
-        "primary_issue",
-        "issue_classification",
-        "validation_targets",
-        "do_not_change_reasoning",
-        "confidence",
-        "expected_validation",
-    ]
-
-    def test_combined_prompt_has_all_schema_keys(self):
-        p = _combined_prompt()
-        for key in self.SCHEMA_KEYS:
-            assert key in p, f"Schema key '{key}' missing from combined prompt"
-
-    def test_setup_prompt_has_all_schema_keys(self):
-        p = _setup_prompt()
-        for key in self.SCHEMA_KEYS:
-            assert key in p, f"Schema key '{key}' missing from setup prompt"
 
 
 # ---------------------------------------------------------------------------
 # AC9 — Zone context: no invented names, caveat present
 # ---------------------------------------------------------------------------
 
-class TestAC9ZoneContext:
-    def _lap_with_positions(self):
-        lap = _Lap()
-        lap.wheelspin_positions = [(100.0, 0.0, 200.0), (105.0, 0.0, 205.0)]
-        lap.snap_throttle_positions = [(100.0, 0.0, 200.0)]
-        lap.oversteer_positions = [(200.0, 0.0, 300.0)]
-        return lap
-
-    def test_combined_zone_context_text_present(self):
-        laps = [self._lap_with_positions()]
-        p = _combined_prompt(laps=laps)
-        low = p.lower()
-        # AC9 fires when positions are non-empty
-        assert "zone" in low or "low confidence" in low
-
-    def test_setup_zone_context_text_present(self):
-        laps = [self._lap_with_positions()]
-        p = _setup_prompt(laps=laps)
-        low = p.lower()
-        assert "zone" in low or "low confidence" in low
-
-    def test_combined_no_invented_turn_names(self):
-        laps = [self._lap_with_positions()]
-        p = _combined_prompt(laps=laps)
-        import re
-        # Check that "Turn N" or "T3" style invented names don't appear from directives
-        # (they can appear in the instruction to NOT use them, so check the negative)
-        # The instruction says "do NOT invent corner names" — verify instruction present
-        assert "do not invent" in p.lower() or "not invent" in p.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -502,79 +326,18 @@ class TestAC10BottomingClassifier:
         result = da._classify_bottoming_location([(1.0, 0.0, 1.0)], "loc1", "lay1")
         assert result == "unknown"
 
-    def test_combined_prompt_has_bottoming_location_line(self):
-        lap = _Lap()
-        lap.bottoming_count = 2
-        adv = _make_advisor()
-        p = adv._build_combined_prompt(
-            [lap], {}, history_str="", car_name="", car_specs={},
-        )
-        assert "bottoming location" in p.lower() or "AC10" in p
 
 
 # ---------------------------------------------------------------------------
 # AC11 — Race objective framing for lap and timed events
 # ---------------------------------------------------------------------------
 
-class TestAC11RaceObjective:
-    def test_combined_lap_race_has_stint_and_tyre(self):
-        adv = _make_advisor(event_ctx={"race_type": "lap", "laps": 10})
-        p = _combined_prompt(adv=adv)
-        assert "stint" in p.lower()
-        assert "tyre" in p.lower()
-
-    def test_combined_timed_race_has_stint_and_tyre(self):
-        adv = _make_advisor(event_ctx={"race_type": "timed", "duration_mins": 30})
-        p = _combined_prompt(adv=adv)
-        assert "stint" in p.lower()
-        assert "tyre" in p.lower()
-
-    def test_combined_practice_has_no_race_objective(self):
-        adv = _make_advisor(event_ctx={"race_type": "practice"})
-        p = _combined_prompt(adv=adv)
-        # AC11 only fires for lap/timed; with practice it must not appear
-        # Note: other parts of the prompt may mention "race" generically
-        # Just check the specific AC11 directive text is absent
-        assert "RACE OBJECTIVE" not in p
-
-    def test_setup_prompt_lap_race_has_stint(self):
-        adv = _make_advisor(event_ctx={"race_type": "lap", "laps": 10})
-        p = _setup_prompt(adv=adv)
-        assert "stint" in p.lower()
 
 
 # ---------------------------------------------------------------------------
 # AC12 — Short-sample warning
 # ---------------------------------------------------------------------------
 
-class TestAC12ShortSampleWarning:
-    def test_combined_short_sample_warning_present(self):
-        # event has 20 laps; we only supply 2 laps → 10% < 20% threshold
-        adv = _make_advisor(event_ctx={"race_type": "lap", "laps": 20})
-        laps = [_Lap(), _Lap()]
-        p = _combined_prompt(adv=adv, laps=laps)
-        assert "short" in p.lower() or "SHORT TEST SAMPLE" in p or "sample" in p.lower()
-
-    def test_combined_no_short_sample_when_sufficient(self):
-        # event has 5 laps; we supply 2 laps → 40% >= 20%
-        adv = _make_advisor(event_ctx={"race_type": "lap", "laps": 5})
-        laps = [_Lap(), _Lap()]
-        p = _combined_prompt(adv=adv, laps=laps)
-        assert "AC12" not in p
-
-    def test_setup_short_sample_warning_present(self):
-        adv = _make_advisor(event_ctx={"race_type": "lap", "laps": 20})
-        laps = [_Lap(), _Lap()]
-        p = _setup_prompt(adv=adv, laps=laps)
-        assert "sample" in p.lower() or "short" in p.lower()
-
-    def test_timed_event_without_lap_count_skips_gracefully(self):
-        # Timed event with no laps key — should not raise
-        adv = _make_advisor(event_ctx={"race_type": "timed", "duration_mins": 60})
-        laps = [_Lap()]
-        p = _combined_prompt(adv=adv, laps=laps)
-        # No crash is the main assertion
-        assert "AC" in p  # directives block is present
 
 
 # ---------------------------------------------------------------------------
@@ -582,13 +345,7 @@ class TestAC12ShortSampleWarning:
 # ---------------------------------------------------------------------------
 
 class TestAC13SmallestChange:
-    def test_combined_has_smallest_change_text(self):
-        p = _combined_prompt()
-        assert "smallest" in p.lower() or "2–4" in p
 
-    def test_setup_has_smallest_change_text(self):
-        p = _setup_prompt()
-        assert "smallest" in p.lower() or "2–4" in p
 
     def test_validate_too_many_changes_produces_warning(self):
         """_validate_setup_response flags > 4 changes with a warning."""
@@ -703,8 +460,6 @@ class TestModuleLevelFunctionsExist:
         # verify parameter in source
         assert "prior_outcomes" in DA_SOURCE
 
-    def test_build_setup_advice_response_max_tokens_1500(self):
-        assert "max_tokens=1500" in DA_SOURCE
 
 
 # ---------------------------------------------------------------------------
@@ -781,16 +536,7 @@ class TestAC1RangeAuthorityAugmented:
 # ---------------------------------------------------------------------------
 
 class TestAC2UnitsAugmented:
-    def test_setup_prompt_camber_unit_annotation(self):
-        """The setup prompt ranges block must show 'positive' and 'degree' or '°'."""
-        p = _setup_prompt()
-        # The ranges block shows camber unit as '° (positive 0–6)'
-        assert "positive" in p.lower(), \
-            "prompt must state camber values are positive"
 
-    def test_combined_prompt_camber_unit_annotation(self):
-        p = _combined_prompt()
-        assert "positive" in p.lower()
 
     def test_directive_never_output_negative_camber(self):
         """The directive text itself must prohibit negative camber values."""
@@ -832,64 +578,14 @@ class TestAC3RideHeightEscalationAugmented:
 
     # ---- (a) unconditional boilerplate present in BOTH prompts ----
 
-    def test_setup_prompt_escalation_text_unconditional(self):
-        """Even with zero bottoming, 'escalate' or 'platform-control' must appear."""
-        laps = [self._lap_no_bottoming()]
-        p = _setup_prompt(laps=laps)
-        low = p.lower()
-        assert "escalate" in low or "platform-control" in low, \
-            "escalate/platform-control must appear unconditionally (AC3 boilerplate)"
 
-    def test_combined_prompt_escalation_text_unconditional(self):
-        laps = [self._lap_no_bottoming()]
-        p = _combined_prompt(laps=laps)
-        low = p.lower()
-        assert "escalate" in low or "platform-control" in low
 
     # ---- (b) conditional 'already at limit' only fires when bottoming present ----
 
-    def test_already_at_limit_absent_when_no_bottoming(self):
-        """'already at limit' is a CONDITIONAL phrase — must NOT appear when
-        bottoming_count == 0.  If this test fails, the conditional check has
-        been promoted to unconditional boilerplate (regression)."""
-        laps = [self._lap_no_bottoming()]
-        p = _combined_prompt(laps=laps)
-        assert "already at limit" not in p.lower(), (
-            "'already at limit' must only appear when bottoming is detected "
-            "(avg_bottom > 0), not as unconditional boilerplate"
-        )
 
-    def test_already_at_limit_present_when_bottoming_high_and_rh_at_max(self):
-        """'already at limit' must appear when bottoming_count > 0 AND ride height
-        is at its per-car maximum (I1 fix: we now check actual setup values)."""
-        laps = [self._lap_high_bottoming()]
-        # Supply setup with ride_height_front at the generic max (200 mm)
-        p = _combined_prompt(laps=laps, setup={"ride_height_front": 200})
-        assert "already at limit" in p.lower(), (
-            "'already at limit' must be injected when bottoming > 0 AND "
-            "ride_height_front is at its max (200 mm generic)"
-        )
 
-    def test_already_at_limit_absent_when_rh_below_max(self):
-        """When bottoming is high but ride height is below max, 'already at limit'
-        must NOT appear — a ride-height increase is still permissible."""
-        laps = [self._lap_high_bottoming()]
-        p = _combined_prompt(laps=laps, setup={"ride_height_front": 90})
-        assert "already at limit" not in p.lower(), (
-            "'already at limit' must NOT appear when ride height is below max"
-        )
 
-    def test_already_at_limit_absent_in_setup_prompt_no_bottoming(self):
-        laps = [self._lap_no_bottoming()]
-        p = _setup_prompt(laps=laps)
-        assert "already at limit" not in p.lower()
 
-    def test_already_at_limit_present_in_setup_prompt_with_bottoming(self):
-        """'already at limit' appears in the setup prompt when bottoming > 0 AND
-        ride_height is at the generic max (I1: requires setup dict at max)."""
-        laps = [self._lap_high_bottoming()]
-        p = _setup_prompt(laps=laps, setup={"ride_height_front": 200})
-        assert "already at limit" in p.lower()
 
     # ---- (c) no-op stripping when AI suggests > per-car max ----
 
@@ -951,32 +647,9 @@ class TestAC4StableBrakingAugmented:
         lap.brake_consistency_m = 35.0
         return lap
 
-    def test_combined_do_not_change_brake_bias_when_stable(self):
-        """The AC4 directive must contain the exact 'do NOT change brake_bias'
-        phrase when lockups < 0.5 AND consistency < 15."""
-        laps = [self._lap_stable()]
-        p = _combined_prompt(laps=laps)
-        assert "do NOT change brake_bias" in p, \
-            "AC4 directive must include 'do NOT change brake_bias' for stable braking"
 
-    def test_setup_do_not_change_brake_bias_when_stable(self):
-        laps = [self._lap_stable()]
-        p = _setup_prompt(laps=laps)
-        assert "do NOT change brake_bias" in p
 
-    def test_combined_do_not_change_brake_bias_absent_when_unstable(self):
-        """AC4 must NOT fire when lockups >= 0.5 — unstable braking should allow
-        brake_bias changes."""
-        laps = [self._lap_unstable()]
-        p = _combined_prompt(laps=laps)
-        assert "do NOT change brake_bias" not in p, \
-            "AC4 'do NOT change brake_bias' must not appear when braking is unstable"
 
-    def test_setup_do_not_change_lsd_decel_when_stable(self):
-        """AC4 also protects lsd_decel — verify that instruction too."""
-        laps = [self._lap_stable()]
-        p = _setup_prompt(laps=laps)
-        assert "lsd_decel" in p, "AC4 must mention lsd_decel protection alongside brake_bias"
 
     def test_directive_fires_at_consistency_boundary(self):
         """avg_consist=14.9 should trigger AC4; 15.0 should not."""
@@ -1422,53 +1095,11 @@ class TestPorsche963ReferenceFailureCase:
         adv._DATA_QUALITY_NOTE = ""
         return adv
 
-    def _build_prompt(self, monkeypatch):
-        monkeypatch.setattr(sr, "_load_ranges_json", lambda: _PORSCHE_963_RANGES)
-        adv = self._make_adv()
-        laps = [_LapPorsche963()]
-        # Pass ride_height at per-car max (90 mm) so AC3 I1 at-max detection fires.
-        _setup_at_max = {"ride_height_front": 90, "ride_height_rear": 90}
-        return adv._build_combined_prompt(
-            laps, setup=_setup_at_max, history_str="",
-            car_name=_PORSCHE_963_CAR, car_specs={},
-            allowed_tuning=_PORSCHE_963_ALLOWED,
-        )
 
-    def test_i_escalate_or_platform_control_language_present(self, monkeypatch):
-        """(i) The prompt must contain escalate/platform-control language when
-        ride height is at max and bottoming is high."""
-        p = self._build_prompt(monkeypatch)
-        low = p.lower()
-        assert "escalate" in low or "platform-control" in low, \
-            "Prompt must contain escalate/platform-control language for high-bottoming scenario"
 
-    def test_i_already_at_limit_language_present_due_to_bottoming(self, monkeypatch):
-        """(i continued) 'already at limit' must appear because bottoming_count=7 > 0
-        AND ride height is set at the Porsche 963 per-car max (90 mm)."""
-        p = self._build_prompt(monkeypatch)
-        assert "already at limit" in p.lower(), \
-            "'already at limit' must be injected when avg_bottom > 0 AND rh at max (90 mm)"
 
-    def test_i_ride_height_max_value_in_prompt(self, monkeypatch):
-        """(i continued) The per-car ride_height max (90 mm) must appear in the
-        escalation directive so the AI knows the actual limit."""
-        p = self._build_prompt(monkeypatch)
-        # The directive text includes 'front max=90 mm' or 'rear max=90 mm'
-        assert "90" in p, "Per-car ride_height max (90 mm) must appear in prompt"
 
-    def test_ii_race_objective_framing_present(self, monkeypatch):
-        """(ii) For race_type=lap, the AC11 race objective framing (stint, tyre)
-        must appear in the prompt."""
-        p = self._build_prompt(monkeypatch)
-        low = p.lower()
-        assert "stint" in low, "AC11 race objective must include 'stint'"
-        assert "tyre" in low, "AC11 race objective must include 'tyre'"
 
-    def test_ii_race_objective_directive_label_present(self, monkeypatch):
-        """(ii) The AC11 RACE OBJECTIVE directive label must be present."""
-        p = self._build_prompt(monkeypatch)
-        assert "AC11 RACE OBJECTIVE" in p or "RACE OBJECTIVE" in p, \
-            "AC11 RACE OBJECTIVE directive label must appear for race_type=lap"
 
     def test_iii_validate_rejects_locked_power_restrictor(self, monkeypatch):
         """(iii) _validate_setup_response must flag power_restrictor as locked
@@ -1535,26 +1166,8 @@ class TestPorsche963ReferenceFailureCase:
         assert any("no-op" in e.lower() for e in errs), \
             f"no-op ride-height must be flagged by validation; got: {errs}"
 
-    def test_full_scenario_stable_braking_directive_present(self, monkeypatch):
-        """Stable braking (lock_up=0, consistency=6m) must trigger AC4 in the prompt."""
-        p = self._build_prompt(monkeypatch)
-        assert "do NOT change brake_bias" in p, \
-            "AC4 stable braking directive must appear for the Porsche 963 scenario"
 
-    def test_full_scenario_snap_throttle_directive_present(self, monkeypatch):
-        """High snap-throttle + oversteer_throttle_on must trigger AC6 in the prompt."""
-        p = self._build_prompt(monkeypatch)
-        assert "AC6 SNAP-THROTTLE DRIVER INPUT" in p, \
-            "AC6 snap-throttle directive must appear for the Porsche 963 scenario"
 
-    def test_full_scenario_tuning_restriction_block_present(self, monkeypatch):
-        """With allowed_tuning set, the tuning restriction block must list locked
-        categories (transmission, power, etc.)."""
-        p = self._build_prompt(monkeypatch)
-        assert "LOCKED" in p, \
-            "Tuning restriction block must list LOCKED categories for the Porsche 963 scenario"
-        assert "transmission" in p.lower() or "power" in p.lower(), \
-            "Locked categories must include transmission or power"
 
 
 # ===========================================================================
@@ -1566,352 +1179,18 @@ class TestPorsche963ReferenceFailureCase:
 # C1 — build_combined_setup_response rebuilds setup_fields after no-op strip
 # ---------------------------------------------------------------------------
 
-class TestC1CombinedRebuildSetupFieldsAfterNoOpStrip:
-    """build_combined_setup_response must rebuild setup_fields from surviving
-    normalised changes so stale keys from stripped no-ops never reach the
-    validator or the UI Apply button."""
-
-    def _make_advisor_with_api(self, monkeypatch, api_response: str):
-        """Create a DrivingAdvisor that uses a stubbed call_api."""
-        # Patch the name in driving_advisor's own namespace (it's an import-time binding)
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: api_response)
-
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._config = {
-            "anthropic": {"api_key": "dummy", "model": None},
-            "strategy": {"track": "", "track_location_id": "", "layout_id": ""},
-        }
-        adv._event_ctx = {}
-        adv._car_id_ref = [0]
-        adv._db = None
-        adv._session_id_getter = lambda: 0
-
-        # Stub recorder: return one lap
-        class _Rec:
-            def recent_laps(self, n):
-                lap = _Lap()
-                lap.lock_up_count = 0
-                lap.wheelspin_count = 0
-                lap.brake_consistency_m = 5.0
-                lap.oversteer_count = 0
-                lap.oversteer_throttle_on_count = 0
-                lap.kerb_count = 0
-                lap.bottoming_count = 2
-                lap.snap_throttle_count = 0
-                lap.max_lat_g = 1.0
-                lap.max_speed_kmh = 200.0
-                lap.bottoming_positions = [(50.0, 0.0, 100.0)]
-                return [lap]
-            def best_lap(self): return None
-        adv._recorder = _Rec()
-        adv._tracker = None
-        return adv
-
-    @pytest.mark.skip(reason=(
-        "Obsolete since the Group 42/43 rule-first refactor: the AI no longer "
-        "authors setup changes, so this test's injected AI changes/setup_fields "
-        "are ignored entirely. No-op stripping now applies to rule-engine-authored "
-        "changes via _normalise_changes; that behaviour is covered by the "
-        "test_group42/43 suites."))
-    def test_stripped_noop_not_in_setup_fields(self, monkeypatch):
-        """When a change is a no-op (from==to_clamped), it must be stripped from
-        both changes AND setup_fields so the Apply button never sees it."""
-        # ride_height_front: from=90, to=90 — a no-op at the max (200 mm generic)
-        # arb_front: from=4, to=5 — a genuine change
-        api_json = json.dumps({
-            "analysis": "Test bottoming scenario.",
-            "primary_issue": "bottoming",
-            "issue_classification": {"bottoming": "setup-limited"},
-            "changes": [
-                {"setting": "Ride Height Front", "field": "ride_height_front",
-                 "from": "90", "to": 90, "why": "no change needed"},
-                {"setting": "ARB Front", "field": "arb_front",
-                 "from": "4", "to": 5, "why": "reduce bottoming"},
-            ],
-            "setup_fields": {"ride_height_front": 90, "arb_front": 5},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "medium", "reason": "test"},
-        })
-        adv = self._make_advisor_with_api(monkeypatch, api_json)
-        result_text = adv.build_combined_setup_response(
-            setup_dict={"ride_height_front": 90, "arb_front": 4},
-            car_name="",
-        )
-        data = json.loads(result_text)
-        sf = data.get("setup_fields", {})
-        # The no-op ride_height_front must NOT be in setup_fields
-        assert "ride_height_front" not in sf, (
-            f"No-op ride_height_front must be absent from setup_fields; got: {sf}"
-        )
-        # The genuine arb_front change MUST be in setup_fields
-        assert "arb_front" in sf, (
-            f"Genuine arb_front change must remain in setup_fields; got: {sf}"
-        )
-
-    def test_no_spurious_mismatch_error_for_stripped_field(self, monkeypatch):
-        """After stripping the no-op, validation_errors must NOT contain a
-        spurious 'setup_fields key X has no corresponding change entry' for
-        the stripped field."""
-        api_json = json.dumps({
-            "analysis": "Test.",
-            "primary_issue": "bottoming",
-            "issue_classification": {"bottoming": "setup-limited"},
-            "changes": [
-                {"setting": "Ride Height Front", "field": "ride_height_front",
-                 "from": "90", "to": 90, "why": "noop"},
-                {"setting": "ARB Front", "field": "arb_front",
-                 "from": "4", "to": 5, "why": "fix"},
-            ],
-            "setup_fields": {"ride_height_front": 90, "arb_front": 5},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "medium", "reason": "test"},
-        })
-        adv = self._make_advisor_with_api(monkeypatch, api_json)
-        result_text = adv.build_combined_setup_response(
-            setup_dict={"ride_height_front": 90, "arb_front": 4},
-            car_name="",
-        )
-        data = json.loads(result_text)
-        errs = data.get("validation_errors", [])
-        # Must not see a spurious mismatch for ride_height_front
-        spurious = [e for e in errs if "ride_height_front" in e and
-                    ("no corresponding" in e or "missing from setup_fields" in e)]
-        assert not spurious, (
-            f"Spurious mismatch errors for stripped field; got: {spurious}"
-        )
 
 
 # ---------------------------------------------------------------------------
 # C2 — max_tokens behavioural pin for both entry points
 # ---------------------------------------------------------------------------
 
-class TestC2MaxTokensBehavioural:
-    """Pin max_tokens via call_api capture — not a source-string scan."""
-
-    def _make_base_advisor(self, monkeypatch, captured: list):
-        def _fake_call_api(*args, **kwargs):
-            captured.append(kwargs.get("max_tokens", args[2] if len(args) > 2 else None))
-            return json.dumps({
-                "analysis": "ok",
-                "primary_issue": "none",
-                "issue_classification": {},
-                "changes": [],
-                "setup_fields": {},
-                "validation_targets": {},
-                "do_not_change_reasoning": [],
-                "confidence": {"overall": "low", "reason": "stub"},
-            })
-        # Patch the name as it exists in the driving_advisor module namespace
-        monkeypatch.setattr(da, "call_api", _fake_call_api)
-
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._config = {
-            "anthropic": {"api_key": "dummy", "model": None},
-            "strategy": {"track": "", "track_location_id": "", "layout_id": ""},
-        }
-        adv._event_ctx = {}
-        adv._car_id_ref = [0]
-        adv._db = None
-        adv._session_id_getter = lambda: 0
-
-        class _Rec:
-            def recent_laps(self, n):
-                return [_Lap()]
-            def best_lap(self): return None
-        adv._recorder = _Rec()
-        adv._tracker = None
-        return adv
-
-    def test_build_combined_setup_response_max_tokens_audit_1500(self, monkeypatch):
-        # Group 42/43 rule-first refactor: the AI no longer authors the setup JSON
-        # (the deterministic rule engine does). The only call_api in the combined
-        # path is now the AI *audit*. Budget raised 800->1500 (UAT: 800 truncated
-        # the audit JSON mid-string -> "Unterminated string"). Pinned here.
-        captured: list = []
-        adv = self._make_base_advisor(monkeypatch, captured)
-        adv.build_combined_setup_response(setup_dict={}, car_name="")
-        assert captured, "call_api was not invoked"
-        assert captured[0] == 1500, (
-            f"build_combined_setup_response audit call must use max_tokens=1500, "
-            f"got {captured[0]}"
-        )
-
-    def test_build_setup_advice_response_max_tokens_1500(self, monkeypatch):
-        captured: list = []
-        adv = self._make_base_advisor(monkeypatch, captured)
-        adv.build_setup_advice_response(setup_dict={}, car_name="")
-        assert captured, "call_api was not invoked"
-        assert captured[0] == 1500, (
-            f"build_setup_advice_response must use max_tokens=1500, got {captured[0]}"
-        )
 
 
 # ---------------------------------------------------------------------------
 # C3a — Locked fields stripped from changes + setup_fields after validation
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason=(
-    "Obsolete since the Group 42/43 rule-first refactor: the AI no longer authors "
-    "setup changes, so injecting a locked field via the AI JSON no longer exercises "
-    "a real path (the injected changes are ignored). Locked/allowed_tuning enforcement "
-    "now lives in the deterministic rule engine (it never authors a locked field) and "
-    "is covered by the test_group42/43 suites. The safety intent — a locked field can "
-    "never reach the Apply button — still holds via that path."))
-class TestC3aLockedFieldStripped:
-    """When a field is locked (not in allowed_tuning), it must be stripped from
-    BOTH changes and setup_fields so the UI Apply button can never write it."""
-
-    def _make_advisor_with_api(self, monkeypatch, api_response: str,
-                                allowed_tuning=None):
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: api_response)
-
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._config = {
-            "anthropic": {"api_key": "dummy", "model": None},
-            "strategy": {"track": "", "track_location_id": "", "layout_id": ""},
-        }
-        adv._event_ctx = {}
-        adv._car_id_ref = [0]
-        adv._db = None
-        adv._session_id_getter = lambda: 0
-
-        class _Rec:
-            def recent_laps(self, n): return [_Lap()]
-            def best_lap(self): return None
-        adv._recorder = _Rec()
-        adv._tracker = None
-        return adv, allowed_tuning
-
-    def test_locked_field_removed_from_changes_and_sf(self, monkeypatch):
-        """aero_front locked (aero not in allowed_tuning) must be stripped."""
-        api_json = json.dumps({
-            "analysis": "t",
-            "primary_issue": "aero",
-            "issue_classification": {},
-            "changes": [
-                {"setting": "Aero Front", "field": "aero_front",
-                 "from": "100", "to": 200, "why": "more downforce"},
-                {"setting": "ARB Front", "field": "arb_front",
-                 "from": "4", "to": 5, "why": "stability"},
-            ],
-            "setup_fields": {"aero_front": 200, "arb_front": 5},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "low", "reason": "stub"},
-        })
-        # Only suspension is allowed; aero is locked.
-        allowed = ["suspension"]
-        adv, _ = self._make_advisor_with_api(monkeypatch, api_json, allowed)
-        result_text = adv.build_combined_setup_response(
-            setup_dict={}, car_name="",
-            allowed_tuning=allowed,
-        )
-        data = json.loads(result_text)
-        fields_in_changes = [c.get("field") for c in data.get("changes", [])]
-        assert "aero_front" not in fields_in_changes, (
-            f"Locked aero_front must be stripped from changes; got: {fields_in_changes}"
-        )
-        assert "aero_front" not in data.get("setup_fields", {}), (
-            f"Locked aero_front must be stripped from setup_fields"
-        )
-        # The allowed arb_front change must survive
-        assert "arb_front" in fields_in_changes, (
-            "Allowed arb_front must survive after locked-field strip"
-        )
-
-    def test_locked_field_error_still_in_validation_errors(self, monkeypatch):
-        """Even though the locked field is stripped, its violation must remain
-        visible in validation_errors."""
-        api_json = json.dumps({
-            "analysis": "t",
-            "primary_issue": "aero",
-            "issue_classification": {},
-            "changes": [
-                {"setting": "Aero Front", "field": "aero_front",
-                 "from": "100", "to": 200, "why": "downforce"},
-            ],
-            "setup_fields": {"aero_front": 200},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "low", "reason": "stub"},
-        })
-        allowed = ["suspension"]
-        adv, _ = self._make_advisor_with_api(monkeypatch, api_json, allowed)
-        result_text = adv.build_combined_setup_response(
-            setup_dict={}, car_name="",
-            allowed_tuning=allowed,
-        )
-        data = json.loads(result_text)
-        errs = data.get("validation_errors", [])
-        assert any("locked" in e.lower() for e in errs), (
-            f"Locked-field violation must remain in validation_errors; got: {errs}"
-        )
-
-    def test_analyse_path_locked_field_removed_from_changes_and_sf(self, monkeypatch):
-        """The locked-field strip must also hold on the analyse path
-        (build_setup_advice_response), not only the combined path."""
-        api_json = json.dumps({
-            "analysis": "t",
-            "primary_issue": "aero",
-            "issue_classification": {},
-            "changes": [
-                {"setting": "Aero Front", "field": "aero_front",
-                 "from": "100", "to": 200, "why": "more downforce"},
-                {"setting": "ARB Front", "field": "arb_front",
-                 "from": "4", "to": 5, "why": "stability"},
-            ],
-            "setup_fields": {"aero_front": 200, "arb_front": 5},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "low", "reason": "stub"},
-        })
-        allowed = ["suspension"]  # aero locked
-        adv, _ = self._make_advisor_with_api(monkeypatch, api_json, allowed)
-        result_text = adv.build_setup_advice_response(
-            setup_dict={}, car_name="", allowed_tuning=allowed,
-        )
-        data = json.loads(result_text)
-        fields_in_changes = [c.get("field") for c in data.get("changes", [])]
-        assert "aero_front" not in fields_in_changes, (
-            f"Locked aero_front must be stripped from changes (analyse path); "
-            f"got: {fields_in_changes}"
-        )
-        assert "aero_front" not in data.get("setup_fields", {}), (
-            "Locked aero_front must be stripped from setup_fields (analyse path)"
-        )
-        assert "arb_front" in fields_in_changes, (
-            "Allowed arb_front must survive after locked-field strip (analyse path)"
-        )
-
-    def test_analyse_path_locked_field_error_still_in_validation_errors(self, monkeypatch):
-        """Analyse path: the stripped locked field's violation must remain visible
-        in validation_errors."""
-        api_json = json.dumps({
-            "analysis": "t",
-            "primary_issue": "aero",
-            "issue_classification": {},
-            "changes": [
-                {"setting": "Aero Front", "field": "aero_front",
-                 "from": "100", "to": 200, "why": "downforce"},
-            ],
-            "setup_fields": {"aero_front": 200},
-            "validation_targets": {},
-            "do_not_change_reasoning": [],
-            "confidence": {"overall": "low", "reason": "stub"},
-        })
-        allowed = ["suspension"]
-        adv, _ = self._make_advisor_with_api(monkeypatch, api_json, allowed)
-        result_text = adv.build_setup_advice_response(
-            setup_dict={}, car_name="", allowed_tuning=allowed,
-        )
-        data = json.loads(result_text)
-        errs = data.get("validation_errors", [])
-        assert any("locked" in e.lower() for e in errs), (
-            f"Locked-field violation must remain in validation_errors (analyse path); "
-            f"got: {errs}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2018,23 +1297,3 @@ class TestI1AC3RideHeightAtMax:
         # The general AC3 text is present but the specific sub-bullet is NOT
         assert "ride_height_front is currently" not in d
 
-    def test_combined_prompt_passes_setup_to_directives(self, monkeypatch):
-        """Verify the combined prompt builder actually passes `setup` to directives,
-        so at-max detection works end-to-end."""
-        captured_setup = []
-        original_fn = da._race_engineer_directives
-
-        def _capture(*args, **kwargs):
-            captured_setup.append(kwargs.get("setup", args[14] if len(args) > 14 else None))
-            return original_fn(*args, **kwargs)
-
-        monkeypatch.setattr(da, "_race_engineer_directives", _capture)
-        adv = _make_advisor()
-        adv._build_combined_prompt(
-            [_Lap()], {"ride_height_front": 90}, history_str="",
-            car_name="", car_specs={},
-        )
-        assert captured_setup, "_race_engineer_directives was not called"
-        assert captured_setup[0] is not None, "setup kwarg must be forwarded"
-        assert captured_setup[0].get("ride_height_front") == 90, \
-            "setup dict must be forwarded with current values"

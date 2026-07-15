@@ -252,21 +252,18 @@ class TestByteIdentitySynced:
         assert snap.layout_id == legacy["layout_id"]
         assert snap.mandatory_compounds_str == legacy["mandatory_compounds"]
 
-    def test_prompt_text_byte_identical(self):
-        """The strongest proof: the actual race prompt text is byte-identical
-        whether RaceParams came from the legacy expressions or the snapshot."""
-        from strategy.ai_planner import RaceParams, _build_race_prompt
+    def test_race_params_construct_byte_identical(self):
+        """The strongest proof available post-AI-removal: RaceParams built from
+        the legacy expressions and from the snapshot are field-identical."""
+        from strategy.race_params import RaceParams
         strat = strategy_dict()
-        lap_data = {"RM": [98000.0, 98200.0, 98100.0], "RH": [99000.0, 99150.0]}
 
         legacy_params = RaceParams(**legacy_strategy_race_params(
             strat, float(strat.get("fuel_burn_per_lap", 2.0))))
         mine, _ = snapshot_strategy_params(strat, event=db_event())
         snap_params = RaceParams(**mine)
 
-        p1 = _build_race_prompt(legacy_params, lap_data, car_name="Porsche 911 RSR (991) '17")
-        p2 = _build_race_prompt(snap_params, lap_data, car_name="Porsche 911 RSR (991) '17")
-        assert p1 == p2, "prompt text must be byte-identical"
+        assert legacy_params == snap_params, "RaceParams must be field-identical"
 
 
 # --------------------------------------------------------------------------- #
@@ -556,22 +553,6 @@ class TestDashboardMigration:
                      '_sc.get("track_location_id"'):
             assert expr not in body, f"legacy event read remains: {expr}"
 
-    def test_run_ai_analysis_uses_snapshot(self, dash_src):
-        body = _method_body(dash_src, "_run_ai_analysis")
-        assert "build_strategy_ai_snapshot" in body or "_build_strategy_ai_snapshot" in body
-        assert "_computed_fuel_burn_lpl()" in body  # telemetry-owned override kept
-        for expr in ('_sc.get("tyre_wear_multiplier"', '_sc.get("bop"',
-                     '_sc.get("avail_tyres"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
-    def test_run_practice_analysis_uses_snapshot(self, dash_src):
-        body = _method_body(dash_src, "_run_practice_analysis")
-        assert "build_practice_analysis_snapshot" in body or "_build_practice_ai_snapshot" in body
-        assert "_computed_fuel_burn_lpl()" in body
-        for expr in ('_psc.get("tyre_wear_multiplier"', '_psc.get("bop"',
-                     '_psc.get("avail_tyres"', '_psc.get("track_location_id"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
     def test_dashboard_has_snapshot_helper(self, dash_src):
         assert "def _build_strategy_ai_snapshot" in dash_src
         assert "def _build_practice_ai_snapshot" in dash_src
@@ -583,20 +564,6 @@ class TestDashboardMigration:
 
 
 class TestSetupBuilderMigration:
-    def test_build_setup_uses_snapshot(self, sb_src):
-        body = _method_body(sb_src, "_run_build_setup")
-        assert "_build_setup_ai_snapshot" in body
-        for expr in ('_sc_build.get("tuning"', '_sc_build.get("tyre_wear_multiplier"',
-                     '_sc_ev.get("race_duration_minutes"', '_sc_build.get("avail_tyres"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
-    def test_build_setup_worker_uses_frozen_track_ids(self, sb_src):
-        # The rec-parsing metadata inside the worker thread must use the frozen
-        # captured values, not re-read config["strategy"] mid-flight.
-        body = _method_body(sb_src, "_run_build_setup")
-        assert '_build_track = self._config.get("strategy", {}).get("track", "")' not in body
-        assert '_build_layout = self._config.get("strategy", {}).get("layout_id", "")' not in body
-
     def test_analyse_setup_uses_snapshot(self, sb_src):
         body = _method_body(sb_src, "_setup_analyse_ai")
         assert "_build_setup_ai_snapshot" in body

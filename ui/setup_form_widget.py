@@ -636,21 +636,24 @@ class SetupFormWidget(QWidget):
 
         # NOTE: the old "Rate this result" combo + "Applied" checkbox were removed.
 
-        # ── Build Setup with AI + Set Car Ranges ──────────────────────────────
+        # ── (retired from-scratch build slot) + Set Car Ranges ────────────────
         _build_row = QHBoxLayout()
-        self._btn_build_setup = QPushButton("Build Setup with AI")
+        # Retired: the from-scratch build button. The deterministic
+        # "Build Baseline Setup" (below) is the from-scratch path; this hidden,
+        # disabled placeholder is kept only so existing attribute references
+        # remain valid and is never shown to the user.
+        self._btn_build_setup = QPushButton("Build Setup")
         self._btn_build_setup.setStyleSheet(
             "background: #1A5C2A; color: white; font-weight: bold; padding: 6px 16px;")
-        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
         self._btn_build_setup.setEnabled(False)
         self._btn_build_setup.setVisible(False)
         self._btn_build_setup.setToolTip(
-            "Build Setup with AI is unavailable — use Analyse to get AI-guided, "
-            "rule-validated setup changes.")
+            "Unavailable — use Build Baseline Setup for a from-scratch setup, or "
+            "Analyse for rule-validated setup changes.")
         self._btn_set_car_ranges = QPushButton("Set Car Ranges…")
         self._btn_set_car_ranges.setToolTip(
             "Define per-car min/max bounds for every setup parameter.\n"
-            "These bounds constrain the spinboxes and the AI output for this car.")
+            "These bounds constrain the spinboxes and the setup engine for this car.")
         self._btn_baseline = QPushButton("Build Baseline Setup")
         self._btn_baseline.setStyleSheet(
             "background: #1A3A5C; color: white; font-weight: bold; padding: 6px 16px;")

@@ -160,16 +160,9 @@ class TestSetupGatingMigrated:
 
 
 class TestValidationMigrated:
-    def test_def_p3_012_reads_event_context(self, dash_src):
-        assert "_strat_locked = _ev_ctx.tuning_locked" in dash_src
-        assert "_strat_allowed = list(_ev_ctx.allowed_tuning_categories)" in dash_src
-
     def test_no_raw_validation_reads_remain(self, dash_src):
         assert "_sc_strat" not in dash_src, (
             "DEF-P3-012 validation still reads config['strategy'] via _sc_strat")
-
-    def test_validator_still_called_per_option(self, dash_src):
-        assert "_vld_strat(_check_text, _strat_locked, _strat_allowed)" in dash_src
 
 
 class TestWriterPathUnchanged:

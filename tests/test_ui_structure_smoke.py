@@ -4,7 +4,7 @@ Builds the real MainWindow offscreen against an isolated temp config (the same
 config-safe pattern as test_config_safety_smoke.py) and asserts the structural
 outcomes of the overhaul actually materialise in the live widget tree:
 
-  * 13 tabs (the Guide tab was folded into Home),
+  * 12 tabs (the Guide tab was folded into Home; the AI Log tab was removed),
   * no "Guide" tab remains,
   * the core workflow tabs are present,
   * Setup Builder holds two SetupFormWidget panels (Race + Qualifying),
@@ -58,8 +58,8 @@ def _titles(win) -> list[str]:
     return [win._tabs.tabText(i) for i in range(win._tabs.count())]
 
 
-def test_thirteen_tabs(window):
-    assert window._tabs.count() == 13
+def test_twelve_tabs(window):
+    assert window._tabs.count() == 12
 
 
 def test_no_guide_tab(window):

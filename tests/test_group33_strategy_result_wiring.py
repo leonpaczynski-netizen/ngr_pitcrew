@@ -271,60 +271,6 @@ class TestBuildFeasibilityHtmlLogic:
 
 
 # ---------------------------------------------------------------------------
-# Task 3 — Timed-race lap estimate: source-level checks
-# ---------------------------------------------------------------------------
-
-class TestTimedRaceLapEstimateSource:
-    """Source-text checks that the timed-race lap estimate was updated to use
-    estimate_race_laps (ceil) with the best/min clean lap of the compound with
-    the most data.  The logic lives in _run_ai_analysis."""
-
-    def setup_method(self):
-        self._body = _method_body(DASHBOARD_SRC, "_run_ai_analysis")
-
-    def test_method_exists(self):
-        assert self._body, "_run_strategy_analysis not found in dashboard.py"
-
-    def test_imports_estimate_race_laps(self):
-        assert "estimate_race_laps" in self._body, (
-            "_run_strategy_analysis must import and use estimate_race_laps"
-        )
-
-    def test_uses_min_for_representative_lap(self):
-        """Representative lap must use min() (best clean lap), not mean/avg."""
-        assert "min(" in self._body, (
-            "_run_strategy_analysis must use min() for representative lap selection"
-        )
-
-    def test_does_not_use_flat_mean_approach(self):
-        """Old int(_duration_secs / avg_lap_secs) approach must be gone."""
-        assert "int(_duration_secs / avg_lap_secs)" not in self._body, (
-            "Old flat-mean approach must be removed from _run_strategy_analysis"
-        )
-        assert "int(duration_secs / avg_lap_secs)" not in self._body, (
-            "Old flat-mean approach must be removed from _run_strategy_analysis"
-        )
-
-    def test_ms_to_s_conversion(self):
-        """Lap times in the DB are in milliseconds; must convert with / 1000."""
-        assert "/ 1000.0" in self._body or "/ 1000" in self._body, (
-            "Lap time must be converted from ms to seconds"
-        )
-
-    def test_max_1_floor_preserved(self):
-        """max(1, ...) floor must still be present."""
-        assert "max(1," in self._body, (
-            "_run_strategy_analysis must preserve max(1, ...) floor on timed lap count"
-        )
-
-    def test_picks_compound_with_most_laps(self):
-        """Must select compound with the most laps as the representative."""
-        assert "len(lap_data_by_compound" in self._body, (
-            "_run_strategy_analysis must select compound with most laps for representative lap"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Task 3 — Lap estimate logic matches feasibility module
 # ---------------------------------------------------------------------------
 

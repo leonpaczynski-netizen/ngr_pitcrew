@@ -42,14 +42,6 @@ def _dashboard_text() -> str:
     return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
 
 
-def _ai_client_text() -> str:
-    return (_SRC / "strategy" / "_ai_client.py").read_text(encoding="utf-8")
-
-
-def _ai_planner_text() -> str:
-    return (_SRC / "strategy" / "ai_planner.py").read_text(encoding="utf-8")
-
-
 def _state_text() -> str:
     return (_SRC / "telemetry" / "state.py").read_text(encoding="utf-8")
 
@@ -64,96 +56,6 @@ def _method_body(text: str, method_name: str) -> str:
         return ""
     end = text.find("\n    def ", start + 1)
     return text[start:end] if end != -1 else text[start:]
-
-
-# ---------------------------------------------------------------------------
-# DEF-P1-012 — practice prompt: locked tuning suppresses setup-changes section
-# ---------------------------------------------------------------------------
-
-class TestBoPPromptSetupChangesConditional(unittest.TestCase):
-
-    def test_setup_changes_line_is_conditional_on_tuning_locked(self):
-        """DEF-P1-012: 'Setup changes' instruction must be inside an if/else block."""
-        src = _ai_planner_text()
-        # The fix uses a Python ternary/conditional inside the f-string
-        self.assertIn("tuning_locked", src[src.find("**Setup changes"):src.find("**Setup changes") + 300]
-                      if src.find("**Setup changes") != -1 else
-                      src[src.find("No setup changes"):src.find("No setup changes") + 300],
-                      "_build_practice_prompt setup instruction must reference tuning_locked")
-
-    def test_no_setup_changes_text_present_when_locked(self):
-        """DEF-P1-012: locked branch must say 'No setup changes' or 'not permitted'."""
-        src = _ai_planner_text()
-        # One of these phrases must exist to handle the locked case
-        self.assertTrue(
-            "No setup changes" in src or "not permitted" in src,
-            "Practice prompt must include a locked-tuning branch that suppresses setup advice"
-        )
-
-    def test_setup_changes_instruction_present_when_not_locked(self):
-        """DEF-P1-012: unlocked branch must still ask for '3–5 changes'."""
-        src = _ai_planner_text()
-        self.assertIn("3–5 changes", src,
-                      "Unlocked branch must retain the original 3–5 setup changes instruction")
-
-    def test_prompt_tuning_locked_branch_references_do_not(self):
-        """DEF-P1-012: locked branch must include a 'DO NOT' or 'not permitted' directive."""
-        src = _ai_planner_text()
-        # Find the locked branch of the setup_changes conditional
-        locked_pos = src.find("No setup changes")
-        if locked_pos == -1:
-            locked_pos = src.find("not permitted")
-        self.assertGreater(locked_pos, -1,
-                           "Practice prompt must have a locked-tuning setup_changes branch")
-
-
-class TestBoPPromptRoundTrip(unittest.TestCase):
-    """Direct call to _build_practice_prompt with tuning_locked=True."""
-
-    def _get_prompt(self, locked: bool) -> str:
-        import sys
-        sys.path.insert(0, str(_SRC))
-        from strategy.ai_planner import _build_practice_prompt, RaceParams
-        params = RaceParams(
-            track="Suzuka Circuit",
-            total_laps=25,
-            fuel_burn_per_lap=2.5,
-            pit_loss_secs=23.0,
-            refuel_speed_lps=10.0,
-            tyre_wear_multiplier=1.0,
-            tuning_locked=locked,
-            allowed_tuning=[],
-        )
-        lap_data = {"Racing Medium": [95000.0, 96000.0, 95500.0]}
-        setup = {"ride_height_front": 80, "ride_height_rear": 85}
-        prompt = _build_practice_prompt(params, lap_data, setup, {})
-        return prompt
-
-    def test_locked_prompt_contains_tuning_locked_block(self):
-        """DEF-P1-012: tuning_locked=True prompt must contain TUNING LOCKED block."""
-        prompt = self._get_prompt(locked=True)
-        self.assertIn("TUNING LOCKED", prompt,
-                      "Locked prompt must contain ## EVENT RULES — TUNING LOCKED")
-
-    def test_locked_prompt_does_not_show_ride_height_value(self):
-        """DEF-P1-012: tuning_locked=True setup block must not expose 80 as ride_height."""
-        prompt = self._get_prompt(locked=True)
-        setup_section = prompt[prompt.find("Current car setup"):] if "Current car setup" in prompt else prompt
-        self.assertNotIn("ride_height_front: 80", setup_section,
-                         "Locked prompt must NOT show actual setup values in setup section")
-
-    def test_locked_prompt_has_no_setup_changes_instruction(self):
-        """DEF-P1-012: tuning_locked=True must NOT instruct AI to provide 3-5 setup changes."""
-        prompt = self._get_prompt(locked=True)
-        # The original "3–5 changes" instruction must be absent when locked
-        self.assertNotIn("3–5 changes", prompt,
-                         "Locked prompt must not ask AI for setup changes")
-
-    def test_unlocked_prompt_has_setup_changes_instruction(self):
-        """DEF-P1-012: tuning_locked=False must retain the 3-5 setup changes instruction."""
-        prompt = self._get_prompt(locked=False)
-        self.assertIn("3–5 changes", prompt,
-                      "Unlocked prompt must retain setup changes instruction")
 
 
 # ---------------------------------------------------------------------------
@@ -332,83 +234,6 @@ class TestQualifyingAlertSuppression(unittest.TestCase):
         body = _method_body(_announcer_text(), "_on_race_finish")
         self.assertIn('"race"', body,
                       "_on_race_finish must check mode == 'race' before announcing")
-
-
-# ---------------------------------------------------------------------------
-# DEF-P2-033 — AI Log auto-select via QTimer
-# ---------------------------------------------------------------------------
-
-class TestAiLogAutoSelectQTimer(unittest.TestCase):
-
-    def test_on_ai_log_entry_uses_qtimer(self):
-        """DEF-P2-033: _on_ai_log_entry must schedule flush via QTimer.singleShot."""
-        body = _method_body(_dashboard_text(), "_on_ai_log_entry")
-        self.assertIn("QTimer", body,
-                      "_on_ai_log_entry must use QTimer.singleShot for deferred selection (DEF-P2-033)")
-        self.assertIn("singleShot", body,
-                      "_on_ai_log_entry must call QTimer.singleShot(0, ...) for deferred flush")
-
-    def test_on_ai_log_entry_sets_pending_flag(self):
-        """DEF-P2-033: _on_ai_log_entry must still set _ai_log_pending_select = True."""
-        body = _method_body(_dashboard_text(), "_on_ai_log_entry")
-        self.assertIn("_ai_log_pending_select = True", body,
-                      "_on_ai_log_entry must set _ai_log_pending_select flag")
-
-    def test_flush_checks_tab_visibility(self):
-        """DEF-P2-033: _flush_ai_log_pending_select must check the AI Log tab is
-        visible before selecting. (Tab Navigation Refactor 2026-07-03: the guard
-        compares the stable tab key TAB_AI_LOG via current_tab_key() instead of
-        the old hard-coded currentIndex() != 11 — same invariant.)"""
-        body = _method_body(_dashboard_text(), "_flush_ai_log_pending_select")
-        self.assertIn("current_tab_key()", body,
-                      "_flush_ai_log_pending_select must check the current tab before selecting")
-        self.assertIn("TAB_AI_LOG", body,
-                      "_flush_ai_log_pending_select must compare against the AI Log tab key")
-
-    def test_flush_leaves_flag_set_when_tab_not_visible(self):
-        """DEF-P2-033: flush must return without clearing flag when not on AI Log tab."""
-        body = _method_body(_dashboard_text(), "_flush_ai_log_pending_select")
-        # The method must have a guard that returns BEFORE clearing the flag
-        # when the AI Log tab is not the current tab (key-based since the
-        # Tab Navigation Refactor).
-        guard_pos = body.find("current_tab_key()")
-        return_pos = body.find("return", guard_pos) if guard_pos != -1 else -1
-        clear_pos  = body.find("_ai_log_pending_select = False")
-        self.assertGreater(guard_pos, -1, "Tab visibility guard must exist")
-        self.assertGreater(return_pos, -1, "Return statement must follow the guard")
-        self.assertGreater(clear_pos, return_pos,
-                           "Flag must only be cleared AFTER the tab-visibility guard passes")
-
-    def test_on_ai_log_entry_no_auto_select_true(self):
-        """DEF-P2-033: _on_ai_log_entry must NOT pass auto_select=True (use QTimer instead)."""
-        body = _method_body(_dashboard_text(), "_on_ai_log_entry")
-        self.assertNotIn("auto_select=True", body,
-                         "_on_ai_log_entry must not use auto_select=True — QTimer is the correct path")
-
-
-# ---------------------------------------------------------------------------
-# DEF-P2-034 — AI Log timestamp uses local time
-# ---------------------------------------------------------------------------
-
-class TestAiLogLocalTimestamp(unittest.TestCase):
-
-    def test_ai_client_does_not_use_utcnow(self):
-        """DEF-P2-034: _ai_client.py must NOT use utcnow() (deprecated and returns UTC)."""
-        src = _ai_client_text()
-        self.assertNotIn("utcnow()", src,
-                         "_ai_client.py must not use utcnow() — use datetime.now() for local time")
-
-    def test_ai_client_uses_datetime_now(self):
-        """DEF-P2-034: _ai_client.py must use datetime.now() for local timestamps."""
-        src = _ai_client_text()
-        self.assertIn("datetime.now()", src,
-                      "_ai_client.py must use datetime.now() to store local time in AI log entries")
-
-    def test_timestamp_display_still_formatted(self):
-        """DEF-P2-034: dashboard must still format timestamp with [:19].replace."""
-        src = _dashboard_text()
-        self.assertIn("replace(\"T\", \" \")", src,
-                      "Timestamp display must still trim T from ISO format with replace")
 
 
 # ---------------------------------------------------------------------------

@@ -355,31 +355,3 @@ class TestSeededCornerVerificationSourceMutation:
         self._apply_ai_result(corners, {})
         for c in corners:
             assert c.verification_source == "greedy"
-
-    def test_ai_verify_integration_sets_source(self):
-        """End-to-end: verify_corners_with_ai returns result → mutation applied."""
-        from strategy.corner_verify_ai import verify_corners_with_ai
-
-        corners = [
-            self._make_corner("T1", 0.10),
-            self._make_corner("T2", 0.25),
-        ]
-        ai_response = json.dumps({
-            "T1": {"progress_pct": 10.0, "confidence": 0.91},
-            "T2": {"progress_pct": 25.0, "confidence": 0.88},
-        })
-
-        with patch("strategy._ai_client.call_api", return_value=ai_response):
-            result, _reason = verify_corners_with_ai(
-                peaks=[(10.0, 0.02, False), (25.0, 0.05, True)],
-                seed_windows=[("T1", 8.0, 15.0), ("T2", 22.0, 30.0)],
-                speed_profile=[(float(i), 120.0) for i in range(0, 101, 5)],
-                api_key="sk-test",
-            )
-
-        assert result is not None
-        # Apply mutation (replicating dashboard logic)
-        self._apply_ai_result(corners, result)
-
-        assert corners[0].verification_source == "ai_verified"
-        assert corners[1].verification_source == "ai_verified"

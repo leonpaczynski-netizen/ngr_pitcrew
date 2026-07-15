@@ -129,14 +129,10 @@ def test_make_candidate_drops_non_numeric():
 
 # ============================================ integration
 
-def test_response_carries_sequence_and_comparison(monkeypatch):
+def test_response_carries_sequence_and_comparison():
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     adv = G._make_full_advisor({}, [G._make_lap()])
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"arb_front": 6, "arb_rear": 5, "aero_front": 400},
         car_name="Porsche 911 RSR (991) '17",

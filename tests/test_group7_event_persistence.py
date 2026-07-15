@@ -333,19 +333,14 @@ class TestEventSetActiveStratKeys(unittest.TestCase):
 
 class TestPracticeAnalysisBoPContext(unittest.TestCase):
 
-    def _body(self) -> str:
-        return _method_body(_dashboard_text(), "_run_practice_analysis")
-
     # AI Snapshot Migration: the derivations moved into
-    # build_practice_analysis_snapshot (data/ai_context_snapshot.py); the
-    # method now routes race_params through the frozen snapshot. Same
-    # DEF-P1-005 invariants, verified at the new home.
+    # build_practice_analysis_snapshot (data/ai_context_snapshot.py). The old
+    # generative-AI practice-analysis method (_run_practice_analysis) was
+    # removed in the no-AI refactor, so the DEF-P1-005 invariants are now
+    # verified directly on the deterministic snapshot builder.
 
     def test_passes_tuning_locked_to_race_params(self):
-        """tuning_locked derived from strategy config and forwarded to AI planner."""
-        body = self._body()
-        self.assertIn("_build_practice_ai_snapshot", body,
-                      '_run_practice_analysis must build race_params via the frozen snapshot')
+        """tuning_locked derived from strategy config by the frozen snapshot builder."""
         from data.ai_context_snapshot import build_practice_analysis_snapshot
         rp = build_practice_analysis_snapshot(
             legacy_strategy={"track": "T", "tuning": False},

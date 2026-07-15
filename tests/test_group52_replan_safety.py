@@ -111,7 +111,7 @@ class TestSetupGuaranteesUntouched:
 
     def test_old_ai_build_path_still_disabled(self):
         src = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
-        assert "form._btn_build_setup.setEnabled(False)" in src
+        assert "the from-scratch AI build path was removed" in src
 
 
 if __name__ == "__main__":

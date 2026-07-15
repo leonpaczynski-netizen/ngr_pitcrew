@@ -174,7 +174,6 @@ class TestAC1AIAuditOnly:
             "missing_evidence": [],
             "explanation_notes": "All good.",
         })
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: audit_response)
 
         result_str = adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
         result = json.loads(result_str)

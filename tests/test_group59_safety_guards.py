@@ -74,7 +74,7 @@ class TestSetupGuaranteesUntouched:
 
     def test_old_ai_build_path_still_disabled(self):
         src = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
-        assert "form._btn_build_setup.setEnabled(False)" in src
+        assert "the from-scratch AI build path was removed" in src
 
     def test_no_setup_history_write(self):
         from ui.race_strategy_uat import run_fuji_live_replan

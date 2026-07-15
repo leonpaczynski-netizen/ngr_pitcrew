@@ -1535,117 +1535,11 @@ class SetupBuilderMixin:
         self._refresh_revert_buttons()
 
     def _run_build_setup_for_form(self, form: "SetupFormWidget") -> None:
-        """Build a complete setup with AI for the given form (Qualifying panel)."""
-        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        """Retired: the from-scratch AI build path was removed in the
+        determinism rebuild (Sprint 1). Use "Build Baseline Setup" for a
+        deterministic from-scratch setup, or "Analyse" for rule-validated
+        changes. Retained as a no-op so existing wiring stays valid."""
         return
-        # Delegates to the main _run_build_setup but uses the form's purpose as session_type.
-        # We temporarily proxy self._setup_type to match the form's purpose so the existing
-        # _run_build_setup reads the correct session type.
-        # The session_type is captured at call time from the form's purpose.
-        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
-        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
-
-        api_key = self._ai_api_key.text().strip()
-        if not api_key:
-            form._build_setup_result.setPlainText(
-                "No API key configured. Add your Anthropic API key in the AI Race Analysis section.")
-            form._build_setup_result.setVisible(True)
-            return
-
-        _ai_snap = self._build_setup_ai_snapshot()
-        car          = _ai_snap.car
-        track        = _ai_snap.track
-        session_type = f"{form.purpose} Setup"
-        race_laps    = _ai_snap.race_laps
-        min_weight   = form._setup_min_weight.value()
-        max_power    = form._setup_max_power.value()
-        actual_bhp   = form._setup_actual_bhp.value()
-        num_gears    = form._setup_num_gears.value()
-        drivetrain   = form._setup_drivetrain.currentData()
-        bop_data     = self._get_bop_data_for_car()
-        _duration_mins   = _ai_snap.duration_mins
-        _mandatory_stops = _ai_snap.mandatory_stops
-        _refuel_rate_lps = _ai_snap.refuel_rate_lps
-        _pit_loss_secs   = _ai_snap.pit_loss_secs
-        _re_brief        = (
-            form._re_brief_input.toPlainText().strip()
-            if hasattr(form, "_re_brief_input") and form._re_brief_input.isVisible()
-            else ""
-        )
-        _, _car_specs = self._load_car_specs_for_current()
-        _allowed_tuning = _ai_snap.allowed_tuning_or_none()
-        _tuning_locked  = _ai_snap.tuning_locked
-        _tyre_wear_mult  = _ai_snap.tyre_wear_multiplier
-        _fuel_mult       = _ai_snap.fuel_multiplier
-        _avail_tyres     = _ai_snap.avail_tyres_list()
-        _req_tyres       = _ai_snap.required_tyres_list()
-        _race_type_build = _ai_snap.race_type
-        _track_loc_id    = _ai_snap.track_location_id
-        _layout_id_build = _ai_snap.layout_id
-        _last_lap = self._recorder.last_lap() if self._recorder else None
-        _gearbox_analysis = _last_lap.gearbox_analysis if _last_lap else {}
-        _car_id_build = self._db.get_car_id(car) if self._db and car and car != "Unknown" else 0
-        self._car_id_build = _car_id_build
-        _ofr2_laps = self._resolve_recent_laps(_car_id_build, track)
-
-        form._btn_build_setup.setEnabled(False)
-        form._btn_build_setup.setText("Building…")
-        form._build_setup_result.setPlainText(
-            "Asking AI for complete car setup — this takes 20–30 seconds…")
-        form._build_setup_result.setVisible(True)
-
-        _session_id_build = (
-            int(self._dispatcher._session_id)
-            if hasattr(self, "_dispatcher") and self._dispatcher is not None
-            else 0
-        )
-
-        def _worker():
-            try:
-                _setup_history_str = ""
-                _setup_comparison_str = ""
-                if self._db and _car_id_build > 0 and track:
-                    try:
-                        _setup_history_str = self._db.get_setup_history_for_car_track(
-                            _car_id_build, track, limit=10)
-                    except Exception:
-                        pass
-                    try:
-                        _setup_comparison_str = self._build_setup_comparison_text(track)
-                    except Exception:
-                        pass
-                rec = build_car_setup(car, track, session_type, race_laps,
-                                      min_weight, max_power, api_key,
-                                      bop_data=bop_data,
-                                      actual_bhp=actual_bhp, num_gears=num_gears,
-                                      drivetrain=drivetrain,
-                                      car_specs=_car_specs,
-                                      allowed_tuning=_allowed_tuning,
-                                      tuning_locked=_tuning_locked,
-                                      gearbox_analysis=_gearbox_analysis or None,
-                                      tyre_wear_multiplier=_tyre_wear_mult,
-                                      fuel_multiplier=_fuel_mult,
-                                      avail_tyres=_avail_tyres or None,
-                                      req_tyres=_req_tyres or None,
-                                      race_type=_race_type_build,
-                                      model=self._config.get("anthropic", {}).get("model") or None,
-                                      car_id=_car_id_build,
-                                      track_location_id=_track_loc_id,
-                                      layout_id=_layout_id_build,
-                                      session_id=_session_id_build,
-                                      setup_history=_setup_history_str,
-                                      setup_comparison=_setup_comparison_str,
-                                      duration_mins=_duration_mins,
-                                      mandatory_stops=_mandatory_stops,
-                                      refuel_rate_lps=_refuel_rate_lps,
-                                      pit_loss_secs=_pit_loss_secs,
-                                      race_engineer_brief=_re_brief,
-                                      per_lap_telemetry=_ofr2_laps or None)
-                self._build_setup_queue.put(("ok", rec, session_type, form))
-            except Exception as exc:
-                self._build_setup_queue.put(("err", str(exc), session_type, form))
-
-        _threading.Thread(target=_worker, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Group 44: Rule-first baseline setup generator
@@ -2338,8 +2232,8 @@ class SetupBuilderMixin:
                 f"<span style='color:#F55;'>Analysis failed:</span> {payload}")
             return
 
-        # DEF-P2-007 — validate AI response for event tuning compliance before display
-        from strategy.ai_planner import validate_ai_setup_response as _vld_setup
+        # DEF-P2-007 — validate the recommendation for event tuning compliance before display
+        from strategy.setup_compliance import validate_setup_tuning_compliance as _vld_setup
         _sc_v = self._config.get("strategy", {})
         _viol_cats = _vld_setup(
             payload if isinstance(payload, str) else "",
@@ -2352,8 +2246,8 @@ class SetupBuilderMixin:
             _violation_banner = (
                 "<div style='background:#2A1A00; border:1px solid #F5A623; "
                 "border-radius:4px; padding:8px; margin-bottom:8px; color:#F5A623;'>"
-                f"&#9888; <b>Event Restriction Warning</b> — AI response may recommend "
-                f"changes to locked areas: <b>{_vc}</b>. Review before applying.</div>"
+                f"&#9888; <b>Event Restriction Warning</b> — the recommendation may touch "
+                f"locked areas: <b>{_vc}</b>. Review before applying.</div>"
             )
 
         # Rating/applied labels are no longer captured here — the rate control
@@ -3282,7 +3176,7 @@ class SetupBuilderMixin:
     def _resolve_recent_laps(self, car_id: int, track: str) -> list:
         """Return per-lap telemetry rows for the most recent session of car+track.
 
-        OFR-2: feeds per_lap_telemetry into build_car_setup so the discipline
+        OFR-2: feeds per_lap_telemetry into the setup engine so the discipline
         block in the setup-build prompt is real.  Always returns a list (empty
         on any error, missing DB, zero car_id, or no previous session).
         Fetches on the UI thread so the worker closure captures a plain list.
@@ -3302,157 +3196,11 @@ class SetupBuilderMixin:
             return []
 
     def _run_build_setup(self) -> None:
-        """Ask AI to generate a complete from-scratch car setup and auto-fill all fields."""
-        # Group 43: ungated AI-build path disabled pending a rule-first baseline generator.
+        """Retired: the from-scratch AI build path was removed in the
+        determinism rebuild (Sprint 1). Use "Build Baseline Setup" for a
+        deterministic from-scratch setup, or "Analyse" for rule-validated
+        changes. Retained as a no-op so existing wiring stays valid."""
         return
-        import threading as _threading  # noqa: F401 — unreachable; preserved for reference
-        from strategy.ai_planner import build_car_setup  # noqa: F401 — unreachable; preserved for reference
-
-        api_key = self._ai_api_key.text().strip()
-        if not api_key:
-            self._build_setup_result.setPlainText("No API key configured. Add your Anthropic API key in the AI Race Analysis section.")
-            self._build_setup_result.setVisible(True)
-            return
-
-        # AI Snapshot Migration: all event/track fields for build_car_setup come
-        # from one frozen snapshot (owners: EventContext race rules,
-        # StrategyContext pit loss, TrackContext identity) instead of scattered
-        # live config["strategy"] reads. Byte-identical when the stores are in
-        # sync (tests/test_ai_context_snapshot.py); the build-setup legacy
-        # defaults (refuel/pit-loss 0.0) are preserved exactly.
-        _ai_snap = self._build_setup_ai_snapshot()
-        car          = _ai_snap.car
-        track        = _ai_snap.track
-        session_type = self._setup_type.currentText()
-        race_laps    = _ai_snap.race_laps
-        min_weight   = self._setup_min_weight.value()
-        max_power    = self._setup_max_power.value()
-        actual_bhp   = self._setup_actual_bhp.value() if hasattr(self, "_setup_actual_bhp") else 0.0
-        num_gears    = self._setup_num_gears.value() if hasattr(self, "_setup_num_gears") else 0
-        drivetrain   = self._setup_drivetrain.currentData() if hasattr(self, "_setup_drivetrain") else ""
-        bop_data     = self._get_bop_data_for_car()
-        _duration_mins   = _ai_snap.duration_mins
-        _mandatory_stops = _ai_snap.mandatory_stops
-        _refuel_rate_lps = _ai_snap.refuel_rate_lps
-        _pit_loss_secs   = _ai_snap.pit_loss_secs
-        _re_brief        = self._re_brief_input.toPlainText().strip() if hasattr(self, "_re_brief_input") else ""
-        _, _car_specs = self._load_car_specs_for_current()
-        _allowed_tuning = _ai_snap.allowed_tuning_or_none()
-        _tuning_locked  = _ai_snap.tuning_locked
-        _tyre_wear_mult  = _ai_snap.tyre_wear_multiplier
-        _fuel_mult       = _ai_snap.fuel_multiplier
-        _avail_tyres     = _ai_snap.avail_tyres_list()
-        _req_tyres       = _ai_snap.required_tyres_list()
-        _race_type_build = _ai_snap.race_type
-        _track_loc_id    = _ai_snap.track_location_id
-        _layout_id_build = _ai_snap.layout_id
-        _last_lap = self._recorder.last_lap() if self._recorder else None
-        _gearbox_analysis = _last_lap.gearbox_analysis if _last_lap else {}
-        _car_id_build = self._db.get_car_id(car) if self._db and car and car != "Unknown" else 0
-        self._car_id_build = _car_id_build
-
-        # OFR-2: resolve most-recent-session laps on the UI thread so the worker
-        # closure captures a plain list (no DB access inside the thread needed).
-        _ofr2_laps = self._resolve_recent_laps(_car_id_build, track)
-
-        self._btn_build_setup.setEnabled(False)
-        self._btn_build_setup.setText("Building…")
-        self._build_setup_result.setPlainText("Asking AI for complete car setup — this takes 20–30 seconds…")
-        self._build_setup_result.setVisible(True)
-
-        _session_id_build = (
-            int(self._dispatcher._session_id)
-            if hasattr(self, "_dispatcher") and self._dispatcher is not None
-            else 0
-        )
-
-        def _worker():
-            try:
-                # Auto-fetch setup history for this car+track
-                _setup_history_str = ""
-                _setup_comparison_str = ""
-                if self._db and _car_id_build > 0 and track:
-                    try:
-                        _setup_history_str = self._db.get_setup_history_for_car_track(
-                            _car_id_build, track, limit=10
-                        )
-                    except Exception as _she:
-                        print(f"[SetupHistory] history fetch failed: {_she}")
-                    try:
-                        _setup_comparison_str = self._build_setup_comparison_text(track)
-                    except Exception as _sce:
-                        print(f"[SetupHistory] comparison fetch failed: {_sce}")
-                rec = build_car_setup(car, track, session_type, race_laps,
-                                      min_weight, max_power, api_key,
-                                      bop_data=bop_data,
-                                      actual_bhp=actual_bhp, num_gears=num_gears,
-                                      drivetrain=drivetrain,
-                                      car_specs=_car_specs,
-                                      allowed_tuning=_allowed_tuning,
-                                      tuning_locked=_tuning_locked,
-                                      gearbox_analysis=_gearbox_analysis or None,
-                                      tyre_wear_multiplier=_tyre_wear_mult,
-                                      fuel_multiplier=_fuel_mult,
-                                      avail_tyres=_avail_tyres or None,
-                                      req_tyres=_req_tyres or None,
-                                      race_type=_race_type_build,
-                                      model=self._config.get("anthropic", {}).get("model") or None,
-                                      car_id=_car_id_build,
-                                      track_location_id=_track_loc_id,
-                                      layout_id=_layout_id_build,
-                                      session_id=_session_id_build,
-                                      setup_history=_setup_history_str,
-                                      setup_comparison=_setup_comparison_str,
-                                      duration_mins=_duration_mins,
-                                      mandatory_stops=_mandatory_stops,
-                                      refuel_rate_lps=_refuel_rate_lps,
-                                      pit_loss_secs=_pit_loss_secs,
-                                      race_engineer_brief=_re_brief,
-                                      per_lap_telemetry=_ofr2_laps or None)
-                from strategy._rec_parser import parse_recommendations_from_response as _parse_recs
-                try:
-                    _ai_id_build = self._db._conn.execute(
-                        "SELECT MAX(id) FROM ai_interactions"
-                    ).fetchone()[0]
-                except Exception:
-                    _ai_id_build = None
-                # AI Snapshot Migration: recommendation metadata uses the SAME
-                # frozen track identity the prompt was built with — no re-read
-                # of config["strategy"] inside the worker thread (which could
-                # have changed mid-flight).
-                _build_track = track
-                _build_layout = _layout_id_build
-                _recs_build = _parse_recs(
-                    getattr(rec, "raw_response", ""),
-                    "Build Car Setup",
-                    _car_id_build,
-                    _build_track,
-                    layout_id=_build_layout,
-                    session_id=_session_id_build,
-                    ai_interaction_id=_ai_id_build,
-                )
-                if _recs_build:
-                    self._db.insert_setup_recommendations(_recs_build)
-                    # Wire corner issue IDs to the saved recommendations
-                    if hasattr(self, '_db') and self._db is not None:
-                        try:
-                            issues = self._db.get_corner_issues(
-                                _car_id_build,
-                                _build_track,
-                            )
-                            issue_ids = [r["id"] for r in (issues or [])]
-                            rec_ids = self._db.get_last_recommendation_ids(
-                                _car_id_build, _build_track, len(_recs_build)
-                            )
-                            for rec_id in rec_ids:
-                                self._db.set_recommendation_corner_issues(rec_id, issue_ids)
-                        except Exception:
-                            pass  # non-critical: traceability is best-effort
-                self._build_setup_queue.put(("ok", rec, session_type))
-            except Exception as exc:
-                self._build_setup_queue.put(("err", str(exc), session_type))
-
-        _threading.Thread(target=_worker, daemon=True).start()
 
     def _display_build_setup_result(self, result: tuple) -> None:
         status, payload, *rest = result
@@ -3461,8 +3209,8 @@ class SetupBuilderMixin:
         _form = rest[1] if len(rest) > 1 and hasattr(rest[1], "purpose") else None
         _btn_build    = _form._btn_build_setup    if _form else self._btn_build_setup
         _build_result = _form._build_setup_result if _form else self._build_setup_result
-        _btn_build.setEnabled(True)
-        _btn_build.setText("Build Setup with AI")
+        _btn_build.setEnabled(False)
+        _btn_build.setText("Build Setup")
         if status == "err":
             _build_result.setPlainText(f"Build Setup failed: {payload}")
             return
@@ -3472,7 +3220,7 @@ class SetupBuilderMixin:
             self._apply_build_setup_result(payload, session_type)
 
     def _apply_build_setup_result(self, rec, session_type: str = "Race") -> None:
-        """Fill all Car Setup form fields from an AI CarSetupRecommendation."""
+        """Fill all Car Setup form fields from a CarSetupRecommendation."""
         # Re-bound spinboxes with per-car ranges before setting values
         _car_name = self._config.get("strategy", {}).get("car", "") or ""
         _ranges = resolve_ranges(_car_name)
@@ -3652,7 +3400,7 @@ class SetupBuilderMixin:
     def _apply_build_setup_result_for_form(
         self, rec, session_type: str, form: "SetupFormWidget"
     ) -> None:
-        """Fill a specific form's fields from an AI CarSetupRecommendation.
+        """Fill a specific form's fields from a CarSetupRecommendation.
 
         Mirrors ``_apply_build_setup_result`` but targets ``form``'s widgets
         instead of the aliased ``self._setup_*`` attrs (which always point to

@@ -16,9 +16,8 @@ Flow (canonical path — build_combined_setup_response in driving_advisor.py):
   3. run_rule_engine       → SetupPlan (setup_rule_engine.py).
   4. plan_to_raw_data      → raw_data dict (setup_plan.py).
   5. _normalise_changes + validate_setup_engineering_structured → validation.
-  6. Blocking failure → _build_deterministic_fallback (no AI retry).
-  7. api_key + no fallback → build_audit_prompt + call_api (audit only).
-  8. _finalise_recommendation → SetupRecommendationResult.
+  6. Blocking failure → _build_deterministic_fallback (deterministic).
+  7. _finalise_recommendation → SetupRecommendationResult.
 
 Rule-pack registration: strategy/setup_knowledge_base.register_pack().
 

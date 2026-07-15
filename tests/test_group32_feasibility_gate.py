@@ -19,7 +19,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import strategy.ai_planner as ap
+from strategy.race_params import RaceParams, StrategyOption, StrategyResult
 from strategy.feasibility import (
     DataGap,
     FeasibilityReport,
@@ -29,9 +29,6 @@ from strategy.feasibility import (
     estimate_race_laps,
 )
 
-AP_SOURCE = (ROOT / "strategy" / "ai_planner.py").read_text(encoding="utf-8")
-FEASIBILITY_SOURCE = (ROOT / "strategy" / "feasibility.py").read_text(encoding="utf-8")
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +36,6 @@ FEASIBILITY_SOURCE = (ROOT / "strategy" / "feasibility.py").read_text(encoding="
 
 def _make_params(**overrides):
     """Construct a minimal RaceParams, tolerant of the dataclass's required fields."""
-    RaceParams = ap.RaceParams
     kwargs = {}
     for f in dataclasses.fields(RaceParams):
         if (
@@ -478,172 +474,20 @@ class TestStandardAssumptions:
 
 
 # ---------------------------------------------------------------------------
-# _parse_strategies — new fields populated from JSON
-# ---------------------------------------------------------------------------
-
-class TestParseStrategiesNewFields:
-    def _make_raw(self, strategy_extra: dict | None = None, **top_level) -> str:
-        s = {
-            "rank": 1,
-            "name": "Safe",
-            "stints": [],
-            "estimated_time_s": 3600.0,
-            "pit_time_s": 23.0,
-            "summary": "Test",
-            "risks": "None",
-            "positives": "",
-            "negatives": "",
-            "estimated_speed_rank": 2,
-            "tyre_risk": "low",
-            "fuel_risk": "medium",
-            "traffic_risk": "high",
-            "undercut_risk": "low",
-            "confidence_score": 0.85,
-            "why_label": "Because it is safe.",
-        }
-        if strategy_extra:
-            s.update(strategy_extra)
-        data = {"strategies": [s], **top_level}
-        return json.dumps(data)
-
-    def test_estimated_speed_rank_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].estimated_speed_rank == 2
-
-    def test_tyre_risk_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].tyre_risk == "low"
-
-    def test_fuel_risk_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].fuel_risk == "medium"
-
-    def test_traffic_risk_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].traffic_risk == "high"
-
-    def test_undercut_risk_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].undercut_risk == "low"
-
-    def test_confidence_score_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert abs(result.strategies[0].confidence_score - 0.85) < 1e-6
-
-    def test_why_label_parsed(self):
-        raw = self._make_raw()
-        result = ap._parse_strategies(raw)
-        assert result.strategies[0].why_label == "Because it is safe."
-
-    def test_top_level_rejected_strategies_parsed(self):
-        raw = self._make_raw(
-            rejected_strategies=[{"name": "0-stop", "reason": "Tyre life too short"}]
-        )
-        result = ap._parse_strategies(raw)
-        assert len(result.rejected_strategies) == 1
-        assert result.rejected_strategies[0].name == "0-stop"
-        assert "Tyre life" in result.rejected_strategies[0].reason
-
-    def test_top_level_data_gaps_parsed(self):
-        raw = self._make_raw(
-            data_gaps=[{"name": "compound_RS_insufficient_data", "description": "RS has only 3 laps"}]
-        )
-        result = ap._parse_strategies(raw)
-        assert len(result.data_gaps) == 1
-        assert result.data_gaps[0].name == "compound_RS_insufficient_data"
-        assert "3 laps" in result.data_gaps[0].description
-
-    def test_top_level_data_gaps_plain_strings_tolerated(self):
-        raw = self._make_raw(data_gaps=["RS has only 3 laps"])
-        result = ap._parse_strategies(raw)
-        assert len(result.data_gaps) == 1
-        assert "3 laps" in result.data_gaps[0].description
-
-    def test_top_level_assumptions_parsed(self):
-        raw = self._make_raw(assumptions=["GT7 may require completing the lap in progress."])
-        result = ap._parse_strategies(raw)
-        assert len(result.assumptions) == 1
-        assert "lap in progress" in result.assumptions[0]
-
-    def test_top_level_calculation_notes_parsed(self):
-        raw = self._make_raw(calculation_notes=["Race laps = ceil(7200/96.3) = 75."])
-        result = ap._parse_strategies(raw)
-        assert len(result.calculation_notes) == 1
-        assert "75" in result.calculation_notes[0]
-
-
-# ---------------------------------------------------------------------------
-# _parse_strategies — backward compat on old JSON (missing new fields)
-# ---------------------------------------------------------------------------
-
-class TestParseStrategiesBackwardCompat:
-    def _old_json(self) -> str:
-        return json.dumps({
-            "strategies": [{
-                "rank": 1,
-                "name": "Safe",
-                "stints": [],
-                "estimated_time_s": 3600.0,
-                "pit_time_s": 23.0,
-                "summary": "Old style",
-                "risks": "None",
-            }]
-            # No new fields, no rejected_strategies, no data_gaps, etc.
-        })
-
-    def test_no_keyerror_on_old_json(self):
-        result = ap._parse_strategies(self._old_json())
-        assert len(result.strategies) == 1
-
-    def test_new_fields_default_when_absent(self):
-        result = ap._parse_strategies(self._old_json())
-        s = result.strategies[0]
-        assert s.estimated_speed_rank == 0
-        assert s.tyre_risk == ""
-        assert s.fuel_risk == ""
-        assert s.traffic_risk == ""
-        assert s.undercut_risk == ""
-        assert s.confidence_score == 0.0
-        assert s.why_label == ""
-
-    def test_rejected_strategies_empty_when_absent(self):
-        result = ap._parse_strategies(self._old_json())
-        assert result.rejected_strategies == []
-
-    def test_data_gaps_empty_when_absent(self):
-        result = ap._parse_strategies(self._old_json())
-        assert result.data_gaps == []
-
-    def test_assumptions_empty_when_absent(self):
-        result = ap._parse_strategies(self._old_json())
-        assert result.assumptions == []
-
-    def test_calculation_notes_empty_when_absent(self):
-        result = ap._parse_strategies(self._old_json())
-        assert result.calculation_notes == []
-
-
-# ---------------------------------------------------------------------------
 # StrategyResult iterable shim
 # ---------------------------------------------------------------------------
 
 class TestStrategyResultIterable:
-    def _make_result(self, n_strategies: int = 2) -> ap.StrategyResult:
+    def _make_result(self, n_strategies: int = 2) -> StrategyResult:
         strategies = [
-            ap.StrategyOption(
+            StrategyOption(
                 rank=i + 1, name=f"S{i}", stints=[], estimated_time_s=3600.0,
                 pit_time_s=23.0, summary="", risks="",
             )
             for i in range(n_strategies)
         ]
         feasibility = _make_feasible_report()
-        return ap.StrategyResult(
+        return StrategyResult(
             strategies=strategies,
             rejected_strategies=[],
             data_gaps=[],
@@ -675,194 +519,4 @@ class TestStrategyResultIterable:
         result = self._make_result(2)
         # Confirm iterating gives StrategyOption objects
         for s in result:
-            assert isinstance(s, ap.StrategyOption)
-
-
-# ---------------------------------------------------------------------------
-# _build_race_prompt — content checks
-# ---------------------------------------------------------------------------
-
-class TestBuildRacePromptContent:
-    def _make_prompt(
-        self,
-        feasibility_report: FeasibilityReport | None = None,
-        **param_overrides,
-    ) -> str:
-        params = _make_params(**param_overrides)
-        lap_data = {"RM": _make_8_laps()}
-        return ap._build_race_prompt(
-            params, lap_data, degradation=None,
-            feasibility_report=feasibility_report,
-        )
-
-    def test_considers_only_feasible_stop_counts_when_provided(self):
-        report = _make_feasible_report(feasible_stop_counts=[2])
-        p = self._make_prompt(feasibility_report=report)
-        # Must mention "consider ONLY" or equivalent
-        assert "consider ONLY" in p or "2-stop" in p
-        # Must NOT contain the old hardcoded 1-stop/2-stop/no-stop instruction
-        assert "1-stop, 2-stop, and no-stop" not in p
-
-    def test_prompt_contains_data_quality_block(self):
-        report = _make_feasible_report()
-        p = self._make_prompt(feasibility_report=report)
-        assert "Data Quality" in p
-
-    def test_prompt_decouples_safe_balanced_aggressive_from_rank(self):
-        report = _make_feasible_report()
-        p = self._make_prompt(feasibility_report=report)
-        # Must mention estimated_speed_rank
-        assert "estimated_speed_rank" in p
-        # Must NOT force Safe=Rank1 in a rigid assignment
-        # The old "Name the three strategies exactly: Rank 1: Safe" is removed
-        assert "Rank 1: \"Safe\"" not in p
-
-    def test_prompt_contains_do_not_invent_missing_compound_data(self):
-        report = _make_feasible_report()
-        p = self._make_prompt(feasibility_report=report)
-        assert "do not invent missing compound data" in p.lower()
-
-    def test_prompt_mentions_sequential_pit_work(self):
-        report = _make_feasible_report()
-        p = self._make_prompt(feasibility_report=report)
-        assert "sequential" in p.lower()
-
-    def test_prompt_contains_feasibility_section(self):
-        report = _make_feasible_report(feasible_stop_counts=[1, 2])
-        p = self._make_prompt(feasibility_report=report)
-        assert "Feasibility Gate" in p
-
-    def test_empty_feasible_counts_instructs_zero_strategies(self):
-        report = _make_feasible_report(feasible_stop_counts=[])
-        p = self._make_prompt(feasibility_report=report)
-        assert "zero feasible strategies" in p.lower() or "return zero feasible" in p.lower() or "ALL stop counts" in p
-
-    def test_prompt_risk_fields_in_schema(self):
-        report = _make_feasible_report()
-        p = self._make_prompt(feasibility_report=report)
-        assert "tyre_risk" in p
-        assert "fuel_risk" in p
-        assert "traffic_risk" in p
-        assert "undercut_risk" in p
-        assert "confidence_score" in p
-        assert "why_label" in p
-
-    def test_prompt_without_feasibility_report_still_works(self):
-        # No feasibility_report → falls back to generic instruction
-        p = self._make_prompt(feasibility_report=None)
-        assert "consider" in p.lower()
-        # Should not crash
-        assert len(p) > 100
-
-
-# ---------------------------------------------------------------------------
-# analyse_strategy end-to-end (mocked API)
-# ---------------------------------------------------------------------------
-
-class TestAnalyseStrategyEndToEnd:
-    def _make_api_response(self) -> str:
-        return json.dumps({
-            "strategies": [{
-                "rank": 1,
-                "name": "Safe — 1-Stop RM",
-                "estimated_speed_rank": 1,
-                "stints": [{"compound": "RM", "laps": 10, "ref_lap_ms": 96290, "pace_threshold_ms": 2500}],
-                "estimated_time_s": 3600.0,
-                "pit_time_s": 23.0,
-                "summary": "One stop on Medium.",
-                "risks": "Low risk.",
-                "positives": "Stable.",
-                "negatives": "Not the fastest.",
-                "tyre_risk": "low",
-                "fuel_risk": "low",
-                "traffic_risk": "medium",
-                "undercut_risk": "medium",
-                "confidence_score": 0.8,
-                "why_label": "Chosen for safety.",
-            }],
-            "rejected_strategies": [],
-            "data_gaps": [],
-            "assumptions": [],
-            "calculation_notes": [],
-        })
-
-    def test_returns_strategy_result(self):
-        params = _make_params(total_laps=20)
-        laps = {"RM": _make_8_laps()}
-        deg = {"RM": _make_deg_entry()}
-        with patch("strategy.ai_planner.call_api", return_value=self._make_api_response()):
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        assert isinstance(result, ap.StrategyResult)
-
-    def test_result_is_iterable(self):
-        params = _make_params(total_laps=20)
-        laps = {"RM": _make_8_laps()}
-        deg = {"RM": _make_deg_entry()}
-        with patch("strategy.ai_planner.call_api", return_value=self._make_api_response()):
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        strategies = list(result)
-        assert len(strategies) >= 0
-
-    def test_result_has_feasibility_attribute(self):
-        params = _make_params(total_laps=20)
-        laps = {"RM": _make_8_laps()}
-        deg = {"RM": _make_deg_entry()}
-        with patch("strategy.ai_planner.call_api", return_value=self._make_api_response()):
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        assert hasattr(result, "feasibility")
-        assert isinstance(result.feasibility, FeasibilityReport)
-
-    def test_feasibility_gaps_merged_into_result(self):
-        """Feasibility data_gaps from the report are merged into the StrategyResult."""
-        params = _make_params(total_laps=20, fuel_burn_per_lap=0.0)  # missing_fuel_burn
-        laps = {"RM": _make_8_laps()}
-        deg = {"RM": _make_deg_entry()}
-        with patch("strategy.ai_planner.call_api", return_value=self._make_api_response()):
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        gap_names = [dg.name for dg in result.data_gaps]
-        assert "missing_fuel_burn" in gap_names
-
-    def test_feasibility_assumptions_merged_into_result(self):
-        """Feasibility assumptions from the report are merged into the StrategyResult."""
-        params = _make_params(race_type="timed", duration_mins=60, total_laps=0)
-        laps = {"RM": _make_8_laps()}
-        deg = {"RM": _make_deg_entry()}
-        with patch("strategy.ai_planner.call_api", return_value=self._make_api_response()):
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        all_assumptions = " ".join(result.assumptions)
-        assert "sequential" in all_assumptions or "pit_loss_secs" in all_assumptions
-
-
-# ---------------------------------------------------------------------------
-# Source-level checks
-# ---------------------------------------------------------------------------
-
-class TestSourceLevelChecks:
-    def test_feasibility_import_present_in_ai_planner(self):
-        assert "from strategy.feasibility import" in AP_SOURCE
-
-    def test_strategy_result_defined(self):
-        assert "class StrategyResult" in AP_SOURCE
-
-    def test_estimate_race_laps_imported(self):
-        assert "estimate_race_laps" in AP_SOURCE
-
-    def test_compute_feasibility_imported(self):
-        assert "compute_feasibility" in AP_SOURCE
-
-    def test_gt7_tank_capacity_constant_in_feasibility(self):
-        assert "_GT7_TANK_CAPACITY" in FEASIBILITY_SOURCE
-        assert "100.0" in FEASIBILITY_SOURCE
-
-    def test_no_tank_capacity_field_added_to_race_params(self):
-        # Brief says: do NOT add tank_capacity to RaceParams.
-        # Check that RaceParams doesn't have a tank_capacity field (not just string match,
-        # since "tank_capacity" appears legitimately in the race engineering context prose).
-        field_names = {f.name for f in dataclasses.fields(ap.RaceParams)}
-        assert "tank_capacity" not in field_names
-
-    def test_sequential_pit_work_in_feasibility_assumptions(self):
-        assert "sequential" in FEASIBILITY_SOURCE
-
-    def test_analyse_strategy_returns_strategy_result_annotation(self):
-        assert "StrategyResult" in AP_SOURCE
+            assert isinstance(s, StrategyOption)

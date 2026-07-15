@@ -72,19 +72,15 @@ def test_insufficient_subtype_blocks_lsd_increase():
 
 # ------------------------------------------------------------- dispositions
 
-def _advisor(monkeypatch):
+def _advisor():
     import tests.test_group41_validation_gate as G
     laps = [G._make_lap(wheelspin_count=20, rev_limiter_by_gear={2: 5, 3: 3})]
     adv = G._make_full_advisor({}, laps)
-    import strategy.driving_advisor as da
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     return adv
 
 
-def test_disposition_gear_too_short_defers_lsd(monkeypatch):
-    adv = _advisor(monkeypatch)
+def test_disposition_gear_too_short_defers_lsd():
+    adv = _advisor()
     setup = {"lsd_accel": 15, "final_drive": 4.25, "aero_front": 400, "aero_rear": 600}
     res = json.loads(adv.build_combined_setup_response(
         setup_dict=setup, car_name="", feeling="Exit Stability: Rear loose on throttle"))
@@ -95,8 +91,8 @@ def test_disposition_gear_too_short_defers_lsd(monkeypatch):
                for c in res.get("changes", []))
 
 
-def test_disposition_rear_lock_noted(monkeypatch):
-    adv = _advisor(monkeypatch)
+def test_disposition_rear_lock_noted():
+    adv = _advisor()
     setup = {"brake_bias": 0, "aero_front": 400, "aero_rear": 600}
     res = json.loads(adv.build_combined_setup_response(
         setup_dict=setup, car_name="", feeling="Rear Under Braking: Locks up rear"))

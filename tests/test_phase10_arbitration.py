@@ -96,14 +96,10 @@ def test_empty_set_is_safe():
 
 # ------------------------------------------------- integration
 
-def test_response_carries_arbitration_block(monkeypatch):
+def test_response_carries_arbitration_block():
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     adv = G._make_full_advisor({}, [G._make_lap()])
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"aero_front": 400, "aero_rear": 690},
         car_name="Porsche 911 RSR (991) '17",

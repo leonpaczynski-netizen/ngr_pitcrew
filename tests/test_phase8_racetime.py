@@ -81,15 +81,11 @@ def test_note_empty_when_not_relevant():
 
 # ------------------------------------------------- integration
 
-def test_fuel_note_recommends_comparison_run_on_drag_track(monkeypatch):
+def test_fuel_note_recommends_comparison_run_on_drag_track():
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     laps = [G._make_lap()]
     adv = G._make_full_advisor({}, laps)
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     setup = {"aero_front": 440, "aero_rear": 690}
     res = json.loads(adv.build_combined_setup_response(
         setup_dict=setup, car_name="Porsche 911 RSR (991) '17",
@@ -98,14 +94,10 @@ def test_fuel_note_recommends_comparison_run_on_drag_track(monkeypatch):
     assert "Comparison run" in res["analysis"]
 
 
-def test_fuel_note_routes_to_strategy_when_not_drag_sensitive(monkeypatch):
+def test_fuel_note_routes_to_strategy_when_not_drag_sensitive():
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     adv = G._make_full_advisor({}, [G._make_lap()])
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"aero_front": 400}, car_name="Porsche 911 RSR (991) '17",
         feeling="Fuel Use: Higher than expected",

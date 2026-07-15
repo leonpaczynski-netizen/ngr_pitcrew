@@ -142,12 +142,8 @@ class TestGuideContent:
         assert "Home — race engineer overview" in dash_src
         assert "Race Engineer Command Centre" in dash_src
 
-    def test_api_key_bullet_points_at_strategy_builder(self, dash_src):
-        # The only editable API-key field lives on the Strategy Builder tab —
-        # the Guide must not claim it is in Settings.
-        m = re.search(r"<li><b>API Key</b>.*?</li>", dash_src, re.DOTALL)
-        assert m, "API Key bullet missing from the Guide"
-        assert "Strategy Builder" in m.group(0)
+    # test_api_key_bullet_points_at_strategy_builder REMOVED: the AI API-key
+    # field and its Guide bullet were deleted in the no-AI refactor.
 
     def test_guide_explains_tool_tabs(self, dash_src):
         assert "Tool tabs (⚙)" in dash_src
@@ -171,7 +167,6 @@ class TestNothingElseChanged:
             '"Event Planner")   # 2',
             '"Telemetry")        # 7',
             '"Diagnostics")      # 8',
-            '"AI Log")           # 11',
             'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
@@ -181,22 +176,22 @@ class TestNothingElseChanged:
         # to stable tab keys — the same 8 per-tab behaviours must still fire.
         body = _method_body(dash_src, "_on_tab_changed")
         for frag in ("TAB_HISTORY", "TAB_SETUP_BUILDER", "TAB_STRATEGY_BUILDER",
-                     "TAB_PRACTICE_REVIEW", "TAB_TELEMETRY", "TAB_AI_LOG",
+                     "TAB_PRACTICE_REVIEW", "TAB_TELEMETRY",
                      "TAB_TRACK_MODELLING", "TAB_HOME",
                      "_refresh_history", "_sync_setup_builder_from_event",
                      "_sync_strategy_from_event", "_sync_practice_from_event",
-                     "_refresh_telemetry_context", "_flush_ai_log_pending_select",
+                     "_refresh_telemetry_context",
                      "_tm_on_tab_shown", "_home_refresh"):
             assert frag in body
 
     def test_diagnostic_tabs_still_built(self, dash_src):
         for builder in ("_build_telemetry_tab", "_build_debug_tab",
-                        "_build_ai_log_tab", "_build_track_modelling_tab"):
+                        "_build_track_modelling_tab"):
             assert f"self.{builder}()" in dash_src
 
     def test_product_flow_roles_unchanged(self):
         assert set(pf.diagnostic_tabs()) == {
-            "Telemetry", "Diagnostics", "AI Log", "Track Modelling",
+            "Telemetry", "Diagnostics", "Track Modelling",
         }
         assert pf.TAB_ROLES.get("Home") == pf.ROLE_WORKFLOW
 
@@ -226,8 +221,6 @@ class TestNothingElseChanged:
             assert 'setdefault("strategy"' not in body
             assert re.search(r'config\[.strategy.\]\s*\[', body) is None
 
-    def test_api_key_field_still_exists_for_ai_callers(self, dash_src):
-        # No duplicate existed to remove; the single editable field must stay
-        # (every AI caller reads self._ai_api_key.text()).
-        assert "self._ai_api_key = QLineEdit" in dash_src
-        assert '"Anthropic API Key:"' in dash_src
+    # test_api_key_field_still_exists_for_ai_callers REMOVED: the _ai_api_key
+    # QLineEdit and the "Anthropic API Key:" label were deleted in the no-AI
+    # refactor (there are no AI callers left).

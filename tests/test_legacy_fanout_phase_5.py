@@ -74,7 +74,6 @@ FROZEN_ALLOWLIST = {
     # read the named WorkingRaceConfig model; its builder is the single bridge
     # read for the concept.
     ("ui/dashboard.py", "_working_race_config"): 1,          # bridge (working config)
-    ("ui/dashboard.py", "_display_practice_results"): 1,     # cosmetic
     ("ui/dashboard.py", "_fanout_event_to_strategy"): 1,     # THE writer
     ("ui/dashboard.py", "_live_init_from_plan"): 1,          # plan restore
     ("ui/dashboard.py", "_load_session_config"): 3,          # restore writer
@@ -82,7 +81,6 @@ FROZEN_ALLOWLIST = {
     ("ui/dashboard.py", "_qual_use_practice_lap"): 1,        # cosmetic
     ("ui/dashboard.py", "_refresh_bop_label"): 1,            # cosmetic label
     ("ui/dashboard.py", "_resolve_setup_id_for_lap"): 1,     # cosmetic
-    ("ui/dashboard.py", "_run_ai_analysis"): 1,              # plan state
     ("ui/dashboard.py", "_save_race_params"): 1,             # plan writer
     # (_save_session_to_db migrated to WorkingRaceConfig — entry removed)
     ("ui/dashboard.py", "_save_setup_from_lapdata"): 1,      # cosmetic
@@ -92,7 +90,6 @@ FROZEN_ALLOWLIST = {
     # (_sync_strategy_from_event residual migrated to WorkingRaceConfig — removed)
     ("ui/dashboard.py", "_update_race_config"): 1,           # config_id WRITER (read migrated)
     ("ui/dashboard.py", "_update_telemetry_labels"): 1,      # cosmetic
-    ("ui/dashboard.py", "_worker"): 1,                       # degradation worker (plan)
     # -- ui/setup_builder_ui.py --------------------------------------------- #
     ("ui/setup_builder_ui.py", "_apply_and_save_ai_setup"): 1,   # cosmetic track (car read removed with the AI-Fix rename)
     ("ui/setup_builder_ui.py", "_apply_build_setup_result"): 1,  # cosmetic
@@ -118,12 +115,7 @@ FROZEN_ALLOWLIST = {
     # extended to close the gap OFR-1's validator found.  After the I2 fix the
     # OFR-1 path contributes ZERO entries (_get_previous_ai_context retains
     # only its two pre-existing track reads; layout_id is now a literal "").
-    ("strategy/driving_advisor.py", "build_coaching_response"): 1,
     ("strategy/driving_advisor.py", "build_combined_setup_response"): 1,
-    ("strategy/driving_advisor.py", "build_driver_feeling_response"): 1,
-    ("strategy/driving_advisor.py", "build_setup_advice_response"): 1,
-    ("strategy/driving_advisor.py", "_build_combined_prompt"): 1,
-    ("strategy/driving_advisor.py", "_build_setup_prompt"): 1,
     ("strategy/driving_advisor.py", "_car_track_header"): 1,
     ("strategy/driving_advisor.py", "_get_driver_feedback_context"): 1,
     ("strategy/driving_advisor.py", "_get_enriched_issue_context"): 1,
@@ -132,7 +124,6 @@ FROZEN_ALLOWLIST = {
     ("strategy/driving_advisor.py", "_get_live_coaching_context"): 1,
     ("strategy/driving_advisor.py", "_get_live_segment_context"): 1,
     ("strategy/driving_advisor.py", "_get_previous_ai_context"): 2,
-    ("strategy/driving_advisor.py", "_get_track_intelligence_context"): 1,
 }
 
 _SCAN_FILES = ("ui/dashboard.py", "ui/setup_builder_ui.py",

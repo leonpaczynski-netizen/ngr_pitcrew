@@ -234,15 +234,11 @@ def test_consumer_skips_off_track_and_straights(monkeypatch):
 
 # ------------------------------------------------------------- advisor plumbing
 
-def test_advisor_surfaces_corner_telemetry_diagnoses(monkeypatch):
+def test_advisor_surfaces_corner_telemetry_diagnoses():
     import json
-    import strategy.driving_advisor as da
     from tests.test_group63_setup_brain_uat2 import (
         _uat_advisor, _uat_history, _UAT_FEELING, _CAR,
     )
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "audit ok"}))
     agg = CornerTelemetryAggregate("s_t2", 2, "Turn 2", "left", samples=40,
                                    wheelspin_events=6, lockup_events=0,
                                    wheelspin_by_phase={"exit": 6}, lockup_by_phase={},
@@ -265,15 +261,11 @@ def test_advisor_surfaces_corner_telemetry_diagnoses(monkeypatch):
     assert "measured live" in tel[0]["telemetry_evidence"]
 
 
-def test_advisor_omits_surface_without_aggregates(monkeypatch):
+def test_advisor_omits_surface_without_aggregates():
     import json
-    import strategy.driving_advisor as da
     from tests.test_group63_setup_brain_uat2 import (
         _uat_advisor, _uat_history, _UAT_FEELING, _CAR,
     )
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     raw = _uat_advisor().build_combined_setup_response(
         setup_dict={"final_drive": 4.25, "num_gears": 6, "arb_front": 6},
         car_name=_CAR, feeling=_UAT_FEELING, purpose="Race", drivetrain="RR",

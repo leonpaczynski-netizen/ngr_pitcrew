@@ -47,7 +47,7 @@ from ui.tab_registry import (
     build_default_registry,
     TAB_LIVE, TAB_EVENT_PLANNER, TAB_GARAGE, TAB_SETUP_BUILDER,
     TAB_PRACTICE_REVIEW, TAB_STRATEGY_BUILDER, TAB_TELEMETRY, TAB_DIAGNOSTICS,
-    TAB_SETTINGS, TAB_HISTORY, TAB_AI_LOG, TAB_TRACK_MODELLING,
+    TAB_SETTINGS, TAB_HISTORY, TAB_TRACK_MODELLING,
     TAB_HOME,
 )
 
@@ -136,7 +136,6 @@ class SignalBridge(QObject):
     tyre_preset_changed     = pyqtSignal(str)         # compound name → update tyre thresholds
     car_detected            = pyqtSignal(int, str)    # car_id, car_name (empty if unknown)
     grip_loss_detected      = pyqtSignal(int, str)    # score 0-100, level: normal/watch/warning/significant
-    ai_log_entry            = pyqtSignal(object)      # AILogEntry
     ptt_status              = pyqtSignal(str)         # PTT state: RADIO READY / TRANSMITTING / PROCESSING / ENGINEER RESPONDING
     calibration_packet      = pyqtSignal(object)      # GT7Packet subsampled at ~10 Hz for calibration capture
 
@@ -176,7 +175,7 @@ _GUIDE_HTML = """
 gives voice alerts, and uses the Claude AI API as your personal race engineer.</p>
 
 <p class="note"><b>Tool tabs (⚙):</b> tabs whose name starts with a gear symbol —
-<b>⚙ Telemetry</b>, <b>⚙ Diagnostics</b>, <b>⚙ AI Log</b> and <b>⚙ Track Modelling</b> —
+<b>⚙ Telemetry</b>, <b>⚙ Diagnostics</b> and <b>⚙ Track Modelling</b> —
 are advanced tools for checking raw data and troubleshooting. They are safe to
 ignore during a normal race weekend; the workflow below never requires them.</p>
 
@@ -206,9 +205,9 @@ flows back to the Event Planner and the Strategy Builder.</p>
 <p>Switch to <b>Setup Builder</b>. The yellow banner at the top confirms which event is active.
 The car field is already populated from your event.</p>
 <ul>
-  <li>Click <b>Build Setup with AI</b> for a complete from-scratch setup (qualifying or race session).</li>
-  <li>Drive the setup. If something feels wrong, type it in <b>How does the car feel?</b>
-      and click <b>Ask AI for Fix</b> — gives exact values for the specific problem.</li>
+  <li>Use the <b>Setup Builder</b> to create or load a setup for the session (qualifying or race).</li>
+  <li>Drive the setup. If something feels wrong, note it in <b>How does the car feel?</b>
+      and adjust the relevant setup values for the specific problem.</li>
   <li>Iterate: drive, type the feeling, fix, repeat until the car is right.</li>
 </ul>
 
@@ -263,11 +262,9 @@ Use <b>Load to Practice Review</b> to pull old laps back into the analysis workf
 <p>Configure once and leave:</p>
 <ul>
   <li><b>Connection</b> — PS5 IP address and UDP port (default 33741). Must match GT7 "Send Data" settings.</li>
-  <li><b>API Key</b> — Anthropic API key for AI features. Store it in <b>api_key.txt</b>
-      next to config.json, or paste it into the key field on the <b>Strategy Builder</b> tab.</li>
   <li><b>Voice Alerts</b> — enable/disable categories, set push-to-talk key.</li>
-  <li><b>Driver Profile</b> — click <b>Refresh Stats</b> after each race weekend (free, instant).
-      Run <b>Propose Profile Update</b> every 3–5 weekends to keep the AI's model of your driving current.</li>
+  <li><b>Driver Profile</b> — click <b>Refresh Stats</b> after each race weekend (free, instant)
+      to keep your driving profile current from measured telemetry.</li>
 </ul>
 
 <h2>GT7 setup (one-time)</h2>
@@ -565,7 +562,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._tabs.addTab(self._build_debug_tab(),            "Diagnostics")      # 8
         self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
         self._tabs.addTab(self._build_history_tab(),          "History")          # 10
-        self._tabs.addTab(self._build_ai_log_tab(),           "AI Log")           # 11
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
@@ -1777,21 +1773,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         stats_row_l.addWidget(self._lbl_profile_stats, stretch=1)
         profile_layout.addWidget(stats_row_w)
 
-        # AI proposal row
-        ai_row_w = QWidget()
-        ai_row_l = QHBoxLayout(ai_row_w)
-        ai_row_l.setContentsMargins(0, 0, 0, 0)
-        self._btn_propose_profile = QPushButton("Propose Profile Update")
-        self._btn_propose_profile.setToolTip(
-            "AI reviews your session telemetry and proposes specific updates to your\n"
-            "driver profile — the document that shapes all setup and coaching advice.\n"
-            "You must review and approve the changes before they are applied.\n\n"
-            "Run 'Refresh Stats' first. Takes ~20 seconds."
-        )
-        self._btn_propose_profile.clicked.connect(self._run_propose_profile_update)
-        ai_row_l.addWidget(self._btn_propose_profile)
-        ai_row_l.addStretch()
-        profile_layout.addWidget(ai_row_w)
 
         # Proposed profile text (hidden until a proposal arrives)
         self._profile_proposal_text = QTextEdit()
@@ -1828,8 +1809,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._dev_mode_check.setChecked(self._config.get("developer_mode", False))
         self._dev_mode_check.setStyleSheet(f"color: {_TEXT};")
         self._dev_mode_check.setToolTip(
-            "Shows full AI prompts, telemetry payloads, and token costs in the AI Log tab.\n"
-            "When disabled, only feature name, status, and AI response are shown."
+            "Shows additional diagnostic detail and raw telemetry payloads."
         )
         dev_layout.addWidget(self._dev_mode_check)
         layout.addWidget(dev_box)
@@ -2053,13 +2033,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 self._telem_lbl_kerbs.setText(str(last_stats.kerb_count))
                 self._telem_lbl_bottom.setText(str(last_stats.bottoming_count))
 
-            # AI last call status
-            entries = getattr(self, "_ai_log_entries", [])
-            if entries:
-                last = entries[-1]
-                status = "✓" if last.success else "✗"
-                t = last.timestamp[11:19] if len(last.timestamp) >= 19 else ""
-                self._telem_lbl_ai_status.setText(f"{status} {last.feature} @ {t}")
         except Exception:
             logging.warning("telemetry label update failed", exc_info=True)
 
@@ -2207,8 +2180,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             if not _lap or not _lap.gearbox_analysis:
                 self._txt_gearbox_debug.setPlainText("No gearbox data recorded yet.")
                 return
-            from strategy.ai_planner import format_gearbox_for_prompt
-            self._txt_gearbox_debug.setPlainText(format_gearbox_for_prompt(_lap.gearbox_analysis))
+            from strategy.gearbox_format import format_gearbox_summary
+            self._txt_gearbox_debug.setPlainText(format_gearbox_summary(_lap.gearbox_analysis))
 
         btn_gbx_refresh.clicked.connect(_refresh_gearbox_debug)
 
@@ -2234,269 +2207,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         root.addWidget(self._txt_log)
 
         return w
-
-    # --- AI Log tab ---------------------------------------------------------
-
-    def _build_ai_log_tab(self) -> QWidget:
-        import json as _json_local
-        self._ai_log_entries: list = []
-
-        outer = QWidget()
-        outer_layout = QVBoxLayout(outer)
-        outer_layout.setContentsMargins(8, 8, 8, 8)
-        outer_layout.setSpacing(6)
-
-        # Toolbar
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("AI Activity Log", styleSheet=f"color: {_TEXT}; font-weight: bold;"))
-        toolbar.addStretch()
-
-        self._ai_log_feature_filter = QComboBox()
-        self._ai_log_feature_filter.addItems([
-            "All", "Strategy Analysis", "Practice Analysis", "Build Car Setup",
-            "Tyre Degradation", "Driver Coaching", "Setup Advice",
-            "Combined Setup", "Handling Analysis", "Profile Update",
-        ])
-        self._ai_log_feature_filter.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: 1px solid #333; padding: 2px 6px;"
-        )
-        self._ai_log_feature_filter.currentTextChanged.connect(self._on_ai_log_filter_changed)
-        toolbar.addWidget(QLabel("Filter:", styleSheet=f"color: {_TEXT};"))
-        toolbar.addWidget(self._ai_log_feature_filter)
-
-        btn_clear_ai = QPushButton("Clear")
-        btn_clear_ai.setFixedWidth(60)
-        btn_clear_ai.setStyleSheet(
-            "QPushButton { background: #2A2A2A; color: white; border-radius: 3px; padding: 2px 6px; }"
-            "QPushButton:hover { background: #3A3A3A; }"
-        )
-        btn_clear_ai.clicked.connect(self._on_ai_log_clear)
-        toolbar.addWidget(btn_clear_ai)
-        outer_layout.addLayout(toolbar)
-
-        # Main splitter
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Left: entry list
-        self._ai_log_list = QListWidget()
-        self._ai_log_list.setStyleSheet(
-            f"background: {_DARK_CARD}; color: {_TEXT}; border: none; font-family: 'Courier New'; font-size: 10px;"
-        )
-        self._ai_log_list.setMinimumWidth(240)
-        self._ai_log_list.setMaximumWidth(340)
-        self._ai_log_list.currentRowChanged.connect(self._on_ai_log_selected)
-        splitter.addWidget(self._ai_log_list)
-
-        # Right: detail tabs
-        detail_tabs = QTabWidget()
-        detail_tabs.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #333; background: #1A1A2E; }"
-            "QTabBar::tab { background: #2A2A3E; color: #AAA; padding: 4px 10px; }"
-            "QTabBar::tab:selected { background: #1A1A2E; color: white; }"
-        )
-        _mono = QFont("Courier New", 10)
-
-        # Prompt tab
-        prompt_w = QWidget()
-        prompt_layout = QVBoxLayout(prompt_w)
-        prompt_layout.setContentsMargins(4, 4, 4, 4)
-        self._ai_log_prompt = QPlainTextEdit()
-        self._ai_log_prompt.setReadOnly(True)
-        self._ai_log_prompt.setFont(_mono)
-        self._ai_log_prompt.setStyleSheet(f"background: {_DARK_CARD}; color: {_TEXT}; border: none;")
-        btn_copy_prompt = QPushButton("Copy Prompt")
-        btn_copy_prompt.setStyleSheet(
-            "QPushButton { background: #1A3A5C; color: white; border-radius: 3px; padding: 3px 10px; }"
-            "QPushButton:hover { background: #2A5A8C; }"
-        )
-        btn_copy_prompt.clicked.connect(
-            lambda: QApplication.clipboard().setText(self._ai_log_prompt.toPlainText()))
-        prompt_layout.addWidget(self._ai_log_prompt)
-        prompt_layout.addWidget(btn_copy_prompt)
-        detail_tabs.addTab(prompt_w, "Prompt")
-
-        # Payload tab
-        self._ai_log_payload = QPlainTextEdit()
-        self._ai_log_payload.setReadOnly(True)
-        self._ai_log_payload.setFont(_mono)
-        self._ai_log_payload.setStyleSheet(f"background: {_DARK_CARD}; color: {_TEXT}; border: none;")
-        detail_tabs.addTab(self._ai_log_payload, "Payload")
-
-        # Response tab
-        response_w = QWidget()
-        response_layout = QVBoxLayout(response_w)
-        response_layout.setContentsMargins(4, 4, 4, 4)
-        self._ai_log_response = QPlainTextEdit()
-        self._ai_log_response.setReadOnly(True)
-        self._ai_log_response.setFont(_mono)
-        self._ai_log_response.setStyleSheet(f"background: {_DARK_CARD}; color: {_TEXT}; border: none;")
-        btn_copy_resp = QPushButton("Copy Response")
-        btn_copy_resp.setStyleSheet(
-            "QPushButton { background: #1A3A5C; color: white; border-radius: 3px; padding: 3px 10px; }"
-            "QPushButton:hover { background: #2A5A8C; }"
-        )
-        btn_copy_resp.clicked.connect(
-            lambda: QApplication.clipboard().setText(self._ai_log_response.toPlainText()))
-        response_layout.addWidget(self._ai_log_response)
-        response_layout.addWidget(btn_copy_resp)
-        detail_tabs.addTab(response_w, "Response")
-
-        # Details tab
-        details_w = QWidget()
-        details_form = QFormLayout(details_w)
-        details_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        _lbl_s = f"color: {_TEXT}; font-size: 11px;"
-        _val_s = "color: #AAE4AA; font-size: 11px; font-family: 'Courier New';"
-        _warn_s = "color: #FFD580; font-size: 11px; font-family: 'Courier New';"
-        self._ai_det_feature   = QLabel("—", styleSheet=_val_s)
-        self._ai_det_model     = QLabel("—", styleSheet=_val_s)
-        self._ai_det_status    = QLabel("—", styleSheet=_val_s)
-        self._ai_det_duration  = QLabel("—", styleSheet=_val_s)
-        self._ai_det_ptokens   = QLabel("—", styleSheet=_val_s)
-        self._ai_det_rtokens   = QLabel("—", styleSheet=_val_s)
-        self._ai_det_total     = QLabel("—", styleSheet=_val_s)
-        self._ai_det_cost      = QLabel("—", styleSheet=_val_s)
-        self._ai_det_warnings  = QLabel("—", styleSheet=_warn_s)
-        self._ai_det_warnings.setWordWrap(True)
-        details_form.addRow(QLabel("Feature:",     styleSheet=_lbl_s), self._ai_det_feature)
-        details_form.addRow(QLabel("Model:",       styleSheet=_lbl_s), self._ai_det_model)
-        details_form.addRow(QLabel("Status:",      styleSheet=_lbl_s), self._ai_det_status)
-        details_form.addRow(QLabel("Duration:",    styleSheet=_lbl_s), self._ai_det_duration)
-        details_form.addRow(QLabel("Prompt Tokens:", styleSheet=_lbl_s), self._ai_det_ptokens)
-        details_form.addRow(QLabel("Response Tokens:", styleSheet=_lbl_s), self._ai_det_rtokens)
-        details_form.addRow(QLabel("Total Tokens:", styleSheet=_lbl_s), self._ai_det_total)
-        details_form.addRow(QLabel("Est. Cost:",   styleSheet=_lbl_s), self._ai_det_cost)
-        details_form.addRow(QLabel("Warnings:",    styleSheet=_lbl_s), self._ai_det_warnings)
-        detail_tabs.addTab(details_w, "Details")
-
-        splitter.addWidget(detail_tabs)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        outer_layout.addWidget(splitter)
-
-        # Load history from DB on startup
-        if self._db is not None:
-            try:
-                for row in reversed(self._db.get_ai_interactions(limit=100)):
-                    self._on_ai_log_entry_dict(row)
-            except Exception:
-                pass
-
-        return outer
-
-    def _on_ai_log_entry(self, entry) -> None:
-        """Slot: called when a new AI call completes (signal from bridge)."""
-        self._ai_log_entries.append(entry)
-        if len(self._ai_log_entries) > 500:
-            self._ai_log_entries = self._ai_log_entries[-500:]
-        self._add_ai_log_list_item(entry, len(self._ai_log_entries) - 1)
-        self._ai_log_pending_select = True
-        # Defer the selection by one event-loop tick so the widget is fully
-        # painted before setCurrentRow fires — works whether the tab is visible
-        # now or not (the flush method checks tab visibility).
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, self._flush_ai_log_pending_select)
-
-    def _on_ai_log_entry_dict(self, row: dict) -> None:
-        """Add a DB-loaded row (dict) to the AI log list without duplicating in-memory list."""
-        from strategy._ai_client import AILogEntry
-        import json as _j
-        try:
-            warnings = _j.loads(row.get("validation_warnings", "[]"))
-        except Exception:
-            warnings = []
-        entry = AILogEntry(
-            timestamp=row.get("timestamp", ""),
-            feature=row.get("feature", ""),
-            model=row.get("model", ""),
-            prompt=row.get("prompt", ""),
-            structured_payload=row.get("structured_payload", "{}"),
-            response=row.get("response", ""),
-            success=bool(row.get("success", 1)),
-            duration_ms=int(row.get("duration_ms", 0)),
-            prompt_tokens=int(row.get("prompt_tokens", 0)),
-            response_tokens=int(row.get("response_tokens", 0)),
-            estimated_cost=float(row.get("estimated_cost", 0.0)),
-            error_msg=row.get("error_msg", ""),
-            validation_warnings=warnings,
-            car_id=int(row.get("car_id", 0)),
-            track=row.get("track", ""),
-        )
-        self._ai_log_entries.append(entry)
-        self._add_ai_log_list_item(entry, len(self._ai_log_entries) - 1)
-
-    def _add_ai_log_list_item(self, entry, idx: int, auto_select: bool = False) -> None:
-        if not hasattr(self, "_ai_log_list"):
-            return
-        t = entry.timestamp[:19].replace("T", " ") if len(entry.timestamp) >= 19 else entry.timestamp
-        if entry.success:
-            status = "✓ OK"
-        elif entry.duration_ms == 0 and entry.error_msg and "AI_DEBUG" in entry.error_msg:
-            status = "⊘ DRY-RUN"
-        else:
-            status = "✗ FAIL"
-        text = f"[{t}] {entry.feature} — {status} — {entry.duration_ms}ms"
-        item = QListWidgetItem(text)
-        if not entry.success:
-            item.setForeground(QColor("#FF6B6B"))
-        self._ai_log_list.addItem(item)
-        self._ai_log_list.scrollToBottom()
-        if auto_select:
-            self._ai_log_list.setCurrentRow(self._ai_log_list.count() - 1)
-
-    def _on_ai_log_selected(self, row: int) -> None:
-        if not hasattr(self, "_ai_log_entries") or row < 0 or row >= len(self._ai_log_entries):
-            return
-        import json as _j
-        entry = self._ai_log_entries[row]
-        dev_mode = self._config.get("developer_mode", False)
-        _placeholder = "[Enable Developer Mode in Settings to view]"
-
-        if hasattr(self, "_ai_log_prompt"):
-            self._ai_log_prompt.setPlainText(entry.prompt if dev_mode else _placeholder)
-        if hasattr(self, "_ai_log_payload"):
-            if dev_mode:
-                try:
-                    pretty = _j.dumps(_j.loads(entry.structured_payload or "{}"), indent=2)
-                except Exception:
-                    pretty = entry.structured_payload or "{}"
-                self._ai_log_payload.setPlainText(pretty)
-            else:
-                self._ai_log_payload.setPlainText(_placeholder)
-        if hasattr(self, "_ai_log_response"):
-            self._ai_log_response.setPlainText(entry.response or entry.error_msg)
-
-        if hasattr(self, "_ai_det_feature"):
-            self._ai_det_feature.setText(entry.feature)
-            self._ai_det_model.setText(entry.model)
-            status_text = "✓ Success" if entry.success else f"✗ Failed: {entry.error_msg}"
-            self._ai_det_status.setText(status_text)
-            self._ai_det_status.setStyleSheet(
-                "color: #AAE4AA; font-size: 11px;" if entry.success else "color: #FF6B6B; font-size: 11px;"
-            )
-            self._ai_det_duration.setText(f"{entry.duration_ms} ms")
-            self._ai_det_ptokens.setText(f"{entry.prompt_tokens:,}")
-            self._ai_det_rtokens.setText(f"{entry.response_tokens:,}")
-            self._ai_det_total.setText(f"{entry.prompt_tokens + entry.response_tokens:,}")
-            self._ai_det_cost.setText(f"${entry.estimated_cost:.5f}")
-            warnings = entry.validation_warnings if isinstance(entry.validation_warnings, list) \
-                else []
-            self._ai_det_warnings.setText("\n".join(warnings) if warnings else "None")
-
-    def _on_ai_log_filter_changed(self, text: str) -> None:
-        if not hasattr(self, "_ai_log_list"):
-            return
-        for i in range(self._ai_log_list.count()):
-            item = self._ai_log_list.item(i)
-            if item:
-                visible = (text == "All") or (text.lower() in item.text().lower())
-                item.setHidden(not visible)
-
-    def _on_ai_log_clear(self) -> None:
-        if hasattr(self, "_ai_log_list"):
-            self._ai_log_list.clear()
-        if hasattr(self, "_ai_log_entries"):
-            self._ai_log_entries.clear()
 
     # ------------------------------------------------------------------ slots
 
@@ -2785,8 +2495,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _lap = _rec.last_lap() if _rec else None
         if not _lap or not _lap.gearbox_analysis:
             return
-        from strategy.ai_planner import format_gearbox_for_prompt
-        self._txt_gearbox_debug.setPlainText(format_gearbox_for_prompt(_lap.gearbox_analysis))
+        from strategy.gearbox_format import format_gearbox_summary
+        self._txt_gearbox_debug.setPlainText(format_gearbox_summary(_lap.gearbox_analysis))
 
     def _update_practice_stats(self, record: LapRecord) -> None:
         if not hasattr(self, "_lbl_prac_gap"):
@@ -3918,8 +3628,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         get_compound_lap_sequences, which returns ALL history for this car+track
         (better than the race session alone).
         """
-        from strategy.ai_planner import RaceParams
-        api_key = self._ai_api_key.text().strip()
+        from strategy.race_params import RaceParams
         _ui_lap_data = self._read_ui_lap_table()
 
         # AI Snapshot Migration: race parameters come from a frozen snapshot of
@@ -3940,8 +3649,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         # Resolve the practice session id used for lap-data queries.
         # If session_id_override is supplied and > 0, use it directly — this is
-        # the pre-race practice session id captured by _run_ai_analysis and stored
-        # in self._strat_practice_sid, preventing the mid-race re-plan from
+        # the pre-race practice session id captured at pre-race analysis time and
+        # stored in self._strat_practice_sid, preventing the mid-race re-plan from
         # querying only in-race laps (spec Risk #2 / AC8).
         # An explicit override is authoritative, INCLUDING 0: override == 0 means
         # "no known practice session" and is passed straight through so the DB query
@@ -3970,7 +3679,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         else:
             lap_data_by_compound = _ui_lap_data
 
-        _strat_model_name = self._config.get("anthropic", {}).get("model", "claude-opus-4-8")
         degradation = self._tyre_degradation_cache if self._tyre_degradation_cache else None
 
         return {
@@ -3982,356 +3690,28 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "car_specs":               _car_specs,
             "setup_comparison_text":   _setup_comparison,
             "tyre_degradation_cache":  degradation,
-            "model_name":              _strat_model_name,
-            "api_key":                 api_key,
         }
 
     def _launch_replan_worker(self, reason: str) -> None:
-        """Launch an off-thread worker to run a mid-race AI strategy re-plan.
+        """Post a graceful 'not yet available' status for a mid-race re-plan.
 
         Called by the engine's _replan_callback from the telemetry thread.
-        The worker posts ("replan_ok", result) or ("replan_error", str) to
-        _strategy_result_queue, which is drained on the Qt main thread.
+        The deterministic mid-race re-plan is not yet implemented; rather than
+        calling any AI, the worker posts a ("replan_error", str) message to
+        _strategy_result_queue, which is drained on the Qt main thread by
+        _display_strategy_results (which calls the engine's replan_failed()).
         """
         import threading as _threading
 
         def _worker():
-            try:
-                from strategy.strategy_orchestrator import run_strategy_analysis
-
-                # Use the practice session id captured at pre-race analysis time so
-                # get_compound_lap_sequences queries PRACTICE laps, not in-race laps
-                # (spec Risk #2 / AC8).  Fallback: if no practice session was recorded
-                # (e.g. user loaded a saved plan without running pre-race analysis),
-                # pass 0 — this makes get_compound_lap_sequences use ALL car+track
-                # history, which still includes practice and is strictly better than
-                # the live race session id.
-                inputs = self._assemble_strategy_inputs(
-                    session_id_override=self._strat_practice_sid
-                )
-
-                # Build the race_situation dict (spec Risk #1: use live fuel burn)
-                _engine = self._strategy_engine
-                _tracker = self._tracker
-                _sc = self._config.get("strategy", {})
-                _total_laps = int(_sc.get("total_laps", 0))
-                _current_lap = getattr(_tracker, "laps_recorded", 0) if _tracker else 0
-                _laps_remaining = max(0, _total_laps - _current_lap)
-
-                # Determine active stint compound and tyre age
-                _current_compound = "Unknown"
-                _tyre_age_laps = 0
-                if _engine is not None:
-                    with _engine._lock:
-                        _active = _engine._active_stint()
-                        if _active is not None:
-                            _current_compound = _active.compound
-                            _tyre_age_laps = _current_lap - _active.start_lap
-                        _orig_stints = [s.to_dict() for s in _engine._stints]
-                        _recent_laps = list(_engine._recent_lap_times)
-                else:
-                    _orig_stints = []
-                    _recent_laps = []
-
-                # Prefer live fuel burn from tracker (spec Risk #1)
-                _live_fuel = 0.0
-                if _tracker is not None:
-                    _live_fuel = getattr(_tracker, "avg_fuel_per_lap", 0.0) or 0.0
-
-                race_situation = {
-                    "current_lap":          _current_lap,
-                    "total_laps":           _total_laps,
-                    "laps_remaining":       _laps_remaining,
-                    "current_compound":     _current_compound,
-                    "tyre_age_laps":        _tyre_age_laps,
-                    "live_fuel_burn_lpl":   _live_fuel,
-                    "replan_reason":        reason,
-                    "original_plan_stints": _orig_stints,
-                    "recent_lap_times_ms":  _recent_laps,
-                }
-
-                result = run_strategy_analysis(
-                    inputs["params"],
-                    inputs["lap_data_by_compound"],
-                    inputs["api_key"],
-                    self._db,
-                    car_id=inputs["car_id"],
-                    session_id=inputs["session_id"],
-                    car_name=inputs["car_name"],
-                    car_specs=inputs["car_specs"],
-                    setup_comparison_text=inputs["setup_comparison_text"],
-                    tyre_degradation_cache=inputs["tyre_degradation_cache"],
-                    model_name=inputs["model_name"],
-                    race_situation=race_situation,
-                )
-                self._strategy_result_queue.put(("replan_ok", result))
-            except Exception as exc:
-                self._strategy_result_queue.put(("replan_error", str(exc)))
-
-        _threading.Thread(target=_worker, daemon=True).start()
-
-    def _run_ai_analysis(self) -> None:
-        """Collect inputs, save params to config, launch analysis thread."""
-        from strategy.ai_planner import RaceParams
-        import threading as _threading
-
-        # Persist race params
-        api_key = self._ai_api_key.text().strip()
-
-        # Read UI lap table early — needed as fallback input for get_strategy_lap_data
-        _ui_lap_data = self._read_ui_lap_table()
-
-        # AI Snapshot Migration: race parameters come from a frozen snapshot of
-        # the canonical contexts instead of live config["strategy"] reads.
-        # Byte-identical when the stores are in sync (proven by
-        # tests/test_ai_context_snapshot.py). Fuel burn stays telemetry-owned
-        # via _computed_fuel_burn_lpl() (loaded session → tracker → config).
-        _ai_snap = self._build_strategy_ai_snapshot(
-            fuel_burn_override=self._computed_fuel_burn_lpl())
-        race_params = _ai_snap.race_params_dict()
-        self._config.setdefault("anthropic", {})["api_key"] = api_key
-        self._persist_config()
-
-        params = RaceParams(**race_params)
-
-        self._ai_results_text.setPlainText("Analysing… please wait.")
-        self._btn_ai_analyse.setEnabled(False)
-        for btn in self._ai_apply_btns:
-            btn.setVisible(False)
-
-        degradation = self._tyre_degradation_cache if self._tyre_degradation_cache else None
-
-        # Load setup history for this race config to give AI context on prior
-        # work — the match key comes from the frozen snapshot (StrategyContext).
-        config_id = _ai_snap.config_id
-        setup_history_text = ""
-        if config_id:
-            try:
-                from data.setup_history import format_for_prompt
-                setup_history_text = format_for_prompt(config_id, max_entries=4)
-            except Exception as _he:
-                print(f"[SetupHistory] load failed: {_he}")
-
-        _car_name, _car_specs = self._load_car_specs_for_current()
-        _setup_comparison = self._build_setup_comparison_text(race_params["track"])
-        _car_id_strat = self._db.get_car_id(_car_name) if self._db and _car_name else 0
-
-        _strat_sid: int = self._resolve_strat_session_id()
-
-        # Capture the practice session id at pre-race analysis time so that
-        # mid-race re-plans can query PRACTICE laps (not live race laps).
-        # This is the earliest safe capture point: the current session IS the
-        # practice session, so _strat_sid refers to practice here (AC8 / spec Risk #2).
-        self._strat_practice_sid = _strat_sid
-
-        lap_data_by_compound: dict[str, list[float]] = {}
-        if self._db and _car_id_strat > 0 and race_params.get("track"):
-            try:
-                lap_data_by_compound = self._db.get_strategy_lap_data(
-                    _car_id_strat,
-                    race_params["track"],
-                    _strat_sid,
-                    _ui_lap_data,
-                )
-            except Exception as _e:
-                print(f"[StrategyAnalysis] get_strategy_lap_data failed: {_e}")
-                lap_data_by_compound = _ui_lap_data
-        else:
-            lap_data_by_compound = _ui_lap_data
-
-        if not lap_data_by_compound:
-            results_widget = getattr(self, "_ai_results_text", None)
-            if results_widget is not None:
-                results_widget.setPlainText(
-                    "No lap time data available. Drive laps on track or enter times "
-                    "manually before running analysis."
-                )
-            btn = getattr(self, "_btn_ai_analyse", None)
-            if btn is not None:
-                btn.setEnabled(True)
-            return
-
-        # Refine timed-race lap count now that lap_data_by_compound is available.
-        # Use ceil + a representative CLEAN lap (best/min lap of the compound with
-        # the most data, tiebreak on fastest average) — this matches exactly what
-        # strategy.feasibility.estimate_race_laps() uses so the UI estimate agrees
-        # with the feasibility module rather than diverging from a flat mean of all
-        # (including slow/degraded) laps.
-        if race_params.get("race_type") == "timed":
-            from strategy.feasibility import estimate_race_laps as _estimate_race_laps
-            _duration_secs = float(_sc.get("race_duration_minutes", 60)) * 60.0
-            _representative_lap_s: float = 0.0
-            if lap_data_by_compound:
-                # Pick the compound with the most laps; tiebreak on lowest average.
-                # Use its minimum (best) clean lap — consistent with ai_planner.analyse_strategy.
-                try:
-                    from statistics import mean as _mean
-                    _rep_compound = max(
-                        lap_data_by_compound,
-                        key=lambda c: (
-                            len(lap_data_by_compound[c]),
-                            -_mean(lap_data_by_compound[c]) if lap_data_by_compound[c] else 0,
-                        ),
-                    )
-                    _rep_laps = lap_data_by_compound[_rep_compound]
-                    if _rep_laps:
-                        _representative_lap_s = min(_rep_laps) / 1000.0  # ms → s
-                except Exception:
-                    pass
-            _est_laps = _estimate_race_laps(_duration_secs, _representative_lap_s)
-            # estimate_race_laps returns 0 if representative_lap_s <= 0; preserve floor of 1.
-            total_laps = max(1, _est_laps)
-            self._config.setdefault("strategy", {})["total_laps"] = total_laps
-            race_params["total_laps"] = total_laps
-
-        _strat_model_name = self._config.get("anthropic", {}).get("model", "claude-opus-4-8")
-
-        def _worker():
-            try:
-                from strategy.strategy_orchestrator import run_strategy_analysis
-                # Setup history is config-id-scoped and must be loaded here
-                # where config_id is available.
-                _sh_text = setup_history_text
-                options = run_strategy_analysis(
-                    params, lap_data_by_compound, api_key, self._db,
-                    car_id=_car_id_strat, session_id=_strat_sid,
-                    car_name=_car_name, car_specs=_car_specs,
-                    setup_comparison_text=_setup_comparison,
-                    tyre_degradation_cache=degradation,
-                    model_name=_strat_model_name,
-                )
-                self._strategy_result_queue.put(("ok", options))
-            except Exception as exc:
-                self._strategy_result_queue.put(("error", str(exc)))
-
-        _threading.Thread(target=_worker, daemon=True).start()
-
-    def _run_practice_analysis(self) -> None:
-        """Full practice session analysis: aero/fuel trade-off, setup advice, further practice."""
-        from strategy.ai_planner import RaceParams
-        import threading as _threading
-
-        api_key = self._ai_api_key.text().strip()
-        if not api_key:
-            self._practice_results_text.show()
-            self._practice_results_text.setPlainText(
-                "No Anthropic API key set. Add your key above.")
-            return
-
-        # AI Snapshot Migration: race parameters come from a frozen snapshot of
-        # the canonical contexts instead of live config["strategy"] reads.
-        # Byte-identical when the stores are in sync, and the practice path's
-        # DEF-P1-005 safe default (unknown tuning flag → locked) is preserved
-        # (proven by tests/test_ai_context_snapshot.py). Fuel burn stays
-        # telemetry-owned via _computed_fuel_burn_lpl().
-        _ai_snap = self._build_practice_ai_snapshot(
-            fuel_burn_override=self._computed_fuel_burn_lpl())
-        race_params = _ai_snap.race_params_dict()
-        print(f"[PracticeAnalysis] tyre_wear_multiplier="
-              f"{race_params['tyre_wear_multiplier']:.2f} (from Event config)")
-        import os as _os
-        if _os.environ.get("GT7_AI_DEBUG"):
-            _tc_inc = bool(race_params.get("track_location_id") and race_params.get("layout_id"))
-            print(
-                f"[PracticeAnalysis DEBUG] bop={race_params['bop']} "
-                f"tuning_locked={race_params['tuning_locked']} "
-                f"allowed_tuning={race_params['allowed_tuning']} "
-                f"race_type={race_params['race_type']} "
-                f"tyre_wear={race_params['tyre_wear_multiplier']} "
-                f"track_context_included={_tc_inc} "
-                f"track_location_id={race_params.get('track_location_id') or 'MISSING'} "
-                f"layout_id={race_params.get('layout_id') or 'MISSING'} "
-                f"snapshot={_ai_snap.core.snapshot_id} source={_ai_snap.core.source.value}"
-            )
-            for _w in (_ai_snap.core.warnings + _ai_snap.core.stale_warnings):
-                print(f"[PracticeAnalysis DEBUG] snapshot-warning: {_w}")
-
-        # Gather tagged lap times from Lap Data tab
-        lap_data_by_compound: dict[str, list[float]] = {}
-        for row in range(self._lap_table.rowCount()):
-            compound     = self._compound_at_row(row)
-            laptime_item = self._lap_table.item(row, 3)
-            if not compound or laptime_item is None:
-                continue
-            try:
-                lt_ms = float(laptime_item.text())
-            except ValueError:
-                continue
-            if lt_ms > 0:
-                lap_data_by_compound.setdefault(compound, []).append(lt_ms)
-
-        if not lap_data_by_compound:
-            self._practice_results_text.show()
-            self._practice_results_text.setPlainText(
-                "No tagged laps found. Tag your practice laps with compound names "
-                "(e.g. 'Soft', 'Medium', 'Hard') in the Lap Data tab first.")
-            return
-
-        # Validation gate — block AI call if data is unreliable (DEF-P2-016)
-        _validation_warnings: list[str] = []
-        _rt = race_params["race_type"]
-        if _rt == "timed" and race_params["duration_mins"] < 5:
-            _validation_warnings.append(
-                f"Race duration is {race_params['duration_mins']} min — too short. "
-                "Set Event Planner to the correct timed race duration.")
-        elif _rt == "lap" and race_params["total_laps"] < 2:
-            _validation_warnings.append(
-                f"Race length is {race_params['total_laps']} laps — too short. "
-                "Set Event Planner to the correct lap count.")
-        if race_params["fuel_burn_per_lap"] <= 0:
-            _validation_warnings.append(
-                "No fuel burn data. Drive at least 3 laps to capture fuel consumption.")
-        if not any(len(v) >= 2 for v in lap_data_by_compound.values()):
-            _validation_warnings.append(
-                "Need at least 2 laps on one compound for reliable analysis.")
-        if _validation_warnings:
-            _warn_html = "<br>".join(f"&#9888;&nbsp;{w}" for w in _validation_warnings)
-            self._practice_results_text.show()
-            self._practice_results_text.setHtml(
-                "<span style='color:#F5A623;font-size:12px;'><b>Practice Analysis Blocked</b>"
-                "</span><br><br>"
-                f"<span style='color:#CCC;'>{_warn_html}</span><br><br>"
-                "<span style='color:#888;font-size:11px;'>Fix the issues above and retry.</span>")
-            print(f"[PracticeAnalysis] Validation blocked: {_validation_warnings}")
-            return
-
-        setup = self._current_setup_dict()
-        params = RaceParams(**race_params)
-        _car_name, _car_specs = self._load_car_specs_for_current()
-        _setup_comparison = self._build_setup_comparison_text(race_params["track"])
-        _hist_session_id = int(
-            self._dispatcher._session_id
-            if hasattr(self, "_dispatcher") and self._dispatcher is not None else 0
-        )
-        _car_id_hist = self._db.get_car_id(_car_name) if self._db and _car_name else 0
-        _model_name = self._config.get("anthropic", {}).get("model", "claude-opus-4-8")
-        # Aliases kept for test-readability and thread-safety (captured in closure).
-        _hist_db       = self._db
-        _hist_track    = race_params.get("track", "")
-        _hist_car_name = _car_name
-
-        self._practice_results_text.show()
-        self._practice_results_text.setHtml(
-            "<span style='color:#888;'>Running practice session analysis… please wait.</span>")
-        self._btn_practice_analyse.setEnabled(False)
-
-        def _worker():
-            try:
-                from strategy.practice_orchestrator import run_practice_analysis
-                result = run_practice_analysis(
-                    params, lap_data_by_compound, setup, _car_name, _car_specs,
-                    _setup_comparison, api_key, self._db,
-                    car_id=_car_id_hist, session_id=_hist_session_id,
-                    model_name=_model_name,
-                )
-                self._practice_result_queue.put(("ok", result))
-            except Exception as exc:
-                self._practice_result_queue.put(("error", str(exc)))
+            self._strategy_result_queue.put((
+                "replan_error",
+                "Deterministic mid-race re-plan is not yet available (pending Sprint 8).",
+            ))
 
         _threading.Thread(target=_worker, daemon=True).start()
 
     def _display_practice_results(self, result: tuple) -> None:
-        self._btn_practice_analyse.setEnabled(True)
         if not hasattr(self, "_practice_results_text"):
             return
         status, payload = result
@@ -4351,28 +3731,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                        "border-radius:4px; padding:8px 12px; margin-bottom:4px;")
         chg_row     = "padding:4px 0 4px 8px; border-bottom:1px solid #1A2A10;"
 
-        # DEF-P2-007 — validate setup changes for event tuning compliance
-        from strategy.ai_planner import validate_ai_setup_response as _vld_prac
-        _sc_v = self._config.get("strategy", {})
-        _viol_text = (
-            " ".join(getattr(analysis, "setup_changes", []))
-            + " " + (getattr(analysis, "aero_fuel_analysis", "") or "")
-        )
-        _viol_cats = _vld_prac(
-            _viol_text,
-            not bool(_sc_v.get("tuning", True)),
-            _sc_v.get("allowed_tuning_categories", []) or None,
-        )
-        if _viol_cats:
-            _vc = ", ".join(_viol_cats)
-            html = (
-                "<div style='background:#2A1A00; border:1px solid #F5A623; "
-                "border-radius:4px; padding:8px; margin-bottom:8px; color:#F5A623;'>"
-                f"&#9888; <b>Event Restriction Warning</b> — Setup changes may include "
-                f"locked areas: <b>{_vc}</b>. Review before applying.</div>"
-            )
-        else:
-            html = ""
+        html = ""
 
         # Strategies — reuse existing card builder
         if analysis.strategies:
@@ -4449,8 +3808,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             print(f"[Replan] failed: {payload}")
             return
 
-        self._btn_ai_analyse.setEnabled(True)
-
         if status == "error":
             self._ai_results_text.setHtml(
                 f"<span style='color:#F55;'>Analysis failed:</span><br><pre>{payload}</pre>")
@@ -4463,37 +3820,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._strategy_options = options
         self._strategy_options_html_base = self._build_strategy_html(options)
 
-        # DEF-P3-012 — validate strategy options for tuning rule violations
         _warn_html = ""
-        try:
-            from strategy.ai_planner import validate_ai_setup_response as _vld_strat
-            # Legacy Fan-Out Removal Phase 3: the tuning-rule validation reads
-            # the canonical EventContext (DB-event-first — consistent with the
-            # AI inputs it validates and the setup-permission gating). Byte-
-            # identical to the previous config["strategy"] reads when the DB
-            # event and the fan-out are in sync.
-            _ev_ctx = self._build_event_context()
-            _strat_locked = _ev_ctx.tuning_locked
-            _strat_allowed = list(_ev_ctx.allowed_tuning_categories)
-            for _opt in options:
-                _check_text = " ".join(filter(None, [
-                    getattr(_opt, "summary", ""),
-                    " ".join(getattr(_opt, "setup_changes", []) or []),
-                ]))
-                if _check_text:
-                    _viols = _vld_strat(_check_text, _strat_locked, _strat_allowed)
-                    if _viols:
-                        _warn_html = (
-                            "<div style='background:#2A1A00;border:1px solid #F5A623;"
-                            "border-radius:4px;padding:8px;margin-bottom:8px;'>"
-                            "<b style='color:#F5A623;'>&#9888; Tuning Rule Violations Detected</b><br>"
-                            "<span style='color:#CCC;font-size:11px;'>"
-                            + "<br>".join(_viols) +
-                            "</span></div>"
-                        )
-                        break
-        except Exception:
-            pass
 
         # Task 2: append feasibility metadata (rejected strategies, data gaps,
         # assumptions, calculation notes) below the strategy cards when present.
@@ -5660,25 +4987,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._lbl_fuel_mult_display = QLabel(f"×{_fm_init} (from Event)")
         self._lbl_fuel_mult_display.setStyleSheet("color: #AAE4AA; font-size: 11px;")
 
-        _saved_api_key = self._config.get("anthropic", {}).get("api_key", "")
-        if not _saved_api_key:
-            try:
-                _key_file = Path(self._config_path).parent / "api_key.txt"
-                _saved_api_key = _key_file.read_text(encoding="utf-8").strip()
-                if _saved_api_key:
-                    self._config.setdefault("anthropic", {})["api_key"] = _saved_api_key
-            except Exception:
-                pass
-        self._ai_api_key = QLineEdit(_saved_api_key)
-        self._ai_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._ai_api_key.setPlaceholderText("sk-ant-api…  (auto-loaded from api_key.txt or config.json)")
-        self._ai_api_key.setToolTip(
-            "Your Claude AI API key from console.anthropic.com\n"
-            "Required for Build Setup, Race Strategy Analysis, Full Practice Analysis,\n"
-            "Analyse Degradation, AI coaching and setup advice.\n"
-            "Keys look like 'sk-ant-api03-...' — stored locally in config.json only."
-        )
-
         # Session match key (internally: race config_id) — derived from
         # track + car + race length. Diagnostic Tab Cleanup (2026-07-03):
         # relabelled from the developer-facing "Race Config ID".
@@ -5694,7 +5002,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         param_form.addRow(QLabel("Fuel Multiplier:", styleSheet=lbl_style), self._lbl_fuel_mult_display)
         param_form.addRow(QLabel("Fuel Burn (auto):", styleSheet=lbl_style), self._lbl_fuel_burn_display)
-        param_form.addRow(QLabel("Anthropic API Key:", styleSheet=lbl_style), self._ai_api_key)
 
         _sep = QFrame()
         _sep.setFrameShape(QFrame.Shape.HLine)
@@ -5702,19 +5009,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         param_form.addRow(_sep)
         param_form.addRow(QLabel("Session Match Key:", styleSheet=lbl_style), self._lbl_config_id)
         ai_layout.addLayout(param_form)
-
-        ai_btn_row = QHBoxLayout()
-        self._btn_ai_analyse = QPushButton("Race Strategy Analysis")
-        self._btn_ai_analyse.setStyleSheet(
-            "background: #1F4E78; color: white; font-weight: bold; padding: 6px 16px;")
-        self._btn_ai_analyse.setToolTip(
-            "Generates 3 ranked race strategies from your tagged practice lap times.\n"
-            "Uses tyre degradation data if 'Analyse Degradation' has been run.\n"
-            "Tag your laps with compound names in the Lap Data tab first.")
-        self._btn_ai_analyse.clicked.connect(self._run_ai_analysis)
-        ai_btn_row.addStretch()
-        ai_btn_row.addWidget(self._btn_ai_analyse)
-        ai_layout.addLayout(ai_btn_row)
 
         self._ai_results_text = QTextEdit()
         self._ai_results_text.setReadOnly(True)
@@ -6101,7 +5395,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         sc["stops"] = stops_data
         # track/race_type/laps/duration/tyre_wear/refuel already in sc from active event
         sc["fuel_burn_per_lap"] = self._computed_fuel_burn_lpl()
-        self._config.setdefault("anthropic", {})["api_key"] = self._ai_api_key.text().strip()
         self._persist_config()
 
         if self._strategy_engine is not None:
@@ -6781,14 +6074,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         _threading.Thread(target=_worker, daemon=True).start()
 
     def _run_analyse_degradation(self) -> None:
-        """Ask AI to identify the tyre degradation cliff for each tagged compound."""
+        """Compute the tyre degradation cliff for each tagged compound (deterministic)."""
         import threading as _threading
-        from strategy.ai_planner import analyse_tyre_degradation
+        from strategy.tyre_degradation import analyse_tyre_degradation
         from statistics import mean as _mean
-
-        api_key = self._ai_api_key.text().strip()
-        if not api_key:
-            return
 
         # Build per-compound sequences from the lap table.
         # Use table row index (not lap_no from column 0) as the ordering key —
@@ -6865,8 +6154,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
 
         def _worker():
             try:
-                result = analyse_tyre_degradation(lap_sequences, wear_mult, api_key,
-                                                  model=self._config.get("anthropic", {}).get("model") or None,
+                result = analyse_tyre_degradation(lap_sequences, wear_mult,
                                                   consecutive_laps=consecutive_laps)
                 self._degradation_result_queue.put(("ok", result))
             except Exception as exc:
@@ -6912,31 +6200,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         sess = m2.group(1) if m2 else "?"
         self._lbl_profile_stats.setText(f"Stats updated — {laps} laps across {sess} sessions.")
 
-    def _run_propose_profile_update(self) -> None:
-        api_key = self._ai_api_key.text().strip()
-        if not api_key:
-            self._lbl_profile_stats.setText("No API key configured — add it in the Strategy tab.")
-            return
-        from strategy.profile_updater import load_stats_doc
-        if not load_stats_doc():
-            self._lbl_profile_stats.setText("Run 'Refresh Stats' first.")
-            return
-        self._btn_propose_profile.setEnabled(False)
-        self._btn_propose_profile.setText("Asking AI…")
-        self._lbl_profile_stats.setText("Requesting profile update from AI — ~20 seconds…")
-        import threading
-        def _worker():
-            from strategy.profile_updater import propose_profile_update
-            try:
-                proposal = propose_profile_update(api_key, model=self._config.get("anthropic", {}).get("model") or None)
-                self._profile_update_queue.put(("ok", proposal))
-            except Exception as exc:
-                self._profile_update_queue.put(("err", str(exc)))
-        threading.Thread(target=_worker, daemon=True).start()
-
     def _display_profile_update_result(self, result: tuple) -> None:
-        self._btn_propose_profile.setEnabled(True)
-        self._btn_propose_profile.setText("Propose Profile Update")
         status, payload = result
         if status == "err":
             self._lbl_profile_stats.setText(f"Update failed: {payload}")
@@ -7294,7 +6558,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._bridge.connection_changed.connect(self.on_connection_status)
         self._bridge.race_state_changed.connect(self.on_race_state)
         self._bridge.event_log_entry.connect(self.on_event_log)
-        self._bridge.ai_log_entry.connect(self._on_ai_log_entry)
         self._bridge.strategy_status_changed.connect(self._on_strategy_status)
         self._bridge.tyre_preset_changed.connect(self._on_tyre_preset_changed)
         self._bridge.car_detected.connect(self._on_car_detected)
@@ -7450,28 +6713,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._sync_race_plan_pit_loss()
         elif key == TAB_PRACTICE_REVIEW:  self._sync_practice_from_event()
         elif key == TAB_TELEMETRY:        self._refresh_telemetry_context()
-        elif key == TAB_AI_LOG:           self._flush_ai_log_pending_select()
         elif key == TAB_TRACK_MODELLING:  self._tm_on_tab_shown()
         elif key == TAB_HOME:             self._home_refresh()
-
-    def _flush_ai_log_pending_select(self) -> None:
-        """Flush deferred AI Log selection — setCurrentRow on a hidden widget has no visual effect.
-
-        Only applies the selection when the AI Log tab is currently visible.
-        If called while another tab is active the flag is left set so that
-        _on_tab_changed re-calls this when the AI Log tab is shown and the
-        selection is applied as soon as the user navigates to the tab.
-        """
-        if not getattr(self, "_ai_log_pending_select", False):
-            return
-        # Leave the flag in place if the AI Log tab is not currently visible.
-        if hasattr(self, "_tabs") and self.current_tab_key() != TAB_AI_LOG:
-            return
-        self._ai_log_pending_select = False
-        if hasattr(self, "_ai_log_list"):
-            count = self._ai_log_list.count()
-            if count > 0:
-                self._ai_log_list.setCurrentRow(count - 1)
 
     # -----------------------------------------------------------------------
     # Event-centred sync methods (called from _on_tab_changed)
@@ -7754,22 +6997,6 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         analysis_group = QGroupBox("Practice AI Analysis")
         analysis_group.setStyleSheet(self._group_style())
         analysis_layout = QVBoxLayout(analysis_group)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        self._btn_practice_analyse = QPushButton("Full Practice Analysis")
-        self._btn_practice_analyse.setStyleSheet(
-            "QPushButton { background: #4B2E78; color: white; font-weight: bold; "
-            "border-radius: 4px; padding: 6px 18px; }"
-            "QPushButton:hover { background: #6B3E98; }"
-        )
-        self._btn_practice_analyse.setToolTip(
-            "Full analysis: race strategies + car setup change recommendations + further practice suggestions.\n"
-            "Run this after completing practice stints to get AI advice on what to do next.\n"
-            "Requires tagged laps + current car setup + API key.")
-        self._btn_practice_analyse.clicked.connect(self._run_practice_analysis)
-        btn_row.addWidget(self._btn_practice_analyse)
-        analysis_layout.addLayout(btn_row)
 
         self._practice_results_text = QTextEdit()
         self._practice_results_text.setReadOnly(True)

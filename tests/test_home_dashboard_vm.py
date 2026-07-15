@@ -344,54 +344,9 @@ class TestTrackCard:
 
 
 # --------------------------------------------------------------------------- #
-# 12./13. AI Input Safety
+# 12./13. AI Input Safety card — REMOVED (CARD_AI_SAFETY dropped in the no-AI
+# refactor; the home dashboard no longer surfaces an AI-safety card).
 # --------------------------------------------------------------------------- #
-class TestAISafetyCard:
-    def test_clean_snapshot_is_ready(self):
-        ev = _event_ctx()
-        sc = _strategy_ctx(ev)
-        snap = build_strategy_ai_snapshot(
-            event_context=ev, strategy_context=sc,
-            legacy_strategy={"track": "Fuji Speedway"})
-        s = hd.build_home_dashboard_state(
-            event_context=ev, strategy_context=sc, ai_snapshot=snap)
-        card = s.card(hd.CARD_AI_SAFETY)
-        assert card.status == hd.HomeDashboardStatus.READY
-        assert "frozen snapshot" in " ".join(card.lines)
-
-    def test_legacy_fallback_snapshot_warns(self):
-        snap = build_strategy_ai_snapshot(
-            legacy_strategy={"track": "Fuji Speedway", "total_laps": 20})
-        s = hd.build_home_dashboard_state(ai_snapshot=snap)
-        card = s.card(hd.CARD_AI_SAFETY)
-        assert card.status == hd.HomeDashboardStatus.ATTENTION
-        msgs = " ".join(w.message for w in card.warnings)
-        assert "legacy fallback" in msgs
-
-    def test_stale_snapshot_state_is_surfaced(self):
-        old_event = _event_ctx()
-        sc = _strategy_ctx(old_event)          # strategy keyed to old event
-        new_event = _event_ctx(laps=30)
-        snap = build_strategy_ai_snapshot(
-            event_context=new_event, strategy_context=sc,
-            legacy_strategy={"track": "Fuji Speedway"})
-        s = hd.build_home_dashboard_state(
-            event_context=new_event, strategy_context=sc, ai_snapshot=snap)
-        card = s.card(hd.CARD_AI_SAFETY)
-        assert card.status == hd.HomeDashboardStatus.ATTENTION
-        assert any(w.kind == "stale" for w in card.warnings)
-
-    def test_bare_core_object_accepted(self):
-        ev = _event_ctx()
-        snap = build_strategy_ai_snapshot(
-            event_context=ev, legacy_strategy={"track": "Fuji Speedway"})
-        s = hd.build_home_dashboard_state(event_context=ev,
-                                          ai_snapshot=snap.core)
-        assert s.card(hd.CARD_AI_SAFETY).status == hd.HomeDashboardStatus.READY
-
-    def test_no_snapshot_is_missing(self):
-        s = hd.build_home_dashboard_state()
-        assert s.card(hd.CARD_AI_SAFETY).status == hd.HomeDashboardStatus.MISSING
 
 
 # --------------------------------------------------------------------------- #
@@ -539,7 +494,7 @@ class TestNeverRaises:
             s = hd.build_home_dashboard_state(
                 event_context=g, strategy_context=g, setup_context=g,
                 track_context=g, ai_snapshot=g, strategy_snapshot=g)
-            assert len(s.cards) == 5
+            assert len(s.cards) == 4
             assert s.next_action.action
 
     def test_garbage_mixed_with_real_contexts(self):
@@ -556,7 +511,7 @@ class TestNeverRaises:
         s = hd.build_home_dashboard_state(
             event_context=Evil(), strategy_context=Evil(),
             setup_context=Evil(), track_context=Evil(), ai_snapshot=Evil())
-        assert len(s.cards) == 5
+        assert len(s.cards) == 4
 
     def test_flow_flags_never_raise(self):
         flags = hd.build_flow_flags(event_context="x", strategy_context=1,
@@ -598,14 +553,13 @@ class TestHomeTabWiring:
             '"Event Planner")   # 2',
             '"Telemetry")        # 7',
             '"Diagnostics")      # 8',
-            '"AI Log")           # 11',
             'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
 
     def test_diagnostic_tabs_still_present(self, dash_src):
         for builder in ("_build_telemetry_tab", "_build_debug_tab",
-                        "_build_ai_log_tab", "_build_track_modelling_tab"):
+                        "_build_track_modelling_tab"):
             assert f"self.{builder}()" in dash_src
 
     def test_on_tab_changed_handles_home(self, dash_src):
@@ -615,7 +569,7 @@ class TestHomeTabWiring:
         # Existing dispatches untouched (key-based since the refactor).
         for frag in ("_refresh_history", "_sync_setup_builder_from_event",
                      "_sync_strategy_from_event", "_sync_practice_from_event",
-                     "_refresh_telemetry_context", "_flush_ai_log_pending_select",
+                     "_refresh_telemetry_context",
                      "_tm_on_tab_shown"):
             assert frag in body
 
@@ -643,9 +597,9 @@ class TestHomeTabWiring:
     def test_home_tab_is_a_workflow_tab_in_product_flow(self):
         assert pf.TAB_ROLES.get("Home") == pf.ROLE_WORKFLOW
         assert pf.decorate_tab_title("Home") == "Home"
-        # The diagnostic tool set is unchanged.
+        # The diagnostic tool set (AI Log removed in the no-AI refactor).
         assert set(pf.diagnostic_tabs()) == {
-            "Telemetry", "Diagnostics", "AI Log", "Track Modelling",
+            "Telemetry", "Diagnostics", "Track Modelling",
         }
 
     def test_refresh_hooks_are_guarded_and_display_only(self, dash_src, sb_src, tm_src):

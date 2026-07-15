@@ -1,14 +1,14 @@
-"""Tests for Group 18B — Recommendation persistence pipeline.
+"""Tests for Group 18B — Recommendation persistence pipeline (deterministic).
 
-Covers:
+The generative-AI pieces (strategy._rec_parser.parse_recommendations_from_response,
+strategy._ai_client.AILogEntry / call_api, the practice-prompt builders, and the
+PracticeAnalysis / CarSetupRecommendation dataclasses) were removed with the AI
+purge, so the tests that exercised them are gone. What survives:
   - SessionDB schema v5: setup_recommendations table + session_id on ai_interactions
   - SessionDB.insert_setup_recommendations()
   - SessionDB.get_recommendations_for_context()
   - SessionDB.log_ai_interaction() with session_id field
-  - strategy/_rec_parser.parse_recommendations_from_response()
-  - AILogEntry.session_id field
-  - call_api session_id parameter (signature only)
-  - DrivingAdvisor session_id_getter wiring
+  - DrivingAdvisor session_id_getter wiring + _get_previous_ai_context (DB-backed)
 """
 from __future__ import annotations
 
@@ -20,8 +20,6 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from data.session_db import SessionDB
-from strategy._rec_parser import parse_recommendations_from_response
-from strategy._ai_client import AILogEntry
 from strategy._setup_constants import DB_VERSION
 
 
@@ -179,126 +177,6 @@ def test_log_ai_interaction_default_session_id(db):
 
 
 # ---------------------------------------------------------------------------
-# TASK 4 — _rec_parser
-# ---------------------------------------------------------------------------
-
-def test_parse_empty_response():
-    result = parse_recommendations_from_response(
-        "", "Driver Coaching", 1, "Suzuka", "", 0, None
-    )
-    assert result == []
-
-
-def test_parse_whitespace_only():
-    result = parse_recommendations_from_response(
-        "   \n\n   ", "Driver Coaching", 1, "Suzuka", "", 0, None
-    )
-    assert result == []
-
-
-def test_parse_structured_numbered():
-    text = "1. Brake earlier at T1.\n\n2. Reduce rear ARB to 3."
-    result = parse_recommendations_from_response(
-        text, "Setup Advice", 5, "Monza", "monza__full", 7, 42
-    )
-    assert len(result) == 2
-    assert result[0]["recommendation_text"] == "1. Brake earlier at T1."
-    assert result[1]["recommendation_text"] == "2. Reduce rear ARB to 3."
-    assert result[0]["car_id"] == 5
-    assert result[0]["track"] == "Monza"
-    assert result[0]["layout_id"] == "monza__full"
-    assert result[0]["session_id"] == 7
-    assert result[0]["ai_interaction_id"] == 42
-    assert result[0]["feature"] == "Setup Advice"
-
-
-def test_parse_structured_bullet():
-    text = "- Point one\n\n- Point two\n\n- Point three"
-    result = parse_recommendations_from_response(
-        text, "Driver Coaching", 1, "Spa", "", 0, None
-    )
-    assert len(result) == 3
-
-
-def test_parse_unstructured_fallback():
-    text = "This is plain prose advice with no structured prefix."
-    result = parse_recommendations_from_response(
-        text, "Driver Coaching", 1, "Spa", "", 0, None
-    )
-    assert len(result) == 1
-    assert result[0]["recommendation_text"] == text
-
-
-def test_parse_truncates_long_recs():
-    long_text = "1. " + "x" * 2000
-    result = parse_recommendations_from_response(
-        long_text, "Driver Coaching", 1, "Spa", "", 0, None
-    )
-    assert len(result) == 1
-    assert len(result[0]["recommendation_text"]) == 1000
-
-
-def test_parse_truncates_long_fallback():
-    long_text = "a" * 3000
-    result = parse_recommendations_from_response(
-        long_text, "Driver Coaching", 1, "Spa", "", 0, None
-    )
-    assert len(result[0]["recommendation_text"]) == 2000
-
-
-def test_parse_max_recs_cap():
-    # 15 numbered items — should be capped at 10
-    blocks = "\n\n".join(f"{i+1}. Item {i+1}" for i in range(15))
-    result = parse_recommendations_from_response(
-        blocks, "Driver Coaching", 1, "Spa", "", 0, None
-    )
-    assert len(result) == 10
-
-
-# ---------------------------------------------------------------------------
-# TASK 2 — AILogEntry session_id field
-# ---------------------------------------------------------------------------
-
-def test_ai_log_entry_has_session_id():
-    """AILogEntry must have a session_id field defaulting to 0."""
-    entry = AILogEntry(
-        timestamp="2026-06-26T00:00:00",
-        feature="Driver Coaching",
-        model="test",
-        prompt="p",
-        structured_payload="{}",
-        response="r",
-        success=True,
-        duration_ms=0,
-        prompt_tokens=0,
-        response_tokens=0,
-        estimated_cost=0.0,
-        error_msg="",
-    )
-    assert hasattr(entry, "session_id")
-    assert entry.session_id == 0
-
-
-def test_ai_log_entry_session_id_set():
-    entry = AILogEntry(
-        timestamp="2026-06-26T00:00:00",
-        feature="Driver Coaching",
-        model="test",
-        prompt="p",
-        structured_payload="{}",
-        response="r",
-        success=True,
-        duration_ms=0,
-        prompt_tokens=0,
-        response_tokens=0,
-        estimated_cost=0.0,
-        error_msg="",
-        session_id=55,
-    )
-    assert entry.session_id == 55
-
-
-# ---------------------------------------------------------------------------
 # TASK 5 — DrivingAdvisor session_id_getter
 # ---------------------------------------------------------------------------
 
@@ -339,46 +217,6 @@ def test_driving_advisor_non_callable_getter():
         session_id_getter="not_callable",
     )
     assert advisor._session_id_getter() == 0
-
-
-# ---------------------------------------------------------------------------
-# TASK 3 — PracticeAnalysis and CarSetupRecommendation raw_response field
-# ---------------------------------------------------------------------------
-
-def test_practice_analysis_has_raw_response():
-    from strategy.ai_planner import PracticeAnalysis
-    pa = PracticeAnalysis(
-        strategies=[],
-        setup_changes=[],
-        further_practice=[],
-        aero_fuel_analysis="",
-    )
-    assert hasattr(pa, "raw_response")
-    assert pa.raw_response == ""
-
-
-def test_car_setup_recommendation_has_raw_response():
-    from strategy.ai_planner import CarSetupRecommendation
-    rec = CarSetupRecommendation(
-        ride_height_front=80, ride_height_rear=82,
-        springs_front=3.5, springs_rear=3.0,
-        dampers_front_comp=30, dampers_front_ext=40,
-        dampers_rear_comp=25, dampers_rear_ext=35,
-        arb_front=5, arb_rear=4,
-        camber_front=-1.0, camber_rear=-1.5,
-        toe_front=0.0, toe_rear=0.05,
-        aero_front=0, aero_rear=0,
-        lsd_initial=10, lsd_accel=15, lsd_decel=5,
-        brake_bias=0,
-        ballast_kg=0.0, ballast_position=0,
-        power_restrictor=100.0,
-        final_drive=3.5,
-        transmission_max_speed_kmh=270.0,
-        gear_ratios=[],
-        reasoning="Test",
-    )
-    assert hasattr(rec, "raw_response")
-    assert rec.raw_response == ""
 
 
 # ---------------------------------------------------------------------------
@@ -454,62 +292,6 @@ def test_get_recommendations_default_limit(db):
     assert result.count("---") <= 1, (
         "Default limit=2 must return at most 2 recommendations"
     )
-
-
-# AC2 — call_api signature accepts session_id parameter
-def test_call_api_accepts_session_id():
-    """call_api must accept a session_id keyword argument."""
-    import inspect
-    from strategy._ai_client import call_api
-    sig = inspect.signature(call_api)
-    assert "session_id" in sig.parameters, "call_api must have a session_id parameter"
-    assert sig.parameters["session_id"].default == 0, "session_id must default to 0"
-
-
-# AC6 — prev_ai_str injected into practice analysis prompt
-def test_practice_prompt_includes_prev_ai_str():
-    """_build_practice_prompt must include prev_ai_str text when provided."""
-    from strategy.ai_planner import _build_practice_prompt, RaceParams
-    params = RaceParams(
-        track="Monza",
-        total_laps=25,
-        tyre_wear_multiplier=1.0,
-        fuel_burn_per_lap=2.5,
-        refuel_speed_lps=10.0,
-        pit_loss_secs=22.0,
-    )
-    prompt = _build_practice_prompt(
-        params=params,
-        lap_data={"RM": [90000, 90500, 91000]},
-        setup={},
-        history={},
-        prev_ai_str="Increase rear ARB to 5.",
-    )
-    assert "Increase rear ARB to 5." in prompt, (
-        "prev_ai_str must be injected into the practice analysis prompt"
-    )
-
-
-# AC6 — empty prev_ai_str produces no Previous AI Recommendations section
-def test_practice_prompt_omits_prev_ai_when_empty():
-    """_build_practice_prompt must not include the section header when prev_ai_str is empty."""
-    from strategy.ai_planner import _build_practice_prompt, RaceParams
-    params = RaceParams(
-        track="Monza",
-        total_laps=25,
-        tyre_wear_multiplier=1.0,
-        fuel_burn_per_lap=2.5,
-        refuel_speed_lps=10.0,
-        pit_loss_secs=22.0,
-    )
-    prompt = _build_practice_prompt(
-        params=params,
-        lap_data={"RM": [90000, 90500, 91000]},
-        setup={},
-        history={},
-        prev_ai_str="",
-    )
-    assert "Previous AI Recommendations (Practice Analysis)" not in prompt
 
 
 # AC7 — DrivingAdvisor._get_previous_ai_context returns joined recs from DB

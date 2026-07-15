@@ -345,12 +345,8 @@ def _uat_advisor():
 
 class TestPorscheRsrIntegration:
     @pytest.fixture
-    def result(self, monkeypatch):
+    def result(self):
         import json
-        import strategy.driving_advisor as da
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-            "status": "APPROVED", "warnings": [], "contradictions": [],
-            "missing_evidence": [], "explanation_notes": "audit ok"}))
         adv = _uat_advisor()
         setup = {
             "final_drive": 4.25, "transmission_max_speed_kmh": 0, "num_gears": 6,

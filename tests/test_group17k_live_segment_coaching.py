@@ -903,21 +903,6 @@ class TestDrivingAdvisorIntegration:
             ctx = adv._get_live_coaching_context(live_position=pos)
         assert isinstance(ctx, str)
 
-    def test_coaching_prompt_includes_coaching_block_when_provided(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap()]
-        _sentinel = "## Live Coaching Cue\nBrake a touch earlier into T1 and release smoother."
-        with patch.object(adv, "_get_live_coaching_context", return_value=_sentinel):
-            prompt = adv._build_coaching_prompt(laps, "", live_position=MagicMock())
-        assert _sentinel in prompt
-
-    def test_coaching_prompt_omits_coaching_block_when_no_call(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap()]
-        with patch.object(adv, "_get_live_coaching_context", return_value=""):
-            prompt = adv._build_coaching_prompt(laps, "", live_position=None)
-        assert "## Live Coaching Cue" not in prompt
-
 
 # ---------------------------------------------------------------------------
 # Class 19 — Regression imports: Groups 17A–17J

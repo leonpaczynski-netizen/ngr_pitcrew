@@ -996,7 +996,6 @@ class TestAC9DeterministicFallback:
                 "explanation_notes": "rh_rake_risk observed.",
             })
 
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: violating_ai_audit_json())
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
@@ -1026,13 +1025,6 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-            "status": "APPROVED",
-            "warnings": [],
-            "contradictions": [],
-            "missing_evidence": [],
-            "explanation_notes": "ok",
-        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
@@ -1067,13 +1059,6 @@ class TestAC9DeterministicFallback:
             feeling=None, location_confidence="low",
         )
 
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-            "status": "APPROVED",
-            "warnings": [],
-            "contradictions": [],
-            "missing_evidence": [],
-            "explanation_notes": "ok",
-        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
@@ -1109,13 +1094,6 @@ class TestAC9DeterministicFallback:
         )
 
         # call_api returns a valid audit response (audit-only, does not drive fallback)
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-            "status": "APPROVED",
-            "warnings": [],
-            "contradictions": [],
-            "missing_evidence": [],
-            "explanation_notes": "ok",
-        }))
 
         result_str = adv.build_combined_setup_response(
             setup_dict=setup, car_name="", feeling=None, diagnosis=diag,
