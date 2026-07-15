@@ -92,9 +92,6 @@ DEFAULT_CONFIG = {
         "qual_rpm": 7000,
         "race_rpm": 6500,
     },
-    "anthropic": {
-        "api_key": ""
-    },
     "car_setup": {
         "setups": []
     },

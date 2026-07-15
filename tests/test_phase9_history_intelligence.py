@@ -115,17 +115,13 @@ def test_history_never_forces_empty_prior():
     assert compare_to_history({"lsd_accel": 15}, {"lsd_accel": 17}, prior) == []
 
 
-def test_response_attaches_historical_comparison(monkeypatch):
+def test_response_attaches_historical_comparison():
     # End-to-end: the setup response carries a current/historical comparison built
     # from the proven Watkins setup.
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     laps = [G._make_lap(wheelspin_count=12)]
     adv = G._make_full_advisor({}, laps)
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     setup = {"lsd_accel": 15, "aero_front": 400, "aero_rear": 600, "camber_front": 1.0}
     res = json.loads(adv.build_combined_setup_response(
         setup_dict=setup, car_name=RSR, track_name="Watkins Glen", purpose="Race",

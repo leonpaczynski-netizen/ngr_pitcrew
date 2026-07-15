@@ -190,7 +190,6 @@ class TestAC1AIDownStillApproved:
         }
         adv = _make_full_advisor({}, laps)
 
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: (_ for _ in ()).throw(Exception("API down")))
 
         result_str = adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
         result = json.loads(result_str)
@@ -214,7 +213,6 @@ class TestAC1AIDownStillApproved:
             "arb_rear": 3,
         }
         adv = _make_full_advisor({}, laps)
-        monkeypatch.setattr(da, "call_api", lambda *a, **k: (_ for _ in ()).throw(Exception("API down")))
 
         result_str = adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
         result = json.loads(result_str)
@@ -253,32 +251,6 @@ class TestAC2NoAIGenerateCall:
     """AC2: The deterministic rule engine authors changes; call_api is only used
     for audit (if at all) — not to generate changes."""
 
-    def test_call_api_not_called_to_generate_changes_no_key(self):
-        """Without an API key call_api is never called at all."""
-        laps = _bottoming_wheelspin_laps()
-        setup = {"aero_front": 0, "aero_rear": 50, "lsd_accel": 20,
-                 "ride_height_front": 80, "ride_height_rear": 82}
-        adv = _make_advisor_no_api({}, laps)
-
-        call_count = {"n": 0}
-        original_call_api = da.call_api
-
-        def counting_call_api(*a, **k):
-            call_count["n"] += 1
-            return original_call_api(*a, **k)
-
-        import strategy.driving_advisor as _da_module
-        _da_module_orig = _da_module.call_api
-        _da_module.call_api = counting_call_api
-        try:
-            adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
-        finally:
-            _da_module.call_api = _da_module_orig
-
-        assert call_count["n"] == 0, (
-            f"AC2 FAIL: call_api was called {call_count['n']} times without an API key."
-        )
-
     def test_changes_present_in_response_without_ai(self):
         """The rule engine alone produces changes without calling call_api."""
         laps = _bottoming_wheelspin_laps()
@@ -313,44 +285,6 @@ class TestAC2NoAIGenerateCall:
                     f"AC2 FAIL: Change dict missing 'rule_id' key — changes should come from "
                     f"the rule engine, not AI. change: {ch}"
                 )
-
-    def test_audit_only_when_api_key_present(self, monkeypatch):
-        """When API key is present, call_api is called at most once (audit only, not generate)."""
-        laps = _bottoming_wheelspin_laps()
-        setup = {"aero_front": 0, "aero_rear": 50, "lsd_accel": 20,
-                 "ride_height_front": 80, "ride_height_rear": 82}
-        adv = _make_full_advisor({}, laps)
-
-        call_count = {"n": 0}
-        call_prompts = []
-
-        def mock_call_api(prompt, api_key, **kwargs):
-            call_count["n"] += 1
-            call_prompts.append(prompt)
-            # Return valid audit JSON
-            return json.dumps({
-                "status": "APPROVED",
-                "warnings": [],
-                "contradictions": [],
-                "missing_evidence": [],
-                "explanation_notes": "All good.",
-            })
-
-        monkeypatch.setattr(da, "call_api", mock_call_api)
-
-        adv.build_combined_setup_response(setup_dict=setup, car_name="", feeling=None)
-
-        assert call_count["n"] <= 1, (
-            f"AC2 FAIL: call_api called {call_count['n']} times — should be at most 1 (audit only)."
-        )
-        if call_count["n"] == 1:
-            # The one call must be the audit prompt, not a generate call
-            prompt = call_prompts[0]
-            assert "AUDIT" in prompt or "audit" in prompt.lower(), (
-                f"AC2 FAIL: The single call_api call should be for audit, not generation. "
-                f"Prompt: {prompt[:300]!r}"
-            )
-
 
 # ===========================================================================
 # AC5 — Pack A invariants individually blocked

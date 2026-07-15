@@ -427,18 +427,6 @@ def main() -> None:
     recorder = LapTelemetryRecorder()
     db = SessionDB("data/gt7_sessions.db")
 
-    from strategy._ai_client import set_log_hook, AILogEntry
-    from dataclasses import asdict as _asdict
-
-    def _ai_log_callback(entry: AILogEntry) -> None:
-        try:
-            db.log_ai_interaction(_asdict(entry))
-        except Exception:
-            pass
-        bridge.ai_log_entry.emit(entry)
-
-    set_log_hook(_ai_log_callback)
-
     strategy_engine = RaceStrategyEngine(tracker, announcer, config, bridge, db=db)
     # Saved stops are restored into the Strategy Builder UI only (dashboard __init__).
     # Do NOT call set_plan() here — the Live Race Engineer must remain inactive until

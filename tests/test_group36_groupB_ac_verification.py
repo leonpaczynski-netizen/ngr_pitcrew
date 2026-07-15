@@ -239,54 +239,6 @@ class TestAC7ReplanReasonIsDescriptive:
 # AC8 — race_situation dict: ALL required keys present in source
 # ---------------------------------------------------------------------------
 
-class TestAC8RaceSituationAllKeys:
-    """AC8: race_situation dict fed to the AI worker must contain every
-    required key from the spec."""
-
-    def setup_method(self):
-        self._body = _method_body(DASHBOARD_SRC, "_launch_replan_worker")
-
-    REQUIRED_KEYS = (
-        "current_lap",
-        "total_laps",
-        "laps_remaining",
-        "current_compound",
-        "tyre_age_laps",
-        "live_fuel_burn_lpl",
-        "recent_lap_times_ms",
-        "original_plan_stints",
-        "replan_reason",
-    )
-
-    def test_all_required_keys_in_source(self):
-        """Every key listed in AC8 must appear in _launch_replan_worker body."""
-        missing = [k for k in self.REQUIRED_KEYS if k not in self._body]
-        assert not missing, (
-            f"race_situation missing keys in _launch_replan_worker: {missing}"
-        )
-
-    def test_tyre_age_laps_present(self):
-        """Specifically verified: tyre_age_laps (absent from group35 check)."""
-        assert "tyre_age_laps" in self._body
-
-    def test_live_fuel_burn_lpl_present(self):
-        """Specifically verified: live_fuel_burn_lpl (absent from group35 check)."""
-        assert "live_fuel_burn_lpl" in self._body
-
-    def test_recent_lap_times_ms_present(self):
-        """Specifically verified: recent_lap_times_ms (absent from group35 check)."""
-        assert "recent_lap_times_ms" in self._body
-
-    def test_lap_data_by_compound_forwarded_to_run_strategy_analysis(self):
-        """lap_data_by_compound from _assemble_strategy_inputs must be passed to
-        run_strategy_analysis — verifies it is not silently dropped."""
-        assert "lap_data_by_compound" in self._body
-
-    def test_tyre_degradation_cache_forwarded(self):
-        """tyre_degradation_cache from inputs must be passed to run_strategy_analysis."""
-        assert "tyre_degradation_cache" in self._body
-
-
 class TestAC8PracticeSessionId:
     """AC8: practice session id (not live race session) used for lap data query.
 
@@ -368,8 +320,8 @@ class TestAC8PracticeSessionId:
         # frozen snapshot layer — route the stub through the REAL production
         # builder over the stub's config (legacy-only source), keeping the
         # runtime session-id invariants meaningfully exercised.
-        from data.ai_context_snapshot import build_strategy_ai_snapshot as _bss
-        stub._build_strategy_ai_snapshot = (
+        from data.analysis_inputs import build_strategy_inputs as _bss
+        stub._build_strategy_inputs = (
             lambda fuel_burn_override=None: _bss(
                 legacy_strategy=stub._config.get("strategy", {}),
                 fuel_burn_override=fuel_burn_override,
@@ -671,65 +623,6 @@ class TestGracefulFailureSource:
 
 
 # ---------------------------------------------------------------------------
-# Cross-cutting: ai_planner backwards compat (additional branch verification)
-# ---------------------------------------------------------------------------
-
-class TestAiPlannerBackwardsCompatExtended:
-    """Additional backward-compat checks for _build_race_prompt."""
-
-    def _params(self):
-        from strategy.ai_planner import RaceParams
-        return RaceParams(
-            track="Monza",
-            total_laps=30,
-            tyre_wear_multiplier=1.5,
-            fuel_burn_per_lap=3.0,
-            refuel_speed_lps=10.0,
-            pit_loss_secs=25.0,
-        )
-
-    def test_race_situation_none_identical_to_omitted(self):
-        """race_situation=None must produce byte-for-byte identical output to default."""
-        from strategy.ai_planner import _build_race_prompt
-        p = self._params()
-        lap_data = {"RM": [88_000.0, 89_000.0]}
-        explicit_none = _build_race_prompt(p, lap_data, race_situation=None)
-        default = _build_race_prompt(p, lap_data)
-        assert explicit_none == default
-
-    def test_race_situation_none_has_no_midrace_block(self):
-        """Baseline prompt must not contain 'MID-RACE RE-PLAN'."""
-        from strategy.ai_planner import _build_race_prompt
-        p = self._params()
-        prompt = _build_race_prompt(p, {"RH": [95_000.0]}, race_situation=None)
-        assert "MID-RACE RE-PLAN" not in prompt
-
-    def test_race_situation_all_fields_appear_in_prompt(self):
-        """Every field from the race_situation dict must appear in the prompt body."""
-        from strategy.ai_planner import _build_race_prompt
-        p = self._params()
-        situation = {
-            "current_lap":          10,
-            "total_laps":           30,
-            "laps_remaining":       20,
-            "current_compound":     "RH",
-            "tyre_age_laps":        9,
-            "live_fuel_burn_lpl":   2.9,
-            "replan_reason":        "unique-replan-trigger-xyz",
-            "original_plan_stints": [{"compound": "RH", "laps": 15}],
-            "recent_lap_times_ms":  [88_500, 89_000, 89_500],
-        }
-        prompt = _build_race_prompt(p, {"RH": [95_000.0]}, race_situation=situation)
-
-        assert "MID-RACE RE-PLAN" in prompt
-        assert "unique-replan-trigger-xyz" in prompt  # replan_reason
-        assert "20" in prompt   # laps_remaining
-        assert "RH" in prompt   # current_compound
-        assert "9" in prompt    # tyre_age_laps
-        assert "2.9" in prompt  # live_fuel_burn_lpl
-
-
-# ---------------------------------------------------------------------------
 # Cross-cutting: _assemble_strategy_inputs returns tyre_degradation_cache
 # ---------------------------------------------------------------------------
 
@@ -741,9 +634,6 @@ class TestAssembleStrategyInputsKeys:
 
     def test_key_tyre_degradation_cache_in_return(self):
         assert '"tyre_degradation_cache"' in self._body
-
-    def test_key_api_key_in_return(self):
-        assert '"api_key"' in self._body
 
     def test_key_lap_data_by_compound_in_return(self):
         assert '"lap_data_by_compound"' in self._body

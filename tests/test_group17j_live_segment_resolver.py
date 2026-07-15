@@ -1067,30 +1067,6 @@ class TestDrivingAdvisorLiveSegment:
         lap.off_track_count = 0
         return lap
 
-    def test_coaching_prompt_includes_live_segment_when_provided(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap()]
-        _sentinel = "## Live Track Position\nCurrent segment: T1 Braking Zone (confidence: high)"
-        with patch.object(adv, "_get_live_segment_context", return_value=_sentinel):
-            prompt = adv._build_coaching_prompt(laps, "", live_position=MagicMock())
-        assert _sentinel in prompt
-
-    def test_coaching_prompt_no_live_segment_without_position(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap()]
-        with patch.object(adv, "_get_live_segment_context", return_value=""):
-            prompt = adv._build_coaching_prompt(laps, "", live_position=None)
-        assert "## Live Track Position" not in prompt
-
-    def test_setup_prompt_includes_live_segment_when_provided(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap()]
-        _sentinel = "## Live Track Position\nCurrent segment: T2 Corner Exit"
-        with patch.object(adv, "_get_live_segment_context", return_value=_sentinel):
-            prompt = adv._build_setup_prompt(laps, {}, "", live_position=MagicMock())
-        assert _sentinel in prompt
-
-
 # ---------------------------------------------------------------------------
 # Class 16 — Resolver error handling
 # ---------------------------------------------------------------------------
@@ -1155,14 +1131,6 @@ class TestRegressionImports:
     def test_track_issue_enrichment_importable(self):
         from data.track_issue_enrichment import enrich_telemetry_issues
         assert callable(enrich_telemetry_issues)
-
-    def test_track_context_prompt_importable(self):
-        from strategy.track_context_prompt import get_track_context_for_ai
-        assert callable(get_track_context_for_ai)
-
-    def test_ai_planner_importable(self):
-        from strategy.ai_planner import RaceParams, analyse_strategy
-        assert RaceParams is not None
 
     def test_driving_advisor_has_live_segment_method(self):
         from strategy.driving_advisor import DrivingAdvisor

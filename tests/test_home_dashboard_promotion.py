@@ -79,7 +79,6 @@ class TestCardTabMapping:
             hd.CARD_TRACK: tr.TAB_TRACK_MODELLING,
             hd.CARD_SETUP: tr.TAB_SETUP_BUILDER,
             hd.CARD_STRATEGY: tr.TAB_STRATEGY_BUILDER,
-            hd.CARD_AI_SAFETY: tr.TAB_AI_LOG,
         }
 
     def test_mapping_covers_every_card_in_card_order(self):
@@ -102,11 +101,6 @@ class TestCardTabMapping:
         assert hd.tab_key_for_card("no_such_card") is None
         assert hd.tab_key_for_card("") is None
         assert hd.tab_key_for_card(None) is None
-
-    def test_ai_safety_targets_a_diagnostic_tool_tab(self):
-        # AI Input Safety opens the AI Log tool tab (a ⚙ diagnostic tab).
-        assert hd.CARD_TAB_KEYS[hd.CARD_AI_SAFETY] == tr.TAB_AI_LOG
-        assert "AI Log" in pf.diagnostic_tabs()
 
 
 # --------------------------------------------------------------------------- #
@@ -166,7 +160,7 @@ class TestNavigationWiring:
 class TestDiagnosticsPreserved:
     def test_all_diagnostic_tabs_still_built(self, dash_src):
         for builder in ("_build_telemetry_tab", "_build_debug_tab",
-                        "_build_ai_log_tab", "_build_track_modelling_tab"):
+                        "_build_track_modelling_tab"):
             assert f"self.{builder}()" in dash_src
 
     def test_tool_tab_markers_still_applied(self, dash_src):
@@ -174,5 +168,5 @@ class TestDiagnosticsPreserved:
 
     def test_diagnostic_set_unchanged(self):
         assert set(pf.diagnostic_tabs()) == {
-            "Telemetry", "Diagnostics", "AI Log", "Track Modelling",
+            "Telemetry", "Diagnostics", "Track Modelling",
         }

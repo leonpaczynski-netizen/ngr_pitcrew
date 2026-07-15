@@ -11,7 +11,6 @@ import time
 import unittest
 from unittest.mock import MagicMock
 
-from strategy.ai_planner import RaceParams, _build_practice_prompt
 from telemetry.state import (
     RacePhase, RaceStateTracker, RaceType, SessionType, TyreThresholds,
     EventType,
@@ -49,19 +48,6 @@ def _make_loading_packet(last_lap_ms: int = 0) -> MagicMock:
     p.current_position = 1
     p.total_cars = 1
     return p
-
-
-def _minimal_race_params(**kwargs) -> RaceParams:
-    defaults = dict(
-        track="Suzuka Circuit",
-        total_laps=25,
-        tyre_wear_multiplier=1.0,
-        fuel_burn_per_lap=3.5,
-        refuel_speed_lps=10.0,
-        pit_loss_secs=23.0,
-    )
-    defaults.update(kwargs)
-    return RaceParams(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -113,51 +99,6 @@ class TestSetBankStatusHelper(unittest.TestCase):
         w._lbl_bank_status = _FakeLbl()
         w._set_bank_status("with label")
         self.assertEqual(label_calls, ["with label"])
-
-
-# ---------------------------------------------------------------------------
-# DEF-P1-004 — Practice Analysis prompt uses correct race type
-# ---------------------------------------------------------------------------
-
-class TestPracticePromptRaceType(unittest.TestCase):
-
-    def _call_build_prompt(self, params: RaceParams) -> str:
-        lap_data = {"RM": [90_000.0, 91_000.0, 90_500.0]}
-        return _build_practice_prompt(params, lap_data, setup={}, history={})
-
-    def test_timed_race_prompt_contains_duration_not_laps(self):
-        """Timed race: prompt must say duration in minutes, not lap count."""
-        params = _minimal_race_params(race_type="timed", duration_mins=40, total_laps=1)
-        prompt = self._call_build_prompt(params)
-        self.assertIn("40 minutes", prompt)
-        self.assertIn("Timed Race", prompt)
-        self.assertNotIn("Race length: 1 laps", prompt)
-        self.assertNotIn("Race length:", prompt)
-
-    def test_timed_race_prompt_does_not_say_1_laps(self):
-        """Regression: timed race must never produce 'Race length: 1 laps'."""
-        params = _minimal_race_params(race_type="timed", duration_mins=60, total_laps=1)
-        prompt = self._call_build_prompt(params)
-        self.assertNotIn("Race length: 1 laps", prompt)
-
-    def test_lap_race_prompt_shows_lap_count(self):
-        """Lap race: prompt must state the correct lap count."""
-        params = _minimal_race_params(race_type="lap", total_laps=25)
-        prompt = self._call_build_prompt(params)
-        self.assertIn("Race length: 25 laps", prompt)
-        self.assertNotIn("Timed Race", prompt)
-
-    def test_lap_race_default_race_type_shows_laps(self):
-        """Default race_type='lap' (no field override) shows lap count."""
-        params = _minimal_race_params(total_laps=30)
-        prompt = self._call_build_prompt(params)
-        self.assertIn("Race length: 30 laps", prompt)
-
-    def test_timed_race_40min_format(self):
-        """Exact expected string for a 40-minute timed race."""
-        params = _minimal_race_params(race_type="timed", duration_mins=40)
-        prompt = self._call_build_prompt(params)
-        self.assertIn("Race duration: 40 minutes (Timed Race)", prompt)
 
 
 # ---------------------------------------------------------------------------

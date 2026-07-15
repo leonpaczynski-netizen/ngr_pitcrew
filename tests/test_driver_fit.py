@@ -129,13 +129,9 @@ def test_real_profile_tailors_baseline():
 
 
 def test_driver_fit_reaches_telemetry_path_but_respects_deferrals():
-    import strategy.driving_advisor as da
     from tests.test_group63_setup_brain_uat2 import (
         _uat_advisor, _uat_history, _UAT_FEELING, _CAR as UCAR,
     )
-    da.call_api = lambda *a, **k: json.dumps(
-        {"status": "APPROVED", "warnings": [], "contradictions": [],
-         "missing_evidence": [], "explanation_notes": "ok"})
     adv = _uat_advisor()
     setup = {"final_drive": 4.25, "transmission_max_speed_kmh": 0, "num_gears": 6,
              "aero_front": 450, "aero_rear": 590, "lsd_initial": 10, "lsd_accel": 40,

@@ -160,12 +160,8 @@ def test_baseline_response_no_history_no_lift():
 
 # ============================================ B. extra candidate columns
 
-def test_extra_candidates_added_as_columns(monkeypatch):
-    import strategy.driving_advisor as da
+def test_extra_candidates_added_as_columns():
     adv = _advisor()
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"arb_front": 6, "arb_rear": 5, "aero_front": 400},
         car_name=_CAR, feeling="pushes wide in the middle of the corner",
@@ -178,12 +174,8 @@ def test_extra_candidates_added_as_columns(monkeypatch):
     assert "race" in names and "quali" in names and "base" in names
 
 
-def test_malformed_extra_candidate_guarded(monkeypatch):
-    import strategy.driving_advisor as da
+def test_malformed_extra_candidate_guarded():
     adv = _advisor()
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     # values missing / None -> must not crash, just no column
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"arb_front": 6, "aero_front": 400}, car_name=_CAR,

@@ -15,30 +15,10 @@ import unittest
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock
 
-from strategy.ai_planner import RaceParams, _build_practice_prompt, _TUNING_CATEGORY_KEYS
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def _minimal_params(**kwargs) -> RaceParams:
-    defaults = dict(
-        track="Suzuka Circuit",
-        total_laps=25,
-        tyre_wear_multiplier=1.0,
-        fuel_burn_per_lap=3.5,
-        refuel_speed_lps=10.0,
-        pit_loss_secs=23.0,
-    )
-    defaults.update(kwargs)
-    return RaceParams(**defaults)
-
-
-def _call_prompt(params: RaceParams) -> str:
-    lap_data = {"RM": [90_000.0, 91_000.0, 90_500.0]}
-    return _build_practice_prompt(params, lap_data, setup=_sample_setup(), history={})
-
 
 def _make_stats():
     """Create a MagicMock LapStats with all attributes write_lap accesses set to real values.
@@ -68,108 +48,6 @@ def _make_stats():
     stats.snap_throttle_positions = []
     stats.over_braking_positions = []
     return stats
-
-
-def _sample_setup() -> dict:
-    return {
-        "name": "Suzuka Base",
-        "track": "Suzuka",
-        "condition": "Dry",
-        "setup_type": "Race Setup",
-        "ride_height_front": 50,
-        "ride_height_rear": 55,
-        "springs_front": 8.0,
-        "springs_rear": 7.5,
-        "aero_front": 300,
-        "aero_rear": 400,
-        "lsd_initial": 10,
-        "lsd_accel": 30,
-        "lsd_decel": 20,
-        "brake_bias": 2,
-        "gear_ratios": [3.5, 2.5, 1.8, 1.4, 1.1, 0.9],
-        "final_drive": 3.2,
-        "transmission_max_speed_kmh": 285,
-        "power_restrictor": 100,
-        "ballast_kg": 0,
-        "ballast_position": 0,
-        "notes": "baseline",
-    }
-
-
-# ---------------------------------------------------------------------------
-# DEF-P1-005 — BoP / tuning restrictions in Practice Analysis prompt
-# ---------------------------------------------------------------------------
-
-class TestBoPPromptRestrictions(unittest.TestCase):
-
-    def test_tuning_locked_prompt_contains_locked_notice(self):
-        """When tuning_locked=True, prompt contains 'TUNING LOCKED'."""
-        params = _minimal_params(tuning_locked=True)
-        prompt = _call_prompt(params)
-        self.assertIn("TUNING LOCKED", prompt)
-
-    def test_tuning_locked_prompt_excludes_setup_values(self):
-        """When tuning_locked, setup fields (ride height, springs) are not in prompt."""
-        params = _minimal_params(tuning_locked=True)
-        prompt = _call_prompt(params)
-        self.assertNotIn("50", prompt.split("## Current car setup")[-1].split("##")[0],
-                         "Ride height value should be absent when locked")
-        self.assertNotIn("8.0", prompt.split("## Current car setup")[-1].split("##")[0],
-                         "Spring value should be absent when locked")
-
-    def test_tuning_locked_prompt_still_has_race_params(self):
-        """When locked, race parameters section is unaffected."""
-        params = _minimal_params(tuning_locked=True)
-        prompt = _call_prompt(params)
-        self.assertIn("Suzuka Circuit", prompt)
-        self.assertIn("3.50 L/lap", prompt)
-
-    def test_allowed_suspension_only_prompt_includes_suspension(self):
-        """allowed_tuning=[suspension] → suspension fields appear in setup section."""
-        params = _minimal_params(allowed_tuning=["suspension"])
-        prompt = _call_prompt(params)
-        setup_section = prompt.split("## Current car setup")[-1].split("##")[0]
-        # Ride height is a suspension key → should appear
-        self.assertIn("ride_height" in _TUNING_CATEGORY_KEYS["suspension"] and "50" or "50",
-                      setup_section)
-
-    def test_allowed_suspension_only_prompt_excludes_aero(self):
-        """allowed_tuning=[suspension] → aero values absent, constraint lists aero as locked."""
-        params = _minimal_params(allowed_tuning=["suspension"])
-        prompt = _call_prompt(params)
-        self.assertIn("EVENT TUNING RESTRICTIONS", prompt)
-        self.assertIn("aero", prompt)  # listed as locked
-        setup_section = prompt.split("## Current car setup")[-1].split("##")[0]
-        # aero_front=300 should not appear in setup
-        self.assertNotIn("300", setup_section)
-
-    def test_allowed_suspension_only_prompt_excludes_diff(self):
-        """Differential values absent when differential not in allowed_tuning.
-        format_setup_for_prompt keeps the LSD label but shows '?' placeholders
-        when the keys are filtered — actual values must not appear."""
-        params = _minimal_params(allowed_tuning=["suspension"])
-        prompt = _call_prompt(params)
-        setup_section = prompt.split("## Current car setup")[-1].split("##")[0]
-        # lsd_initial=10, lsd_accel=30, lsd_decel=20 → filtered → '?'
-        self.assertNotIn("10/30/20", setup_section,
-                         "Actual LSD values must be absent when differential is locked")
-
-    def test_no_restrictions_full_setup_present(self):
-        """No tuning restriction → full setup in prompt (regression guard)."""
-        params = _minimal_params()
-        prompt = _call_prompt(params)
-        self.assertNotIn("TUNING LOCKED", prompt)
-        self.assertNotIn("EVENT TUNING RESTRICTIONS", prompt)
-        setup_section = prompt.split("## Current car setup")[-1].split("##")[0]
-        self.assertIn("300", setup_section)   # aero_front
-        self.assertIn("LSD", setup_section)   # differential
-
-    def test_timed_race_prompt_unchanged_by_lock(self):
-        """Race duration line still correct when tuning is locked."""
-        params = _minimal_params(race_type="timed", duration_mins=40, tuning_locked=True)
-        prompt = _call_prompt(params)
-        self.assertIn("Race duration: 40 minutes (Timed Race)", prompt)
-        self.assertIn("TUNING LOCKED", prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -415,14 +293,6 @@ class TestValidationGateLogic(unittest.TestCase):
         w = self._should_block("timed", 25, 1, 0.0, {"RM": [90_000.0]})
         self.assertGreaterEqual(len(w), 3)
 
-    def test_source_contains_validation_gate(self):
-        """Source scan: _run_practice_analysis must contain the validation gate."""
-        src = pathlib.Path(__file__).parent.parent / "ui" / "dashboard.py"
-        text = src.read_text(encoding="utf-8")
-        self.assertIn("Validation blocked", text)
-        self.assertIn("_validation_warnings", text)
-
-
 # ---------------------------------------------------------------------------
 # DEF-P2-012 — tyre wear multiplier source
 # ---------------------------------------------------------------------------
@@ -433,24 +303,18 @@ class TestTyreWearSource(unittest.TestCase):
         """_run_practice_analysis must read tyre_wear_multiplier from the event config.
 
         AI Snapshot Migration: the read moved into the frozen snapshot layer
-        (data/ai_context_snapshot.py) — verify the routing plus the value flow.
+        (data/analysis_inputs.py) — verify the routing plus the value flow.
         """
         src = pathlib.Path(__file__).parent.parent / "ui" / "dashboard.py"
         text = src.read_text(encoding="utf-8")
-        self.assertIn("_build_practice_ai_snapshot", text,
+        self.assertIn("_build_practice_inputs", text,
                       "practice analysis must build race_params via the frozen snapshot")
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T", "tyre_wear_multiplier": 5.0},
             fuel_burn_override=2.5).race_params_dict()
         self.assertEqual(rp["tyre_wear_multiplier"], 5.0,
                          "strategy config must be the source for tyre_wear_multiplier")
-
-    def test_source_logs_tyre_wear(self):
-        """Debug log for tyre_wear_multiplier must be present."""
-        src = pathlib.Path(__file__).parent.parent / "ui" / "dashboard.py"
-        text = src.read_text(encoding="utf-8")
-        self.assertIn("PracticeAnalysis] tyre_wear_multiplier", text)
 
 
 if __name__ == "__main__":

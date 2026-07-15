@@ -43,7 +43,6 @@ sys.path.insert(0, str(ROOT))
 from strategy.relative_degradation import compute_relative_degradation
 from strategy.engine import RaceStrategyEngine, Stint
 from strategy.feasibility import check_compound_eligibility
-import strategy.ai_planner as ap
 
 
 # ---------------------------------------------------------------------------
@@ -92,20 +91,6 @@ def _make_record(lap_time_ms: int = 90000):
     record.wheelspin_count = 0
     record.oversteer_count = 0
     return record
-
-
-def _minimal_ai_degradation_response(compounds: list[str]) -> str:
-    """Return a minimal valid degradation JSON for patching call_api."""
-    result = {}
-    for c in compounds:
-        result[c] = {
-            "cliff_lap_practice": 10,
-            "pace_loss_at_cliff_s": 1.5,
-            "total_life_race": 14,
-            "optimal_stint_race": 9,
-            "confidence": "medium",
-        }
-    return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -464,50 +449,6 @@ class TestAC7FeasibilityGateRejectsZeroOptimal:
         assert eligible is True
         assert reason is None
 
-    def test_ac7_no_ai_call_when_feasibility_gate_rejects_all(self):
-        """When the feasibility gate rejects all stop counts, call_api must not be called."""
-        import dataclasses
-        RaceParams = ap.RaceParams
-        kwargs = {}
-        for f in dataclasses.fields(RaceParams):
-            if (f.default is not dataclasses.MISSING
-                    or f.default_factory is not dataclasses.MISSING):  # type: ignore
-                continue
-            ann = str(f.type)
-            if "int" in ann:
-                kwargs[f.name] = 0
-            elif "float" in ann:
-                kwargs[f.name] = 0.0
-            elif "str" in ann:
-                kwargs[f.name] = ""
-            elif "bool" in ann:
-                kwargs[f.name] = False
-            else:
-                kwargs[f.name] = None
-        kwargs.update(dict(
-            track="Spa", total_laps=20, tyre_wear_multiplier=1.0,
-            fuel_burn_per_lap=2.5, refuel_speed_lps=10.0, pit_loss_secs=23.0,
-        ))
-        params = RaceParams(**kwargs)
-        laps = {"RS": [90000.0] * 8}
-        deg = {
-            "RS": {
-                "optimal_stint_race": 0,  # relative result: not yet degraded
-                "total_life_race": 0,
-                "cliff_lap_practice": 0,
-                "pace_loss_at_cliff_s": None,
-                "confidence": "low",
-                "degradation_method": "relative_baseline",
-                "harder_baseline_ms": 97000.0,
-                "not_yet_degraded": True,
-            }
-        }
-        with patch("strategy.ai_planner.call_api") as mock_api:
-            result = ap.analyse_strategy(params, laps, "fake_key", degradation=deg)
-        mock_api.assert_not_called()
-        # Must not have any feasible strategies
-        assert result.strategies == []
-
 
 # ---------------------------------------------------------------------------
 # AC8 — Live engine alert fires when rolling 3-lap avg >= harder_baseline_ms;
@@ -610,105 +551,6 @@ class TestAC8LiveEngineAlert:
 
 
 # ---------------------------------------------------------------------------
-# AC9 — Degradation AI prompt includes harder-compound baseline pace (s/lap)
-#        where it exists; uses cliff instruction where it doesn't.
-#        (No network calls — prompt builder tested directly.)
-# ---------------------------------------------------------------------------
-
-class TestAC9DegradationPromptContent:
-    """Acceptance: _build_degradation_prompt includes harder-baseline pace for
-    relative_baseline compounds; cliff instruction for cliff_detection compounds."""
-
-    def _make_det_result_with_baseline(self) -> dict:
-        """RS has a harder baseline (from RH); RH has cliff_detection (no baseline)."""
-        return {
-            "RS": {
-                "harder_baseline_ms": 97000.0,   # 97.000s/lap
-                "degradation_method": "relative_baseline",
-                "optimal_stint_race": 7,
-                "confidence": "medium",
-                "not_yet_degraded": False,
-            },
-            "RH": {
-                "harder_baseline_ms": None,
-                "degradation_method": "cliff_detection",
-                "optimal_stint_race": 0,
-                "confidence": "low",
-                "not_yet_degraded": False,
-            },
-        }
-
-    def test_ac9_prompt_contains_baseline_pace_for_compound_with_baseline(self):
-        """RS has harder_baseline_ms → prompt must mention the baseline pace in s/lap."""
-        seqs = {
-            "RS": [_ms(90.0)] * 7 + [_ms(97.1), _ms(97.2)],
-            "RH": [_ms(97.0)] * 5,
-        }
-        det_result = self._make_det_result_with_baseline()
-        prompt = ap._build_degradation_prompt(seqs, 1.0, det_result)
-        # 97000ms → 97.000 s/lap must appear
-        assert "97.000" in prompt, (
-            "Prompt must include harder-baseline pace (97.000s) for RS"
-        )
-
-    def test_ac9_prompt_says_use_threshold_for_baseline_compound(self):
-        """Prompt must instruct AI to use the pre-computed baseline threshold for RS."""
-        seqs = {
-            "RS": [_ms(90.0)] * 7 + [_ms(97.1), _ms(97.2)],
-            "RH": [_ms(97.0)] * 5,
-        }
-        det_result = self._make_det_result_with_baseline()
-        prompt = ap._build_degradation_prompt(seqs, 1.0, det_result)
-        lower_p = prompt.lower()
-        assert "threshold" in lower_p or "degradation threshold" in lower_p or "baseline" in lower_p
-
-    def test_ac9_prompt_uses_cliff_instruction_for_compound_without_baseline(self):
-        """RH has no harder baseline → prompt must instruct normal cliff-detection."""
-        seqs = {
-            "RS": [_ms(90.0)] * 7 + [_ms(97.1), _ms(97.2)],
-            "RH": [_ms(97.0)] * 5,
-        }
-        det_result = self._make_det_result_with_baseline()
-        prompt = ap._build_degradation_prompt(seqs, 1.0, det_result)
-        # RH section must say "no harder-compound baseline" and use cliff method
-        lower_p = prompt.lower()
-        assert "no harder" in lower_p or "cliff" in lower_p, (
-            "Prompt must include cliff-detection instruction for RH"
-        )
-
-    def test_ac9_prompt_without_det_result_has_no_baseline_section(self):
-        """When det_result is None, no pre-computed baseline section appears."""
-        seqs = {"RM": [_ms(95.0)] * 6}
-        prompt = ap._build_degradation_prompt(seqs, 1.0, None)
-        # No baseline section header
-        assert "Per-compound degradation thresholds" not in prompt
-
-    def test_ac9_prompt_with_det_result_has_baseline_section_header(self):
-        """When det_result is provided (any compound), the section header appears."""
-        seqs = {
-            "RS": [_ms(90.0)] * 7 + [_ms(97.1), _ms(97.2)],
-            "RH": [_ms(97.0)] * 5,
-        }
-        det_result = self._make_det_result_with_baseline()
-        prompt = ap._build_degradation_prompt(seqs, 1.0, det_result)
-        assert "Per-compound degradation thresholds" in prompt
-
-    def test_ac9_no_network_call_in_prompt_builder(self):
-        """_build_degradation_prompt is pure (no API call)."""
-        # If this test runs without error, no network was used.
-        seqs = {"RM": [_ms(95.0)] * 6, "RH": [_ms(97.0)] * 5}
-        det_result = {
-            "RM": {"harder_baseline_ms": 97000.0, "degradation_method": "relative_baseline",
-                   "optimal_stint_race": 5, "confidence": "medium", "not_yet_degraded": False},
-            "RH": {"harder_baseline_ms": None, "degradation_method": "cliff_detection",
-                   "optimal_stint_race": 0, "confidence": "medium", "not_yet_degraded": False},
-        }
-        prompt = ap._build_degradation_prompt(seqs, 1.0, det_result)
-        assert isinstance(prompt, str)
-        assert len(prompt) > 50
-
-
-# ---------------------------------------------------------------------------
 # AC10 — Output dict retains all existing keys AND adds degradation_method,
 #         harder_baseline_ms, not_yet_degraded.  Assert presence and types.
 # ---------------------------------------------------------------------------
@@ -769,29 +611,6 @@ class TestAC10OutputDictShape:
                 f"Compound {compound} missing keys: {missing}"
             )
 
-    def test_ac10_merged_result_also_has_all_keys(self):
-        """analyse_tyre_degradation (merged) output retains all keys including new ones."""
-        rh_laps = [_ms(97.0)] * 8
-        rs_laps = [_ms(90.0)] * 6 + [_ms(97.1), _ms(97.2)]
-        seqs = {"RS": rs_laps, "RH": rh_laps}
-        ai_response = _minimal_ai_degradation_response(["RS", "RH"])
-
-        with patch("strategy.ai_planner.call_api", return_value=ai_response):
-            merged = ap.analyse_tyre_degradation(seqs, 1.0, "fake_key")
-
-        for compound in seqs:
-            assert compound in merged
-            entry = merged[compound]
-            assert "degradation_method" in entry
-            assert "harder_baseline_ms" in entry
-            assert "not_yet_degraded" in entry
-            # Existing AI keys retained
-            assert "cliff_lap_practice" in entry
-            assert "pace_loss_at_cliff_s" in entry
-            assert "total_life_race" in entry
-            assert "optimal_stint_race" in entry
-            assert "confidence" in entry
-
 
 # ---------------------------------------------------------------------------
 # AC11 — RS < RM < RH life ordering enforced after merge;
@@ -819,161 +638,6 @@ class TestAC11LifeOrderingEnforced:
         # (4 <= 7 in this scenario)
         assert rs_opt <= rm_opt or rs_opt == 0 or rm_opt == 0, (
             f"RS optimal ({rs_opt}) must be <= RM optimal ({rm_opt})"
-        )
-
-    def test_ac11_merged_rs_le_rm_after_ordering_enforcement(self):
-        """Merged result: AI gives RS optimal=15, RM optimal=10 (unphysical).
-        Post-merge ordering enforcement must cap RS to <= RM."""
-        rh_laps = [_ms(97.0)] * 8
-        rm_laps = [_ms(95.0)] * 8
-        rs_laps = [_ms(90.0)] * 8  # RS never crosses baseline → not_yet_degraded
-
-        seqs = {"RS": rs_laps, "RM": rm_laps, "RH": rh_laps}
-
-        # AI returns RS optimal=15, RM optimal=10 (physically wrong: RS softer than RM)
-        ai_response = json.dumps({
-            "RS": {"cliff_lap_practice": 16, "pace_loss_at_cliff_s": 2.0,
-                   "total_life_race": 18, "optimal_stint_race": 15, "confidence": "high"},
-            "RM": {"cliff_lap_practice": 11, "pace_loss_at_cliff_s": 1.5,
-                   "total_life_race": 14, "optimal_stint_race": 10, "confidence": "high"},
-            "RH": {"cliff_lap_practice": 0, "pace_loss_at_cliff_s": 0.8,
-                   "total_life_race": 20, "optimal_stint_race": 18, "confidence": "high"},
-        })
-
-        with patch("strategy.ai_planner.call_api", return_value=ai_response):
-            merged = ap.analyse_tyre_degradation(seqs, 1.0, "fake_key")
-
-        rs_opt = merged["RS"]["optimal_stint_race"]
-        rm_opt = merged["RM"]["optimal_stint_race"]
-        # After ordering enforcement, RS (softer) optimal must be <= RM (harder) optimal
-        assert rs_opt <= rm_opt, (
-            f"Post-merge ordering failed: RS optimal ({rs_opt}) > RM optimal ({rm_opt})"
-        )
-
-    def test_ac11_relative_baseline_method_overrides_ai_optimal(self):
-        """When compute_relative_degradation returns relative_baseline for RS,
-        analyse_tyre_degradation must use the deterministic optimal_stint_race
-        instead of the AI's value."""
-        rh_laps = [_ms(97.0)] * 8
-        rs_laps = [_ms(90.0)] * 6 + [_ms(97.1), _ms(97.2)]  # degrades at lap 7, opt=6
-        seqs = {"RS": rs_laps, "RH": rh_laps}
-
-        # AI claims RS optimal=20 (should be overridden by deterministic opt=6)
-        ai_response = json.dumps({
-            "RS": {"cliff_lap_practice": 21, "pace_loss_at_cliff_s": 2.0,
-                   "total_life_race": 24, "optimal_stint_race": 20, "confidence": "high"},
-            "RH": {"cliff_lap_practice": 0, "pace_loss_at_cliff_s": 0.5,
-                   "total_life_race": 30, "optimal_stint_race": 25, "confidence": "high"},
-        })
-
-        with patch("strategy.ai_planner.call_api", return_value=ai_response):
-            merged = ap.analyse_tyre_degradation(seqs, 1.0, "fake_key")
-
-        # RS got relative_baseline method → deterministic value=6 must override AI's 20
-        assert merged["RS"]["optimal_stint_race"] == 6
-        assert merged["RS"]["degradation_method"] == "relative_baseline"
-
-    def test_ac11_undetermined_harder_does_not_drag_down_softer(self):
-        """Agreed case 1: SS=4 [relative_baseline], SM=0 [not_yet_degraded], SH=10.
-
-        Undetermined/not-viable harder compounds (optimal_stint_race <= 0) must NOT
-        constrain a softer compound that has a real positive value.  SS is only
-        constrained by the nearest DETERMINED harder compound with a positive optimal:
-        SH=10.  Since 4 <= 10 the cap is not triggered; SS stays at 4.
-
-        Expected post-enforcement: SS=4, SM=0, SH=10 (all unchanged).
-        """
-        # Sports compounds: SH (idx=3) harder than SM (idx=4) harder than SS (idx=5).
-        sm_laps = [_ms(93.0)] * 5     # SM baseline = 93.000s
-        sh_laps = [_ms(95.0)] * 5     # SH baseline = 95.000s
-        # SS crosses SM baseline at laps 5&6 → deterministic opt=4 (relative_baseline)
-        ss_laps = [_ms(90.0)] * 4 + [_ms(93.1), _ms(93.2)]
-        seqs = {"SS": ss_laps, "SM": sm_laps, "SH": sh_laps}
-
-        # SM (93s) is always below SH baseline (95s) → not_yet_degraded, merged opt=0.
-        # SH has no harder compound → cliff_detection, AI opt=10.
-        ai_response = json.dumps({
-            "SS": {"cliff_lap_practice": 7, "pace_loss_at_cliff_s": 1.5,
-                   "total_life_race": 8, "optimal_stint_race": 6, "confidence": "medium"},
-            "SM": {"cliff_lap_practice": 0, "pace_loss_at_cliff_s": 0.8,
-                   "total_life_race": 6, "optimal_stint_race": 5, "confidence": "medium"},
-            "SH": {"cliff_lap_practice": 11, "pace_loss_at_cliff_s": 0.5,
-                   "total_life_race": 12, "optimal_stint_race": 10, "confidence": "medium"},
-        })
-
-        with patch("strategy.ai_planner.call_api", return_value=ai_response):
-            merged = ap.analyse_tyre_degradation(seqs, 1.0, "fake_key")
-
-        ss_opt = merged["SS"]["optimal_stint_race"]
-        sm_opt = merged["SM"]["optimal_stint_race"]
-        sh_opt = merged["SH"]["optimal_stint_race"]
-
-        assert ss_opt == 4, (
-            f"SS must remain 4 (undetermined SM=0 must not drag it down; "
-            f"nearest determined harder is SH=10 and 4<=10); got SS={ss_opt}"
-        )
-        assert sm_opt == 0, (
-            f"SM must remain 0 (not_yet_degraded, undetermined); got SM={sm_opt}"
-        )
-        assert sh_opt == 10, (
-            f"SH must remain 10 (no harder compound; cliff_detection AI opt); got SH={sh_opt}"
-        )
-
-    def test_ac11_fully_determined_violation_is_capped(self):
-        """Agreed case 2: softer compound with positive det opt exceeds a determined harder
-        compound's opt — the softer must be capped down.
-
-        Scenario: SS+SM+SH.
-          - SS det=6 (crosses SM baseline at laps 7&8, relative_baseline).
-          - SM det=0, not_yet_degraded (SM laps all below SH baseline → undetermined, skipped).
-          - SH cliff_detection, AI gives opt=4 (determined positive).
-
-        Running-cap walk (hardest first: SH=4 → cap=4; SM=0 skip; SS=6>4 → cap to 4):
-          Post-enforcement: SS=4, SM=0, SH=4.
-
-        The key assertion: SS (softer, det=6) is capped to SH (nearest determined harder=4).
-        SM (undetermined) neither receives a cap nor contributes to the running cap.
-        """
-        # Sports compounds: SH (idx=3) harder than SM (idx=4) harder than SS (idx=5).
-        sm_laps = [_ms(93.0)] * 5    # SM baseline = 93.000s
-        sh_laps = [_ms(95.0)] * 5    # SH baseline = 95.000s; SH is cliff_detection (no harder)
-        # SS crosses SM baseline at laps 7&8 → det opt = 6 (D=7, optimal=6)
-        ss_laps = [_ms(90.0)] * 6 + [_ms(93.1), _ms(93.2)]
-        seqs = {"SS": ss_laps, "SM": sm_laps, "SH": sh_laps}
-
-        # AI response: SH cliff opt=4 (determined); SM and SS values will be overridden
-        # by deterministic results (SS=6 via relative_baseline; SM=0 via not_yet_degraded).
-        ai_response = json.dumps({
-            "SS": {"cliff_lap_practice": 9, "pace_loss_at_cliff_s": 1.5,
-                   "total_life_race": 10, "optimal_stint_race": 8, "confidence": "medium"},
-            "SM": {"cliff_lap_practice": 0, "pace_loss_at_cliff_s": 0.8,
-                   "total_life_race": 6, "optimal_stint_race": 5, "confidence": "medium"},
-            "SH": {"cliff_lap_practice": 5, "pace_loss_at_cliff_s": 0.5,
-                   "total_life_race": 6, "optimal_stint_race": 4, "confidence": "medium"},
-        })
-
-        with patch("strategy.ai_planner.call_api", return_value=ai_response):
-            merged = ap.analyse_tyre_degradation(seqs, 1.0, "fake_key")
-
-        ss_opt = merged["SS"]["optimal_stint_race"]
-        sm_opt = merged["SM"]["optimal_stint_race"]
-        sh_opt = merged["SH"]["optimal_stint_race"]
-
-        # SH is determined (cliff AI=4); SM is undetermined (det not_yet_degraded=True → 0).
-        # SS det=6 > SH=4 → ordering enforcement caps SS down to SH=4.
-        assert ss_opt == 4, (
-            f"SS det=6 must be capped to nearest determined harder compound SH=4; "
-            f"got SS={ss_opt}, SM={sm_opt}, SH={sh_opt}"
-        )
-        assert sh_opt == 4, (
-            f"SH cliff AI opt=4 must be preserved; got {sh_opt}"
-        )
-        assert sm_opt == 0, (
-            f"SM must remain 0 (not_yet_degraded, undetermined — no cap applied); got {sm_opt}"
-        )
-        # Core property: softer (SS) capped to nearest determined harder (SH), not dragged by SM=0
-        assert ss_opt <= sh_opt, (
-            f"Post-enforcement ordering: SS ({ss_opt}) must be <= SH ({sh_opt})"
         )
 
 

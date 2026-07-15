@@ -231,74 +231,6 @@ class TestAC1FujiRSRGearingDiagnosis:
     def test_gearing_diagnosis_key_present(self):
         assert "gearing_diagnosis_category" in self.diag
 
-    def test_no_do_not_recommend_lengthening_gears_in_prompt(self):
-        """The old gear_note block 'Do NOT recommend lengthening gears' must NOT
-        appear in the combined prompt (it was removed in the Setup Brain Upgrade)."""
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._event_ctx = _FUJI_RSR_EVENT_CTX
-        adv._config = {"strategy": {}}
-        adv._summarize_new_telemetry = lambda laps: ""
-        adv._car_track_header = lambda *a, **k: ""
-        adv._get_event_context_block = lambda: ""
-        adv._get_driver_feedback_context = lambda: ""
-        adv._get_previous_ai_context = lambda *a, **k: ""
-        adv._get_track_intelligence_context = lambda: ""
-        adv._get_enriched_issue_context = lambda laps: ""
-        adv._get_live_segment_context = lambda live: ""
-        adv._DATA_QUALITY_NOTE = ""
-        prompt = adv._build_combined_prompt(
-            self.laps, _FUJI_RSR_SETUP, "",
-            car_name="Porsche 911 RSR '17", car_specs={},
-            feeling=_FUJI_RSR_FEELING, diagnosis=self.diag,
-        )
-        assert "Do NOT recommend lengthening gears" not in prompt, (
-            "The old gear_note block must be absent from the prompt after the upgrade"
-        )
-
-    def test_no_observed_top_speed_in_prompt(self):
-        """The old '⚠ Observed top speed' gear_note string must be absent."""
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._event_ctx = {}
-        adv._config = {"strategy": {}}
-        adv._summarize_new_telemetry = lambda laps: ""
-        adv._car_track_header = lambda *a, **k: ""
-        adv._get_event_context_block = lambda: ""
-        adv._get_driver_feedback_context = lambda: ""
-        adv._get_previous_ai_context = lambda *a, **k: ""
-        adv._get_track_intelligence_context = lambda: ""
-        adv._get_enriched_issue_context = lambda laps: ""
-        adv._get_live_segment_context = lambda live: ""
-        adv._DATA_QUALITY_NOTE = ""
-        prompt = adv._build_combined_prompt(
-            self.laps, _FUJI_RSR_SETUP, "",
-            car_name="", car_specs={},
-        )
-        assert "⚠ Observed top speed" not in prompt, (
-            "'⚠ Observed top speed' legacy gear_note string must be absent"
-        )
-
-    def test_no_car_at_rev_limiter_in_prompt(self):
-        """The old '✓ Car is at/near the rev limiter' gear_note string must be absent."""
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._event_ctx = {}
-        adv._config = {"strategy": {}}
-        adv._summarize_new_telemetry = lambda laps: ""
-        adv._car_track_header = lambda *a, **k: ""
-        adv._get_event_context_block = lambda: ""
-        adv._get_driver_feedback_context = lambda: ""
-        adv._get_previous_ai_context = lambda *a, **k: ""
-        adv._get_track_intelligence_context = lambda: ""
-        adv._get_enriched_issue_context = lambda laps: ""
-        adv._get_live_segment_context = lambda live: ""
-        adv._DATA_QUALITY_NOTE = ""
-        prompt = adv._build_combined_prompt(
-            self.laps, _FUJI_RSR_SETUP, "",
-            car_name="", car_specs={},
-        )
-        assert "✓ Car is at/near the rev limiter" not in prompt, (
-            "'✓ Car is at/near the rev limiter' legacy gear_note must be absent"
-        )
-
     def test_constraint_8_absent(self):
         """After the upgrade there are exactly 8 constraints (no #9)."""
         assert "9." not in DRIVER_HARD_CONSTRAINTS, (
@@ -1123,82 +1055,8 @@ class TestAC8DominantPrecedence:
 # ===========================================================================
 
 class TestAC9PromptSchema:
-    """AC9: 'not-present' present in allowed-values line of both prompt builders;
-    'not currently an issue' absent from both JSON examples."""
-
-    def _make_adv(self) -> da.DrivingAdvisor:
-        adv = da.DrivingAdvisor.__new__(da.DrivingAdvisor)
-        adv._event_ctx = {}
-        adv._config = {"strategy": {}}
-        adv._summarize_new_telemetry = lambda laps: ""
-        adv._car_track_header = lambda *a, **k: ""
-        adv._get_event_context_block = lambda: ""
-        adv._get_driver_feedback_context = lambda: ""
-        adv._get_previous_ai_context = lambda *a, **k: ""
-        adv._get_track_intelligence_context = lambda: ""
-        adv._get_enriched_issue_context = lambda laps: ""
-        adv._get_live_segment_context = lambda live: ""
-        adv._DATA_QUALITY_NOTE = ""
-        return adv
-
-    def _lap(self):
-        return SimpleNamespace(
-            lap_num=1, lap_time_ms=90000,
-            lock_up_count=0, wheelspin_count=0,
-            brake_consistency_m=5.0, oversteer_count=0,
-            oversteer_throttle_on_count=0, kerb_count=0,
-            bottoming_count=0, snap_throttle_count=0,
-            max_lat_g=1.5, max_speed_kmh=200.0,
-            avg_throttle_pct=55.0, avg_brake_pct=15.0,
-            lock_up_positions=[], wheelspin_positions=[],
-            oversteer_positions=[], snap_throttle_positions=[],
-            over_braking_positions=[], bottoming_positions=[],
-            rev_limiter_count=0, rev_limiter_by_gear={},
-            over_braking_count=0, abrupt_release_count=0,
-            car_max_speed_theoretical_kmh=0.0, avg_tyre_radius={},
-            off_track_count=0, frames=[],
-        )
-
-    def test_not_present_in_combined_prompt_allowed_values(self):
-        adv = self._make_adv()
-        prompt = adv._build_combined_prompt(
-            [self._lap()], {}, "", car_name="", car_specs={},
-        )
-        assert "not-present" in prompt, (
-            "'not-present' must appear in the issue_classification allowed-values "
-            "line of _build_combined_prompt"
-        )
-
-    def test_not_present_in_setup_prompt_allowed_values(self):
-        adv = self._make_adv()
-        prompt = adv._build_setup_prompt(
-            [self._lap()], {}, "", car_name="", car_specs={},
-        )
-        assert "not-present" in prompt, (
-            "'not-present' must appear in the issue_classification allowed-values "
-            "line of _build_setup_prompt"
-        )
-
-    def test_not_currently_an_issue_absent_from_combined_prompt(self):
-        """'not currently an issue' was replaced by 'not-present' — must be absent."""
-        adv = self._make_adv()
-        prompt = adv._build_combined_prompt(
-            [self._lap()], {}, "", car_name="", car_specs={},
-        )
-        assert "not currently an issue" not in prompt, (
-            "'not currently an issue' must be absent from combined prompt JSON example "
-            "(replaced by 'not-present')"
-        )
-
-    def test_not_currently_an_issue_absent_from_setup_prompt(self):
-        adv = self._make_adv()
-        prompt = adv._build_setup_prompt(
-            [self._lap()], {}, "", car_name="", car_specs={},
-        )
-        assert "not currently an issue" not in prompt, (
-            "'not currently an issue' must be absent from setup prompt JSON example "
-            "(replaced by 'not-present')"
-        )
+    """AC9: 'not-present' is an allowed issue-classification value in the
+    deterministic race-engineer directives."""
 
     def test_race_engineer_directives_not_present_in_ac5(self):
         """AC5 directive says 'not-present' is one of the allowed classification values."""

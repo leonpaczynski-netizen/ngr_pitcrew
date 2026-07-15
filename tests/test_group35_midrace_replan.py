@@ -425,171 +425,6 @@ class TestQualifyingAck:
 
 
 # ---------------------------------------------------------------------------
-# ai_planner._build_race_prompt — race_situation=None → identical output
-# ---------------------------------------------------------------------------
-
-class TestBuildRacePromptRaceSituation:
-    def _make_params(self):
-        from strategy.ai_planner import RaceParams
-        return RaceParams(
-            track="Spa",
-            total_laps=20,
-            tyre_wear_multiplier=1.0,
-            fuel_burn_per_lap=2.5,
-            refuel_speed_lps=10.0,
-            pit_loss_secs=23.0,
-        )
-
-    def test_race_situation_none_produces_no_midrace_block(self):
-        """With race_situation=None the prompt must NOT contain 'MID-RACE RE-PLAN'."""
-        from strategy.ai_planner import _build_race_prompt
-        params = self._make_params()
-        prompt = _build_race_prompt(
-            params,
-            {"RM": [90_000.0, 91_000.0]},
-            race_situation=None,
-        )
-        assert "MID-RACE RE-PLAN" not in prompt
-
-    def test_race_situation_populated_contains_midrace_block(self):
-        """With a populated race_situation the prompt must contain 'MID-RACE RE-PLAN'."""
-        from strategy.ai_planner import _build_race_prompt
-        params = self._make_params()
-        situation = {
-            "current_lap": 8,
-            "total_laps": 20,
-            "laps_remaining": 12,
-            "current_compound": "RM",
-            "tyre_age_laps": 7,
-            "live_fuel_burn_lpl": 2.4,
-            "replan_reason": "tyre degradation breach",
-            "original_plan_stints": [{"compound": "RM", "laps": 10}],
-            "recent_lap_times_ms": [90_000, 91_000, 92_000],
-        }
-        prompt = _build_race_prompt(
-            params,
-            {"RM": [90_000.0, 91_000.0]},
-            race_situation=situation,
-        )
-        assert "MID-RACE RE-PLAN" in prompt
-
-    def test_race_situation_contains_laps_remaining(self):
-        from strategy.ai_planner import _build_race_prompt
-        params = self._make_params()
-        situation = {
-            "current_lap": 8,
-            "total_laps": 20,
-            "laps_remaining": 12,
-            "current_compound": "RM",
-            "tyre_age_laps": 7,
-            "live_fuel_burn_lpl": 2.4,
-            "replan_reason": "pace drop",
-            "original_plan_stints": [],
-            "recent_lap_times_ms": [],
-        }
-        prompt = _build_race_prompt(
-            params,
-            {"RM": [90_000.0]},
-            race_situation=situation,
-        )
-        assert "laps_remaining" in prompt
-        assert "12" in prompt
-
-    def test_race_situation_contains_reason(self):
-        from strategy.ai_planner import _build_race_prompt
-        params = self._make_params()
-        situation = {
-            "current_lap": 5,
-            "total_laps": 20,
-            "laps_remaining": 15,
-            "current_compound": "RH",
-            "tyre_age_laps": 4,
-            "live_fuel_burn_lpl": 3.0,
-            "replan_reason": "unique-reason-xyz",
-            "original_plan_stints": [],
-            "recent_lap_times_ms": [],
-        }
-        prompt = _build_race_prompt(
-            params,
-            {"RH": [95_000.0]},
-            race_situation=situation,
-        )
-        assert "unique-reason-xyz" in prompt
-
-    def test_none_vs_missing_are_byte_for_byte_equal(self):
-        """_build_race_prompt(..., race_situation=None) must be identical to
-        omitting the parameter (backward-compatible default)."""
-        from strategy.ai_planner import _build_race_prompt
-        params = self._make_params()
-        lap_data = {"RM": [90_000.0, 91_000.0]}
-        prompt_explicit_none = _build_race_prompt(
-            params, lap_data, race_situation=None
-        )
-        prompt_default = _build_race_prompt(params, lap_data)
-        assert prompt_explicit_none == prompt_default
-
-
-# ---------------------------------------------------------------------------
-# orchestrator forwards race_situation to analyse_strategy
-# ---------------------------------------------------------------------------
-
-class TestOrchestratorForwardsRaceSituation:
-    def _make_params(self):
-        from strategy.ai_planner import RaceParams
-        return RaceParams(
-            track="Spa",
-            total_laps=20,
-            tyre_wear_multiplier=1.0,
-            fuel_burn_per_lap=2.5,
-            refuel_speed_lps=10.0,
-            pit_loss_secs=23.0,
-        )
-
-    def _make_db(self):
-        db = MagicMock()
-        db.get_recent_fuel_sequence.return_value = []
-        db.get_compound_lap_sequences.return_value = {}
-        db.get_corner_issues.return_value = []
-        return db
-
-    def test_race_situation_forwarded(self):
-        params = self._make_params()
-        db = self._make_db()
-        situation = {"current_lap": 5, "replan_reason": "test"}
-
-        with patch("strategy.strategy_orchestrator.analyse_strategy",
-                   return_value=MagicMock(strategies=[])) as mock_ai:
-            from strategy.strategy_orchestrator import run_strategy_analysis
-            run_strategy_analysis(
-                params, {"RM": [90_000.0]}, "key", db,
-                car_id=1, session_id=0, car_name="GR86", car_specs={},
-                setup_comparison_text="", tyre_degradation_cache=None,
-                model_name="claude-3",
-                race_situation=situation,
-            )
-
-        call_kwargs = mock_ai.call_args.kwargs
-        assert call_kwargs.get("race_situation") is situation
-
-    def test_race_situation_none_forwarded_as_none(self):
-        params = self._make_params()
-        db = self._make_db()
-
-        with patch("strategy.strategy_orchestrator.analyse_strategy",
-                   return_value=MagicMock(strategies=[])) as mock_ai:
-            from strategy.strategy_orchestrator import run_strategy_analysis
-            run_strategy_analysis(
-                params, {}, "key", db,
-                car_id=1, session_id=0, car_name="GR86", car_specs={},
-                setup_comparison_text="", tyre_degradation_cache=None,
-                model_name="claude-3",
-            )
-
-        call_kwargs = mock_ai.call_args.kwargs
-        assert call_kwargs.get("race_situation") is None
-
-
-# ---------------------------------------------------------------------------
 # dashboard source-text tests
 # ---------------------------------------------------------------------------
 
@@ -618,9 +453,6 @@ class TestAssembleStrategyInputsSource:
         """Must use _strat_sid (practice session), NOT live race session."""
         assert "_strat_sid" in self._body
 
-    def test_returns_dict_with_api_key(self):
-        assert '"api_key"' in self._body
-
     def test_returns_dict_with_params(self):
         assert '"params"' in self._body
 
@@ -632,29 +464,8 @@ class TestLaunchReplanWorkerSource:
     def test_method_exists(self):
         assert self._body, "_launch_replan_worker not found in dashboard.py"
 
-    def test_calls_assemble_strategy_inputs(self):
-        assert "_assemble_strategy_inputs" in self._body
-
-    def test_builds_race_situation_dict(self):
-        assert "race_situation" in self._body
-
-    def test_posts_replan_ok(self):
-        assert '"replan_ok"' in self._body
-
     def test_posts_replan_error(self):
         assert '"replan_error"' in self._body
-
-    def test_calls_run_strategy_analysis(self):
-        assert "run_strategy_analysis" in self._body
-
-    def test_uses_live_fuel_burn(self):
-        """Must prefer live tracker fuel burn for the race situation."""
-        assert "avg_fuel_per_lap" in self._body
-
-    def test_race_situation_contains_required_keys(self):
-        for key in ("current_lap", "laps_remaining", "current_compound",
-                    "replan_reason", "original_plan_stints"):
-            assert key in self._body, f"race_situation missing key: {key}"
 
 
 class TestDisplayStrategyResultsHandlesReplan:

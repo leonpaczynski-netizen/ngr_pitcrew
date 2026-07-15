@@ -42,22 +42,11 @@ def sbu_src() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. Source-scan: _run_build_setup body contracts
+# 1. Source-scan: _resolve_recent_laps helper wiring (still used by the
+#    deterministic setup engine to feed per-lap telemetry)
 # ---------------------------------------------------------------------------
 
-class TestRunBuildSetupBody:
-
-    def test_method_exists(self, sbu_src):
-        body = _method_body(sbu_src, "_run_build_setup")
-        assert body
-
-    def test_calls_get_previous_session_id(self, sbu_src):
-        # Must reference the helper (via _resolve_recent_laps which itself calls
-        # get_previous_session_id); OR the call appears in the outer method body.
-        # We check _resolve_recent_laps is called from _run_build_setup.
-        body = _method_body(sbu_src, "_run_build_setup")
-        assert "_resolve_recent_laps" in body, (
-            "_run_build_setup must delegate lap resolution to _resolve_recent_laps")
+class TestResolveRecentLapsHelperWiring:
 
     def test_calls_get_session_laps_in_helper(self, sbu_src):
         # get_session_laps must appear in the _resolve_recent_laps helper body.
@@ -68,44 +57,21 @@ class TestRunBuildSetupBody:
         helper = _method_body(sbu_src, "_resolve_recent_laps")
         assert "get_previous_session_id" in helper
 
-    def test_passes_per_lap_telemetry(self, sbu_src):
-        body = _method_body(sbu_src, "_run_build_setup")
-        assert "per_lap_telemetry=" in body, (
-            "_run_build_setup must pass per_lap_telemetry= to build_car_setup")
-
-    def test_no_config_strategy_read_in_run_build_setup(self, sbu_src):
-        body = _method_body(sbu_src, "_run_build_setup")
-        assert 'config.get("strategy"' not in body, (
-            "_run_build_setup must not read config['strategy'] — "
-            "use frozen AI snapshot instead")
-
-    def test_ofr2_laps_resolved_before_worker_def(self, sbu_src):
-        """_ofr2_laps fetch must be OUTSIDE (before) the def _worker block."""
-        body = _method_body(sbu_src, "_run_build_setup")
-        # Find the index of the OFR-2 laps assignment and of "def _worker"
-        fetch_idx = body.find("_resolve_recent_laps(")
-        worker_idx = body.find("def _worker(")
-        assert fetch_idx != -1, "_resolve_recent_laps call not found in _run_build_setup"
-        assert worker_idx != -1, "def _worker not found in _run_build_setup"
-        assert fetch_idx < worker_idx, (
-            "_ofr2_laps must be resolved before def _worker so the closure "
-            "captures a plain list (no DB access on the worker thread)")
-
 
 # ---------------------------------------------------------------------------
-# 2. Source-scan: _build_setup_ai_snapshot body contracts
+# 2. Source-scan: _build_setup_inputs body contracts
 # ---------------------------------------------------------------------------
 
 class TestBuildSetupAiSnapshotBody:
 
     def test_passes_session_type_kwarg(self, sbu_src):
-        body = _method_body(sbu_src, "_build_setup_ai_snapshot")
+        body = _method_body(sbu_src, "_build_setup_inputs")
         assert "session_type=" in body, (
-            "_build_setup_ai_snapshot must pass session_type= to "
-            "build_setup_ai_snapshot so SetupAISnapshot.discipline is real")
+            "_build_setup_inputs must pass session_type= to "
+            "build_setup_inputs so SetupInputs.discipline is real")
 
     def test_reads_setup_type_defensively(self, sbu_src):
-        body = _method_body(sbu_src, "_build_setup_ai_snapshot")
+        body = _method_body(sbu_src, "_build_setup_inputs")
         assert 'hasattr(self, "_setup_type")' in body, (
             "session_type read must be guarded with hasattr so the helper "
             "is safe before the combo widget is created")

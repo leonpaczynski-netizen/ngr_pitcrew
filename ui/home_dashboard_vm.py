@@ -8,15 +8,14 @@ display logic behind the home/overview surface that
 What it does
 ------------
 Converts the four canonical read models (EventContext, StrategyContext,
-SetupContext, TrackContext), the AI snapshot status, and
+SetupContext, TrackContext) and
 ``ui.product_flow.build_flow_state_summary()`` into display-ready cards:
 
   A. Race Setup          — the active event and its race rules
   B. Track Intelligence  — track/layout identity + model data availability
   C. Setup Brain         — the latest setup recommendation and its freshness
   D. Strategy Brain      — the strategy plan and its freshness
-  E. AI Input Safety     — whether AI paths use clean frozen snapshots
-  F. Next Best Action    — the single suggested next step
+  E. Next Best Action    — the single suggested next step
 
 Display-only. This module is NOT a new owner of state:
 * it only **reads** the contexts the callers pass in,
@@ -136,9 +135,8 @@ CARD_RACE_SETUP = "race_setup"
 CARD_TRACK = "track_intelligence"
 CARD_SETUP = "setup_brain"
 CARD_STRATEGY = "strategy_brain"
-CARD_AI_SAFETY = "ai_input_safety"
 
-CARD_ORDER = (CARD_RACE_SETUP, CARD_TRACK, CARD_SETUP, CARD_STRATEGY, CARD_AI_SAFETY)
+CARD_ORDER = (CARD_RACE_SETUP, CARD_TRACK, CARD_SETUP, CARD_STRATEGY)
 
 
 # --------------------------------------------------------------------------- #
@@ -155,13 +153,11 @@ CARD_ORDER = (CARD_RACE_SETUP, CARD_TRACK, CARD_SETUP, CARD_STRATEGY, CARD_AI_SA
 #   Track Intelligence → Track Modelling (build/inspect the track model)
 #   Setup Brain        → Setup Builder   (build/refine the car setup)
 #   Strategy Brain     → Strategy Builder(build the race strategy)
-#   AI Input Safety    → AI Log          (inspect the exact AI inputs/outputs)
 from ui.tab_registry import (  # noqa: E402  (pure-Python import, no PyQt6)
     TAB_EVENT_PLANNER,
     TAB_TRACK_MODELLING,
     TAB_SETUP_BUILDER,
     TAB_STRATEGY_BUILDER,
-    TAB_AI_LOG,
 )
 
 CARD_TAB_KEYS = {
@@ -169,7 +165,6 @@ CARD_TAB_KEYS = {
     CARD_TRACK: TAB_TRACK_MODELLING,
     CARD_SETUP: TAB_SETUP_BUILDER,
     CARD_STRATEGY: TAB_STRATEGY_BUILDER,
-    CARD_AI_SAFETY: TAB_AI_LOG,
 }
 
 
@@ -635,75 +630,6 @@ def _build_strategy_card(strategy_context, event_context) -> HomeDashboardCard:
 
 
 # --------------------------------------------------------------------------- #
-# Section E — AI Input Safety
-# --------------------------------------------------------------------------- #
-def _resolve_snapshot_core(ai_snapshot):
-    """Accept a use-case snapshot (has ``.core``) or a bare core object."""
-    if ai_snapshot is None:
-        return None
-    core = _get(ai_snapshot, "core")
-    if core is not None and _get(core, "snapshot_id") is not None:
-        return core
-    if _get(ai_snapshot, "snapshot_id") is not None:
-        return ai_snapshot
-    return None
-
-
-def _build_ai_safety_card(ai_snapshot) -> HomeDashboardCard:
-    core = _resolve_snapshot_core(ai_snapshot)
-    if core is None:
-        return HomeDashboardCard(
-            key=CARD_AI_SAFETY,
-            title="AI Input Safety",
-            status=HomeDashboardStatus.MISSING,
-            headline="AI input status unknown",
-            lines=("No AI input snapshot is available to check.",),
-        )
-
-    source = _enum_value(_get(core, "source"), "empty")
-    stale = tuple(_as_str(w) for w in (_get(core, "stale_warnings") or ()))
-    build_warnings = tuple(_as_str(w) for w in (_get(core, "warnings") or ()))
-
-    lines = []
-    warnings = []
-
-    if source == "contexts":
-        lines.append("AI prompts use a frozen snapshot of the current event, "
-                     "strategy, setup and track state.")
-        status = HomeDashboardStatus.READY
-        headline = "AI inputs are clean"
-    elif source == "legacy_only":
-        lines.append("No active event — AI would fall back to older saved "
-                     "settings for this path.")
-        warnings.append(HomeDashboardWarning(
-            CARD_AI_SAFETY,
-            "AI used legacy fallback inputs for this path — set an active "
-            "event so prompts use the current settings.",
-        ))
-        status = HomeDashboardStatus.ATTENTION
-        headline = "AI inputs use legacy fallback"
-    else:
-        lines.append("No event or saved settings available for AI prompts.")
-        status = HomeDashboardStatus.MISSING
-        headline = "No AI inputs available"
-
-    for w in stale:
-        warnings.append(HomeDashboardWarning(CARD_AI_SAFETY, w, kind="stale"))
-    for w in build_warnings:
-        if source == "legacy_only":
-            continue  # already summarised above in plain English
-        warnings.append(HomeDashboardWarning(CARD_AI_SAFETY, w))
-
-    if warnings and status == HomeDashboardStatus.READY:
-        status = HomeDashboardStatus.ATTENTION
-        headline = "AI inputs need attention"
-    return HomeDashboardCard(
-        key=CARD_AI_SAFETY, title="AI Input Safety", status=status,
-        headline=headline, lines=tuple(lines), warnings=tuple(warnings),
-    )
-
-
-# --------------------------------------------------------------------------- #
 # Section F — Next Best Action (product_flow bridge)
 # --------------------------------------------------------------------------- #
 def build_flow_flags(
@@ -799,9 +725,8 @@ def build_home_dashboard_state(
         The canonical read models (or None). Duck-typed — malformed objects
         degrade to "missing" cards rather than crashing.
     ai_snapshot
-        A use-case AI snapshot (``StrategyAISnapshot`` etc., read via ``.core``)
-        or a bare ``AIContextSnapshot``. Reflects whether AI paths would use
-        clean frozen inputs right now.
+        Deprecated/unused — retained for call-site compatibility. Previously
+        drove the removed "AI Input Safety" card. Ignored.
     strategy_snapshot
         Optional ``StrategyPromptSnapshot`` used to check setup-vs-strategy
         staleness. When omitted it is derived from the strategy + event
@@ -828,8 +753,6 @@ def build_home_dashboard_state(
          lambda: _build_setup_card(setup_context, event_context, strategy_snapshot)),
         (CARD_STRATEGY, "Strategy Brain",
          lambda: _build_strategy_card(strategy_context, event_context)),
-        (CARD_AI_SAFETY, "AI Input Safety",
-         lambda: _build_ai_safety_card(ai_snapshot)),
     )
 
     cards = []

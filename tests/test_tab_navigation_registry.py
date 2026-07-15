@@ -39,9 +39,10 @@ def _method_body(src: str, name: str) -> str:
 # --------------------------------------------------------------------------- #
 class TestRegistryKeys:
     def test_every_current_tab_has_a_stable_key(self):
-        # 13 tabs since the Guide tab was folded into Home (post-UAT overhaul).
-        assert len(tr.DEFAULT_TAB_ORDER) == 13
-        assert len(set(tr.DEFAULT_TAB_ORDER)) == 13, "duplicate tab keys"
+        # 12 tabs: the Guide tab was folded into Home (post-UAT overhaul) and the
+        # AI Log tab was removed in the no-AI refactor.
+        assert len(tr.DEFAULT_TAB_ORDER) == 12
+        assert len(set(tr.DEFAULT_TAB_ORDER)) == 12, "duplicate tab keys"
         for key in tr.DEFAULT_TAB_ORDER:
             assert key in tr.TAB_BASE_TITLES, f"no base title for {key}"
 
@@ -59,7 +60,7 @@ class TestRegistryKeys:
             tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
             tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
-            tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
+            tr.TAB_SETTINGS, tr.TAB_HISTORY,
             tr.TAB_TRACK_MODELLING,
         )
         assert tr.DEFAULT_TAB_ORDER == expected
@@ -76,7 +77,7 @@ class TestRegistryKeys:
             tr.TAB_LIVE, tr.TAB_EVENT_PLANNER, tr.TAB_GARAGE,
             tr.TAB_SETUP_BUILDER, tr.TAB_PRACTICE_REVIEW,
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
-            tr.TAB_SETTINGS, tr.TAB_HISTORY, tr.TAB_AI_LOG,
+            tr.TAB_SETTINGS, tr.TAB_HISTORY,
             tr.TAB_TRACK_MODELLING,
         )
 
@@ -179,7 +180,6 @@ class TestDispatchByKey:
             ("TAB_STRATEGY_BUILDER", "_sync_strategy_from_event"),
             ("TAB_PRACTICE_REVIEW", "_sync_practice_from_event"),
             ("TAB_TELEMETRY", "_refresh_telemetry_context"),
-            ("TAB_AI_LOG", "_flush_ai_log_pending_select"),
             ("TAB_TRACK_MODELLING", "_tm_on_tab_shown"),
             ("TAB_HOME", "_home_refresh"),
         )
@@ -210,8 +210,6 @@ class TestDispatchByKey:
         assert "self.select_tab(TAB_EVENT_PLANNER)" in dash_src    # Garage → Event Planner
 
     def test_visibility_checks_use_keys(self, dash_src):
-        flush = _method_body(dash_src, "_flush_ai_log_pending_select")
-        assert "current_tab_key() != TAB_AI_LOG" in flush
         home = _method_body(dash_src, "_home_refresh_if_visible")
         assert "current_tab_key() != TAB_HOME" in home
 
@@ -244,8 +242,7 @@ class TestNavigationHelpers:
         assert reg.index_of(tr.TAB_EVENT_PLANNER) == 2
         assert reg.index_of(tr.TAB_SETUP_BUILDER) == 4
         assert reg.index_of(tr.TAB_PRACTICE_REVIEW) == 5
-        assert reg.index_of(tr.TAB_AI_LOG) == 11
-        assert reg.index_of(tr.TAB_TRACK_MODELLING) == 12
+        assert reg.index_of(tr.TAB_TRACK_MODELLING) == 11
 
 
 # --------------------------------------------------------------------------- #
@@ -267,7 +264,6 @@ class TestNothingElseChanged:
             '"Diagnostics")      # 8',
             '"Settings")         # 9',
             '"History")          # 10',
-            '"AI Log")           # 11',
             'self._build_track_modelling_tab(), "Track Modelling")  # 12',
         ):
             assert needle in dash_src, f"tab wiring changed: {needle}"
@@ -280,12 +276,12 @@ class TestNothingElseChanged:
 
     def test_diagnostic_tabs_still_built_and_marked(self, dash_src):
         for builder in ("_build_telemetry_tab", "_build_debug_tab",
-                        "_build_ai_log_tab", "_build_track_modelling_tab"):
+                        "_build_track_modelling_tab"):
             assert f"self.{builder}()" in dash_src
         # Tool-tab decoration still applied after registry creation.
         assert "_apply_product_flow_tab_markers()" in dash_src
         assert set(pf.diagnostic_tabs()) == {
-            "Telemetry", "Diagnostics", "AI Log", "Track Modelling",
+            "Telemetry", "Diagnostics", "Track Modelling",
         }
 
     def test_navigation_helpers_write_no_state(self, dash_src):

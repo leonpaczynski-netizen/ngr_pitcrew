@@ -19,18 +19,18 @@ from data.event_context import build_event_context
 from data.strategy_context import build_strategy_context
 from data.setup_context import build_setup_context, build_setup_prompt_snapshot
 from data.track_context import build_track_context
-from data.ai_context_snapshot import (
-    AI_CONTEXT_SNAPSHOT_SCHEMA,
-    AIContextSnapshot,
-    AIContextSnapshotSource,
-    AIContextSnapshotValidationResult,
-    PracticeAnalysisSnapshot,
-    SetupAISnapshot,
-    StrategyAISnapshot,
-    build_practice_analysis_snapshot,
-    build_setup_ai_snapshot,
-    build_strategy_ai_snapshot,
-    validate_ai_context_snapshot,
+from data.analysis_inputs import (
+    ANALYSIS_INPUTS_SCHEMA,
+    AnalysisInputs,
+    AnalysisInputsSource,
+    AnalysisInputsValidationResult,
+    PracticeInputs,
+    SetupInputs,
+    StrategyInputs,
+    build_practice_inputs,
+    build_setup_inputs,
+    build_strategy_inputs,
+    validate_analysis_inputs,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -166,7 +166,7 @@ def legacy_setup_build_inputs(_sc):
 
 def snapshot_strategy_params(strat, event=None, fuel_burn_override=None):
     ev, sc, tc = contexts_for(strat, event)
-    snap = build_strategy_ai_snapshot(
+    snap = build_strategy_inputs(
         event_context=ev, strategy_context=sc, track_context=tc,
         legacy_strategy=strat, fuel_burn_override=fuel_burn_override)
     return snap.race_params_dict(), snap
@@ -174,7 +174,7 @@ def snapshot_strategy_params(strat, event=None, fuel_burn_override=None):
 
 def snapshot_practice_params(strat, event=None, fuel_burn_override=None):
     ev, sc, tc = contexts_for(strat, event)
-    snap = build_practice_analysis_snapshot(
+    snap = build_practice_inputs(
         event_context=ev, strategy_context=sc, track_context=tc,
         legacy_strategy=strat, fuel_burn_override=fuel_burn_override)
     return snap.race_params_dict(), snap
@@ -225,13 +225,13 @@ class TestByteIdentitySynced:
         legacy = legacy_strategy_race_params(strat, float(strat["fuel_burn_per_lap"]))
         mine, snap = snapshot_strategy_params(strat, event=None)
         assert mine == legacy
-        assert snap.core.source == AIContextSnapshotSource.CONTEXTS
+        assert snap.core.source == AnalysisInputsSource.CONTEXTS
 
     def test_setup_inputs_identical_full_state(self):
         strat = strategy_dict()
         legacy = legacy_setup_build_inputs(strat)
         ev, sc, tc = contexts_for(strat, db_event())
-        snap = build_setup_ai_snapshot(
+        snap = build_setup_inputs(
             event_context=ev, strategy_context=sc, track_context=tc,
             legacy_strategy=strat)
         assert snap.car == legacy["car"]
@@ -252,21 +252,18 @@ class TestByteIdentitySynced:
         assert snap.layout_id == legacy["layout_id"]
         assert snap.mandatory_compounds_str == legacy["mandatory_compounds"]
 
-    def test_prompt_text_byte_identical(self):
-        """The strongest proof: the actual race prompt text is byte-identical
-        whether RaceParams came from the legacy expressions or the snapshot."""
-        from strategy.ai_planner import RaceParams, _build_race_prompt
+    def test_race_params_construct_byte_identical(self):
+        """The strongest proof available post-AI-removal: RaceParams built from
+        the legacy expressions and from the snapshot are field-identical."""
+        from strategy.race_params import RaceParams
         strat = strategy_dict()
-        lap_data = {"RM": [98000.0, 98200.0, 98100.0], "RH": [99000.0, 99150.0]}
 
         legacy_params = RaceParams(**legacy_strategy_race_params(
             strat, float(strat.get("fuel_burn_per_lap", 2.0))))
         mine, _ = snapshot_strategy_params(strat, event=db_event())
         snap_params = RaceParams(**mine)
 
-        p1 = _build_race_prompt(legacy_params, lap_data, car_name="Porsche 911 RSR (991) '17")
-        p2 = _build_race_prompt(snap_params, lap_data, car_name="Porsche 911 RSR (991) '17")
-        assert p1 == p2, "prompt text must be byte-identical"
+        assert legacy_params == snap_params, "RaceParams must be field-identical"
 
 
 # --------------------------------------------------------------------------- #
@@ -334,7 +331,7 @@ class TestByteIdentityDefaults:
         strat = {"track": "T", "car": "", "tuning": True}
         legacy = legacy_setup_build_inputs(strat)
         ev, sc, tc = contexts_for(strat, None)
-        snap = build_setup_ai_snapshot(event_context=ev, strategy_context=sc,
+        snap = build_setup_inputs(event_context=ev, strategy_context=sc,
                                        track_context=tc, legacy_strategy=strat)
         assert snap.car == "Unknown" == legacy["car"]
         assert snap.race_laps == 25 == legacy["race_laps"]
@@ -368,8 +365,8 @@ class TestIntentionalFreshness:
 class TestSnapshotSemantics:
     def test_schema_and_source(self):
         _, snap = snapshot_strategy_params(strategy_dict(), event=db_event())
-        assert snap.core.schema == AI_CONTEXT_SNAPSHOT_SCHEMA
-        assert snap.core.source == AIContextSnapshotSource.CONTEXTS
+        assert snap.core.schema == ANALYSIS_INPUTS_SCHEMA
+        assert snap.core.source == AnalysisInputsSource.CONTEXTS
         assert snap.config_id == "a1b2c3d4e5"
 
     def test_id_stable_for_stable_inputs(self):
@@ -396,10 +393,10 @@ class TestSnapshotSemantics:
             setup={"setup_label": "A", "car": "X", "track": "T"}, event_context=ev))
         setup_b = build_setup_prompt_snapshot(build_setup_context(
             setup={"setup_label": "B", "car": "X", "track": "T"}, event_context=ev))
-        a = build_strategy_ai_snapshot(event_context=ev, strategy_context=sc,
+        a = build_strategy_inputs(event_context=ev, strategy_context=sc,
                                        track_context=tc, setup_snapshot=setup_a,
                                        legacy_strategy=strat)
-        b = build_strategy_ai_snapshot(event_context=ev, strategy_context=sc,
+        b = build_strategy_inputs(event_context=ev, strategy_context=sc,
                                        track_context=tc, setup_snapshot=setup_b,
                                        legacy_strategy=strat)
         assert a.core.snapshot_id != b.core.snapshot_id
@@ -411,9 +408,9 @@ class TestSnapshotSemantics:
         tc1 = build_track_context(event_context=ev, strategy=strat)
         tc2 = build_track_context(event_context=ev, strategy=strat,
                                   station_map_exists=True)
-        a = build_strategy_ai_snapshot(event_context=ev, strategy_context=sc,
+        a = build_strategy_inputs(event_context=ev, strategy_context=sc,
                                        track_context=tc1, legacy_strategy=strat)
-        b = build_strategy_ai_snapshot(event_context=ev, strategy_context=sc,
+        b = build_strategy_inputs(event_context=ev, strategy_context=sc,
                                        track_context=tc2, legacy_strategy=strat)
         assert a.core.snapshot_id != b.core.snapshot_id
         assert a.core.track_change_hash != b.core.track_change_hash
@@ -432,24 +429,24 @@ class TestSnapshotSemantics:
         assert "HACKED" not in after["avail_tyres"]
 
     def test_never_raises_on_garbage(self):
-        snap = build_strategy_ai_snapshot(
+        snap = build_strategy_inputs(
             event_context="junk", strategy_context=42, setup_snapshot=[],
             track_context=3.14, legacy_strategy="not a dict")
-        assert isinstance(snap, StrategyAISnapshot)
-        snap2 = build_practice_analysis_snapshot(legacy_strategy=None)
-        assert isinstance(snap2, PracticeAnalysisSnapshot)
-        snap3 = build_setup_ai_snapshot(legacy_strategy=object())
-        assert isinstance(snap3, SetupAISnapshot)
+        assert isinstance(snap, StrategyInputs)
+        snap2 = build_practice_inputs(legacy_strategy=None)
+        assert isinstance(snap2, PracticeInputs)
+        snap3 = build_setup_inputs(legacy_strategy=object())
+        assert isinstance(snap3, SetupInputs)
 
     def test_empty_source_when_nothing_available(self):
-        snap = build_strategy_ai_snapshot()
-        assert snap.core.source == AIContextSnapshotSource.EMPTY
+        snap = build_strategy_inputs()
+        assert snap.core.source == AnalysisInputsSource.EMPTY
         assert snap.core.warnings
 
     def test_to_dict(self):
         _, snap = snapshot_strategy_params(strategy_dict(), event=db_event())
         d = snap.to_dict()
-        assert d["core"]["schema"] == AI_CONTEXT_SNAPSHOT_SCHEMA
+        assert d["core"]["schema"] == ANALYSIS_INPUTS_SCHEMA
         assert d["race_params"]["track"] == "Fuji Speedway"
 
 
@@ -459,8 +456,8 @@ class TestSnapshotSemantics:
 class TestLegacyFallback:
     def test_legacy_only_matches_legacy_expressions(self):
         strat = strategy_dict()
-        snap = build_strategy_ai_snapshot(legacy_strategy=strat)  # no contexts
-        assert snap.core.source == AIContextSnapshotSource.LEGACY_ONLY
+        snap = build_strategy_inputs(legacy_strategy=strat)  # no contexts
+        assert snap.core.source == AnalysisInputsSource.LEGACY_ONLY
         assert any("legacy" in w.lower() for w in snap.core.warnings)
         legacy = legacy_strategy_race_params(strat, 2.85)
         assert snap.race_params_dict() == legacy
@@ -468,14 +465,14 @@ class TestLegacyFallback:
     def test_legacy_only_practice_tuning_default(self):
         strat = strategy_dict()
         del strat["tuning"]
-        snap = build_practice_analysis_snapshot(legacy_strategy=strat,
+        snap = build_practice_inputs(legacy_strategy=strat,
                                                 fuel_burn_override=2.5)
         assert snap.race_params_dict()["tuning_locked"] is True
 
     def test_legacy_only_setup_inputs(self):
         strat = strategy_dict()
-        snap = build_setup_ai_snapshot(legacy_strategy=strat)
-        assert snap.core.source == AIContextSnapshotSource.LEGACY_ONLY
+        snap = build_setup_inputs(legacy_strategy=strat)
+        assert snap.core.source == AnalysisInputsSource.LEGACY_ONLY
         legacy = legacy_setup_build_inputs(strat)
         assert snap.car == legacy["car"]
         assert snap.mandatory_compounds_str == legacy["mandatory_compounds"]
@@ -489,7 +486,7 @@ class TestStalenessDetection:
         old_ev = build_event_context(event=db_event(laps=25), strategy=strategy_dict())
         sc_old = build_strategy_context(strategy=strategy_dict(), event_context=old_ev)
         new_ev = build_event_context(event=db_event(laps=40), strategy=strategy_dict())
-        snap = build_strategy_ai_snapshot(
+        snap = build_strategy_inputs(
             event_context=new_ev, strategy_context=sc_old,
             legacy_strategy=strategy_dict())
         assert snap.core.has_stale_state
@@ -500,7 +497,7 @@ class TestStalenessDetection:
         setup_snap = build_setup_prompt_snapshot(build_setup_context(
             setup={"setup_label": "S", "car": "X", "track": "T"}, event_context=old_ev))
         new_ev = build_event_context(event=db_event(laps=40), strategy=strategy_dict())
-        snap = build_setup_ai_snapshot(
+        snap = build_setup_inputs(
             event_context=new_ev, setup_snapshot=setup_snap,
             legacy_strategy=strategy_dict())
         assert any("previous event" in w for w in snap.core.stale_warnings)
@@ -512,7 +509,7 @@ class TestStalenessDetection:
         tc = build_track_context(selected_location_id="daytona_international_speedway",
                                  selected_layout_id="daytona_international_speedway__road_course",
                                  event_context=ev)
-        snap = build_strategy_ai_snapshot(
+        snap = build_strategy_inputs(
             event_context=ev, track_context=tc, legacy_strategy=strat)
         assert any("does not match" in w for w in snap.core.stale_warnings)
 
@@ -521,17 +518,17 @@ class TestStalenessDetection:
         ev, sc, tc = contexts_for(strat, db_event())
         setup_snap = build_setup_prompt_snapshot(build_setup_context(
             setup={"setup_label": "S", "car": "X", "track": "T"}, event_context=ev))
-        snap = build_strategy_ai_snapshot(
+        snap = build_strategy_inputs(
             event_context=ev, strategy_context=sc, setup_snapshot=setup_snap,
             track_context=tc, legacy_strategy=strat)
         assert snap.core.stale_warnings == ()
-        res = validate_ai_context_snapshot(snap.core)
-        assert isinstance(res, AIContextSnapshotValidationResult)
+        res = validate_analysis_inputs(snap.core)
+        assert isinstance(res, AnalysisInputsValidationResult)
         assert res.ok
 
     def test_validation_flags_legacy_only(self):
-        snap = build_strategy_ai_snapshot(legacy_strategy=strategy_dict())
-        res = validate_ai_context_snapshot(snap.core)
+        snap = build_strategy_inputs(legacy_strategy=strategy_dict())
+        res = validate_analysis_inputs(snap.core)
         assert res.ok is False
         assert any("legacy" in w.lower() for w in res.all_warnings)
 
@@ -548,7 +545,7 @@ def _method_body(src, name):
 class TestDashboardMigration:
     def test_assemble_strategy_inputs_uses_snapshot(self, dash_src):
         body = _method_body(dash_src, "_assemble_strategy_inputs")
-        assert "build_strategy_ai_snapshot" in body
+        assert "build_strategy_inputs" in body
         assert "race_params_dict()" in body
         # Event truth no longer read directly from config["strategy"]:
         for expr in ('_sc.get("tyre_wear_multiplier"', '_sc.get("race_type"',
@@ -556,55 +553,25 @@ class TestDashboardMigration:
                      '_sc.get("track_location_id"'):
             assert expr not in body, f"legacy event read remains: {expr}"
 
-    def test_run_ai_analysis_uses_snapshot(self, dash_src):
-        body = _method_body(dash_src, "_run_ai_analysis")
-        assert "build_strategy_ai_snapshot" in body or "_build_strategy_ai_snapshot" in body
-        assert "_computed_fuel_burn_lpl()" in body  # telemetry-owned override kept
-        for expr in ('_sc.get("tyre_wear_multiplier"', '_sc.get("bop"',
-                     '_sc.get("avail_tyres"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
-    def test_run_practice_analysis_uses_snapshot(self, dash_src):
-        body = _method_body(dash_src, "_run_practice_analysis")
-        assert "build_practice_analysis_snapshot" in body or "_build_practice_ai_snapshot" in body
-        assert "_computed_fuel_burn_lpl()" in body
-        for expr in ('_psc.get("tyre_wear_multiplier"', '_psc.get("bop"',
-                     '_psc.get("avail_tyres"', '_psc.get("track_location_id"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
     def test_dashboard_has_snapshot_helper(self, dash_src):
-        assert "def _build_strategy_ai_snapshot" in dash_src
-        assert "def _build_practice_ai_snapshot" in dash_src
+        assert "def _build_strategy_inputs" in dash_src
+        assert "def _build_practice_inputs" in dash_src
         # Helpers thread the four contexts:
-        body = _method_body(dash_src, "_build_strategy_ai_snapshot")
+        body = _method_body(dash_src, "_build_strategy_inputs")
         assert "_build_event_context()" in body
         assert "_build_strategy_context()" in body
         assert "_build_track_context()" in body
 
 
 class TestSetupBuilderMigration:
-    def test_build_setup_uses_snapshot(self, sb_src):
-        body = _method_body(sb_src, "_run_build_setup")
-        assert "_build_setup_ai_snapshot" in body
-        for expr in ('_sc_build.get("tuning"', '_sc_build.get("tyre_wear_multiplier"',
-                     '_sc_ev.get("race_duration_minutes"', '_sc_build.get("avail_tyres"'):
-            assert expr not in body, f"legacy event read remains: {expr}"
-
-    def test_build_setup_worker_uses_frozen_track_ids(self, sb_src):
-        # The rec-parsing metadata inside the worker thread must use the frozen
-        # captured values, not re-read config["strategy"] mid-flight.
-        body = _method_body(sb_src, "_run_build_setup")
-        assert '_build_track = self._config.get("strategy", {}).get("track", "")' not in body
-        assert '_build_layout = self._config.get("strategy", {}).get("layout_id", "")' not in body
-
     def test_analyse_setup_uses_snapshot(self, sb_src):
         body = _method_body(sb_src, "_setup_analyse_ai")
-        assert "_build_setup_ai_snapshot" in body
+        assert "_build_setup_inputs" in body
         assert '_sc.get("allowed_tuning_categories"' not in body
         assert '_sc.get("mandatory_compounds"' not in body
 
     def test_setup_builder_has_snapshot_helper(self, sb_src):
-        assert "def _build_setup_ai_snapshot" in sb_src
-        body = _method_body(sb_src, "_build_setup_ai_snapshot")
-        assert "build_setup_ai_snapshot" in body
+        assert "def _build_setup_inputs" in sb_src
+        body = _method_body(sb_src, "_build_setup_inputs")
+        assert "build_setup_inputs" in body
         assert "_build_event_context" in body

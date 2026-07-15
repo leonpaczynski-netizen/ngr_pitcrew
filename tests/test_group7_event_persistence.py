@@ -333,21 +333,16 @@ class TestEventSetActiveStratKeys(unittest.TestCase):
 
 class TestPracticeAnalysisBoPContext(unittest.TestCase):
 
-    def _body(self) -> str:
-        return _method_body(_dashboard_text(), "_run_practice_analysis")
-
     # AI Snapshot Migration: the derivations moved into
-    # build_practice_analysis_snapshot (data/ai_context_snapshot.py); the
-    # method now routes race_params through the frozen snapshot. Same
-    # DEF-P1-005 invariants, verified at the new home.
+    # build_practice_inputs (data/analysis_inputs.py). The old
+    # generative-AI practice-analysis method (_run_practice_analysis) was
+    # removed in the no-AI refactor, so the DEF-P1-005 invariants are now
+    # verified directly on the deterministic snapshot builder.
 
     def test_passes_tuning_locked_to_race_params(self):
-        """tuning_locked derived from strategy config and forwarded to AI planner."""
-        body = self._body()
-        self.assertIn("_build_practice_ai_snapshot", body,
-                      '_run_practice_analysis must build race_params via the frozen snapshot')
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        """tuning_locked derived from strategy config by the frozen snapshot builder."""
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T", "tuning": False},
             fuel_burn_override=2.5).race_params_dict()
         self.assertTrue(rp["tuning_locked"],
@@ -355,8 +350,8 @@ class TestPracticeAnalysisBoPContext(unittest.TestCase):
 
     def test_passes_allowed_tuning_to_race_params(self):
         """allowed_tuning derived from strategy config and forwarded to AI planner."""
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T", "allowed_tuning_categories": ["brake_balance"]},
             fuel_burn_override=2.5).race_params_dict()
         self.assertEqual(rp["allowed_tuning"], ["brake_balance"],

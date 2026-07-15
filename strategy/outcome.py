@@ -36,7 +36,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from strategy.ai_planner import RaceParams, StrategyOption
+    from strategy.race_params import RaceParams, StrategyOption
 
 # GT7 domain constant: full tank is always 100 litres.
 _GT7_TANK_CAPACITY = 100.0

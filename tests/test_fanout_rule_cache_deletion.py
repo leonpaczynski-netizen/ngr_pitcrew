@@ -161,14 +161,14 @@ class TestInvisibilityProofs:
         # The strategy AI snapshot's CONTEXTS source takes everything from the
         # canonical contexts; the legacy dict's rule keys (present or absent)
         # do not change the frozen race params.
-        from data.ai_context_snapshot import build_strategy_ai_snapshot
+        from data.analysis_inputs import build_strategy_inputs
         from data.strategy_context import build_strategy_context
         ev = build_event_context(event=_db_event(), strategy=_core_only_strategy())
-        a = build_strategy_ai_snapshot(
+        a = build_strategy_inputs(
             event_context=ev,
             strategy_context=build_strategy_context(strategy=_core_only_strategy()),
             legacy_strategy=_core_only_strategy())
-        b = build_strategy_ai_snapshot(
+        b = build_strategy_inputs(
             event_context=ev,
             strategy_context=build_strategy_context(strategy=_with_stale_rules()),
             legacy_strategy=_with_stale_rules())

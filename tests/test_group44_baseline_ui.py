@@ -355,73 +355,11 @@ class TestBaselineButtonPresence:
 
 
 # ===========================================================================
-# AC2 — AI structurally excluded (call_api never invoked)
+# AC2 — AI structurally excluded: REMOVED (call_api / _ai_client deleted in the
+# no-AI refactor; the baseline path is now unconditionally deterministic, so
+# there is no longer an AI entry point to patch/assert-absent). Deterministic
+# baseline coverage is retained in the range/gearbox/label classes below.
 # ===========================================================================
-
-class TestAIStructurallyExcluded:
-    """build_baseline_setup_response must never call call_api (no AI key, no network)."""
-
-    def test_call_api_never_invoked_during_baseline(self):
-        """Patch call_api at the driving_advisor import site and assert zero calls."""
-        advisor = _make_advisor()
-        ranges = resolve_ranges("")
-
-        with patch("strategy.driving_advisor.call_api") as mock_api:
-            result = advisor.build_baseline_setup_response(
-                car_name="",
-                ranges=ranges,
-                drivetrain="FR",
-                num_gears=6,
-                allowed_tuning=None,
-                tuning_locked=False,
-            )
-            assert mock_api.call_count == 0, (
-                f"AC2 FAIL: call_api was invoked {mock_api.call_count} time(s) during "
-                f"build_baseline_setup_response. The baseline path must never call the AI. "
-                f"call_args_list={mock_api.call_args_list}"
-            )
-
-        # Still must produce a valid approved response
-        data = json.loads(result)
-        assert data["recommendation_status"] in APPROVED_STATUSES, (
-            f"AC2 FAIL: response status={data['recommendation_status']!r} not in APPROVED_STATUSES"
-        )
-
-    def test_call_api_never_invoked_with_awd_6_gears(self):
-        """AWD + 6 gears variant also must not touch call_api."""
-        advisor = _make_advisor()
-        ranges = resolve_ranges("")
-
-        with patch("strategy.driving_advisor.call_api") as mock_api:
-            advisor.build_baseline_setup_response(
-                car_name="",
-                ranges=ranges,
-                drivetrain="AWD",
-                num_gears=6,
-                allowed_tuning=None,
-                tuning_locked=False,
-            )
-            assert mock_api.call_count == 0, (
-                "AC2 FAIL: call_api must not be called for AWD/6-gear baseline"
-            )
-
-    def test_call_api_never_invoked_when_tuning_locked(self):
-        """Even when tuning_locked=True the path must not call the AI."""
-        advisor = _make_advisor()
-        ranges = resolve_ranges("")
-
-        with patch("strategy.driving_advisor.call_api") as mock_api:
-            advisor.build_baseline_setup_response(
-                car_name="",
-                ranges=ranges,
-                drivetrain="FR",
-                num_gears=6,
-                allowed_tuning=None,
-                tuning_locked=True,
-            )
-            assert mock_api.call_count == 0, (
-                "AC2 FAIL: call_api must not be called when tuning_locked=True"
-            )
 
 
 # ===========================================================================
@@ -1106,24 +1044,11 @@ class TestTuningLockedShortCircuit:
         data = json.loads(result)
         assert isinstance(data, dict), "Integration C FAIL: tuning_locked response is not a dict"
 
-    def test_tuning_locked_does_not_call_api(self):
-        """tuning_locked=True path must not touch call_api."""
-        advisor = _make_advisor()
-        ranges = resolve_ranges("")
-        with patch("strategy.driving_advisor.call_api") as mock_api:
-            advisor.build_baseline_setup_response(
-                car_name="", ranges=ranges, drivetrain="FR",
-                num_gears=6, allowed_tuning=None, tuning_locked=True,
-            )
-            assert mock_api.call_count == 0, (
-                "Integration C FAIL: call_api was invoked with tuning_locked=True"
-            )
-
     def test_handler_short_circuit_written_to_result_text(self, qapp):
         """The tuning-locked short-circuit in _generate_baseline_setup writes to _build_setup_result.
 
         We cannot call _generate_baseline_setup directly (it requires a full
-        _build_setup_ai_snapshot / MainWindow host).  We instead verify the
+        _build_setup_inputs / MainWindow host).  We instead verify the
         behaviour at the DrivingAdvisor.build_baseline_setup_response layer,
         where tuning_locked=True produces empty changes — the UI handler guards
         on _locked before even calling the advisor.

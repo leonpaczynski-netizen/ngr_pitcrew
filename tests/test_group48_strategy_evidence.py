@@ -180,7 +180,7 @@ class TestDerived:
 
 class TestFromRaceParams:
     def test_adapts_race_params(self):
-        from strategy.ai_planner import RaceParams
+        from strategy.race_params import RaceParams
 
         params = RaceParams(
             track="Fuji Speedway",

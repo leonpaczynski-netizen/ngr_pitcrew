@@ -176,13 +176,9 @@ def test_balance_solver_respects_field_lockout_end_to_end():
     move on the telemetry path (the balance solver doesn't consult outcomes itself)."""
     import json
     from types import SimpleNamespace
-    import strategy.driving_advisor as da
     from tests.test_group63_setup_brain_uat2 import (
         _uat_advisor, _uat_history, _UAT_FEELING, _CAR as UCAR,
     )
-    da.call_api = lambda *a, **k: json.dumps(
-        {"status": "APPROVED", "warnings": [], "contradictions": [],
-         "missing_evidence": [], "explanation_notes": "ok"})
 
     class _StubDB:
         def get_learning_outcomes(self, car_id, track, layout):

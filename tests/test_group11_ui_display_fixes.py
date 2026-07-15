@@ -73,43 +73,6 @@ class TestFuelBurnLabelResetOnEventSwitch(unittest.TestCase):
 # Group 11b — DEF-P2-021: AI Log list auto-selects new live entries
 # ---------------------------------------------------------------------------
 
-class TestAiLogAutoSelect(unittest.TestCase):
-
-    def setUp(self):
-        self._text = _dashboard_text()
-
-    def test_add_ai_log_list_item_has_auto_select_param(self):
-        """DEF-P2-021: _add_ai_log_list_item must accept an auto_select parameter."""
-        body = _method_body(self._text, "_add_ai_log_list_item")
-        self.assertIn("auto_select", body,
-                      "_add_ai_log_list_item must have an auto_select parameter")
-
-    def test_add_ai_log_list_item_calls_set_current_row_when_auto_select(self):
-        """DEF-P2-021: _add_ai_log_list_item must call setCurrentRow when auto_select=True."""
-        body = _method_body(self._text, "_add_ai_log_list_item")
-        self.assertIn("setCurrentRow", body,
-                      "_add_ai_log_list_item must call setCurrentRow to make new entry visible")
-        self.assertIn("auto_select", body,
-                      "setCurrentRow must be guarded by auto_select flag")
-
-    def test_on_ai_log_entry_defers_selection_via_qtimer(self):
-        """DEF-P2-021/DEF-P2-033: _on_ai_log_entry must defer selection via QTimer, not auto_select=True."""
-        body = _method_body(self._text, "_on_ai_log_entry")
-        # Group 14 (DEF-P2-033) replaced auto_select=True with QTimer.singleShot for correct
-        # deferred selection — the old auto_select=True approach caused invisible setCurrentRow
-        # calls when the AI Log tab was not the active tab.
-        self.assertIn("QTimer", body,
-                      "_on_ai_log_entry must schedule selection via QTimer.singleShot (DEF-P2-033)")
-        self.assertNotIn("auto_select=True", body,
-                         "_on_ai_log_entry must not use auto_select=True (replaced by QTimer in DEF-P2-033)")
-
-    def test_on_ai_log_entry_dict_does_not_auto_select(self):
-        """DB-loaded history entries must NOT auto-select (would disrupt startup load order)."""
-        body = _method_body(self._text, "_on_ai_log_entry_dict")
-        self.assertNotIn("auto_select=True", body,
-                         "_on_ai_log_entry_dict (DB load) must not pass auto_select=True")
-
-
 # ---------------------------------------------------------------------------
 # Group 11c — DEF-P1-011: fuel burn label updated from live practice telemetry
 # ---------------------------------------------------------------------------

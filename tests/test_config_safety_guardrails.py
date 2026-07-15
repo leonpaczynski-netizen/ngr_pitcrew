@@ -80,7 +80,6 @@ class TestLoadConfig:
     def test_missing_file_yields_defaults(self, tmp_path):
         cfg = cp.load_config(str(tmp_path / "nope.json"))
         assert cfg["strategy"]["degradation_consecutive_laps"] == 2
-        assert cfg["anthropic"]["api_key"] == ""
 
     def test_temp_file_merges_over_defaults(self, tmp_path):
         p = tmp_path / "config.json"
@@ -101,7 +100,6 @@ class TestLoadConfig:
     def test_reading_real_config_under_tests_returns_defaults(self):
         # Must NOT read the user's file (no secret exposure); falls back to defaults.
         cfg = cp.load_config(str(cp.REAL_CONFIG_PATH))
-        assert cfg["anthropic"]["api_key"] == ""
         assert cfg == cp.DEFAULT_CONFIG
         # Identity: it's a fresh deep copy, not the shared module dict.
         assert cfg is not cp.DEFAULT_CONFIG
@@ -165,7 +163,6 @@ class TestSaveConfig:
         assert written["strategy"]["degradation_consecutive_laps"] == 2
         on_disk = json.loads(p.read_text())
         assert on_disk["strategy"]["degradation_consecutive_laps"] == 2
-        assert on_disk["anthropic"]["api_key"] == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -174,9 +171,6 @@ class TestSaveConfig:
 class TestDefaultConfig:
     def test_degradation_consecutive_laps_default_is_2(self):
         assert cp.DEFAULT_CONFIG["strategy"]["degradation_consecutive_laps"] == 2
-
-    def test_default_api_key_is_empty(self):
-        assert cp.DEFAULT_CONFIG["anthropic"]["api_key"] == ""
 
     def test_main_reexports_same_default(self):
         import main

@@ -22,9 +22,6 @@ def _dashboard_text() -> str:
 def _setup_builder_text() -> str:
     return (_SRC / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
 
-def _planner_text() -> str:
-    return (_SRC / "strategy" / "ai_planner.py").read_text(encoding="utf-8")
-
 def _advisor_text() -> str:
     return (_SRC / "strategy" / "driving_advisor.py").read_text(encoding="utf-8")
 
@@ -203,16 +200,6 @@ class TestSetupBuilderPermissions(unittest.TestCase):
 
 class TestAITuningConstraintPropagation(unittest.TestCase):
 
-    def test_practice_analysis_passes_tuning_locked(self):
-        """_run_practice_analysis must include tuning_locked in race_params."""
-        body = _method_body(_dashboard_text(), "_run_practice_analysis")
-        self.assertIn("tuning_locked", body)
-
-    def test_practice_analysis_passes_allowed_tuning(self):
-        """_run_practice_analysis must include allowed_tuning in race_params."""
-        body = _method_body(_dashboard_text(), "_run_practice_analysis")
-        self.assertIn("allowed_tuning", body)
-
     def test_setup_analyse_ai_passes_tuning_params(self):
         """_setup_analyse_ai must pass allowed_tuning and tuning_locked to the advisor."""
         body = _method_body(_setup_builder_text(), "_setup_analyse_ai")
@@ -236,12 +223,6 @@ class TestAITuningConstraintPropagation(unittest.TestCase):
         src = _advisor_text()
         self.assertIn("def _tuning_constraint_block(", src)
 
-    def test_advisor_coaching_prompt_injects_constraint_block(self):
-        """_build_coaching_prompt must inject the tuning constraint block."""
-        body = _method_body(_advisor_text(), "_build_coaching_prompt")
-        self.assertIn("tuning_block", body)
-
-
 # ---------------------------------------------------------------------------
 # DEF-P2-007 — AI output validation (validate_ai_setup_response logic tests)
 # ---------------------------------------------------------------------------
@@ -249,7 +230,7 @@ class TestAITuningConstraintPropagation(unittest.TestCase):
 class TestAIOutputValidation(unittest.TestCase):
 
     def _validate(self, response: str, locked: bool = False, allowed: list | None = None):
-        from strategy.ai_planner import validate_ai_setup_response
+        from strategy.setup_compliance import validate_setup_tuning_compliance as validate_ai_setup_response
         return validate_ai_setup_response(response, locked, allowed)
 
     def test_no_restrictions_returns_empty(self):
@@ -311,27 +292,15 @@ class TestAIOutputValidation(unittest.TestCase):
         self.assertIn("aero", result)
         self.assertIn("suspension", result)
 
-    def test_display_setup_result_calls_validator(self):
-        """Source scan: _display_setup_result must call validate_ai_setup_response."""
-        body = _method_body(_setup_builder_text(), "_display_setup_result")
-        self.assertIn("validate_ai_setup_response", body,
-                      "_display_setup_result must validate AI output for tuning compliance")
-
-    def test_display_practice_results_calls_validator(self):
-        """Source scan: _display_practice_results must call validate_ai_setup_response."""
-        body = _method_body(_dashboard_text(), "_display_practice_results")
-        self.assertIn("validate_ai_setup_response", body,
-                      "_display_practice_results must validate AI output for tuning compliance")
-
-    def test_validate_function_exists_in_ai_planner(self):
-        """validate_ai_setup_response must be importable from strategy.ai_planner."""
-        from strategy.ai_planner import validate_ai_setup_response
-        self.assertTrue(callable(validate_ai_setup_response))
+    def test_validate_function_exists_in_setup_compliance(self):
+        """validate_setup_tuning_compliance must be importable from strategy.setup_compliance."""
+        from strategy.setup_compliance import validate_setup_tuning_compliance
+        self.assertTrue(callable(validate_setup_tuning_compliance))
 
     def test_validate_returns_list(self):
         """Return type must always be a list."""
-        from strategy.ai_planner import validate_ai_setup_response
-        result = validate_ai_setup_response("some text", False, None)
+        from strategy.setup_compliance import validate_setup_tuning_compliance
+        result = validate_setup_tuning_compliance("some text", False, None)
         self.assertIsInstance(result, list)
 
 

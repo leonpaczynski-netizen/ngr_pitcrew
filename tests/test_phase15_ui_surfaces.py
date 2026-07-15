@@ -136,16 +136,12 @@ def test_malformed_field_does_not_crash():
 
 # ------------------------------------------------- end-to-end (backend -> UI)
 
-def test_real_backend_response_renders_without_error(monkeypatch):
+def test_real_backend_response_renders_without_error():
     """A real build_combined_setup_response output must feed the renderer cleanly —
     guards against backend/UI field-shape drift."""
     import json
     import tests.test_group41_validation_gate as G
-    import strategy.driving_advisor as da
     adv = G._make_full_advisor({}, [G._make_lap()])
-    monkeypatch.setattr(da, "call_api", lambda *a, **k: json.dumps({
-        "status": "APPROVED", "warnings": [], "contradictions": [],
-        "missing_evidence": [], "explanation_notes": "ok"}))
     res = json.loads(adv.build_combined_setup_response(
         setup_dict={"arb_front": 6, "arb_rear": 5, "aero_front": 400},
         car_name="Porsche 911 RSR (991) '17", purpose="Qualifying",

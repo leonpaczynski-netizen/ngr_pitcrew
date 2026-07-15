@@ -363,19 +363,20 @@ class TrackModellingMixin:
         self._tm_btn_save_path.setToolTip("Export the built reference path to JSON")
         cal_layout.addWidget(self._tm_btn_save_path)
 
-        self._tm_btn_ai_corner_verify = QPushButton("AI Corner Verify")
+        # Retired: the optional AI corner-verification feature was removed in the
+        # determinism rebuild (Sprint 1). Corner positions come from the
+        # deterministic greedy seed-matcher. This hidden, disabled placeholder is
+        # kept only so existing attribute references remain valid.
+        self._tm_btn_ai_corner_verify = QPushButton("Corner Verify")
         self._tm_btn_ai_corner_verify.setStyleSheet(_btn_style)
         self._tm_btn_ai_corner_verify.setEnabled(False)
-        self._tm_btn_ai_corner_verify.setToolTip(
-            "Optional: ask the AI to sanity-check the detected corner positions "
-            "against the racing line. Confirmed corners are marked AI-verified; "
-            "the result appears in the status line just below."
-        )
+        self._tm_btn_ai_corner_verify.setVisible(False)
         cal_layout.addWidget(self._tm_btn_ai_corner_verify)
         # Persistent AI-verify status (the run used to only flash a 5s status-bar
         # message, so users couldn't tell if it did anything).
-        self._tm_lbl_ai_verify_status = QLabel("AI corner verify: not run yet")
+        self._tm_lbl_ai_verify_status = QLabel("")
         self._tm_lbl_ai_verify_status.setStyleSheet("color: #888; font-size: 10px;")
+        self._tm_lbl_ai_verify_status.setVisible(False)
         cal_layout.addWidget(self._tm_lbl_ai_verify_status)
 
         self._tm_btn_detect_segs = QPushButton("Detect Segments")
@@ -2537,81 +2538,10 @@ class TrackModellingMixin:
             )
 
     def _tm_run_ai_corner_verify(self) -> None:
-        """Button handler: run AI corner verification on the current station map."""
-        if getattr(self, "_tm_station_map", None) is None:
-            return
-        self._tm_btn_ai_corner_verify.setEnabled(False)
-        self._tm_btn_ai_corner_verify.setText("Verifying…")
-        if hasattr(self, "_tm_lbl_ai_verify_status"):
-            self._tm_lbl_ai_verify_status.setText("AI corner verify: running…")
-            self._tm_lbl_ai_verify_status.setStyleSheet("color: #E4D0AA; font-size: 10px;")
-
-        # Build peaks from station map seeded corners
-        stations = self._tm_station_map.stations
-
-        def _curvature_at_station(target_m):
-            if not stations:
-                return 0.0
-            closest = min(stations, key=lambda s: abs(s.station_m - target_m))
-            return abs(closest.curvature)
-
-        peaks = [
-            (c.approx_progress * 100.0, _curvature_at_station(c.approx_station_m), not c.is_seeded_placeholder)
-            for c in self._tm_station_map.seeded_corners
-        ]
-
-        # Build seed windows from seed layout corner definitions
-        seed_windows = []
-        _sr = getattr(self, "_tm_seed_result", None)
-        if _sr is not None and _sr.success:
-            loc_id = (self._tm_location_combo.currentData() or "").strip()
-            lay_id = (self._tm_layout_combo.currentData() or "").strip()
-            if loc_id and lay_id:
-                _lay = get_selected_layout(_sr, loc_id, lay_id)
-                for cdef in (getattr(_lay, "corner_definitions", None) or []):
-                    seed_windows.append((
-                        cdef.corner_id,
-                        getattr(cdef, "start_progress_pct", cdef.approx_progress * 100.0 - 3.0)
-                        if not hasattr(cdef, "start_progress_pct") else cdef.start_progress_pct,
-                        getattr(cdef, "end_progress_pct", cdef.approx_progress * 100.0 + 3.0)
-                        if not hasattr(cdef, "end_progress_pct") else cdef.end_progress_pct,
-                    ))
-
-        # Build speed profile from last built reference path
-        speed_profile = []
-        ctrl = getattr(self, "_tm_controller", None)
-        if ctrl is not None:
-            last_result = getattr(ctrl, "_last_build_result", None)
-            ref_path = (
-                last_result.reference_path
-                if last_result is not None and last_result.success and last_result.reference_path
-                else None
-            )
-            if ref_path is not None:
-                for pt in ref_path.points:
-                    speed_profile.append((pt.lap_progress * 100.0, pt.speed_kph_avg))
-
-        # API key — same source every other UI AI caller uses (the editable
-        # field, auto-loaded from api_key.txt / config["anthropic"]). The old
-        # config.get("ai", ...) read a section that never exists, so corner
-        # verification always ran with an empty key.
-        if hasattr(self, "_ai_api_key"):
-            api_key = self._ai_api_key.text().strip()
-        else:
-            api_key = self._config.get("anthropic", {}).get("api_key", "")
-
-        # Track name from current layout selection
-        lay_id_str = (self._tm_layout_combo.currentData() or "").strip()
-
-        def _worker():
-            from strategy.corner_verify_ai import verify_corners_with_ai
-            result_tuple = verify_corners_with_ai(
-                peaks, seed_windows, speed_profile, api_key, lay_id_str
-            )
-            self._tm_ai_corner_verify_signal.emit(result_tuple)
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
+        """Retired no-op: AI corner verification was removed in the
+        determinism rebuild (Sprint 1). Corner positions come from the
+        deterministic greedy seed-matcher; nothing to verify here."""
+        return
 
     def _tm_ai_corner_verify_done(self, result_tuple) -> None:
         """Slot: called via signal from AI verify worker thread (thread-safe)."""

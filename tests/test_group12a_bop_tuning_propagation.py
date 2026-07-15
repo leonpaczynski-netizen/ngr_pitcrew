@@ -37,14 +37,14 @@ class TestTuningLockedDefault(unittest.TestCase):
         self._body = _method_body(_dashboard_text(), "_run_practice_analysis")
 
     # AI Snapshot Migration: the DEF-P1-005 derivation moved into
-    # build_practice_analysis_snapshot (data/ai_context_snapshot.py). These
+    # build_practice_inputs (data/analysis_inputs.py). These
     # tests keep guarding the same invariants at their new home: the method
     # routes through the snapshot, and an absent tuning key still means LOCKED.
 
     def test_tuning_locked_uses_false_default(self):
         """DEF-P1-005: absent tuning key → tuning_locked=True (safe default)."""
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T"},  # no "tuning" key anywhere
             fuel_burn_override=2.5).race_params_dict()
         self.assertTrue(rp["tuning_locked"],
@@ -55,11 +55,11 @@ class TestTuningLockedDefault(unittest.TestCase):
         self.assertNotIn('_psc.get("tuning", True)', self._body,
                          '_run_practice_analysis must not use get("tuning", True) as default')
         # And behaviourally: tuning=False must stay locked, tuning=True unlocked.
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        locked = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        locked = build_practice_inputs(
             legacy_strategy={"track": "T", "tuning": False},
             fuel_burn_override=2.5).race_params_dict()
-        unlocked = build_practice_analysis_snapshot(
+        unlocked = build_practice_inputs(
             legacy_strategy={"track": "T", "tuning": True},
             fuel_burn_override=2.5).race_params_dict()
         self.assertTrue(locked["tuning_locked"])
@@ -67,17 +67,15 @@ class TestTuningLockedDefault(unittest.TestCase):
 
     def test_tuning_locked_key_is_in_race_params(self):
         """tuning_locked must be built into race_params for prompt injection."""
-        self.assertIn("_build_practice_ai_snapshot", self._body,
-                      '_run_practice_analysis must build race_params via the frozen snapshot')
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T"}, fuel_burn_override=2.5).race_params_dict()
         self.assertIn("tuning_locked", rp)
 
     def test_allowed_tuning_key_is_in_race_params(self):
         """allowed_tuning must be passed to the AI prompt builder."""
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T", "allowed_tuning_categories": ["aero"]},
             fuel_burn_override=2.5).race_params_dict()
         self.assertEqual(rp["allowed_tuning"], ["aero"])
@@ -147,31 +145,6 @@ class TestStratIsReference(unittest.TestCase):
         (DB-only via EventContext — same reasoning as tuning)."""
         self.assertNotIn('strat["bop"]', self._body,
                          "bop must not be re-cached in config['strategy']")
-
-
-# ---------------------------------------------------------------------------
-# 12a-4 — GT7_AI_DEBUG context print
-# ---------------------------------------------------------------------------
-
-class TestDebugContextPrint(unittest.TestCase):
-
-    def setUp(self):
-        self._body = _method_body(_dashboard_text(), "_run_practice_analysis")
-
-    def test_debug_guard_checks_gt7_ai_debug_env(self):
-        """Debug output must be gated by GT7_AI_DEBUG environment variable."""
-        self.assertIn("GT7_AI_DEBUG", self._body,
-                      "_run_practice_analysis must gate debug output on GT7_AI_DEBUG env var")
-
-    def test_debug_prints_tuning_locked(self):
-        """Debug output must include tuning_locked value."""
-        self.assertIn("tuning_locked", self._body,
-                      "_run_practice_analysis debug block must show tuning_locked")
-
-    def test_debug_prints_bop(self):
-        """Debug output must include bop value."""
-        self.assertIn("bop", self._body,
-                      "_run_practice_analysis debug block must show bop flag")
 
 
 if __name__ == "__main__":

@@ -946,40 +946,6 @@ class TestDrivingAdvisorEnrichment:
             ctx = adv._get_enriched_issue_context(laps)
         assert isinstance(ctx, str)
 
-    def test_coaching_prompt_includes_enriched_issues_when_resolved(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap(lock_up=[(100.0, 0.0, 200.0)])]
-
-        _sentinel = "## Track-Located Telemetry Issues\nT1 Braking Zone — brake_lock"
-        with patch.object(adv, "_get_enriched_issue_context", return_value=_sentinel):
-            prompt = adv._build_coaching_prompt(laps, "")
-        assert _sentinel in prompt
-
-    def test_coaching_prompt_includes_warning_for_unresolved(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap(lock_up=[(100.0, 0.0, 200.0)])]
-
-        from data.track_model_resolver import TrackModelResolverResult, TrackModelResolutionStatus
-        missing = TrackModelResolverResult(
-            track_location_id="suzuka_circuit",
-            layout_id="suzuka_circuit__full_course",
-            resolution_status=TrackModelResolutionStatus.MISSING,
-        )
-        with patch("data.track_model_resolver.resolve_best_track_model", return_value=missing), \
-             patch("data.track_issue_enrichment._load_reference_path", return_value=None):
-            prompt = adv._build_coaching_prompt(laps, "")
-        # Prompt is still valid string even when enrichment unresolved
-        assert isinstance(prompt, str)
-
-    def test_setup_prompt_includes_enriched_issues(self):
-        adv = self._make_advisor()
-        laps = [self._make_lap(wheelspin=[(50.0, 0.0, 100.0)])]
-        _sentinel = "## Track-Located Telemetry Issues\nT2 Corner Exit — wheelspin"
-        with patch.object(adv, "_get_enriched_issue_context", return_value=_sentinel):
-            prompt = adv._build_setup_prompt(laps, {}, "")
-        assert _sentinel in prompt
-
-
 # ---------------------------------------------------------------------------
 # Class 14 — Full pipeline integration test
 # ---------------------------------------------------------------------------
@@ -1077,14 +1043,6 @@ class TestRegressionImports:
             TrackIssueEnrichmentConfidence,
         )
         assert callable(enrich_telemetry_issues)
-
-    def test_track_context_prompt_importable(self):
-        from strategy.track_context_prompt import get_track_context_for_ai
-        assert callable(get_track_context_for_ai)
-
-    def test_ai_planner_importable(self):
-        from strategy.ai_planner import RaceParams, analyse_strategy
-        assert RaceParams is not None
 
     def test_driving_advisor_importable(self):
         from strategy.driving_advisor import DrivingAdvisor

@@ -212,53 +212,5 @@ class TestMigrationV6(unittest.TestCase):
         self.assertEqual(version, DB_VERSION)
 
 
-class TestBuildCarSetupSignature(unittest.TestCase):
-
-    def test_build_car_setup_has_new_params(self):
-        from strategy.ai_planner import build_car_setup
-        sig = inspect.signature(build_car_setup)
-        params = sig.parameters
-        self.assertIn("setup_history", params)
-        self.assertIn("setup_comparison", params)
-        self.assertEqual(params["setup_history"].default, "")
-        self.assertEqual(params["setup_comparison"].default, "")
-
-    def test_build_car_setup_injects_history_and_comparison_into_prompt(self):
-        """AC1: setup_history and setup_comparison are actually placed in the prompt text."""
-        from strategy.ai_planner import _build_setup_from_scratch_prompt
-        history_text = "HISTORY_SENTINEL_XYZ"
-        comparison_text = "COMPARISON_SENTINEL_ABC"
-        prompt = _build_setup_from_scratch_prompt(
-            car="TestCar",
-            track="Sardegna",
-            session_type="Race",
-            race_laps=10,
-            min_weight_kg=0,
-            max_power_hp=0,
-            setup_history=history_text,
-            setup_comparison=comparison_text,
-        )
-        self.assertIn(history_text, prompt,
-                      "setup_history sentinel not found in generated prompt")
-        self.assertIn(comparison_text, prompt,
-                      "setup_comparison sentinel not found in generated prompt")
-
-    def test_build_car_setup_omits_history_blocks_when_empty(self):
-        """AC1 edge case: empty strings produce no spurious section headers."""
-        from strategy.ai_planner import _build_setup_from_scratch_prompt
-        prompt = _build_setup_from_scratch_prompt(
-            car="TestCar",
-            track="Sardegna",
-            session_type="Race",
-            race_laps=10,
-            min_weight_kg=0,
-            max_power_hp=0,
-            setup_history="",
-            setup_comparison="",
-        )
-        self.assertNotIn("Previous Setup Recommendations", prompt)
-        self.assertNotIn("Setup Performance Comparison", prompt)
-
-
 if __name__ == "__main__":
     unittest.main()
