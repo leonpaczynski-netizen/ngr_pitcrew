@@ -13,7 +13,7 @@ from strategy.setup_lineage import vs_previous_to_verdict, rollback_from_lineage
 
 def test_schema_v16_and_columns():
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 17
     cols = [r[1] for r in db._conn.execute("PRAGMA table_info(driver_feedback)").fetchall()]
     assert {"vs_previous", "corner", "phase"} <= set(cols)
 

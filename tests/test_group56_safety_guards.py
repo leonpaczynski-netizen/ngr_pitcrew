@@ -161,9 +161,9 @@ class TestNoSchemaMigration:
         # must still be absent.
         src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
         assert "_migrate_v14" in src
-        # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
-        # guard now protects against an unexpected _migrate_v16.
-        assert "_migrate_v18" not in src
+        # Cross-lap persistence (Sprint 5) legitimately added _migrate_v18
+        # (corner_issue_occurrences); guard now protects against an unexpected v19.
+        assert "_migrate_v19" not in src
 
 
 if __name__ == "__main__":

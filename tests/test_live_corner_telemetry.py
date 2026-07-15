@@ -287,7 +287,7 @@ def _agg(seg="s_t3", turn=3, samples=40, spin=4, gear=2, rpm=6500):
 def test_db_v17_schema_and_table():
     from data.session_db import SessionDB
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 17
     cols = [r[1] for r in db._conn.execute(
         "PRAGMA table_info(corner_slip_telemetry)").fetchall()]
     assert {"segment_id", "run_id", "wheelspin_events", "throttle_sum"} <= set(cols)

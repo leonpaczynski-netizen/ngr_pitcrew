@@ -110,7 +110,7 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v16 (Engineering-Brain Phase 7): additive driver_feedback vs_previous/corner/phase.
 # v17 (Engineering-Brain live telemetry): additive corner_slip_telemetry table
 #     (cross-session per-corner slip accumulation).
-DB_VERSION: int = 17
+DB_VERSION: int = 18
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
