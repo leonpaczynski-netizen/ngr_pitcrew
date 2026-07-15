@@ -1385,7 +1385,7 @@ class SetupBuilderMixin:
         form._setup_result_text.setPlainText("Analysing setup… please wait.")
         form._btn_analyse_setup.setEnabled(False)
         import threading as _threading
-        _ai_snap = self._build_setup_ai_snapshot()
+        _ai_snap = self._build_setup_inputs()
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
@@ -1556,7 +1556,7 @@ class SetupBuilderMixin:
         import threading as _threading
         from strategy.setup_ranges import resolve_ranges as _resolve_ranges
 
-        _ai_snap = self._build_setup_ai_snapshot()
+        _ai_snap = self._build_setup_inputs()
         car   = _ai_snap.car
         track = _ai_snap.track
         if not car or not track:
@@ -1589,7 +1589,7 @@ class SetupBuilderMixin:
         _session_type = self._active_form().purpose if hasattr(self, "_active_form") else "Race"
         # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
         # real event is active (EMPTY source) so the backend treats context as unknown.
-        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        from data.analysis_inputs import AnalysisInputsSource as _SnapSrc
         _tyre_wear = (
             _ai_snap.tyre_wear_multiplier
             if _ai_snap.core.source != _SnapSrc.EMPTY
@@ -1750,7 +1750,7 @@ class SetupBuilderMixin:
         import threading as _threading
         from strategy.setup_ranges import resolve_ranges as _resolve_ranges
 
-        _ai_snap = self._build_setup_ai_snapshot()
+        _ai_snap = self._build_setup_inputs()
         car   = _ai_snap.car
         track = _ai_snap.track
         if not car or not track:
@@ -1784,7 +1784,7 @@ class SetupBuilderMixin:
         _session_type = f"{form.purpose} Setup"
         # Group 45: tyre_wear_multiplier from the event snapshot — pass None when no
         # real event is active (EMPTY source) so the backend treats context as unknown.
-        from data.ai_context_snapshot import AIContextSnapshotSource as _SnapSrc
+        from data.analysis_inputs import AnalysisInputsSource as _SnapSrc
         _tyre_wear = (
             _ai_snap.tyre_wear_multiplier
             if _ai_snap.core.source != _SnapSrc.EMPTY
@@ -1901,7 +1901,7 @@ class SetupBuilderMixin:
             from data.setup_context import empty_setup_context
             return empty_setup_context()
 
-    def _build_setup_ai_snapshot(self):
+    def _build_setup_inputs(self):
         """Frozen AI-input snapshot for the setup AI paths.
 
         AI Snapshot Migration: freezes the event/track fields the Build-Setup
@@ -1909,14 +1909,14 @@ class SetupBuilderMixin:
         StrategyContext pit loss, TrackContext identity, SetupContext via the
         last captured setup context) instead of live config["strategy"] reads.
         Byte-identical to the legacy expressions when the stores are in sync
-        (proven by tests/test_ai_context_snapshot.py). Never raises; falls back
+        (proven by tests/test_analysis_inputs.py). Never raises; falls back
         to exact legacy expressions when no event context exists.
-        OFR-2: session_type is passed so SetupAISnapshot.discipline is real.
+        OFR-2: session_type is passed so SetupInputs.discipline is real.
         """
         # OFR-2: read session_type defensively — combo may not exist yet.
         _stype = self._setup_type.currentText() if hasattr(self, "_setup_type") else None
         try:
-            from data.ai_context_snapshot import build_setup_ai_snapshot
+            from data.analysis_inputs import build_setup_inputs
             ev = self._build_event_context() if hasattr(self, "_build_event_context") else None
             sc = self._build_strategy_context() if hasattr(self, "_build_strategy_context") else None
             tc = self._build_track_context() if hasattr(self, "_build_track_context") else None
@@ -1928,15 +1928,15 @@ class SetupBuilderMixin:
                     setup_snap = build_setup_prompt_snapshot(last)
             except Exception:
                 setup_snap = None
-            return build_setup_ai_snapshot(
+            return build_setup_inputs(
                 event_context=ev, strategy_context=sc,
                 setup_snapshot=setup_snap, track_context=tc,
                 legacy_strategy=self._config.get("strategy", {}),
                 session_type=_stype)
         except Exception:  # pragma: no cover - defensive; must never break AI calls
-            from data.ai_context_snapshot import build_setup_ai_snapshot
+            from data.analysis_inputs import build_setup_inputs
             _legacy = self._config.get("strategy", {}) if hasattr(self, "_config") else None
-            return build_setup_ai_snapshot(legacy_strategy=_legacy, session_type=_stype)
+            return build_setup_inputs(legacy_strategy=_legacy, session_type=_stype)
 
     def _setup_type_prefix(self) -> str:
         """'Q' for a qualifying setup, 'R' for a race setup.
@@ -2146,8 +2146,8 @@ class SetupBuilderMixin:
         # AI Snapshot Migration: event tuning-legality + mandatory compounds
         # come from a frozen snapshot (owner: EventContext) instead of live
         # config["strategy"] reads. Byte-identical when the stores are in sync
-        # (tests/test_ai_context_snapshot.py).
-        _ai_snap = self._build_setup_ai_snapshot()
+        # (tests/test_analysis_inputs.py).
+        _ai_snap = self._build_setup_inputs()
         _allowed  = _ai_snap.allowed_tuning_or_none()
         _locked   = _ai_snap.tuning_locked
         _compound = _ai_snap.mandatory_compounds_str
@@ -3407,7 +3407,7 @@ class SetupBuilderMixin:
         the Race form).  Used when the Qualifying panel's Build button fires.
         """
         from strategy.setup_ranges import resolve_ranges
-        _car_name = (self._build_setup_ai_snapshot().car or "") if hasattr(self, "_build_setup_ai_snapshot") else ""
+        _car_name = (self._build_setup_inputs().car or "") if hasattr(self, "_build_setup_inputs") else ""
         _ranges = resolve_ranges(_car_name)
 
         def _set_int(spin, param, val):

@@ -182,7 +182,7 @@ class _MinimalStubHost(SetupBuilderMixin):
     def _current_setup_dict(self):
         return {"lsd_accel": 20, "aero_rear": 50}
 
-    def _build_setup_ai_snapshot(self):
+    def _build_setup_inputs(self):
         snap = MagicMock()
         snap.allowed_tuning_or_none.return_value = None
         snap.tuning_locked = False

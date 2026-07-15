@@ -13,14 +13,14 @@ Every AI-input path in the app assembled its inputs **live** from
 snapshot with fresh UI state, or read event fields that no longer match the
 edited DB event. This module freezes one consistent set of inputs per AI call:
 
-* ``StrategyAISnapshot``   — race-strategy analysis + mid-race re-plan inputs
+* ``StrategyInputs``   — race-strategy analysis + mid-race re-plan inputs
   (`_assemble_strategy_inputs` / `_run_ai_analysis`),
-* ``PracticeAnalysisSnapshot`` — practice-analysis inputs
+* ``PracticeInputs`` — practice-analysis inputs
   (`_run_practice_analysis`),
-* ``SetupAISnapshot``      — Build-Setup-with-AI + Analyse-Setup event inputs
+* ``SetupInputs``      — Build-Setup-with-AI + Analyse-Setup event inputs
   (`setup_builder_ui`),
 
-each embedding a common ``AIContextSnapshot`` core carrying the component
+each embedding a common ``AnalysisInputs`` core carrying the component
 change markers, a combined ``snapshot_id``, build warnings and staleness
 detection.
 
@@ -75,10 +75,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from data.track_context import TrackContext
 
 
-AI_CONTEXT_SNAPSHOT_SCHEMA = "ai_context_snapshot_v1"
+ANALYSIS_INPUTS_SCHEMA = "analysis_inputs_v1"
 
 
-class AIContextSnapshotSource(str, Enum):
+class AnalysisInputsSource(str, Enum):
     """How the snapshot's inputs were resolved."""
     CONTEXTS = "contexts"        # built from the canonical read models
     LEGACY_ONLY = "legacy_only"  # no active event context — exact legacy expressions
@@ -156,11 +156,11 @@ def compute_snapshot_id(fields: dict) -> str:
 # Core snapshot (shared by every use case)
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
-class AIContextSnapshot:
+class AnalysisInputs:
     """The common core: component change markers + combined id + warnings."""
     schema: str
     snapshot_id: str
-    source: AIContextSnapshotSource
+    source: AnalysisInputsSource
 
     # Component keys (empty string = that context was not supplied)
     event_change_hash: str = ""
@@ -185,7 +185,7 @@ class AIContextSnapshot:
 
 
 @dataclass(frozen=True)
-class AIContextSnapshotValidationResult:
+class AnalysisInputsValidationResult:
     ok: bool
     warnings: Tuple[str, ...] = ()
     stale_warnings: Tuple[str, ...] = ()
@@ -195,17 +195,17 @@ class AIContextSnapshotValidationResult:
         return tuple(self.warnings) + tuple(self.stale_warnings)
 
 
-def validate_ai_context_snapshot(core: AIContextSnapshot) -> AIContextSnapshotValidationResult:
+def validate_analysis_inputs(core: AnalysisInputs) -> AnalysisInputsValidationResult:
     """Non-crashing validation of a snapshot core. ``ok`` means: built from
     contexts, no staleness detected."""
     warnings = list(core.warnings)
-    if core.source == AIContextSnapshotSource.LEGACY_ONLY:
+    if core.source == AnalysisInputsSource.LEGACY_ONLY:
         warnings.append(
             "AI inputs built from legacy config only — no active event context.")
-    elif core.source == AIContextSnapshotSource.EMPTY:
+    elif core.source == AnalysisInputsSource.EMPTY:
         warnings.append("AI inputs are empty — no event or legacy state available.")
-    return AIContextSnapshotValidationResult(
-        ok=(core.source == AIContextSnapshotSource.CONTEXTS and not core.stale_warnings),
+    return AnalysisInputsValidationResult(
+        ok=(core.source == AnalysisInputsSource.CONTEXTS and not core.stale_warnings),
         warnings=tuple(warnings),
         stale_warnings=core.stale_warnings,
     )
@@ -395,13 +395,13 @@ def _race_params_legacy(
 
 def _build_core(
     payload: dict,
-    source: AIContextSnapshotSource,
+    source: AnalysisInputsSource,
     event_context,
     strategy_context,
     setup_snapshot,
     track_context,
     warnings: list,
-) -> AIContextSnapshot:
+) -> AnalysisInputs:
     stale = _detect_stale(event_context, strategy_context, setup_snapshot, track_context)
     component_hashes = {
         "event": _as_str(_get(event_context, "change_hash")),
@@ -410,8 +410,8 @@ def _build_core(
         "track": _as_str(_get(track_context, "change_hash")),
     }
     snapshot_id = compute_snapshot_id({"payload": payload, **component_hashes})
-    return AIContextSnapshot(
-        schema=AI_CONTEXT_SNAPSHOT_SCHEMA,
+    return AnalysisInputs(
+        schema=ANALYSIS_INPUTS_SCHEMA,
         snapshot_id=snapshot_id,
         source=source,
         event_change_hash=component_hashes["event"],
@@ -423,27 +423,27 @@ def _build_core(
     )
 
 
-def _resolve_source(event_context, legacy: dict, warnings: list) -> AIContextSnapshotSource:
+def _resolve_source(event_context, legacy: dict, warnings: list) -> AnalysisInputsSource:
     has_event = bool(_get(event_context, "has_active_event", False))
     if has_event:
-        return AIContextSnapshotSource.CONTEXTS
+        return AnalysisInputsSource.CONTEXTS
     if legacy:
         warnings.append(
             "No active event context — race parameters read from legacy "
             "config[\"strategy\"] expressions (documented fallback).")
-        return AIContextSnapshotSource.LEGACY_ONLY
+        return AnalysisInputsSource.LEGACY_ONLY
     warnings.append("No event context and no legacy strategy config available.")
-    return AIContextSnapshotSource.EMPTY
+    return AnalysisInputsSource.EMPTY
 
 
 # --------------------------------------------------------------------------- #
 # Use-case snapshot: race strategy analysis / mid-race re-plan
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
-class StrategyAISnapshot:
+class StrategyInputs:
     """Frozen inputs for race-strategy analysis (`_assemble_strategy_inputs`,
     `_run_ai_analysis`). ``race_params`` feeds ``RaceParams(**...)``."""
-    core: AIContextSnapshot
+    core: AnalysisInputs
     race_params: Tuple[Tuple[str, Any], ...]
     config_id: str  # owner: StrategyContext (setup-history match key)
 
@@ -458,7 +458,7 @@ class StrategyAISnapshot:
         }
 
 
-def build_strategy_ai_snapshot(
+def build_strategy_inputs(
     *,
     event_context=None,
     strategy_context=None,
@@ -466,7 +466,7 @@ def build_strategy_ai_snapshot(
     track_context=None,
     legacy_strategy: Optional[dict] = None,
     fuel_burn_override: Optional[float] = None,
-) -> StrategyAISnapshot:
+) -> StrategyInputs:
     """Freeze the strategy-analysis inputs. Never raises.
 
     ``fuel_burn_override`` — pass the telemetry-derived value
@@ -478,7 +478,7 @@ def build_strategy_ai_snapshot(
     warnings: list = []
     source = _resolve_source(event_context, legacy, warnings)
 
-    if source == AIContextSnapshotSource.CONTEXTS:
+    if source == AnalysisInputsSource.CONTEXTS:
         params = _race_params_from_contexts(
             event_context, strategy_context, track_context, legacy,
             tuning_absent_locked=False,  # legacy strategy paths: absent → unlocked
@@ -494,7 +494,7 @@ def build_strategy_ai_snapshot(
 
     core = _build_core(params, source, event_context, strategy_context,
                        setup_snapshot, track_context, warnings)
-    return StrategyAISnapshot(
+    return StrategyInputs(
         core=core, race_params=_freeze_params(params), config_id=config_id)
 
 
@@ -502,14 +502,14 @@ def build_strategy_ai_snapshot(
 # Use-case snapshot: practice analysis
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
-class PracticeAnalysisSnapshot:
+class PracticeInputs:
     """Frozen inputs for practice analysis (`_run_practice_analysis`).
 
-    Same shape as StrategyAISnapshot; kept distinct because the legacy practice
+    Same shape as StrategyInputs; kept distinct because the legacy practice
     path uses the DEF-P1-005 safe-locked tuning default (absent flag → locked)
     and always takes the telemetry-derived fuel burn.
     """
-    core: AIContextSnapshot
+    core: AnalysisInputs
     race_params: Tuple[Tuple[str, Any], ...]
     discipline: str = "unknown"   # OFR-2: resolved session discipline
 
@@ -524,7 +524,7 @@ class PracticeAnalysisSnapshot:
         }
 
 
-def build_practice_analysis_snapshot(
+def build_practice_inputs(
     *,
     event_context=None,
     strategy_context=None,
@@ -533,7 +533,7 @@ def build_practice_analysis_snapshot(
     legacy_strategy: Optional[dict] = None,
     fuel_burn_override: Optional[float] = None,
     session_purpose: Optional[str] = None,
-) -> PracticeAnalysisSnapshot:
+) -> PracticeInputs:
     """Freeze the practice-analysis inputs. Never raises. ``fuel_burn_override``
     should carry ``_computed_fuel_burn_lpl()`` (telemetry-owned).
     ``session_purpose`` is optional — when supplied it is normalised to a
@@ -542,7 +542,7 @@ def build_practice_analysis_snapshot(
     warnings: list = []
     source = _resolve_source(event_context, legacy, warnings)
 
-    if source == AIContextSnapshotSource.CONTEXTS:
+    if source == AnalysisInputsSource.CONTEXTS:
         params = _race_params_from_contexts(
             event_context, strategy_context, track_context, legacy,
             tuning_absent_locked=True,  # DEF-P1-005: unknown tuning → locked
@@ -563,7 +563,7 @@ def build_practice_analysis_snapshot(
 
     core = _build_core(params, source, event_context, strategy_context,
                        setup_snapshot, track_context, warnings)
-    return PracticeAnalysisSnapshot(
+    return PracticeInputs(
         core=core, race_params=_freeze_params(params), discipline=_disc)
 
 
@@ -571,7 +571,7 @@ def build_practice_analysis_snapshot(
 # Use-case snapshot: setup AI (Build Setup with AI / Analyse Setup)
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
-class SetupAISnapshot:
+class SetupInputs:
     """Frozen event/track inputs for the setup AI paths (`setup_builder_ui`).
 
     Field owners: everything except ``pit_loss_secs`` (StrategyContext),
@@ -580,7 +580,7 @@ class SetupAISnapshot:
     build-setup legacy defaults differ from the strategy paths: refuel and pit
     loss default to 0.0 here (preserved exactly).
     """
-    core: AIContextSnapshot
+    core: AnalysisInputs
 
     car: str
     track: str
@@ -620,7 +620,7 @@ class SetupAISnapshot:
         return d
 
 
-def build_setup_ai_snapshot(
+def build_setup_inputs(
     *,
     event_context=None,
     strategy_context=None,
@@ -628,7 +628,7 @@ def build_setup_ai_snapshot(
     track_context=None,
     legacy_strategy: Optional[dict] = None,
     session_type: Optional[str] = None,
-) -> SetupAISnapshot:
+) -> SetupInputs:
     """Freeze the setup-AI event/track inputs. Never raises.
     ``session_type`` is optional — when supplied (the setup's declared purpose)
     it is normalised to a discipline string; absent/unknown → "unknown" (OFR-2)."""
@@ -636,7 +636,7 @@ def build_setup_ai_snapshot(
     warnings: list = []
     source = _resolve_source(event_context, legacy, warnings)
 
-    if source == AIContextSnapshotSource.CONTEXTS:
+    if source == AnalysisInputsSource.CONTEXTS:
         ev = event_context
         loc_id, lay_id = _resolve_track_ids(track_context, ev, legacy)
         laps = _as_int(_get(ev, "laps"), 0)
@@ -693,4 +693,4 @@ def build_setup_ai_snapshot(
 
     core = _build_core(payload, source, event_context, strategy_context,
                        setup_snapshot, track_context, warnings)
-    return SetupAISnapshot(core=core, discipline=_disc, **payload)
+    return SetupInputs(core=core, discipline=_disc, **payload)

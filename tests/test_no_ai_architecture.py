@@ -32,12 +32,10 @@ def _production_py_files() -> list[Path]:
     return files
 
 
-# Modules that were deleted in the AI-removal sprint. Importing any is a failure.
-# NOTE: ``data.ai_context_snapshot`` is intentionally NOT here yet — it is pure
-# deterministic input-plumbing (freezes canonical contexts into RaceParams; no
-# network, no keys, no generative AI). Its legacy "AI" name is scheduled for a
-# separate cosmetic rename (→ data.analysis_inputs) so this determinism sprint
-# stays focused on removing actual generative AI.
+# Modules that were removed/renamed in the AI-removal sprint. Importing any of
+# their old AI-named paths is a failure. (The deterministic input-plumbing that
+# used to live in ``data.ai_context_snapshot`` was renamed to
+# ``data.analysis_inputs`` — the old module name must no longer resolve.)
 _DELETED_AI_MODULES = [
     "strategy._ai_client",
     "strategy.ai_planner",
@@ -46,6 +44,7 @@ _DELETED_AI_MODULES = [
     "strategy.strategy_orchestrator",
     "strategy.practice_orchestrator",
     "strategy.track_context_prompt",
+    "data.ai_context_snapshot",
 ]
 
 # Real generative-AI markers (regexes). Deliberately specific so benign words

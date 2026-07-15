@@ -65,9 +65,9 @@ FROZEN_ALLOWLIST = {
     ("ui/dashboard.py", "_config_pit_loss_secs"): 1,         # pit_loss_secs (working-config core; UAT seed fix)
     ("ui/dashboard.py", "_build_ai_analysis_group"): 2,      # fuel labels init
     ("ui/dashboard.py", "_build_event_context"): 1,          # bridge input
-    ("ui/dashboard.py", "_build_practice_ai_snapshot"): 2,   # bridge input
+    ("ui/dashboard.py", "_build_practice_inputs"): 2,   # bridge input
     ("ui/dashboard.py", "_build_session_context"): 1,        # bridge input
-    ("ui/dashboard.py", "_build_strategy_ai_snapshot"): 2,   # bridge input
+    ("ui/dashboard.py", "_build_strategy_inputs"): 2,   # bridge input
     ("ui/dashboard.py", "_build_strategy_context"): 1,       # bridge input
     # Working Race Config sprint (2026-07-04): the hash + _update_race_config
     # display reads + strategy-sync no-event checks + session-save tagging now
@@ -93,7 +93,7 @@ FROZEN_ALLOWLIST = {
     # -- ui/setup_builder_ui.py --------------------------------------------- #
     ("ui/setup_builder_ui.py", "_apply_and_save_ai_setup"): 1,   # cosmetic track (car read removed with the AI-Fix rename)
     ("ui/setup_builder_ui.py", "_apply_build_setup_result"): 1,  # cosmetic
-    ("ui/setup_builder_ui.py", "_build_setup_ai_snapshot"): 2,   # bridge input
+    ("ui/setup_builder_ui.py", "_build_setup_inputs"): 2,   # bridge input
     ("ui/setup_builder_ui.py", "_build_setup_context"): 1,       # bridge input
     ("ui/setup_builder_ui.py", "_display_setup_result"): 3,      # history keys
     ("ui/setup_builder_ui.py", "_load_car_specs_for_current"): 1,  # car read

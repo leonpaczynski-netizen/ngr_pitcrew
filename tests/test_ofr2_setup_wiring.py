@@ -59,19 +59,19 @@ class TestResolveRecentLapsHelperWiring:
 
 
 # ---------------------------------------------------------------------------
-# 2. Source-scan: _build_setup_ai_snapshot body contracts
+# 2. Source-scan: _build_setup_inputs body contracts
 # ---------------------------------------------------------------------------
 
 class TestBuildSetupAiSnapshotBody:
 
     def test_passes_session_type_kwarg(self, sbu_src):
-        body = _method_body(sbu_src, "_build_setup_ai_snapshot")
+        body = _method_body(sbu_src, "_build_setup_inputs")
         assert "session_type=" in body, (
-            "_build_setup_ai_snapshot must pass session_type= to "
-            "build_setup_ai_snapshot so SetupAISnapshot.discipline is real")
+            "_build_setup_inputs must pass session_type= to "
+            "build_setup_inputs so SetupInputs.discipline is real")
 
     def test_reads_setup_type_defensively(self, sbu_src):
-        body = _method_body(sbu_src, "_build_setup_ai_snapshot")
+        body = _method_body(sbu_src, "_build_setup_inputs")
         assert 'hasattr(self, "_setup_type")' in body, (
             "session_type read must be guarded with hasattr so the helper "
             "is safe before the combo widget is created")

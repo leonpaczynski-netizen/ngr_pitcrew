@@ -1,8 +1,8 @@
 """OFR-2 — AI context snapshot discipline field tests.
 
 Covers:
-- SetupAISnapshot and PracticeAnalysisSnapshot have discipline="unknown" default
-- StrategyAISnapshot has NO discipline field
+- SetupInputs and PracticeInputs have discipline="unknown" default
+- StrategyInputs has NO discipline field
 - Builder derivations: "Race Setup"→"race", "Qualifying"→"qualifying", None→"unknown"
 - to_dict() includes discipline
 """
@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from data.ai_context_snapshot import (
-    PracticeAnalysisSnapshot,
-    SetupAISnapshot,
-    StrategyAISnapshot,
-    build_practice_analysis_snapshot,
-    build_setup_ai_snapshot,
-    build_strategy_ai_snapshot,
+from data.analysis_inputs import (
+    PracticeInputs,
+    SetupInputs,
+    StrategyInputs,
+    build_practice_inputs,
+    build_setup_inputs,
+    build_strategy_inputs,
 )
 
 
@@ -26,27 +26,27 @@ from data.ai_context_snapshot import (
 
 class TestDisciplineDefault:
     def test_setup_snapshot_discipline_defaults_unknown(self):
-        snap = build_setup_ai_snapshot()
+        snap = build_setup_inputs()
         assert snap.discipline == "unknown"
 
     def test_practice_snapshot_discipline_defaults_unknown(self):
-        snap = build_practice_analysis_snapshot()
+        snap = build_practice_inputs()
         assert snap.discipline == "unknown"
 
     def test_strategy_snapshot_has_no_discipline_field(self):
-        snap = build_strategy_ai_snapshot()
+        snap = build_strategy_inputs()
         assert not hasattr(snap, "discipline"), (
-            "StrategyAISnapshot must NOT have a discipline field"
+            "StrategyInputs must NOT have a discipline field"
         )
 
 
 # ---------------------------------------------------------------------------
-# SetupAISnapshot builder derivations
+# SetupInputs builder derivations
 # ---------------------------------------------------------------------------
 
 class TestSetupSnapshotDisciplineDerivation:
     def _build(self, session_type):
-        return build_setup_ai_snapshot(session_type=session_type)
+        return build_setup_inputs(session_type=session_type)
 
     def test_race_setup_maps_to_race(self):
         snap = self._build("Race Setup")
@@ -86,12 +86,12 @@ class TestSetupSnapshotDisciplineDerivation:
 
 
 # ---------------------------------------------------------------------------
-# PracticeAnalysisSnapshot builder derivations
+# PracticeInputs builder derivations
 # ---------------------------------------------------------------------------
 
 class TestPracticeSnapshotDisciplineDerivation:
     def _build(self, purpose):
-        return build_practice_analysis_snapshot(session_purpose=purpose)
+        return build_practice_inputs(session_purpose=purpose)
 
     def test_race_setup_maps_to_race(self):
         snap = self._build("Race Setup")
@@ -128,24 +128,24 @@ class TestPracticeSnapshotDisciplineDerivation:
 
 class TestToDictCarriesDiscipline:
     def test_setup_snapshot_to_dict_has_discipline(self):
-        snap = build_setup_ai_snapshot(session_type="Race Setup")
+        snap = build_setup_inputs(session_type="Race Setup")
         d = snap.to_dict()
         assert "discipline" in d
         assert d["discipline"] == "race"
 
     def test_practice_snapshot_to_dict_has_discipline(self):
-        snap = build_practice_analysis_snapshot(session_purpose="Qualifying")
+        snap = build_practice_inputs(session_purpose="Qualifying")
         d = snap.to_dict()
         assert "discipline" in d
         assert d["discipline"] == "qualifying"
 
     def test_setup_snapshot_unknown_to_dict(self):
-        snap = build_setup_ai_snapshot()
+        snap = build_setup_inputs()
         d = snap.to_dict()
         assert d["discipline"] == "unknown"
 
     def test_practice_snapshot_unknown_to_dict(self):
-        snap = build_practice_analysis_snapshot()
+        snap = build_practice_inputs()
         d = snap.to_dict()
         assert d["discipline"] == "unknown"
 
@@ -157,15 +157,15 @@ class TestToDictCarriesDiscipline:
 class TestFrozenDataclassCompat:
     def test_setup_snapshot_without_discipline_kwarg_compiles(self):
         """Existing call sites that don't pass discipline= must still work."""
-        snap = build_setup_ai_snapshot()
+        snap = build_setup_inputs()
         assert snap.discipline == "unknown"  # default applied
 
     def test_practice_snapshot_without_purpose_kwarg_compiles(self):
-        snap = build_practice_analysis_snapshot()
+        snap = build_practice_inputs()
         assert snap.discipline == "unknown"
 
     def test_strategy_snapshot_builds_without_error(self):
-        snap = build_strategy_ai_snapshot()
+        snap = build_strategy_inputs()
         d = snap.to_dict()
         assert "core" in d
-        assert "discipline" not in d  # must NOT bleed into StrategyAISnapshot.to_dict()
+        assert "discipline" not in d  # must NOT bleed into StrategyInputs.to_dict()

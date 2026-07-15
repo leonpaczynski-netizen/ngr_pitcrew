@@ -820,7 +820,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         track_ctx = self._build_track_context()
         # Pure computation of what the AI-input snapshot would be right now —
         # no AI call is made; this reports frozen-vs-legacy input status.
-        ai_snap = self._build_strategy_ai_snapshot()
+        ai_snap = self._build_strategy_inputs()
         # SessionContext sprint: route the live/practice flags through the
         # canonical SessionContext instead of reaching into tracker internals.
         # `has_valid_laps` still approximates "recorded laps are reviewable"
@@ -3636,9 +3636,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         # fields incl. fuel burn/pit loss, TrackContext identity) instead of
         # live config["strategy"] reads. Byte-identical to the previous inline
         # expressions when the stores are in sync (proven by
-        # tests/test_ai_context_snapshot.py); fresh DB event values win when
+        # tests/test_analysis_inputs.py); fresh DB event values win when
         # the event was edited after "Set as Active".
-        _ai_snap = self._build_strategy_ai_snapshot()
+        _ai_snap = self._build_strategy_inputs()
         race_params = _ai_snap.race_params_dict()
 
         params = RaceParams(**race_params)
@@ -4746,7 +4746,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         pit_loss_is_manual = pit_loss > 0
         if not pit_loss_is_manual:
             try:
-                _snap = self._build_strategy_ai_snapshot()
+                _snap = self._build_strategy_inputs()
                 pit_loss = float(_snap.race_params_dict().get("pit_loss_secs", 0.0) or 0.0)
             except Exception:
                 pit_loss = 0.0
@@ -7935,7 +7935,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             from data.session_context import empty_session_context
             return empty_session_context()
 
-    def _build_strategy_ai_snapshot(self, fuel_burn_override=None):
+    def _build_strategy_inputs(self, fuel_burn_override=None):
         """Frozen AI-input snapshot for race-strategy analysis.
 
         AI Snapshot Migration: freezes one consistent set of race parameters
@@ -7949,8 +7949,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         exists (recorded as a snapshot warning).
         """
         try:
-            from data.ai_context_snapshot import build_strategy_ai_snapshot
-            return build_strategy_ai_snapshot(
+            from data.analysis_inputs import build_strategy_inputs
+            return build_strategy_inputs(
                 event_context=self._build_event_context(),
                 strategy_context=self._build_strategy_context(),
                 track_context=self._build_track_context(),
@@ -7958,23 +7958,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 fuel_burn_override=fuel_burn_override,
             )
         except Exception:  # pragma: no cover - defensive; must never break AI calls
-            from data.ai_context_snapshot import build_strategy_ai_snapshot
-            return build_strategy_ai_snapshot(
+            from data.analysis_inputs import build_strategy_inputs
+            return build_strategy_inputs(
                 legacy_strategy=self._config.get("strategy", {}),
                 fuel_burn_override=fuel_burn_override,
             )
 
-    def _build_practice_ai_snapshot(self, fuel_burn_override=None):
+    def _build_practice_inputs(self, fuel_burn_override=None):
         """Frozen AI-input snapshot for practice analysis.
 
-        Same as ``_build_strategy_ai_snapshot`` but preserves the practice
+        Same as ``_build_strategy_inputs`` but preserves the practice
         path's DEF-P1-005 safe default (unknown tuning flag → locked).
         ``fuel_burn_override`` carries ``_computed_fuel_burn_lpl()``
         (telemetry-owned until a TelemetryContext sprint).
         """
         try:
-            from data.ai_context_snapshot import build_practice_analysis_snapshot
-            return build_practice_analysis_snapshot(
+            from data.analysis_inputs import build_practice_inputs
+            return build_practice_inputs(
                 event_context=self._build_event_context(),
                 strategy_context=self._build_strategy_context(),
                 track_context=self._build_track_context(),
@@ -7982,8 +7982,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                 fuel_burn_override=fuel_burn_override,
             )
         except Exception:  # pragma: no cover - defensive; must never break AI calls
-            from data.ai_context_snapshot import build_practice_analysis_snapshot
-            return build_practice_analysis_snapshot(
+            from data.analysis_inputs import build_practice_inputs
+            return build_practice_inputs(
                 legacy_strategy=self._config.get("strategy", {}),
                 fuel_burn_override=fuel_burn_override,
             )

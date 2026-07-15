@@ -303,14 +303,14 @@ class TestTyreWearSource(unittest.TestCase):
         """_run_practice_analysis must read tyre_wear_multiplier from the event config.
 
         AI Snapshot Migration: the read moved into the frozen snapshot layer
-        (data/ai_context_snapshot.py) — verify the routing plus the value flow.
+        (data/analysis_inputs.py) — verify the routing plus the value flow.
         """
         src = pathlib.Path(__file__).parent.parent / "ui" / "dashboard.py"
         text = src.read_text(encoding="utf-8")
-        self.assertIn("_build_practice_ai_snapshot", text,
+        self.assertIn("_build_practice_inputs", text,
                       "practice analysis must build race_params via the frozen snapshot")
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        rp = build_practice_analysis_snapshot(
+        from data.analysis_inputs import build_practice_inputs
+        rp = build_practice_inputs(
             legacy_strategy={"track": "T", "tyre_wear_multiplier": 5.0},
             fuel_burn_override=2.5).race_params_dict()
         self.assertEqual(rp["tyre_wear_multiplier"], 5.0,

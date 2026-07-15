@@ -1048,7 +1048,7 @@ class TestTuningLockedShortCircuit:
         """The tuning-locked short-circuit in _generate_baseline_setup writes to _build_setup_result.
 
         We cannot call _generate_baseline_setup directly (it requires a full
-        _build_setup_ai_snapshot / MainWindow host).  We instead verify the
+        _build_setup_inputs / MainWindow host).  We instead verify the
         behaviour at the DrivingAdvisor.build_baseline_setup_response layer,
         where tuning_locked=True produces empty changes — the UI handler guards
         on _locked before even calling the advisor.

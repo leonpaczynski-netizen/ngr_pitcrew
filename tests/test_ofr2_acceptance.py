@@ -5,7 +5,7 @@ and the practice/strategy orchestrators were removed. The deterministic core of
 OFR-2 survives and is what this file now covers:
 
 * strategy.telemetry_disciplines.build_discipline_telemetry_block (pure builder)
-* data.ai_context_snapshot discipline field derivation
+* data.analysis_inputs discipline field derivation
 * data.recommendation_scoring (OFR-1 block, untouched)
 * ui.setup_builder_ui._resolve_recent_laps (per-lap telemetry resolver)
 
@@ -137,79 +137,79 @@ class TestAC6NoTyreRadius:
 
 
 # ===========================================================================
-# AC8 — SetupAISnapshot + PracticeAnalysisSnapshot gain discipline field;
-#        StrategyAISnapshot does NOT
+# AC8 — SetupInputs + PracticeInputs gain discipline field;
+#        StrategyInputs does NOT
 # ===========================================================================
 
 class TestAC8SnapshotDisciplineField:
-    """AC8: dataclass field checks + derivations; StrategyAISnapshot negative check."""
+    """AC8: dataclass field checks + derivations; StrategyInputs negative check."""
 
     def test_ac8_setup_snapshot_has_discipline_field(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        snap = build_setup_ai_snapshot()
-        assert hasattr(snap, "discipline"), "SetupAISnapshot must have discipline field"
+        from data.analysis_inputs import build_setup_inputs
+        snap = build_setup_inputs()
+        assert hasattr(snap, "discipline"), "SetupInputs must have discipline field"
 
     def test_ac8_setup_snapshot_default_unknown(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        assert build_setup_ai_snapshot().discipline == "unknown"
+        from data.analysis_inputs import build_setup_inputs
+        assert build_setup_inputs().discipline == "unknown"
 
     def test_ac8_setup_snapshot_race_setup_derives_race(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        snap = build_setup_ai_snapshot(session_type="Race Setup")
+        from data.analysis_inputs import build_setup_inputs
+        snap = build_setup_inputs(session_type="Race Setup")
         assert snap.discipline == "race"
 
     def test_ac8_setup_snapshot_qualifying_setup_derives_qualifying(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        snap = build_setup_ai_snapshot(session_type="Qualifying Setup")
+        from data.analysis_inputs import build_setup_inputs
+        snap = build_setup_inputs(session_type="Qualifying Setup")
         assert snap.discipline == "qualifying"
 
     def test_ac8_setup_snapshot_none_derives_unknown(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        snap = build_setup_ai_snapshot(session_type=None)
+        from data.analysis_inputs import build_setup_inputs
+        snap = build_setup_inputs(session_type=None)
         assert snap.discipline == "unknown"
 
     def test_ac8_practice_snapshot_has_discipline_field(self):
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        snap = build_practice_analysis_snapshot()
+        from data.analysis_inputs import build_practice_inputs
+        snap = build_practice_inputs()
         assert hasattr(snap, "discipline")
 
     def test_ac8_practice_snapshot_default_unknown(self):
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        assert build_practice_analysis_snapshot().discipline == "unknown"
+        from data.analysis_inputs import build_practice_inputs
+        assert build_practice_inputs().discipline == "unknown"
 
     def test_ac8_practice_snapshot_qualifying_derives_qualifying(self):
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        snap = build_practice_analysis_snapshot(session_purpose="Qualifying")
+        from data.analysis_inputs import build_practice_inputs
+        snap = build_practice_inputs(session_purpose="Qualifying")
         assert snap.discipline == "qualifying"
 
     def test_ac8_practice_snapshot_race_setup_derives_race(self):
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        snap = build_practice_analysis_snapshot(session_purpose="Race Setup")
+        from data.analysis_inputs import build_practice_inputs
+        snap = build_practice_inputs(session_purpose="Race Setup")
         assert snap.discipline == "race"
 
     def test_ac8_strategy_snapshot_has_no_discipline_field(self):
-        from data.ai_context_snapshot import build_strategy_ai_snapshot
-        snap = build_strategy_ai_snapshot()
+        from data.analysis_inputs import build_strategy_inputs
+        snap = build_strategy_inputs()
         assert not hasattr(snap, "discipline"), (
-            "StrategyAISnapshot must NOT have a discipline field (AC8 negative check)"
+            "StrategyInputs must NOT have a discipline field (AC8 negative check)"
         )
 
     def test_ac8_strategy_snapshot_to_dict_no_discipline_key(self):
-        from data.ai_context_snapshot import build_strategy_ai_snapshot
-        d = build_strategy_ai_snapshot().to_dict()
+        from data.analysis_inputs import build_strategy_inputs
+        d = build_strategy_inputs().to_dict()
         assert "discipline" not in d, (
-            "StrategyAISnapshot.to_dict() must not carry a discipline key"
+            "StrategyInputs.to_dict() must not carry a discipline key"
         )
 
     def test_ac8_setup_snapshot_to_dict_has_discipline(self):
-        from data.ai_context_snapshot import build_setup_ai_snapshot
-        d = build_setup_ai_snapshot(session_type="Race Setup").to_dict()
+        from data.analysis_inputs import build_setup_inputs
+        d = build_setup_inputs(session_type="Race Setup").to_dict()
         assert "discipline" in d
         assert d["discipline"] == "race"
 
     def test_ac8_practice_snapshot_to_dict_has_discipline(self):
-        from data.ai_context_snapshot import build_practice_analysis_snapshot
-        d = build_practice_analysis_snapshot(session_purpose="Qualifying").to_dict()
+        from data.analysis_inputs import build_practice_inputs
+        d = build_practice_inputs(session_purpose="Qualifying").to_dict()
         assert "discipline" in d
         assert d["discipline"] == "qualifying"
 

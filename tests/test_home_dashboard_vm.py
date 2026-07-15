@@ -23,7 +23,7 @@ from data.strategy_context import (
 )
 from data.setup_context import build_setup_context, empty_setup_context
 from data.track_context import build_track_context, empty_track_context
-from data.ai_context_snapshot import build_strategy_ai_snapshot
+from data.analysis_inputs import build_strategy_inputs
 
 
 ROOT = Path(__file__).parent.parent
@@ -435,7 +435,7 @@ class TestFriendlyLabels:
         snap = build_strategy_prompt_snapshot(sc, ev)
         setup = _setup_ctx(ev, snap)
         tc = _track_ctx(ev)
-        ai = build_strategy_ai_snapshot(
+        ai = build_strategy_inputs(
             event_context=ev, strategy_context=sc,
             legacy_strategy={"track": "Fuji Speedway"})
         return hd.build_home_dashboard_state(
@@ -579,7 +579,7 @@ class TestHomeTabWiring:
         assert "_build_strategy_context" in body
         assert "_build_track_context" in body
         assert "_last_setup_context" in body
-        assert "_build_strategy_ai_snapshot" in body
+        assert "_build_strategy_inputs" in body
         assert "build_home_dashboard_state" in body
 
     def test_home_methods_do_not_write_state(self, dash_src):
