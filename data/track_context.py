@@ -575,11 +575,19 @@ def build_track_context(
         except Exception:  # pragma: no cover - defensive
             station_map_station_count = 0
     else:
-        station_map_available = _as_bool(station_map_exists, False)
+        # No in-memory station map — fall back to the explicit existence flag or
+        # the disk audit (Sprint 3), so a fresh restart still sees an on-disk map.
+        station_map_available = (
+            _as_bool(station_map_exists, False)
+            or _as_bool(_get(file_audit, "station_map_exists"), False)
+        )
         station_map_station_count = 0
 
-    accepted_model_available = _as_bool(
-        _get(alignment, "accepted"), False)
+    # Accepted model: in-memory alignment OR the disk audit (Sprint 3).
+    accepted_model_available = (
+        _as_bool(_get(alignment, "accepted"), False)
+        or _as_bool(_get(file_audit, "accepted_exists"), False)
+    )
 
     lap_offset_available, lap_offset_status, lap_offset_confidence = (
         _derive_lap_offset(offset_calibration)
