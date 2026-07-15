@@ -1715,14 +1715,14 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         detect_row_l.addStretch()
         ptt_form.addRow("Push-to-talk button:", detect_row_w)
 
+        # Local-only recognition (Sprint 11): speech never leaves the machine.
+        # The cloud option was removed — Pit Crew is fully local and private.
         self._combo_speech_backend = QComboBox()
-        self._combo_speech_backend.addItem("Google (online)", "google")
-        self._combo_speech_backend.addItem("Windows / Sphinx (offline)", "sphinx")
-        cur_backend = qc.get("speech_backend", "google")
-        for i in range(self._combo_speech_backend.count()):
-            if self._combo_speech_backend.itemData(i) == cur_backend:
-                self._combo_speech_backend.setCurrentIndex(i)
-                break
+        self._combo_speech_backend.addItem("Local — CMU PocketSphinx (offline)", "sphinx")
+        self._combo_speech_backend.setCurrentIndex(0)
+        self._combo_speech_backend.setEnabled(False)
+        self._combo_speech_backend.setToolTip(
+            "Speech is recognised locally (offline) — it never leaves your PC.")
         ptt_form.addRow("Speech recognition:", self._combo_speech_backend)
 
         self._combo_microphone = QComboBox()
