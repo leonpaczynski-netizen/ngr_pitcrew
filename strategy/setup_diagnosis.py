@@ -1411,25 +1411,42 @@ def _classify_bottoming_confidence(
 
 
 def _rh_permitted_increment(bottoming_confidence: dict, loc_usable: bool) -> int:
-    """Return the permitted ride-height increase increment (mm) given confidence.
+    """Return the permitted ride-height increase increment (mm).
 
-    confidence low  => 0
-    confidence medium => 2
-    confidence high & subtype floor_contact & loc_usable => 6
-    confidence high & subtype floor_contact & not loc_usable => 4
-    confidence high & other subtype => 4
+    Sprint 4 anti-ratchet: a ride-height RAISE is authorised ONLY for genuine
+    floor contact (or high-confidence suspension compression) away from kerbs.
+    Kerb strikes (which classify as NORMAL_OR_EXPECTED), throttle squat, and
+    insufficient data NEVER authorise a raise — this is the veto that stops a
+    harmless kerb-contact bottoming from creeping ride height up across sessions
+    (the reported 56 -> 58 -> 60 -> 62 ratchet, where the previous rule returned
+    +2 mm at medium confidence regardless of subtype).
+
+      subtype not floor/compression         => 0  (veto — kerb strike / squat / unknown)
+      confidence low                        => 0
+      confidence medium & floor_contact     => 2
+      confidence medium & suspension_comp   => 0  (needs high confidence)
+      confidence high & floor_contact & loc  => 6
+      confidence high & floor_contact       => 4
+      confidence high & suspension_comp     => 2
     """
-    confidence = bottoming_confidence.get("confidence", "low") if bottoming_confidence else "low"
-    subtype = bottoming_confidence.get("subtype", "insufficient_data") if bottoming_confidence else "insufficient_data"
+    if not bottoming_confidence:
+        return 0
+    confidence = bottoming_confidence.get("confidence", "low")
+    subtype = bottoming_confidence.get("subtype", "insufficient_data")
+
+    # Veto: only genuine floor contact / suspension compression may raise ride
+    # height. Everything else (kerb_strike, throttle_squat, insufficient_data) = 0.
+    if subtype not in ("floor_contact", "suspension_compression"):
+        return 0
 
     if confidence == "low":
         return 0
     if confidence == "medium":
-        return 2
+        return 2 if subtype == "floor_contact" else 0
     # confidence == "high"
     if subtype == "floor_contact":
         return 6 if loc_usable else 4
-    return 4
+    return 2  # suspension_compression at high confidence — smaller, guarded step
 
 
 def _derive_driver_feel_traction_status(feeling_history: list) -> str:

@@ -150,9 +150,11 @@ def test_schema_version_is_v10(db):
     # vs_previous/corner/phase columns to driver_feedback).
     # Reconciled for Engineering-Brain live telemetry: 16 → 17 (_migrate_v17 added the
     # standalone additive corner_slip_telemetry table).
+    # Reconciled for cross-lap persistence (Sprint 5): 17 → 18 (_migrate_v18 added the
+    # standalone additive corner_issue_occurrences table).
     # The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 17
+    assert version == 18
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

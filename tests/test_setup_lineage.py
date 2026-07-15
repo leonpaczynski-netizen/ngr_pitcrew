@@ -232,7 +232,7 @@ def test_lineage_persistence_and_rollback_db():
     db = SessionDB(":memory:")
     # DB_VERSION reached 17 with the cross-session corner_slip_telemetry table (v16 was
     # the Practice Review capture columns).
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 17
     for ch in ([{"field": "arb_front", "from": "6", "to": "5"}],
                [{"field": "lsd_accel", "from": "15", "to": "17"}]):
         db._conn.execute(

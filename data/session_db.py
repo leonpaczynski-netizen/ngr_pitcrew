@@ -462,8 +462,39 @@ CREATE TABLE IF NOT EXISTS race_plans (
 );
 """
 
+_DDL_V18 = """
+CREATE TABLE IF NOT EXISTS corner_issue_occurrences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_id INTEGER NOT NULL,
+    track TEXT NOT NULL DEFAULT '',
+    layout_id TEXT NOT NULL DEFAULT '',
+    session_id INTEGER NOT NULL DEFAULT 0,
+    setup_checkpoint_id TEXT NOT NULL DEFAULT '',
+    lap_number INTEGER NOT NULL DEFAULT 0,
+    segment_id TEXT NOT NULL DEFAULT '',
+    corner_phase TEXT NOT NULL DEFAULT '',
+    issue_type TEXT NOT NULL DEFAULT '',
+    issue_subtype TEXT NOT NULL DEFAULT '',
+    axle TEXT NOT NULL DEFAULT '',
+    duration_s REAL NOT NULL DEFAULT 0.0,
+    severity REAL NOT NULL DEFAULT 0.0,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    throttle REAL NOT NULL DEFAULT 0.0,
+    brake REAL NOT NULL DEFAULT 0.0,
+    speed_kmh REAL NOT NULL DEFAULT 0.0,
+    gear INTEGER NOT NULL DEFAULT 0,
+    compound TEXT NOT NULL DEFAULT '',
+    tyre_age INTEGER NOT NULL DEFAULT 0,
+    exclusion_reason TEXT NOT NULL DEFAULT '',
+    provenance TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_corner_issue_occ_scope
+    ON corner_issue_occurrences (car_id, track, layout_id);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17)
+        + _DDL_V17 + _DDL_V18)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -565,6 +596,18 @@ class SessionDB:
             self._migrate_v17()
             self._conn.execute("PRAGMA user_version = 17")
             self._conn.commit()
+        if version < 18:
+            self._migrate_v18()
+            self._conn.execute("PRAGMA user_version = 18")
+            self._conn.commit()
+
+    def _migrate_v18(self) -> None:
+        """Cross-lap persistence (Sprint 5) — additive corner_issue_occurrences
+        table (schema v18). Stores one row per admissible/suppressed issue
+        episode so the pure persistence engine can compute same-corner recurrence
+        and cross-session confirmation from stored data. Standalone table
+        (CREATE IF NOT EXISTS, idempotent); touches no existing table."""
+        self._conn.executescript(_DDL_V18)
 
     def _migrate_v17(self) -> None:
         """Engineering-Brain (live telemetry) — additive corner_slip_telemetry table
@@ -2560,6 +2603,75 @@ class SessionDB:
                      updated_at=excluded.updated_at""",
                 rows)
             self._conn.commit()
+
+    def save_issue_occurrences(self, car_id: int, track: str, layout_id: str,
+                               occurrences) -> int:
+        """Insert per-episode issue occurrences (Sprint 5, additive).
+
+        ``occurrences`` are duck-typed (IssueOccurrence or dicts). Both admissible
+        and suppressed episodes are stored (suppressed carry exclusion_reason) so
+        the record stays honest and visible. Returns the number of rows inserted.
+        Never raises out — a persistence failure must not break a session save.
+        """
+        rows = []
+        import datetime as _dt
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        for o in (occurrences or []):
+            def g(name, default=None):
+                if isinstance(o, dict):
+                    return o.get(name, default)
+                return getattr(o, name, default)
+            rows.append((
+                int(car_id or 0), track or "", layout_id or "",
+                int(g("session_id", 0) or 0), str(g("setup_checkpoint_id", "") or ""),
+                int(g("lap_number", 0) or 0), str(g("segment_id", "") or ""),
+                str(g("corner_phase", "") or ""), str(g("issue_type", "") or ""),
+                str(g("issue_subtype", "") or ""), str(g("axle", "") or ""),
+                float(g("duration_s", 0.0) or 0.0), float(g("severity", 0.0) or 0.0),
+                float(g("confidence", 0.0) or 0.0), float(g("throttle", 0.0) or 0.0),
+                float(g("brake", 0.0) or 0.0), float(g("speed_kmh", 0.0) or 0.0),
+                int(g("gear", 0) or 0), str(g("compound", "") or ""),
+                int(g("tyre_age", 0) or 0), str(g("exclusion_reason", "") or ""),
+                str(g("provenance", "") or ""), now,
+            ))
+        if not rows:
+            return 0
+        try:
+            with self._lock:
+                self._conn.executemany(
+                    """INSERT INTO corner_issue_occurrences
+                       (car_id, track, layout_id, session_id, setup_checkpoint_id,
+                        lap_number, segment_id, corner_phase, issue_type, issue_subtype,
+                        axle, duration_s, severity, confidence, throttle, brake,
+                        speed_kmh, gear, compound, tyre_age, exclusion_reason,
+                        provenance, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    rows)
+                self._conn.commit()
+            return len(rows)
+        except Exception:
+            return 0
+
+    def get_issue_occurrences(self, car_id: int, track: str,
+                              layout_id: str = "") -> list[dict]:
+        """Return stored issue-occurrence rows for this car/track(/layout).
+
+        Rows are plain dicts; the caller rebuilds IssueOccurrence and feeds the
+        pure cross-lap persistence engine (enables cross-session confirmation).
+        """
+        if not track:
+            return []
+        if layout_id:
+            where = "car_id = ? AND track = ? AND layout_id = ?"
+            params: tuple = (int(car_id or 0), track, layout_id)
+        else:
+            where = "car_id = ? AND track = ?"
+            params = (int(car_id or 0), track)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM corner_issue_occurrences WHERE {where} ORDER BY id",
+                params).fetchall()
+        return [dict(r) for r in rows]
 
     def get_corner_slip_rows(self, car_id: int, track: str,
                              layout_id: str = "") -> list[dict]:
