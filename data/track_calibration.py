@@ -1204,6 +1204,12 @@ class TrackModelFileAudit:
     offset_file: str = ""
     offset_exists: bool = False
 
+    # Sprint 3: disk existence of the two artefacts the audit previously omitted.
+    accepted_file: str = ""
+    accepted_exists: bool = False
+    station_map_file: str = ""
+    station_map_exists: bool = False
+
     def summary_line(self) -> str:
         """Return a compact one-line summary for UI display."""
         if not self.loc_id or not self.lay_id:
@@ -1313,10 +1319,27 @@ def audit_track_model_files(
                 audit.calibration_laps_exists = False  # treat as missing if corrupt
 
         # ── Reviewed segment file ─────────────────────────────────────────────
-        reviewed_name = f"{loc_id}__{lay_id}.reviewed_segments.json"
-        reviewed_path = d / reviewed_name
-        audit.reviewed_file   = str(reviewed_path)
-        audit.reviewed_exists = reviewed_path.exists()
+        # Real reviewed files are timestamped: "{loc}__{lay}__reviewed_segments__{ts}.json"
+        # (data/track_segment_review.py). Match by glob; fall back to the legacy
+        # non-timestamped name so both shapes are detected.
+        reviewed_glob = sorted(d.glob(f"{loc_id}__{lay_id}__reviewed_segments__*.json"))
+        legacy_reviewed = d / f"{loc_id}__{lay_id}.reviewed_segments.json"
+        if reviewed_glob:
+            audit.reviewed_file   = str(reviewed_glob[-1])  # newest (timestamp sorts last)
+            audit.reviewed_exists = True
+        else:
+            audit.reviewed_file   = str(legacy_reviewed)
+            audit.reviewed_exists = legacy_reviewed.exists()
+
+        # ── Accepted model file (Sprint 3) ────────────────────────────────────
+        accepted_path = d / f"{loc_id}__{lay_id}.accepted_model.json"
+        audit.accepted_file   = str(accepted_path)
+        audit.accepted_exists = accepted_path.exists()
+
+        # ── Station map file (Sprint 3) ───────────────────────────────────────
+        station_path = d / f"{loc_id}__{lay_id}.station_map.json"
+        audit.station_map_file   = str(station_path)
+        audit.station_map_exists = station_path.exists()
 
         # ── Lap offset calibration file ───────────────────────────────────────
         offset_name = f"{loc_id}__{lay_id}__lap_offset.json"

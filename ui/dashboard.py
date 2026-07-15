@@ -838,11 +838,26 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
                     learning = self._db.has_learning_for_car_track(_cid, event_ctx.track)
         except Exception:
             learning = False
+        # Sprint 3: single disk-first track-readiness verdict. Uses the resolved
+        # identity so the Command Centre reflects on-disk assets without opening
+        # Track Modelling. Every other screen calls the same resolver.
+        track_readiness = None
+        try:
+            from data.track_readiness_disk import resolve_track_readiness_from_disk
+            _tid = getattr(track_ctx, "identity", None)
+            _loc = str(getattr(_tid, "track_location_id", "") or "")
+            _lay = str(getattr(_tid, "layout_id", "") or "")
+            if _loc and _lay:
+                track_readiness = resolve_track_readiness_from_disk(_loc, _lay)
+        except Exception:
+            track_readiness = None
+
         return build_home_dashboard_state(
             event_context=event_ctx,
             strategy_context=strategy_ctx,
             setup_context=setup_ctx,
             track_context=track_ctx,
+            track_readiness=track_readiness,
             ai_snapshot=ai_snap,
             has_practice_laps=session_ctx.has_practice_laps,
             has_valid_laps=session_ctx.has_valid_laps,

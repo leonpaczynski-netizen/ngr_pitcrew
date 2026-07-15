@@ -348,7 +348,7 @@ def _build_race_setup_card(event_context, track_context) -> HomeDashboardCard:
 # --------------------------------------------------------------------------- #
 # Section B — Track Intelligence
 # --------------------------------------------------------------------------- #
-def _build_track_card(track_context, event_context) -> HomeDashboardCard:
+def _build_track_card(track_context, event_context, readiness=None) -> HomeDashboardCard:
     identity = _get(track_context, "identity")
     source_val = _enum_value(_get(track_context, "source"), "empty")
     track_name = (
@@ -400,31 +400,53 @@ def _build_track_card(track_context, event_context) -> HomeDashboardCard:
             kind="blocker",
         ))
 
-    # Live mapping readiness — echo the context's own gate, never invent it.
-    can_map = bool(_get(track_context, "can_attempt_live_mapping", False))
-    if can_map:
-        lines.append("Live corner mapping: ready to attempt")
-    else:
-        lines.append("Live corner mapping: not available")
-        blockers = ()
-        try:
-            fn = getattr(track_context, "live_mapping_blockers", None)
-            if callable(fn):
-                blockers = tuple(fn() or ())
-        except Exception:
-            blockers = ()
-        for b in blockers:
-            warnings.append(HomeDashboardWarning(
-                CARD_TRACK, f"Live mapping is blocked: {_as_str(b)}", kind="blocker"))
-        if not blockers:
-            warnings.append(HomeDashboardWarning(
-                CARD_TRACK, "Track model is unavailable for live mapping.",
-                kind="blocker"))
+    # Track readiness — ONE deterministic verdict. The Qt layer computes it
+    # disk-first (data.track_readiness_disk.resolve_track_readiness_from_disk)
+    # and passes it in, so a fresh restart reflects on-disk assets without
+    # opening Track Modelling. Falls back to the context's station-map-only gate
+    # only when no verdict is supplied (keeps the pure VM usable standalone).
+    readiness_state = _enum_value(_get(readiness, "state"), "") if readiness is not None else ""
 
-    # Mismatch / staleness against the active event.
+    if readiness is not None:
+        ready_now = readiness_state in ("ready_approved", "ready_seed_geometry")
+        lines.append("Live corner mapping: " + ("ready" if ready_now else "not ready"))
+        if readiness_state == "ready_seed_geometry":
+            lines.append("Note: usable from seed geometry — no approved reference path yet.")
+        na = _as_str(_get(readiness, "next_action"))
+        if na:
+            lines.append("Next: " + na)
+        # Surface blockers only for genuinely not-ready states.
+        if not ready_now:
+            for b in tuple(_get(readiness, "blockers", ()) or ()):
+                warnings.append(HomeDashboardWarning(
+                    CARD_TRACK, _as_str(b),
+                    kind="blocker" if readiness_state in ("invalid_asset", "missing_asset") else "warning"))
+    else:
+        # Legacy fallback: echo the context's own station-map gate.
+        can_map = bool(_get(track_context, "can_attempt_live_mapping", False))
+        lines.append("Live corner mapping: " + ("ready to attempt" if can_map else "not available"))
+        if not can_map:
+            blockers = ()
+            try:
+                fn = getattr(track_context, "live_mapping_blockers", None)
+                if callable(fn):
+                    blockers = tuple(fn() or ())
+            except Exception:
+                blockers = ()
+            for b in blockers:
+                warnings.append(HomeDashboardWarning(
+                    CARD_TRACK, f"Live mapping is blocked: {_as_str(b)}", kind="blocker"))
+            if not blockers:
+                warnings.append(HomeDashboardWarning(
+                    CARD_TRACK, "Track model is unavailable for live mapping.",
+                    kind="blocker"))
+
+    # Mismatch / staleness against the active event (independent of readiness).
+    event_mismatch = False
     try:
         fn = getattr(track_context, "mismatches_event", None)
         if callable(fn) and event_context is not None and fn(event_context):
+            event_mismatch = True
             warnings.append(HomeDashboardWarning(
                 CARD_TRACK,
                 "The track selected in Track Modelling does not match the "
@@ -434,7 +456,18 @@ def _build_track_card(track_context, event_context) -> HomeDashboardCard:
     except Exception:
         pass
 
-    if warnings:
+    # Status: readiness verdict wins when supplied.
+    if readiness is not None:
+        if readiness_state in ("ready_approved", "ready_seed_geometry"):
+            status = HomeDashboardStatus.ATTENTION if event_mismatch else HomeDashboardStatus.READY
+        elif readiness_state == "invalid_asset":
+            status = HomeDashboardStatus.BLOCKED
+        elif readiness_state == "missing_asset":
+            status = HomeDashboardStatus.MISSING
+        else:  # partial / identity_mismatch
+            status = HomeDashboardStatus.ATTENTION
+    elif warnings:
+        can_map = bool(_get(track_context, "can_attempt_live_mapping", False))
         status = (
             HomeDashboardStatus.BLOCKED
             if any(w.kind == "blocker" for w in warnings) and not can_map
@@ -710,6 +743,7 @@ def build_home_dashboard_state(
     strategy_context=None,
     setup_context=None,
     track_context=None,
+    track_readiness=None,
     ai_snapshot=None,
     strategy_snapshot=None,
     has_practice_laps: bool = False,
@@ -748,7 +782,7 @@ def build_home_dashboard_state(
         (CARD_RACE_SETUP, "Race Setup",
          lambda: _build_race_setup_card(event_context, track_context)),
         (CARD_TRACK, "Track Intelligence",
-         lambda: _build_track_card(track_context, event_context)),
+         lambda: _build_track_card(track_context, event_context, track_readiness)),
         (CARD_SETUP, "Setup Brain",
          lambda: _build_setup_card(setup_context, event_context, strategy_snapshot)),
         (CARD_STRATEGY, "Strategy Brain",
