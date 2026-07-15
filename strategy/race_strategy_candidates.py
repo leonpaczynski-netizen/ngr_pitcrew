@@ -383,10 +383,17 @@ def _fastest_compound(evidence: RaceStrategyEvidence) -> str:
 
 
 def _second_compound(evidence: RaceStrategyEvidence, fastest: str) -> Optional[str]:
-    """A distinct second compound for a compound-switch plan, or None."""
-    for c in evidence.available_compounds:
-        if c != fastest:
-            return c
+    """A distinct, MEASURED second compound for a compound-switch plan, or None.
+
+    Untested compounds (no measured pace) must never enter a recommended
+    strategy — they may only appear as unvalidated alternatives. So a
+    compound-switch candidate is built only from a compound that has real pace
+    data; when none exists, return None and no switch candidate is generated.
+    """
+    tested = [c for c in evidence.available_compounds
+              if c != fastest and evidence.compound_pace_s(c) > 0]
+    if tested:
+        return min(tested, key=lambda c: evidence.compound_pace_s(c))
     return None
 
 
