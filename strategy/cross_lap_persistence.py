@@ -1,5 +1,13 @@
 """Cross-lap issue persistence engine (pure, Qt-free, deterministic).
 
+⚠ EXPERIMENTAL — NOT WIRED INTO THE LIVE PATH (see tests/test_engine_wiring_status.py).
+This recurrence engine is consumed only by the dormant ``setup_decision``
+arbiter, and its SQLite store (``corner_issue_occurrences`` /
+``save_issue_occurrences``, DB v18) is defined but the live recorder does not yet
+populate it. Validated by the golden UAT + its own tests; kept as the intended
+future evidence layer for setup arbitration. The live setup-advice path uses
+``setup_diagnosis`` instead.
+
 Sprint 5 of the determinism rebuild. A telemetry-derived issue (wheelspin,
 lockup, bottoming, oversteer, ...) must NOT become setup-authoring evidence
 from one lap, one packet cluster, or a raw per-lap average. This module answers

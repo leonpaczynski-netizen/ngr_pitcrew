@@ -131,6 +131,14 @@ def compute_feasibility(
 ) -> FeasibilityReport:
     """Compute feasibility of all candidate stop-count strategies.
 
+    ⚠ EXPERIMENTAL — this function is NOT wired into the live path
+    (see tests/test_engine_wiring_status.py); the Group 48
+    ``race_strategy_candidates`` legality gate replaced it. NOTE: this module's
+    DATACLASSES (``DataGap``/``FeasibilityReport``/``RejectedStrategy``) ARE live —
+    re-exported via ``strategy.race_params`` and rendered by the dashboard — so the
+    module must not be deleted; only ``compute_feasibility`` /
+    ``check_compound_eligibility`` are dormant.
+
     Steps:
     1. Global field validation → DataGaps (and early return for fatal gaps).
     2. Per-compound eligibility.
