@@ -1,11 +1,15 @@
 # NGR Pit Crew — Consolidated UAT Runbook
 
-**Version:** 1.0 · **Date:** ___________ · **Build:** master @ `1542ec7` (post determinism rebuild + Sprint 10 UI + voice)
+**Version:** 1.1 · **Date:** ___________ · **Build:** master @ `4e35f36` (post determinism rebuild + Sprint 10 UI + voice + codebase-audit hardening)
 **Tester:** ___________
 
 This is the **single, ordered UAT script** for the rebuilt app. It supersedes the
 fragmented per-sprint checklists for acceptance purposes — use those only as
 deep-dive references. One defect scheme throughout: **UAT-NNN** (log at the end).
+
+> **v1.1 note:** the UI test surface is unchanged behaviourally, but `ui/dashboard.py`
+> was decomposed into per-tab mixin modules (see **Appendix — Module map**). If you
+> log a defect, the module map tells you which file owns that surface.
 
 **Golden fixture used throughout:** Porsche 911 RSR '17 @ **Fuji International Speedway – Full Course**.
 
@@ -142,7 +146,7 @@ Only these need hardware. Validates what automation cannot.
 ### B7 · Live replan (advisory placeholder — expected behaviour)
 | ✔ | ID | Step | Expected |
 |---|----|------|----------|
-| ☐ | UAT-B7.1 | Mid-race, trigger a re-plan | Honest "Deterministic mid-race re-plan is not yet available" message; **no** pit call, **no** setup change (see Known Limitations) |
+| ☐ | UAT-B7.1 | Mid-race, trigger a re-plan | Honest "Live mid-race re-plan is not available in this build" message; **no** pit call, **no** setup change (see Known Limitations) |
 
 ---
 
@@ -176,3 +180,42 @@ These are intentional/disclosed. Confirm the behaviour matches, don't file bugs:
 | B — Live | | | |
 
 **Overall UAT verdict:** ___________________________
+
+---
+
+## Appendix — Module map (where each UAT area lives)
+
+`ui/dashboard.py` was decomposed from a ~9.1k-line monolith into a lean
+orchestration core (~6.6k lines) plus **six per-tab mixins** that `MainWindow`
+composes. Behaviour is unchanged — this map is for **defect triage**: when a step
+fails, start in the module that owns that surface.
+
+**MainWindow composition** (`ui/dashboard.py`):
+`class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlanMixin, EventPlannerMixin, LiveMixin, QMainWindow)`
+
+| UAT area | Owning module(s) | Backing engine / data |
+|----------|------------------|-----------------------|
+| §0 launch, §A1 | `main.py`, `ui/dashboard.py` (MainWindow core), `config_paths.py` (config safety) | — |
+| §A2 Voice + in-app voice manager | `ui/settings_ui.py` (`SettingsMixin` — picker/download), `voice/piper_tts.py`, `voice/announcer.py` | `voice/piper_models/*.onnx` |
+| §A3 Home guided stepper | `ui/dashboard.py` (`_build_home_tab`), `ui/workflow_stepper_widget.py` | `ui/workflow_stepper.py`, `ui/home_dashboard_vm.py` |
+| §A4 Event Planner | `ui/event_planner_ui.py` (`EventPlannerMixin`) — the 4 `config["strategy"]` writers stay in `ui/dashboard.py` (fan-out allowlist) | `data/event_context.py` |
+| §A5 Setup Builder (advice cards + apply 3-state) | `ui/setup_builder_ui.py` (`SetupBuilderMixin`), `ui/setup_form_widget.py`, `ui/setup_advice_render.py` | `strategy/setup_diagnosis.py`, `strategy/setup_rule_engine.py`, `data/applied_checkpoint.py` |
+| §A6 / §B6 Strategy · Race Plan · Practice→Strategy | `ui/race_plan_ui.py` (`RacePlanMixin`), `ui/race_strategy_vm.py`, `ui/race_strategy_readiness_vm.py` | `strategy/race_strategy_pipeline.py`, `strategy/race_strategy_from_session.py`, `strategy/practice_evidence_bundle.py` |
+| §A7 Track readiness | `data/track_readiness.py`, `data/track_readiness_disk.py`, `ui/track_modelling_ui.py` (`TrackModellingMixin`) | `data/track_*` model stores |
+| §A8 / §B history & persistence | `ui/dashboard.py` (History tab), `data/session_db.py` (atomic, additive migrations to v19) | `data/gt7_sessions.db` |
+| §B1 Telemetry connection | `telemetry/listener.py`, `telemetry/packet.py` (Salsa20 decode), `telemetry/state.py` | — |
+| §B2 Live Race Engineer (cues/beeps/panels) | `ui/live_ui.py` (`LiveMixin`), `voice/announcer.py` | `telemetry/state.py` |
+| §B3 Practice capture → episodes/recurrence | `telemetry/slip_events.py`, `strategy/cross_lap_persistence.py`¹ | `data/session_db.py` (v18 store) |
+| §B4 Push-to-talk voice queries | `voice/query_listener.py` (local PocketSphinx), `ui/settings_ui.py` (Detect/Test PTT) | — |
+| §B5 Practice Review — driver feedback | `ui/dashboard.py` (Practice Review tab), `strategy/driving_advisor.py` | `data/session_db.py` (driver_feedback) |
+| §B7 Live replan (advisory placeholder) | `ui/dashboard.py` (`_launch_replan_worker`), `strategy/race_strategy_replan.py` | — |
+
+Tabs still living in the `ui/dashboard.py` core (smaller, not yet extracted):
+**Garage, Practice Review, Telemetry, Diagnostics, History**.
+
+¹ `strategy/cross_lap_persistence.py`, `strategy/setup_decision.py` (arbitration),
+`strategy/tyre_curves.py`, `strategy/feasibility.py`/`outcome.py` are marked
+**⚠ EXPERIMENTAL — not wired into the live UI path** (validated by the golden-UAT
+gates directly, not by driving the app). A hands-on tester won't exercise them;
+see `tests/test_engine_wiring_status.py` for the enforced live-vs-experimental
+registry. The live setup path uses `setup_diagnosis`/`setup_rule_engine`.
