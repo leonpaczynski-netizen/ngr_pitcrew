@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from strategy.engine import RaceStrategyEngine, Stint
 from telemetry.state import Priority
 
-DASHBOARD_SRC = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+DASHBOARD_SRC = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

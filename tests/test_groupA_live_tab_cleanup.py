@@ -29,7 +29,7 @@ import unittest
 # ---------------------------------------------------------------------------
 
 _ROOT = pathlib.Path(__file__).parent.parent
-_DASHBOARD_SRC = (_ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+_DASHBOARD_SRC = (_ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (_ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
 _MIXIN_SRC     = (_ROOT / "ui" / "track_modelling_ui.py").read_text(encoding="utf-8")
 
 

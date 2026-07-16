@@ -28,7 +28,7 @@ def _listener_text() -> str:
 
 
 def _dashboard_text() -> str:
-    return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8") + (_SRC / "ui" / "live_ui.py").read_text(encoding="utf-8")
 
 def _setup_builder_text() -> str:
     # Setup builder UI now spans two files: the mixin and the extracted form widget.
@@ -298,7 +298,9 @@ class TestPTTOnLiveTab(unittest.TestCase):
 
     def test_live_ptt_status_lbl_default_text(self):
         """_live_ptt_status_lbl must initialize with 'RADIO READY'."""
-        src = _dashboard_text()
+        # The Live tab builder moved to ui/live_ui.py in the decomposition; scan
+        # it directly so the proximity check isn't split by the combined source.
+        src = (_SRC / "ui" / "live_ui.py").read_text(encoding="utf-8")
         pos = src.find("_live_ptt_status_lbl")
         snippet = src[pos:pos + 300]
         self.assertIn("RADIO READY", snippet,
@@ -312,7 +314,7 @@ class TestPTTOnLiveTab(unittest.TestCase):
 
     def test_live_label_in_info_row(self):
         """_live_ptt_status_lbl must be added to the Live tab info row."""
-        src = _dashboard_text()
+        src = (_SRC / "ui" / "live_ui.py").read_text(encoding="utf-8")
         lbl_pos = src.find("_live_ptt_status_lbl")
         # Within 200 chars back, there should be the Mode combo reference
         pre = src[max(0, lbl_pos - 400):lbl_pos]
