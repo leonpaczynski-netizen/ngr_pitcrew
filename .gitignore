@@ -31,3 +31,8 @@ htmlcov/
 .idea/
 *.swp
 api_key.txt
+
+# Piper neural TTS voice models (~60 MB each; downloaded via piper.download_voices)
+voice/piper_models/
+*.onnx
+*.onnx.json

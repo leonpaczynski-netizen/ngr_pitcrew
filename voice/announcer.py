@@ -472,6 +472,7 @@ class VoiceAnnouncer(threading.Thread):
         self._wake = threading.Event()
         self._muted_until: float = 0.0
         self._engine = None
+        self._piper = None
         self._beep_dev_eff: Optional[int] = None
         self._session_mode: str = "race"
         self._qualifying_target_ms: int = 0
@@ -741,6 +742,23 @@ class VoiceAnnouncer(threading.Thread):
 
         print("[VoiceAnnouncer] SAPI5 ready")
 
+        # Optional Piper neural TTS (local, offline). When active, spoken text is
+        # synthesised by Piper and played via sounddevice; beeps/PTT cues stay on
+        # the SAPI5/winsound path. Any failure silently falls back to SAPI5.
+        self._piper = None
+        if str(self._cfg.get("tts_engine", "piper")).lower() == "piper":
+            try:
+                from voice.piper_tts import PiperEngine
+                _eng = PiperEngine(self._cfg.get("piper_model", ""))
+                if _eng.load():
+                    _eng.warmup()
+                    self._piper = _eng
+                    print(f"[VoiceAnnouncer] Piper neural TTS active: {_eng.model_name}")
+                else:
+                    print(f"[VoiceAnnouncer] Piper unavailable ({_eng.error}) — using SAPI5")
+            except Exception as _pe:
+                print(f"[VoiceAnnouncer] Piper init error: {_pe} — using SAPI5")
+
         if _SD_OK:
             try:
                 all_devs = _sd.query_devices()
@@ -948,15 +966,25 @@ class VoiceAnnouncer(threading.Thread):
                 continue
 
             try:
-                self._apply_sapi5_cfg(sp, self._cfg)
-                purge_flag = _PURGE if ann.interrupt else 0
-                print(f"[VoiceAnnouncer] speak  key={ann.cooldown_key!r} interrupt={ann.interrupt}: {ann.text!r}")
-                sp.Speak(ann.text, purge_flag | _ASYNC)
-                rate_wpm = max(int(self._cfg.get("rate", 175)), 50)
-                words    = len(ann.text.split())
-                est_secs = min((words / rate_wpm) * 60.0 + 0.3, 12.0)
-                self._wake.wait(timeout=est_secs)
-                self._wake.clear()
+                # Piper neural TTS when active; SAPI5 otherwise (or on any Piper
+                # failure). Piper plays async via sounddevice and reports the audio
+                # duration so the same _wake/est-duration model applies.
+                piper_dur = None
+                if self._piper is not None:
+                    piper_dur = self._speak_piper(ann, sp, _PURGE, _ASYNC)
+                if piper_dur is not None:
+                    self._wake.wait(timeout=piper_dur)
+                    self._wake.clear()
+                else:
+                    self._apply_sapi5_cfg(sp, self._cfg)
+                    purge_flag = _PURGE if ann.interrupt else 0
+                    print(f"[VoiceAnnouncer] speak  key={ann.cooldown_key!r} interrupt={ann.interrupt}: {ann.text!r}")
+                    sp.Speak(ann.text, purge_flag | _ASYNC)
+                    rate_wpm = max(int(self._cfg.get("rate", 175)), 50)
+                    words    = len(ann.text.split())
+                    est_secs = min((words / rate_wpm) * 60.0 + 0.3, 12.0)
+                    self._wake.wait(timeout=est_secs)
+                    self._wake.clear()
             except Exception as e:
                 print(f"[VoiceAnnouncer] speak error: {e}")
 
@@ -966,6 +994,52 @@ class VoiceAnnouncer(threading.Thread):
         if _ka_stop is not None:
             _ka_stop.set()
         print("[VoiceAnnouncer] SAPI5 loop exited")
+
+    def _speak_piper(self, ann, sp, _PURGE, _ASYNC):
+        """Synthesise ann.text with Piper and play it async via sounddevice.
+
+        Returns the audio duration in seconds (so the caller waits on _wake for
+        that long, matching the SAPI async model), or None to fall back to SAPI5.
+        On an interrupt, purges any in-flight SAPI speech and stops current Piper
+        playback so the new cue replaces it cleanly.
+        """
+        if self._piper is None or not _SD_OK:
+            return None
+        try:
+            samples, sr = self._piper.synth(
+                ann.text,
+                rate_wpm=int(self._cfg.get("rate", 175)),
+                volume=float(self._cfg.get("volume", 1.0)))
+            if samples is None or len(samples) == 0:
+                return None
+
+            if ann.interrupt:
+                try:
+                    sp.Speak("", _PURGE | _ASYNC)  # cut any leftover SAPI speech
+                except Exception:
+                    pass
+                try:
+                    with _sd_play_lock:
+                        _sd.stop()
+                except Exception:
+                    pass
+
+            dev = self._beep_dev_eff
+            devs = [dev, None] if dev is not None else [None]
+            with _sd_play_lock:
+                for _d in devs:
+                    try:
+                        _sd.play(samples, sr, device=_d, blocking=False)
+                        break
+                    except Exception:
+                        if _d is devs[-1]:
+                            return None
+            print(f"[VoiceAnnouncer] speak(piper) key={ann.cooldown_key!r} "
+                  f"interrupt={ann.interrupt}: {ann.text!r}")
+            return len(samples) / float(sr) + 0.15
+        except Exception as e:
+            print(f"[VoiceAnnouncer] piper speak error: {e} — SAPI fallback")
+            return None
 
     def _run_pyttsx3(self) -> None:
         try:
