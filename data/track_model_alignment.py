@@ -386,8 +386,8 @@ def export_accepted_model_json(
         "corner_position_match":  result.corner_position_match,
         "corners_matched":        result.corners_matched,
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2)
+    from data.atomic_write import atomic_write_json
+    atomic_write_json(path, payload)
     return path
 
 

@@ -778,8 +778,8 @@ def export_station_map_json(
             if station_map.pit_lane is not None else None
         ),
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2)
+    from data.atomic_write import atomic_write_json
+    atomic_write_json(path, payload)
     return path
 
 

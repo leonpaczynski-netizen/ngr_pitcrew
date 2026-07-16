@@ -1,5 +1,12 @@
 """Deterministic race outcome computation for strategy comparison.
 
+⚠ EXPERIMENTAL / SUPERSEDED — NOT WIRED INTO THE LIVE PATH
+(see tests/test_engine_wiring_status.py). ``compute_outcome`` / ``compare_outcomes``
+have no runtime caller; the Group 48 ``race_strategy_scorer`` replaced this
+Group 32-39 outcome engine as the live total-race-time ranker. Retained (with its
+tests) as a reference implementation; not deleted only because doing so is pure
+churn with no runtime benefit.
+
 Pure module — no Qt, no API calls, no DB access.
 Mirrors the style of strategy/feasibility.py and strategy/relative_degradation.py.
 

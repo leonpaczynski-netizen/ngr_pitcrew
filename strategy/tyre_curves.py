@@ -1,5 +1,12 @@
 """Deterministic RS/RM/RH tyre performance curves + crossover laps (pure).
 
+⚠ EXPERIMENTAL — NOT WIRED INTO THE LIVE PATH (see tests/test_engine_wiring_status.py).
+``build_compound_curves`` / ``compute_crossovers`` have no runtime caller: the live
+Race Plan reads pace from ``race_strategy_scorer``, and ``PracticeEvidenceBundle``
+accepts curves only as an optional arg the dashboard never populates. Validated by
+the golden UAT and its own tests; kept as the intended future evidence layer. Do
+not assume the app's live tyre-strategy behaviour flows through here.
+
 Sprint 7 of the determinism rebuild. Race strategy must be built from MEASURED
 tyre-age performance for each compound — not generic tyre-life assumptions, an
 invented heat window, or one fastest lap. This module models how each compound
