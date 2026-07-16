@@ -593,6 +593,30 @@ class SetupFormWidget(QWidget):
             "color: #8BC34A; font-size: 10px; font-style: italic; padding: 2px 0;")
         outer.addWidget(self._lbl_setup_save_status)
 
+        # ── Applied-in-GT7 checkpoint (Sprint 10 UI) ──────────────────────────
+        # Saving a setup in Pit Crew and *applying* it in GT7 are different acts.
+        # This row makes the distinction honest: after the driver dials the setup
+        # into GT7's tuning menu they press "Changes Applied in Game", which
+        # records an applied checkpoint. The status label then shows one of three
+        # states — not saved / changes pending in GT7 / confirmed applied — vs the
+        # last confirmed checkpoint.
+        _apply_row = QHBoxLayout()
+        self._btn_applied_in_game = QPushButton("Changes Applied in Game")
+        self._btn_applied_in_game.setToolTip(
+            "Press after you have entered this setup into GT7's tuning menu.\n"
+            "Records that the current setup is the one actually in the car, so\n"
+            "Pit Crew can tell saved-locally changes apart from applied-in-GT7 ones.")
+        self._btn_applied_in_game.setStyleSheet(
+            "background: #143A5C; color: #CFE8FF; font-weight: bold; "
+            "border: 1px solid #2E6FA8; padding: 6px 14px;")
+        self._lbl_apply_status = QLabel("")
+        self._lbl_apply_status.setWordWrap(True)
+        self._lbl_apply_status.setStyleSheet(
+            "color: #9AA0A6; font-size: 10px; padding: 2px 0;")
+        _apply_row.addWidget(self._btn_applied_in_game)
+        _apply_row.addWidget(self._lbl_apply_status, 1)
+        outer.addLayout(_apply_row)
+
         # ── Result text (analyse output) ──────────────────────────────────────
         self._setup_result_text = QTextEdit()
         self._setup_result_text.setReadOnly(True)

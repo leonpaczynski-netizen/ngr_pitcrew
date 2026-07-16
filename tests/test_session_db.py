@@ -152,9 +152,11 @@ def test_schema_version_is_v10(db):
     # standalone additive corner_slip_telemetry table).
     # Reconciled for cross-lap persistence (Sprint 5): 17 → 18 (_migrate_v18 added the
     # standalone additive corner_issue_occurrences table).
+    # Reconciled for Sprint 10 UI: 18 → 19 (_migrate_v19 added the standalone additive
+    # applied_setup_checkpoints table).
     # The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 18
+    assert version == 19
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):
