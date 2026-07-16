@@ -30,6 +30,45 @@ except ImportError:
 
 _SCRAPE_OK = _REQUESTS_OK and _BS4_OK
 
+
+def _atomic_write_json(path, obj) -> None:
+    """Write ``obj`` as pretty JSON to ``path`` atomically.
+
+    The scraper runs on a background thread and writes several shared data files
+    (car_specs.json / bop_data.json / …) that the running UI reads. A plain
+    ``write_text`` that is interrupted mid-flush (app close, crash, disk full)
+    leaves a truncated, unparseable file. Writing to a temp sibling then
+    ``os.replace`` makes the swap atomic on the same filesystem, and a ``.bak``
+    snapshot of the prior good file is kept — mirroring config_paths.save_config.
+    """
+    import os
+    import shutil
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(obj, indent=2, ensure_ascii=False)
+    # Snapshot the prior good file first (copy, not move) so the target is never
+    # momentarily absent, mirroring config_paths.save_config.
+    if p.exists():
+        try:
+            shutil.copy2(p, p.with_name(p.name + ".bak"))
+        except Exception:
+            pass
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -348,9 +387,9 @@ def update_cars(
                 car_specs[full_name] = existing_spec
                 specs_updated += 1
 
-    p.write_text(json.dumps(extra, indent=2, ensure_ascii=False), encoding="utf-8")
-    sp.write_text(json.dumps(car_specs, indent=2, ensure_ascii=False), encoding="utf-8")
-    ip.write_text(json.dumps(car_id_map, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_json(p, extra)
+    _atomic_write_json(sp, car_specs)
+    _atomic_write_json(ip, car_id_map)
     return True, (
         f"Cars: {len(all_scraped)} on site, {added} new names added, "
         f"{specs_updated} detail spec records updated, "
@@ -463,7 +502,7 @@ def update_tracks(
                 existing_keys.add(_ascii_key(layout))
                 added += 1
 
-    p.write_text(json.dumps(extra, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_json(p, extra)
     return True, (
         f"Tracks: {len(unique_links)} circuits, {all_found} layouts found, "
         f"{added} new added to gt7_extra.json"
@@ -556,7 +595,7 @@ def update_bop(bop_path: str = "data/bop_data.json") -> tuple[bool, str]:
         "note": "Auto-updated from dg-edge.com. Click 'Reload BOP' in Car Setup to apply.",
         "cars": cars_by_class,
     })
-    p.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_json(p, existing)
 
     total = sum(len(v) for v in cars_by_class.values())
     msg   = f"BOP v{version}: {total} cars across {len(cars_by_class)} class(es)"
