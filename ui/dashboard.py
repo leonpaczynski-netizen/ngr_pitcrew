@@ -732,6 +732,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header_bar)
 
+        # Sprint 10: guided workflow stepper — the "follow the bouncing ball"
+        # 12-stage journey. Clicking its next-action button navigates to the tab
+        # the current stage lives on.
+        try:
+            from ui.workflow_stepper_widget import WorkflowStepper
+            self._home_stepper = WorkflowStepper()
+            self._home_stepper.go_to_tab.connect(self.select_tab)
+            root.addWidget(self._home_stepper)
+        except Exception:
+            self._home_stepper = None
+
         # Next-best-action banner + a click-to-navigate button (Home Dashboard
         # Promotion). The button opens the recommended tab via select_tab; its
         # target is resolved in _home_refresh from the flow summary's tab name
@@ -852,6 +863,28 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             track_readiness = None
 
+        # Sprint 10: stash the guided-workflow inputs for the Home stepper. Uses
+        # the strong signals available here; the applied-in-GT7 / pending-change
+        # signals come from the setup-apply checkpoint set in Setup Builder.
+        try:
+            from ui.workflow_stepper import WorkflowInputs
+            _setup_saved = bool(getattr(setup_ctx, "has_active_setup", False))
+            _apply = getattr(self, "_setup_apply_status", None)
+            self._home_workflow_inputs = WorkflowInputs(
+                event_ready=bool(getattr(event_ctx, "car", "") and getattr(event_ctx, "track", "")),
+                track_ready=bool(track_readiness and getattr(track_readiness, "is_ready", False)),
+                track_blocker=(track_readiness.blockers[0] if track_readiness
+                               and getattr(track_readiness, "blockers", ()) else ""),
+                setup_saved=_setup_saved,
+                setup_applied_in_gt7=bool(getattr(_apply, "is_confirmed", False)),
+                setup_pending_changes=len(getattr(_apply, "pending_fields", ()) or ()),
+                practice_captured=bool(has_laps),
+                engineering_reviewed=_setup_saved,
+                strategy_evidence_ready=bool(session_ctx.has_valid_laps),
+            )
+        except Exception:
+            self._home_workflow_inputs = None
+
         return build_home_dashboard_state(
             event_context=event_ctx,
             strategy_context=strategy_ctx,
@@ -896,6 +929,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._home_next_action_lbl.setText(
                 hdvm.format_next_action_html(state.next_action))
             self._home_update_next_action_button(state.next_action)
+            # Sprint 10: update the guided workflow stepper.
+            _stepper = getattr(self, "_home_stepper", None)
+            _wf = getattr(self, "_home_workflow_inputs", None)
+            if _stepper is not None and _wf is not None:
+                from ui.workflow_stepper import build_workflow_state
+                _stepper.set_state(build_workflow_state(_wf))
             for key, lbl in self._home_card_labels.items():
                 card = state.card(key)
                 if card is not None:
