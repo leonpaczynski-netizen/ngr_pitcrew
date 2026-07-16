@@ -4,8 +4,9 @@ Press a configured button → hear a 440 Hz "listening" beep → speak a query
 word → hear the answer announced via VoiceAnnouncer.
 
 Supports keyboard buttons (via pynput) and optionally joystick buttons (via
-pygame if installed). Audio is recorded with sounddevice and recognised via
-the SpeechRecognition library (Google backend by default).
+pygame if installed). Audio is recorded with sounddevice and recognised
+LOCALLY via CMU PocketSphinx (SpeechRecognition) — speech never leaves the
+machine and no network is required (Sprint 11, fully local & private).
 """
 from __future__ import annotations
 
@@ -233,28 +234,29 @@ def _record_audio(duration_secs: float,
 _recogniser: Optional["_sr.Recognizer"] = _sr.Recognizer() if _SR_OK else None  # type: ignore[assignment]
 
 
-def _recognise(audio_bytes: bytes, sample_rate: int, backend: str) -> Optional[str]:
+def _recognise(audio_bytes: bytes, sample_rate: int, backend: str = "sphinx") -> Optional[str]:
+    """Transcribe locally only (Sprint 11 — Pit Crew is fully local & private).
+
+    Uses CMU PocketSphinx via SpeechRecognition. The cloud ``recognize_google``
+    path was removed: speech never leaves the machine, and no network is
+    required. The ``backend`` argument is retained for signature compatibility
+    but is ignored — recognition is always local.
+    """
     if not _SR_OK or _recogniser is None:
         print("[QueryListener] SpeechRecognition not installed")
         return None
     audio = _sr.AudioData(audio_bytes, sample_rate=sample_rate, sample_width=2)
     try:
-        if backend == "sphinx":
-            result = _recogniser.recognize_sphinx(audio).lower()  # type: ignore[attr-defined]
-        else:
-            result = _recogniser.recognize_google(audio).lower()
-        print(f"[QueryListener] recognised text: {result!r}")
+        result = _recogniser.recognize_sphinx(audio).lower()  # type: ignore[attr-defined]
+        print(f"[QueryListener] recognised text (local): {result!r}")
         return result
     except _sr.UnknownValueError:
-        print("[QueryListener] recognition: Google could not understand audio "
-              "(speak clearly into mic, check volume)")
-        return None
-    except _sr.RequestError as e:
-        print(f"[QueryListener] recognition: API error — {e} "
-              "(check internet connection; free API key has rate limits)")
+        print("[QueryListener] local recognition could not understand audio "
+              "(speak clearly into the mic, check input volume)")
         return None
     except Exception as e:
-        print(f"[QueryListener] recognition: unexpected error — {e}")
+        print(f"[QueryListener] local recognition error — {e} "
+              "(is 'pocketsphinx' installed? pip install pocketsphinx)")
         return None
 
 
@@ -409,7 +411,7 @@ class QueryListener(threading.Thread):
     def _handle_trigger_inner(self) -> None:
         qc       = self._config.get("query", {})
         duration = float(qc.get("record_secs", 3.0))
-        backend  = qc.get("speech_backend", "google")
+        backend  = qc.get("speech_backend", "sphinx")  # local-only; value ignored by _recognise
         mic_idx  = qc.get("mic_index", None)
         bt_mode  = self._config.get("voice", {}).get("bt_mode", False)
         hfp_warmup = _HFP_WARMUP_SECS if bt_mode else 0.0

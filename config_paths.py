@@ -70,7 +70,7 @@ DEFAULT_CONFIG = {
     "fuel": {"safety_margin_laps": 1.0, "pit_threshold_liters": 0.5},
     "ui": {"refresh_ms": 100},
     "query": {
-        "speech_backend": "google",
+        "speech_backend": "sphinx",
         "mic_index": None,
         "record_secs": 3.0,
     },
