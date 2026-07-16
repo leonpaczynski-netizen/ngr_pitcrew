@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def _dash():
-    return ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "race_plan_ui.py").read_text(encoding="utf-8"))
+    return ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8") + (ROOT / "ui" / "race_plan_ui.py").read_text(encoding="utf-8"))
 
 
 def _method(name: str) -> str:

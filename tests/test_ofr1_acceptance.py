@@ -177,7 +177,7 @@ class TestAC1AutomaticScoringTrigger:
 
     def test_trigger_after_open_session_source_scan(self):
         """Source scan: _trigger_scoring_pass is called AFTER open_session in both call sites."""
-        dash_src = (REPO / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        dash_src = (REPO / "ui" / "dashboard.py").read_text(encoding="utf-8") + (REPO / "ui" / "live_ui.py").read_text(encoding="utf-8")
 
         def _body(name):
             m = re.search(
@@ -907,7 +907,7 @@ class TestAC7LearningSavedGate:
     def test_build_home_dashboard_state_source_scan(self):
         """_build_home_dashboard_state must call has_learning_for_car_track
         and pass learning_saved= kwarg to build_home_dashboard_state."""
-        dash_src = (REPO / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        dash_src = (REPO / "ui" / "dashboard.py").read_text(encoding="utf-8") + (REPO / "ui" / "live_ui.py").read_text(encoding="utf-8")
         m = re.search(
             r"\n    def _build_home_dashboard_state\(.*?(?=\n    def |\n(?:class |# ---)|\Z)",
             dash_src, re.DOTALL

@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from ui import dashboard as _dash_mod
 from ui import setup_builder_ui as _sbu_mod
 
-DASH_SRC = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+DASH_SRC = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
 SBU_SRC = (ROOT / "ui" / "setup_builder_ui.py").read_text(encoding="utf-8")
 
 

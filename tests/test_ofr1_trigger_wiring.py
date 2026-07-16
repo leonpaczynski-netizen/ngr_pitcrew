@@ -38,7 +38,7 @@ def _method_body(src: str, name: str) -> str:
 
 @pytest.fixture(scope="module")
 def dash_src() -> str:
-    return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ from telemetry.state import RaceStateTracker, SessionType, TyreThresholds
 # ---------------------------------------------------------------------------
 
 _ROOT = pathlib.Path(__file__).parent.parent
-_DASHBOARD_SRC = (_ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+_DASHBOARD_SRC = (_ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (_ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
 
 
 def _method_body(source: str, method_name: str) -> str:
