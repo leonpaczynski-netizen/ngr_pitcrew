@@ -31,7 +31,7 @@ ROOT = Path(__file__).parent.parent
 
 @pytest.fixture(scope="module")
 def dash_src():
-    return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    return ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "event_planner_ui.py").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
