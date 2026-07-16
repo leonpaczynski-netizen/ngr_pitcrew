@@ -30,11 +30,13 @@ One deterministic, offline, Qt-free scenario (Porsche RSR at Fuji Full Course) t
 | User setups / telemetry / track assets / history protected | Sprint-0 hash manifest re-verified every milestone: 27 protected runtime files unchanged |
 
 ## What is NOT covered here (needs the running Qt app — see Milestone 5 note)
-The following are **modelled and unit-tested** but their **on-screen Qt rendering** is a separate follow-up that requires driving the live app:
-- Rendering the workflow stepper and the structured advice cards in the widgets.
-- The "Changes Applied in Game" button + applied-checkpoint DB persistence.
-- The "Build Race Plan from This Practice" action wired to the Strategy tab.
-- PTT working *interactively* in Practice (the global hook + local recognition are in place; the live click-to-speak-to-answer loop needs the app + a mic to exercise).
+> **Update (2026-07-16):** the Sprint 10 Qt visual layer below has since been **delivered and merged** (PR #64), and the robotic-voice issue was fixed with local Piper neural TTS + an in-app voice picker/downloader (PR #65). Each ships with offscreen construction/behaviour tests. Only interactive PTT (item 4) still needs a hands-on run. See `docs/UAT_RUNBOOK.md` for the consolidated acceptance script.
+
+- ✅ **Done (PR #64):** rendering the workflow stepper and the structured advice cards in the widgets.
+- ✅ **Done (PR #64, DB v19):** the "Changes Applied in Game" button + applied-checkpoint DB persistence.
+- ✅ **Done (PR #64):** the "Build Race Plan from This Practice" action wired to the Strategy tab.
+- ⏳ **Remaining:** PTT working *interactively* in Practice (the global hook + local recognition are in place; the live click-to-speak-to-answer loop needs the app + a mic + `pocketsphinx` installed + a bound key to exercise — see UAT_RUNBOOK §B4).
+
 The deterministic logic each of these renders is complete and locked by tests.
 
 ## Sprint 12 final report
