@@ -493,8 +493,27 @@ CREATE INDEX IF NOT EXISTS idx_corner_issue_occ_scope
     ON corner_issue_occurrences (car_id, track, layout_id);
 """
 
+_DDL_V19 = """
+CREATE TABLE IF NOT EXISTS applied_setup_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_id INTEGER NOT NULL DEFAULT 0,
+    track TEXT NOT NULL DEFAULT '',
+    layout_id TEXT NOT NULL DEFAULT '',
+    purpose TEXT NOT NULL DEFAULT '',
+    setup_id TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL DEFAULT '',
+    setup_hash TEXT NOT NULL DEFAULT '',
+    fields_json TEXT NOT NULL DEFAULT '',
+    changed_fields_json TEXT NOT NULL DEFAULT '',
+    confirmed_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_applied_setup_cp_scope
+    ON applied_setup_checkpoints (car_id, track, layout_id, purpose);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -600,6 +619,19 @@ class SessionDB:
             self._migrate_v18()
             self._conn.execute("PRAGMA user_version = 18")
             self._conn.commit()
+        if version < 19:
+            self._migrate_v19()
+            self._conn.execute("PRAGMA user_version = 19")
+            self._conn.commit()
+
+    def _migrate_v19(self) -> None:
+        """Saved-vs-applied-in-GT7 checkpoint (Sprint 10 UI) — additive
+        applied_setup_checkpoints table (schema v19). Stores one append-only row
+        each time the driver confirms a setup was applied in GT7 ("Changes Applied
+        in Game"), so the three-state apply status survives restart and telemetry
+        can be attributed to the setup that was actually in the car. Standalone
+        table (CREATE IF NOT EXISTS, idempotent); touches no existing table."""
+        self._conn.executescript(_DDL_V19)
 
     def _migrate_v18(self) -> None:
         """Cross-lap persistence (Sprint 5) — additive corner_issue_occurrences
@@ -2672,6 +2704,63 @@ class SessionDB:
                 f"SELECT * FROM corner_issue_occurrences WHERE {where} ORDER BY id",
                 params).fetchall()
         return [dict(r) for r in rows]
+
+    def save_applied_checkpoint(self, car_id: int, track: str, layout_id: str,
+                                purpose: str, checkpoint) -> int:
+        """Record that a setup was confirmed applied in GT7 (Sprint 10, additive).
+
+        ``checkpoint`` is duck-typed (AppliedCheckpoint or dict). Append-only: each
+        confirmation inserts a new row, so the applied history stays honest and the
+        latest row is the current GT7-confirmed state. Returns the inserted rowid
+        (0 on failure). Never raises out — a persistence failure must not break the
+        UI action."""
+        import json as _json
+        import datetime as _dt
+
+        def g(name, default=None):
+            if isinstance(checkpoint, dict):
+                return checkpoint.get(name, default)
+            return getattr(checkpoint, name, default)
+
+        try:
+            now = _dt.datetime.now().isoformat(timespec="seconds")
+            with self._lock:
+                cur = self._conn.execute(
+                    """INSERT INTO applied_setup_checkpoints
+                       (car_id, track, layout_id, purpose, setup_id, checkpoint_id,
+                        setup_hash, fields_json, changed_fields_json, confirmed_at,
+                        created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (int(car_id or 0), track or "", layout_id or "", purpose or "",
+                     str(g("setup_id", "") or ""), str(g("checkpoint_id", "") or ""),
+                     str(g("setup_hash", "") or ""),
+                     _json.dumps(g("fields", {}) or {}, sort_keys=True),
+                     _json.dumps(list(g("changed_fields", ()) or [])),
+                     str(g("confirmed_at", "") or ""), now))
+                self._conn.commit()
+                return int(cur.lastrowid or 0)
+        except Exception:
+            return 0
+
+    def get_latest_applied_checkpoint(self, car_id: int, track: str,
+                                      layout_id: str = "",
+                                      purpose: str = "") -> dict | None:
+        """Return the most-recent applied-in-GT7 checkpoint for this scope, or None.
+
+        The Setup Builder rebuilds an ``AppliedCheckpoint`` from this dict and feeds
+        the pure ``compute_apply_status`` to resolve the three-state apply status.
+        """
+        try:
+            where = "car_id = ? AND track = ? AND layout_id = ? AND purpose = ?"
+            params: tuple = (int(car_id or 0), track or "", layout_id or "",
+                             purpose or "")
+            with self._lock:
+                row = self._conn.execute(
+                    f"SELECT * FROM applied_setup_checkpoints WHERE {where} "
+                    "ORDER BY id DESC LIMIT 1", params).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
 
     def get_corner_slip_rows(self, car_id: int, track: str,
                              layout_id: str = "") -> list[dict]:

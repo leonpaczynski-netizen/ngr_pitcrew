@@ -147,7 +147,7 @@ class TestNoSchemaMigration:
         # Engineering-Brain live telemetry legitimately added _migrate_v17
         # (corner_slip_telemetry); guard now protects against an unexpected _migrate_v19.
         assert "_migrate_v17" in src
-        assert "_migrate_v19" not in src
+        assert "_migrate_v20" not in src
 
 
 class TestStrategyDeterministic:

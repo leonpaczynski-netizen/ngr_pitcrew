@@ -164,6 +164,72 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
     )
 
 
+# Tone → (background, border, text) for the structured advice cards. Keys match
+# ui.setup_advice_render.TONE_* so the pure card list drives colour here.
+_ADVICE_TONE_STYLE = {
+    "ok":     ("#0E1A16", "#3FA07A", "#7FD0AC"),
+    "warn":   ("#1A1A00", "#C8A020", "#E6C34A"),
+    "danger": ("#2A0A0A", "#E05050", "#E08080"),
+    "info":   ("#0E1622", "#3A6B8C", "#8FC0DC"),
+}
+
+
+def _advice_cards_to_html(cards) -> str:
+    """Render an ordered ``AdviceCard`` list (ui.setup_advice_render) as themed HTML.
+
+    Sprint 10 of the determinism rebuild: the deterministic ``SetupDecision`` is
+    surfaced as discrete typed cards — a decision banner, approved-changes /
+    preserved / rejected tables, evidence-conflict + controlled-test cards, and
+    cross-lap / tyre-crossover evidence — instead of one free-form advice blob.
+    Pure string rendering; safe to unit-test without Qt.
+    """
+    if not cards:
+        return ""
+    out = ["<div style='margin-bottom:10px;'>"]
+    for c in cards:
+        tone = getattr(c, "tone", "info")
+        bg, border, text = _ADVICE_TONE_STYLE.get(tone, _ADVICE_TONE_STYLE["info"])
+        kind = getattr(c, "kind", "")
+        title = getattr(c, "title", "") or ""
+        lines = tuple(getattr(c, "lines", ()) or ())
+        rows = tuple(getattr(c, "rows", ()) or ())
+
+        if kind == "banner":
+            body = "".join(
+                f"<div style='color:{text}; font-size:12px; margin-top:4px;'>{ln}</div>"
+                for ln in lines)
+            out.append(
+                f"<div style='background:{bg}; border-left:4px solid {border}; "
+                f"border-radius:5px; padding:10px 12px; margin-bottom:8px;'>"
+                f"<div style='color:{text}; font-size:14px; font-weight:bold;'>{title}</div>"
+                f"{body}</div>")
+            continue
+
+        parts = [
+            f"<div style='background:{bg}; border:1px solid {border}; "
+            f"border-radius:4px; padding:8px 10px; margin-bottom:6px;'>"
+            f"<div style='color:{text}; font-weight:bold; font-size:12px; "
+            f"margin-bottom:4px;'>{title}</div>"]
+        for ln in lines:
+            parts.append(
+                f"<div style='color:#CCC; font-size:11px; margin:2px 0;'>{ln}</div>")
+        if rows:
+            parts.append("<table style='font-size:11px; border-collapse:collapse; "
+                         "width:100%;'>")
+            for row in rows:
+                cells = "".join(
+                    f"<td style='color:{'#E0E0E0' if i == 0 else '#AAA'}; "
+                    f"padding:2px 8px 2px 0; vertical-align:top; "
+                    f"{'font-weight:bold;' if i == 0 else ''}'>{cell}</td>"
+                    for i, cell in enumerate(row))
+                parts.append(f"<tr>{cells}</tr>")
+            parts.append("</table>")
+        parts.append("</div>")
+        out.append("".join(parts))
+    out.append("</div>")
+    return "".join(out)
+
+
 def _setup_response_looks_complete(payload: str) -> bool:
     """Heuristic: does the advisor payload look like a complete setup JSON?
 
@@ -898,6 +964,7 @@ class SetupBuilderMixin:
             "_build_setup_result", "_btn_build_setup", "_btn_set_car_ranges",
             "_btn_baseline",
             "_setup_load_combo", "_lbl_setup_save_status",
+            "_btn_applied_in_game", "_lbl_apply_status",
             "_re_brief_label", "_re_brief_input",
             "_btn_reread_gears",
         ]
@@ -915,6 +982,8 @@ class SetupBuilderMixin:
         self._race_form._btn_apply_ai_setup.clicked.connect(self._apply_and_save_ai_setup)
         self._race_form._btn_revert_setup.clicked.connect(self._revert_last_change)
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
+        self._race_form._btn_applied_in_game.clicked.connect(
+            lambda: self._on_changes_applied_in_game(self._race_form))
         # Race-form baseline button builds BOTH race + qualifying baselines in one
         # go (UAT); the Qualifying form's own button still builds just qualifying.
         self._race_form._btn_baseline.setText("Build Baseline (Race + Quali)")
@@ -942,6 +1011,9 @@ class SetupBuilderMixin:
         )
         qf._btn_build_setup.clicked.connect(
             lambda: self._run_build_setup_for_form(self._qual_form)
+        )
+        qf._btn_applied_in_game.clicked.connect(
+            lambda: self._on_changes_applied_in_game(self._qual_form)
         )
         qf._btn_baseline.clicked.connect(
             lambda: self._generate_baseline_setup_for_form(self._qual_form)
@@ -1047,6 +1119,9 @@ class SetupBuilderMixin:
 
         self._refresh_setup_combo()
         self._refresh_qual_setup_combo()
+        # Sprint 10: seed the saved-vs-applied-in-GT7 three-state labels.
+        self._refresh_apply_status_for_form(self._race_form)
+        self._refresh_apply_status_for_form(self._qual_form)
         return container
 
     def _current_setup_dict(self) -> dict:
@@ -1185,6 +1260,143 @@ class SetupBuilderMixin:
         self._gear_ratios_captured = any(r > 0.0 for r in saved_ratios)
         self._spin_final_drive.setValue(float(d.get("final_drive", 0.0)))
         self._spin_top_speed.setValue(float(d.get("transmission_max_speed_kmh", 0)))
+
+    # ── Applied-in-GT7 checkpoint (Sprint 10 UI) ──────────────────────────────
+    # Identity/advisory keys that are NOT part of what the driver dials into GT7's
+    # tuning menu; excluded from the checkpoint hash so re-reading the same setup
+    # (which restamps captured_at) doesn't read as a pending change.
+    _APPLY_CHECKPOINT_META = frozenset({
+        "name", "car", "setup_label", "track", "condition", "setup_type",
+        "notes", "ecu_recommendation", "captured_at", "bop_race",
+    })
+
+    def _apply_checkpoint_fields(self, form: "SetupFormWidget") -> dict:
+        """The tuning-field subset of a form's setup used for apply comparison."""
+        try:
+            d = form.current_setup_dict()
+        except Exception:
+            return {}
+        out = {}
+        for k, v in (d or {}).items():
+            if k in self._APPLY_CHECKPOINT_META:
+                continue
+            # Lists (gear ratios) → a hashable, stable representation.
+            out[k] = tuple(v) if isinstance(v, list) else v
+        return out
+
+    def _apply_checkpoint_scope(self, form: "SetupFormWidget"):
+        """(car_id, track, layout_id, purpose, setup_id) key for this form's setup."""
+        car_id, track, layout_id, setup_id = 0, "", "", ""
+        try:
+            ev = self._build_event_context()
+            track = str(getattr(ev, "track", "") or "")
+            layout_id = str(getattr(ev, "layout_id", "") or "")
+            car = str(getattr(ev, "car", "") or "")
+            if self._db is not None and car:
+                car_id = int(self._db.get_car_id(car) or 0)
+        except Exception:
+            pass
+        purpose = getattr(form, "purpose", "Race") or "Race"
+        # Reference the saved setup id when the current label matches one, else the
+        # label text — used only for the checkpoint id, not the scope lookup.
+        try:
+            label = form._setup_label.text().strip()
+            for s in (getattr(self, "_saved_setups", []) or []):
+                if s.get("setup_label") == label and s.get("setup_id"):
+                    setup_id = str(s.get("setup_id"))
+                    break
+            if not setup_id:
+                setup_id = label
+        except Exception:
+            pass
+        return car_id, track, layout_id, purpose, setup_id
+
+    def _latest_applied_checkpoint(self, form: "SetupFormWidget"):
+        """Rebuild the last AppliedCheckpoint for this form's scope, or None."""
+        if self._db is None:
+            return None
+        car_id, track, layout_id, purpose, _sid = self._apply_checkpoint_scope(form)
+        row = self._db.get_latest_applied_checkpoint(car_id, track, layout_id, purpose)
+        if not row:
+            return None
+        import json as _json
+        from data.applied_checkpoint import AppliedCheckpoint
+        try:
+            fields = _json.loads(row.get("fields_json") or "{}")
+        except Exception:
+            fields = {}
+        # JSON turns tuples into lists; re-tuple so hashes match the live fields.
+        fields = {k: (tuple(v) if isinstance(v, list) else v)
+                  for k, v in fields.items()}
+        return AppliedCheckpoint(
+            checkpoint_id=str(row.get("checkpoint_id") or ""),
+            setup_id=str(row.get("setup_id") or ""),
+            setup_hash=str(row.get("setup_hash") or ""),
+            fields=fields,
+            confirmed_at=str(row.get("confirmed_at") or ""),
+        )
+
+    def _on_changes_applied_in_game(self, form: "SetupFormWidget") -> None:
+        """Record that the current setup was applied in GT7 (button handler)."""
+        from data.applied_checkpoint import make_checkpoint
+        fields = self._apply_checkpoint_fields(form)
+        if not fields:
+            return
+        car_id, track, layout_id, purpose, setup_id = self._apply_checkpoint_scope(form)
+        confirmed_at = time.strftime("%Y-%m-%d %H:%M")
+        cp = make_checkpoint(setup_id=setup_id, fields=fields,
+                             confirmed_at=confirmed_at)
+        if self._db is not None:
+            self._db.save_applied_checkpoint(car_id, track, layout_id, purpose, cp)
+        try:
+            self._bridge.event_log_entry.emit(
+                f"[Setup] {purpose} setup confirmed applied in GT7 ({confirmed_at})")
+        except Exception:
+            pass
+        self._refresh_apply_status_for_form(form)
+
+    def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:
+        """Recompute + render the saved-vs-applied-in-GT7 three-state for ``form``.
+
+        The Race form's status is mirrored to ``self._setup_apply_status`` so the
+        Command Centre workflow stepper (dashboard) reflects apply state."""
+        from data.applied_checkpoint import compute_apply_status, SetupApplyState
+        lbl = getattr(form, "_lbl_apply_status", None)
+        if lbl is None:
+            return
+        checkpoint = self._latest_applied_checkpoint(form)
+        has_setup = bool(getattr(self, "_saved_setups", []) or []) or checkpoint is not None
+        fields = self._apply_checkpoint_fields(form) if has_setup else None
+        status = compute_apply_status(fields, checkpoint)
+
+        _COLOR = {
+            SetupApplyState.NOT_SAVED: "#9AA0A6",
+            SetupApplyState.CHANGED_SINCE_GT7: "#F0C070",
+            SetupApplyState.CONFIRMED_IN_GT7: "#8BC34A",
+        }
+        _PREFIX = {
+            SetupApplyState.NOT_SAVED: "",
+            SetupApplyState.CHANGED_SINCE_GT7: "⚠ ",
+            SetupApplyState.CONFIRMED_IN_GT7: "✓ ",
+        }
+        color = _COLOR.get(status.state, "#9AA0A6")
+        lbl.setText(_PREFIX.get(status.state, "") + status.message)
+        lbl.setStyleSheet(f"color: {color}; font-size: 10px; padding: 2px 0;")
+        # The button is only meaningful once there is a setup to confirm.
+        btn = getattr(form, "_btn_applied_in_game", None)
+        if btn is not None:
+            btn.setEnabled(bool(fields))
+
+        # Mirror the Race form's status to the workflow-stepper input the Command
+        # Centre reads, then nudge Home to re-render the stepper.
+        if form is getattr(self, "_race_form", None):
+            self._setup_apply_status = status
+            _home_refresh = getattr(self, "_home_refresh", None)
+            if callable(_home_refresh):
+                try:
+                    _home_refresh()
+                except Exception:
+                    pass
 
     def _load_car_specs_for_current(self) -> tuple[str, dict]:
         """Return (car_name, specs_dict) for the currently selected car in the Setup tab."""
@@ -1355,6 +1567,8 @@ class SetupBuilderMixin:
             form._lbl_setup_save_status.setText("")
             if hasattr(form, "_lbl_setup_save_status") else None
         ))
+        # Sprint 10: saving may create pending (not-yet-applied-in-GT7) changes.
+        self._refresh_apply_status_for_form(form)
 
     def _setup_load_selected_for_form(self, form: "SetupFormWidget") -> None:
         """Load the selected setup into ``form``."""
@@ -2083,6 +2297,9 @@ class SetupBuilderMixin:
             _QTimer.singleShot(4000, lambda: (
                 self._lbl_setup_save_status.setText("") if hasattr(self, "_lbl_setup_save_status") else None
             ))
+        # Sprint 10: saving may create pending (not-yet-applied-in-GT7) changes.
+        if hasattr(self, "_race_form"):
+            self._refresh_apply_status_for_form(self._race_form)
 
     def _after_setup_load(self) -> None:
         """Refresh the Home Setup card after a setup is loaded into a form.
@@ -2095,6 +2312,10 @@ class SetupBuilderMixin:
             self._last_setup_context = self._build_setup_context()
         except Exception:
             pass
+        # Sprint 10: a load may change which setup differs from the GT7 checkpoint.
+        for _f in (getattr(self, "_race_form", None), getattr(self, "_qual_form", None)):
+            if _f is not None:
+                self._refresh_apply_status_for_form(_f)
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
@@ -2209,6 +2430,77 @@ class SetupBuilderMixin:
         # cross-session read includes this run before it diagnoses.
         self._persist_live_corner_slip()
         _threading.Thread(target=_worker, daemon=True).start()
+
+    def _build_setup_advice_cards(
+        self, data: dict, *, approved_changes, rejected_changes,
+        protected_fields, validation_failed: bool, status_approved: bool,
+    ) -> list:
+        """Turn the deterministic analysis payload into a :class:`SetupDecision`
+        and render it to structured advice cards (Sprint 10).
+
+        The decision mirrors what the backend already decided — approved,
+        rejected, and preserved fields — so the structured cards never
+        re-arbitrate or contradict the detailed sections below them. Cross-lap
+        persistence rows are threaded through when the payload carries them.
+        """
+        from strategy.setup_decision import (
+            SetupDecision, FieldDecision, DecisionStatus)
+        from ui.setup_advice_render import render_setup_decision
+
+        def _label(ch, default="setup"):
+            if isinstance(ch, dict):
+                return str(ch.get("setting") or ch.get("field") or default)
+            return str(ch or default)
+
+        def _reason(ch, *keys, default=""):
+            if isinstance(ch, dict):
+                for k in keys:
+                    if ch.get(k):
+                        return str(ch.get(k))
+            return default
+
+        fds: list = []
+        for ch in (approved_changes or []):
+            fds.append(FieldDecision(
+                _label(ch), "approved",
+                _reason(ch, "why", "rationale", "symptom")))
+        for ch in (rejected_changes or []):
+            fds.append(FieldDecision(
+                _label(ch, "field"), "rejected",
+                _reason(ch, "reason", "why",
+                        default="rejected by engineering validation")))
+        for f in (protected_fields or []):
+            fds.append(FieldDecision(str(f), "preserved", "protected — left unchanged"))
+
+        if validation_failed:
+            status = DecisionStatus.ENGINEERING_FAILURE
+        elif status_approved and approved_changes:
+            status = DecisionStatus.APPROVED_WITH_CHANGES
+        elif status_approved:
+            status = DecisionStatus.APPROVED_NO_CHANGE
+        elif rejected_changes and not approved_changes:
+            status = DecisionStatus.REJECTED_UNSAFE
+        else:
+            status = DecisionStatus.INSUFFICIENT_EVIDENCE
+
+        _HEADLINE = {
+            DecisionStatus.APPROVED_WITH_CHANGES: "Approved — apply the changes below",
+            DecisionStatus.APPROVED_NO_CHANGE: "Approved — no change needed",
+            DecisionStatus.REJECTED_UNSAFE: "Rejected — changes left unapplied",
+            DecisionStatus.ENGINEERING_FAILURE:
+                "Engineering validation failed — no changes applied",
+            DecisionStatus.INSUFFICIENT_EVIDENCE:
+                "Insufficient evidence — no changes applied",
+        }
+        # Rationale stays empty here: the full analysis renders in its own card
+        # below, so the banner would only duplicate it.
+        decision = SetupDecision(
+            status=status, field_decisions=tuple(fds),
+            validation_failed=bool(validation_failed),
+            headline=_HEADLINE.get(status, status.value), rationale="")
+
+        _persistence = getattr(self, "_last_persistence_results", ()) or ()
+        return render_setup_decision(decision, persistence_results=_persistence)
 
     def _display_setup_result(self, result: tuple) -> None:
         if not hasattr(self, "_setup_result_text"):
@@ -2445,6 +2737,26 @@ class SetupBuilderMixin:
         except Exception:
             _learning_outcome_html = ""
 
+        # Sprint 10: structured decision cards (ui.setup_advice_render) rendered
+        # ABOVE the free-form analysis. When a legacy status banner is already
+        # shown, drop the cards' own banner so the status isn't stated twice; the
+        # approved/preserved/rejected tables still render.
+        _advice_html = ""
+        try:
+            _cards = self._build_setup_advice_cards(
+                data,
+                approved_changes=approved_changes,
+                rejected_changes=rejected_changes,
+                protected_fields=_protected_fields,
+                validation_failed=bool(data.get("engineering_validation_failed", False)),
+                status_approved=_status_approved,
+            )
+            if _status_banner:
+                _cards = [c for c in _cards if getattr(c, "kind", "") != "banner"]
+            _advice_html = _advice_cards_to_html(_cards)
+        except Exception:  # pragma: no cover - defensive; never break the display
+            _advice_html = ""
+
         html = (
             _status_banner
             + _eng_banner
@@ -2452,6 +2764,7 @@ class SetupBuilderMixin:
             + _diagnosis_html
             + _violation_banner
             + _validation_banner
+            + _advice_html
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
             + _learning_outcome_html
         )

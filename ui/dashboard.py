@@ -732,6 +732,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header_bar)
 
+        # Sprint 10: guided workflow stepper — the "follow the bouncing ball"
+        # 12-stage journey. Clicking its next-action button navigates to the tab
+        # the current stage lives on.
+        try:
+            from ui.workflow_stepper_widget import WorkflowStepper
+            self._home_stepper = WorkflowStepper()
+            self._home_stepper.go_to_tab.connect(self.select_tab)
+            root.addWidget(self._home_stepper)
+        except Exception:
+            self._home_stepper = None
+
         # Next-best-action banner + a click-to-navigate button (Home Dashboard
         # Promotion). The button opens the recommended tab via select_tab; its
         # target is resolved in _home_refresh from the flow summary's tab name
@@ -852,6 +863,31 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         except Exception:
             track_readiness = None
 
+        # Sprint 10: stash the guided-workflow inputs for the Home stepper. Uses
+        # the strong signals available here; the applied-in-GT7 / pending-change
+        # signals come from the setup-apply checkpoint set in Setup Builder.
+        try:
+            from ui.workflow_stepper import WorkflowInputs
+            _setup_saved = bool(getattr(setup_ctx, "has_active_setup", False))
+            _apply = getattr(self, "_setup_apply_status", None)
+            self._home_workflow_inputs = WorkflowInputs(
+                event_ready=bool(getattr(event_ctx, "car", "") and getattr(event_ctx, "track", "")),
+                track_ready=bool(track_readiness and getattr(track_readiness, "is_ready", False)),
+                track_blocker=(track_readiness.blockers[0] if track_readiness
+                               and getattr(track_readiness, "blockers", ()) else ""),
+                setup_saved=_setup_saved,
+                setup_applied_in_gt7=bool(getattr(_apply, "is_confirmed", False)),
+                setup_pending_changes=len(getattr(_apply, "pending_fields", ()) or ()),
+                practice_captured=bool(has_laps),
+                engineering_reviewed=_setup_saved,
+                strategy_evidence_ready=bool(session_ctx.has_valid_laps),
+                # Sprint 10 piece 4: lit once a race plan is built from a practice
+                # bundle (see _run_race_plan_from_practice).
+                race_plan_built=bool(getattr(self, "_race_plan_built", False)),
+            )
+        except Exception:
+            self._home_workflow_inputs = None
+
         return build_home_dashboard_state(
             event_context=event_ctx,
             strategy_context=strategy_ctx,
@@ -896,6 +932,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             self._home_next_action_lbl.setText(
                 hdvm.format_next_action_html(state.next_action))
             self._home_update_next_action_button(state.next_action)
+            # Sprint 10: update the guided workflow stepper.
+            _stepper = getattr(self, "_home_stepper", None)
+            _wf = getattr(self, "_home_workflow_inputs", None)
+            if _stepper is not None and _wf is not None:
+                from ui.workflow_stepper import build_workflow_state
+                _stepper.set_state(build_workflow_state(_wf))
             for key, lbl in self._home_card_labels.items():
                 card = state.card(key)
                 if card is not None:
@@ -4398,7 +4440,22 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             "Generate an evidence-based race strategy from the current event + "
             "session data. No API key required. Cannot change any car setup.")
         self._btn_build_race_plan.clicked.connect(self._run_race_plan)
+        # Sprint 10: explicit Practice → Strategy hand-off. Builds a
+        # PracticeEvidenceBundle from the selected practice session (measured
+        # evidence + the applied-in-GT7 setup checkpoint) and plans from it,
+        # surfacing confidence, missing evidence, and any staleness.
+        self._btn_race_plan_from_practice = QPushButton("Build Race Plan from This Practice")
+        self._btn_race_plan_from_practice.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_race_plan_from_practice.setStyleSheet(
+            "background:#143A5C; color:#CFE8FF; font-weight:bold; "
+            "border:1px solid #2E6FA8; padding:6px 14px;")
+        self._btn_race_plan_from_practice.setToolTip(
+            "Bundle this practice session's measured evidence and the setup you "
+            "confirmed applied in GT7, then build the race plan from it. Warns when "
+            "the evidence is thin or the setup was never confirmed in game.")
+        self._btn_race_plan_from_practice.clicked.connect(self._run_race_plan_from_practice)
         btn_row.addStretch()
+        btn_row.addWidget(self._btn_race_plan_from_practice)
         btn_row.addWidget(self._btn_build_race_plan)
         v.addLayout(btn_row)
 
@@ -4964,14 +5021,141 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
             readiness_html = ""
 
         _sep = "<hr style='border:none; border-top:1px solid #333; margin:6px 0;'>"
+        # Sprint 10: a practice-bundle banner is prepended when the plan was built
+        # via "Build Race Plan from This Practice". Consumed once, then cleared so a
+        # subsequent plain "Build Race Strategy" doesn't show a stale banner.
+        _bundle_banner = getattr(self, "_practice_bundle_banner_html", "")
+        self._practice_bundle_banner_html = ""
         self._race_plan_text.setHtml(
-            readiness_html + (empty_html or "") + _sep + render_race_plan_html(vm))
+            _bundle_banner + readiness_html + (empty_html or "") + _sep
+            + render_race_plan_html(vm))
 
         rows = candidate_table_rows(vm)
         self._race_plan_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 self._race_plan_table.setItem(r, c, QTableWidgetItem(cell))
+
+    # ------------------------------------------------------------------
+    # Sprint 10 — Practice → Strategy hand-off (PracticeEvidenceBundle)
+    # ------------------------------------------------------------------
+
+    def _practice_bundle_setup_linkage(self, inp: dict) -> tuple:
+        """(approved_setup_id, applied_checkpoint_id, confirmed_in_gt7) for the plan.
+
+        Reads the latest applied-in-GT7 Race checkpoint (Sprint 10 piece 2) for the
+        event's car/track/layout. A checkpoint means the setup was confirmed applied
+        in game at least once; its absence surfaces as a 'not confirmed' warning.
+        Read-only; never raises.
+        """
+        try:
+            if self._db is None:
+                return "", "", False
+            row = self._db.get_latest_applied_checkpoint(
+                int(inp.get("car_id", 0) or 0), inp.get("track", "") or "",
+                inp.get("layout_id", "") or "", "Race")
+            if not row:
+                return "", "", False
+            return (str(row.get("setup_id") or ""),
+                    str(row.get("checkpoint_id") or ""), True)
+        except Exception:
+            return "", "", False
+
+    def _build_practice_evidence_bundle(self, inp: dict):
+        """Build a PracticeEvidenceBundle from the selected practice session (pure
+        engines; read-only). Returns the bundle or None on failure."""
+        from strategy.race_strategy_from_session import build_strategy_evidence_from_session
+        from strategy.practice_evidence_bundle import build_practice_evidence_bundle
+        session_result = build_strategy_evidence_from_session(
+            self._db,
+            session_id=inp["session_id"], car_id=inp["car_id"],
+            track=inp["track"], layout_id=inp["layout_id"],
+            race_duration_minutes=inp["race_duration_minutes"],
+            race_laps=inp["race_laps"],
+            fuel_multiplier=inp["fuel_multiplier"],
+            tyre_multiplier=inp["tyre_multiplier"],
+            refuel_rate_lps=inp["refuel_rate_lps"],
+            pit_loss_seconds=inp["pit_loss_seconds"],
+            starting_fuel_pct=inp["starting_fuel_pct"],
+            available_compounds=inp["available_compounds"],
+            required_compounds=inp["required_compounds"],
+            mandatory_pit_stops=inp["mandatory_pit_stops"],
+        )
+        approved_setup_id, checkpoint_id, confirmed = self._practice_bundle_setup_linkage(inp)
+        return build_practice_evidence_bundle(
+            session_result=session_result,
+            car_id=inp["car_id"], car_name=inp.get("car_name", ""),
+            approved_setup_id=approved_setup_id, applied_checkpoint_id=checkpoint_id,
+            setup_confirmed_in_gt7=confirmed,
+            session_ids=(int(inp.get("session_id", 0) or 0),),
+        )
+
+    def _practice_bundle_banner_html_for(self, bundle, inp: dict) -> str:
+        """Render the practice-bundle hand-off banner: readiness, confidence,
+        setup-confirmed state, missing evidence, and staleness. Pure string build."""
+        from strategy.practice_evidence_bundle import detect_bundle_staleness, staleness_text
+        ready = bool(getattr(bundle, "is_ready_for_strategy", False))
+        confirmed = bool(getattr(bundle, "setup_confirmed_in_gt7", False))
+        _stale, _reasons = detect_bundle_staleness(
+            bundle,
+            current_track=inp.get("track"), current_layout_id=inp.get("layout_id"),
+            current_race_laps=inp.get("race_laps"),
+            current_race_duration_minutes=inp.get("race_duration_minutes"),
+            current_fuel_multiplier=inp.get("fuel_multiplier"),
+            current_tyre_multiplier=inp.get("tyre_multiplier"),
+            current_refuel_rate_lps=inp.get("refuel_rate_lps"),
+        )
+        if ready and confirmed and not _stale:
+            border, text = "#3FA07A", "#7FD0AC"
+            head = "&#10003; Race plan built from this practice"
+        elif ready:
+            border, text = "#C8A020", "#E6C34A"
+            head = "&#9888; Race plan built from this practice — check the notes"
+        else:
+            border, text = "#E05050", "#E08080"
+            head = "&#9940; Not enough measured evidence for a confident plan"
+
+        notes = []
+        notes.append(f"Evidence confidence: <b>{getattr(bundle, 'confidence', 'none')}</b>")
+        notes.append("Setup confirmed applied in GT7"
+                     if confirmed else
+                     "Setup NOT confirmed applied in GT7 — press “Changes Applied in "
+                     "Game” in Setup Builder so the plan matches the car.")
+        for m in getattr(bundle, "missing_evidence", ()) or ():
+            notes.append(f"Missing: {m}")
+        for t in staleness_text(_reasons):
+            notes.append(f"Stale: {t}")
+        body = "".join(f"<li style='margin:1px 0;'>{n}</li>" for n in notes)
+        return (
+            f"<div style='background:#0E1622; border-left:4px solid {border}; "
+            f"border-radius:5px; padding:8px 12px; margin-bottom:6px;'>"
+            f"<div style='color:{text}; font-weight:bold; font-size:12px;'>{head}</div>"
+            f"<ul style='margin:4px 0 0 0; padding-left:16px; color:#BBB; "
+            f"font-size:11px;'>{body}</ul></div>")
+
+    def _run_race_plan_from_practice(self) -> None:
+        """Build a PracticeEvidenceBundle from the selected session, then plan from
+        it (Sprint 10). Read-only: never applies a setup, never calls a pit."""
+        try:
+            inp = self._assemble_race_plan_inputs()
+        except Exception as exc:
+            self._race_plan_text.setHtml(
+                f"<p style='color:#E8A9A3;'>Could not read race settings: {exc}</p>")
+            return
+        try:
+            bundle = self._build_practice_evidence_bundle(inp)
+        except Exception as exc:
+            self._race_plan_text.setHtml(
+                f"<p style='color:#E8A9A3;'>Could not bundle this practice: {exc}</p>")
+            return
+        self._practice_bundle = bundle
+        self._race_plan_built = bool(getattr(bundle, "is_ready_for_strategy", False))
+        try:
+            self._practice_bundle_banner_html = self._practice_bundle_banner_html_for(bundle, inp)
+        except Exception:
+            self._practice_bundle_banner_html = ""
+        # Reuse the deterministic plan path; it prepends the banner set above.
+        self._run_race_plan()
 
     def _build_ai_analysis_group(self) -> QGroupBox:
         ai_box = QGroupBox("AI Race Analysis")

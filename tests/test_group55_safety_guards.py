@@ -157,7 +157,7 @@ class TestNoSchemaMigration:
         assert "_migrate_v14" in src
         # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
         # guard now protects against an unexpected _migrate_v16.
-        assert "_migrate_v19" not in src
+        assert "_migrate_v20" not in src
 
 
 if __name__ == "__main__":
