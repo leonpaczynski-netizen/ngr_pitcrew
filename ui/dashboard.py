@@ -171,8 +171,9 @@ _GUIDE_HTML = """
 </style>
 
 <h1>Next Gear Racing Pit Crew — User Guide</h1>
-<p class="note">Real-time race engineer for Gran Turismo 7. Reads UDP telemetry from your PS5,
-gives voice alerts, and uses the Claude AI API as your personal race engineer.</p>
+<p class="note">Real-time race engineer for Gran Turismo 7. Reads UDP telemetry from your PS5
+and gives voice alerts. Fully local, offline and deterministic — no AI, no internet,
+no API key.</p>
 
 <p class="note"><b>Tool tabs (⚙):</b> tabs whose name starts with a gear symbol —
 <b>⚙ Telemetry</b>, <b>⚙ Diagnostics</b> and <b>⚙ Track Modelling</b> —
@@ -283,8 +284,8 @@ destination to your PC's IP address and port <b>33741</b>. The app must be runni
 <tr><td><span class="kw">last lap</span></td><td>Time, lock-ups, wheelspin, oversteer, kerb strikes, braking consistency</td></tr>
 <tr><td><span class="kw">rain</span></td><td>Marks wet conditions; shortens slick stint; updates pit window</td></tr>
 <tr><td><span class="kw">damage</span></td><td>Reports damage; recommends pit if major; monitors pace recovery</td></tr>
-<tr><td><span class="kw">improve</span> / coaching</td><td><span class="warn">Requires API key.</span> AI coaching from last 3 laps</td></tr>
-<tr><td><span class="kw">setup</span></td><td><span class="warn">Requires API key.</span> AI setup advice from telemetry</td></tr>
+<tr><td><span class="kw">improve</span> / coaching</td><td>Deterministic coaching from your last 3 laps (offline)</td></tr>
+<tr><td><span class="kw">setup</span></td><td>Rule-based setup advice from telemetry (offline)</td></tr>
 </table>
 
 <h2>Tyre compound tags</h2>
@@ -3763,17 +3764,18 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         """Post a graceful 'not yet available' status for a mid-race re-plan.
 
         Called by the engine's _replan_callback from the telemetry thread.
-        The deterministic mid-race re-plan is not yet implemented; rather than
-        calling any AI, the worker posts a ("replan_error", str) message to
-        _strategy_result_queue, which is drained on the Qt main thread by
-        _display_strategy_results (which calls the engine's replan_failed()).
+        The deterministic mid-race re-plan is not implemented in this build;
+        rather than calling any AI, the worker posts a ("replan_error", str)
+        message to _strategy_result_queue, which is drained on the Qt main thread
+        by _display_strategy_results (which calls the engine's replan_failed()).
         """
         import threading as _threading
 
         def _worker():
             self._strategy_result_queue.put((
                 "replan_error",
-                "Deterministic mid-race re-plan is not yet available (pending Sprint 8).",
+                "Live mid-race re-plan is not available in this build. Build the "
+                "race plan before the race; live state is shown as read-only advisory.",
             ))
 
         _threading.Thread(target=_worker, daemon=True).start()
@@ -4314,7 +4316,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
              "Race Strategy Analysis → 3 ranked strategies from your tagged lap data "
              "(uses degradation data if available).\n"
              "Full Practice Analysis → full package: strategy + setup changes + "
-             "aero/fuel trade-off + further practice recommendations.  (Requires API key.)"),
+             "aero/fuel trade-off + further practice recommendations.  (Deterministic, offline.)"),
             ("5  Load a strategy",
              "Click Load Strategy 1 / 2 / 3 to populate the Stint Plan below, "
              "then click Apply Plan to activate live tracking. "
@@ -5168,7 +5170,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._run_race_plan()
 
     def _build_ai_analysis_group(self) -> QGroupBox:
-        ai_box = QGroupBox("AI Race Analysis")
+        ai_box = QGroupBox("Race Analysis (evidence-based — no AI, no API key)")
         ai_layout = QVBoxLayout(ai_box)
 
         # --- Race context read-only panel (populated from active event) ---
