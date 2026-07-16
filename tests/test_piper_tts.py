@@ -22,7 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from voice import piper_tts
-from voice.piper_tts import PiperEngine, find_default_model, _resolve_model
+from voice.piper_tts import (
+    PiperEngine, find_default_model, _resolve_model, list_local_voices,
+    friendly_label,
+)
 import voice.announcer as announcer
 from voice.announcer import VoiceAnnouncer
 
@@ -145,3 +148,64 @@ def test_speak_piper_none_engine_returns_none(mocked_sd):
     a = VoiceAnnouncer({"enabled": True})
     a._piper = None
     assert a._speak_piper(_Ann("x"), _FakeSp(), 2, 1) is None
+
+
+# ── In-app voice listing + friendly labels ──────────────────────────────────
+
+def test_friendly_label_from_filename():
+    assert friendly_label("en_US-ryan-high").startswith("Ryan")
+    assert "high" in friendly_label("en_US-ryan-high")
+
+
+def test_list_local_voices_reads_pairs(tmp_path):
+    (tmp_path / "en_GB-alan-medium.onnx").write_bytes(b"\x00")
+    (tmp_path / "en_GB-alan-medium.onnx.json").write_text(
+        '{"audio":{"quality":"medium"},"dataset":"alan",'
+        '"language":{"country_english":"Great Britain","code":"en_GB"}}',
+        encoding="utf-8")
+    # a stray .onnx with no json config is ignored
+    (tmp_path / "orphan.onnx").write_bytes(b"\x00")
+    voices = list_local_voices(models_dir=tmp_path)
+    assert [v["name"] for v in voices] == ["en_GB-alan-medium"]
+    assert voices[0]["label"].startswith("Alan")
+    assert voices[0]["quality"] == "medium"
+
+
+# ── Runtime engine/voice hot-swap (update_config) ───────────────────────────
+
+def test_update_config_switch_to_sapi5_drops_piper():
+    a = VoiceAnnouncer({"enabled": True})
+    a._piper = _StubEngine(np.zeros(10, dtype=np.int16))
+    a.update_config({"tts_engine": "sapi5"})
+    assert a._piper is None
+
+
+def test_sync_piper_engine_loads_in_background(monkeypatch):
+    import threading as _t
+
+    class _FakeEng:
+        def __init__(self, model="", **k):
+            self._model = model
+            self.model_name = model or "auto"
+            self.model_path = f"/models/{model or 'auto'}.onnx"
+            self.error = ""
+
+        def load(self):
+            return True
+
+        def warmup(self):
+            pass
+
+    monkeypatch.setattr(piper_tts, "PiperEngine", _FakeEng)
+    monkeypatch.setattr(piper_tts, "_resolve_model",
+                        lambda m, models_dir=None: f"/models/{m or 'auto'}.onnx")
+
+    a = VoiceAnnouncer({"enabled": True})
+    a._piper = None
+    a.update_config({"tts_engine": "piper", "piper_model": "en_US-ryan-high"})
+    # The (re)load runs on a daemon thread; wait for it to swap in.
+    for t in _t.enumerate():
+        if t.name == "PiperSwitch":
+            t.join(timeout=3)
+    assert a._piper is not None
+    assert a._piper.model_name == "en_US-ryan-high"

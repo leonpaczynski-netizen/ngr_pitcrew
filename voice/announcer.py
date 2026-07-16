@@ -503,9 +503,50 @@ class VoiceAnnouncer(threading.Thread):
         # clear _beep_dev_eff so subsequent beeps use the sounddevice default.
         cfg_dev = cfg.get("beep_device", None)
         self._beep_dev_eff = int(cfg_dev) if cfg_dev is not None else None
+        # Hot-swap the TTS engine/voice when it changed (in-app voice picker).
+        self._sync_piper_engine(cfg)
+
+    def _sync_piper_engine(self, cfg: dict) -> None:
+        """Apply a runtime engine/voice change without an app restart.
+
+        Switching to SAPI5 drops the Piper engine immediately. Switching to (or
+        between) Piper voices (re)loads the model in a background thread so the UI
+        and announcer threads never block on the ~1.7s load; on failure the engine
+        stays whatever it was (SAPI5 fallback still applies)."""
+        engine = str(cfg.get("tts_engine", "piper")).lower()
+        if engine != "piper":
+            self._piper = None
+            return
+        try:
+            from voice.piper_tts import PiperEngine, _resolve_model
+        except Exception:
+            self._piper = None
+            return
+        want = cfg.get("piper_model", "")
+        want_path = _resolve_model(want)
+        cur_path = self._piper.model_path if self._piper is not None else ""
+        if self._piper is not None and want_path and cur_path == want_path:
+            return  # already on the requested voice
+        if self._piper is not None and not want and cur_path:
+            return  # no specific voice requested and one is already loaded
+
+        def _build() -> None:
+            try:
+                eng = PiperEngine(want)
+                if eng.load():
+                    eng.warmup()
+                    self._piper = eng
+                    print(f"[VoiceAnnouncer] Piper voice switched: {eng.model_name}")
+                else:
+                    print(f"[VoiceAnnouncer] Piper voice unavailable ({eng.error}) — keeping current")
+            except Exception as e:
+                print(f"[VoiceAnnouncer] Piper voice switch error: {e}")
+
+        threading.Thread(target=_build, daemon=True, name="PiperSwitch").start()
 
     def test_voice(self) -> None:
-        self.announce("Voice test OK.", Priority.INFO, "test", 0.0)
+        self.announce("Radio check. This is your race engineer.",
+                      Priority.INFO, "test", 0.0, interrupt=True)
 
     def play_beep(self, freq_hz: int = 880, duration_ms: int = 150,
                   interrupt: bool = False, mute_bypass: bool = False,

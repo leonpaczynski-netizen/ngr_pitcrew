@@ -36,6 +36,66 @@ def find_default_model(models_dir=None) -> str:
     return str(hits[0]) if hits else ""
 
 
+def friendly_label(name: str, meta: Optional[dict] = None) -> str:
+    """Human label for a Piper voice, e.g. 'Alan — English (Great Britain), medium'.
+
+    Uses the model's ``.onnx.json`` metadata when supplied, else parses the
+    ``<lang>-<speaker>-<quality>`` filename convention.
+    """
+    speaker, region, quality = "", "", ""
+    if meta:
+        try:
+            lang = meta.get("language", {}) or {}
+            region = lang.get("country_english", "") or lang.get("code", "")
+            quality = (meta.get("audio", {}) or {}).get("quality", "")
+            speaker = str(meta.get("dataset", "") or "")
+        except Exception:
+            pass
+    if not speaker:
+        parts = name.split("-")
+        if len(parts) >= 3:
+            region = region or parts[0]
+            speaker = parts[1]
+            quality = quality or parts[2]
+        else:
+            speaker = name
+    label = speaker.replace("_", " ").title() if speaker else name
+    tail = ", ".join(p for p in (region, quality) if p)
+    return f"{label} — {tail}" if tail else label
+
+
+def list_local_voices(models_dir=None) -> list:
+    """Discover downloaded Piper voices in ``models_dir``.
+
+    Returns a list of dicts ``{name, path, label, quality}`` sorted by name — one
+    per ``*.onnx`` that has a companion ``*.onnx.json`` config. This is what the
+    in-app voice picker lists; dropping a new model pair into the folder makes it
+    appear (no code change).
+    """
+    import json as _json
+    d = Path(models_dir) if models_dir else _MODELS_DIR
+    out = []
+    try:
+        onnx_files = sorted(p for p in d.glob("*.onnx") if p.is_file())
+    except Exception:
+        return out
+    for p in onnx_files:
+        cfg = p.with_suffix(".onnx.json")
+        if not cfg.is_file():
+            continue
+        meta = {}
+        try:
+            meta = _json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+        name = p.stem
+        out.append({
+            "name": name, "path": str(p), "label": friendly_label(name, meta),
+            "quality": (meta.get("audio", {}) or {}).get("quality", ""),
+        })
+    return out
+
+
 def _resolve_model(model: str, models_dir=None) -> str:
     """Resolve a config value to a model path.
 

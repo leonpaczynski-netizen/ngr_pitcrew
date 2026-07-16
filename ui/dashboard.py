@@ -1712,9 +1712,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         voice_layout.addRow("Fuel/pit alerts:",  self._chk_fuel_alerts)
         voice_layout.addRow("Lap countdown:",    self._chk_countdown)
 
+        voice_btn_row = QHBoxLayout()
         btn_test = QPushButton("Test Voice")
+        btn_test.setToolTip("Speak a test line using the currently saved voice.")
         btn_test.clicked.connect(self._announcer.test_voice)
-        voice_layout.addRow("", btn_test)
+        self._btn_download_voice = QPushButton("Download voice…")
+        self._btn_download_voice.setToolTip(
+            "Download an additional natural (Piper) voice — runs fully offline "
+            "afterwards. Pick from the list; it appears in Voice once installed.")
+        self._btn_download_voice.clicked.connect(self._on_download_piper_voice)
+        voice_btn_row.addWidget(btn_test)
+        voice_btn_row.addWidget(self._btn_download_voice)
+        voice_btn_row.addStretch()
+        voice_layout.addRow("", voice_btn_row)
         layout.addWidget(voice_box)
 
         # Fuel config
@@ -6707,9 +6717,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         vc["position_alerts"]  = self._chk_pos_alerts.isChecked()
         vc["fuel_alerts"]      = self._chk_fuel_alerts.isChecked()
         vc["countdown_alerts"] = self._chk_countdown.isChecked()
-        vid = self._combo_voice.currentData()
-        if vid:
-            vc["voice_id"] = vid
+        data = self._combo_voice.currentData()
+        if isinstance(data, dict):
+            engine = str(data.get("engine", "piper")).lower()
+            vc["tts_engine"] = engine
+            if engine == "piper":
+                vc["piper_model"] = data.get("model", "")
+            elif data.get("voice_id"):
+                vc["voice_id"] = data.get("voice_id", "")
+        elif data:  # legacy: bare SAPI voice id
+            vc["voice_id"] = data
 
         fc = self._config.setdefault("fuel", {})
         fc["safety_margin_laps"]  = self._spin_safety.value()
@@ -6740,13 +6757,104 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, QMainWindow):
         self._spin_pit_thr.setValue(0.5)
 
     def _populate_voices(self) -> None:
-        self._combo_voice.addItem("Default", "")
-        voices = self._announcer.list_voices()
-        cur_vid = self._config.get("voice", {}).get("voice_id", "")
-        for vid, vname in voices:
-            self._combo_voice.addItem(vname, vid)
-            if vid == cur_vid:
-                self._combo_voice.setCurrentIndex(self._combo_voice.count() - 1)
+        """Fill the Voice picker with natural (Piper) voices first, then the
+        system (SAPI5) voices. Each item carries {engine, model|voice_id} so the
+        save path knows which engine to select."""
+        self._combo_voice.clear()
+        vc = self._config.get("voice", {})
+        cur_engine = str(vc.get("tts_engine", "piper")).lower()
+        cur_model = vc.get("piper_model", "")
+        cur_vid = vc.get("voice_id", "")
+        sel = -1
+
+        # Natural (Piper) voices found in voice/piper_models/.
+        try:
+            from voice.piper_tts import list_local_voices
+            for v in list_local_voices():
+                self._combo_voice.addItem(
+                    f"\U0001F3A4 {v['label']}  (Natural)",
+                    {"engine": "piper", "model": v["name"]})
+                if cur_engine == "piper" and sel < 0 and (
+                        not cur_model or v["name"] == cur_model):
+                    sel = self._combo_voice.count() - 1
+        except Exception:
+            pass
+
+        # System (SAPI5) voices.
+        try:
+            for vid, vname in (self._announcer.list_voices() or []):
+                self._combo_voice.addItem(
+                    f"{vname}  (System)", {"engine": "sapi5", "voice_id": vid})
+                if cur_engine != "piper" and vid == cur_vid:
+                    sel = self._combo_voice.count() - 1
+        except Exception:
+            pass
+
+        if self._combo_voice.count() == 0:
+            self._combo_voice.addItem("Default", {"engine": "sapi5", "voice_id": ""})
+        self._combo_voice.setCurrentIndex(sel if sel >= 0 else 0)
+
+    # Curated natural (Piper) voices offered by the in-app downloader.
+    _PIPER_CATALOG = [
+        ("Alan — British male (medium)", "en_GB-alan-medium"),
+        ("Northern English male (medium)", "en_GB-northern_english_male-medium"),
+        ("Ryan — US male (high quality)", "en_US-ryan-high"),
+        ("Lessac — US neutral (medium)", "en_US-lessac-medium"),
+        ("Cori — British female (high)", "en_GB-cori-high"),
+        ("Alba — Scottish female (medium)", "en_GB-alba-medium"),
+        ("Jenny — British female (medium)", "en_GB-jenny_dioco-medium"),
+    ]
+
+    def _on_download_piper_voice(self) -> None:
+        """Download an additional Piper voice from the official catalog into
+        voice/piper_models/ (background thread), then refresh the picker."""
+        from PyQt6.QtWidgets import QInputDialog
+        labels = [c[0] for c in self._PIPER_CATALOG]
+        choice, ok = QInputDialog.getItem(
+            self, "Download voice",
+            "Choose a natural voice to download (~30–110 MB, one-time; runs "
+            "offline after):", labels, 0, False)
+        if not ok or not choice:
+            return
+        name = dict(self._PIPER_CATALOG).get(choice, "")
+        if not name:
+            return
+        self._btn_download_voice.setEnabled(False)
+        self._btn_download_voice.setText("Downloading…")
+        self._bridge.event_log_entry.emit(f"[Voice] downloading {name} …")
+
+        def _run() -> None:
+            err = ""
+            try:
+                from pathlib import Path
+                from piper.download_voices import download_voice
+                d = Path("voice/piper_models")
+                d.mkdir(parents=True, exist_ok=True)
+                download_voice(name, d)
+            except Exception as e:
+                err = str(e)
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._on_voice_download_done(name, err))
+
+        import threading as _th
+        _th.Thread(target=_run, daemon=True, name="PiperDownload").start()
+
+    def _on_voice_download_done(self, name: str, err: str) -> None:
+        self._btn_download_voice.setEnabled(True)
+        self._btn_download_voice.setText("Download voice…")
+        if err:
+            self._bridge.event_log_entry.emit(f"[Voice] download failed: {err}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Download failed",
+                                f"Could not download {name}:\n{err}")
+            return
+        self._bridge.event_log_entry.emit(f"[Voice] {name} installed.")
+        self._populate_voices()
+        for i in range(self._combo_voice.count()):
+            d = self._combo_voice.itemData(i)
+            if isinstance(d, dict) and d.get("model") == name:
+                self._combo_voice.setCurrentIndex(i)
+                break
 
     # ------------------------------------------------------------------ wiring
 
