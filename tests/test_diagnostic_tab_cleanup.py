@@ -30,6 +30,13 @@ def tm_src():
     return (ROOT / "ui" / "track_modelling_ui.py").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def guide_src():
+    # The User Guide HTML moved out of dashboard.py into ui/guide_content.py
+    # (decomposition slice 1); guide-content assertions read it here.
+    return (ROOT / "ui" / "guide_content.py").read_text(encoding="utf-8")
+
+
 def _method_body(src: str, name: str) -> str:
     m = re.search(rf"\n    def {name}\(.*?(?=\n    def |\n(?:class |# ---)|\Z)",
                   src, re.DOTALL)
@@ -130,24 +137,24 @@ class TestRenamedLabels:
 # 3. Guide content fixed
 # --------------------------------------------------------------------------- #
 class TestGuideContent:
-    def test_guide_title_uses_product_name(self, dash_src):
-        assert "Next Gear Racing Pit Crew — User Guide" in dash_src
-        assert "GT7 VR Dashboard — User Guide" not in dash_src
+    def test_guide_title_uses_product_name(self, guide_src):
+        assert "Next Gear Racing Pit Crew — User Guide" in guide_src
+        assert "GT7 VR Dashboard — User Guide" not in guide_src
 
-    def test_stale_dashboard_step_replaced_by_home(self, dash_src):
+    def test_stale_dashboard_step_replaced_by_home(self, guide_src):
         # Step 8 described a "Dashboard" tab with quick-link buttons that never
         # existed; it now describes the real Home tab.
-        assert "Dashboard — event and session overview" not in dash_src
-        assert "quick-link buttons" not in dash_src
-        assert "Home — race engineer overview" in dash_src
-        assert "Race Engineer Command Centre" in dash_src
+        assert "Dashboard — event and session overview" not in guide_src
+        assert "quick-link buttons" not in guide_src
+        assert "Home — race engineer overview" in guide_src
+        assert "Race Engineer Command Centre" in guide_src
 
     # test_api_key_bullet_points_at_strategy_builder REMOVED: the AI API-key
     # field and its Guide bullet were deleted in the no-AI refactor.
 
-    def test_guide_explains_tool_tabs(self, dash_src):
-        assert "Tool tabs (⚙)" in dash_src
-        assert "safe to" in dash_src  # "safe to ignore" wording
+    def test_guide_explains_tool_tabs(self, guide_src):
+        assert "Tool tabs (⚙)" in guide_src
+        assert "safe to" in guide_src  # "safe to ignore" wording
 
     def test_dead_telemetry_reference_constant_deleted(self, dash_src):
         assert not re.search(r"^_TELEMETRY_REFERENCE_HTML\s*=", dash_src, re.M), (
