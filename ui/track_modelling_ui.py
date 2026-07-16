@@ -2203,13 +2203,21 @@ class TrackModellingMixin:
         result.accepted    = True
         result.accepted_at = datetime.now(timezone.utc).isoformat()
         try:
-            _export_accepted_model(
+            _out = _export_accepted_model(
                 result,
                 sm.track_location_id,
                 sm.layout_id,
             )
-        except Exception:
-            pass  # best-effort
+            print(f"[TrackModel] accepted model saved: {_out}")
+        except Exception as _exc:
+            # Do NOT silently show "accepted" when the write failed — surface it.
+            print(f"[TrackModel] accepted-model export FAILED: {_exc}")
+            if hasattr(self, "_bridge"):
+                try:
+                    self._bridge.event_log_entry.emit(
+                        f"[TrackModel] accepted-model save FAILED — not persisted: {_exc}")
+                except Exception:
+                    pass
         # Export the reviewed segments — this is what makes the model AI-ready.
         review = getattr(self, "_tm_review_result", None)
         if review is not None:
