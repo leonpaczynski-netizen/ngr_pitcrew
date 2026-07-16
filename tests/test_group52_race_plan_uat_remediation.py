@@ -59,7 +59,7 @@ def db():
 
 class TestSelectedSessionDrivesBuild:
     def test_assemble_uses_selected_session_id(self):
-        src = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        src = ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "race_plan_ui.py").read_text(encoding="utf-8"))
         # _assemble_race_plan_inputs resolves via the selector, not the raw active id.
         start = src.index("def _assemble_race_plan_inputs(self)")
         end = src.index("\n    def ", start + 1)

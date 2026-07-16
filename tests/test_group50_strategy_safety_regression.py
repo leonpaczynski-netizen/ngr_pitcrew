@@ -67,7 +67,7 @@ def _hash(path: Path):
 
 
 def _dash():
-    return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    return ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "race_plan_ui.py").read_text(encoding="utf-8"))
 
 
 def _race_plan_method():

@@ -92,7 +92,7 @@ class TestNoApiKey:
             assert "api_key" not in src.lower()
 
     def test_run_race_plan_method_reads_no_api_key(self):
-        src = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        src = ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "race_plan_ui.py").read_text(encoding="utf-8"))
         start = src.index("def _run_race_plan(self)")
         end = src.index("\n    def ", start + 1)
         assert "api_key" not in src[start:end]
