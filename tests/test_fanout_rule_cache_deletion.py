@@ -38,7 +38,10 @@ RULE_FIELDS = ("tyre_wear_multiplier", "fuel_mult", "mandatory_stops",
 
 @pytest.fixture(scope="module")
 def dash_src():
-    return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    # Event-list handlers (e.g. _on_event_set_active) moved to ui/event_planner_ui.py
+    # in the dashboard decomposition; scan the combined source.
+    return ((ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+            + (ROOT / "ui" / "event_planner_ui.py").read_text(encoding="utf-8"))
 
 
 def _method_body(src: str, name: str) -> str:

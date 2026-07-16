@@ -26,7 +26,7 @@ _SRC = pathlib.Path(__file__).parent.parent
 
 
 def _dashboard_text() -> str:
-    return (_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8")
+    return ((_SRC / "ui" / "dashboard.py").read_text(encoding="utf-8") + (_SRC / "ui" / "event_planner_ui.py").read_text(encoding="utf-8"))
 
 
 def _method_body(text: str, method_name: str) -> str:
