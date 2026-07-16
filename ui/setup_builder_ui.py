@@ -164,6 +164,72 @@ def _format_status_banner(status: str, validation_warnings: list) -> str:
     )
 
 
+# Tone → (background, border, text) for the structured advice cards. Keys match
+# ui.setup_advice_render.TONE_* so the pure card list drives colour here.
+_ADVICE_TONE_STYLE = {
+    "ok":     ("#0E1A16", "#3FA07A", "#7FD0AC"),
+    "warn":   ("#1A1A00", "#C8A020", "#E6C34A"),
+    "danger": ("#2A0A0A", "#E05050", "#E08080"),
+    "info":   ("#0E1622", "#3A6B8C", "#8FC0DC"),
+}
+
+
+def _advice_cards_to_html(cards) -> str:
+    """Render an ordered ``AdviceCard`` list (ui.setup_advice_render) as themed HTML.
+
+    Sprint 10 of the determinism rebuild: the deterministic ``SetupDecision`` is
+    surfaced as discrete typed cards — a decision banner, approved-changes /
+    preserved / rejected tables, evidence-conflict + controlled-test cards, and
+    cross-lap / tyre-crossover evidence — instead of one free-form advice blob.
+    Pure string rendering; safe to unit-test without Qt.
+    """
+    if not cards:
+        return ""
+    out = ["<div style='margin-bottom:10px;'>"]
+    for c in cards:
+        tone = getattr(c, "tone", "info")
+        bg, border, text = _ADVICE_TONE_STYLE.get(tone, _ADVICE_TONE_STYLE["info"])
+        kind = getattr(c, "kind", "")
+        title = getattr(c, "title", "") or ""
+        lines = tuple(getattr(c, "lines", ()) or ())
+        rows = tuple(getattr(c, "rows", ()) or ())
+
+        if kind == "banner":
+            body = "".join(
+                f"<div style='color:{text}; font-size:12px; margin-top:4px;'>{ln}</div>"
+                for ln in lines)
+            out.append(
+                f"<div style='background:{bg}; border-left:4px solid {border}; "
+                f"border-radius:5px; padding:10px 12px; margin-bottom:8px;'>"
+                f"<div style='color:{text}; font-size:14px; font-weight:bold;'>{title}</div>"
+                f"{body}</div>")
+            continue
+
+        parts = [
+            f"<div style='background:{bg}; border:1px solid {border}; "
+            f"border-radius:4px; padding:8px 10px; margin-bottom:6px;'>"
+            f"<div style='color:{text}; font-weight:bold; font-size:12px; "
+            f"margin-bottom:4px;'>{title}</div>"]
+        for ln in lines:
+            parts.append(
+                f"<div style='color:#CCC; font-size:11px; margin:2px 0;'>{ln}</div>")
+        if rows:
+            parts.append("<table style='font-size:11px; border-collapse:collapse; "
+                         "width:100%;'>")
+            for row in rows:
+                cells = "".join(
+                    f"<td style='color:{'#E0E0E0' if i == 0 else '#AAA'}; "
+                    f"padding:2px 8px 2px 0; vertical-align:top; "
+                    f"{'font-weight:bold;' if i == 0 else ''}'>{cell}</td>"
+                    for i, cell in enumerate(row))
+                parts.append(f"<tr>{cells}</tr>")
+            parts.append("</table>")
+        parts.append("</div>")
+        out.append("".join(parts))
+    out.append("</div>")
+    return "".join(out)
+
+
 def _setup_response_looks_complete(payload: str) -> bool:
     """Heuristic: does the advisor payload look like a complete setup JSON?
 
@@ -2365,6 +2431,77 @@ class SetupBuilderMixin:
         self._persist_live_corner_slip()
         _threading.Thread(target=_worker, daemon=True).start()
 
+    def _build_setup_advice_cards(
+        self, data: dict, *, approved_changes, rejected_changes,
+        protected_fields, validation_failed: bool, status_approved: bool,
+    ) -> list:
+        """Turn the deterministic analysis payload into a :class:`SetupDecision`
+        and render it to structured advice cards (Sprint 10).
+
+        The decision mirrors what the backend already decided — approved,
+        rejected, and preserved fields — so the structured cards never
+        re-arbitrate or contradict the detailed sections below them. Cross-lap
+        persistence rows are threaded through when the payload carries them.
+        """
+        from strategy.setup_decision import (
+            SetupDecision, FieldDecision, DecisionStatus)
+        from ui.setup_advice_render import render_setup_decision
+
+        def _label(ch, default="setup"):
+            if isinstance(ch, dict):
+                return str(ch.get("setting") or ch.get("field") or default)
+            return str(ch or default)
+
+        def _reason(ch, *keys, default=""):
+            if isinstance(ch, dict):
+                for k in keys:
+                    if ch.get(k):
+                        return str(ch.get(k))
+            return default
+
+        fds: list = []
+        for ch in (approved_changes or []):
+            fds.append(FieldDecision(
+                _label(ch), "approved",
+                _reason(ch, "why", "rationale", "symptom")))
+        for ch in (rejected_changes or []):
+            fds.append(FieldDecision(
+                _label(ch, "field"), "rejected",
+                _reason(ch, "reason", "why",
+                        default="rejected by engineering validation")))
+        for f in (protected_fields or []):
+            fds.append(FieldDecision(str(f), "preserved", "protected — left unchanged"))
+
+        if validation_failed:
+            status = DecisionStatus.ENGINEERING_FAILURE
+        elif status_approved and approved_changes:
+            status = DecisionStatus.APPROVED_WITH_CHANGES
+        elif status_approved:
+            status = DecisionStatus.APPROVED_NO_CHANGE
+        elif rejected_changes and not approved_changes:
+            status = DecisionStatus.REJECTED_UNSAFE
+        else:
+            status = DecisionStatus.INSUFFICIENT_EVIDENCE
+
+        _HEADLINE = {
+            DecisionStatus.APPROVED_WITH_CHANGES: "Approved — apply the changes below",
+            DecisionStatus.APPROVED_NO_CHANGE: "Approved — no change needed",
+            DecisionStatus.REJECTED_UNSAFE: "Rejected — changes left unapplied",
+            DecisionStatus.ENGINEERING_FAILURE:
+                "Engineering validation failed — no changes applied",
+            DecisionStatus.INSUFFICIENT_EVIDENCE:
+                "Insufficient evidence — no changes applied",
+        }
+        # Rationale stays empty here: the full analysis renders in its own card
+        # below, so the banner would only duplicate it.
+        decision = SetupDecision(
+            status=status, field_decisions=tuple(fds),
+            validation_failed=bool(validation_failed),
+            headline=_HEADLINE.get(status, status.value), rationale="")
+
+        _persistence = getattr(self, "_last_persistence_results", ()) or ()
+        return render_setup_decision(decision, persistence_results=_persistence)
+
     def _display_setup_result(self, result: tuple) -> None:
         if not hasattr(self, "_setup_result_text"):
             return
@@ -2600,6 +2737,26 @@ class SetupBuilderMixin:
         except Exception:
             _learning_outcome_html = ""
 
+        # Sprint 10: structured decision cards (ui.setup_advice_render) rendered
+        # ABOVE the free-form analysis. When a legacy status banner is already
+        # shown, drop the cards' own banner so the status isn't stated twice; the
+        # approved/preserved/rejected tables still render.
+        _advice_html = ""
+        try:
+            _cards = self._build_setup_advice_cards(
+                data,
+                approved_changes=approved_changes,
+                rejected_changes=rejected_changes,
+                protected_fields=_protected_fields,
+                validation_failed=bool(data.get("engineering_validation_failed", False)),
+                status_approved=_status_approved,
+            )
+            if _status_banner:
+                _cards = [c for c in _cards if getattr(c, "kind", "") != "banner"]
+            _advice_html = _advice_cards_to_html(_cards)
+        except Exception:  # pragma: no cover - defensive; never break the display
+            _advice_html = ""
+
         html = (
             _status_banner
             + _eng_banner
@@ -2607,6 +2764,7 @@ class SetupBuilderMixin:
             + _diagnosis_html
             + _violation_banner
             + _validation_banner
+            + _advice_html
             + f"<div style='{card}'><p style='margin:0;line-height:1.5;'>{analysis}</p></div>"
             + _learning_outcome_html
         )
