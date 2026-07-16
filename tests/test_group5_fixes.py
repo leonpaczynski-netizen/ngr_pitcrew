@@ -320,8 +320,12 @@ class TestPTTOnLiveTab(unittest.TestCase):
                       "_live_ptt_status_lbl must appear after the Mode combo in the Live tab")
 
     def test_ptt_status_signal_connected_to_handler(self):
-        """ptt_status signal must be connected to _on_ptt_status."""
-        src = _dashboard_text()
+        """ptt_status signal must be connected to _on_ptt_status.
+
+        The connection lives in the Settings tab builder, which moved to
+        ui/settings_ui.py in the dashboard decomposition (the _on_ptt_status
+        handler stays on MainWindow and still resolves via the MRO)."""
+        src = _dashboard_text() + (_SRC / "ui" / "settings_ui.py").read_text(encoding="utf-8")
         self.assertIn("ptt_status.connect(self._on_ptt_status)", src,
                       "ptt_status signal must be connected to _on_ptt_status")
 
