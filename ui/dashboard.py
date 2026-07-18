@@ -5670,8 +5670,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         return segs, lap_len, offset
 
     def _capture_practice_lap(self, record) -> None:
-        """Extract the just-completed lap's slip episodes and fold them into the
-        Practice Analysis buffers. Best-effort — never raises into the lap path.
+        """Snapshot the just-completed lap on the UI thread, then extract its slip
+        episodes OFF the UI thread (per-frame XYZ resolution + DB persist — the
+        heavy work) so lap completion never stutters. The result is folded into
+        the Practice Analysis buffers back on the main thread (see
+        ``_apply_lap_capture``), which is the only place they are mutated so there
+        is no cross-thread race. Never raises into the lap path.
         """
         try:
             rec = getattr(self, "_recorder", None)
@@ -5688,87 +5692,91 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             frames = getattr(stats, "frames", None) if stats is not None else None
             if not frames:
                 return
+            # Snapshot the frame list (refs) so the worker reads a stable view
+            # even as the recorder advances to the next lap.
+            frames = list(frames)
             lap_num = int(getattr(stats, "lap_num", lap_num) or lap_num)
 
+            # --- Snapshot every input on the main thread (all cheap reads) ---
             drivetrain = ""
             try:
                 if hasattr(self, "_setup_drivetrain"):
                     drivetrain = self._setup_drivetrain.currentText() or ""
             except Exception:
                 drivetrain = ""
-
-            from strategy.practice_capture import (
-                build_progress_segment_resolver, build_xyz_segment_resolver,
-                compute_lap_capture, segments_to_corner_names,
-                segments_to_track_corners)
             loc, lay = self._practice_track_identity()
             segs = self._practice_reviewed_segments(loc, lay)
-            offset = 0.0
             cal = getattr(self, "_tm_offset_calibration", None)
-            if cal is not None:
-                offset = float(getattr(cal, "offset_m", 0.0) or 0.0)
-
-            resolver = None
-            if loc and lay:
-                # PRIMARY: XYZ → reference-path matcher (accumulates corner names).
-                resolver = build_xyz_segment_resolver(
-                    loc, lay, offset_calibration=cal,
-                    name_sink=self._practice_corner_names)
-            if resolver is None and segs:
-                # Fallback: road-distance → lap-progress over reviewed segments.
+            offset = float(getattr(cal, "offset_m", 0.0) or 0.0) if cal is not None else 0.0
+            lap_len = 0.0
+            try:
+                lap_len = float(self._tm_get_track_length_m() or 0.0)
+            except Exception:
                 lap_len = 0.0
-                try:
-                    lap_len = float(self._tm_get_track_length_m() or 0.0)
-                except Exception:
-                    lap_len = 0.0
-                if lap_len > 0:
-                    resolver = build_progress_segment_resolver(segs, lap_len, offset)
-
             best = 0
             try:
                 best = int(self._logger.best_lap_ms() or 0)
             except Exception:
                 best = 0
-            episodes, is_clean = compute_lap_capture(
-                frames, drivetrain, resolver,
-                lap_time_ms=int(getattr(record, "lap_time_ms", 0) or 0),
-                best_ms=best, valid=bool(getattr(record, "is_valid", True)))
-            self._practice_lap_episodes[lap_num] = episodes
-            self._practice_total_laps.add(lap_num)
-            if is_clean:
-                self._practice_clean_laps.add(lap_num)
+            lap_time_ms = int(getattr(record, "lap_time_ms", 0) or 0)
+            valid = bool(getattr(record, "is_valid", True))
+            track = str(getattr(self._build_event_context(), "track", "") or "")
+            car_id = self._current_car_id()
+            sid = int(getattr(getattr(self, "_dispatcher", None), "_session_id", 0) or 0)
 
-            if segs:
-                # Merge disk names with any the XYZ resolver accumulated.
-                for sid, nm in segments_to_corner_names(segs).items():
-                    if nm:
-                        self._practice_corner_names.setdefault(sid, nm)
-                self._practice_track_corners = segments_to_track_corners(segs)
+            def _extract():
+                # Runs on the worker thread: per-frame resolution + DB persist.
+                from strategy.practice_capture import (
+                    build_progress_segment_resolver, build_xyz_segment_resolver,
+                    compute_lap_capture, segments_to_corner_names,
+                    segments_to_track_corners, episodes_to_occurrences)
+                names: dict = {}   # local sink — merged into buffers on the main thread
+                resolver = None
+                if loc and lay:
+                    resolver = build_xyz_segment_resolver(
+                        loc, lay, offset_calibration=cal, name_sink=names)
+                if resolver is None and segs and lap_len > 0:
+                    resolver = build_progress_segment_resolver(segs, lap_len, offset)
+                episodes, is_clean = compute_lap_capture(
+                    frames, drivetrain, resolver,
+                    lap_time_ms=lap_time_ms, best_ms=best, valid=valid)
+                # Cross-session per-corner history (DB is thread-safe).
+                if self._db is not None and episodes and car_id and track:
+                    try:
+                        occ = episodes_to_occurrences(
+                            episodes, lap_number=lap_num, session_id=sid)
+                        self._db.save_issue_occurrences(car_id, track, lay, occ)
+                    except Exception as ex:
+                        print(f"[PracticeCapture] persist: {ex}")
+                return {
+                    "lap_num": lap_num, "episodes": episodes, "is_clean": is_clean,
+                    "names": names,
+                    "disk_names": segments_to_corner_names(segs) if segs else {},
+                    "track_corners": segments_to_track_corners(segs) if segs else None,
+                }
 
-            # Holistic brain Phase 0: turn on cross-session per-corner collection
-            # by persisting this lap's episodes to corner_issue_occurrences
-            # (dormant table, 0 rows before) so history accrues across sessions.
-            self._persist_practice_episodes(lap_num, episodes)
+            self._run_analysis_async(_extract, self._apply_lap_capture, None, "")
         except Exception as e:
             print(f"[PracticeCapture] {e}")
 
-    def _persist_practice_episodes(self, lap_num: int, episodes) -> None:
-        """Persist a lap's slip episodes to corner_issue_occurrences (best-effort).
-        Never raises; no-op without a DB or a resolved car/track."""
-        if self._db is None or not episodes:
+    def _apply_lap_capture(self, result) -> None:
+        """Main-thread completion slot: fold a worker's capture result into the
+        Practice Analysis buffers (only mutated here — no cross-thread race)."""
+        if not result:
             return
-        try:
-            loc, lay = self._practice_track_identity()
-            track = str(getattr(self._build_event_context(), "track", "") or "")
-            car_id = self._current_car_id()
-            if not (car_id and track):
-                return
-            sid = int(getattr(getattr(self, "_dispatcher", None), "_session_id", 0) or 0)
-            from strategy.practice_capture import episodes_to_occurrences
-            occ = episodes_to_occurrences(episodes, lap_number=lap_num, session_id=sid)
-            self._db.save_issue_occurrences(car_id, track, lay, occ)
-        except Exception as ex:
-            print(f"[PracticeCapture] persist episodes: {ex}")
+        ln = int(result.get("lap_num", 0))
+        self._practice_lap_episodes[ln] = result.get("episodes") or []
+        self._practice_total_laps.add(ln)
+        if result.get("is_clean"):
+            self._practice_clean_laps.add(ln)
+        for sid, nm in (result.get("names") or {}).items():
+            if nm:
+                self._practice_corner_names.setdefault(sid, nm)
+        for sid, nm in (result.get("disk_names") or {}).items():
+            if nm:
+                self._practice_corner_names.setdefault(sid, nm)
+        if result.get("track_corners") is not None:
+            self._practice_track_corners = result["track_corners"]
 
     def _perfect_lap_frame_resolver(self, loc: str, lay: str):
         """A frame->(segment_id, phase) resolver over the XYZ path, for offline
