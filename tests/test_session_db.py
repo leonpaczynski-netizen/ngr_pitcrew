@@ -154,9 +154,11 @@ def test_schema_version_is_v10(db):
     # standalone additive corner_issue_occurrences table).
     # Reconciled for Sprint 10 UI: 18 → 19 (_migrate_v19 added the standalone additive
     # applied_setup_checkpoints table).
+    # Reconciled for Engineering-Brain Phase 1: 19 → 20 (_migrate_v20 added the standalone
+    # additive engineering_context + engineering_context_links tables).
     # The test name is kept stable to not disrupt git blame.
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 19
+    assert version == 20
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

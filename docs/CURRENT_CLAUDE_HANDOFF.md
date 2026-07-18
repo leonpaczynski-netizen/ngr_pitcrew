@@ -1,6 +1,40 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-13) — Group 64: Setup-authoring architecture & discipline intelligence remediation
+## Current Objective (2026-07-18) — Engineering Brain Phase 1: Canonical Engineering Context & Identity Bridge — COMPLETE
+
+**Branch `eng-brain-phase1-canonical-context` from `master` @ `c611d79` — committed, NOT pushed / no PR.** Architecture + data-foundation group: one deterministic, evidence-honest identity spine future recommendations, applied setups, telemetry sessions, driver feedback, per-corner evidence, experiments and outcomes can share. No physics, no new setup rules, no UI redesign, no auto-apply, no auto-pit, no experiment/outcome loop.
+
+**Verified starting state (docs were stale — code is source of truth):** `DB_VERSION` was **19** (handoff header said 14 — stale), migrations ran through `_migrate_v19`; `RULE_ENGINE_VERSION = "46.0"`; golden `config_id` = `sha256("{track}|{car}|{length_key}")[:10]` owned by `data/working_race_config.py` (vectors in `tests/test_race_config_id_hash.py`); frozen fan-out allowlist in `tests/test_legacy_fanout_phase_5.py`.
+
+**Schema/version change:** `user_version` **19 → 20**; `DB_VERSION` 19 → 20 (`strategy/_setup_constants.py`). `RULE_ENGINE_VERSION` unchanged.
+
+**Files changed:**
+- NEW `data/engineering_context_key.py` — pure identity spine (no PyQt/DB/network/AI; never raises). `EngineeringContextKey` (13 `Optional[str]` components; `None` = genuinely unknown, `0`/`""`/blank normalise to unknown). `FINGERPRINT_VERSION="eck_v1"`. `fingerprint()` (full, `eck_v1:<hex16>`) + `scope_fingerprint()` (stable join key over driver/car/track_location/layout/gt7). `EngineeringContextResolution` (status/provenance/unresolved/ambiguous/warnings). `ResolutionStatus` COMPLETE/PARTIAL/AMBIGUOUS/UNRESOLVED/INVALID. `ProvenanceSource`. Resolvers: `build_engineering_context`, `resolve_from_session_row`, `resolve_from_applied_checkpoint`, `resolve_from_lineage`, `resolve_from_driver_feedback`, `resolve_feedback_against_session_context`, `engineering_context_from_stored_row`. Honest track/layout resolution (free-text never invents a layout; >1 candidate ⇒ AMBIGUOUS). `enrich()` fills unknowns, reports conflicts, never overwrites.
+- MOD `data/session_db.py` — `_DDL_V20` (`engineering_context` + `engineering_context_links`, indexes), `_migrate_v20` + hook, `_DDL` concat. NEW methods: `upsert_engineering_context` (INSERT OR IGNORE by fingerprint — idempotent, atomic, never partial; empty/invalid not stored), `link_engineering_context` (INSERT OR REPLACE — idempotent bridge), `resolve_and_link_engineering_context`, `get_engineering_context`, `get_engineering_context_for_source`, `get_engineering_contexts_by_scope`, `get_engineering_context_links_by_scope`. Wired best-effort (outside the write lock) into `open_session` (+ optional `layout_id`/`driver_id`/`gt7_version` kwargs feeding context only), `save_applied_checkpoint`, `record_lineage`, `write_feedback` (inherits the session's stored context).
+- MOD `strategy/_setup_constants.py` — `DB_VERSION` 19 → 20.
+- NEW `tests/test_engineering_context_key.py` + `tests/test_engineering_context_bridge.py` (62 tests).
+- MOD version-guard tests: `tests/test_session_db.py` (==20), `tests/test_group55–60_safety_guards.py` + `tests/test_group61_safety_invariants.py` (migration-hook ceiling → v21; v20 legitimate).
+- NEW `docs/ENGINEERING_BRAIN_PHASE1_CANONICAL_CONTEXT.md`; MOD `docs/PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Canonical identity ownership:** `EngineeringContextKey` owns canonical engineering identity. `config_id` stays a COMPATIBILITY component (algorithm + golden vector NEVER recalculated here — the module never imports `compute_config_id`). `layout_id`/`track_location_id` (track_context/event_context) remain authoritative track identity, composed INTO the context. Unknown = `None`; ambiguous track/layout reported, never guessed.
+
+**Compatibility decisions:** `config_id` flows in as a component only; free-text tracks resolve to a layout ONLY on a single unambiguous track-library candidate; historical rows bridge via `engineering_context_links` (no destructive column migration).
+
+**Integration proof:** a new session + applied-setup checkpoint + setup-lineage node + driver-feedback record on the same car/track/layout resolve to ONE `scope_fingerprint` (feedback also keeps a distinct full fingerprint carrying setup_id) — without free-text coincidence.
+
+**Tests run / results:** new suites **62 passed**. Regression run in chunks (documented Win/Py3.14 PyQt teardown segfault): non-UI chunks **5408 passed, 23 skipped, 0 failed** + chunk-0 files individually green; UI files individually **21 clean**, `group75`/`group76` UI + `test_config_safety_smoke` pass then hit the known Qt teardown segfault. **0 new failures.** One PRE-EXISTING failure unrelated to Phase 1: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` dead alias in `ui/track_modelling_ui.py`, present on `master`, file untouched here). Golden `config_id` vectors + frozen fan-out allowlist assert green.
+
+**Runtime files confirmed untouched (git + mtime):** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json` (their pre-existing diffs are from a prior manual UAT, last modified hours/days before this session; my test runs used `:memory:`/tmp DBs only). No `config.json` write.
+
+**Known limitations:** `sessions` doesn't store `layout_id` (caller must pass it at `open_session` for a session↔layout-bearing-checkpoint join; legacy sessions stay honestly partial); `driver_id`/`gt7_version` not persisted per-record yet (unknown ⇒ consistent join). No UI consumes the context yet.
+
+**GO/NO-GO: GO.** Safety spine intact (offline, deterministic, no AI, no auto-apply/pit, Apply gate + frozen allowlist + golden vector unchanged).
+
+**Recommended next group:** Engineering Brain Phase 2 — Persisted Setup Experiments & Recommendation Evidence Ledger (reference this context via `scope_fingerprint`; do NOT start it in this task).
+
+---
+
+## Prior Objective (2026-07-13) — Group 64: Setup-authoring architecture & discipline intelligence remediation
 
 **Branch `group64-setup-authoring-discipline-intelligence` from `master` @ `9d2b276` — committed, NOT pushed / no PR.** The manual UAT after Group 63 still produced near-identical Base/Qualifying/Race setups and a lone `ARB Front 6→5` labelled "approved", plus a contradictory bottoming state and a weak `gear_too_short_spin`. Group 63 fixed the *incremental* evidence pipeline; the remaining failures were **structural**: no single deterministic path authored a COMPLETE, objective-specific, full-field setup, and several "one canonical truth / safe ≠ complete" guarantees were re-derived or ignored at the render/status layer. Root-cause report: `docs/AUDIT_setup_brain_group64.md`. UAT guide: `docs/UAT_setup_brain_group64.md`.
 

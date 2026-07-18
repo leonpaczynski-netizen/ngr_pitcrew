@@ -163,7 +163,10 @@ class TestNoSchemaMigration:
         assert "_migrate_v14" in src
         # Cross-lap persistence (Sprint 5) legitimately added _migrate_v18
         # (corner_issue_occurrences); guard now protects against an unexpected v19.
-        assert "_migrate_v20" not in src
+        # Engineering-Brain Phase 1 legitimately added _migrate_v20
+        # (engineering-context spine); guard now protects against v21.
+        assert "_migrate_v20" in src
+        assert "_migrate_v21" not in src
 
 
 if __name__ == "__main__":

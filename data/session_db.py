@@ -512,8 +512,71 @@ CREATE INDEX IF NOT EXISTS idx_applied_setup_cp_scope
     ON applied_setup_checkpoints (car_id, track, layout_id, purpose);
 """
 
+# Engineering-Brain Phase 1 — canonical engineering identity spine (schema v20).
+# Two ADDITIVE standalone tables (touch no existing table):
+#   engineering_context       — one row per distinct canonical context, keyed by
+#                               its versioned full `fingerprint` (UNIQUE). Stores
+#                               the 13 identity components (NULL = genuinely
+#                               unknown, never a guessed placeholder), the stable
+#                               `scope_fingerprint` join key, the resolution
+#                               status, and JSON provenance/unresolved/ambiguous/
+#                               warnings for evidence honesty.
+#   engineering_context_links — a compatibility BRIDGE from an existing record
+#                               (source_kind, source_id) to a context fingerprint,
+#                               so historical rows resolve WITHOUT a destructive
+#                               column migration. UNIQUE(source_kind, source_id)
+#                               makes linking idempotent.
+# All columns nullable / defaulted; CREATE IF NOT EXISTS ⇒ idempotent migration.
+_DDL_V20 = """
+CREATE TABLE IF NOT EXISTS engineering_context (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint          TEXT    NOT NULL UNIQUE,
+    scope_fingerprint    TEXT    NOT NULL DEFAULT '',
+    fingerprint_version  TEXT    NOT NULL DEFAULT '',
+    driver_id            TEXT,
+    car_id               TEXT,
+    track_location_id    TEXT,
+    layout_id            TEXT,
+    event_id             TEXT,
+    discipline           TEXT,
+    gt7_version          TEXT,
+    config_id            TEXT,
+    setup_id             TEXT,
+    applied_checkpoint_id TEXT,
+    lineage_id           TEXT,
+    session_id           TEXT,
+    run_id               TEXT,
+    status               TEXT    NOT NULL DEFAULT '',
+    provenance_json      TEXT    NOT NULL DEFAULT '{}',
+    unresolved_json      TEXT    NOT NULL DEFAULT '[]',
+    ambiguous_json       TEXT    NOT NULL DEFAULT '[]',
+    warnings_json        TEXT    NOT NULL DEFAULT '[]',
+    created_at           TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_eng_context_scope
+    ON engineering_context (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_eng_context_car_track
+    ON engineering_context (car_id, track_location_id, layout_id);
+CREATE INDEX IF NOT EXISTS idx_eng_context_config
+    ON engineering_context (config_id);
+
+CREATE TABLE IF NOT EXISTS engineering_context_links (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_kind          TEXT    NOT NULL DEFAULT '',
+    source_id            TEXT    NOT NULL DEFAULT '',
+    context_fingerprint  TEXT    NOT NULL DEFAULT '',
+    scope_fingerprint    TEXT    NOT NULL DEFAULT '',
+    created_at           TEXT    NOT NULL DEFAULT '',
+    UNIQUE (source_kind, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_eng_link_fingerprint
+    ON engineering_context_links (context_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_eng_link_scope
+    ON engineering_context_links (scope_fingerprint);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18 + _DDL_V19)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -623,6 +686,18 @@ class SessionDB:
             self._migrate_v19()
             self._conn.execute("PRAGMA user_version = 19")
             self._conn.commit()
+        if version < 20:
+            self._migrate_v20()
+            self._conn.execute("PRAGMA user_version = 20")
+            self._conn.commit()
+
+    def _migrate_v20(self) -> None:
+        """Engineering-Brain Phase 1 — canonical engineering identity spine
+        (schema v20). Adds two standalone additive tables (engineering_context +
+        engineering_context_links). Touches no existing table and rewrites no
+        historical data, so it is behaviour-preserving for all prior records.
+        CREATE IF NOT EXISTS throughout ⇒ the migration is idempotent."""
+        self._conn.executescript(_DDL_V20)
 
     def _migrate_v19(self) -> None:
         """Saved-vs-applied-in-GT7 checkpoint (Sprint 10 UI) — additive
@@ -1016,9 +1091,22 @@ class SessionDB:
                      session_id, changes_json, label),
                 )
                 self._conn.commit()
-                return int(cur.lastrowid)
+                node_id = int(cur.lastrowid)
         except Exception:
             return None
+        # Phase 1: bridge this lineage node to its canonical engineering context
+        # (best-effort, outside the write lock).
+        try:
+            from data.engineering_context_key import resolve_from_lineage
+            res = resolve_from_lineage({
+                "id": node_id, "car_id": car_id, "track": track,
+                "layout_id": layout_id, "objective": objective,
+                "session_id": session_id,
+            })
+            self.resolve_and_link_engineering_context(res, "setup_lineage", node_id)
+        except Exception:
+            pass
+        return node_id
 
     def record_lineage_outcome(
         self, lineage_id: int, verdict: str, outcome_session_id: "int | None" = None
@@ -1089,6 +1177,174 @@ class SessionDB:
                        ORDER BY id DESC LIMIT ?""",
                     (car_id, track, layout_id, int(limit)),
                 ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Canonical engineering identity spine (Engineering-Brain Phase 1, v20)
+    # ------------------------------------------------------------------
+    _ECK_COMPONENTS = (
+        "driver_id", "car_id", "track_location_id", "layout_id", "event_id",
+        "discipline", "gt7_version", "config_id", "setup_id",
+        "applied_checkpoint_id", "lineage_id", "session_id", "run_id",
+    )
+
+    def upsert_engineering_context(self, resolution) -> "str | None":
+        """Persist a resolved canonical engineering context. Idempotent, atomic.
+
+        ``resolution`` is an ``EngineeringContextResolution`` (duck-typed). The
+        row is keyed by its versioned full ``fingerprint`` (UNIQUE): re-resolving
+        the SAME context is a no-op (INSERT OR IGNORE), never a duplicate or a
+        partial write. A malformed/unresolvable/invalid resolution is NOT stored
+        (unknown identity is not a manufactured row). Returns the fingerprint on
+        success, else None. Best-effort — never raises outward."""
+        import json as _json
+        try:
+            ctx = resolution.context
+            status = getattr(resolution.status, "value", resolution.status)
+            # Refuse to persist an identity with no known component — an empty
+            # context is not authoritative and would collide across records.
+            if not ctx.known_fields or str(status) == "invalid":
+                return None
+            fp = ctx.fingerprint()
+            scope = ctx.scope_fingerprint()
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            values = {n: getattr(ctx, n) for n in self._ECK_COMPONENTS}
+            with self._lock:
+                # Single statement ⇒ a context is never partially written.
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO engineering_context
+                       (fingerprint, scope_fingerprint, fingerprint_version,
+                        driver_id, car_id, track_location_id, layout_id, event_id,
+                        discipline, gt7_version, config_id, setup_id,
+                        applied_checkpoint_id, lineage_id, session_id, run_id,
+                        status, provenance_json, unresolved_json, ambiguous_json,
+                        warnings_json, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (fp, scope,
+                     getattr(resolution, "fingerprint_version", ""),
+                     values["driver_id"], values["car_id"],
+                     values["track_location_id"], values["layout_id"],
+                     values["event_id"], values["discipline"],
+                     values["gt7_version"], values["config_id"],
+                     values["setup_id"], values["applied_checkpoint_id"],
+                     values["lineage_id"], values["session_id"], values["run_id"],
+                     str(status),
+                     _json.dumps(dict(resolution.provenance), sort_keys=True),
+                     _json.dumps(list(resolution.unresolved)),
+                     _json.dumps(list(resolution.ambiguous)),
+                     _json.dumps(list(resolution.warnings)),
+                     now))
+                self._conn.commit()
+            return fp
+        except Exception:
+            return None
+
+    def link_engineering_context(
+        self, source_kind: str, source_id, context_fingerprint: str,
+        scope_fingerprint: str = "",
+    ) -> None:
+        """Bridge an existing record to a canonical context, idempotently.
+
+        ``(source_kind, source_id)`` is UNIQUE, so re-linking replaces the prior
+        link rather than duplicating it — a historical row can be resolved and
+        bridged without any destructive column migration. Best-effort."""
+        try:
+            if not context_fingerprint:
+                return
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO engineering_context_links
+                       (source_kind, source_id, context_fingerprint,
+                        scope_fingerprint, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (str(source_kind or ""),
+                     str(source_id if source_id is not None else ""),
+                     str(context_fingerprint), str(scope_fingerprint or ""), now))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def resolve_and_link_engineering_context(
+        self, resolution, source_kind: str, source_id
+    ) -> "str | None":
+        """Upsert a resolved context AND bridge the source record to it in one
+        best-effort call. Returns the context fingerprint, or None if the
+        resolution carried no usable identity (in which case NO link is made —
+        an unresolved record stays honestly unlinked, still queryable via its
+        own table). Never raises outward."""
+        fp = self.upsert_engineering_context(resolution)
+        if fp is None:
+            return None
+        try:
+            scope = resolution.context.scope_fingerprint()
+        except Exception:
+            scope = ""
+        self.link_engineering_context(source_kind, source_id, fp, scope)
+        return fp
+
+    def get_engineering_context(self, fingerprint: str) -> "dict | None":
+        """Return a stored canonical context by its full fingerprint, or None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT * FROM engineering_context WHERE fingerprint = ?",
+                    (str(fingerprint),)).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
+    def get_engineering_context_for_source(
+        self, source_kind: str, source_id
+    ) -> "dict | None":
+        """Return the canonical context linked to a source record, or None.
+
+        Joins the bridge to the context table so a session / applied-checkpoint /
+        lineage / driver-feedback row can be resolved to its shared context
+        without touching that record's own schema."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    """SELECT c.* FROM engineering_context_links l
+                       JOIN engineering_context c
+                         ON c.fingerprint = l.context_fingerprint
+                       WHERE l.source_kind = ? AND l.source_id = ?""",
+                    (str(source_kind or ""),
+                     str(source_id if source_id is not None else ""))).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
+    def get_engineering_contexts_by_scope(
+        self, scope_fingerprint: str
+    ) -> list[dict]:
+        """Return all canonical contexts sharing a physical-scope join key.
+
+        This is the future before/after setup-comparison join: every session,
+        applied setup, lineage node and feedback record for the same
+        driver/car/track/layout/physics shares one ``scope_fingerprint``."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM engineering_context
+                       WHERE scope_fingerprint = ? ORDER BY id ASC""",
+                    (str(scope_fingerprint),)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def get_engineering_context_links_by_scope(
+        self, scope_fingerprint: str
+    ) -> list[dict]:
+        """Return every source record (kind + id) bridged to a physical scope."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM engineering_context_links
+                       WHERE scope_fingerprint = ? ORDER BY id ASC""",
+                    (str(scope_fingerprint),)).fetchall()
             return [dict(r) for r in rows]
         except Exception:
             return []
@@ -2052,8 +2308,17 @@ class SessionDB:
         car_name: str = "",
         config_id: str = "",
         event_id: int = 0,
+        *,
+        layout_id: str = "",
+        driver_id: str = "",
+        gt7_version: str = "",
     ) -> int:
-        """Create a new session row and return its id."""
+        """Create a new session row and return its id.
+
+        The optional ``layout_id`` / ``driver_id`` / ``gt7_version`` are used ONLY
+        to resolve the canonical engineering context (Phase 1) — they do not
+        alter the sessions row. When absent, the corresponding identity component
+        stays honestly unknown."""
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO sessions
@@ -2065,7 +2330,34 @@ class SessionDB:
                     event_id,
                 ),
             )
-            return cur.lastrowid
+            sid = cur.lastrowid
+        # Phase 1: bridge this new session to its canonical engineering context.
+        # Best-effort, OUTSIDE the write lock (the context methods re-lock).
+        self._attach_session_context(
+            sid, car_id=car_id, track=track, session_type=session_type,
+            config_id=config_id, event_id=event_id, layout_id=layout_id,
+            driver_id=driver_id, gt7_version=gt7_version)
+        return sid
+
+    def _attach_session_context(
+        self, session_id, *, car_id, track, session_type, config_id, event_id,
+        layout_id="", driver_id="", gt7_version="",
+    ) -> None:
+        """Resolve + bridge a session row to its canonical engineering context.
+        Best-effort; a failure here never affects session creation."""
+        try:
+            from data.engineering_context_key import resolve_from_session_row
+            row = {
+                "id": session_id, "car_id": car_id, "track": track,
+                "session_type": session_type, "config_id": config_id,
+                "event_id": event_id,
+            }
+            res = resolve_from_session_row(
+                row, driver_id=(driver_id or None), layout_id=(layout_id or None),
+                gt7_version=(gt7_version or None))
+            self.resolve_and_link_engineering_context(res, "session", session_id)
+        except Exception:
+            pass
 
     def write_lap(
         self,
@@ -2776,9 +3068,25 @@ class SessionDB:
                      _json.dumps(list(g("changed_fields", ()) or [])),
                      str(g("confirmed_at", "") or ""), now))
                 self._conn.commit()
-                return int(cur.lastrowid or 0)
+                cp_rowid = int(cur.lastrowid or 0)
         except Exception:
             return 0
+        # Phase 1: bridge this applied-setup checkpoint to its canonical
+        # engineering context (best-effort, outside the write lock).
+        try:
+            from data.engineering_context_key import resolve_from_applied_checkpoint
+            row = {
+                "id": cp_rowid, "car_id": car_id, "track": track,
+                "layout_id": layout_id, "purpose": purpose,
+                "setup_id": g("setup_id", ""),
+                "checkpoint_id": g("checkpoint_id", ""),
+            }
+            res = resolve_from_applied_checkpoint(row)
+            self.resolve_and_link_engineering_context(
+                res, "applied_checkpoint", cp_rowid)
+        except Exception:
+            pass
+        return cp_rowid
 
     def get_latest_applied_checkpoint(self, car_id: int, track: str,
                                       layout_id: str = "",
@@ -3034,7 +3342,39 @@ class SessionDB:
                 ),
             )
             self._conn.commit()
-            return cur.lastrowid or 0
+            fb_id = cur.lastrowid or 0
+            sess = self._conn.execute(
+                "SELECT id, car_id, track, session_type, config_id, event_id "
+                "FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            session_row = dict(sess) if sess is not None else None
+        # Phase 1: bridge this feedback row to the SAME canonical context as its
+        # session — INHERITING the session's already-resolved identity (so it
+        # shares the session's stable scope_fingerprint), enriched with the
+        # feedback's own config_id/setup_id. No free-text coincidence. If the
+        # session has no stored context (legacy), fall back to resolving from the
+        # joined session row. Best-effort, outside the write lock.
+        try:
+            from data.engineering_context_key import (
+                engineering_context_from_stored_row,
+                resolve_feedback_against_session_context,
+                resolve_from_driver_feedback,
+            )
+            stored = self.get_engineering_context_for_source("session", session_id)
+            if stored is not None:
+                session_ctx = engineering_context_from_stored_row(stored)
+                res = resolve_feedback_against_session_context(
+                    session_ctx,
+                    config_id=(config_id or None),
+                    setup_id=(setup_id or None))
+            else:
+                res = resolve_from_driver_feedback(
+                    {"session_id": session_id, "config_id": config_id,
+                     "setup_id": setup_id},
+                    session_row=session_row)
+            self.resolve_and_link_engineering_context(res, "driver_feedback", fb_id)
+        except Exception:
+            pass
+        return fb_id
 
     def get_lap_count_for_setup(self, setup_id: int) -> int:
         """Number of laps (any session) tagged with this setup_id.
