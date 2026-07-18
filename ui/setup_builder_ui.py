@@ -1451,26 +1451,22 @@ class SetupBuilderMixin:
                 base_sid = sessions[1].get("id")
         except Exception:
             pass
-        car_name = ""
-        try:
-            # Read the car via the canonical EventContext bridge (never a new
-            # config["strategy"] fan-out reader — the frozen allowlist stays exact).
-            car_name = str(getattr(self._build_event_context(), "car", "") or "")
-        except Exception:
-            car_name = ""
         import threading as _threading
 
         q = self._ensure_outcome_queue()
         exp_id = int(exp.get("id") or 0)
 
         def _worker():
+            # Phase 4: the canonical assembler resolves the applied-checkpoint scope,
+            # selects baseline/test sessions, evaluates lap validity, and assembles
+            # per-corner baseline/test observations from the persisted stores — then
+            # calls the Phase 3 evaluator with REAL evidence (no test-only objects).
             try:
-                res = db.evaluate_setup_experiment(
+                res = db.review_experiment_outcome(
                     exp_id, test_session_id=test_sid, baseline_session_id=base_sid,
-                    car=car_name, track=track, layout_id=layout_id, discipline=purpose,
                     complete_on_success=True)
             except Exception as exc:  # never let the worker crash the app
-                res = {"ok": False, "error": str(exc)}
+                res = {"ok": False, "phase": "infrastructure", "error": str(exc)}
             try:
                 q.put((res, form))
             except Exception:
@@ -1496,6 +1492,12 @@ class SetupBuilderMixin:
         if lbl is None:
             return
         if not isinstance(res, dict) or not res.get("ok"):
+            # Distinguish an infrastructure failure from honest engineering
+            # insufficiency (never present a DB/parse error as a verdict).
+            if (res or {}).get("phase") in ("infrastructure", "assembly"):
+                reason = (res or {}).get("error") or (res or {}).get("reason") or "unavailable"
+                lbl.setText(f"Outcome review could not run ({res.get('phase')}): {reason}")
+                return
             reason = (res or {}).get("reason") or (res or {}).get("error") or "no result"
             lbl.setText(f"Outcome review unavailable: {reason}")
             return
@@ -1503,8 +1505,36 @@ class SetupBuilderMixin:
         conf = str(res.get("confidence_level", "") or "")
         laps = res.get("valid_laps", 0)
         nxt = str(res.get("next_action", "") or "").replace("_", " ")
-        parts = [f"Outcome: {status} (confidence {conf}; {laps} valid laps).",
+        # Canonical driver-facing decision state (Phase 4 authority) — the UI
+        # renders it, never re-derives it.
+        decision = ""
+        try:
+            from strategy.setup_decision_status import resolve_setup_decision
+            _exp_status = "rejected" if res.get("status") == "regression" else (
+                "completed" if res.get("lifecycle") and "completed" in res.get("lifecycle")
+                else "ready_for_review")
+            decision = resolve_setup_decision(
+                experiment_status=_exp_status, outcome_status=res.get("status", ""),
+                outcome_confidence_level=conf,
+                rollback_eligible=bool(res.get("rollback_eligible"))).state.value
+        except Exception:
+            decision = ""
+        parts = [f"Decision: {decision.replace('_',' ').title()}." if decision else "",
+                 f"Outcome: {status} (confidence {conf}; {laps} valid laps).",
                  f"Recommended next: {nxt}."]
+        # Evidence readiness (from the canonical assembler).
+        asm = res.get("assembly") or {}
+        if asm:
+            ct = asm.get("corner_test_count", 0)
+            cb = asm.get("corner_baseline_count", 0)
+            twl = asm.get("test_whole_lap") or {}
+            rej = twl.get("rejected_lap_count", 0)
+            parts.append(f"Evidence: {ct} test / {cb} baseline corners; "
+                         f"{rej} rejected laps.")
+            miss = asm.get("missing_evidence") or []
+            if miss:
+                parts.append("Missing: " + "; ".join(str(m) for m in miss[:2]) + ".")
+        parts = [p for p in parts if p]
         regs = res.get("regressions") or []
         if regs:
             parts.append("Regressions: " + "; ".join(str(r) for r in regs[:3]) + ".")

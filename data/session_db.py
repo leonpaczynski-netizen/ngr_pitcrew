@@ -2704,6 +2704,198 @@ class SessionDB:
             pass
         return written
 
+    # ------------------------------------------------------------------
+    # Canonical evidence assembly + live review (Phase 4)
+    # ------------------------------------------------------------------
+    def _checkpoint_scope_row(self, checkpoint_id: str) -> "dict | None":
+        """Resolve car_id/track/layout for an applied checkpoint id. Assumes no lock."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT car_id, track, layout_id, setup_id FROM "
+                    "applied_setup_checkpoints WHERE checkpoint_id=? "
+                    "ORDER BY id DESC LIMIT 1", (str(checkpoint_id),)).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
+    def assemble_setup_experiment_evidence(
+        self, experiment_id: int, *, test_session_id=None, baseline_session_id=None,
+    ) -> dict:
+        """Assemble canonical baseline/test evidence for a Phase-2 experiment in the
+        EXACT form Phase 3 consumes — using the canonical lap-validity + per-corner
+        authorities over persisted `corner_issue_occurrences` (checkpoint-tagged,
+        session-keyed). Deterministic; never raises; never silently picks among
+        equally plausible sessions (returns AMBIGUOUS). Does NOT decide the outcome."""
+        try:
+            from strategy.engineering_lap_validity import (
+                evaluate_session_laps, LapPurpose)
+            from strategy.corner_evidence import (
+                from_issue_occurrence_row, to_phase3_observations)
+            from strategy.setup_evidence_assembly import (
+                SessionCandidate, select_test_session, select_baseline_session,
+                summarise_valid_laps, SelectionStatus)
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase4 import failed: {exc}"}
+
+        exp = self.get_setup_experiment(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "reason": "experiment not found"}
+        applied_cp = str(exp.get("applied_checkpoint_id") or "")
+        scope = str(exp.get("scope_fingerprint") or "")
+        parent = str(exp.get("parent_setup_id") or "")
+        if not applied_cp:
+            return {"ok": False, "reason": "experiment has no applied checkpoint"}
+        cp_scope = self._checkpoint_scope_row(applied_cp)
+        if cp_scope is None:
+            return {"ok": False, "reason": "applied checkpoint scope not resolvable"}
+        car_id = int(cp_scope.get("car_id") or 0)
+        track = str(cp_scope.get("track") or "")
+        layout_id = str(cp_scope.get("layout_id") or "")
+
+        # All occurrences for this physical scope; group per session + checkpoint set.
+        occ_rows = self.get_issue_occurrences(car_id, track, layout_id)
+        by_session: dict = {}
+        cp_by_session: dict = {}
+        for r in occ_rows:
+            sid = str(r.get("session_id"))
+            by_session.setdefault(sid, []).append(r)
+            cp = str(r.get("setup_checkpoint_id") or "")
+            if cp:
+                cp_by_session.setdefault(sid, set()).add(cp)
+
+        # Build candidate sessions with a canonical valid-lap count each.
+        session_ids = set(by_session)
+        for extra in (test_session_id, baseline_session_id):
+            if extra is not None:
+                session_ids.add(str(extra))
+        candidates = []
+        validity_by_session: dict = {}
+        laps_by_session: dict = {}
+        for sid in session_ids:
+            laps = self.get_laps_for_scoring(int(sid)) if sid.isdigit() else []
+            _, summ = evaluate_session_laps(
+                laps, purpose=LapPurpose.OUTCOME_COMPARISON,
+                scope_fingerprint=scope, expected_track=track)
+            validity_by_session[sid] = summ
+            laps_by_session[sid] = laps
+            candidates.append(SessionCandidate(
+                session_id=sid, checkpoint_ids=tuple(sorted(cp_by_session.get(sid, ()))),
+                valid_lap_count=summ.usable_laps, track=track, layout_id=layout_id,
+                scope_fingerprint=scope))
+
+        test_sel = select_test_session(
+            candidates, applied_checkpoint_id=applied_cp, scope_fingerprint=scope,
+            explicit_session_id=(str(test_session_id) if test_session_id is not None else None))
+        base_sel = select_baseline_session(
+            candidates, applied_checkpoint_id=applied_cp,
+            scope_fingerprint=scope,
+            explicit_session_id=(str(baseline_session_id) if baseline_session_id is not None else None))
+
+        def _corner_obs(sid, *, tag_checkpoint):
+            if sid is None:
+                return ()
+            rows = by_session.get(str(sid), [])
+            if tag_checkpoint:
+                rows = [r for r in rows
+                        if str(r.get("setup_checkpoint_id") or "") == applied_cp] or rows
+            recs = [from_issue_occurrence_row(r, scope_fingerprint=scope,
+                                              experiment_id=str(experiment_id))
+                    for r in rows]
+            summ = validity_by_session.get(str(sid))
+            valid_nums = getattr(summ, "valid_lap_numbers", ()) if summ else ()
+            total_valid = getattr(summ, "usable_laps", 0) if summ else 0
+            return to_phase3_observations(recs, total_valid_laps=total_valid,
+                                          valid_lap_numbers=valid_nums)
+
+        corner_test = _corner_obs(test_sel.session_id, tag_checkpoint=True)
+        corner_baseline = _corner_obs(base_sel.session_id, tag_checkpoint=False)
+
+        def _summary(sid):
+            if sid is None:
+                return None
+            summ = validity_by_session.get(str(sid))
+            return summarise_valid_laps(
+                laps_by_session.get(str(sid), []), summ,
+                setup_identity_confidence="high", track_identity_confidence="high")
+
+        missing = []
+        if not test_sel.ok:
+            missing.append(f"test evidence {test_sel.status.value}: "
+                           + "; ".join(test_sel.reasons))
+        if not base_sel.ok:
+            missing.append(f"baseline evidence {base_sel.status.value}: "
+                           + "; ".join(base_sel.reasons))
+        if test_sel.ok and not corner_test:
+            missing.append("no per-corner test evidence assembled")
+
+        return {
+            "ok": True, "experiment_id": int(experiment_id),
+            "applied_checkpoint_id": applied_cp, "scope_fingerprint": scope,
+            "car_id": car_id, "track": track, "layout_id": layout_id,
+            "parent_setup_id": parent,
+            "test_session_id": test_sel.session_id,
+            "baseline_session_id": base_sel.session_id,
+            "test_selection": test_sel.to_dict(),
+            "baseline_selection": base_sel.to_dict(),
+            "corner_test": corner_test, "corner_baseline": corner_baseline,
+            "test_whole_lap": (_summary(test_sel.session_id) or None),
+            "baseline_whole_lap": (_summary(base_sel.session_id) or None),
+            "missing_evidence": missing,
+        }
+
+    def review_experiment_outcome(
+        self, experiment_id: int, *, test_session_id=None, baseline_session_id=None,
+        driver_review=None, confounders=None, complete_on_success: bool = True,
+        driver: str = "",
+    ) -> dict:
+        """Production review path (Phase 4): assemble canonical per-corner evidence
+        from persisted stores, then call the Phase-3 evaluator with it. This is what
+        the off-thread 'Review Test Outcome' action calls — no test-only manual
+        CornerObservation objects required. Never raises for missing evidence; an
+        infrastructure failure is surfaced distinctly (never a fabricated verdict)."""
+        assembled = self.assemble_setup_experiment_evidence(
+            int(experiment_id), test_session_id=test_session_id,
+            baseline_session_id=baseline_session_id)
+        if not assembled.get("ok"):
+            return {"ok": False, "phase": "assembly",
+                    "reason": assembled.get("reason") or assembled.get("error"),
+                    "assembly": assembled}
+        car_name = ""
+        try:
+            with self._lock:
+                crow = self._conn.execute(
+                    "SELECT name FROM cars WHERE id=?",
+                    (int(assembled["car_id"]),)).fetchone()
+            car_name = str(crow[0]) if crow is not None else ""
+        except Exception:
+            car_name = ""
+        result = self.evaluate_setup_experiment(
+            int(experiment_id),
+            test_session_id=assembled["test_session_id"],
+            baseline_session_id=assembled["baseline_session_id"],
+            corner_baseline=assembled["corner_baseline"],
+            corner_test=assembled["corner_test"],
+            driver_review=driver_review, confounders=confounders,
+            test_checkpoint_id=assembled["applied_checkpoint_id"],
+            car=car_name, track=assembled["track"],
+            layout_id=assembled["layout_id"], driver=driver,
+            complete_on_success=complete_on_success)
+        if isinstance(result, dict):
+            result = dict(result)
+            result["assembly"] = {
+                "test_selection": assembled["test_selection"],
+                "baseline_selection": assembled["baseline_selection"],
+                "missing_evidence": assembled["missing_evidence"],
+                "test_whole_lap": (assembled["test_whole_lap"].to_dict()
+                                   if assembled.get("test_whole_lap") else None),
+                "baseline_whole_lap": (assembled["baseline_whole_lap"].to_dict()
+                                       if assembled.get("baseline_whole_lap") else None),
+                "corner_test_count": len(assembled["corner_test"]),
+                "corner_baseline_count": len(assembled["corner_baseline"]),
+            }
+        return result
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:

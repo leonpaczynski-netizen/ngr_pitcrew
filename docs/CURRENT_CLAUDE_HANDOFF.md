@@ -1,6 +1,41 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 3: Closed-Loop Outcome Evaluation, Regression Detection & Failed-Direction Learning — COMPLETE
+## Current Objective (2026-07-18) — Engineering Brain Phase 4: Canonical Evidence Authorities, Unified Clean-Lap Semantics & Live Per-Corner Outcome Assembly — COMPLETE
+
+**Branch `eng-brain-phase4-canonical-evidence` from `master` @ Phase 3 `6314c05` — committed, NOT pushed / no PR.** (Verified start: Phase 3 `6314c05` was HEAD/tip; Phase 2/3 stacked on the branch, master at Phase 1; `DB_VERSION` 22, `RULE_ENGINE_VERSION` 46.0 — exactly the supplied checkpoint.) Evidence authorities + live wiring only — NO new physics/rules/outcome-evaluator, no auto-apply/rollback, no UI redesign.
+
+**Schema decision: NO migration.** `DB_VERSION` stays **22**; `RULE_ENGINE_VERSION` stays `46.0`. Proof: `corner_issue_occurrences` already carries `session_id`+`setup_checkpoint_id`+`lap_number`+`segment_id`+`corner_phase`+`issue_type`+`axle`+`exclusion_reason`+`provenance` and is LIVE-populated by the Practice path (`dashboard._extract`→`save_issue_occurrences`); `sessions.date_utc`+`applied_setup_checkpoints.confirmed_at` give timing. This is sufficient durable per-corner linkage keyed to a session AND the applied checkpoint — no new (duplicate) telemetry table.
+
+**Files changed:**
+- NEW `strategy/engineering_lap_validity.py` — canonical lap-validity authority (`evaluate_engineering_lap`/`evaluate_session_laps`; states VALID/VALID_WITH_LIMITATIONS/INVALID/UNRESOLVED; `LapPurpose` policy SETUP_ENGINEERING/OUTCOME_COMPARISON/PRACTICE_PATTERN/PERFECT_LAP_REFERENCE/RACE_STRATEGY; unifies the 6 scattered clean-lap rules; every rejection reason retained; identity gates strongest; pure, never raises).
+- NEW `strategy/corner_evidence.py` — canonical per-corner observation (`CornerObservationRecord`, `from_issue_occurrence_row`) + recurrence classifier REUSING `practice_pattern_analysis.RecurrenceThresholds`/`RecurrenceClass` (distinct affected VALID laps, never raw count; excluded events don't count; no invented GT7 channels); `aggregate_corner_evidence` (segment+phase+issue+axle only), `to_phase3_observations`.
+- NEW `strategy/setup_evidence_assembly.py` — pure baseline/test selectors (RESOLVED/PARTIAL/AMBIGUOUS/MISSING/INCOMPATIBLE — never picks newest; test must be checkpoint-tagged, baseline must be the parent and NOT carry the experiment's checkpoint) + `summarise_valid_laps` (median, valid laps only).
+- NEW `strategy/setup_decision_status.py` — `resolve_setup_decision` (13 driver-facing states; outcome>lifecycle>recommendation precedence; contradictions→INVALID; deterministic allowed/blocked actions).
+- MOD `data/session_db.py` — `assemble_setup_experiment_evidence` (production per-corner assembly from `corner_issue_occurrences`, returns Phase-3-form evidence + selection statuses + missing evidence) + `review_experiment_outcome` (assemble→Phase-3 evaluate) + `_checkpoint_scope_row`. NO DDL/migration.
+- MOD `ui/setup_builder_ui.py` — rewired the off-thread `_review_experiment_outcome` worker to `db.review_experiment_outcome(...)` (real assembled corner evidence — closes the Phase-3 live gap); `_display_outcome_result` renders the canonical `resolve_setup_decision` state + evidence readiness (valid/rejected laps, test/baseline corner counts, missing evidence) and distinguishes infrastructure failure from engineering insufficiency.
+- MOD `ui/setup_form_widget.py` — already-present "Review Test Outcome" button (Phase 3); unchanged behaviour.
+- MOD `strategy/setup_decision.py` — formal DEPRECATION note on `arbitrate_setup_decision` (kept EXPERIMENTAL banner; points to the Phase-4 authority; stays unwired).
+- NEW `tests/test_phase4_{lap_validity,corner_evidence,evidence_assembly,setup_decision,golden_uat}.py` (86). NEW `docs/ENGINEERING_BRAIN_PHASE4_CANONICAL_EVIDENCE.md`; MOD `docs/PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Duplicate clean-lap inventory (disposition):** `aggregate_lap_window` → compatibility adapter (whole-lap windows); `resolve_clean_lap` → specialised-purpose policy (PRACTICE_PATTERN/PERFECT_LAP_REFERENCE), live callers unchanged this group; `LapMeta.representative` → deprecated (dormant, vocabulary folded in); `evaluate_lap_validity` (Phase 3) → canonical caller (fed by the authority via assembly); `get_laps_for_scoring` SQL → fetch-only. The Phase-4 assembly/review is the canonical caller; practice/perfect-lap live callers documented for a Phase-5 unification pass (no behavioural drift).
+
+**Dormant arbiter disposition:** `arbitrate_setup_decision` + `analyse_cross_lap` were already unwired (guarded by `test_engine_wiring_status`). Formally DEPRECATED `arbitrate_setup_decision` (docstring → Phase 1–4 spine + `resolve_setup_decision`), kept its render dataclasses (used by UI) + EXPERIMENTAL banner. `resolve_setup_decision` is the single driver-facing decision authority; `test_phase4_setup_decision::test_dormant_arbiter_deprecated_and_unwired` proves no competing runtime path.
+
+**Runtime production integration:** record practice laps → persist `corner_issue_occurrences` → associate by applied checkpoint → `assemble_setup_experiment_evidence` (canonical validity + per-corner authorities) → `evaluate_setup_experiment` → meaningful outcome. Off the UDP/Qt threads (existing worker/queue). Never mutates the recommendation; no auto-apply/revert; honest INSUFFICIENT preserved; the UI shows why laps/corners were excluded.
+
+**Tests run / results:** new suites **86 passed** (lap-validity 21, corner-evidence 20, assembly 20, decision 18, golden UAT 3 + safety). Non-UI regression (chunked): **6795 passed, 27 skipped, 0 failed**. UI files individually green (see below). Golden `config_id` + frozen allowlist + Apply-gate predicate + engine-wiring-status assert green. **0 new failures.** Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched). Qt teardown-only segfaults (tests pass first): `config_safety_smoke`, `group75_segment_editor_ui`/`live_baseline_ui`, `group76_live_capture_thread`/`perfect_lap_ui`.
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations:** live `corner_slip_telemetry` (run-keyed, Setup-Builder analyse path) is not yet merged with `corner_issue_occurrences` (session/checkpoint-keyed, Practice path) — the assembler reads the latter (the store with the Phase-3 linkage); unifying the two live producers is Phase 5. Practice/perfect-lap live callers still call `resolve_clean_lap` directly (documented specialised-purpose policies to migrate later; same rules encoded in the authority).
+
+**GO/NO-GO: GO.** Safety spine intact (offline, deterministic, no AI, no auto-apply/pit/rollback; Apply gate + golden vector + frozen allowlist + engine-wiring-status unchanged).
+
+**Recommended Phase 5:** Working-Window Learning, Successful-Direction Reinforcement & Experiment Selection — use the canonical evidence + Phase-3 outcomes to update driver/car/track working windows, reinforce confirmed directions, select minimum-effective next experiments, prevent repeated dead-end testing; and unify the two live per-corner producers + migrate remaining clean-lap callers onto the authority. Do NOT start Phase 5 in this task.
+
+---
+
+## Prior Objective (2026-07-18) — Engineering Brain Phase 3: Closed-Loop Outcome Evaluation, Regression Detection & Failed-Direction Learning — COMPLETE
 
 **Branch `eng-brain-phase3-outcome-evaluation` from `master` @ Phase 2 `b6f6dd4` — committed, NOT pushed / no PR.** (Verified start: Phase 1 on `master`; Phase 2 `b6f6dd4` was the branch tip, NOT on master — exactly the supplied checkpoint. `DB_VERSION` 21, `RULE_ENGINE_VERSION` 46.0.) Deterministic outcome engine only — NO new physics/rules, no UI redesign, no auto-apply, no auto-rollback.
 
