@@ -5347,9 +5347,171 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         layout.addWidget(analysis_group)
 
         layout.addWidget(self._build_driver_feedback_form())
+        # UAT Finding 2: dedicated Practice Analysis surface AFTER driver feedback.
+        layout.addWidget(self._build_practice_analysis_panel())
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 2 — Practice Analysis structured surface.
+    # ------------------------------------------------------------------ #
+
+    def _build_practice_analysis_panel(self) -> QGroupBox:
+        """Structured cross-lap pattern analysis (session summary + per-corner
+        table + repeatable/strong/isolated lists + targeted tests). Deliberately
+        NOT one plain-text box."""
+        group = QGroupBox("Practice Analysis — Patterns Across Laps")
+        group.setStyleSheet(self._group_style())
+        v = QVBoxLayout(group)
+        v.setSpacing(8)
+
+        intro = QLabel(
+            "Analyses repeated vs isolated issues, consistently strong corners, "
+            "and agreement with your feedback — across clean laps only.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        v.addWidget(intro)
+
+        btn_row = QHBoxLayout()
+        self._btn_analyse_practice = QPushButton("Analyse Practice Patterns")
+        self._btn_analyse_practice.clicked.connect(self._analyse_practice_patterns)
+        btn_row.addWidget(self._btn_analyse_practice)
+        btn_row.addStretch()
+        v.addLayout(btn_row)
+
+        self._pa_empty_lbl = QLabel(
+            "Click “Analyse Practice Patterns” after a stint of clean laps.")
+        self._pa_empty_lbl.setWordWrap(True)
+        self._pa_empty_lbl.setStyleSheet("color:#9AA0A6; font-size:11px;")
+        v.addWidget(self._pa_empty_lbl)
+
+        # 1) Session summary (grid of label/value).
+        self._pa_summary_grid = QGridLayout()
+        summary_box = QGroupBox("Session Summary")
+        summary_box.setStyleSheet(self._group_style())
+        summary_box.setLayout(self._pa_summary_grid)
+        self._pa_summary_box = summary_box
+        summary_box.setVisible(False)
+        v.addWidget(summary_box)
+
+        # 2) Per-corner pattern table.
+        from ui.practice_analysis_vm import CORNER_TABLE_COLUMNS
+        self._pa_table = QTableWidget(0, len(CORNER_TABLE_COLUMNS))
+        self._pa_table.setHorizontalHeaderLabels(list(CORNER_TABLE_COLUMNS))
+        self._pa_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self._pa_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._pa_table.setVisible(False)
+        self._pa_table_caption = QLabel("Per-corner pattern")
+        self._pa_table_caption.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        self._pa_table_caption.setVisible(False)
+        v.addWidget(self._pa_table_caption)
+        v.addWidget(self._pa_table)
+
+        # 3-7) Lists: repeatable issues, strong corners, isolated events,
+        #      driver-feedback agreement, targeted next tests.
+        def _make_list(title: str):
+            cap = QLabel(title)
+            cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+            cap.setVisible(False)
+            lst = QListWidget()
+            lst.setMaximumHeight(110)
+            lst.setVisible(False)
+            v.addWidget(cap)
+            v.addWidget(lst)
+            return cap, lst
+
+        self._pa_repeat_cap, self._pa_repeat_list = _make_list("Repeatable issues")
+        self._pa_strong_cap, self._pa_strong_list = _make_list("Strong & consistent corners")
+        self._pa_isolated_cap, self._pa_isolated_list = _make_list("Isolated events")
+        self._pa_feedback_cap, self._pa_feedback_list = _make_list("Driver-feedback agreement")
+        self._pa_tests_cap, self._pa_tests_list = _make_list("Targeted next tests")
+
+        return group
+
+    def _render_practice_analysis(self, report) -> None:
+        """Populate the structured Practice Analysis widgets from a report."""
+        from ui import practice_analysis_vm as pav
+
+        empty = pav.empty_state(report)
+        self._pa_empty_lbl.setText(empty or "")
+        self._pa_empty_lbl.setVisible(bool(empty))
+
+        # Session summary.
+        while self._pa_summary_grid.count():
+            item = self._pa_summary_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        rows = pav.session_summary_rows(report)
+        for i, (label, value) in enumerate(rows):
+            r, c = divmod(i, 3)
+            cell = QLabel(f"{label}: {value}")
+            cell.setStyleSheet(f"color: {_TEXT};")
+            self._pa_summary_grid.addWidget(cell, r, c)
+        self._pa_summary_box.setVisible(True)
+
+        # Per-corner table.
+        table_rows = pav.corner_table_rows(report)
+        self._pa_table.setRowCount(len(table_rows))
+        for ri, row in enumerate(table_rows):
+            for ci, val in enumerate(row):
+                self._pa_table.setItem(ri, ci, QTableWidgetItem(str(val)))
+        has_rows = bool(table_rows)
+        self._pa_table.setVisible(has_rows)
+        self._pa_table_caption.setVisible(has_rows)
+
+        # Lists.
+        for cap, lst, lines in (
+            (self._pa_repeat_cap, self._pa_repeat_list, pav.repeatable_lines(report)),
+            (self._pa_strong_cap, self._pa_strong_list, pav.strong_lines(report)),
+            (self._pa_isolated_cap, self._pa_isolated_list, pav.isolated_lines(report)),
+            (self._pa_feedback_cap, self._pa_feedback_list, pav.feedback_lines(report)),
+            (self._pa_tests_cap, self._pa_tests_list, pav.targeted_test_lines(report)),
+        ):
+            lst.clear()
+            for line in lines:
+                lst.addItem(line)
+            cap.setVisible(bool(lines))
+            lst.setVisible(bool(lines))
+
+    def _analyse_practice_patterns(self) -> None:
+        """Gather this session's slip episodes, run the deterministic engine and
+        render the structured result. Honest empty-state when data is thin."""
+        from strategy.practice_pattern_analysis import analyze_practice
+        try:
+            report = self._build_practice_analysis_report()
+        except Exception as e:
+            print(f"[PracticeAnalysis] {e}")
+            report = analyze_practice([], clean_lap_numbers=[], total_lap_numbers=[])
+        self._render_practice_analysis(report)
+
+    def _build_practice_analysis_report(self):
+        """Assemble a PracticeAnalysisReport from the current session's laps.
+
+        Best-effort: uses per-lap slip episodes + the driver feedback that was
+        just submitted. Returns an empty (honest) report when no clean-lap
+        episode data is available yet.
+        """
+        from strategy.practice_pattern_analysis import analyze_practice
+        from strategy.practice_observation_builder import build_observations
+
+        lap_episodes = getattr(self, "_practice_lap_episodes", None) or {}
+        clean = getattr(self, "_practice_clean_laps", None)
+        if clean is None:
+            clean = sorted(int(l) for l in lap_episodes.keys())
+        total = getattr(self, "_practice_total_laps", None) or sorted(
+            int(l) for l in lap_episodes.keys())
+        corner_names = getattr(self, "_practice_corner_names", None) or {}
+        driver_feedback = getattr(self, "_last_feedback_dict", None)
+
+        observations = build_observations(
+            lap_episodes, clean_lap_numbers=clean, corner_names=corner_names)
+        return analyze_practice(
+            observations, clean_lap_numbers=clean, total_lap_numbers=total,
+            track_corners=getattr(self, "_practice_track_corners", None),
+            driver_feedback=driver_feedback)
 
     def _build_driver_feedback_form(self) -> QGroupBox:
         group = QGroupBox("Driver Feedback — After Stint")
@@ -5516,6 +5678,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         feedback_dict["vs_previous"] = _vs_prev
         if _vs_prev:
             parts.append(f"Compared to last setup: {_vsp}")
+        # Remember the latest feedback so Practice Analysis can check telemetry
+        # agreement/contradiction against the driver's own words.
+        self._last_feedback_dict = dict(feedback_dict)
 
         # Submit if there's any structured feedback, notes, a rating, or a vs-previous call.
         if not parts and not rating and not _vs_prev:
