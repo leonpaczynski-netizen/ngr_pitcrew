@@ -5484,6 +5484,35 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         cv.addWidget(self._coach_advice_list)
         v.addWidget(coach_box)
 
+        # Holistic brain Phase 3: cross-session setup verdict.
+        verdict_box = QGroupBox("Setup vs Previous — Did It Improve?")
+        verdict_box.setStyleSheet(self._group_style())
+        vv = QVBoxLayout(verdict_box)
+        vv.setSpacing(6)
+        v_intro = QLabel(
+            "Compares your two most-recent setups on this car/track: lap-time, "
+            "per-corner apex speed, wheelspin/lock-ups, and your own feedback.")
+        v_intro.setWordWrap(True)
+        v_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        vv.addWidget(v_intro)
+        self._btn_setup_verdict = QPushButton("Compare Setups (session history)")
+        self._btn_setup_verdict.clicked.connect(self._analyse_setup_verdict)
+        _vrow = QHBoxLayout()
+        _vrow.addWidget(self._btn_setup_verdict)
+        _vrow.addStretch()
+        vv.addLayout(_vrow)
+        self._verdict_summary_lbl = QLabel(
+            "Click “Compare Setups” once you've run two setups here.")
+        self._verdict_summary_lbl.setWordWrap(True)
+        self._verdict_summary_lbl.setStyleSheet(
+            "color:#8BD3E6; font-size:11px; font-weight:bold;")
+        vv.addWidget(self._verdict_summary_lbl)
+        self._verdict_reasons_list = QListWidget()
+        self._verdict_reasons_list.setMaximumHeight(150)
+        self._verdict_reasons_list.setVisible(False)
+        vv.addWidget(self._verdict_reasons_list)
+        v.addWidget(verdict_box)
+
         return group
 
     def _render_practice_analysis(self, report) -> None:
@@ -5779,6 +5808,76 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                 for a in c.advice:
                     advice_list.addItem(a)
             advice_list.setVisible(True)
+
+    def _setup_id_labels(self) -> dict:
+        """Map DB setup_id -> display label from saved setups."""
+        out = {}
+        try:
+            from ui.setup_name_helper import setup_display_label
+            for s in (getattr(self, "_saved_setups", []) or []):
+                sid = s.get("setup_id")
+                if sid:
+                    out[sid] = setup_display_label(s) or f"Setup {sid}"
+        except Exception:
+            pass
+        return out
+
+    def _build_setup_verdict(self):
+        """Holistic brain Phase 3: compare the two most-recent setups on this
+        car/track using lap-time + per-corner + slip deltas and feedback."""
+        from strategy.setup_verdict_pipeline import build_verdict_from_laps
+        if self._db is None:
+            return None
+        loc, lay = self._practice_track_identity()
+        car_id = self._current_car_id()
+        track = str(getattr(self._build_event_context(), "track", "") or "")
+        if not (car_id and track):
+            return None
+        laps = self._db.get_laps_with_telemetry(
+            car_id, track, session_type="Practice", limit=60)
+        if not laps:
+            return None
+        segs = self._practice_reviewed_segments(loc, lay)
+        resolver = self._perfect_lap_frame_resolver(loc, lay)
+        # Best-effort latest vs-previous feedback.
+        fb = ""
+        try:
+            recent = self._db.get_recent_feedback(car_id, track, limit=1)
+            if recent:
+                fb = str(recent[0].get("vs_previous", "") or "")
+        except Exception:
+            fb = ""
+        return build_verdict_from_laps(
+            laps, resolver, segs, labels=self._setup_id_labels(),
+            feedback_vs_previous=fb)
+
+    def _analyse_setup_verdict(self) -> None:
+        verdict = None
+        try:
+            verdict = self._build_setup_verdict()
+        except Exception as e:
+            print(f"[SetupVerdict] {e}")
+        self._render_setup_verdict(verdict)
+
+    def _render_setup_verdict(self, verdict) -> None:
+        lbl = getattr(self, "_verdict_summary_lbl", None)
+        reasons = getattr(self, "_verdict_reasons_list", None)
+        if lbl is None:
+            return
+        if verdict is None:
+            lbl.setText(
+                "Need at least two setups with clean laps on this car/track "
+                "(with a track model for corner detail) to compare.")
+            if reasons is not None:
+                reasons.clear()
+                reasons.setVisible(False)
+            return
+        lbl.setText(verdict.headline())
+        if reasons is not None:
+            reasons.clear()
+            for r in verdict.reasons:
+                reasons.addItem(r)
+            reasons.setVisible(True)
 
     def _analyse_practice_patterns(self) -> None:
         """Gather this session's slip episodes, run the deterministic engine and

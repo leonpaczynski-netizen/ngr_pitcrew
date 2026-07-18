@@ -2228,7 +2228,7 @@ class SessionDB:
         sql = (
             "SELECT lr.id AS lap_record_id, lr.session_id, lr.lap_num, "
             "lr.lap_time_ms, lr.setup_id, lr.compound, lr.is_pit_lap, "
-            "lr.session_type "
+            "lr.session_type, lr.wheelspin_count, lr.lock_up_count "
             "FROM lap_records lr "
             f"WHERE {' AND '.join(where)} "
             "ORDER BY lr.id DESC LIMIT ?"
