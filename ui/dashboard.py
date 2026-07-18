@@ -315,6 +315,23 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         # driver feedback so the setup fix knows which setup was on the car.
         self._live_running_setup: str = ""
 
+        # UAT Finding 1: canonical applied-setup authority — the single owner of
+        # "the setup that is actually on the car right now". The Live Race
+        # Engineer defaults its baseline to this; the running-setup combo is only
+        # a manual override. Backed by a small JSON file next to the config so the
+        # last confirmed active setup restores after restart (and stays isolated
+        # under the temp config used by tests).
+        from data.setup_state_authority import ActiveSetupAuthority
+        from data.active_setup_store import JsonActiveSetupStore
+        _authority_store = None
+        try:
+            if self._config_path:
+                _authority_store = JsonActiveSetupStore(
+                    Path(self._config_path).with_name("active_setup_state.json"))
+        except Exception:
+            _authority_store = None
+        self._setup_authority = ActiveSetupAuthority(store=_authority_store)
+
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
@@ -5070,6 +5087,62 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._live_running_setup = "" if (not text or text == "— none —") else text
         self._refresh_running_setup_combos()
 
+    # ------------------------------------------------------------------ #
+    # UAT Finding 1 — canonical applied-setup authority integration.
+    # ------------------------------------------------------------------ #
+
+    def _current_setup_identity(self):
+        """The (car, track, layout) identity of the current session/event."""
+        from data.setup_state_authority import SetupIdentity
+        try:
+            ev = self._build_event_context()
+            return SetupIdentity(
+                car=str(getattr(ev, "car", "") or ""),
+                track=str(getattr(ev, "track", "") or ""),
+                layout_id=str(getattr(ev, "layout_id", "") or ""),
+            )
+        except Exception:
+            return SetupIdentity()
+
+    def _active_setup_for_current(self, purpose: str = "Race"):
+        """The canonical active applied setup for this session, or None.
+
+        Prefers the requested purpose, then the other, so the Live baseline is
+        populated whichever discipline was last applied for this car/track."""
+        auth = getattr(self, "_setup_authority", None)
+        if auth is None:
+            return None
+        ident = self._current_setup_identity()
+        other = "Qualifying" if purpose == "Race" else "Race"
+        return auth.active_setup(ident, purpose) or auth.active_setup(ident, other)
+
+    def _refresh_active_setup_display(self) -> None:
+        """Render the Live baseline (canonical active setup) honestly, kept
+        visibly separate from the manual running-setup override combo."""
+        lbl = getattr(self, "_live_active_setup_lbl", None)
+        auth = getattr(self, "_setup_authority", None)
+        if lbl is None or auth is None:
+            return
+        ident = self._current_setup_identity()
+        active = self._active_setup_for_current("Race")
+        if active is not None:
+            at = f" · applied {active.applied_at}" if active.applied_at else ""
+            lbl.setText(
+                f"Live baseline: {active.name} · rev {active.revision} "
+                f"[{active.purpose}]{at}")
+            lbl.setStyleSheet("color:#8BC34A; font-size:10px; padding:2px 0;")
+            return
+        gate = auth.analysis_gate(ident, "Race")
+        if gate.reason.name == "IDENTITY_MISMATCH" and gate.active is not None:
+            lbl.setText(
+                "Live baseline: none for this car/track — the applied setup "
+                f"“{gate.active.name}” is for a different session.")
+        else:
+            lbl.setText(
+                "Live baseline: none applied yet — apply a setup in game "
+                "to set the Live Race Engineer baseline.")
+        lbl.setStyleSheet("color:#F0C070; font-size:10px; padding:2px 0;")
+
     def _sync_practice_from_event(self) -> None:
         # Keep the "setup run this stint" selector current with saved setups +
         # whatever was declared live.
@@ -5399,7 +5472,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             running_setup = "" if (not _rs or _rs == "— none —") else _rs
         elif getattr(self, "_live_running_setup", ""):
             running_setup = self._live_running_setup
+        # UAT Finding 1: with no manual override, attach feedback to the canonical
+        # active applied setup (the Live baseline) so it's associated with the
+        # exact setup revision on the car — no duplicate manual selection.
+        setup_revision = 0
+        if not running_setup:
+            _active = self._active_setup_for_current("Race")
+            if _active is not None:
+                running_setup = _active.label()
+                setup_revision = _active.revision
+        else:
+            _active = self._active_setup_for_current("Race")
+            if _active is not None:
+                setup_revision = _active.revision
         feedback_dict["setup_run"] = running_setup
+        feedback_dict["setup_revision"] = setup_revision
         if running_setup:
             parts.append(f"Setup run this stint: {running_setup}")
 

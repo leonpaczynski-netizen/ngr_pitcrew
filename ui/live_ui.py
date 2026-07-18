@@ -342,14 +342,28 @@ class LiveMixin:
             f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
         )
         self._live_running_setup_combo.setToolTip(
-            "Tell the app which saved setup you're running this stint.\n"
-            "It carries into Practice Review and is sent to the AI with your feedback.")
+            "Manual override: tell the app which saved setup you're running this "
+            "stint. Normally the Live baseline below (the setup you applied in "
+            "game) is used automatically — only change this to override it.")
         self._live_running_setup_combo.currentTextChanged.connect(self._on_running_setup_changed)
-        _lrs_lbl = QLabel("Setup on car:")
+        _lrs_lbl = QLabel("Override (manual):")
         _lrs_lbl.setStyleSheet(f"color: {_TEXT};")
         setup_layout.addRow(_lrs_lbl, self._live_running_setup_combo)
+
+        # UAT Finding 1: the canonical Live baseline — the setup confirmed
+        # "Applied in Game". Read-only and kept visibly separate from the manual
+        # override above so unapplied recommendations never masquerade as active.
+        self._live_active_setup_lbl = QLabel(
+            "Live baseline: none applied yet — apply a setup in game to set the "
+            "Live Race Engineer baseline.")
+        self._live_active_setup_lbl.setWordWrap(True)
+        self._live_active_setup_lbl.setStyleSheet(
+            "color:#F0C070; font-size:10px; padding:2px 0;")
+        setup_layout.addRow("", self._live_active_setup_lbl)
+
         layout.addWidget(setup_box)
         self._refresh_running_setup_combos()
+        self._refresh_active_setup_display()
 
         stats_box = QGroupBox("Practice Stats")
         stats_box.setStyleSheet(self._group_style())

@@ -1348,6 +1348,39 @@ class SetupBuilderMixin:
                              confirmed_at=confirmed_at)
         if self._db is not None:
             self._db.save_applied_checkpoint(car_id, track, layout_id, purpose, cp)
+
+        # UAT Finding 1: make this the canonical active setup for the Live Race
+        # Engineer. Persist the COMPLETE setup snapshot (not just the tuning
+        # subset used for the three-state comparison) under the authority so the
+        # Live baseline, telemetry attachment and analysis gate all resolve to
+        # exactly what was applied — no duplicate manual selection.
+        auth = getattr(self, "_setup_authority", None)
+        if auth is not None:
+            try:
+                from data.setup_state_authority import SetupIdentity
+                ev = self._build_event_context()
+                ident = SetupIdentity(
+                    car=str(getattr(ev, "car", "") or ""),
+                    track=str(getattr(ev, "track", "") or ""),
+                    layout_id=str(getattr(ev, "layout_id", "") or ""),
+                )
+                try:
+                    complete = dict(form.current_setup_dict() or {})
+                except Exception:
+                    complete = dict(fields)
+                name = ""
+                try:
+                    name = form._setup_label.text().strip()
+                except Exception:
+                    name = ""
+                auth.mark_applied(
+                    ident, setup_id=setup_id or name,
+                    name=name or setup_id or f"{purpose} setup",
+                    fields=complete, purpose=purpose, applied_at=confirmed_at)
+                self._refresh_active_setup_display()
+            except Exception:
+                pass
+
         try:
             self._bridge.event_log_entry.emit(
                 f"[Setup] {purpose} setup confirmed applied in GT7 ({confirmed_at})")
