@@ -2203,6 +2203,44 @@ class SessionDB:
             print(f"[SessionDB] Frame decompress failed for record {lap_record_id}: {_e}")
             return []
 
+    def get_laps_with_telemetry(
+        self, car_id: int, track: str, *, session_type: str = "",
+        limit: int = 40, compound: str = "", exclude_pit: bool = True,
+    ) -> list[dict]:
+        """Recent laps (newest first) WITH their decompressed frames — the batch
+        counterpart to ``get_lap_telemetry`` (which is single-lap only), for
+        cross-session frame analysis (holistic brain, Phase 1+).
+
+        Each item: ``{lap_record_id, session_id, lap_num, lap_time_ms, setup_id,
+        compound, is_pit_lap, session_type, frames: [dict, ...]}``. Laps without a
+        stored telemetry blob come back with ``frames == []``.
+        """
+        where = ["lr.car_id = ?", "lr.track = ?", "lr.lap_time_ms > 0"]
+        params: list = [int(car_id or 0), track or ""]
+        if session_type:
+            where.append("lr.session_type = ?")
+            params.append(session_type)
+        if compound:
+            where.append("lr.compound = ?")
+            params.append(compound)
+        if exclude_pit:
+            where.append("lr.is_pit_lap = 0")
+        sql = (
+            "SELECT lr.id AS lap_record_id, lr.session_id, lr.lap_num, "
+            "lr.lap_time_ms, lr.setup_id, lr.compound, lr.is_pit_lap, "
+            "lr.session_type "
+            "FROM lap_records lr "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY lr.id DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        with self._lock:
+            rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        # Fetch frames OUTSIDE the lock (get_lap_telemetry re-acquires it).
+        for d in rows:
+            d["frames"] = self.get_lap_telemetry(int(d["lap_record_id"]))
+        return rows
+
     def write_setup(
         self,
         session_id: int,

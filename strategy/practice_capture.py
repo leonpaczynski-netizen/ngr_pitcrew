@@ -117,6 +117,37 @@ def build_progress_segment_resolver(
     return _resolver
 
 
+def episodes_to_occurrences(episodes, *, lap_number: int, session_id: int = 0,
+                            setup_checkpoint_id: str = "") -> List[dict]:
+    """Map slip episodes (duck-typed SlipEpisode) to corner_issue_occurrence dicts
+    for cross-session persistence. Pure — no DB. Both admissible and excluded
+    episodes are kept (excluded carry exclusion_reason) so history stays honest.
+    """
+    out: List[dict] = []
+    for e in (episodes or []):
+        g = lambda n, d=None: getattr(e, n, d)
+        out.append({
+            "session_id": int(session_id or 0),
+            "setup_checkpoint_id": str(setup_checkpoint_id or ""),
+            "lap_number": int(lap_number),
+            "segment_id": str(g("segment_id", "") or ""),
+            "corner_phase": str(g("corner_phase", "") or ""),
+            "issue_type": str(g("kind", "") or ""),
+            "issue_subtype": str(g("subtype", "") or ""),
+            "axle": str(g("axle", "") or ""),
+            "duration_s": float(g("duration_s", 0.0) or 0.0),
+            "severity": float(g("max_slip", 0.0) or 0.0),
+            "confidence": float(g("confidence", 0.0) or 0.0),
+            "throttle": float(g("throttle", 0.0) or 0.0),
+            "brake": float(g("brake", 0.0) or 0.0),
+            "speed_kmh": float(g("speed_kmh", 0.0) or 0.0),
+            "gear": int(g("gear", 0) or 0),
+            "exclusion_reason": str(g("exclusion_reason", "") or ""),
+            "provenance": str(g("provenance", "") or "practice_capture"),
+        })
+    return out
+
+
 def build_xyz_segment_resolver(
     track_location_id: str,
     layout_id: str,

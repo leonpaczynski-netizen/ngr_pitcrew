@@ -1932,7 +1932,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             if not os.path.exists("data/gt7_sessions.db"):
                 return ""
             db = _SDB("data/gt7_sessions.db")
-            rows = db.get_setup_comparison(0, track)
+            # Resolve the REAL car_id — the old code passed 0, which matched no
+            # rows, so setup-history comparison was always empty.
+            car_name = ""
+            try:
+                car_name = str(getattr(self._build_event_context(), "car", "") or "")
+            except Exception:
+                car_name = ""
+            car_id = int(db.get_car_id(car_name)) if car_name else self._current_car_id()
+            rows = db.get_setup_comparison(car_id, track)
             db.close()
             if not rows:
                 return ""
@@ -5486,6 +5494,27 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             cap.setVisible(bool(lines))
             lst.setVisible(bool(lines))
 
+    def _current_car_id(self) -> int:
+        """Best-effort DB car_id for the active car (0 if unknown).
+
+        Historical aggregates (setup comparison, car/track summary, corner-slip
+        rows) are scoped by car_id; passing 0 matches nothing, which was why
+        setup history read as empty. Resolve the real id from the live dispatcher
+        ref first, then the event-context car name."""
+        try:
+            ref = getattr(self, "_car_id_ref", None)
+            if ref and int(ref[0]) > 0:
+                return int(ref[0])
+        except Exception:
+            pass
+        try:
+            car = str(getattr(self._build_event_context(), "car", "") or "")
+            if car and self._db is not None:
+                return int(self._db.get_car_id(car) or 0)
+        except Exception:
+            pass
+        return 0
+
     def _reset_practice_capture(self) -> None:
         """Clear the per-lap practice buffers (call when a new practice session
         starts so cross-session evidence never mixes)."""
@@ -5612,8 +5641,31 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     if nm:
                         self._practice_corner_names.setdefault(sid, nm)
                 self._practice_track_corners = segments_to_track_corners(segs)
+
+            # Holistic brain Phase 0: turn on cross-session per-corner collection
+            # by persisting this lap's episodes to corner_issue_occurrences
+            # (dormant table, 0 rows before) so history accrues across sessions.
+            self._persist_practice_episodes(lap_num, episodes)
         except Exception as e:
             print(f"[PracticeCapture] {e}")
+
+    def _persist_practice_episodes(self, lap_num: int, episodes) -> None:
+        """Persist a lap's slip episodes to corner_issue_occurrences (best-effort).
+        Never raises; no-op without a DB or a resolved car/track."""
+        if self._db is None or not episodes:
+            return
+        try:
+            loc, lay = self._practice_track_identity()
+            track = str(getattr(self._build_event_context(), "track", "") or "")
+            car_id = self._current_car_id()
+            if not (car_id and track):
+                return
+            sid = int(getattr(getattr(self, "_dispatcher", None), "_session_id", 0) or 0)
+            from strategy.practice_capture import episodes_to_occurrences
+            occ = episodes_to_occurrences(episodes, lap_number=lap_num, session_id=sid)
+            self._db.save_issue_occurrences(car_id, track, lay, occ)
+        except Exception as ex:
+            print(f"[PracticeCapture] persist episodes: {ex}")
 
     def _analyse_practice_patterns(self) -> None:
         """Gather this session's slip episodes, run the deterministic engine and
