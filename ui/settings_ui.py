@@ -153,11 +153,19 @@ class SettingsMixin:
         self._ptt_binding_lbl = QLabel(self._format_binding(qb))
         self._ptt_binding_lbl.setStyleSheet("color: #AAE4AA;")
         ptt_detect_btn = QPushButton("Detect Button...")
+        ptt_detect_btn.setToolTip(
+            "Listen for a keyboard key, controller or wheel button to bind as\n"
+            "push-to-talk. You'll confirm before an existing binding is replaced."
+        )
         ptt_detect_btn.clicked.connect(self._on_detect_ptt_button)
+        ptt_clear_btn = QPushButton("Clear")
+        ptt_clear_btn.setToolTip("Remove the current push-to-talk button assignment.")
+        ptt_clear_btn.clicked.connect(self._on_clear_ptt_binding)
         detect_row_w = QWidget()
         detect_row_l = QHBoxLayout(detect_row_w)
         detect_row_l.setContentsMargins(0, 0, 0, 0)
         detect_row_l.addWidget(ptt_detect_btn)
+        detect_row_l.addWidget(ptt_clear_btn)
         detect_row_l.addWidget(self._ptt_binding_lbl)
         detect_row_l.addStretch()
         ptt_form.addRow("Push-to-talk button:", detect_row_w)
@@ -299,38 +307,149 @@ class SettingsMixin:
         if btype == "keyboard":
             return f"Keyboard: {qb.get('key', '?')}"
         if btype == "joystick":
-            return f"Joystick button {qb.get('button_index', '?')}"
+            dev = qb.get("device")
+            base = f"Joystick button {qb.get('button_index', '?')}"
+            return f"{base} ({dev})" if dev else base
         return "Not configured"
 
-    def _on_detect_ptt_button(self) -> None:
-        # Pause the active QueryListener keyboard hook so it doesn't consume
-        # the keypress before the detect dialog sees it.
-        paused_listener = None
-        if self._query_listener is not None:
-            paused_listener = self._query_listener._pynput_listener
-            if paused_listener is not None:
-                try:
-                    paused_listener.stop()
-                except Exception:
-                    pass
-                self._query_listener._pynput_listener = None
+    @staticmethod
+    def _bindings_equal(a: dict, b: dict) -> bool:
+        """True when two PTT bindings refer to the same physical control."""
+        if not a or not b or a.get("type") != b.get("type"):
+            return False
+        if a.get("type") == "keyboard":
+            return a.get("key") == b.get("key")
+        if a.get("type") == "joystick":
+            return a.get("button_index") == b.get("button_index")
+        return False
 
-        dlg = _ButtonDetectDialog(self)
-        accepted = dlg.exec()
+    # ------------------------------------------------------------------
+    # PTT detection — split into a factory + pure-ish apply step so the real
+    # settings-UI path is testable without opening a blocking modal dialog.
+    # ------------------------------------------------------------------
 
-        if accepted and dlg.detected_binding:
-            binding = dlg.detected_binding
-            self._config.setdefault("query_button", {}).clear()
-            self._config["query_button"].update(binding)
-            self._ptt_binding_lbl.setText(self._format_binding(binding))
-            self._persist_config()
+    def _make_button_detect_dialog(self):
+        """Factory for the canonical PTT button-detection dialog.
 
-        # Always restart the listener (with new binding if accepted, or old one if cancelled)
-        if self._query_listener is not None:
+        Isolated behind a method so tests can substitute a non-blocking fake and
+        still exercise the real ``_on_detect_ptt_button`` code path. Production
+        always returns the one canonical dialog from ``ui.button_detect_dialog``.
+        """
+        from ui.button_detect_dialog import ButtonDetectDialog
+        return ButtonDetectDialog(self)
+
+    def _pause_query_listener(self) -> None:
+        """Stop the live PTT keyboard hook so the detect dialog sees the keypress
+        first. Safe to call when no listener exists."""
+        ql = getattr(self, "_query_listener", None)
+        if ql is None:
+            return
+        pl = getattr(ql, "_pynput_listener", None)
+        if pl is not None:
             try:
-                self._query_listener._setup_keyboard_listener()
-            except Exception as e:
-                print(f"[Dashboard] listener restart error: {e}")
+                pl.stop()
+            except Exception:
+                pass
+            ql._pynput_listener = None
+
+    def _resume_query_listener(self) -> None:
+        """Restart the PTT keyboard hook with whatever binding is now current."""
+        ql = getattr(self, "_query_listener", None)
+        if ql is None:
+            return
+        try:
+            ql._setup_keyboard_listener()
+        except Exception as e:
+            print(f"[Settings] listener restart error: {e}")
+
+    def _show_ptt_message(self, text: str, *, title: str = "Push-to-talk") -> None:
+        QMessageBox.information(self, title, text)
+
+    def _confirm_replace_binding(self, existing: dict, new: dict) -> bool:
+        reply = QMessageBox.question(
+            self,
+            "Replace push-to-talk binding?",
+            "Replace current binding:\n"
+            f"    {self._format_binding(existing)}\n\n"
+            "with the newly detected:\n"
+            f"    {self._format_binding(new)}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _apply_detected_ptt_binding(self, binding: dict) -> bool:
+        """Persist a freshly detected binding. Returns True if it was stored.
+
+        Warns on a duplicate (already-assigned) button and requires explicit
+        confirmation before overwriting an existing binding.
+        """
+        if not binding:
+            return False
+        existing = self._config.get("query_button", {}) or {}
+        if existing and self._bindings_equal(existing, binding):
+            self._show_ptt_message(
+                "That button is already assigned to push-to-talk.",
+                title="Duplicate binding",
+            )
+            return False
+        if existing and not self._confirm_replace_binding(existing, binding):
+            return False
+        self._config.setdefault("query_button", {}).clear()
+        self._config["query_button"].update(binding)
+        self._ptt_binding_lbl.setText(self._format_binding(binding))
+        self._persist_config()
+        return True
+
+    def _on_detect_ptt_button(self) -> None:
+        # Pause the live keyboard hook so it doesn't consume the keypress before
+        # the detect dialog sees it; always restart it afterwards.
+        self._pause_query_listener()
+        try:
+            dlg = self._make_button_detect_dialog()
+            accepted = bool(dlg.exec())
+            binding = (
+                dict(dlg.detected_binding)
+                if (accepted and dlg.detected_binding) else None
+            )
+            joystick_available = bool(getattr(dlg, "joystick_available", True))
+        finally:
+            self._resume_query_listener()
+
+        if binding is None:
+            # Cancelled, Escape, or timed out — never disturb the existing
+            # binding. If nothing was detected and no controller was connected,
+            # say so honestly rather than silently doing nothing.
+            if not joystick_available:
+                self._show_ptt_message(
+                    "No button detected.\n\n"
+                    "No controller or wheel was connected. You can bind a "
+                    "keyboard key instead, or connect your device and try again.",
+                    title="No button detected",
+                )
+            return
+
+        self._apply_detected_ptt_binding(binding)
+
+    def _on_clear_ptt_binding(self) -> None:
+        if not (self._config.get("query_button") or {}):
+            self._show_ptt_message("No push-to-talk button is currently assigned.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Clear push-to-talk binding?",
+            "Remove the current push-to-talk button assignment?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._config.setdefault("query_button", {}).clear()
+        self._ptt_binding_lbl.setText(self._format_binding({}))
+        self._persist_config()
+        # Rebind the live listener so it stops firing on the cleared key.
+        self._pause_query_listener()
+        self._resume_query_listener()
 
     def _on_test_ptt(self) -> None:
         if self._query_listener is not None:
