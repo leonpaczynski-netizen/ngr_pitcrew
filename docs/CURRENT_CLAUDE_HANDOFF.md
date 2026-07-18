@@ -1,6 +1,38 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 2: Persisted Setup Experiments & Recommendation Evidence Ledger — COMPLETE
+## Current Objective (2026-07-18) — Engineering Brain Phase 3: Closed-Loop Outcome Evaluation, Regression Detection & Failed-Direction Learning — COMPLETE
+
+**Branch `eng-brain-phase3-outcome-evaluation` from `master` @ Phase 2 `b6f6dd4` — committed, NOT pushed / no PR.** (Verified start: Phase 1 on `master`; Phase 2 `b6f6dd4` was the branch tip, NOT on master — exactly the supplied checkpoint. `DB_VERSION` 21, `RULE_ENGINE_VERSION` 46.0.) Deterministic outcome engine only — NO new physics/rules, no UI redesign, no auto-apply, no auto-rollback.
+
+**Schema/version change:** `user_version` **21 → 22**; `DB_VERSION` 21 → 22 (`strategy/_setup_constants.py`). `RULE_ENGINE_VERSION` unchanged.
+
+**Files changed:**
+- NEW `strategy/setup_experiment_outcome.py` — pure outcome domain (Qt/DB/UI/network/AI-free; obtains Phase 1 `scope_fingerprint`, never recomputes; composes `recommendation_scoring.aggregate_lap_window`, `practice_pattern_analysis.RecurrenceThresholds`, deterministic driver fields). Outcome states CONFIRMED_IMPROVEMENT/PARTIAL_IMPROVEMENT/NO_MEANINGFUL_CHANGE/REGRESSION/CONFOUNDED/INSUFFICIENT_EVIDENCE; `SetupExperimentOutcome` aggregate; `resolve_experiment_evidence_association`, `evaluate_lap_validity`, `compare_whole_lap` (median, not fastest), `compare_corners` (recurrence classes), `evaluate_criteria` (primary target = diagnosed symptom; free-text criteria supporting), `evaluate_protected_behaviours` (per-behaviour corners; material regression blocks CONFIRMED), `arbitrate_driver_vs_telemetry` (preserves disagreement), `decide_outcome` (explicit table), `build_failed_direction_learning` (lockout/caution/none; compound→caution/low-attribution), `build_next_action`, `evaluate_outcome`, `compute_outcome_idempotency_key`.
+- MOD `data/session_db.py` — `_DDL_V22` (5 tables + indexes), `_migrate_v22` + hook; `_experiment_gate_state.has_outcome_record` now computed from a real non-superseded/non-invalidated outcome (unlocks COMPLETED honestly). Methods: `create_experiment_outcome` (atomic ROLLBACK, idempotent by key), `get_experiment_outcome`, `get_latest_experiment_outcome`, `list_experiment_outcomes`, `supersede_experiment_outcome`, `invalidate_experiment_outcome`, `list_failed_directions_by_scope`, `list_failed_directions_for_field`, `find_latest_reviewable_experiment`, and orchestrator `evaluate_setup_experiment(...)` + helpers `_attach_outcome_evidence` / `_advance_experiment_lifecycle` / `_record_failed_direction_learning`.
+- MOD `strategy/_setup_constants.py` — `DB_VERSION` 21 → 22.
+- MOD `ui/setup_form_widget.py` — "Review Test Outcome" button + outcome summary label (hidden until an applied experiment exists).
+- MOD `ui/setup_builder_ui.py` — connect the button (both forms); reveal it on apply; `_review_experiment_outcome` (off-thread worker) + `_ensure_outcome_queue` + `_display_outcome_result`. Car read via EventContext (frozen fan-out allowlist untouched).
+- MOD `ui/dashboard.py` — register `_outcome_result_queue`/`_display_outcome_result` in `_poll_ui_queue` (guarded).
+- NEW `tests/test_setup_outcome_{domain,persistence,integration,golden_uat}.py` (79). MOD version guards: `test_session_db`→22, `test_setup_experiment_persistence`→DB_VERSION, `test_group55–60_safety_guards`+`test_group61_safety_invariants` migration ceiling → v23.
+- NEW `docs/ENGINEERING_BRAIN_PHASE3_OUTCOME_EVALUATION.md`; MOD Phase 2 doc, `docs/PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Outcome model / rules:** see the Phase 3 doc. Regression precedence is safety-first (a material protected regression can never yield CONFIRMED). CONFOUNDED/INSUFFICIENT never fabricate a verdict or falsely complete/reject (stay READY_FOR_REVIEW). COMPLETED requires a persisted outcome (now honestly gated). Failed-direction learning: strong single-field regression → LOCKOUT (+ `learning_outcomes` 'worsened' + lineage 'worsened' feeding `blocked_rules_from_outcomes`/`rollback_from_lineage`); compound/weak → CAUTION (row only); insufficient/confounded → nothing; scoped to this car/track/layout (never global). Superseding is audited (`superseded_by`); history never deleted.
+
+**Production seams:** orchestrator `SessionDB.evaluate_setup_experiment` (evidence gathered off the telemetry thread); driver-triggered off-thread "Review Test Outcome" Setup Builder action (read-only; never applies/reverts).
+
+**Tests run / results:** new suites **79 passed** (domain 40, persistence 14, integration 22, golden UAT 3). Non-UI regression (chunked, Win/Py3.14 PyQt teardown): **6709 passed, 27 skipped, 0 failed**. Setup-builder UI construction tests individually green (group25/44/42/41). Golden `config_id` + frozen allowlist + Apply-gate predicate assert green. **0 new failures.** Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched). Qt teardown-only segfaults (tests pass first): `config_safety_smoke`, `group75_segment_editor_ui`, `group76_live_capture_thread`, `group76_perfect_lap_ui`.
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations:** the live UI review path gathers whole-lap windows from the DB but does not yet auto-assemble per-corner baseline/test observations from live telemetry (run→corner mapping) — a live review without them is honestly INSUFFICIENT/NO_MEANINGFUL. The engine fully supports per-corner evidence (tests + golden UAT prove it); live per-corner assembly + a single canonical clean-lap authority is Phase 4.
+
+**GO/NO-GO: GO.** Safety spine intact (offline, deterministic, no AI, no auto-apply/pit/rollback; Apply gate + golden vector + frozen allowlist unchanged).
+
+**Recommended Phase 4:** Canonical Evidence Authorities & Unified Clean-Lap / Setup-Decision Semantics — unify the clean-lap definition + per-corner evidence into canonical authorities, wire live per-corner assembly into the review path, and retire the informal duplicates. All Phase 3 hooks already exist. Do NOT start Phase 4 in this task.
+
+---
+
+## Prior Objective (2026-07-18) — Engineering Brain Phase 2: Persisted Setup Experiments & Recommendation Evidence Ledger — COMPLETE
 
 **Branch `eng-brain-phase2-setup-experiments` from `master` @ `3d7c6af` — committed, NOT pushed / no PR.** Phase 1 was fast-forwarded onto `master` first (per the user's decision), so `master` now carries the canonical-context spine; Phase 2 branches from it. Durable evidence ledger only — NO before/after outcome scoring, no auto-judgement, no physics, no new setup rules, no strategy maths, no auto-apply/pit, no UI redesign (those are Phase 3+).
 

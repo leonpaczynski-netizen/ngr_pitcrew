@@ -735,8 +735,159 @@ CREATE INDEX IF NOT EXISTS idx_setup_exp_state_exp
     ON setup_experiment_state_history (experiment_id);
 """
 
+# Engineering-Brain Phase 3 — closed-loop outcome evaluation, regression detection
+# and failed-direction learning (schema v22). FIVE additive standalone tables
+# (touch no existing table; CREATE IF NOT EXISTS ⇒ idempotent migration
+# `_migrate_v22`):
+#   setup_experiment_outcomes            — the IMMUTABLE evaluated outcome (one per
+#                                          evaluation; UNIQUE idempotency_key; a
+#                                          superseding correction sets superseded_by
+#                                          on the prior, never overwrites it).
+#   setup_experiment_outcome_criteria    — per-criterion verdicts (append-only).
+#   setup_experiment_outcome_protected   — protected-behaviour verdicts.
+#   setup_experiment_outcome_corners     — per-corner before/after comparison.
+#   setup_experiment_failed_directions   — scoped failed-direction learning
+#                                          (lockout/caution) for confirmed regressions.
+# Every row references the Phase 1 scope_fingerprint + the Phase 2 experiment id.
+# Core join fields are first-class indexed columns; unknowns are NULL.
+_DDL_V22 = """
+CREATE TABLE IF NOT EXISTS setup_experiment_outcomes (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id          INTEGER NOT NULL,
+    scope_fingerprint      TEXT    NOT NULL DEFAULT '',
+    parent_setup_id        TEXT    NOT NULL DEFAULT '',
+    applied_checkpoint_id  TEXT    NOT NULL DEFAULT '',
+    test_session_id        TEXT,
+    test_run_id            TEXT,
+    eval_version           TEXT    NOT NULL DEFAULT '',
+    status                 TEXT    NOT NULL DEFAULT '',
+    confidence             REAL    NOT NULL DEFAULT 0.0,
+    confidence_level       TEXT    NOT NULL DEFAULT '',
+    evidence_completeness  TEXT    NOT NULL DEFAULT '',
+    validity_json          TEXT    NOT NULL DEFAULT '{}',
+    whole_lap_json         TEXT    NOT NULL DEFAULT '{}',
+    regressions_json       TEXT    NOT NULL DEFAULT '[]',
+    improvements_json      TEXT    NOT NULL DEFAULT '[]',
+    neutral_json           TEXT    NOT NULL DEFAULT '[]',
+    confounders_json       TEXT    NOT NULL DEFAULT '[]',
+    missing_evidence_json  TEXT    NOT NULL DEFAULT '[]',
+    driver_agreement       TEXT    NOT NULL DEFAULT '',
+    driver_review_summary  TEXT    NOT NULL DEFAULT '',
+    decision_rationale     TEXT    NOT NULL DEFAULT '',
+    next_action            TEXT    NOT NULL DEFAULT '',
+    next_action_detail     TEXT    NOT NULL DEFAULT '',
+    rollback_eligible      INTEGER NOT NULL DEFAULT 0,
+    rollback_target        TEXT    NOT NULL DEFAULT '',
+    learning_eligible      INTEGER NOT NULL DEFAULT 0,
+    superseded_by          INTEGER,
+    invalidated_reason     TEXT    NOT NULL DEFAULT '',
+    idempotency_key        TEXT    NOT NULL UNIQUE,
+    created_at             TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_experiment
+    ON setup_experiment_outcomes (experiment_id);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_scope
+    ON setup_experiment_outcomes (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_checkpoint
+    ON setup_experiment_outcomes (applied_checkpoint_id);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_session
+    ON setup_experiment_outcomes (test_session_id);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_status
+    ON setup_experiment_outcomes (status);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_outcome_criteria (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    outcome_id      INTEGER NOT NULL,
+    criterion_id    TEXT    NOT NULL DEFAULT '',
+    description     TEXT    NOT NULL DEFAULT '',
+    metric          TEXT    NOT NULL DEFAULT '',
+    expected        TEXT    NOT NULL DEFAULT '',
+    observed        TEXT    NOT NULL DEFAULT '',
+    sample_count    INTEGER NOT NULL DEFAULT 0,
+    confidence      TEXT    NOT NULL DEFAULT '',
+    verdict         TEXT    NOT NULL DEFAULT '',
+    missing_evidence TEXT   NOT NULL DEFAULT '',
+    rationale       TEXT    NOT NULL DEFAULT '',
+    is_target       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_criteria_oid
+    ON setup_experiment_outcome_criteria (outcome_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_outcome_protected (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    outcome_id          INTEGER NOT NULL,
+    behaviour           TEXT    NOT NULL DEFAULT '',
+    field               TEXT    NOT NULL DEFAULT '',
+    baseline_state      TEXT    NOT NULL DEFAULT '',
+    test_state          TEXT    NOT NULL DEFAULT '',
+    comparison          TEXT    NOT NULL DEFAULT '',
+    confidence          TEXT    NOT NULL DEFAULT '',
+    verdict             TEXT    NOT NULL DEFAULT '',
+    supporting_evidence TEXT    NOT NULL DEFAULT '',
+    corners_json        TEXT    NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_protected_oid
+    ON setup_experiment_outcome_protected (outcome_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_outcome_corners (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    outcome_id        INTEGER NOT NULL,
+    segment_id        TEXT    NOT NULL DEFAULT '',
+    corner_name       TEXT    NOT NULL DEFAULT '',
+    issue_type        TEXT    NOT NULL DEFAULT '',
+    phase             TEXT    NOT NULL DEFAULT '',
+    baseline_class    TEXT    NOT NULL DEFAULT '',
+    test_class        TEXT    NOT NULL DEFAULT '',
+    baseline_affected INTEGER NOT NULL DEFAULT 0,
+    test_affected     INTEGER NOT NULL DEFAULT 0,
+    sample_count      INTEGER NOT NULL DEFAULT 0,
+    confidence        TEXT    NOT NULL DEFAULT '',
+    verdict           TEXT    NOT NULL DEFAULT '',
+    is_target         INTEGER NOT NULL DEFAULT 0,
+    is_protected      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_exp_outcome_corners_oid
+    ON setup_experiment_outcome_corners (outcome_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_failed_directions (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    outcome_id            INTEGER NOT NULL,
+    experiment_id         INTEGER NOT NULL,
+    scope_fingerprint     TEXT    NOT NULL DEFAULT '',
+    driver                TEXT    NOT NULL DEFAULT '',
+    car                   TEXT    NOT NULL DEFAULT '',
+    track                 TEXT    NOT NULL DEFAULT '',
+    layout_id             TEXT    NOT NULL DEFAULT '',
+    discipline            TEXT    NOT NULL DEFAULT '',
+    parent_setup_id       TEXT    NOT NULL DEFAULT '',
+    field                 TEXT    NOT NULL DEFAULT '',
+    from_value            TEXT,
+    to_value              TEXT,
+    direction             TEXT    NOT NULL DEFAULT '',
+    magnitude             REAL,
+    symptom               TEXT    NOT NULL DEFAULT '',
+    regression_observed   TEXT    NOT NULL DEFAULT '',
+    affected_protected    TEXT    NOT NULL DEFAULT '',
+    corners_json          TEXT    NOT NULL DEFAULT '[]',
+    strength              TEXT    NOT NULL DEFAULT '',
+    confidence            TEXT    NOT NULL DEFAULT '',
+    attribution_confidence TEXT   NOT NULL DEFAULT '',
+    evidence_count        INTEGER NOT NULL DEFAULT 0,
+    rule_id               TEXT    NOT NULL DEFAULT '',
+    rule_engine_version   TEXT    NOT NULL DEFAULT '',
+    superseded_by         INTEGER,
+    created_at            TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_exp_failed_dir_scope
+    ON setup_experiment_failed_directions (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_exp_failed_dir_experiment
+    ON setup_experiment_failed_directions (experiment_id);
+CREATE INDEX IF NOT EXISTS idx_exp_failed_dir_field
+    ON setup_experiment_failed_directions (car, track, layout_id, field);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -854,6 +1005,18 @@ class SessionDB:
             self._migrate_v21()
             self._conn.execute("PRAGMA user_version = 21")
             self._conn.commit()
+        if version < 22:
+            self._migrate_v22()
+            self._conn.execute("PRAGMA user_version = 22")
+            self._conn.commit()
+
+    def _migrate_v22(self) -> None:
+        """Engineering-Brain Phase 3 — closed-loop outcome evaluation (schema v22).
+        Adds five standalone additive tables (setup_experiment_outcomes + criteria/
+        protected/corners child tables + setup_experiment_failed_directions).
+        Touches no existing table, rewrites no historical data. CREATE IF NOT
+        EXISTS throughout ⇒ the migration is idempotent."""
+        self._conn.executescript(_DDL_V22)
 
     def _migrate_v21(self) -> None:
         """Engineering-Brain Phase 2 — persisted setup experiments & recommendation
@@ -1789,12 +1952,20 @@ class SessionDB:
         n_test = self._conn.execute(
             "SELECT COUNT(*) FROM setup_experiment_evidence WHERE experiment_id=? "
             "AND phase IN ('test','driver_review')", (eid,)).fetchone()[0]
+        # Phase 3: COMPLETED is honestly gated on a persisted (non-invalidated,
+        # non-superseded) outcome record actually existing for this experiment.
+        try:
+            n_outcome = self._conn.execute(
+                "SELECT COUNT(*) FROM setup_experiment_outcomes WHERE experiment_id=? "
+                "AND superseded_by IS NULL AND invalidated_reason=''", (eid,)).fetchone()[0]
+        except Exception:
+            n_outcome = 0
         return {
             "status": row.get("status", ""),
             "has_actionable_changes": n_changes > 0,
             "has_applied_checkpoint": bool(row.get("applied_checkpoint_id")),
             "has_test_evidence": n_test > 0,
-            "has_outcome_record": False,   # Phase 3 outcome table does not exist yet
+            "has_outcome_record": n_outcome > 0,
         }
 
     def transition_experiment_state(
@@ -2027,6 +2198,511 @@ class SessionDB:
             return result
         except Exception:
             return None
+
+    # ------------------------------------------------------------------
+    # Setup experiment OUTCOMES + failed-direction learning (Phase 3, v22)
+    # ------------------------------------------------------------------
+    def create_experiment_outcome(
+        self, outcome, *, car: str = "", track: str = "", layout_id: str = "",
+        discipline: str = "", driver: str = "", rule_engine_version: str = "",
+    ) -> "int | None":
+        """Persist a SetupExperimentOutcome atomically + idempotently. Returns id.
+
+        Idempotent by ``outcome.idempotency_key`` (UNIQUE): re-evaluating the same
+        experiment against the same evidence returns the existing id and writes NO
+        duplicate. The parent outcome + all child rows (criteria, protected,
+        corners, failed_directions) are written in ONE transaction — a failed
+        child write rolls back the WHOLE outcome (never a partial record). The
+        outcome is IMMUTABLE once written. Best-effort; None on error."""
+        import json as _json
+        try:
+            key = outcome.idempotency_key
+            if not key:
+                return None
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                existing = self._conn.execute(
+                    "SELECT id FROM setup_experiment_outcomes WHERE idempotency_key=?",
+                    (key,)).fetchone()
+                if existing is not None:
+                    return int(existing[0])
+                try:
+                    self._conn.execute("BEGIN")
+                    cur = self._conn.execute(
+                        """INSERT INTO setup_experiment_outcomes
+                           (experiment_id, scope_fingerprint, parent_setup_id,
+                            applied_checkpoint_id, test_session_id, test_run_id,
+                            eval_version, status, confidence, confidence_level,
+                            evidence_completeness, validity_json, whole_lap_json,
+                            regressions_json, improvements_json, neutral_json,
+                            confounders_json, missing_evidence_json, driver_agreement,
+                            driver_review_summary, decision_rationale, next_action,
+                            next_action_detail, rollback_eligible, rollback_target,
+                            learning_eligible, idempotency_key, created_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (int(outcome.experiment_id), outcome.scope_fingerprint,
+                         outcome.parent_setup_id, outcome.applied_checkpoint_id,
+                         outcome.test_session_id, outcome.test_run_id,
+                         outcome.eval_version, outcome.status.value,
+                         float(outcome.confidence), outcome.confidence_level.value,
+                         outcome.evidence_completeness,
+                         _json.dumps(outcome.validity.to_dict()),
+                         _json.dumps(outcome.whole_lap.to_dict()),
+                         _json.dumps(list(outcome.regressions)),
+                         _json.dumps(list(outcome.improvements)),
+                         _json.dumps(list(outcome.neutral_findings)),
+                         _json.dumps(list(outcome.confounders)),
+                         _json.dumps(list(outcome.missing_evidence)),
+                         outcome.driver_agreement.value, outcome.driver_review_summary,
+                         outcome.decision_rationale, outcome.next_action.value,
+                         outcome.next_action_detail, 1 if outcome.rollback_eligible else 0,
+                         outcome.rollback_target, 1 if outcome.learning_eligible else 0,
+                         key, now))
+                    oid = int(cur.lastrowid)
+                    for c in outcome.criteria:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_outcome_criteria
+                               (outcome_id, criterion_id, description, metric, expected,
+                                observed, sample_count, confidence, verdict,
+                                missing_evidence, rationale, is_target)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (oid, c.criterion_id, c.description, c.metric, c.expected,
+                             c.observed, int(c.sample_count), c.confidence,
+                             c.verdict.value, c.missing_evidence, c.rationale,
+                             1 if c.is_target else 0))
+                    for p in outcome.protected:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_outcome_protected
+                               (outcome_id, behaviour, field, baseline_state, test_state,
+                                comparison, confidence, verdict, supporting_evidence,
+                                corners_json)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                            (oid, p.behaviour, p.field, p.baseline_state, p.test_state,
+                             p.comparison, p.confidence, p.verdict.value,
+                             p.supporting_evidence, _json.dumps(list(p.corners))))
+                    for cc in outcome.corner_comparisons:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_outcome_corners
+                               (outcome_id, segment_id, corner_name, issue_type, phase,
+                                baseline_class, test_class, baseline_affected,
+                                test_affected, sample_count, confidence, verdict,
+                                is_target, is_protected)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (oid, cc.segment_id, cc.corner_name, cc.issue_type, cc.phase,
+                             cc.baseline_class, cc.test_class, int(cc.baseline_affected),
+                             int(cc.test_affected), int(cc.sample_count), cc.confidence,
+                             cc.verdict.value, 1 if cc.is_target else 0,
+                             1 if cc.is_protected else 0))
+                    for fd in outcome.failed_directions:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_failed_directions
+                               (outcome_id, experiment_id, scope_fingerprint, driver,
+                                car, track, layout_id, discipline, parent_setup_id,
+                                field, from_value, to_value, direction, magnitude,
+                                symptom, regression_observed, affected_protected,
+                                corners_json, strength, confidence,
+                                attribution_confidence, evidence_count, rule_id,
+                                rule_engine_version, created_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (oid, int(outcome.experiment_id), outcome.scope_fingerprint,
+                             driver, car, track, layout_id, discipline,
+                             outcome.parent_setup_id, fd.field, fd.from_value,
+                             fd.to_value, fd.direction, fd.magnitude, fd.symptom,
+                             fd.regression_observed, fd.affected_protected,
+                             _json.dumps(list(fd.corners)), fd.strength.value,
+                             fd.confidence, fd.attribution_confidence,
+                             int(fd.evidence_count), fd.rule_id, rule_engine_version,
+                             now))
+                    self._conn.execute("COMMIT")
+                    return oid
+                except Exception:
+                    try:
+                        self._conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    return None
+        except Exception:
+            return None
+
+    def get_experiment_outcome(self, outcome_id: int) -> "dict | None":
+        """Return a full outcome (parent + criteria + protected + corners +
+        failed_directions), or None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT * FROM setup_experiment_outcomes WHERE id=?",
+                    (int(outcome_id),)).fetchone()
+                if row is None:
+                    return None
+                oid = int(outcome_id)
+                out = dict(row)
+                out["criteria"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_outcome_criteria WHERE outcome_id=? "
+                    "ORDER BY id ASC", (oid,)).fetchall()]
+                out["protected"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_outcome_protected WHERE outcome_id=? "
+                    "ORDER BY id ASC", (oid,)).fetchall()]
+                out["corners"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_outcome_corners WHERE outcome_id=? "
+                    "ORDER BY id ASC", (oid,)).fetchall()]
+                out["failed_directions"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_failed_directions WHERE outcome_id=? "
+                    "ORDER BY id ASC", (oid,)).fetchall()]
+            return out
+        except Exception:
+            return None
+
+    def get_latest_experiment_outcome(self, experiment_id: int) -> "dict | None":
+        """Return the most-recent non-superseded, non-invalidated outcome, or None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM setup_experiment_outcomes WHERE experiment_id=? "
+                    "AND superseded_by IS NULL AND invalidated_reason='' "
+                    "ORDER BY id DESC LIMIT 1", (int(experiment_id),)).fetchone()
+            return self.get_experiment_outcome(int(row[0])) if row is not None else None
+        except Exception:
+            return None
+
+    def list_experiment_outcomes(self, experiment_id: int) -> list[dict]:
+        """All outcomes for an experiment (incl. superseded), newest first."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM setup_experiment_outcomes WHERE experiment_id=? "
+                    "ORDER BY id DESC", (int(experiment_id),)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def supersede_experiment_outcome(self, old_outcome_id: int,
+                                     new_outcome_id: int) -> None:
+        """Audited superseding — points the prior outcome at its replacement
+        WITHOUT deleting or mutating the historical conclusion. Best-effort."""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE setup_experiment_outcomes SET superseded_by=? WHERE id=?",
+                    (int(new_outcome_id), int(old_outcome_id)))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def invalidate_experiment_outcome(self, outcome_id: int, reason: str) -> None:
+        """Audited invalidation (records a reason; never erases the row)."""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE setup_experiment_outcomes SET invalidated_reason=? WHERE id=?",
+                    (str(reason or "invalidated"), int(outcome_id)))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def list_failed_directions_by_scope(self, scope_fingerprint: str) -> list[dict]:
+        """Scoped failed-direction learning (lockout/caution), newest first."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM setup_experiment_failed_directions "
+                    "WHERE scope_fingerprint=? AND superseded_by IS NULL "
+                    "ORDER BY id DESC", (str(scope_fingerprint),)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def list_failed_directions_for_field(
+        self, car: str, track: str, layout_id: str, field: str,
+    ) -> list[dict]:
+        """Failed-direction learning for a specific field within one car/track/layout
+        scope only (never cross-car/cross-track). Newest first."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM setup_experiment_failed_directions "
+                    "WHERE car=? AND track=? AND layout_id=? AND field=? "
+                    "AND superseded_by IS NULL ORDER BY id DESC",
+                    (str(car), str(track), str(layout_id), str(field))).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def evaluate_setup_experiment(
+        self, experiment_id: int, *,
+        test_session_id=None, baseline_session_id=None,
+        corner_baseline=None, corner_test=None, driver_review=None,
+        confounders=None, test_scope_fingerprint=None, test_checkpoint_id=None,
+        test_session_started_after_apply: bool = True,
+        candidate_experiment_ids=(), complete_on_success: bool = True,
+        car: str = "", track: str = "", layout_id: str = "", discipline: str = "",
+        driver: str = "", force: bool = False,
+    ) -> dict:
+        """High-level Phase-3 orchestration: evaluate one applied experiment against
+        measured test evidence, persist an immutable outcome + failed-direction
+        learning, drive the Phase-2 lifecycle, and feed the EXISTING lockout/lineage
+        consumers. Structured result; never raises for ordinary missing-evidence.
+
+        Evidence is gathered from the DB (clean-lap windows via the OFR-1 authority
+        `aggregate_lap_window`) for the given baseline/test sessions; per-corner
+        observations + the deterministically-parsed driver review are passed in by
+        the caller (the Setup Builder/Practice worker) so this method stays pure of
+        telemetry threading. Runs OFF the telemetry UDP thread by contract."""
+        try:
+            from strategy.setup_experiment_outcome import (
+                ExperimentSnapshot, OutcomeInputs, LapAggregate, ConfounderInput,
+                resolve_experiment_evidence_association, evaluate_lap_validity,
+                evaluate_outcome, OutcomeStatus,
+            )
+            from data.recommendation_scoring import aggregate_lap_window
+            from strategy._setup_constants import RULE_ENGINE_VERSION
+        except Exception as exc:  # pragma: no cover - import/infrastructure failure
+            return {"ok": False, "error": f"phase3 import failed: {exc}"}
+
+        exp = self.get_setup_experiment(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "status": "insufficient_evidence",
+                    "reason": "experiment not found"}
+        if exp.get("status") not in ("applied", "test_in_progress", "ready_for_review"):
+            return {"ok": False, "status": "insufficient_evidence",
+                    "reason": f"experiment not evaluable in state {exp.get('status')!r}"}
+
+        snap = ExperimentSnapshot.from_experiment(exp)
+
+        # --- gather clean-lap windows from the DB (OFR-1 authority) ----------
+        def _agg(session_id):
+            if session_id is None:
+                return LapAggregate(), 0
+            rows = self.get_laps_for_scoring(int(session_id))
+            w = aggregate_lap_window(rows)
+            return LapAggregate.from_lap_window(w, rows), len(rows)
+
+        test_agg, test_total = _agg(test_session_id)
+        base_agg, _ = _agg(baseline_session_id)
+        has_parent_baseline = (baseline_session_id is not None) or base_agg.clean_count > 0
+
+        # --- authoritative association --------------------------------------
+        assoc = resolve_experiment_evidence_association(
+            snap,
+            test_scope_fingerprint=(test_scope_fingerprint
+                                    if test_scope_fingerprint is not None
+                                    else snap.scope_fingerprint),
+            test_checkpoint_id=(test_checkpoint_id or ""),
+            test_session_started_after_apply=test_session_started_after_apply,
+            candidate_experiment_ids=candidate_experiment_ids,
+            has_parent_baseline=has_parent_baseline)
+
+        min_req = snap.min_clean_laps or 3
+        validity = evaluate_lap_validity(
+            test_agg, total_laps=test_total, min_required=min_req,
+            setup_identity_confidence=("high" if not (confounders and getattr(
+                confounders, "setup_identity_uncertain", False)) else "low"))
+
+        inputs = OutcomeInputs(
+            experiment=snap, association=assoc, validity=validity,
+            baseline=base_agg, test=test_agg,
+            corner_baseline=tuple(corner_baseline or ()),
+            corner_test=tuple(corner_test or ()),
+            driver_review=driver_review,
+            confounders=confounders or ConfounderInput(),
+            test_session_id=(str(test_session_id) if test_session_id is not None else None))
+
+        outcome = evaluate_outcome(inputs)
+
+        # --- persist immutable outcome (atomic) -----------------------------
+        prior = self.get_latest_experiment_outcome(int(experiment_id))
+        outcome_id = self.create_experiment_outcome(
+            outcome, car=car, track=track, layout_id=layout_id,
+            discipline=discipline, driver=driver,
+            rule_engine_version=RULE_ENGINE_VERSION)
+        if outcome_id is None:
+            return {"ok": False, "status": outcome.status.value,
+                    "reason": "outcome persistence failed"}
+        # Audited superseding: a genuinely-new evaluation supersedes the prior one.
+        if prior is not None and int(prior.get("id")) != outcome_id:
+            self.supersede_experiment_outcome(int(prior["id"]), outcome_id)
+
+        # --- attach evidence to the Phase-2 append-only ledger --------------
+        self._attach_outcome_evidence(int(experiment_id), outcome, test_session_id,
+                                      driver_review)
+
+        # --- drive the Phase-2 lifecycle (validated, append-only) -----------
+        transitioned = self._advance_experiment_lifecycle(
+            int(experiment_id), outcome.status, complete_on_success)
+
+        # --- feed EXISTING consumers for confirmed regressions --------------
+        learning = self._record_failed_direction_learning(
+            outcome, car=car, track=track, layout_id=layout_id,
+            test_session_id=test_session_id)
+
+        return {
+            "ok": True,
+            "experiment_id": int(experiment_id),
+            "outcome_id": outcome_id,
+            "status": outcome.status.value,
+            "confidence": outcome.confidence,
+            "confidence_level": outcome.confidence_level.value,
+            "association": assoc.status.value,
+            "valid_laps": validity.valid_laps,
+            "next_action": outcome.next_action.value,
+            "rollback_eligible": outcome.rollback_eligible,
+            "rollback_target": outcome.rollback_target,
+            "learning_eligible": outcome.learning_eligible,
+            "failed_directions": [fd.to_dict() for fd in outcome.failed_directions],
+            "regressions": list(outcome.regressions),
+            "improvements": list(outcome.improvements),
+            "lifecycle": transitioned,
+            "learning_written": learning,
+            "superseded_prior": (int(prior["id"]) if prior is not None
+                                 and int(prior.get("id")) != outcome_id else None),
+        }
+
+    def find_latest_reviewable_experiment(
+        self, car_id: int, track: str, layout_id: str = "", discipline: str = "",
+    ) -> "dict | None":
+        """Return the most-recent experiment awaiting outcome review (APPLIED /
+        TEST_IN_PROGRESS / READY_FOR_REVIEW) for a scope, or None. Used by the
+        driver-triggered 'Review Test Outcome' action. Resolves the Phase 1
+        scope_fingerprint from the identity so it never matches on free-text."""
+        try:
+            from data.engineering_context_key import build_engineering_context
+            res = build_engineering_context(
+                car_id=car_id, free_text_track=track, layout_id=layout_id,
+                discipline=discipline)
+            scope_fp = res.scope_fingerprint
+            with self._lock:
+                row = self._conn.execute(
+                    """SELECT * FROM setup_experiments
+                       WHERE scope_fingerprint=?
+                         AND status IN ('applied','test_in_progress','ready_for_review')
+                       ORDER BY id DESC LIMIT 1""",
+                    (scope_fp,)).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
+    def _attach_outcome_evidence(self, experiment_id, outcome, test_session_id,
+                                 driver_review) -> None:
+        """Append TEST / DRIVER_REVIEW / OUTCOME evidence to the Phase-2 ledger
+        (append-only; references + structured summaries, never blobs)."""
+        try:
+            from strategy.setup_experiment import (
+                ExperimentEvidence, EvidencePhase, EvidenceStance)
+            v = outcome.validity
+            self.append_experiment_evidence(experiment_id, ExperimentEvidence(
+                evidence_type="test_evidence", phase=EvidencePhase.TEST,
+                source_table="lap_records",
+                source_id=(str(test_session_id) if test_session_id is not None else ""),
+                summary=(f"{v.valid_laps} valid / {v.rejected_laps} rejected laps; "
+                         f"repeatability_assessable={v.repeatability_assessable}"),
+                confidence=v.setup_identity_confidence,
+                provenance="recommendation_scoring.aggregate_lap_window",
+                session_id=(str(test_session_id) if test_session_id is not None else None),
+                stance=EvidenceStance.NEUTRAL))
+            if driver_review is not None:
+                self.append_experiment_evidence(experiment_id, ExperimentEvidence(
+                    evidence_type="driver_review", phase=EvidencePhase.DRIVER_REVIEW,
+                    source_table="driver_feedback",
+                    source_id=str(getattr(driver_review, "feedback_id", "") or ""),
+                    summary=outcome.driver_review_summary,
+                    provenance="setup_diagnosis._parse_driver_feel",
+                    stance=(EvidenceStance.SUPPORTS
+                            if getattr(driver_review, "refers_to_correct_setup", True)
+                            else EvidenceStance.NEUTRAL)))
+            self.append_experiment_evidence(experiment_id, ExperimentEvidence(
+                evidence_type="outcome", phase=EvidencePhase.OUTCOME,
+                source_table="setup_experiment_outcomes",
+                summary=f"{outcome.status.value} (confidence {outcome.confidence}); "
+                        f"next: {outcome.next_action.value}",
+                confidence=outcome.confidence_level.value,
+                provenance="setup_experiment_outcome.evaluate_outcome",
+                stance=EvidenceStance.NEUTRAL))
+        except Exception:
+            pass
+
+    def _advance_experiment_lifecycle(self, experiment_id, status,
+                                      complete_on_success) -> list:
+        """Drive APPLIED → TEST_IN_PROGRESS → READY_FOR_REVIEW → COMPLETED/REJECTED
+        via the Phase-2 validated transitions (never bypasses validation; each step
+        appends to the audited state history). Inconclusive outcomes stay in
+        READY_FOR_REVIEW. Returns the ordered list of applied transitions."""
+        applied = []
+        try:
+            from strategy.setup_experiment_outcome import OutcomeStatus
+
+            def _cur():
+                r = self._experiment_row(experiment_id) if hasattr(self, "_experiment_row") else None
+                return (r or {}).get("status", "")
+
+            # Advance to READY_FOR_REVIEW (test evidence now exists).
+            if _cur() == "applied":
+                if self.transition_experiment_state(
+                        experiment_id, "test_in_progress", source="phase3"):
+                    applied.append("test_in_progress")
+            if _cur() in ("applied", "test_in_progress"):
+                if self.transition_experiment_state(
+                        experiment_id, "ready_for_review", source="phase3",
+                        reason="Phase 3 evaluation attached test evidence"):
+                    applied.append("ready_for_review")
+
+            # Terminal transition by outcome (COMPLETED needs the persisted outcome,
+            # which now exists → the gate passes honestly).
+            if status in (OutcomeStatus.CONFIRMED_IMPROVEMENT,
+                          OutcomeStatus.PARTIAL_IMPROVEMENT,
+                          OutcomeStatus.NO_MEANINGFUL_CHANGE) and complete_on_success:
+                if self.transition_experiment_state(
+                        experiment_id, "completed", source="phase3",
+                        reason=f"outcome={status.value}"):
+                    applied.append("completed")
+            elif status == OutcomeStatus.REGRESSION:
+                if self.transition_experiment_state(
+                        experiment_id, "rejected", source="phase3",
+                        reason="confirmed regression"):
+                    applied.append("rejected")
+            # CONFOUNDED / INSUFFICIENT_EVIDENCE: remain in READY_FOR_REVIEW.
+        except Exception:
+            pass
+        return applied
+
+    def _record_failed_direction_learning(self, outcome, *, car, track, layout_id,
+                                          test_session_id) -> dict:
+        """Feed the EXISTING deterministic consumers so Phase 3 learning is not a
+        competing engine: a LOCKOUT-strength failed direction writes a 'worsened'
+        row to learning_outcomes (consumed by blocked_rules_from_outcomes) and
+        stamps the latest lineage node 'worsened' (consumed by rollback_from_lineage).
+        A CAUTION writes neither a hard block nor a lineage worsening — the
+        setup_experiment_failed_directions row (already persisted) is the caution
+        record. Never fires for non-regression / insufficient / confounded."""
+        from strategy.setup_experiment_outcome import LearningStrength
+        written = {"learning_outcomes": 0, "lineage": 0, "caution": 0}
+        try:
+            car_id = 0
+            try:
+                car_id = int(self.get_car_id(car) or 0) if car else 0
+            except Exception:
+                car_id = 0
+            sess = int(test_session_id) if test_session_id is not None else 0
+            for fd in outcome.failed_directions:
+                if fd.strength == LearningStrength.LOCKOUT and fd.rule_id:
+                    self.record_learning_outcome(
+                        car_id, track, layout_id, sess, "", fd.rule_id,
+                        "phase3_outcome", "worsened",
+                        0.8 if fd.confidence == "high" else 0.6, "", "",
+                        target_issue=fd.symptom,
+                        evidence_summary=fd.regression_observed,
+                        outcome_kind="failed_direction")
+                    written["learning_outcomes"] += 1
+                elif fd.strength == LearningStrength.CAUTION:
+                    written["caution"] += 1
+            # Stamp lineage 'worsened' once for a confirmed regression (rollback consumer).
+            if any(fd.strength == LearningStrength.LOCKOUT
+                   for fd in outcome.failed_directions):
+                self.record_latest_lineage_outcome(
+                    car_id, track, layout_id, "worsened",
+                    outcome_session_id=(sess or None))
+                written["lineage"] = 1
+        except Exception:
+            pass
+        return written
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

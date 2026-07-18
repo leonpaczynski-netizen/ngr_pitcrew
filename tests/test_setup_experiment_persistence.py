@@ -50,8 +50,8 @@ def db():
 
 # ------------------------------------------------------------------ 11 migration
 def test_user_version_is_21(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 21
-    assert DB_VERSION == 21
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 21
 
 
 def test_all_six_tables_exist(db):
@@ -70,7 +70,7 @@ def test_migration_idempotent(tmp_path):
     a.create_setup_experiment(_exp())
     a._conn.close()
     b = SessionDB(p)
-    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == 21
+    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     assert b._conn.execute("SELECT COUNT(*) FROM setup_experiments").fetchone()[0] == 1
 
 

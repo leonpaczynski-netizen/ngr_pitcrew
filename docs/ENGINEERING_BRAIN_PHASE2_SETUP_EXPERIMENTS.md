@@ -174,7 +174,14 @@ new setup authoring, physics, strategy maths, telemetry thresholds, UI redesign,
 new track assets, dormant-engine deletion. COMPLETED remains unreachable in
 production until Phase 3 supplies an outcome record.
 
-## Phase 3 prerequisites
+## Phase 3 — DELIVERED
+
+Phase 3 (Closed-Loop Outcome Evaluation, Regression Detection & Failed-Direction
+Learning) is now implemented — see `docs/ENGINEERING_BRAIN_PHASE3_OUTCOME_EVALUATION.md`.
+It added DB v22 (`setup_experiment_outcomes` + children + `setup_experiment_failed_directions`),
+`strategy/setup_experiment_outcome.py`, and the `evaluate_setup_experiment`
+orchestrator; `has_outcome_record` is now real so COMPLETED is honestly gated.
+The original Phase-3-prerequisite notes below are retained for history.
 
 Phase 3 (Closed-Loop Outcome Evaluation, Regression Detection & Failed-Direction
 Learning) will: add an outcome table, attach TEST / DRIVER_REVIEW / OUTCOME-phase

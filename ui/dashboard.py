@@ -1457,7 +1457,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             (self._baseline_result_queue,    self._display_baseline_result),
             (self._degradation_result_queue, self._display_degradation_result),
             (self._profile_update_queue,     self._display_profile_update_result),
+            # Engineering-Brain Phase 3: off-thread setup-experiment outcome review.
+            (getattr(self, "_outcome_result_queue", None),
+             getattr(self, "_display_outcome_result", None)),
         ]:
+            if _q is None or _handler is None:
+                continue
             try:
                 _handler(_q.get_nowait())
             except queue.Empty:

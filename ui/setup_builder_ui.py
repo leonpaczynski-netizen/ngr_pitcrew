@@ -985,6 +985,8 @@ class SetupBuilderMixin:
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
         self._race_form._btn_applied_in_game.clicked.connect(
             lambda: self._on_changes_applied_in_game(self._race_form))
+        self._race_form._btn_review_outcome.clicked.connect(
+            lambda: self._review_experiment_outcome(self._race_form))
         # Race-form baseline button builds BOTH race + qualifying baselines in one
         # go (UAT); the Qualifying form's own button still builds just qualifying.
         self._race_form._btn_baseline.setText("Build Baseline (Race + Quali)")
@@ -1015,6 +1017,9 @@ class SetupBuilderMixin:
         )
         qf._btn_applied_in_game.clicked.connect(
             lambda: self._on_changes_applied_in_game(self._qual_form)
+        )
+        qf._btn_review_outcome.clicked.connect(
+            lambda: self._review_experiment_outcome(self._qual_form)
         )
         qf._btn_baseline.clicked.connect(
             lambda: self._generate_baseline_setup_for_form(self._qual_form)
@@ -1406,6 +1411,117 @@ class SetupBuilderMixin:
             view = getattr(self, "_setup_rec_view", None)
             if view is not None and view.current_vm() is not None:
                 view.mark_applied()
+        # Phase 3: an applied experiment now exists → reveal the outcome-review action.
+        try:
+            btn = getattr(form, "_btn_review_outcome", None)
+            if btn is not None:
+                btn.setVisible(True)
+        except Exception:
+            pass
+
+    def _review_experiment_outcome(self, form: "SetupFormWidget") -> None:
+        """Driver-triggered, OFF-THREAD closed-loop outcome review (Phase 3).
+
+        Finds the latest applied experiment for this scope and evaluates it against
+        measured test evidence via the deterministic outcome engine. Read-only:
+        it never applies or reverts a setup. Runs on a worker thread (never the
+        telemetry packet thread); the result is drained + rendered on the Qt tick."""
+        db = getattr(self, "_db", None)
+        lbl = getattr(form, "_lbl_outcome_summary", None)
+        if db is None:
+            return
+        try:
+            car_id, track, layout_id, purpose, _sid = self._apply_checkpoint_scope(form)
+        except Exception:
+            return
+        exp = db.find_latest_reviewable_experiment(car_id, track, layout_id, purpose)
+        if exp is None:
+            if lbl is not None:
+                lbl.setText("No applied experiment to review for this car/track/layout yet.")
+            return
+        if lbl is not None:
+            lbl.setText("Evaluating test outcome…")
+        # Pick the two most-recent sessions for this scope as test/baseline windows.
+        test_sid = base_sid = None
+        try:
+            sessions = db.get_practice_sessions(car_id, track) or []
+            if sessions:
+                test_sid = sessions[0].get("id")
+            if len(sessions) > 1:
+                base_sid = sessions[1].get("id")
+        except Exception:
+            pass
+        car_name = ""
+        try:
+            # Read the car via the canonical EventContext bridge (never a new
+            # config["strategy"] fan-out reader — the frozen allowlist stays exact).
+            car_name = str(getattr(self._build_event_context(), "car", "") or "")
+        except Exception:
+            car_name = ""
+        import threading as _threading
+
+        q = self._ensure_outcome_queue()
+        exp_id = int(exp.get("id") or 0)
+
+        def _worker():
+            try:
+                res = db.evaluate_setup_experiment(
+                    exp_id, test_session_id=test_sid, baseline_session_id=base_sid,
+                    car=car_name, track=track, layout_id=layout_id, discipline=purpose,
+                    complete_on_success=True)
+            except Exception as exc:  # never let the worker crash the app
+                res = {"ok": False, "error": str(exc)}
+            try:
+                q.put((res, form))
+            except Exception:
+                pass
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _ensure_outcome_queue(self):
+        q = getattr(self, "_outcome_result_queue", None)
+        if q is None:
+            import queue as _queue
+            q = _queue.Queue()
+            self._outcome_result_queue = q
+        return q
+
+    def _display_outcome_result(self, payload: tuple) -> None:
+        """Render a compact, honest outcome summary next to the setup form."""
+        try:
+            res, form = payload
+        except Exception:
+            return
+        lbl = getattr(form, "_lbl_outcome_summary", None)
+        if lbl is None:
+            return
+        if not isinstance(res, dict) or not res.get("ok"):
+            reason = (res or {}).get("reason") or (res or {}).get("error") or "no result"
+            lbl.setText(f"Outcome review unavailable: {reason}")
+            return
+        status = str(res.get("status", "")).replace("_", " ").title()
+        conf = str(res.get("confidence_level", "") or "")
+        laps = res.get("valid_laps", 0)
+        nxt = str(res.get("next_action", "") or "").replace("_", " ")
+        parts = [f"Outcome: {status} (confidence {conf}; {laps} valid laps).",
+                 f"Recommended next: {nxt}."]
+        regs = res.get("regressions") or []
+        if regs:
+            parts.append("Regressions: " + "; ".join(str(r) for r in regs[:3]) + ".")
+        imps = res.get("improvements") or []
+        if imps:
+            parts.append("Improvements: " + "; ".join(str(i) for i in imps[:3]) + ".")
+        fds = res.get("failed_directions") or []
+        if fds:
+            strengths = {str(f.get("strength")) for f in fds}
+            if "lockout" in strengths:
+                parts.append("A failed-direction LOCKOUT was recorded for this scope.")
+            elif "caution" in strengths:
+                parts.append("A failed-direction CAUTION was recorded for this scope.")
+        if res.get("rollback_eligible"):
+            parts.append(f"Rollback target if you revert: {res.get('rollback_target') or 'parent setup'} "
+                         "(not applied automatically).")
+        lbl.setText(" ".join(parts))
 
     def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:
         """Recompute + render the saved-vs-applied-in-GT7 three-state for ``form``.
