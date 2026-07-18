@@ -5446,6 +5446,44 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._pa_feedback_cap, self._pa_feedback_list = _make_list("Driver-feedback agreement")
         self._pa_tests_cap, self._pa_tests_list = _make_list("Targeted next tests")
 
+        # Holistic brain Phase 2: per-corner driving coach (your perfect lap).
+        coach_box = QGroupBox("Driving Coach — Your Perfect Lap")
+        coach_box.setStyleSheet(self._group_style())
+        cv = QVBoxLayout(coach_box)
+        cv.setSpacing(6)
+        coach_intro = QLabel(
+            "Your best clean-lap corner targets (brake point · gears · apex "
+            "speed · throttle-on), and where your normal laps leave time.")
+        coach_intro.setWordWrap(True)
+        coach_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        cv.addWidget(coach_intro)
+        self._btn_coach_lap = QPushButton("Coach My Perfect Lap")
+        self._btn_coach_lap.clicked.connect(self._coach_perfect_lap)
+        _crow = QHBoxLayout()
+        _crow.addWidget(self._btn_coach_lap)
+        _crow.addStretch()
+        cv.addLayout(_crow)
+        self._coach_summary_lbl = QLabel(
+            "Click “Coach My Perfect Lap” after some clean laps.")
+        self._coach_summary_lbl.setWordWrap(True)
+        self._coach_summary_lbl.setStyleSheet("color:#8BC34A; font-size:11px;")
+        cv.addWidget(self._coach_summary_lbl)
+        _ideal_cap = QLabel("Ideal lap — corner targets")
+        _ideal_cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        cv.addWidget(_ideal_cap)
+        self._coach_ideal_list = QListWidget()
+        self._coach_ideal_list.setMaximumHeight(130)
+        self._coach_ideal_list.setVisible(False)
+        cv.addWidget(self._coach_ideal_list)
+        _adv_cap = QLabel("Where to find time")
+        _adv_cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        cv.addWidget(_adv_cap)
+        self._coach_advice_list = QListWidget()
+        self._coach_advice_list.setMaximumHeight(150)
+        self._coach_advice_list.setVisible(False)
+        cv.addWidget(self._coach_advice_list)
+        v.addWidget(coach_box)
+
         return group
 
     def _render_practice_analysis(self, report) -> None:
@@ -5666,6 +5704,81 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             self._db.save_issue_occurrences(car_id, track, lay, occ)
         except Exception as ex:
             print(f"[PracticeCapture] persist episodes: {ex}")
+
+    def _perfect_lap_frame_resolver(self, loc: str, lay: str):
+        """A frame->(segment_id, phase) resolver over the XYZ path, for offline
+        per-corner extraction of stored lap frames."""
+        from strategy.practice_capture import build_xyz_segment_resolver
+        cal = getattr(self, "_tm_offset_calibration", None)
+        xyz = build_xyz_segment_resolver(loc, lay, offset_calibration=cal)
+
+        def _fr(frame):
+            get = (frame.get if isinstance(frame, dict)
+                   else lambda k, d=None: getattr(frame, k, d))
+            px, py, pz = get("pos_x", None), get("pos_y", None), get("pos_z", None)
+            pos = (px, py, pz) if None not in (px, py, pz) else None
+            return xyz(get("road_distance", 0.0), get("speed_kmh", 0.0),
+                       get("throttle", 0.0), get("brake", 0.0), pos=pos)
+
+        return _fr
+
+    def _build_perfect_lap_report(self):
+        """Holistic brain Phases 1-2: read recent practice laps' stored frames,
+        extract per-corner reference points, and coach against the driver's own
+        best clean laps. Returns None when there's no usable data."""
+        from strategy.perfect_lap_pipeline import coach_from_laps
+        if self._db is None:
+            return None
+        loc, lay = self._practice_track_identity()
+        car_id = self._current_car_id()
+        track = str(getattr(self._build_event_context(), "track", "") or "")
+        if not (car_id and track):
+            return None
+        laps = self._db.get_laps_with_telemetry(
+            car_id, track, session_type="Practice", limit=30)
+        if not laps:
+            return None
+        segs = self._practice_reviewed_segments(loc, lay)
+        resolver = self._perfect_lap_frame_resolver(loc, lay)
+        return coach_from_laps(laps, resolver, segs)
+
+    def _coach_perfect_lap(self) -> None:
+        """Button handler: build + render the perfect-lap coaching."""
+        report = None
+        try:
+            report = self._build_perfect_lap_report()
+        except Exception as e:
+            print(f"[PerfectLap] {e}")
+        self._render_perfect_lap(report)
+
+    def _render_perfect_lap(self, report) -> None:
+        lbl = getattr(self, "_coach_summary_lbl", None)
+        ideal_list = getattr(self, "_coach_ideal_list", None)
+        advice_list = getattr(self, "_coach_advice_list", None)
+        if lbl is None:
+            return
+        if report is None or not report.ideal_corners:
+            lbl.setText(
+                "No coached laps yet — drive clean practice laps on a track with "
+                "an approved model, then click again. (Corner identity needs the "
+                "track model.)")
+            for lst in (ideal_list, advice_list):
+                if lst is not None:
+                    lst.clear()
+                    lst.setVisible(False)
+            return
+        lbl.setText(report.session_consistency)
+        if ideal_list is not None:
+            ideal_list.clear()
+            for line in report.ideal_lap_lines:
+                ideal_list.addItem(line)
+            ideal_list.setVisible(True)
+        if advice_list is not None:
+            advice_list.clear()
+            for c in report.coaching:
+                for a in c.advice:
+                    advice_list.addItem(a)
+            advice_list.setVisible(True)
 
     def _analyse_practice_patterns(self) -> None:
         """Gather this session's slip episodes, run the deterministic engine and
