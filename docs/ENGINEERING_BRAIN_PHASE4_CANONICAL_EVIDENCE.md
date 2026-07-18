@@ -170,7 +170,15 @@ auto-picked). A DB/parse error is never converted into `NO_MEANINGFUL_CHANGE`.
   are documented specialised-purpose policies to migrate onto the authority in a
   later pass (no behavioural drift — the authority encodes the same rules per purpose).
 
-## Phase 5 prerequisites
+## Phase 5 — DELIVERED
+
+Phase 5 (Working-Window Learning, Successful-Direction Reinforcement & Experiment
+Selection) is now implemented — see `docs/ENGINEERING_BRAIN_PHASE5_WORKING_WINDOW_LEARNING.md`.
+It added DB v23 (`setup_working_window_evidence` + `setup_working_windows`),
+`strategy/working_window.py` + `strategy/experiment_selection.py`, the
+`from_corner_slip_aggregate`/`unify_corner_observations` producer unification, and
+migrated `resolve_clean_lap` onto this authority. The original prerequisite notes
+below are retained for history.
 
 Phase 5 (Working-Window Learning, Successful-Direction Reinforcement, Experiment
 Selection) will consume the now-canonical evidence + Phase-3 outcomes to update

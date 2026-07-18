@@ -150,8 +150,8 @@ class TestNoSchemaMigration:
         # protects against an unexpected _migrate_v21.
         assert "_migrate_v17" in src
         assert "_migrate_v20" in src
-        assert "_migrate_v22" in src
-        assert "_migrate_v23" not in src
+        assert "_migrate_v23" in src
+        assert "_migrate_v24" not in src
 
 
 class TestStrategyDeterministic:

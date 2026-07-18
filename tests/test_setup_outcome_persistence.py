@@ -61,8 +61,9 @@ def db():
 
 # ------------------------------------------------------------------ 34,35 migration
 def test_user_version_is_22(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 22
-    assert DB_VERSION == 22
+    # Phase 3 shipped the v22 outcome tables; later phases advance the schema.
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 22
 
 
 def test_all_five_tables_exist(db):
@@ -88,7 +89,7 @@ def test_migration_idempotent(tmp_path):
     a.create_experiment_outcome(_outcome(), car="RSR", track="Fuji", layout_id="fc")
     a._conn.close()
     b = SessionDB(p)
-    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == 22
+    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     assert b._conn.execute("SELECT COUNT(*) FROM setup_experiment_outcomes").fetchone()[0] == 1
 
 

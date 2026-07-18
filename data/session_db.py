@@ -886,8 +886,78 @@ CREATE INDEX IF NOT EXISTS idx_exp_failed_dir_field
     ON setup_experiment_failed_directions (car, track, layout_id, field);
 """
 
+# Engineering-Brain Phase 5 — learned working-window persistence (schema v23).
+# TWO additive standalone tables (touch no existing table; CREATE IF NOT EXISTS ⇒
+# idempotent migration `_migrate_v23`):
+#   setup_working_window_evidence — the APPEND-ONLY source-of-truth ledger: one row
+#     per (context_key, experiment_id, outcome_id) contribution. UNIQUE on that
+#     triple ⇒ replaying the same outcome contributes exactly once (idempotent).
+#   setup_working_windows — the MATERIALISED window cache (a deterministic function
+#     of its evidence ledger; recomputed on each learn). UNIQUE(context_key).
+# Every learned update traces to an experiment + outcome + applied checkpoint +
+# scope fingerprint + delta. Unknown numeric values are NULL.
+_DDL_V23 = """
+CREATE TABLE IF NOT EXISTS setup_working_window_evidence (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_key            TEXT    NOT NULL DEFAULT '',
+    experiment_id          TEXT    NOT NULL DEFAULT '',
+    outcome_id             TEXT    NOT NULL DEFAULT '',
+    scope_fingerprint      TEXT    NOT NULL DEFAULT '',
+    driver                 TEXT    NOT NULL DEFAULT '',
+    car                    TEXT    NOT NULL DEFAULT '',
+    track                  TEXT    NOT NULL DEFAULT '',
+    layout_id              TEXT    NOT NULL DEFAULT '',
+    discipline             TEXT    NOT NULL DEFAULT '',
+    field                  TEXT    NOT NULL DEFAULT '',
+    from_value             TEXT,
+    to_value               TEXT,
+    direction              TEXT    NOT NULL DEFAULT '',
+    magnitude              REAL,
+    outcome_status         TEXT    NOT NULL DEFAULT '',
+    contribution           TEXT    NOT NULL DEFAULT '',
+    is_compound            INTEGER NOT NULL DEFAULT 0,
+    attribution_confidence TEXT    NOT NULL DEFAULT '',
+    symptom                TEXT    NOT NULL DEFAULT '',
+    corners_json           TEXT    NOT NULL DEFAULT '[]',
+    checkpoint_id          TEXT    NOT NULL DEFAULT '',
+    session_id             TEXT    NOT NULL DEFAULT '',
+    is_direct              INTEGER NOT NULL DEFAULT 1,
+    created_at             TEXT    NOT NULL DEFAULT '',
+    UNIQUE (context_key, experiment_id, outcome_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ww_evidence_context
+    ON setup_working_window_evidence (context_key);
+CREATE INDEX IF NOT EXISTS idx_ww_evidence_scope_field
+    ON setup_working_window_evidence (scope_fingerprint, field);
+CREATE INDEX IF NOT EXISTS idx_ww_evidence_experiment
+    ON setup_working_window_evidence (experiment_id);
+
+CREATE TABLE IF NOT EXISTS setup_working_windows (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_key            TEXT    NOT NULL UNIQUE,
+    scope_fingerprint      TEXT    NOT NULL DEFAULT '',
+    driver                 TEXT    NOT NULL DEFAULT '',
+    car                    TEXT    NOT NULL DEFAULT '',
+    track                  TEXT    NOT NULL DEFAULT '',
+    layout_id              TEXT    NOT NULL DEFAULT '',
+    discipline             TEXT    NOT NULL DEFAULT '',
+    field                  TEXT    NOT NULL DEFAULT '',
+    window_json            TEXT    NOT NULL DEFAULT '{}',
+    confidence             TEXT    NOT NULL DEFAULT '',
+    valid_experiment_count INTEGER NOT NULL DEFAULT 0,
+    improvement_count      INTEGER NOT NULL DEFAULT 0,
+    regression_count       INTEGER NOT NULL DEFAULT 0,
+    updated_at             TEXT    NOT NULL DEFAULT '',
+    eval_version           TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ww_scope
+    ON setup_working_windows (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_ww_scope_field
+    ON setup_working_windows (car, track, layout_id, discipline, field);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -896,6 +966,66 @@ def ms_to_str(ms: int) -> str:
     m = int(total_s // 60)
     s = total_s - m * 60
     return f"{m}:{s:06.3f}"
+
+
+def _json_loads_list(v) -> list:
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    try:
+        d = json.loads(v) if v else []
+        return list(d) if isinstance(d, (list, tuple)) else []
+    except Exception:
+        return []
+
+
+def _rehydrate_window(wd: dict):
+    """Reconstruct a LearnedWorkingWindow from its stored to_dict() (Phase 5)."""
+    from strategy.working_window import (
+        LearnedWorkingWindow, WindowContextKey, WindowConfidence,
+        DirectionalEvidence, DirectionEffect)
+    c = wd.get("context") or {}
+    ctx = WindowContextKey(
+        scope_fingerprint=c.get("scope_fingerprint", ""), driver=c.get("driver", ""),
+        car=c.get("car", ""), track=c.get("track", ""),
+        layout_id=c.get("layout_id", ""), discipline=c.get("discipline", ""),
+        field=c.get("field", ""))
+    try:
+        conf = WindowConfidence(wd.get("confidence") or "none")
+    except ValueError:
+        conf = WindowConfidence.NONE
+    directional = []
+    for d in (wd.get("directional") or []):
+        try:
+            eff = DirectionEffect(d.get("effect") or "unknown")
+        except ValueError:
+            eff = DirectionEffect.UNKNOWN
+        directional.append(DirectionalEvidence(
+            direction=d.get("direction", ""), effect=eff,
+            improved_count=int(d.get("improved_count") or 0),
+            worsened_count=int(d.get("worsened_count") or 0),
+            no_effect_count=int(d.get("no_effect_count") or 0),
+            locked_out=bool(d.get("locked_out")),
+            lockout_reason=d.get("lockout_reason", "")))
+    return LearnedWorkingWindow(
+        context=ctx, field=wd.get("field", ""),
+        successful_values=tuple(wd.get("successful_values") or ()),
+        unsuccessful_values=tuple(wd.get("unsuccessful_values") or ()),
+        ineffective_values=tuple(wd.get("ineffective_values") or ()),
+        low_bound=wd.get("low_bound"), high_bound=wd.get("high_bound"),
+        preferred_center=wd.get("preferred_center"),
+        valid_experiment_count=int(wd.get("valid_experiment_count") or 0),
+        improvement_count=int(wd.get("improvement_count") or 0),
+        regression_count=int(wd.get("regression_count") or 0),
+        unchanged_count=int(wd.get("unchanged_count") or 0),
+        inconclusive_count=int(wd.get("inconclusive_count") or 0),
+        confidence=conf, provenance=tuple(wd.get("provenance") or ()),
+        supporting_experiment_ids=tuple(wd.get("supporting_experiment_ids") or ()),
+        supporting_checkpoint_ids=tuple(wd.get("supporting_checkpoint_ids") or ()),
+        supporting_session_ids=tuple(wd.get("supporting_session_ids") or ()),
+        corners=tuple(wd.get("corners") or ()),
+        directional=tuple(directional), contradiction=bool(wd.get("contradiction")),
+        has_direct_evidence=bool(wd.get("has_direct_evidence", True)),
+        warnings=tuple(wd.get("warnings") or ()))
 
 
 class SessionDB:
@@ -1009,6 +1139,10 @@ class SessionDB:
             self._migrate_v22()
             self._conn.execute("PRAGMA user_version = 22")
             self._conn.commit()
+        if version < 23:
+            self._migrate_v23()
+            self._conn.execute("PRAGMA user_version = 23")
+            self._conn.commit()
 
     def _migrate_v22(self) -> None:
         """Engineering-Brain Phase 3 — closed-loop outcome evaluation (schema v22).
@@ -1017,6 +1151,13 @@ class SessionDB:
         Touches no existing table, rewrites no historical data. CREATE IF NOT
         EXISTS throughout ⇒ the migration is idempotent."""
         self._conn.executescript(_DDL_V22)
+
+    def _migrate_v23(self) -> None:
+        """Engineering-Brain Phase 5 — learned working-window persistence (schema
+        v23). Adds two standalone additive tables (setup_working_window_evidence +
+        setup_working_windows). Touches no existing table, rewrites no historical
+        data. CREATE IF NOT EXISTS throughout ⇒ the migration is idempotent."""
+        self._conn.executescript(_DDL_V23)
 
     def _migrate_v21(self) -> None:
         """Engineering-Brain Phase 2 — persisted setup experiments & recommendation
@@ -2895,6 +3036,370 @@ class SessionDB:
                 "corner_baseline_count": len(assembled["corner_baseline"]),
             }
         return result
+
+    # ------------------------------------------------------------------
+    # Working-window learning + experiment selection (Phase 5, v23)
+    # ------------------------------------------------------------------
+    def _experiment_context_scope(self, experiment_id: int):
+        """Resolve (WindowContextKey base + car_id/car) for an experiment from its
+        applied checkpoint scope. Returns (exp_dict, scope_dict) or (None, None)."""
+        exp = self.get_setup_experiment(int(experiment_id))
+        if exp is None:
+            return None, None
+        cp = self._checkpoint_scope_row(str(exp.get("applied_checkpoint_id") or ""))
+        car_id = int((cp or {}).get("car_id") or 0)
+        car_name = ""
+        try:
+            with self._lock:
+                crow = self._conn.execute(
+                    "SELECT name FROM cars WHERE id=?", (car_id,)).fetchone()
+            car_name = str(crow[0]) if crow is not None else ""
+        except Exception:
+            car_name = ""
+        # discipline from the experiment's hypothesis/test protocol is not stored on
+        # the row; derive from the checkpoint purpose where available.
+        discipline = ""
+        try:
+            with self._lock:
+                prow = self._conn.execute(
+                    "SELECT purpose FROM applied_setup_checkpoints WHERE checkpoint_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (str(exp.get("applied_checkpoint_id") or ""),)).fetchone()
+            discipline = str(prow[0]) if prow is not None else ""
+        except Exception:
+            discipline = ""
+        return exp, {
+            "car_id": car_id, "car": car_name,
+            "track": str((cp or {}).get("track") or ""),
+            "layout_id": str((cp or {}).get("layout_id") or ""),
+            "discipline": discipline,
+            "scope_fingerprint": str(exp.get("scope_fingerprint") or ""),
+        }
+
+    def learn_from_experiment_outcome(self, experiment_id: int) -> dict:
+        """Phase 5 orchestrator: consume the experiment + its canonical Phase-3
+        outcome, map to per-field window evidence, persist it (append-only,
+        idempotent), and recompute the materialised learned windows. Only a
+        completed, canonically-evaluated outcome teaches; confounded/insufficient
+        contribute metadata only. Never raises; deterministic; idempotent replay."""
+        try:
+            from strategy.working_window import (
+                WindowContextKey, outcome_to_window_evidence, recompute_working_window)
+            from strategy.setup_ranges import resolve_ranges
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase5 import failed: {exc}"}
+        exp, scope = self._experiment_context_scope(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "reason": "experiment not found"}
+        outcome = self.get_latest_experiment_outcome(int(experiment_id))
+        if outcome is None:
+            return {"ok": False, "reason": "no persisted outcome to learn from"}
+        base_ctx = WindowContextKey(
+            scope_fingerprint=scope["scope_fingerprint"], car=scope["car"],
+            track=scope["track"], layout_id=scope["layout_id"],
+            discipline=scope["discipline"])
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        evidence = outcome_to_window_evidence(exp, outcome, context=base_ctx, created_at=now)
+        try:
+            ranges = resolve_ranges(scope["car"]) if scope["car"] else {}
+        except Exception:
+            ranges = {}
+        updated_fields = []
+        for ev in evidence:
+            # persist evidence (append-only, idempotent by UNIQUE triple)
+            self._record_window_evidence(ev, scope, now)
+        # recompute each touched field's window from its full ledger
+        touched = {ev.field for ev in evidence}
+        for fld in sorted(touched):
+            ctx = WindowContextKey(
+                scope_fingerprint=base_ctx.scope_fingerprint, driver=base_ctx.driver,
+                car=base_ctx.car, track=base_ctx.track, layout_id=base_ctx.layout_id,
+                discipline=base_ctx.discipline, field=fld)
+            rows = self._get_window_evidence(ctx.key())
+            rng = ranges.get(fld)
+            lo = hi = None
+            if isinstance(rng, (tuple, list)) and len(rng) == 2:
+                try:
+                    lo, hi = float(rng[0]), float(rng[1])
+                except (TypeError, ValueError):
+                    lo = hi = None
+            window = recompute_working_window(rows, ctx, legal_low=lo, legal_high=hi)
+            self._upsert_working_window(window, scope, now)
+            updated_fields.append(fld)
+        return {"ok": True, "experiment_id": int(experiment_id),
+                "outcome_status": str(outcome.get("status") or ""),
+                "updated_fields": updated_fields,
+                "contributions": [e.contribution.value for e in evidence]}
+
+    def _record_window_evidence(self, ev, scope, now) -> None:
+        import json as _json
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO setup_working_window_evidence
+                       (context_key, experiment_id, outcome_id, scope_fingerprint,
+                        driver, car, track, layout_id, discipline, field, from_value,
+                        to_value, direction, magnitude, outcome_status, contribution,
+                        is_compound, attribution_confidence, symptom, corners_json,
+                        checkpoint_id, session_id, is_direct, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (ev.context_key, ev.experiment_id, ev.outcome_id,
+                     scope["scope_fingerprint"], "", scope["car"], scope["track"],
+                     scope["layout_id"], scope["discipline"], ev.field, ev.from_value,
+                     ev.to_value, ev.direction.value, ev.magnitude, ev.outcome_status,
+                     ev.contribution.value, 1 if ev.is_compound else 0,
+                     ev.attribution_confidence, ev.symptom,
+                     _json.dumps(list(ev.corners)), ev.checkpoint_id, ev.session_id,
+                     1 if ev.is_direct else 0, ev.created_at or now))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def _get_window_evidence(self, context_key: str) -> list:
+        """Load a context's evidence ledger as WindowEvidence objects (source-of-truth)."""
+        from strategy.working_window import (
+            WindowEvidence, Direction, WindowContribution)
+        import json as _json
+        out = []
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM setup_working_window_evidence WHERE context_key=? "
+                    "ORDER BY id ASC", (str(context_key),)).fetchall()
+            for r in rows:
+                d = dict(r)
+                try:
+                    corners = tuple(_json.loads(d.get("corners_json") or "[]"))
+                except Exception:
+                    corners = ()
+                try:
+                    direction = Direction(d.get("direction") or "none")
+                except ValueError:
+                    direction = Direction.NONE
+                try:
+                    contrib = WindowContribution(d.get("contribution") or "none")
+                except ValueError:
+                    contrib = WindowContribution.NONE
+                out.append(WindowEvidence(
+                    context_key=d.get("context_key", ""),
+                    experiment_id=d.get("experiment_id", ""),
+                    outcome_id=d.get("outcome_id", ""), field=d.get("field", ""),
+                    from_value=d.get("from_value"), to_value=d.get("to_value"),
+                    direction=direction, magnitude=d.get("magnitude"),
+                    outcome_status=d.get("outcome_status", ""), contribution=contrib,
+                    is_compound=bool(d.get("is_compound")),
+                    attribution_confidence=d.get("attribution_confidence", ""),
+                    symptom=d.get("symptom", ""), corners=corners,
+                    checkpoint_id=d.get("checkpoint_id", ""),
+                    session_id=d.get("session_id", ""),
+                    is_direct=bool(d.get("is_direct", 1)),
+                    created_at=d.get("created_at", "")))
+        except Exception:
+            return []
+        return out
+
+    def _upsert_working_window(self, window, scope, now) -> None:
+        import json as _json
+        try:
+            ctx = window.context
+            with self._lock:
+                self._conn.execute(
+                    """INSERT INTO setup_working_windows
+                       (context_key, scope_fingerprint, driver, car, track, layout_id,
+                        discipline, field, window_json, confidence,
+                        valid_experiment_count, improvement_count, regression_count,
+                        updated_at, eval_version)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(context_key) DO UPDATE SET
+                         window_json=excluded.window_json,
+                         confidence=excluded.confidence,
+                         valid_experiment_count=excluded.valid_experiment_count,
+                         improvement_count=excluded.improvement_count,
+                         regression_count=excluded.regression_count,
+                         updated_at=excluded.updated_at""",
+                    (ctx.key(), scope["scope_fingerprint"], "", scope["car"],
+                     scope["track"], scope["layout_id"], scope["discipline"],
+                     window.field, _json.dumps(window.to_dict()),
+                     window.confidence.value, window.valid_experiment_count,
+                     window.improvement_count, window.regression_count, now,
+                     window.eval_version))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def get_working_window(self, scope_fingerprint: str, field: str, *,
+                           car: str = "", track: str = "", layout_id: str = "",
+                           discipline: str = "") -> "dict | None":
+        """Return a learned window dict for a field in a context, or None."""
+        from strategy.working_window import WindowContextKey
+        ctx = WindowContextKey(scope_fingerprint=scope_fingerprint, car=car,
+                               track=track, layout_id=layout_id,
+                               discipline=discipline, field=field)
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT window_json FROM setup_working_windows WHERE context_key=?",
+                    (ctx.key(),)).fetchone()
+            import json as _json
+            return _json.loads(row[0]) if row is not None else None
+        except Exception:
+            return None
+
+    def list_working_windows(self, scope_fingerprint: str) -> list:
+        """All learned windows for a scope (materialised), newest-updated first."""
+        import json as _json
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT window_json FROM setup_working_windows WHERE "
+                    "scope_fingerprint=? ORDER BY updated_at DESC", (str(scope_fingerprint),)).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    out.append(_json.loads(r[0]))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def select_next_experiment(
+        self, experiment_id: int, *, dominant_issue: str = "", target_phase: str = "",
+        target_corners=(), recurrence_class: str = "", valid_lap_count: int = 0,
+        current_setup=None, decision_blocks: bool = False,
+    ) -> dict:
+        """Phase 5 orchestrator: build a SelectionContext from persisted learned
+        windows + failed-direction learning + the current setup, generate
+        minimum-effective candidates, and select the next experiment deterministically
+        — subordinate to the canonical decision authority. Returns a structured
+        result incl. an honest no-selection state. Never raises."""
+        try:
+            from strategy.experiment_selection import (
+                SelectionContext, generate_candidates, select_experiment,
+                build_test_protocol)
+            from strategy.working_window import WindowContextKey
+            from strategy.setup_ranges import resolve_ranges
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase5 import failed: {exc}"}
+        exp, scope = self._experiment_context_scope(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "reason": "experiment not found"}
+        car = scope["car"]; track = scope["track"]; layout = scope["layout_id"]
+        discipline = scope["discipline"]; scope_fp = scope["scope_fingerprint"]
+        try:
+            ranges = resolve_ranges(car) if car else {}
+        except Exception:
+            ranges = {}
+        # learned windows for this scope, keyed by field
+        windows = {}
+        from strategy.working_window import (
+            LearnedWorkingWindow, WindowConfidence, DirectionalEvidence,
+            DirectionEffect)
+        for wd in self.list_working_windows(scope_fp):
+            fld = str(wd.get("field") or "")
+            if fld:
+                windows[fld] = _rehydrate_window(wd)
+        # failed + ineffective directions from Phase 3 failed-direction learning +
+        # the learned windows' directional lockouts
+        failed = set()
+        ineffective = set()
+        try:
+            for fd in self.list_failed_directions_by_scope(scope_fp):
+                f = str(fd.get("field") or ""); d = str(fd.get("direction") or "")
+                if f and d in ("increase", "decrease") and fd.get("strength") == "lockout":
+                    failed.add((f, d))
+        except Exception:
+            pass
+        for fld, w in windows.items():
+            for d in getattr(w, "locked_directions", lambda: ())():
+                failed.add((fld, d))
+            for de in getattr(w, "directional", ()):
+                if de.effect == DirectionEffect.NO_EFFECT:
+                    ineffective.add((fld, de.direction))
+        # protected behaviours from the experiment
+        protected = tuple(
+            {"behaviour": p.get("description", ""), "field": p.get("field", ""),
+             "corners": _json_loads_list(p.get("corners_json"))}
+            for p in (exp.get("protected_behaviours") or []))
+        cur = dict(current_setup or {})
+        ctx = SelectionContext(
+            scope_fingerprint=scope_fp, car=car, track=track, layout_id=layout,
+            discipline=discipline, dominant_issue=dominant_issue,
+            target_phase=target_phase, target_corners=tuple(target_corners),
+            recurrence_class=recurrence_class, valid_lap_count=valid_lap_count,
+            current_setup=cur, ranges=ranges, working_windows=windows,
+            failed_directions=tuple(sorted(failed)),
+            ineffective_directions=tuple(sorted(ineffective)),
+            protected_behaviours=protected)
+        candidates = generate_candidates(ctx)
+        result = select_experiment(
+            candidates, decision_blocks=decision_blocks,
+            recurrence_class=recurrence_class, valid_lap_count=valid_lap_count)
+        out = result.to_dict()
+        out["ok"] = True
+        if result.selected is not None:
+            out["test_protocol"] = build_test_protocol(
+                result.selected, parent_setup_id=str(exp.get("parent_setup_id") or ""),
+                rollback_target=str(exp.get("rollback_target") or ""))
+        return out
+
+    def review_and_learn(
+        self, experiment_id: int, *, test_session_id=None, baseline_session_id=None,
+        driver_review=None, confounders=None, complete_on_success: bool = True,
+        driver: str = "",
+    ) -> dict:
+        """Full Phase 3→4→5 runtime step: review the outcome (canonical evidence
+        assembly + Phase 3 evaluation), LEARN working-window updates from the
+        canonical outcome, then SELECT the minimum-effective next experiment —
+        subordinate to the canonical decision authority. Read-only w.r.t. the setup:
+        never applies or reverts. Returns the review dict augmented with
+        ``learning`` and ``next_experiment``. Never raises."""
+        review = self.review_experiment_outcome(
+            int(experiment_id), test_session_id=test_session_id,
+            baseline_session_id=baseline_session_id, driver_review=driver_review,
+            confounders=confounders, complete_on_success=complete_on_success,
+            driver=driver)
+        if not isinstance(review, dict) or not review.get("ok"):
+            return review
+        status = str(review.get("status") or "")
+        learn = self.learn_from_experiment_outcome(int(experiment_id))
+        review["learning"] = learn
+
+        # Build selection inputs from the reviewed experiment.
+        exp, scope = self._experiment_context_scope(int(experiment_id))
+        dominant = ""
+        target_corners = ()
+        try:
+            hyp = json.loads((exp or {}).get("hypothesis_json") or "{}")
+            dominant = str(hyp.get("primary_diagnosis") or "")
+            target_corners = tuple(hyp.get("target_corners") or [])
+        except Exception:
+            dominant = ""
+        # current setup = what is actually in the car (the applied checkpoint fields)
+        current_setup = {}
+        try:
+            cprow = self.get_latest_applied_checkpoint(
+                int((scope or {}).get("car_id") or 0), (scope or {}).get("track", ""),
+                (scope or {}).get("layout_id", ""), (scope or {}).get("discipline", ""))
+            if cprow and cprow.get("fields_json"):
+                current_setup = json.loads(cprow["fields_json"]) or {}
+                current_setup = {k: (v[0] if isinstance(v, list) and v else v)
+                                 for k, v in current_setup.items()}
+        except Exception:
+            current_setup = {}
+        # The decision authority is subordinate: a non-actionable outcome blocks a
+        # setup change; the target is unresolved only when it did not improve.
+        decision_blocks = status in ("insufficient_evidence", "confounded") \
+            or str(review.get("association") or "resolved") != "resolved"
+        still_recurring = status in ("regression", "no_meaningful_change",
+                                     "partial_improvement")
+        recurrence = "recurring" if still_recurring else "isolated"
+        review["next_experiment"] = self.select_next_experiment(
+            int(experiment_id), dominant_issue=dominant, target_phase="",
+            target_corners=target_corners, recurrence_class=recurrence,
+            valid_lap_count=int(review.get("valid_laps") or 0),
+            current_setup=current_setup, decision_blocks=decision_blocks)
+        return review
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

@@ -1457,12 +1457,14 @@ class SetupBuilderMixin:
         exp_id = int(exp.get("id") or 0)
 
         def _worker():
-            # Phase 4: the canonical assembler resolves the applied-checkpoint scope,
+            # Phase 4/5: the canonical assembler resolves the applied-checkpoint scope,
             # selects baseline/test sessions, evaluates lap validity, and assembles
             # per-corner baseline/test observations from the persisted stores — then
-            # calls the Phase 3 evaluator with REAL evidence (no test-only objects).
+            # calls the Phase 3 evaluator with REAL evidence, LEARNS working-window
+            # updates from the canonical outcome, and SELECTS the minimum-effective
+            # next experiment. Read-only: never applies or reverts a setup.
             try:
-                res = db.review_experiment_outcome(
+                res = db.review_and_learn(
                     exp_id, test_session_id=test_sid, baseline_session_id=base_sid,
                     complete_on_success=True)
             except Exception as exc:  # never let the worker crash the app
@@ -1551,7 +1553,29 @@ class SetupBuilderMixin:
         if res.get("rollback_eligible"):
             parts.append(f"Rollback target if you revert: {res.get('rollback_target') or 'parent setup'} "
                          "(not applied automatically).")
-        lbl.setText(" ".join(parts))
+        # Phase 5: learning + the selected minimum-effective next experiment.
+        learn = res.get("learning") or {}
+        if learn.get("ok") and learn.get("updated_fields"):
+            parts.append("Learned working windows updated for: "
+                         + ", ".join(str(f) for f in learn["updated_fields"][:4]) + ".")
+        nxt = res.get("next_experiment") or {}
+        sel = nxt.get("selected")
+        if sel:
+            parts.append(
+                f"Next experiment: {sel.get('field')} {sel.get('direction')} "
+                f"({sel.get('current_value')}→{sel.get('proposed_value')}). "
+                f"{sel.get('selection_rationale', '')} — apply manually to test "
+                "(nothing is applied automatically).")
+            blocked = [c for c in (nxt.get("rejected") or []) if c.get("hard_blockers")]
+            if blocked:
+                b0 = blocked[0]
+                parts.append(f"Blocked alternative: {b0.get('candidate_id')} — "
+                             + "; ".join(b0.get("hard_blockers", [])) + ".")
+        elif nxt.get("no_selection_reason"):
+            parts.append("No safe next experiment: "
+                         + str(nxt["no_selection_reason"]).replace("_", " ")
+                         + " (current setup should be retained / more evidence needed).")
+        lbl.setText(" ".join(p for p in parts if p))
 
     def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:
         """Recompute + render the saved-vs-applied-in-GT7 three-state for ``form``.

@@ -338,3 +338,169 @@ def to_phase3_observations(
             affected_laps=a.affected_valid_laps, clean_laps=a.total_valid_laps,
             event_count=a.event_count, samples=a.total_valid_laps))
     return tuple(out)
+
+
+# --------------------------------------------------------------------------- #
+# Per-corner producer UNIFICATION (Phase 5): corner_slip_telemetry → canonical
+# --------------------------------------------------------------------------- #
+# A slip aggregate is run-keyed and carries NO per-lap attribution, so it can
+# never contribute distinct affected VALID laps (the recurrence metric). It
+# corroborates a corner's presence at LOWER confidence. Thresholds mirror
+# live_corner_aggregator (_MIN_SAMPLES=8, _MIN_EVENTS=2).
+_SLIP_MIN_SAMPLES = 8
+_SLIP_MIN_EVENTS = 2
+
+
+def _dominant_phase(by_phase: Mapping) -> str:
+    if not isinstance(by_phase, Mapping) or not by_phase:
+        return ""
+    return max(by_phase.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _dominant_axle(axle_counts: Mapping) -> str:
+    if not isinstance(axle_counts, Mapping) or not axle_counts:
+        return ""
+    return max(axle_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def from_corner_slip_aggregate(
+    agg,
+    *,
+    scope_fingerprint: str = "",
+    run_id=None,
+    track: str = "",
+    layout_id: str = "",
+    session_id=None,
+    checkpoint_id=None,
+    experiment_id=None,
+    min_events: int = _SLIP_MIN_EVENTS,
+    min_samples: int = _SLIP_MIN_SAMPLES,
+) -> Tuple[CornerObservationRecord, ...]:
+    """Adapt a `live_corner_aggregator.CornerTelemetryAggregate` (run-keyed slip
+    telemetry) into canonical observations — one per event type present above the
+    thresholds. LOWER confidence (run-aggregated, NOT lap-attributed): `lap_number`
+    stays None and `occurred_on_lap` is False, so it can never inflate distinct-lap
+    recurrence. Unlinked (no session/checkpoint) records are honestly ineligible for
+    experiment-outcome comparison; linkage is never fabricated from timing."""
+    seg = str(getattr(agg, "segment_id", "") or "")
+    samples = int(getattr(agg, "samples", 0) or 0)
+    if not seg or samples < min_samples:
+        return ()
+    linked = bool(session_id) or bool(checkpoint_id)
+    base_conf = "medium" if (linked and samples >= min_samples * 2) else "low"
+    metrics = _clean_metrics({
+        "avg_throttle": getattr(agg, "avg_throttle", None),
+        "avg_brake": getattr(agg, "avg_brake", None),
+        "exit_gear": getattr(agg, "exit_gear", None)})
+    out = []
+
+    def _mk(events, by_phase, axle_counts, issue):
+        if events < min_events:
+            return None
+        return CornerObservationRecord(
+            scope_fingerprint=scope_fingerprint,
+            session_id=(str(session_id) if session_id is not None else None),
+            run_id=(str(run_id) if run_id is not None else None),
+            lap_id=None, lap_number=None,
+            applied_checkpoint_id=(str(checkpoint_id) if checkpoint_id else ""),
+            experiment_id=(str(experiment_id) if experiment_id is not None else None),
+            track=track, layout_id=layout_id, segment_id=seg,
+            corner_name=str(getattr(agg, "display_name", "") or ""),
+            corner_resolution_confidence=base_conf,
+            phase=normalise_phase(_dominant_phase(by_phase)),
+            issue_type=issue, axle=_dominant_axle(axle_counts),
+            event_count=int(events), episode_count=int(events),
+            affected_sample_count=samples, occurred_on_lap=False,   # no lap attribution
+            confidence=base_conf, severity=("high" if events >= 5 else "medium"),
+            source="corner_slip_telemetry",
+            telemetry_available=("partial" if linked else "unlinked"),
+            exclusion_reason=("" if linked else "unlinked_run_no_session_or_checkpoint"),
+            metrics=metrics)
+
+    r1 = _mk(int(getattr(agg, "wheelspin_events", 0) or 0),
+             getattr(agg, "wheelspin_by_phase", {}),
+             getattr(agg, "spin_axle_counts", {}), "wheelspin")
+    r2 = _mk(int(getattr(agg, "lockup_events", 0) or 0),
+             getattr(agg, "lockup_by_phase", {}),
+             getattr(agg, "lock_axle_counts", {}), "lockup")
+    for r in (r1, r2):
+        if r is not None:
+            out.append(r)
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class UnificationAudit:
+    included: int
+    excluded: int
+    duplicates_removed: int
+    ambiguous: int
+    unlinked: int
+    source_counts: Mapping[str, int]
+    distinct_affected_valid_laps: int
+
+    def to_dict(self) -> dict:
+        return {"included": self.included, "excluded": self.excluded,
+                "duplicates_removed": self.duplicates_removed,
+                "ambiguous": self.ambiguous, "unlinked": self.unlinked,
+                "source_counts": dict(self.source_counts),
+                "distinct_affected_valid_laps": self.distinct_affected_valid_laps}
+
+
+def unify_corner_observations(
+    occurrence_records: Sequence[CornerObservationRecord],
+    slip_records: Sequence[CornerObservationRecord],
+    *,
+    valid_lap_numbers: Optional[Sequence[int]] = None,
+) -> Tuple[Tuple[CornerObservationRecord, ...], UnificationAudit]:
+    """Merge the two per-corner producers behind the canonical model WITHOUT
+    double-counting a physical event, preserving source provenance.
+
+    Rule: a slip record is a DUPLICATE of an occurrence record when they share the
+    same (segment, phase, issue, axle) AND the same authoritative context (same
+    session or same applied checkpoint) — an explicit stable identity match, never
+    a mere shared issue label. A slip record that matches occurrences in >1 distinct
+    session is AMBIGUOUS (kept, flagged). An unlinked slip record (no session/
+    checkpoint) is kept but ineligible for outcome comparison. Recurrence still uses
+    distinct affected VALID laps (occurrence records only — slip has no lap #)."""
+    valid_set = set(valid_lap_numbers) if valid_lap_numbers is not None else None
+    occ = list(occurrence_records)
+    # index occurrence context by (segment, phase, issue, axle)
+    occ_ctx: dict = {}
+    for r in occ:
+        occ_ctx.setdefault((r.segment_id, r.phase.value, r.issue_type, r.axle),
+                           set()).add((r.session_id, r.applied_checkpoint_id))
+    unified = list(occ)
+    duplicates = ambiguous = unlinked = 0
+    for s in slip_records:
+        if not (s.session_id or s.applied_checkpoint_id):
+            unlinked += 1
+            unified.append(s)                 # kept, ineligible (occurred_on_lap False)
+            continue
+        key = (s.segment_id, s.phase.value, s.issue_type, s.axle)
+        ctxs = occ_ctx.get(key)
+        if not ctxs:
+            unified.append(s)                 # linked but no matching occurrence → corroboration
+            continue
+        distinct_sessions = {c[0] for c in ctxs if c[0]}
+        same = any((s.session_id and s.session_id == c[0])
+                   or (s.applied_checkpoint_id and s.applied_checkpoint_id == c[1])
+                   for c in ctxs)
+        if same and len(distinct_sessions) > 1:
+            ambiguous += 1
+            unified.append(s)                 # kept, flagged ambiguous
+        elif same:
+            duplicates += 1                   # same physical event → drop the slip copy
+        else:
+            unified.append(s)
+    # distinct affected valid laps (occurrence records only)
+    affected = {r.lap_number for r in occ
+                if r.lap_number is not None and r.occurred_on_lap and not r.excluded
+                and (valid_set is None or r.lap_number in valid_set)}
+    audit = UnificationAudit(
+        included=len(unified), excluded=duplicates,
+        duplicates_removed=duplicates, ambiguous=ambiguous, unlinked=unlinked,
+        source_counts={"corner_issue_occurrences": len(occ),
+                       "corner_slip_telemetry": len(slip_records)},
+        distinct_affected_valid_laps=len(affected))
+    return tuple(unified), audit

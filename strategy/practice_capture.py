@@ -27,12 +27,33 @@ def resolve_clean_lap(
 ) -> bool:
     """A lap is clean when it is valid, has a positive time, and is not a pace
     outlier (within ``outlier_ratio`` of the session best). With no best yet,
-    a valid positive lap is provisionally clean."""
+    a valid positive lap is provisionally clean.
+
+    Phase 5: this is now a COMPATIBILITY ADAPTER over the single canonical
+    lap-validity authority (`strategy/engineering_lap_validity`) — the Practice and
+    Perfect-Lap live paths route through it, so there is ONE clean-lap authority.
+    Behaviour is preserved: valid + positive time + within the pace-outlier ratio.
+    The engineering plausibility floor is relaxed here so this pace-focused rule
+    keeps its documented semantics for the practice/perfect-lap purposes."""
     if not valid or lap_time_ms <= 0:
         return False
-    if best_ms and best_ms > 0:
-        return lap_time_ms <= best_ms * outlier_ratio
-    return True
+    import dataclasses as _dc
+    from strategy.engineering_lap_validity import (
+        evaluate_engineering_lap, LapPurpose, policy_for)
+    pol = _dc.replace(policy_for(LapPurpose.PRACTICE_PATTERN),
+                      reject_pace_outlier=True, pace_outlier_ratio=float(outlier_ratio))
+    v = evaluate_engineering_lap(
+        {"lap_time_ms": int(lap_time_ms or 0), "is_pit_lap": 0, "is_out_lap": 0},
+        purpose=LapPurpose.PRACTICE_PATTERN, best_lap_ms=int(best_ms or 0), policy=pol)
+    # This rule's contract is pace/validity only — a positive-time lap that the
+    # authority flags solely as implausibly fast is still "clean" for pace purposes.
+    from strategy.engineering_lap_validity import R_IMPLAUSIBLE_TIME
+    if not v.accepted and set(v.rejection_reasons) <= {R_IMPLAUSIBLE_TIME}:
+        # only the plausibility floor rejected it → preserve legacy pace semantics
+        if best_ms and best_ms > 0:
+            return lap_time_ms <= best_ms * outlier_ratio
+        return True
+    return v.accepted
 
 
 def compute_lap_capture(

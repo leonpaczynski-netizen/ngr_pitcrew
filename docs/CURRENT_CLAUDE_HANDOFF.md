@@ -1,6 +1,40 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 4: Canonical Evidence Authorities, Unified Clean-Lap Semantics & Live Per-Corner Outcome Assembly — COMPLETE
+## Current Objective (2026-07-18) — Engineering Brain Phase 5: Working-Window Learning, Successful-Direction Reinforcement & Minimum-Effective Experiment Selection — COMPLETE
+
+**Branch `eng-brain-phase5-working-window-learning` from `master` @ Phase 4 `52628af` — committed, NOT pushed / no PR.** (Verified start: `52628af` was HEAD/tip; Phases 2-4 stacked on-branch, master at Phase 1; `DB_VERSION 22`, `RULE_ENGINE_VERSION 46.0` — exactly the supplied checkpoint.) Learning + selection over the Phase 1-4 spine — NO generative AI, no opaque scoring, no physics, no auto-apply/revert, no multi-field shotgun experiments.
+
+**Schema/version change:** `user_version` **22 → 23**; `DB_VERSION` 22 → 23 (`strategy/_setup_constants.py`). `RULE_ENGINE_VERSION` unchanged.
+
+**Files changed:**
+- NEW `strategy/working_window.py` — learned working-window domain (pure). `LearnedWorkingWindow` = deterministic function of an append-only `WindowEvidence` ledger (idempotent, order-independent). `outcome_to_window_evidence` maps Phase-3 `OutcomeStatus` → contributions (confirmed→successful, partial→successful+low-attribution, regression→unsuccessful+direction-lockout, no_meaningful_change→ineffective, confounded/insufficient→no learning). `recompute_working_window` (regression narrows window + locks direction; confidence never over-claims — 1 exp→provisional, contradiction→low, high needs ≥5 exp/≥3 improvements). Directional learning (per field+direction improved/worsened/no-effect + lockout).
+- NEW `strategy/experiment_selection.py` — candidate model + generation + selector (pure). `generate_candidates` maps symptom→handling axis (`_SYMPTOM_AXIS`) → fields via `setup_synthesis.PARAMETER_INTERACTIONS` → ONE legal step of ONE field (physics-informed hypothesis, never a value table, never universal best). HARD dead-end gates (failed/ineffective direction, illegal/at-current/no-measurable-delta value, disproved value, protected-field). `select_experiment` — 5-stage deterministic (subordinate to `resolve_setup_decision`; stable tie-break: isolation→least-protected-risk→fewest-negatives→evidence→field-name; honest `NoSelectionReason`). `build_test_protocol`.
+- MOD `strategy/corner_evidence.py` — `from_corner_slip_aggregate` (run-keyed slip → canonical, lap-attribution-free, unlinked→ineligible) + `unify_corner_observations` (dedup by stable identity (segment,phase,issue,axle)+session/checkpoint; slip can't inflate distinct-lap recurrence; ambiguous/unlinked flagged; `UnificationAudit`).
+- MOD `strategy/practice_capture.py` — `resolve_clean_lap` now a compatibility ADAPTER over the ONE `engineering_lap_validity` authority (Practice + Perfect-Lap live paths; behaviour preserved; plausibility floor relaxed for the pace purpose).
+- MOD `data/session_db.py` — `_DDL_V23` (2 tables + indexes), `_migrate_v23` + hook + DB_VERSION 22→23; module helpers `_json_loads_list`/`_rehydrate_window`. Methods `learn_from_experiment_outcome`, `select_next_experiment`, `review_and_learn`, `get_working_window`, `list_working_windows`, `_record_window_evidence`/`_get_window_evidence`/`_upsert_working_window`/`_experiment_context_scope`.
+- MOD `ui/setup_builder_ui.py` — off-thread review worker rewired to `db.review_and_learn`; `_display_outcome_result` renders learned windows + selected next experiment + blocked alternative + no-selection state.
+- MOD version guards: `test_session_db` (→23), `test_setup_outcome_persistence` (→DB_VERSION), `test_phase4_evidence_assembly` (no-migration test → follows DB_VERSION / telemetry-table check), `test_group55-60_safety_guards` + `test_group61_safety_invariants` (migration ceiling → v24).
+- NEW `tests/test_phase5_{working_window,experiment_selection,corner_unification,lap_validity_migration,persistence,golden_uat,wiring}.py` (95). NEW `docs/ENGINEERING_BRAIN_PHASE5_WORKING_WINDOW_LEARNING.md`; MOD Phase 4 doc, `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Learning rules:** only a completed canonical outcome teaches values; regression is authoritative + locks the failed direction (lifted only by a later compatible improvement, audited via the ledger); no-meaningful-change marks the increment ineffective; confounded/insufficient teach nothing. Compound experiments → low attribution (no hard field lockout; isolation follow-up preferred). Direct context evidence > inherited cross-context prior (`is_direct`).
+
+**Persistence:** append-only `setup_working_window_evidence` (UNIQUE(context_key, experiment_id, outcome_id) → idempotent replay) is the source of truth; `setup_working_windows` is a materialised cache recomputed from it. Every learned update traces to experiment+outcome+checkpoint+scope+delta. No new telemetry table (producers are read, not duplicated).
+
+**Runtime loop:** review → `review_experiment_outcome` (Phase 4 assembly + Phase 3 evaluate) → `learn_from_experiment_outcome` → `select_next_experiment`, all off-thread; read-only w.r.t. the setup (no apply/revert). Selection is subordinate to `resolve_setup_decision`.
+
+**Tests run / results:** new suites **95 passed**. Non-UI regression (chunked): **6890 passed, 27 skipped, 0 failed**. Setup-builder UI construction tests individually green (group25/44/42/41). Golden `config_id` + frozen allowlist + Apply-gate + engine-wiring-status assert green. **0 new failures.** Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched). Qt teardown-only segfaults (tests pass first): `config_safety_smoke`, `group75_segment_editor_ui`/`live_baseline_ui`, `group76_live_capture_thread`/`perfect_lap_ui`.
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations:** selection targets a single dominant symptom per call; the `review_and_learn` selection inputs derive from the reviewed experiment's diagnosis (a live per-corner residual-issue detector is Phase 6); inherited-prior auto-seeding is represented (`is_direct`) but not yet wired into candidate generation; the two live per-corner producers are unified at read-time (write-time merge deferred).
+
+**GO/NO-GO: GO.** The central learning + selection loop is genuinely operational (proven by golden UAT A-J through the production path): learns from valid success/failure, preserves inconclusive without false learning, blocks repeated failed/dead-end directions, protects confirmed-good behaviour, selects the smallest safe next experiment, returns honest no-selection, unifies both per-corner producers without double-counting, uses one lap-validity authority, persists idempotently, and is deterministic across restart. Every Phase 1-4 safety guarantee preserved.
+
+**Recommended Phase 6:** Live Residual-Issue Detection & Multi-Symptom Experiment Planning — derive the dominant residual issue + recurrence live from the unified per-corner evidence, queue minimum-effective experiments across several symptoms with protected-behaviour arbitration, and auto-seed inherited-prior windows into candidate generation. Do NOT start Phase 6 in this task.
+
+---
+
+## Prior Objective (2026-07-18) — Engineering Brain Phase 4: Canonical Evidence Authorities, Unified Clean-Lap Semantics & Live Per-Corner Outcome Assembly — COMPLETE
 
 **Branch `eng-brain-phase4-canonical-evidence` from `master` @ Phase 3 `6314c05` — committed, NOT pushed / no PR.** (Verified start: Phase 3 `6314c05` was HEAD/tip; Phase 2/3 stacked on the branch, master at Phase 1; `DB_VERSION` 22, `RULE_ENGINE_VERSION` 46.0 — exactly the supplied checkpoint.) Evidence authorities + live wiring only — NO new physics/rules/outcome-evaluator, no auto-apply/rollback, no UI redesign.
 

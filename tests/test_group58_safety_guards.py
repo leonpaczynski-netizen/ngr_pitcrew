@@ -122,11 +122,11 @@ class TestNoSchemaMigration:
         assert "_migrate_v14" in src
         # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
         # guard now protects against an unexpected _migrate_v16.
-        # Engineering-Brain Phase 1/2/3 legitimately added _migrate_v20/v21/v22
-        # (context spine + experiment ledger + outcome eval); guard protects v23.
+        # Engineering-Brain Phases 1-5 legitimately added _migrate_v20..v23
+        # (context/experiment/outcome/working-window); guard protects v24.
         assert "_migrate_v20" in src
-        assert "_migrate_v22" in src
-        assert "_migrate_v23" not in src
+        assert "_migrate_v23" in src
+        assert "_migrate_v24" not in src
 
 
 class TestStrategyScoringDeterministic:

@@ -169,18 +169,25 @@ def _occ(sid, cp, lap, seg="T1", issue="front_lock", phase="braking", axle="fron
             "axle": axle, "severity": 0.7, "confidence": 0.8}
 
 
-# 77 — no migration required; DB stays v22
+# 77 — Phase 4 itself required NO migration (the assembler reads existing stores).
+# Phase 5 later added v23 (working-window tables, NOT telemetry); the live schema
+# now follows DB_VERSION.
 def test_no_new_migration_needed(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 22
-    assert DB_VERSION == 22
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 22
 
 
-# 80 — no duplicate telemetry storage: assembler reads existing corner_issue_occurrences
+# 80 — no duplicate TELEMETRY storage: the assembler reads the existing
+# corner_issue_occurrences / corner_slip_telemetry stores; no phase adds a
+# competing per-corner telemetry table.
 def test_no_duplicate_telemetry_tables(db):
-    src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-    # Phase 4 added no new corner/telemetry table (only reads existing stores).
-    assert "_DDL_V23" not in src
-    assert "_migrate_v23" not in src
+    tables = {r[0] for r in db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    telemetry_tables = {t for t in tables
+                        if "corner" in t and ("slip" in t or "occurrence" in t
+                                              or "issue" in t)}
+    assert telemetry_tables == {"corner_issues", "corner_issue_occurrences",
+                                "corner_slip_telemetry"}
 
 
 # 53/54/61 — practice-persisted corner occurrence reaches assembler → meaningful outcome
