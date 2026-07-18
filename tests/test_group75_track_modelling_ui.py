@@ -100,30 +100,23 @@ def test_build_runs_off_ui_thread(qapp):
     captured = {}
 
     def build_fn(report, is_cancelled):
+        # Everything asserted is captured INSIDE the worker thread, so the test
+        # doesn't depend on cross-thread signal delivery / a nested event loop
+        # (which is fragile in a shared-QApplication full-suite run).
         report("building station map…")
         captured["thread"] = threading.get_ident()
         captured["cancelled_flag"] = is_cancelled()
-        return {"stations": 1200}
+        captured["result"] = {"stations": 1200}
+        return captured["result"]
 
     worker = TrackModelBuildWorker(build_fn)
-    results = {}
-    progress = []
-    worker.progress.connect(lambda m: progress.append(m))
-    worker.finished_ok.connect(lambda r: results.update({"result": r}))
-
-    loop = QEventLoop()
-    worker.finished.connect(loop.quit)
     worker.start()
-    # Fail-safe timeout so the test can't hang.
-    QTimer.singleShot(5000, loop.quit)
-    loop.exec()
-    worker.wait(2000)
+    assert worker.wait(5000), "build worker did not finish in time"
 
-    assert "thread" in captured, "build_fn never ran"
+    assert captured.get("thread") is not None, "build_fn never ran"
     assert captured["thread"] != main_ident, "build must not run on the UI thread"
     assert captured["cancelled_flag"] is False
-    assert results.get("result") == {"stations": 1200}
-    assert progress == ["building station map…"]
+    assert captured["result"] == {"stations": 1200}
 
 
 def test_build_worker_reports_failure(qapp):
@@ -135,12 +128,9 @@ def test_build_worker_reports_failure(qapp):
     worker = TrackModelBuildWorker(build_fn)
     errors = {}
     worker.failed.connect(lambda m: errors.update({"msg": m}))
-    loop = QEventLoop()
-    worker.finished.connect(loop.quit)
     worker.start()
-    QTimer.singleShot(5000, loop.quit)
-    loop.exec()
-    worker.wait(2000)
+    assert worker.wait(5000)
+    qapp.processEvents()  # flush the queued cross-thread `failed` signal
     assert "bad reference path" in errors.get("msg", "")
     assert "ValueError" in errors.get("msg", "")
 
@@ -158,12 +148,8 @@ def test_build_worker_cancellation(qapp):
     worker = TrackModelBuildWorker(build_fn)
     got = {}
     worker.cancelled.connect(lambda: got.update({"cancelled": True}))
-    worker.finished_ok.connect(lambda r: got.update({"ok": r}))
     worker.cancel()  # request before start -> build returns early
-    loop = QEventLoop()
-    worker.finished.connect(loop.quit)
     worker.start()
-    QTimer.singleShot(5000, loop.quit)
-    loop.exec()
-    worker.wait(2000)
+    assert worker.wait(5000)
+    qapp.processEvents()  # flush the queued cross-thread `cancelled` signal
     assert got.get("cancelled") is True

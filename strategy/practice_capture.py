@@ -1,0 +1,140 @@
+"""Live practice-capture helpers for the Practice Analysis engine (pure, Qt-free).
+
+UAT Finding 2 wiring completion. These deterministic helpers let the dashboard
+turn a completed lap's frames into cross-lap observations:
+
+  * ``resolve_clean_lap`` — the canonical "is this a clean lap?" rule (valid +
+    not a pace outlier). Persistence conclusions use clean laps only.
+  * ``build_progress_segment_resolver`` — a ``(road_distance, speed, throttle,
+    brake) -> (segment_id, phase)`` resolver over reviewed segments, so slip
+    episodes resolve to a corner + phase (falls back to unresolved honestly).
+  * ``segments_to_corner_names`` / ``segments_to_track_corners`` — feed corner
+    names + the strong-corner candidate list to the engine.
+
+No Qt, no I/O; the caller supplies frames, reviewed segments and lap length.
+"""
+from __future__ import annotations
+
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple
+
+
+def resolve_clean_lap(
+    lap_time_ms: int,
+    best_ms: int,
+    *,
+    valid: bool = True,
+    outlier_ratio: float = 1.07,
+) -> bool:
+    """A lap is clean when it is valid, has a positive time, and is not a pace
+    outlier (within ``outlier_ratio`` of the session best). With no best yet,
+    a valid positive lap is provisionally clean."""
+    if not valid or lap_time_ms <= 0:
+        return False
+    if best_ms and best_ms > 0:
+        return lap_time_ms <= best_ms * outlier_ratio
+    return True
+
+
+def compute_lap_capture(
+    frames,
+    drivetrain: str,
+    resolver: Optional[Callable[[float, float, float, float], Tuple[str, str]]],
+    *,
+    lap_time_ms: int,
+    best_ms: int,
+    valid: bool = True,
+) -> Tuple[list, bool]:
+    """Extract a lap's slip episodes and decide whether the lap is clean.
+
+    Pure orchestration of the episode extractor + clean-lap rule so the dashboard
+    hook is a thin store. Returns ``(episodes, is_clean)``.
+    """
+    from telemetry.slip_events import extract_slip_episodes
+    episodes = (extract_slip_episodes(frames, drivetrain, segment_resolver=resolver)
+                if frames else [])
+    is_clean = resolve_clean_lap(int(lap_time_ms or 0), int(best_ms or 0), valid=valid)
+    return episodes, is_clean
+
+
+def _phase_of(segment_type) -> str:
+    try:
+        from strategy.live_corner_aggregator import phase_from_segment_type
+        # The mapper keys on the enum's string value, not the enum member.
+        val = getattr(segment_type, "value", segment_type)
+        return phase_from_segment_type(val) or ""
+    except Exception:
+        # Minimal fallback mapping.
+        s = str(getattr(segment_type, "value", segment_type) or "").lower()
+        if "brak" in s:
+            return "braking"
+        if "apex" in s:
+            return "apex"
+        if "entry" in s:
+            return "entry"
+        if "exit" in s or "traction" in s:
+            return "exit"
+        return ""
+
+
+def _is_rejected(seg) -> bool:
+    st = getattr(seg, "review_status", None)
+    return str(getattr(st, "value", st) or "").lower() == "rejected"
+
+
+def _in_span(lp: float, start: float, end: float) -> bool:
+    if start <= end:
+        return start <= lp <= end
+    # Wrapped span across the start/finish line.
+    return lp >= start or lp <= end
+
+
+def build_progress_segment_resolver(
+    segments: Sequence,
+    lap_length_m: float,
+    offset_m: float = 0.0,
+) -> Callable[[float, float, float, float], Tuple[str, str]]:
+    """Return a resolver mapping road_distance -> (segment_id, phase).
+
+    ``segments`` are reviewed segments carrying lap_progress_start/end and
+    segment_type. When lap length is unknown or no segment matches, the resolver
+    returns ``("", "")`` and the episode is treated as an unresolved location.
+    """
+    usable = [s for s in (segments or []) if not _is_rejected(s)]
+
+    def _resolver(road_distance: float, speed_kmh: float,
+                  throttle: float, brake: float) -> Tuple[str, str]:
+        if not usable or not lap_length_m or lap_length_m <= 0:
+            return "", ""
+        lp = ((float(road_distance) - float(offset_m)) / float(lap_length_m)) % 1.0
+        for seg in usable:
+            if _in_span(lp, float(seg.lap_progress_start), float(seg.lap_progress_end)):
+                phase = _phase_of(getattr(seg, "segment_type", ""))
+                if not phase:
+                    continue  # straight / non-corner — keep looking
+                return str(seg.segment_id), phase
+        return "", ""
+
+    return _resolver
+
+
+def segments_to_corner_names(segments: Sequence) -> dict:
+    out = {}
+    for s in (segments or []):
+        name = getattr(s, "display_name", "") or getattr(s, "original_display_name", "")
+        out[str(getattr(s, "segment_id", ""))] = str(name or "")
+    return out
+
+
+def segments_to_track_corners(segments: Sequence) -> List[Tuple[str, str]]:
+    """Corner (apex/exit/entry/braking) segments as (segment_id, name), so the
+    engine can flag consistently-clean corners as strengths. Rejected segments
+    are excluded."""
+    out: List[Tuple[str, str]] = []
+    for s in (segments or []):
+        if _is_rejected(s):
+            continue
+        if not _phase_of(getattr(s, "segment_type", "")):
+            continue  # not a corner phase
+        name = getattr(s, "display_name", "") or getattr(s, "original_display_name", "")
+        out.append((str(getattr(s, "segment_id", "")), str(name or "")))
+    return out

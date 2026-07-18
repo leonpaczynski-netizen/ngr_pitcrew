@@ -463,6 +463,9 @@ class LiveMixin:
         idx = {"Race": 0, "Practice": 1, "Qualifying": 2}.get(mode, 0)
         if hasattr(self, "_live_mode_stack"):
             self._live_mode_stack.setCurrentIndex(idx)
+        # Entering Practice starts a fresh capture window for Practice Analysis.
+        if mode == "Practice" and hasattr(self, "_reset_practice_capture"):
+            self._reset_practice_capture()
         self._config.setdefault("live", {})["mode"] = mode
         self._persist_config()
         # Suppress strategy pit alerts when not in Race mode

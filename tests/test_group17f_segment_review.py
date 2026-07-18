@@ -167,8 +167,10 @@ class TestSegmentReviewStatus:
 # ===========================================================================
 
 class TestSegmentReviewAction:
-    def test_has_seven_values(self):
-        assert len(SegmentReviewAction) == 7
+    def test_has_ten_values(self):
+        # Seven original + three interactive-editor ops (renumber/merge/split)
+        # added for the UAT Finding 4 review step.
+        assert len(SegmentReviewAction) == 10
 
     def test_str_comparable(self):
         assert SegmentReviewAction.CONFIRM == "confirm"
@@ -179,6 +181,8 @@ class TestSegmentReviewAction:
             "confirm", "rename", "reject", "mark_needs_more_laps",
             "mark_split_required", "mark_merge_required",
             "promote_engineer_validated",
+            # Interactive-editor operations (real structural edits).
+            "renumber", "merge", "split",
         }
         assert {a.value for a in SegmentReviewAction} == expected
 

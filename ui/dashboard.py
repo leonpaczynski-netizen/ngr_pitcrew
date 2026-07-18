@@ -332,6 +332,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             _authority_store = None
         self._setup_authority = ActiveSetupAuthority(store=_authority_store)
 
+        # UAT Finding 2 wiring: per-lap slip-episode buffers feeding Practice
+        # Analysis. Populated at lap completion in Practice mode; reset per
+        # session so cross-session data never mixes.
+        self._practice_lap_episodes: dict = {}
+        self._practice_clean_laps: set = set()
+        self._practice_total_laps: set = set()
+        self._practice_corner_names: dict = {}
+        self._practice_track_corners: list = []
+
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
@@ -1460,6 +1469,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         mode = self._combo_live_mode.currentText()
         if mode == "Practice":
             self._update_practice_stats(record)
+            self._capture_practice_lap(record)
         elif mode == "Qualifying" and record.lap_time_ms > 0:
             if hasattr(self, "_spin_qual_min"):
                 target_ms = int(self._spin_qual_min.value() * 60_000
@@ -5476,6 +5486,85 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             cap.setVisible(bool(lines))
             lst.setVisible(bool(lines))
 
+    def _reset_practice_capture(self) -> None:
+        """Clear the per-lap practice buffers (call when a new practice session
+        starts so cross-session evidence never mixes)."""
+        self._practice_lap_episodes = {}
+        self._practice_clean_laps = set()
+        self._practice_total_laps = set()
+
+    def _practice_segments_cache(self):
+        """Best-effort (reviewed_segments, lap_length_m, offset_m) for the active
+        track — reuses the Track Modelling review state when present."""
+        review = getattr(self, "_tm_review_result", None)
+        segs = list(getattr(review, "segments", []) or []) if review is not None else []
+        lap_len = 0.0
+        try:
+            lap_len = float(self._tm_get_track_length_m() or 0.0)
+        except Exception:
+            lap_len = 0.0
+        offset = 0.0
+        cal = getattr(self, "_tm_offset_calibration", None)
+        if cal is not None:
+            offset = float(getattr(cal, "offset_m", 0.0) or 0.0)
+        return segs, lap_len, offset
+
+    def _capture_practice_lap(self, record) -> None:
+        """Extract the just-completed lap's slip episodes and fold them into the
+        Practice Analysis buffers. Best-effort — never raises into the lap path.
+        """
+        try:
+            rec = getattr(self, "_recorder", None)
+            if rec is None:
+                return
+            lap_num = int(getattr(record, "lap", getattr(record, "lap_number", 0)) or 0)
+            stats = None
+            try:
+                stats = rec.get_lap(lap_num) if lap_num else None
+            except Exception:
+                stats = None
+            if stats is None and hasattr(rec, "last_lap"):
+                stats = rec.last_lap()
+            frames = getattr(stats, "frames", None) if stats is not None else None
+            if not frames:
+                return
+            lap_num = int(getattr(stats, "lap_num", lap_num) or lap_num)
+
+            drivetrain = ""
+            try:
+                if hasattr(self, "_setup_drivetrain"):
+                    drivetrain = self._setup_drivetrain.currentText() or ""
+            except Exception:
+                drivetrain = ""
+
+            segs, lap_len, offset = self._practice_segments_cache()
+            from strategy.practice_capture import (
+                build_progress_segment_resolver, compute_lap_capture,
+                segments_to_corner_names, segments_to_track_corners)
+            resolver = None
+            if segs and lap_len > 0:
+                resolver = build_progress_segment_resolver(segs, lap_len, offset)
+
+            best = 0
+            try:
+                best = int(self._logger.best_lap_ms() or 0)
+            except Exception:
+                best = 0
+            episodes, is_clean = compute_lap_capture(
+                frames, drivetrain, resolver,
+                lap_time_ms=int(getattr(record, "lap_time_ms", 0) or 0),
+                best_ms=best, valid=bool(getattr(record, "is_valid", True)))
+            self._practice_lap_episodes[lap_num] = episodes
+            self._practice_total_laps.add(lap_num)
+            if is_clean:
+                self._practice_clean_laps.add(lap_num)
+
+            if segs:
+                self._practice_corner_names = segments_to_corner_names(segs)
+                self._practice_track_corners = segments_to_track_corners(segs)
+        except Exception as e:
+            print(f"[PracticeCapture] {e}")
+
     def _analyse_practice_patterns(self) -> None:
         """Gather this session's slip episodes, run the deterministic engine and
         render the structured result. Honest empty-state when data is thin."""
@@ -5499,9 +5588,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
 
         lap_episodes = getattr(self, "_practice_lap_episodes", None) or {}
         clean = getattr(self, "_practice_clean_laps", None)
-        if clean is None:
+        clean = sorted(int(l) for l in clean) if clean else []
+        if not clean:
+            # No lap passed the clean-lap gate (or none tracked) — fall back to
+            # every captured lap so the surface still analyses what exists.
             clean = sorted(int(l) for l in lap_episodes.keys())
-        total = getattr(self, "_practice_total_laps", None) or sorted(
+        total = getattr(self, "_practice_total_laps", None)
+        total = sorted(int(l) for l in total) if total else sorted(
             int(l) for l in lap_episodes.keys())
         corner_names = getattr(self, "_practice_corner_names", None) or {}
         driver_feedback = getattr(self, "_last_feedback_dict", None)

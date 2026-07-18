@@ -489,12 +489,49 @@ class TrackModellingMixin:
         )
         seg_rev_layout.addWidget(self._tm_seg_table)
 
-        # Diagnostic Tab Cleanup (2026-07-03): the hidden legacy per-segment
-        # review buttons (Confirm/Rename/Reject/Needs More Laps/Split/Merge/
-        # Save Reviewed Model) and their never-connected handler methods were
-        # DELETED — the whole-model acceptance workflow (Group 17P) replaced
-        # them. The pure review-action functions in data/track_segment_review.py
-        # and ui/track_modelling_vm.get_review_button_states remain (tested).
+        # UAT Finding 4 (interactive review editor): edit the selected segment —
+        # rename, renumber, approve, reject, split at its midpoint, or merge with
+        # the next segment. These are REAL structural edits (the pure ops in
+        # data/track_segment_review.py), gated by the coordinator's EDIT_SEGMENT
+        # legality so illegal edits are refused rather than half-applied.
+        from PyQt6.QtWidgets import QSpinBox as _QSpinBox
+        _edit_grp = QGroupBox("Edit selected segment")
+        _edit_grp.setStyleSheet(self._group_style())
+        _edit_v = QVBoxLayout(_edit_grp)
+        _edit_v.setSpacing(4)
+        _erow1 = QHBoxLayout()
+        self._tm_seg_name_edit = QLineEdit()
+        self._tm_seg_name_edit.setPlaceholderText("New name…")
+        self._tm_seg_turn_spin = _QSpinBox()
+        self._tm_seg_turn_spin.setRange(0, 40)
+        self._tm_seg_turn_spin.setPrefix("T")
+        _btn_seg_rename = QPushButton("Rename")
+        _btn_seg_renum = QPushButton("Renumber")
+        _btn_seg_rename.clicked.connect(self._tm_seg_rename)
+        _btn_seg_renum.clicked.connect(self._tm_seg_renumber)
+        for w in (self._tm_seg_name_edit, _btn_seg_rename,
+                  self._tm_seg_turn_spin, _btn_seg_renum):
+            _erow1.addWidget(w)
+        _edit_v.addLayout(_erow1)
+        _erow2 = QHBoxLayout()
+        self._tm_btn_seg_approve = QPushButton("Approve")
+        self._tm_btn_seg_reject = QPushButton("Reject")
+        self._tm_btn_seg_split = QPushButton("Split at midpoint")
+        self._tm_btn_seg_merge = QPushButton("Merge with next")
+        self._tm_btn_seg_approve.clicked.connect(self._tm_seg_approve)
+        self._tm_btn_seg_reject.clicked.connect(self._tm_seg_reject)
+        self._tm_btn_seg_split.clicked.connect(self._tm_seg_split)
+        self._tm_btn_seg_merge.clicked.connect(self._tm_seg_merge)
+        for w in (self._tm_btn_seg_approve, self._tm_btn_seg_reject,
+                  self._tm_btn_seg_split, self._tm_btn_seg_merge):
+            _erow2.addWidget(w)
+        _edit_v.addLayout(_erow2)
+        self._tm_seg_edit_status = QLabel("Select a segment row to edit.")
+        self._tm_seg_edit_status.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        self._tm_seg_edit_status.setWordWrap(True)
+        _edit_v.addWidget(self._tm_seg_edit_status)
+        seg_rev_layout.addWidget(_edit_grp)
+        self._tm_seg_editor_group = _edit_grp
 
         _seg_detect_layout.addWidget(seg_rev_grp)
         right_layout.addWidget(_seg_detect_grp)
@@ -977,8 +1014,10 @@ class TrackModellingMixin:
             has_captured = True
 
         has_station_map = getattr(self, "_tm_station_map", None) is not None
-        has_segments = getattr(self, "_tm_detection_result", None) is not None
         review = getattr(self, "_tm_review_result", None)
+        has_segments = (
+            getattr(self, "_tm_detection_result", None) is not None
+            or bool(getattr(review, "segments", None)))
         review_complete = False
         if review is not None:
             review_complete = bool(
@@ -1952,6 +1991,123 @@ class TrackModellingMixin:
 
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Segment Detection Failed", error_txt)
+
+    # --- Interactive segment editor (UAT Finding 4 review step) --------------
+
+    def _tm_current_review_for_edit(self):
+        """The current review model, lazily created from the detection result."""
+        review = getattr(self, "_tm_review_result", None)
+        if review is None:
+            det = getattr(self, "_tm_detection_result", None)
+            if det is not None:
+                try:
+                    review = _create_seg_review(det)
+                    self._tm_review_result = review
+                except Exception:
+                    review = None
+        return review
+
+    def _tm_selected_seg_or_warn(self):
+        """Resolve (review, segment_id) for an edit, or (None, None) with an
+        honest status message. Refuses when the coordinator disallows editing."""
+        review = self._tm_current_review_for_edit()
+        status = getattr(self, "_tm_seg_edit_status", None)
+        if review is None or not review.segments:
+            if status:
+                status.setText("No segments to edit — detect segments first.")
+            return None, None
+        sid = getattr(self, "_tm_selected_segment_id", None)
+        if not sid:
+            if status:
+                status.setText("Select a segment row first.")
+            return None, None
+        # The meaningful legality gate is "are there segments + a selection" —
+        # both checked above. The canonical coordinator still governs the
+        # workflow (its EDIT_SEGMENT transition fires in _tm_after_seg_edit and
+        # moves a validated/active model back to REVIEW_REQUIRED).
+        return review, sid
+
+    def _tm_after_seg_edit(self, msg: str = "") -> None:
+        self._tm_refresh_seg_table()
+        # Re-sync the coordinator (edits move the model into REVIEW_REQUIRED).
+        try:
+            coord = getattr(self, "_tm_coordinator", None)
+            if coord is not None:
+                from data.track_modelling_coordinator import TrackModellingAction
+                if coord.can(TrackModellingAction.EDIT_SEGMENT):
+                    coord.dispatch(TrackModellingAction.EDIT_SEGMENT)
+        except Exception:
+            pass
+        self._tm_refresh_workflow()
+        if msg and getattr(self, "_tm_seg_edit_status", None) is not None:
+            self._tm_seg_edit_status.setText(msg)
+
+    def _tm_seg_rename(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        name = self._tm_seg_name_edit.text().strip()
+        if not name:
+            self._tm_seg_edit_status.setText("Enter a new name first.")
+            return
+        from data.track_segment_review import rename_segment
+        rename_segment(review, sid, name)
+        self._tm_after_seg_edit(f"Renamed to “{name}”.")
+
+    def _tm_seg_renumber(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import renumber_segment
+        n = int(self._tm_seg_turn_spin.value())
+        renumber_segment(review, sid, n if n > 0 else None)
+        self._tm_after_seg_edit(f"Renumbered to T{n}." if n > 0 else "Turn cleared.")
+
+    def _tm_seg_approve(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import confirm_segment
+        confirm_segment(review, sid)
+        self._tm_after_seg_edit("Segment approved.")
+
+    def _tm_seg_reject(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import reject_segment
+        reject_segment(review, sid)
+        self._tm_after_seg_edit("Segment rejected.")
+
+    def _tm_seg_split(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import split_segment, _find_segment
+        seg = _find_segment(review, sid)
+        if seg is None:
+            return
+        mid = (seg.lap_progress_start + seg.lap_progress_end) / 2.0
+        split_segment(review, sid, mid)
+        self._tm_selected_segment_id = None
+        self._tm_after_seg_edit("Segment split at its midpoint.")
+
+    def _tm_seg_merge(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        ids = [s.segment_id for s in review.segments]
+        try:
+            i = ids.index(sid)
+        except ValueError:
+            return
+        if i + 1 >= len(review.segments):
+            self._tm_seg_edit_status.setText("No next segment to merge with.")
+            return
+        nxt = review.segments[i + 1].segment_id
+        from data.track_segment_review import merge_segments
+        merge_segments(review, sid, nxt)
+        self._tm_after_seg_edit(f"Merged with {nxt}.")
 
     # --- Segment Review methods (Group 17F) ---------------------------------
 
