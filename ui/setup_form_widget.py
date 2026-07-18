@@ -26,9 +26,10 @@ from PyQt6.QtWidgets import (
 if TYPE_CHECKING:
     pass  # host type is SetupBuilderMixin; avoid circular import
 
-# Module-level display constants — must match dashboard.py / setup_builder_ui.py
-_DARK_CARD = "#2A2A2A"
-_TEXT       = "#E0E0E0"
+# Module-level display constants — sourced from the NGR design system.
+from ui import ngr_theme as _ngr_t
+_DARK_CARD = _ngr_t.CARBON_RAISED   # was "#2A2A2A"
+_TEXT       = _ngr_t.TEXT           # was "#E0E0E0"
 
 
 def _set_spin_readonly(spin, readonly: bool) -> None:

@@ -13,8 +13,9 @@ from PyQt6.QtWidgets import (
 )
 
 from strategy.setup_ranges import GENERIC_DEFAULTS, resolve_ranges, save_car_ranges
+from ui import ngr_theme as _ngr_t
 
-_TEXT = "#E0E0E0"
+_TEXT = _ngr_t.TEXT   # was "#E0E0E0" — NGR design-system body text
 
 
 class CarRangesDialog(QDialog):

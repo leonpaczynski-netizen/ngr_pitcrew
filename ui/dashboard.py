@@ -148,10 +148,13 @@ class SignalBridge(QObject):
 # Main Window
 # ---------------------------------------------------------------------------
 
-_DARK_BG   = "#1E1E1E"
-_DARK_CARD  = "#2A2A2A"
-_TEXT       = "#E0E0E0"
-_ACCENT     = "#2EA043"
+# Canonical display constants — sourced from the NGR design system so the whole
+# app shares one palette (ui/ngr_theme.py) instead of ad-hoc hex.
+from ui import ngr_theme as _ngrt
+_DARK_BG   = _ngrt.CARBON          # was "#1E1E1E" — window surface
+_DARK_CARD  = _ngrt.CARBON_RAISED  # was "#2A2A2A" — cards/panels
+_TEXT       = _ngrt.TEXT           # was "#E0E0E0" — body text
+_ACCENT     = _ngrt.NGR_GREEN      # was "#2EA043" — NGR neon-green accent
 
 from ui.guide_content import GUIDE_HTML as _GUIDE_HTML
 

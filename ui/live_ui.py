@@ -21,10 +21,13 @@ from PyQt6.QtWidgets import (  # noqa: F401
     QTextEdit, QStackedWidget, QAbstractItemView,
 )
 
-# Module-level display constants — must match dashboard.py
-_DARK_CARD = "#2A2A2A"
-_TEXT = "#E0E0E0"
-_ACCENT = "#2EA043"
+# Module-level display constants — now sourced from the NGR design system so
+# these surfaces stay consistent with the global theme (ui/ngr_theme.py) instead
+# of drifting on ad-hoc hex.
+from ui import ngr_theme as _ngr
+_DARK_CARD = _ngr.CARBON_RAISED   # was "#2A2A2A" — carbon card surface
+_TEXT = _ngr.TEXT                 # was "#E0E0E0" — body text
+_ACCENT = _ngr.NGR_GREEN          # was "#2EA043" — NGR neon-green accent
 
 
 class LiveMixin:
@@ -593,7 +596,7 @@ class LiveMixin:
                 if target_ms > 0:
                     delta_ms = p.last_lap_ms - target_ms
                     sign = "+" if delta_ms >= 0 else ""
-                    color = "#E8771A" if delta_ms > 0 else _ACCENT
+                    color = _ngr.WARN if delta_ms > 0 else _ACCENT
                     _dt = f"{sign}{delta_ms / 1000:.3f}s vs tgt"
                     _ds = f"color: {color};"
                     if self._live_label_cache.get("lbl_delta") != (_dt, _ds):
@@ -603,7 +606,7 @@ class LiveMixin:
             elif p.best_lap_ms > 0:
                 delta_ms = p.last_lap_ms - p.best_lap_ms
                 sign = "+" if delta_ms >= 0 else ""
-                color = "#E8771A" if delta_ms > 0 else _ACCENT
+                color = _ngr.WARN if delta_ms > 0 else _ACCENT
                 _dt = f"{sign}{delta_ms / 1000:.3f}s"
                 _ds = f"color: {color};"
                 if self._live_label_cache.get("lbl_delta") != (_dt, _ds):
@@ -673,7 +676,7 @@ class LiveMixin:
         def _delta(actual_ms: int, target_frac_ms: int) -> tuple[str, str]:
             d = actual_ms - target_frac_ms
             sign = "+" if d >= 0 else ""
-            col = "#E8771A" if d > 0 else _ACCENT
+            col = _ngr.WARN if d > 0 else _ACCENT
             return f"{sign}{d / 1000:.3f}s", col
 
         if lap_frac >= 0.333 and not self._qual_s1_done:
@@ -692,7 +695,7 @@ class LiveMixin:
             proj_ms = int(elapsed_ms / lap_frac)
             delta_total = proj_ms - target_ms
             sign = "+" if delta_total >= 0 else ""
-            col = "#E8771A" if delta_total > 0 else _ACCENT
+            col = _ngr.WARN if delta_total > 0 else _ACCENT
             self._lbl_qual_proj.setText(
                 f"{format_laptime_display(proj_ms)} ({sign}{delta_total / 1000:.3f}s)")
             self._lbl_qual_proj.setStyleSheet(f"color:{col};")

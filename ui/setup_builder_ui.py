@@ -18,9 +18,10 @@ from strategy.setup_ranges import resolve_ranges, save_car_ranges, GENERIC_DEFAU
 from ui.car_ranges_dialog import CarRangesDialog  # noqa: F401 — used in _open_car_ranges_dialog
 from ui.setup_form_widget import SetupFormWidget
 
-# Module-level display constants — must match dashboard.py
-_DARK_CARD = "#2A2A2A"
-_TEXT       = "#E0E0E0"
+# Module-level display constants — sourced from the NGR design system.
+from ui import ngr_theme as _ngr_t
+_DARK_CARD = _ngr_t.CARBON_RAISED   # was "#2A2A2A"
+_TEXT       = _ngr_t.TEXT           # was "#E0E0E0"
 
 
 def _format_validation_errors_banner(validation_errors: list) -> str:

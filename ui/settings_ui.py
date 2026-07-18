@@ -17,8 +17,9 @@ from PyQt6.QtWidgets import (  # noqa: F401
     QLineEdit, QTextEdit, QScrollArea, QMessageBox, QInputDialog,
 )
 
-# Module-level display constant — must match dashboard.py
-_TEXT = "#E0E0E0"
+# Module-level display constant — sourced from the NGR design system.
+from ui import ngr_theme as _ngr_t
+_TEXT = _ngr_t.TEXT   # was "#E0E0E0"
 
 
 class SettingsMixin:

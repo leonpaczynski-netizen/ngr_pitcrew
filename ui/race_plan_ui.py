@@ -18,9 +18,11 @@ from PyQt6.QtWidgets import (  # noqa: F401
     QHeaderView,
 )
 
-# Module-level display constants — must match dashboard.py
-_DARK_CARD = "#2A2A2A"
-_TEXT = "#E0E0E0"
+# Module-level display constants — sourced from the NGR design system for theme
+# consistency (ui/ngr_theme.py) instead of ad-hoc hex.
+from ui import ngr_theme as _ngr
+_DARK_CARD = _ngr.CARBON_RAISED   # was "#2A2A2A"
+_TEXT = _ngr.TEXT                 # was "#E0E0E0"
 
 
 class RacePlanMixin:
