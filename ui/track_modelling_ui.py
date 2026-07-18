@@ -900,6 +900,14 @@ class TrackModellingMixin:
 
         # Store seed result reference + review state
         self._tm_seed_result = None
+        # UAT Finding 4: one canonical state machine drives the guided six-step
+        # workflow; the banner shows a single primary next-step at a time and
+        # ``_tm_snapshot`` is the canonical result object other surfaces read.
+        from data.track_modelling_coordinator import TrackModellingCoordinator
+        self._tm_coordinator = TrackModellingCoordinator()
+        self._tm_snapshot = None
+        self._tm_building = False
+        self._tm_error = False
         self._tm_controller = TrackCalibrationCaptureController()
         self._tm_detection_result = None   # last SegmentDetectionResult
         self._tm_review_result    = None   # current TrackModelReviewResult
@@ -929,7 +937,107 @@ class TrackModellingMixin:
         # so selecting a segment did nothing).
         self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
+        # Guided "follow the bouncing ball" next-step banner across the top —
+        # driven by the canonical coordinator, one primary step at a time.
+        self._tm_next_step_banner = QLabel("Select a track and layout to begin.")
+        self._tm_next_step_banner.setWordWrap(True)
+        self._tm_next_step_banner.setStyleSheet(
+            "background:#12242E; color:#8BD3E6; border:1px solid #21455A; "
+            "border-radius:4px; padding:6px 10px; font-size:11px; font-weight:bold;")
+        outer_layout.insertWidget(0, self._tm_next_step_banner)
+        self._tm_refresh_workflow()
+
         return outer
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 4 — canonical state machine integration.
+    # ------------------------------------------------------------------ #
+
+    def _tm_build_coordinator_inputs(self):
+        """Derive canonical TrackModellingInputs from the existing UI state and
+        the disk readiness resolver — the coordinator never touches disk itself."""
+        from data.track_modelling_coordinator import TrackModellingInputs
+        loc_id = getattr(self._tm_location_combo, "currentData", lambda: "")() or ""
+        lay_id = getattr(self._tm_layout_combo, "currentData", lambda: "")() or ""
+        identity_known = bool(loc_id and lay_id)
+
+        capturing = False
+        has_captured = False
+        ctrl = getattr(self, "_tm_controller", None)
+        if ctrl is not None:
+            try:
+                from data.track_calibration_runtime import CalibrationCaptureState
+                st = getattr(ctrl, "_state", None)
+                capturing = st == CalibrationCaptureState.RECORDING
+                has_captured = st in (
+                    CalibrationCaptureState.STOPPED, CalibrationCaptureState.BUILT)
+            except Exception:
+                pass
+        if getattr(self, "_tm_restored_session", None) is not None:
+            has_captured = True
+
+        has_station_map = getattr(self, "_tm_station_map", None) is not None
+        has_segments = getattr(self, "_tm_detection_result", None) is not None
+        review = getattr(self, "_tm_review_result", None)
+        review_complete = False
+        if review is not None:
+            review_complete = bool(
+                getattr(review, "is_ai_ready", False)
+                or getattr(review, "ai_ready", False))
+
+        model_active = False
+        validation_passed = False
+        if identity_known:
+            try:
+                from data.track_readiness_disk import resolve_track_readiness_from_disk
+                rr = resolve_track_readiness_from_disk(loc_id, lay_id)
+                model_active = bool(getattr(rr, "is_approved", False))
+                validation_passed = model_active
+            except Exception:
+                pass
+        align = getattr(self, "_tm_alignment_result", None)
+        if align is not None and not validation_passed:
+            validation_passed = bool(getattr(align, "accepted", False))
+
+        return TrackModellingInputs(
+            identity_known=identity_known,
+            capturing=capturing,
+            has_captured_laps=has_captured,
+            has_reference_path=has_station_map,
+            has_station_map=has_station_map,
+            has_segments=has_segments,
+            review_complete=review_complete,
+            validation_passed=validation_passed,
+            model_active=model_active,
+            building=bool(getattr(self, "_tm_building", False)),
+            error=bool(getattr(self, "_tm_error", False)),
+        )
+
+    def _tm_refresh_workflow(self) -> None:
+        """Sync the coordinator from current state and render the guided banner.
+
+        Never raises — the workflow banner is advisory and must not break the tab.
+        """
+        coord = getattr(self, "_tm_coordinator", None)
+        banner = getattr(self, "_tm_next_step_banner", None)
+        if coord is None:
+            return
+        try:
+            from data.track_modelling_coordinator import WorkflowStep
+            inputs = self._tm_build_coordinator_inputs()
+            coord.sync_from_inputs(inputs)
+            loc = getattr(self._tm_location_combo, "currentText", lambda: "")() or ""
+            lay = getattr(self._tm_layout_combo, "currentText", lambda: "")() or ""
+            ident = f"{loc} · {lay}".strip(" ·")
+            snap = coord.snapshot(identity_label=ident)
+            self._tm_snapshot = snap
+            if banner is not None:
+                step_num = list(WorkflowStep).index(snap.step) + 1
+                banner.setText(
+                    f"Step {step_num}/6 — {snap.step.value.title()}: "
+                    f"{snap.primary_next_step}")
+        except Exception:
+            pass
 
     def _tm_on_tab_shown(self) -> None:
         """Called when the Track Modelling tab is first shown or re-shown."""
@@ -938,6 +1046,7 @@ class TrackModellingMixin:
             self._tm_refresh_refinement_panel()
         except Exception:
             pass
+        self._tm_refresh_workflow()
         if self._tm_seed_result is not None:
             return  # already loaded
         try:
@@ -2676,6 +2785,11 @@ class TrackModellingMixin:
         if nxt is not None:
             has_station_map = getattr(self, "_tm_station_map", None) is not None
             nxt.setText(_format_next_step(self._tm_resolver_result, has_station_map))
+
+        # Keep the canonical workflow state machine + guided banner in sync with
+        # whatever the resolver just re-derived (auto-loads approved models to
+        # ACTIVE on selection).
+        self._tm_refresh_workflow()
 
     # ── Group 17M: lap offset calibration helpers ────────────────────────────
 
