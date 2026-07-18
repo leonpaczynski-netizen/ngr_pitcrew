@@ -130,10 +130,11 @@ class TestNoSchemaMigration:
         assert "_migrate_v14" in src
         # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
         # guard now protects against an unexpected _migrate_v16.
-        # Engineering-Brain Phase 1 legitimately added _migrate_v20
-        # (engineering-context spine); guard now protects against v21.
+        # Engineering-Brain Phase 1/2 legitimately added _migrate_v20/_migrate_v21
+        # (context spine + experiment ledger); guard now protects against v22.
         assert "_migrate_v20" in src
-        assert "_migrate_v21" not in src
+        assert "_migrate_v21" in src
+        assert "_migrate_v22" not in src
 
 
 class TestRuntimeAssetsUntouched:

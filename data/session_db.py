@@ -575,8 +575,168 @@ CREATE INDEX IF NOT EXISTS idx_eng_link_scope
     ON engineering_context_links (scope_fingerprint);
 """
 
+# Engineering-Brain Phase 2 — persisted setup experiments & recommendation
+# evidence ledger (schema v21). SIX additive standalone tables (touch no existing
+# table; CREATE IF NOT EXISTS ⇒ idempotent migration `_migrate_v21`):
+#   setup_experiments                     — the immutable creation record; every
+#                                           experiment references the Phase 1
+#                                           canonical context via scope_fingerprint.
+#                                           idempotency_key is UNIQUE (duplicate
+#                                           rendering/reopen never re-creates one).
+#   setup_experiment_changes              — append-only structured proposed deltas
+#                                           (source-of-truth, NOT rendered text).
+#   setup_experiment_protected_behaviours — confirmed-good behaviours to preserve.
+#   setup_experiment_test_protocol        — 1:1 deterministic test plan.
+#   setup_experiment_evidence             — append-only evidence ledger (references
+#                                           + structured summaries, never blobs).
+#   setup_experiment_state_history        — append-only lifecycle transitions.
+# Unknown numeric values are NULL (not placeholder strings). Core join fields
+# (scope/context fingerprint, parent setup, lineage, checkpoint, session, status,
+# created_at, idempotency_key) are first-class indexed columns.
+_DDL_V21 = """
+CREATE TABLE IF NOT EXISTS setup_experiments (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    schema_version          TEXT    NOT NULL DEFAULT '',
+    scope_fingerprint       TEXT    NOT NULL DEFAULT '',
+    context_fingerprint     TEXT    NOT NULL DEFAULT '',
+    context_schema_version  TEXT    NOT NULL DEFAULT '',
+    context_status          TEXT    NOT NULL DEFAULT '',
+    context_unresolved_json TEXT    NOT NULL DEFAULT '[]',
+    context_warnings_json   TEXT    NOT NULL DEFAULT '[]',
+    label                   TEXT    NOT NULL DEFAULT '',
+    recommendation_source   TEXT    NOT NULL DEFAULT '',
+    recommendation_status   TEXT    NOT NULL DEFAULT '',
+    rule_engine_version     TEXT    NOT NULL DEFAULT '',
+    driver_profile_version  TEXT    NOT NULL DEFAULT '',
+    parent_setup_id         TEXT    NOT NULL DEFAULT '',
+    proposed_setup_id       TEXT    NOT NULL DEFAULT '',
+    applied_checkpoint_id   TEXT    NOT NULL DEFAULT '',
+    lineage_id              TEXT    NOT NULL DEFAULT '',
+    session_id              TEXT,
+    run_id                  TEXT,
+    status                  TEXT    NOT NULL DEFAULT 'draft',
+    hypothesis_json         TEXT    NOT NULL DEFAULT '{}',
+    deferred_diagnoses_json TEXT    NOT NULL DEFAULT '[]',
+    rollback_target         TEXT    NOT NULL DEFAULT '',
+    applied_match_state     TEXT    NOT NULL DEFAULT '',
+    applied_comparison_json TEXT    NOT NULL DEFAULT '',
+    idempotency_key         TEXT    NOT NULL UNIQUE,
+    created_at              TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_scope
+    ON setup_experiments (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_context
+    ON setup_experiments (context_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_parent
+    ON setup_experiments (parent_setup_id);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_lineage
+    ON setup_experiments (lineage_id);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_checkpoint
+    ON setup_experiments (applied_checkpoint_id);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_session
+    ON setup_experiments (session_id);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_status
+    ON setup_experiments (status);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_created
+    ON setup_experiments (created_at);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_changes (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id             INTEGER NOT NULL,
+    field                     TEXT    NOT NULL DEFAULT '',
+    subsystem                 TEXT    NOT NULL DEFAULT '',
+    from_value                TEXT,
+    to_value                  TEXT,
+    delta_direction           TEXT    NOT NULL DEFAULT '',
+    delta_magnitude           REAL,
+    unit                      TEXT    NOT NULL DEFAULT '',
+    rationale                 TEXT    NOT NULL DEFAULT '',
+    expected_effect           TEXT    NOT NULL DEFAULT '',
+    side_effects              TEXT    NOT NULL DEFAULT '',
+    contraindications_checked TEXT    NOT NULL DEFAULT '',
+    role                      TEXT    NOT NULL DEFAULT '',
+    kind                      TEXT,
+    change_order              INTEGER NOT NULL DEFAULT 0,
+    rule_id                   TEXT    NOT NULL DEFAULT '',
+    source_label              TEXT    NOT NULL DEFAULT '',
+    symptom                   TEXT    NOT NULL DEFAULT '',
+    risk_level                TEXT    NOT NULL DEFAULT '',
+    confidence_level          TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_changes_exp
+    ON setup_experiment_changes (experiment_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_protected_behaviours (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id       INTEGER NOT NULL,
+    description         TEXT    NOT NULL DEFAULT '',
+    field               TEXT    NOT NULL DEFAULT '',
+    source_evidence     TEXT    NOT NULL DEFAULT '',
+    corners_json        TEXT    NOT NULL DEFAULT '[]',
+    baseline_confidence TEXT    NOT NULL DEFAULT '',
+    regression_threshold TEXT   NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_protected_exp
+    ON setup_experiment_protected_behaviours (experiment_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_test_protocol (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id         INTEGER NOT NULL,
+    min_clean_laps        INTEGER,
+    preferred_clean_laps  INTEGER,
+    warmup_exclusion_laps INTEGER,
+    tyre_compound         TEXT    NOT NULL DEFAULT '',
+    fuel_state            TEXT    NOT NULL DEFAULT '',
+    weather_assumption    TEXT    NOT NULL DEFAULT '',
+    target_corners_json   TEXT    NOT NULL DEFAULT '[]',
+    metrics_json          TEXT    NOT NULL DEFAULT '[]',
+    driver_questions_json TEXT    NOT NULL DEFAULT '[]',
+    success_criteria_json TEXT    NOT NULL DEFAULT '[]',
+    failure_criteria_json TEXT    NOT NULL DEFAULT '[]',
+    confounders_json      TEXT    NOT NULL DEFAULT '[]',
+    rollback_target       TEXT    NOT NULL DEFAULT '',
+    notes                 TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_protocol_exp
+    ON setup_experiment_test_protocol (experiment_id);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_evidence (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL,
+    evidence_type TEXT    NOT NULL DEFAULT '',
+    phase         TEXT    NOT NULL DEFAULT '',
+    source_table  TEXT    NOT NULL DEFAULT '',
+    source_id     TEXT    NOT NULL DEFAULT '',
+    summary       TEXT    NOT NULL DEFAULT '',
+    confidence    TEXT    NOT NULL DEFAULT '',
+    provenance    TEXT    NOT NULL DEFAULT '',
+    corner        TEXT    NOT NULL DEFAULT '',
+    lap           INTEGER,
+    session_id    TEXT,
+    run_id        TEXT,
+    stance        TEXT    NOT NULL DEFAULT 'neutral',
+    created_at    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_evidence_exp
+    ON setup_experiment_evidence (experiment_id);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_evidence_phase
+    ON setup_experiment_evidence (experiment_id, phase);
+
+CREATE TABLE IF NOT EXISTS setup_experiment_state_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL,
+    from_status   TEXT    NOT NULL DEFAULT '',
+    to_status     TEXT    NOT NULL DEFAULT '',
+    reason        TEXT    NOT NULL DEFAULT '',
+    source        TEXT    NOT NULL DEFAULT '',
+    created_at    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_setup_exp_state_exp
+    ON setup_experiment_state_history (experiment_id);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -690,6 +850,18 @@ class SessionDB:
             self._migrate_v20()
             self._conn.execute("PRAGMA user_version = 20")
             self._conn.commit()
+        if version < 21:
+            self._migrate_v21()
+            self._conn.execute("PRAGMA user_version = 21")
+            self._conn.commit()
+
+    def _migrate_v21(self) -> None:
+        """Engineering-Brain Phase 2 — persisted setup experiments & recommendation
+        evidence ledger (schema v21). Adds six standalone additive tables
+        (setup_experiments + changes/protected/test_protocol/evidence/state_history).
+        Touches no existing table and rewrites no historical data. CREATE IF NOT
+        EXISTS throughout ⇒ the migration is idempotent."""
+        self._conn.executescript(_DDL_V21)
 
     def _migrate_v20(self) -> None:
         """Engineering-Brain Phase 1 — canonical engineering identity spine
@@ -1348,6 +1520,513 @@ class SessionDB:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # Setup experiments & recommendation evidence ledger (Phase 2, v21)
+    # ------------------------------------------------------------------
+    def create_setup_experiment(self, exp) -> "int | None":
+        """Persist a SetupExperiment atomically + idempotently. Returns its id.
+
+        Idempotent by ``exp.idempotency_key`` (UNIQUE): if an experiment with the
+        same key already exists, its id is returned and NO duplicate is written.
+        Otherwise the parent row + all child rows (changes, protected behaviours,
+        test protocol, recommendation-time evidence) + the creation state-history
+        row are written in ONE transaction — a failed child write rolls back the
+        WHOLE experiment (never a partial record). Returns None on error or when
+        the experiment fails validation (e.g. not actionable / no scope)."""
+        import json as _json
+        try:
+            from strategy.setup_experiment import validate_experiment
+            v = validate_experiment(exp)
+            if not v.ok:
+                return None
+        except Exception:
+            return None
+        try:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                existing = self._conn.execute(
+                    "SELECT id FROM setup_experiments WHERE idempotency_key = ?",
+                    (exp.idempotency_key,)).fetchone()
+                if existing is not None:
+                    return int(existing[0])
+                try:
+                    self._conn.execute("BEGIN")
+                    cur = self._conn.execute(
+                        """INSERT INTO setup_experiments
+                           (schema_version, scope_fingerprint, context_fingerprint,
+                            context_schema_version, context_status,
+                            context_unresolved_json, context_warnings_json, label,
+                            recommendation_source, recommendation_status,
+                            rule_engine_version, driver_profile_version,
+                            parent_setup_id, proposed_setup_id, applied_checkpoint_id,
+                            lineage_id, session_id, run_id, status, hypothesis_json,
+                            deferred_diagnoses_json, rollback_target,
+                            idempotency_key, created_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (exp.schema_version, exp.scope_fingerprint,
+                         exp.context_fingerprint, exp.context_schema_version,
+                         exp.context_status,
+                         _json.dumps(list(exp.context_unresolved)),
+                         _json.dumps(list(exp.context_warnings)), exp.label,
+                         exp.recommendation_source, exp.recommendation_status,
+                         exp.rule_engine_version, exp.driver_profile_version,
+                         exp.parent_setup_id, exp.proposed_setup_id,
+                         exp.applied_checkpoint_id, str(exp.lineage_id or ""),
+                         exp.session_id, exp.run_id, exp.status.value,
+                         _json.dumps(exp.hypothesis.to_dict()),
+                         _json.dumps(list(exp.deferred_diagnoses)),
+                         exp.rollback_target, exp.idempotency_key, now))
+                    eid = int(cur.lastrowid)
+                    for c in exp.changes:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_changes
+                               (experiment_id, field, subsystem, from_value, to_value,
+                                delta_direction, delta_magnitude, unit, rationale,
+                                expected_effect, side_effects, contraindications_checked,
+                                role, kind, change_order, rule_id, source_label,
+                                symptom, risk_level, confidence_level)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (eid, c.field, c.subsystem, c.from_value, c.to_value,
+                             c.delta_direction, c.delta_magnitude, c.unit, c.rationale,
+                             c.expected_effect, c.side_effects,
+                             c.contraindications_checked, c.role.value,
+                             c.kind.value if c.kind else None, c.order, c.rule_id,
+                             c.source_label, c.symptom, c.risk_level, c.confidence_level))
+                    for p in exp.protected_behaviours:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_protected_behaviours
+                               (experiment_id, description, field, source_evidence,
+                                corners_json, baseline_confidence, regression_threshold)
+                               VALUES (?,?,?,?,?,?,?)""",
+                            (eid, p.description, p.field, p.source_evidence,
+                             _json.dumps(list(p.corners)), p.baseline_confidence,
+                             p.regression_threshold))
+                    tp = exp.test_protocol
+                    self._conn.execute(
+                        """INSERT INTO setup_experiment_test_protocol
+                           (experiment_id, min_clean_laps, preferred_clean_laps,
+                            warmup_exclusion_laps, tyre_compound, fuel_state,
+                            weather_assumption, target_corners_json, metrics_json,
+                            driver_questions_json, success_criteria_json,
+                            failure_criteria_json, confounders_json, rollback_target,
+                            notes)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (eid, tp.min_clean_laps, tp.preferred_clean_laps,
+                         tp.warmup_exclusion_laps, tp.tyre_compound, tp.fuel_state,
+                         tp.weather_assumption, _json.dumps(list(tp.target_corners)),
+                         _json.dumps(list(tp.metrics_to_observe)),
+                         _json.dumps(list(tp.driver_questions)),
+                         _json.dumps(list(tp.success_criteria)),
+                         _json.dumps(list(tp.failure_criteria)),
+                         _json.dumps(list(tp.confounders)), tp.rollback_target,
+                         tp.notes))
+                    for ev in exp.evidence:
+                        self._conn.execute(
+                            """INSERT INTO setup_experiment_evidence
+                               (experiment_id, evidence_type, phase, source_table,
+                                source_id, summary, confidence, provenance, corner,
+                                lap, session_id, run_id, stance, created_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (eid, ev.evidence_type, ev.phase.value, ev.source_table,
+                             ev.source_id, ev.summary, ev.confidence, ev.provenance,
+                             ev.corner, ev.lap, ev.session_id, ev.run_id,
+                             ev.stance.value, now))
+                    self._conn.execute(
+                        """INSERT INTO setup_experiment_state_history
+                           (experiment_id, from_status, to_status, reason, source,
+                            created_at)
+                           VALUES (?,?,?,?,?,?)""",
+                        (eid, "", exp.status.value, "experiment created",
+                         exp.recommendation_source, now))
+                    self._conn.execute("COMMIT")
+                    return eid
+                except Exception:
+                    try:
+                        self._conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    return None
+        except Exception:
+            return None
+
+    def _experiment_row(self, experiment_id: int) -> "dict | None":
+        row = self._conn.execute(
+            "SELECT * FROM setup_experiments WHERE id = ?",
+            (int(experiment_id),)).fetchone()
+        return dict(row) if row is not None else None
+
+    def get_setup_experiment(self, experiment_id: int) -> "dict | None":
+        """Return a full experiment (parent + changes + protected + protocol +
+        evidence + state history), or None."""
+        try:
+            with self._lock:
+                parent = self._experiment_row(experiment_id)
+                if parent is None:
+                    return None
+                eid = int(experiment_id)
+                parent["changes"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_changes WHERE experiment_id=? "
+                    "ORDER BY change_order ASC, id ASC", (eid,)).fetchall()]
+                parent["protected_behaviours"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_protected_behaviours "
+                    "WHERE experiment_id=? ORDER BY id ASC", (eid,)).fetchall()]
+                pr = self._conn.execute(
+                    "SELECT * FROM setup_experiment_test_protocol WHERE experiment_id=?",
+                    (eid,)).fetchone()
+                parent["test_protocol"] = dict(pr) if pr is not None else None
+                parent["evidence"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_evidence WHERE experiment_id=? "
+                    "ORDER BY id ASC", (eid,)).fetchall()]
+                parent["state_history"] = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM setup_experiment_state_history WHERE experiment_id=? "
+                    "ORDER BY id ASC", (eid,)).fetchall()]
+            return parent
+        except Exception:
+            return None
+
+    def get_setup_experiment_by_idempotency_key(self, key: str) -> "dict | None":
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM setup_experiments WHERE idempotency_key=?",
+                    (str(key),)).fetchone()
+            return self.get_setup_experiment(int(row[0])) if row is not None else None
+        except Exception:
+            return None
+
+    def _list_experiments_where(self, where: str, params: tuple) -> list[dict]:
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT * FROM setup_experiments WHERE {where} "
+                    "ORDER BY id DESC", params).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def list_setup_experiments_by_scope(self, scope_fingerprint: str) -> list[dict]:
+        return self._list_experiments_where(
+            "scope_fingerprint = ?", (str(scope_fingerprint),))
+
+    def list_setup_experiments_by_parent_setup(self, parent_setup_id: str) -> list[dict]:
+        return self._list_experiments_where(
+            "parent_setup_id = ?", (str(parent_setup_id),))
+
+    def list_setup_experiments_by_lineage(self, lineage_id) -> list[dict]:
+        return self._list_experiments_where("lineage_id = ?", (str(lineage_id or ""),))
+
+    def list_setup_experiments_by_checkpoint(self, checkpoint_id: str) -> list[dict]:
+        return self._list_experiments_where(
+            "applied_checkpoint_id = ?", (str(checkpoint_id),))
+
+    def list_setup_experiments_by_session(self, session_id) -> list[dict]:
+        return self._list_experiments_where("session_id = ?", (str(session_id or ""),))
+
+    def get_experiment_state_history(self, experiment_id: int) -> list[dict]:
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM setup_experiment_state_history WHERE experiment_id=? "
+                    "ORDER BY id ASC", (int(experiment_id),)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def get_experiment_evidence(self, experiment_id: int,
+                                phase: str = "") -> list[dict]:
+        try:
+            with self._lock:
+                if phase:
+                    rows = self._conn.execute(
+                        "SELECT * FROM setup_experiment_evidence WHERE experiment_id=? "
+                        "AND phase=? ORDER BY id ASC",
+                        (int(experiment_id), str(phase))).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT * FROM setup_experiment_evidence WHERE experiment_id=? "
+                        "ORDER BY id ASC", (int(experiment_id),)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def append_experiment_evidence(self, experiment_id: int, evidence) -> "int | None":
+        """Append ONE evidence record (append-only ledger). ``evidence`` is an
+        ExperimentEvidence (duck-typed). Returns the new row id, or None."""
+        try:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                if self._experiment_row(experiment_id) is None:
+                    return None
+                phase = getattr(evidence.phase, "value", evidence.phase)
+                stance = getattr(evidence.stance, "value", evidence.stance)
+                cur = self._conn.execute(
+                    """INSERT INTO setup_experiment_evidence
+                       (experiment_id, evidence_type, phase, source_table, source_id,
+                        summary, confidence, provenance, corner, lap, session_id,
+                        run_id, stance, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (int(experiment_id), evidence.evidence_type, str(phase),
+                     evidence.source_table, evidence.source_id, evidence.summary,
+                     evidence.confidence, evidence.provenance, evidence.corner,
+                     evidence.lap, evidence.session_id, evidence.run_id,
+                     str(stance), now))
+                self._conn.commit()
+                return int(cur.lastrowid)
+        except Exception:
+            return None
+
+    def _experiment_gate_state(self, experiment_id: int) -> dict:
+        """Compute the honest transition-gate predicates from stored DB state
+        (callers cannot fake them). Assumes the lock is already held."""
+        eid = int(experiment_id)
+        row = self._experiment_row(eid)
+        if row is None:
+            return {}
+        n_changes = self._conn.execute(
+            "SELECT COUNT(*) FROM setup_experiment_changes WHERE experiment_id=? "
+            "AND role IN ('primary','supporting')", (eid,)).fetchone()[0]
+        n_test = self._conn.execute(
+            "SELECT COUNT(*) FROM setup_experiment_evidence WHERE experiment_id=? "
+            "AND phase IN ('test','driver_review')", (eid,)).fetchone()[0]
+        return {
+            "status": row.get("status", ""),
+            "has_actionable_changes": n_changes > 0,
+            "has_applied_checkpoint": bool(row.get("applied_checkpoint_id")),
+            "has_test_evidence": n_test > 0,
+            "has_outcome_record": False,   # Phase 3 outcome table does not exist yet
+        }
+
+    def transition_experiment_state(
+        self, experiment_id: int, to_status: str, *, reason: str = "",
+        source: str = "admin",
+    ) -> bool:
+        """Validate + apply a deterministic lifecycle transition, appending a
+        state-history row. Gate predicates are computed from stored DB state, so
+        an APPLIED/READY_FOR_REVIEW/COMPLETED transition cannot be faked. Returns
+        True on success, False if the transition is not permitted."""
+        try:
+            from strategy.setup_experiment import (
+                ExperimentStatus, validate_transition)
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                gate = self._experiment_gate_state(experiment_id)
+                if not gate:
+                    return False
+                try:
+                    frm = ExperimentStatus(gate["status"])
+                    to = ExperimentStatus(str(to_status))
+                except ValueError:
+                    return False
+                chk = validate_transition(
+                    frm, to,
+                    has_actionable_changes=gate["has_actionable_changes"],
+                    has_applied_checkpoint=gate["has_applied_checkpoint"],
+                    has_test_evidence=gate["has_test_evidence"],
+                    has_outcome_record=gate["has_outcome_record"])
+                if not chk.ok:
+                    return False
+                self._conn.execute(
+                    "UPDATE setup_experiments SET status=? WHERE id=?",
+                    (to.value, int(experiment_id)))
+                self._conn.execute(
+                    """INSERT INTO setup_experiment_state_history
+                       (experiment_id, from_status, to_status, reason, source, created_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    (int(experiment_id), frm.value, to.value,
+                     reason or chk.reason, source, now))
+                self._conn.commit()
+                return True
+        except Exception:
+            return False
+
+    def find_applyable_experiment_for_scope(
+        self, scope_fingerprint: str, parent_setup_id: str = "",
+    ) -> "dict | None":
+        """Return the most-recent experiment for a scope that is awaiting apply
+        (DRAFT or READY_FOR_APPLY), optionally constrained to a parent setup, or
+        None. Used by the Apply boundary to find which experiment to link."""
+        try:
+            with self._lock:
+                if parent_setup_id:
+                    row = self._conn.execute(
+                        """SELECT * FROM setup_experiments
+                           WHERE scope_fingerprint=? AND parent_setup_id=?
+                             AND status IN ('draft','ready_for_apply')
+                           ORDER BY id DESC LIMIT 1""",
+                        (str(scope_fingerprint), str(parent_setup_id))).fetchone()
+                else:
+                    row = self._conn.execute(
+                        """SELECT * FROM setup_experiments
+                           WHERE scope_fingerprint=?
+                             AND status IN ('draft','ready_for_apply')
+                           ORDER BY id DESC LIMIT 1""",
+                        (str(scope_fingerprint),)).fetchone()
+            return dict(row) if row is not None else None
+        except Exception:
+            return None
+
+    def _experiment_proposed_values(self, experiment_id: int) -> dict:
+        """{field: to_value} for the actionable changes. Assumes lock held."""
+        rows = self._conn.execute(
+            "SELECT field, to_value FROM setup_experiment_changes "
+            "WHERE experiment_id=? AND role IN ('primary','supporting')",
+            (int(experiment_id),)).fetchall()
+        return {r[0]: r[1] for r in rows if r[1] is not None}
+
+    def link_experiment_applied_checkpoint(
+        self, experiment_id: int, checkpoint_id: str, applied_fields: dict, *,
+        reason: str = "confirmed applied in GT7", source: str = "apply",
+    ) -> "dict | None":
+        """Link an applied-setup checkpoint to an experiment and transition it to
+        APPLIED. Computes the deterministic proposed-vs-applied comparison and
+        stores it (applied_match_state + comparison JSON) WITHOUT altering the
+        original recommendation. Idempotent: re-linking the SAME checkpoint_id is a
+        no-op that returns the stored comparison. Returns a dict with the match
+        state + comparison, or None on error / invalid transition."""
+        import json as _json
+        try:
+            from strategy.setup_experiment import compare_proposed_vs_applied
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                row = self._experiment_row(experiment_id)
+                if row is None:
+                    return None
+                # Idempotency: same checkpoint already linked → return stored result.
+                if (row.get("applied_checkpoint_id") == str(checkpoint_id)
+                        and row.get("applied_match_state")):
+                    try:
+                        cmp = _json.loads(row.get("applied_comparison_json") or "{}")
+                    except Exception:
+                        cmp = {}
+                    return {"match_state": row.get("applied_match_state"),
+                            "comparison": cmp, "already_linked": True}
+                proposed = self._experiment_proposed_values(experiment_id)
+                comparison = compare_proposed_vs_applied(proposed, applied_fields or {})
+                gate = self._experiment_gate_state(experiment_id)
+                # Only DRAFT / READY_FOR_APPLY may transition to APPLIED.
+                if gate.get("status") not in ("draft", "ready_for_apply"):
+                    # Still record the checkpoint + comparison for provenance, but
+                    # do not force an illegal state change.
+                    self._conn.execute(
+                        "UPDATE setup_experiments SET applied_checkpoint_id=?, "
+                        "applied_match_state=?, applied_comparison_json=? WHERE id=?",
+                        (str(checkpoint_id), comparison.state.value,
+                         _json.dumps(comparison.to_dict()), int(experiment_id)))
+                    self._conn.commit()
+                    return {"match_state": comparison.state.value,
+                            "comparison": comparison.to_dict(),
+                            "state_changed": False}
+                try:
+                    self._conn.execute("BEGIN")
+                    self._conn.execute(
+                        "UPDATE setup_experiments SET applied_checkpoint_id=?, "
+                        "status='applied', applied_match_state=?, "
+                        "applied_comparison_json=? WHERE id=?",
+                        (str(checkpoint_id), comparison.state.value,
+                         _json.dumps(comparison.to_dict()), int(experiment_id)))
+                    self._conn.execute(
+                        """INSERT INTO setup_experiment_state_history
+                           (experiment_id, from_status, to_status, reason, source,
+                            created_at)
+                           VALUES (?,?,?,?,?,?)""",
+                        (int(experiment_id), gate.get("status", ""), "applied",
+                         reason, source, now))
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    try:
+                        self._conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    return None
+                return {"match_state": comparison.state.value,
+                        "comparison": comparison.to_dict(), "state_changed": True}
+        except Exception:
+            return None
+
+    def invalidate_setup_experiment(self, experiment_id: int, reason: str) -> bool:
+        """Administratively invalidate an experiment (append-only; never mutates
+        the original hypothesis/changes/evidence)."""
+        return self.transition_experiment_state(
+            experiment_id, "invalid", reason=reason or "invalidated", source="admin")
+
+    def cancel_setup_experiment(self, experiment_id: int, reason: str) -> bool:
+        """Administratively cancel an experiment before completion."""
+        return self.transition_experiment_state(
+            experiment_id, "cancelled", reason=reason or "cancelled", source="admin")
+
+    def record_recommendation_experiment(
+        self, data: dict, *, recommendation_source: str = "analyse",
+        car_id=None, track: str = "", layout_id: str = "", discipline: str = "",
+        parent_setup_id: str = "", proposed_setup_id: str = "", lineage_id="",
+        session_id=None, driver_id=None, gt7_version=None, event_id=None,
+        config_id: str = "", label: str = "",
+    ) -> "int | None":
+        """Orchestration seam for the Setup Builder Analyse path: build a
+        SetupExperiment from a parsed recommendation ``data`` dict (source-of-truth
+        JSON, NOT rendered HTML) and persist it idempotently.
+
+        Returns the experiment id (existing or new — duplicate rendering/reopen
+        does not create a second experiment), or None when the recommendation is
+        NOT a valid actionable experiment (blocked/empty/evidence-required). The
+        experiment references the Phase 1 canonical scope_fingerprint. Best-effort;
+        never raises outward."""
+        try:
+            from strategy.setup_experiment import build_experiment_from_recommendation
+            exp = build_experiment_from_recommendation(
+                data, recommendation_source=recommendation_source, car_id=car_id,
+                track=track, layout_id=layout_id, discipline=discipline,
+                driver_id=driver_id, gt7_version=gt7_version, event_id=event_id,
+                config_id=config_id, parent_setup_id=parent_setup_id,
+                proposed_setup_id=proposed_setup_id, lineage_id=lineage_id,
+                session_id=session_id, label=label)
+            if exp is None:
+                return None
+            return self.create_setup_experiment(exp)
+        except Exception:
+            return None
+
+    def link_apply_to_experiment(
+        self, *, car_id=None, track: str = "", layout_id: str = "",
+        discipline: str = "", driver_id=None, gt7_version=None,
+        parent_setup_id: str = "", checkpoint_id: str = "",
+        applied_fields: dict = None,
+    ) -> "dict | None":
+        """Orchestration seam for the Apply-in-GT7 path: resolve the Phase 1
+        scope_fingerprint from the same identity inputs used at analyse time, find
+        the experiment for that scope awaiting apply, and link the applied
+        checkpoint (transition → APPLIED + proposed-vs-applied comparison).
+
+        Returns the comparison dict (with the linked experiment id), or None when
+        there is no applyable experiment for the scope. Best-effort; never raises."""
+        try:
+            from data.engineering_context_key import build_engineering_context
+            res = build_engineering_context(
+                car_id=car_id, free_text_track=track, layout_id=layout_id,
+                discipline=discipline, driver_id=driver_id, gt7_version=gt7_version)
+            scope_fp = res.scope_fingerprint
+            exp = self.find_applyable_experiment_for_scope(scope_fp, parent_setup_id)
+            if exp is None and parent_setup_id:
+                # Fall back to any applyable experiment in the scope (the parent
+                # label may differ from the recommendation's parent).
+                exp = self.find_applyable_experiment_for_scope(scope_fp, "")
+            if exp is None:
+                # Idempotency: a duplicate Apply of the SAME checkpoint finds the
+                # already-applied experiment (no longer DRAFT/READY) by checkpoint.
+                for row in self.list_setup_experiments_by_checkpoint(str(checkpoint_id)):
+                    if row.get("scope_fingerprint") == scope_fp:
+                        exp = row
+                        break
+            if exp is None:
+                return None
+            result = self.link_experiment_applied_checkpoint(
+                int(exp["id"]), str(checkpoint_id), applied_fields or {})
+            if isinstance(result, dict):
+                result = dict(result)
+                result["experiment_id"] = int(exp["id"])
+            return result
+        except Exception:
+            return None
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

@@ -28,8 +28,11 @@ def db():
 
 # ------------------------------------------------------------------ 10 migration
 def test_user_version_is_20(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 20
-    assert DB_VERSION == 20
+    # Phase 1 shipped the v20 context tables; Phase 2 legitimately advanced the
+    # schema to v21 (setup-experiment ledger). The context tables still exist and
+    # the live schema version follows DB_VERSION.
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 20
 
 
 def test_engineering_tables_and_indexes_exist(db):
@@ -49,7 +52,7 @@ def test_migration_is_idempotent(tmp_path):
     a._conn.close()
     # Re-open the SAME file: migrations must be a no-op, no error, version stable.
     b = SessionDB(p)
-    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == 20
+    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     # Data survived and no duplicate context rows appeared.
     n = b._conn.execute("SELECT COUNT(*) FROM engineering_context").fetchone()[0]
     assert n == 1

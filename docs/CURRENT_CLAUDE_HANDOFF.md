@@ -1,6 +1,46 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 1: Canonical Engineering Context & Identity Bridge — COMPLETE
+## Current Objective (2026-07-18) — Engineering Brain Phase 2: Persisted Setup Experiments & Recommendation Evidence Ledger — COMPLETE
+
+**Branch `eng-brain-phase2-setup-experiments` from `master` @ `3d7c6af` — committed, NOT pushed / no PR.** Phase 1 was fast-forwarded onto `master` first (per the user's decision), so `master` now carries the canonical-context spine; Phase 2 branches from it. Durable evidence ledger only — NO before/after outcome scoring, no auto-judgement, no physics, no new setup rules, no strategy maths, no auto-apply/pit, no UI redesign (those are Phase 3+).
+
+**Verified starting state:** `master` @ `3d7c6af` (Phase 1 merged via fast-forward); `DB_VERSION` was 20, `RULE_ENGINE_VERSION` 46.0; Phase 1 context tables + APIs present; golden `config_id` vector + frozen fan-out allowlist intact.
+
+**Schema/version change:** `user_version` **20 → 21**; `DB_VERSION` 20 → 21 (`strategy/_setup_constants.py`). `RULE_ENGINE_VERSION` unchanged.
+
+**Files changed:**
+- NEW `strategy/setup_experiment.py` — pure domain (Qt/DB/UI/network/AI-free; imports ONLY the pure Phase 1 `data/engineering_context_key.py` to OBTAIN — never recompute — the context fingerprints). `SetupExperiment` aggregate + `ExperimentChange`/`ProtectedBehaviour`/`TestProtocol`/`ExperimentEvidence`/`ExperimentHypothesis`/`StateTransition`; enums `ExperimentStatus` (DRAFT/READY_FOR_APPLY/APPLIED/TEST_IN_PROGRESS/READY_FOR_REVIEW/COMPLETED/REJECTED/REVERTED/CANCELLED/INVALID), `ChangeRole`, `ChangeKind`, `EvidencePhase` (BASELINE/DIAGNOSIS/RECOMMENDATION/APPLY_VERIFICATION/TEST/DRIVER_REVIEW/OUTCOME), `EvidenceStance`, `HandlingPhase`, `AppliedMatchState`. `VALID_TRANSITIONS` + `validate_transition` (honesty gates), `compare_proposed_vs_applied`, `compute_idempotency_key` (timestamp-free, change-order stable), `build_experiment_from_recommendation` (parsed `_data` dict → DRAFT or None), `recommendation_evidence_from_data`.
+- MOD `data/session_db.py` — `_DDL_V21` (six standalone tables + indexes), `_migrate_v21` + hook. Repository methods: `create_setup_experiment` (atomic BEGIN/COMMIT, full ROLLBACK on child failure, idempotent by UNIQUE `idempotency_key`), `get_setup_experiment`, `list_setup_experiments_by_{scope,parent_setup,lineage,checkpoint,session}`, `append_experiment_evidence` (append-only), `transition_experiment_state` (gate predicates read from DB state — cannot be faked), `get_experiment_state_history`, `get_experiment_evidence`, `find_applyable_experiment_for_scope`, `link_experiment_applied_checkpoint` (→ APPLIED + comparison; idempotent per checkpoint), `invalidate_setup_experiment`, `cancel_setup_experiment`, and orchestration seams `record_recommendation_experiment` / `link_apply_to_experiment`.
+- MOD `strategy/_setup_constants.py` — `DB_VERSION` 20 → 21.
+- MOD `ui/setup_builder_ui.py` — Analyse seam in `_display_setup_result` (create experiment for `entry_type=='analyse_setup'` + `_status_approved`, best-effort, gate unchanged); Apply seam in `_on_changes_applied_in_game` (link checkpoint after `save_applied_checkpoint`).
+- NEW `tests/test_setup_experiment_{domain,persistence,integration}.py` (80). MOD version guards: `test_session_db` (→21), `test_engineering_context_bridge` (→ `DB_VERSION`), `test_group55–60_safety_guards` + `test_group61_safety_invariants` (migration ceiling → v22).
+- NEW `docs/ENGINEERING_BRAIN_PHASE2_SETUP_EXPERIMENTS.md`; MOD `docs/PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Ownership:** `strategy/setup_experiment.py::SetupExperiment` owns experiment identity + lifecycle; every experiment references the Phase 1 `scope_fingerprint` (obtained via the Phase 1 API, never recomputed). No competing context/setup/event system.
+
+**Lifecycle:** DRAFT → READY_FOR_APPLY → APPLIED → TEST_IN_PROGRESS → READY_FOR_REVIEW → (COMPLETED | REJECTED) / REVERTED / CANCELLED / INVALID. Deterministic + validated; no automatic progression. COMPLETED needs a Phase-3 outcome record — **unreachable in production until Phase 3** (honest dependency).
+
+**Immutable / append-only:** hypothesis, changes, evidence snapshot, test protocol, protected behaviours, rollback target frozen at creation; evidence ledger + state history append-only; corrections via amendment / superseding / admin INVALID/CANCELLED with reason.
+
+**Idempotency:** `compute_idempotency_key` = versioned sha256 over {schema, scope_fingerprint, parent_setup_id, source, rule_engine_version, rec_status, ordered (field,to_value)}. Never a timestamp; stable under change reorder. UNIQUE column ⇒ re-render/reopen never duplicates.
+
+**Apply linkage & comparison:** `link_apply_to_experiment` resolves the same Phase 1 scope, finds the experiment awaiting apply (or the already-applied one by checkpoint for idempotency), transitions → APPLIED and stores `applied_match_state` + `applied_comparison_json` (MATCH/PARTIAL_MATCH/MISMATCH/UNVERIFIABLE). Never auto-applies; never alters the original recommendation; rollback target unchanged.
+
+**Baseline decision:** baseline Build (`entry_type=='baseline_setup'`) creates NO experiment — a from-scratch full-field baseline is a setup ARTEFACT, not a controlled reversible test of a hypothesis against a parent setup.
+
+**Tests run / results:** new suites **80 passed** (domain 44, persistence 16, integration 20). Regression (chunked per the documented Win/Py3.14 PyQt teardown segfault): non-UI **7630 passed, 27 skipped, 0 failed**; UI files individually green (see below). Golden `config_id` vectors + frozen fan-out allowlist + Apply-gate predicate assert green. **0 new failures.**
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json` retain pre-existing UAT diffs; tests used `:memory:`/tmp DBs only; no `config.json` write.
+
+**Known limitations:** COMPLETED unreachable until Phase 3 (no outcome table); TEST/DRIVER_REVIEW/OUTCOME evidence is structured for but not yet auto-attached (Phase 3); UI surfaces the experiment id/state minimally (no dense new panel); baseline Build intentionally not tracked.
+
+**GO/NO-GO: GO.** Safety spine intact (offline, deterministic, no AI, no auto-apply/pit; Apply gate + golden vector + frozen allowlist unchanged).
+
+**Recommended next group:** Engineering Brain Phase 3 — Closed-Loop Setup Outcome Evaluation, Regression Detection & Failed-Direction Learning (add an outcome table; attach TEST/OUTCOME evidence; before/after per-corner deltas keyed on `scope_fingerprint`; judge vs persisted success/failure criteria + protected behaviours; drive READY_FOR_REVIEW → COMPLETED/REJECTED; confirmed regressions → failed-direction lockouts). Do NOT start Phase 3 in this task.
+
+---
+
+## Prior Objective (2026-07-18) — Engineering Brain Phase 1: Canonical Engineering Context & Identity Bridge — COMPLETE
 
 **Branch `eng-brain-phase1-canonical-context` from `master` @ `c611d79` — committed, NOT pushed / no PR.** Architecture + data-foundation group: one deterministic, evidence-honest identity spine future recommendations, applied setups, telemetry sessions, driver feedback, per-corner evidence, experiments and outcomes can share. No physics, no new setup rules, no UI redesign, no auto-apply, no auto-pit, no experiment/outcome loop.
 

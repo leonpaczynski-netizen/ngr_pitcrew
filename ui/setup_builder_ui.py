@@ -1349,6 +1349,17 @@ class SetupBuilderMixin:
                              confirmed_at=confirmed_at)
         if self._db is not None:
             self._db.save_applied_checkpoint(car_id, track, layout_id, purpose, cp)
+            # Engineering-Brain Phase 2: link this applied checkpoint to the
+            # experiment awaiting apply for this scope (→ APPLIED + proposed-vs-
+            # applied comparison). Does NOT auto-apply and NEVER alters the
+            # original recommendation. Best-effort; never blocks the UI action.
+            try:
+                self._last_apply_match = self._db.link_apply_to_experiment(
+                    car_id=car_id, track=track, layout_id=layout_id,
+                    discipline=purpose, parent_setup_id=setup_id,
+                    checkpoint_id=cp.checkpoint_id, applied_fields=dict(fields))
+            except Exception:
+                self._last_apply_match = None
 
         # UAT Finding 1: make this the canonical active setup for the Live Race
         # Engineer. Persist the COMPLETE setup snapshot (not just the tuning
@@ -2637,6 +2648,28 @@ class SetupBuilderMixin:
         from data.setup_history import is_legacy_unknown as _is_legacy_unknown, LEGACY_UNKNOWN as _LEGACY_UNKNOWN
         _is_legacy: bool = _is_legacy_unknown(_rec_status)  # True for "", None, unrecognised
         _status_approved: bool = (not _is_legacy) and (_rec_status in _APPROVED_STATUSES)
+
+        # Engineering-Brain Phase 2: persist a controlled setup EXPERIMENT for a
+        # valid actionable Analyse recommendation (source-of-truth `data` dict, not
+        # rendered HTML). Idempotent — re-rendering/reopening never duplicates it.
+        # Baseline Build (entry_type == "baseline_setup") is deliberately EXCLUDED:
+        # a from-scratch full-field baseline is a setup ARTEFACT, not a reversible
+        # test of a hypothesis against a parent setup. Best-effort; never blocks UI.
+        self._last_experiment_id = getattr(self, "_last_experiment_id", None)
+        _exp_db = getattr(self, "_db", None)
+        if _status_approved and entry_type == "analyse_setup" and _exp_db is not None:
+            try:
+                _exp_form = _form or getattr(self, "_race_form", None)
+                if _exp_form is not None:
+                    _cid, _trk, _lay, _purpose, _psid = \
+                        self._apply_checkpoint_scope(_exp_form)
+                    self._last_experiment_id = _exp_db.record_recommendation_experiment(
+                        data, recommendation_source="analyse", car_id=_cid,
+                        track=_trk, layout_id=_lay, discipline=_purpose,
+                        parent_setup_id=_psid,
+                        label=f"{_purpose} setup experiment")
+            except Exception:
+                self._last_experiment_id = None
 
         # Build status banner (replaces old eng_banner + validation_banner logic).
         # For known non-approved statuses (validation_failed, blocked_no_safe_recommendation,

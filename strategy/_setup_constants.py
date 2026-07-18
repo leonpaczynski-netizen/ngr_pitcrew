@@ -114,7 +114,7 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     (cross-lap persistence per-episode store).
 # v19 (Determinism Sprint 10 UI): additive applied_setup_checkpoints table
 #     (saved-vs-applied-in-GT7 three-state; "Changes Applied in Game" button).
-DB_VERSION: int = 20
+DB_VERSION: int = 21
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
