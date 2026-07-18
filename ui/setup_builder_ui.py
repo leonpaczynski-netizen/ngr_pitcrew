@@ -1575,6 +1575,34 @@ class SetupBuilderMixin:
             parts.append("No safe next experiment: "
                          + str(nxt["no_selection_reason"]).replace("_", " ")
                          + " (current setup should be retained / more evidence needed).")
+        # Phase 6: current engineering state + multi-symptom development plan.
+        plan_wrap = res.get("engineering_plan") or {}
+        if plan_wrap.get("ok"):
+            snap = plan_wrap.get("snapshot") or {}
+            plan = plan_wrap.get("plan") or {}
+            parts.append(
+                "Engineering state: "
+                f"{len(snap.get('resolved') or [])} resolved, "
+                f"{len(snap.get('improved') or [])} improved, "
+                f"{len(snap.get('unchanged') or [])} unchanged, "
+                f"{len(snap.get('worsened') or [])} worsened, "
+                f"{len(snap.get('new_issues') or [])} new, "
+                f"{len(snap.get('damaged_good') or [])} damaged-good.")
+            imm = plan.get("immediate_experiment")
+            if imm:
+                parts.append(
+                    f"Development plan: 1 immediate experiment ({imm.get('field')} "
+                    f"{imm.get('direction')}), {len(plan.get('queued') or [])} queued "
+                    "hypothesis(es). One change at a time — apply manually.")
+            else:
+                parts.append(
+                    "Development plan: "
+                    + str(plan.get("status", "")).replace("_", " ")
+                    + " — no immediate setup change; "
+                    + f"{len(plan.get('deferred_issues') or [])} review/evidence task(s).")
+            if plan.get("conflicts"):
+                parts.append(f"{len(plan['conflicts'])} candidate conflict(s) flagged.")
+            parts.append("Plan is advisory — setup values are not applied automatically.")
         lbl.setText(" ".join(p for p in parts if p))
 
     def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:

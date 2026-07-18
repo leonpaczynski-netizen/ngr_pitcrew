@@ -3399,7 +3399,131 @@ class SessionDB:
             target_corners=target_corners, recurrence_class=recurrence,
             valid_lap_count=int(review.get("valid_laps") or 0),
             current_setup=current_setup, decision_blocks=decision_blocks)
+        # Phase 6: full residual snapshot + multi-symptom development plan.
+        review["engineering_plan"] = self.build_engineering_plan(
+            int(experiment_id), association_status=str(review.get("association") or "resolved"),
+            decision_state=str((review.get("next_experiment") or {}).get("decision_state") or ""),
+            current_setup=current_setup)
         return review
+
+    def build_engineering_plan(
+        self, experiment_id: int, *, association_status: str = "resolved",
+        decision_state: str = "", current_setup=None,
+    ) -> dict:
+        """Phase 6 orchestrator: build the current engineering-state snapshot +
+        multi-symptom development plan from the persisted Phase-3 outcome, Phase-4
+        evidence and Phase-5 working windows/candidates. Deterministic + regenerable
+        (NO persistence — the plan is a pure function of persisted state). Read-only:
+        selects at most ONE immediate experiment (via Phase 5) and queues the rest.
+        Never raises."""
+        try:
+            from strategy.engineering_state import build_engineering_state, ValidLapSummary
+            from strategy.experiment_planning import (
+                prioritise_issues, build_development_plan, ActionKind)
+            from strategy.setup_decision_status import resolve_setup_decision
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase6 import failed: {exc}"}
+        exp, scope = self._experiment_context_scope(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "reason": "experiment not found"}
+        outcome = self.get_latest_experiment_outcome(int(experiment_id))
+        if outcome is None:
+            return {"ok": False, "reason": "no persisted outcome"}
+        scope_fp = str(exp.get("scope_fingerprint") or "")
+        discipline = str((scope or {}).get("discipline") or "")
+        exp_status = str(exp.get("status") or "")
+        outcome_status = str(outcome.get("status") or "")
+        # canonical decision state (Phase 4 authority)
+        try:
+            dstate = decision_state or resolve_setup_decision(
+                experiment_status=exp_status, outcome_status=outcome_status).state.value
+        except Exception:
+            dstate = decision_state
+        decision_blocks = outcome_status in ("insufficient_evidence", "confounded") \
+            or str(association_status or "resolved") != "resolved"
+        # valid-lap summary from the outcome validity
+        import json as _json
+        try:
+            validity = _json.loads(outcome.get("validity_json") or "{}")
+        except Exception:
+            validity = {}
+        try:
+            whole = _json.loads(outcome.get("whole_lap_json") or "{}")
+        except Exception:
+            whole = {}
+        vls = ValidLapSummary(
+            valid_lap_count=int(validity.get("valid_laps") or 0),
+            rejected_lap_count=int(validity.get("rejected_laps") or 0),
+            median_lap_ms=int(whole.get("test_median_ms") or 0),
+            rejection_distribution={r: 1 for r in validity.get("rejection_reasons") or []})
+        # working-window fields for this scope
+        ww_fields = []
+        try:
+            ww_fields = [str(w.get("field") or "")
+                         for w in self.list_working_windows(scope_fp) if w.get("field")]
+        except Exception:
+            ww_fields = []
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        snapshot = build_engineering_state(
+            outcome=outcome, scope_fingerprint=scope_fp,
+            car=str((scope or {}).get("car") or ""),
+            track=str((scope or {}).get("track") or ""),
+            layout_id=str((scope or {}).get("layout_id") or ""), discipline=discipline,
+            applied_checkpoint_id=str(exp.get("applied_checkpoint_id") or ""),
+            experiment_id=str(experiment_id), association_status=association_status,
+            decision_state=dstate, valid_laps=vls, working_window_fields=ww_fields,
+            generated_at=now)
+        prioritised = prioritise_issues(snapshot.residual_issues,
+                                        decision_blocks=decision_blocks)
+
+        cur = dict(current_setup or {})
+        if not cur:
+            try:
+                cprow = self.get_latest_applied_checkpoint(
+                    int((scope or {}).get("car_id") or 0), (scope or {}).get("track", ""),
+                    (scope or {}).get("layout_id", ""), discipline)
+                if cprow and cprow.get("fields_json"):
+                    raw = _json.loads(cprow["fields_json"]) or {}
+                    cur = {k: (v[0] if isinstance(v, list) and v else v)
+                           for k, v in raw.items()}
+            except Exception:
+                cur = {}
+
+        # setup-actionable issues in priority order
+        setup_issues = [p for p in prioritised if p.actionable_as_setup]
+        issue_by_key = {ri.key: ri for ri in snapshot.residual_issues}
+        immediate_selection = None
+        queued_candidates = []
+        valid_laps = int(validity.get("valid_laps") or 0)
+        for idx, p in enumerate(setup_issues):
+            ri = issue_by_key.get(p.issue_key)
+            if ri is None:
+                continue
+            corners = tuple(c for c in (ri.identity.corner_name,
+                                        ri.identity.segment_id) if c)
+            rc = ("recurring" if ri.test_class in ("recurring", "strongly_recurring")
+                  else ("strongly_recurring" if ri.residual_state.value == "new"
+                        and ri.test_affected >= 3 else "recurring"))
+            sel = self.select_next_experiment(
+                int(experiment_id), dominant_issue=ri.identity.issue_type,
+                target_phase=ri.identity.phase, target_corners=corners,
+                recurrence_class=rc, valid_lap_count=valid_laps,
+                current_setup=cur, decision_blocks=decision_blocks)
+            if idx == 0 and sel.get("selected"):
+                immediate_selection = sel
+            elif sel.get("selected"):
+                cand = dict(sel["selected"])
+                cand["_issue_key"] = p.issue_key
+                queued_candidates.append(cand)
+            if len(queued_candidates) >= 3:
+                break
+
+        plan = build_development_plan(
+            snapshot, prioritised, immediate_selection=immediate_selection,
+            queued_candidates=queued_candidates,
+            rollback_target=str(exp.get("rollback_target") or ""),
+            generated_at=now, decision_blocks=decision_blocks)
+        return {"ok": True, "snapshot": snapshot.to_dict(), "plan": plan.to_dict()}
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

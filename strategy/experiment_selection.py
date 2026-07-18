@@ -66,16 +66,22 @@ class NoSelectionReason(str, Enum):
 _SYMPTOM_AXIS: dict = {
     "mid_corner_understeer": ("apex_front_support", +1),
     "front_push": ("apex_front_support", +1),
+    "understeer": ("apex_front_support", +1),          # bare corner-evidence issue type
     "entry_understeer": ("entry_rotation", +1),
     "rear_loose_on_exit": ("power_oversteer_resistance", +1),
     "power_oversteer": ("power_oversteer_resistance", +1),
+    "oversteer": ("power_oversteer_resistance", +1),
+    "snap_oversteer": ("power_oversteer_resistance", +1),
     "exit_wheelspin": ("exit_traction", +1),
+    "wheelspin": ("exit_traction", +1),                # bare corner-evidence issue type
+    "rear_wheelspin": ("exit_traction", +1),
     "poor_traction": ("exit_traction", +1),
     "rear_loose_under_braking": ("trail_braking_stability", +1),
     "braking_instability": ("trail_braking_stability", +1),
     "high_speed_instability": ("high_speed_stability", +1),
     "kerb_instability": ("kerb_compliance", +1),
     "front_lock": ("trail_braking_stability", +1),
+    "lockup": ("trail_braking_stability", +1),
 }
 
 

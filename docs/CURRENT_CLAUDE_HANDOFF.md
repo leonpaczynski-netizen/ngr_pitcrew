@@ -1,6 +1,37 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 5: Working-Window Learning, Successful-Direction Reinforcement & Minimum-Effective Experiment Selection — COMPLETE
+## Current Objective (2026-07-18) — Engineering Brain Phase 6: Live Residual-Issue Detection & Multi-Symptom Experiment Planning — COMPLETE
+
+**Branch `eng-brain-phase6-residual-experiment-planning` from `master` @ Phase 5 `535aed9` — committed, NOT pushed / no PR.** (Verified start: `535aed9` HEAD/tip; Phases 2-5 stacked on-branch, master at Phase 1; `DB_VERSION 23`, `RULE_ENGINE_VERSION 46.0`; pre-existing runtime diffs 9-145h old.) Residual detection + development-programme planning over the Phase 1-5 spine — NO generative AI, no auto-apply/revert, no live-coaching, no UI redesign.
+
+**Schema decision: NO migration.** `DB_VERSION` stays **23**; `RULE_ENGINE_VERSION` stays `46.0`. Proof: the plan is a DETERMINISTIC function of already-persisted state (immutable Phase-3 `setup_experiment_outcomes` + corner/protected children, applied-checkpoint scope, Phase-5 `setup_working_windows`, `setup_ranges`/interaction constants); `build_engineering_plan` regenerates a byte-identical snapshot + plan fingerprint across restart (golden UAT L). No evidence/audit lost; no telemetry table added.
+
+**Files changed:**
+- NEW `strategy/engineering_issue.py` — `EngineeringIssueIdentity` (stable key EXCLUDING display text) + `IssueFamily` + `ResidualState` (12 states) + `classify_corner_residual`/`classify_protected_residual`/`residual_issues_from_outcome` (re-classify the canonical Phase-3 outcome rows; RESOLVED needs improved verdict + test below authorable + ≥3 samples + non-low confidence; NEW needs weak baseline + authorable test recurrence; de-dupe keeps most-severe).
+- NEW `strategy/engineering_state.py` — `EngineeringStateSnapshot` (residual issues grouped resolved/improved/unchanged/worsened/new/confirmed_good/damaged_good/insufficient + evidence gaps + decision state + working-window refs + time-independent `content_fingerprint`; pure builder never reads the clock).
+- NEW `strategy/experiment_planning.py` — `prioritise_issues` (hard exclusion → documented precedence new-regression>damaged-good>high-recurrence>persistent>drive-out/gearing>tyre-fuel>consistency>weak>evidence; stable tie-break; non-setup issues routed to their own review task), `detect_conflicts` (same-field-opposite/strong-interaction/protected-good via the interaction graph), `cluster_issues` (rule-based by family+axle+phase, isolation-required), `DevelopmentPlan` + `build_development_plan` (AT MOST ONE immediate experiment + queued hypotheses w/ dependency/blocker/promotion/cancellation, invalidation triggers, deterministic fingerprint).
+- MOD `data/session_db.py` — `build_engineering_plan` orchestrator (gathers outcome + validity + working windows; builds snapshot; prioritises; immediate = Phase-5 `select_next_experiment` for the top setup issue, queued for the next; NO persistence); `review_and_learn` returns `engineering_plan={snapshot,plan}`. Extended Phase-5 `_SYMPTOM_AXIS` with bare corner-evidence issue types (understeer/wheelspin/oversteer/lockup/...).
+- MOD `strategy/experiment_selection.py` — `_SYMPTOM_AXIS` bare-issue-type additions.
+- MOD `ui/setup_builder_ui.py` — `_display_outcome_result` renders the engineering state (resolved/improved/unchanged/worsened/new/damaged-good counts) + development plan (1 immediate + queued, or no-immediate status + review/evidence tasks) + conflict note + "advisory, not applied automatically".
+- NEW `tests/test_phase6_{residual_detection,priority_planning,golden_uat,wiring}.py` (70). NEW `docs/ENGINEERING_BRAIN_PHASE6_RESIDUAL_EXPERIMENT_PLANNING.md`; MOD Phase 5 doc, `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Reuse:** Phase 3 `SetupExperimentOutcome` (re-classified, never re-evaluated), Phase 4 assembly/lap-validity/`resolve_setup_decision`, Phase 5 `select_next_experiment`/`generate_candidates` (ONE selector — Phase 6 defines none), `setup_synthesis.PARAMETER_INTERACTIONS`. Planning is subordinate to the decision authority (blocked → no immediate). Failed-direction lockouts + protected-behaviour gates from Phase 3/5 remain authoritative (a repeat failed direction is never re-selected via queue priority).
+
+**Central-loop proof (golden UAT through the production path):** A (one issue resolved, another remains → the resolved one is not re-selected, the planner moves to the remaining issue with one isolated experiment); B (original improves but a new regression appears → the regression is prioritised); F (a failed LSD-accel increase stays blocked); G (a one-off invalid lap with 11 severe events cannot create a recurring/new issue — excluded); J (confounded → no forced change); L (restart reproduces identical snapshot + plan fingerprint).
+
+**Tests run / results:** new suites **70 passed**. Non-UI regression (chunked): **6960 passed, 27 skipped, 0 failed**. Setup-builder UI construction tests individually green (group25/44/42/41). Golden `config_id` + frozen allowlist + Apply-gate + engine-wiring-status assert green. **0 new failures.** Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched). Qt teardown-only segfaults (tests pass first): `config_safety_smoke`, `group75_segment_editor_ui`/`live_baseline_ui`, `group76_live_capture_thread`/`perfect_lap_ui`.
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only (9-145h old); tests used `:memory:`/tmp DBs.
+
+**Known limitations:** standalone live-Practice engineering-state panel deferred (snapshot is surfaced via the experiment-review path); clustering is by (family, axle, phase) — a physics-informed shared-cause solver deferred; queued candidates generated for up to 3 next issues.
+
+**GO/NO-GO: GO.** Residual detection + multi-symptom planning are operational through a real production path (review → learn → snapshot → plan): the system distinguishes resolved from merely-unobserved, detects new regressions, protects confirmed-good behaviour, reconciles multiple symptoms, separates setup from gearing/drive-out/evidence/technique issues, prioritises recurring valid evidence over one-offs, detects candidate conflicts, chooses ≤1 immediate setup experiment, queues dependent hypotheses without treating them as approved changes, respects failed-direction lockouts + working windows + discipline, is deterministic across restart, and stays read-only until explicit user action. Every Phase 1-5 safety guarantee preserved.
+
+**Recommended Phase 7:** Standalone Live Engineering-State Monitoring & Session Development Ledger — surface the Phase-6 snapshot live during practice (off-thread, event-driven), persist an audited plan-history ledger (superseded/invalidated), add a physics-informed shared-cause cluster solver. Do NOT start Phase 7 in this task.
+
+---
+
+## Prior Objective (2026-07-18) — Engineering Brain Phase 5: Working-Window Learning, Successful-Direction Reinforcement & Minimum-Effective Experiment Selection — COMPLETE
 
 **Branch `eng-brain-phase5-working-window-learning` from `master` @ Phase 4 `52628af` — committed, NOT pushed / no PR.** (Verified start: `52628af` was HEAD/tip; Phases 2-4 stacked on-branch, master at Phase 1; `DB_VERSION 22`, `RULE_ENGINE_VERSION 46.0` — exactly the supplied checkpoint.) Learning + selection over the Phase 1-4 spine — NO generative AI, no opaque scoring, no physics, no auto-apply/revert, no multi-field shotgun experiments.
 

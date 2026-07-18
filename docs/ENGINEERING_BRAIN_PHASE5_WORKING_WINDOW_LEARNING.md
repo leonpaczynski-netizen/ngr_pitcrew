@@ -219,7 +219,15 @@ direction (window PROVISIONAL, value recorded), a regression locks the direction
 blocks its re-selection, an unchanged result marks the increment ineffective,
 restart reproduces the same next experiment, and no evidence is double-counted.
 
-## 22. Recommended Phase 6
+## 22. Recommended Phase 6 — DELIVERED
+
+Phase 6 (Live Residual-Issue Detection & Multi-Symptom Experiment Planning) is now
+implemented — see `docs/ENGINEERING_BRAIN_PHASE6_RESIDUAL_EXPERIMENT_PLANNING.md`. It
+added `strategy/engineering_issue.py` (residual states), `strategy/engineering_state.py`
+(snapshot) and `strategy/experiment_planning.py` (priority + conflict + one-immediate
+plan), plus `SessionDB.build_engineering_plan` wired into `review_and_learn`. No
+migration (the plan is a deterministic regenerable function of persisted state). The
+original recommendation notes below are retained for history.
 
 Phase 6 — Live Residual-Issue Detection & Multi-Symptom Experiment Planning: derive
 the dominant residual issue + recurrence live from the unified per-corner evidence
