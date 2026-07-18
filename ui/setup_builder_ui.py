@@ -1388,6 +1388,13 @@ class SetupBuilderMixin:
             pass
         self._refresh_apply_status_for_form(form)
 
+        # UAT Finding 3: flip the structured recommendation rows proposed->applied
+        # (visibility/highlight unchanged) when the Race setup is applied.
+        if form is getattr(self, "_race_form", None):
+            view = getattr(self, "_setup_rec_view", None)
+            if view is not None and view.current_vm() is not None:
+                view.mark_applied()
+
     def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:
         """Recompute + render the saved-vs-applied-in-GT7 three-state for ``form``.
 
@@ -3140,6 +3147,15 @@ class SetupBuilderMixin:
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
+        # UAT Finding 3: mirror the recommendation into the structured tabbed
+        # view. Proposed changes highlight immediately here (at generate) — the
+        # "Applied in Game" button only flips status later, it is not what first
+        # highlights a field.
+        try:
+            self._populate_setup_recommendation_view(data, _status_approved)
+        except Exception as _e:
+            print(f"[SetupRecView] populate failed: {_e}")
+
     def _render_discipline_field_plan(self, plan: dict) -> str:
         """Thin wrapper — delegates to the module-level renderer so the surfaces
         method (which is sometimes called with self=None in tests) never needs self."""
@@ -3948,9 +3964,115 @@ class SetupBuilderMixin:
 
         # ── Side-by-side setup panel — expands to fill remaining space ─────────
         setup_panel = self._build_car_setup_group()
-        tab_layout.addWidget(setup_panel, 1)  # stretch factor 1
+
+        # UAT Finding 3: the structured recommendation surface (header + tabbed
+        # Recommendation/Why/Practice Analysis/Test Plan/Advanced + action bar),
+        # replacing the text-box-first design. Shown once a recommendation
+        # exists; sits in a vertical splitter with the editor forms.
+        from ui.setup_recommendation_view import SetupRecommendationView
+        self._setup_rec_view = SetupRecommendationView()
+        self._setup_rec_view.setVisible(False)
+        self._wire_setup_rec_view()
+
+        _rec_split = QSplitter(Qt.Orientation.Vertical)
+        _rec_split.addWidget(setup_panel)
+        _rec_split.addWidget(self._setup_rec_view)
+        _rec_split.setStretchFactor(0, 1)
+        _rec_split.setStretchFactor(1, 1)
+        tab_layout.addWidget(_rec_split, 1)  # stretch factor 1
 
         return tab_widget
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 3 — structured recommendation view wiring.
+    # ------------------------------------------------------------------ #
+
+    def _wire_setup_rec_view(self) -> None:
+        v = self._setup_rec_view
+        v.apply_in_game.connect(lambda: self._rec_view_apply_in_game())
+        v.values_entered.connect(lambda: self._rec_view_values_entered())
+        v.start_validation.connect(lambda: self._rec_view_start_validation())
+        v.submit_feedback.connect(lambda: self._rec_view_submit_feedback())
+        v.reject_recommendation.connect(lambda: self._rec_view_reject())
+
+    def _populate_setup_recommendation_view(self, data: dict, status_approved: bool) -> None:
+        """Build the structured VM from the recommendation payload and render it.
+
+        Called at generate time from ``_display_setup_result`` so proposed
+        changes highlight immediately — clicking "Applied in Game" later only
+        flips the status, it is not what first highlights a field.
+        """
+        view = getattr(self, "_setup_rec_view", None)
+        if view is None:
+            return
+        from ui.setup_recommendation_vm import build_recommendation_vm, HeaderInfo
+        ev = self._build_event_context()
+        active = ""
+        if hasattr(self, "_active_setup_for_current"):
+            a = self._active_setup_for_current("Race")
+            if a is not None:
+                active = a.label()
+        name = ""
+        try:
+            name = self._race_form._setup_label.text().strip()
+        except Exception:
+            name = ""
+        header = HeaderInfo(
+            car=str(getattr(ev, "car", "") or ""),
+            track=str(getattr(ev, "track", "") or ""),
+            layout=str(getattr(ev, "layout_id", "") or ""),
+            setup_name=name, revision="1", active_setup=active,
+        )
+        vm = build_recommendation_vm(data, header=header,
+                                     status_approved=status_approved)
+        view.set_vm(vm)
+        view.setVisible(vm.has_recommendation)
+
+    def _rec_view_apply_in_game(self) -> None:
+        form = getattr(self, "_race_form", None)
+        if form is not None:
+            self._on_changes_applied_in_game(form)
+        if getattr(self, "_setup_rec_view", None) is not None:
+            self._setup_rec_view.mark_applied()
+
+    def _rec_view_values_entered(self) -> None:
+        try:
+            self._bridge.event_log_entry.emit(
+                "[Setup] Recommended values entered in GT7 (awaiting on-track confirmation).")
+        except Exception:
+            pass
+
+    def _rec_view_start_validation(self) -> None:
+        auth = getattr(self, "_setup_authority", None)
+        if auth is not None and hasattr(self, "_current_setup_identity"):
+            try:
+                auth.start_validation(self._current_setup_identity(), "Race")
+                if hasattr(self, "_refresh_active_setup_display"):
+                    self._refresh_active_setup_display()
+            except Exception:
+                pass
+        try:
+            self._bridge.event_log_entry.emit(
+                "[Setup] Validation started — run the test plan laps.")
+        except Exception:
+            pass
+
+    def _rec_view_submit_feedback(self) -> None:
+        # Take the driver to the feedback surface (Practice Review).
+        try:
+            from ui.tab_registry import TAB_PRACTICE_REVIEW
+            self.select_tab(TAB_PRACTICE_REVIEW)
+        except Exception:
+            pass
+
+    def _rec_view_reject(self) -> None:
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.setVisible(False)
+        try:
+            self._bridge.event_log_entry.emit("[Setup] Recommendation rejected by driver.")
+        except Exception:
+            pass
 
     def _refresh_setup_history_combo(self) -> None:
         try:
