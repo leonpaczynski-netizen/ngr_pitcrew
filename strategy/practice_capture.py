@@ -102,7 +102,7 @@ def build_progress_segment_resolver(
     usable = [s for s in (segments or []) if not _is_rejected(s)]
 
     def _resolver(road_distance: float, speed_kmh: float,
-                  throttle: float, brake: float) -> Tuple[str, str]:
+                  throttle: float, brake: float, *, pos=None) -> Tuple[str, str]:
         if not usable or not lap_length_m or lap_length_m <= 0:
             return "", ""
         lp = ((float(road_distance) - float(offset_m)) / float(lap_length_m)) % 1.0
@@ -113,6 +113,52 @@ def build_progress_segment_resolver(
                     continue  # straight / non-corner — keep looking
                 return str(seg.segment_id), phase
         return "", ""
+
+    return _resolver
+
+
+def build_xyz_segment_resolver(
+    track_location_id: str,
+    layout_id: str,
+    offset_calibration=None,
+    name_sink: Optional[dict] = None,
+) -> Callable[..., Tuple[str, str]]:
+    """Return a resolver that maps a frame's world position to (segment_id, phase)
+    using the PRIMARY XYZ→reference-path path (data.live_segment_resolver), the
+    same matcher the live corner telemetry uses.
+
+    ``name_sink`` (if given) is populated segment_id -> display_name as positions
+    resolve, so the caller can label corners without a second disk read. Falls
+    back to ("", "") when the position can't be matched — honestly unresolved.
+    """
+    from data.live_segment_resolver import resolve_live_segment, LivePosition
+
+    def _resolver(road_distance: float, speed_kmh: float, throttle: float,
+                  brake: float, *, pos=None) -> Tuple[str, str]:
+        try:
+            px = py = pz = None
+            if pos is not None and len(pos) == 3:
+                px, py, pz = pos
+            lp = LivePosition(
+                pos_x=px, pos_y=py, pos_z=pz,
+                road_distance_m=float(road_distance) if road_distance is not None else None,
+            )
+            res = resolve_live_segment(track_location_id, layout_id, lp,
+                                       offset_calibration=offset_calibration)
+            match = getattr(res, "match", None)
+            if match is None:
+                return "", ""
+            phase = _phase_of(getattr(match, "segment_type", ""))
+            if not phase:
+                return "", ""
+            sid = str(getattr(match, "segment_id", "") or "")
+            if name_sink is not None and sid:
+                nm = getattr(match, "display_name", "") or ""
+                if nm:
+                    name_sink[sid] = str(nm)
+            return sid, phase
+        except Exception:
+            return "", ""
 
     return _resolver
 

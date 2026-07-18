@@ -55,6 +55,29 @@ def test_progress_resolver_maps_and_excludes_rejected():
     assert r2(1000.0, 100.0, 0.5, 0.5) == ("", "")
 
 
+def test_xyz_resolver_maps_and_names(monkeypatch):
+    """The primary XYZ resolver maps a world position to (segment_id, phase) via
+    resolve_live_segment and accumulates corner names into the sink."""
+    from strategy import practice_capture as pc
+    match = types.SimpleNamespace(
+        segment_id="t3", display_name="Turn 3",
+        segment_type=TrackSegmentType.APEX_ZONE)
+    monkeypatch.setattr(
+        "data.live_segment_resolver.resolve_live_segment",
+        lambda *a, **k: types.SimpleNamespace(match=match))
+    names: dict = {}
+    resolver = pc.build_xyz_segment_resolver("fuji", "full_course", name_sink=names)
+    sid, phase = resolver(1234.0, 120.0, 0.9, 0.0, pos=(1.0, 2.0, 3.0))
+    assert sid == "t3" and phase == "apex"
+    assert names["t3"] == "Turn 3"
+    # No match -> honestly unresolved.
+    monkeypatch.setattr(
+        "data.live_segment_resolver.resolve_live_segment",
+        lambda *a, **k: types.SimpleNamespace(match=None))
+    resolver2 = pc.build_xyz_segment_resolver("fuji", "full_course")
+    assert resolver2(50.0, 100.0, 0.5, 0.5, pos=(0.0, 0.0, 0.0)) == ("", "")
+
+
 def test_corner_name_helpers():
     segs = [
         _seg("t1apex", TrackSegmentType.APEX_ZONE, 0.15, 0.20, "Turn 1"),

@@ -3153,6 +3153,17 @@ class SetupBuilderMixin:
         # highlights a field.
         try:
             self._populate_setup_recommendation_view(data, _status_approved)
+            _is_race_form = (_form is None) or (_form is getattr(self, "_race_form", None))
+            if _status_approved and approved_changes and _is_race_form:
+                # Highlight the ACTUAL setup-box spinboxes for the proposed
+                # fields at GENERATE time (previously only fired on Apply).
+                _changed_keys = [c.get("field") for c in approved_changes if c.get("field")]
+                if _changed_keys:
+                    self._highlight_changed_fields(_changed_keys)
+                # De-squash: the structured view is now the recommendation
+                # surface, so collapse the old cramped HTML result box.
+                if _result_text is not None:
+                    _result_text.setVisible(False)
         except Exception as _e:
             print(f"[SetupRecView] populate failed: {_e}")
 
@@ -3994,6 +4005,7 @@ class SetupBuilderMixin:
         v.start_validation.connect(lambda: self._rec_view_start_validation())
         v.submit_feedback.connect(lambda: self._rec_view_submit_feedback())
         v.reject_recommendation.connect(lambda: self._rec_view_reject())
+        v.accept_and_lock.connect(lambda: self._rec_view_accept_and_lock())
 
     def _populate_setup_recommendation_view(self, data: dict, status_approved: bool) -> None:
         """Build the structured VM from the recommendation payload and render it.
@@ -4071,6 +4083,40 @@ class SetupBuilderMixin:
             view.setVisible(False)
         try:
             self._bridge.event_log_entry.emit("[Setup] Recommendation rejected by driver.")
+        except Exception:
+            pass
+
+    def _rec_view_accept_and_lock(self) -> None:
+        """Lock the current setup in as the confirmed baseline (ACCEPTED state)."""
+        auth = getattr(self, "_setup_authority", None)
+        locked = None
+        if auth is not None and hasattr(self, "_current_setup_identity"):
+            try:
+                ident = self._current_setup_identity()
+                # Ensure it's applied first, then accept -> ACCEPTED baseline.
+                active = auth.active_setup(ident, "Race")
+                if active is None:
+                    # Nothing applied yet — apply the current form, then accept.
+                    self._on_changes_applied_in_game(getattr(self, "_race_form", None))
+                auth.start_validation(ident, "Race")
+                locked = auth.accept(ident, "Race")
+                if hasattr(self, "_refresh_active_setup_display"):
+                    self._refresh_active_setup_display()
+            except Exception as e:
+                print(f"[Setup] accept/lock error: {e}")
+        try:
+            if locked is not None:
+                self._bridge.event_log_entry.emit(
+                    f"[Setup] Locked in as confirmed baseline: {locked.label()} "
+                    f"(Accepted).")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self, "Setup locked in",
+                    f"“{locked.name}” (rev {locked.revision}) is now your confirmed "
+                    "baseline for this car, track and layout.")
+            else:
+                self._bridge.event_log_entry.emit(
+                    "[Setup] Could not lock setup — apply a setup in game first.")
         except Exception:
             pass
 

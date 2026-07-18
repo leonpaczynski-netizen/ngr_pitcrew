@@ -5493,11 +5493,39 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._practice_clean_laps = set()
         self._practice_total_laps = set()
 
-    def _practice_segments_cache(self):
-        """Best-effort (reviewed_segments, lap_length_m, offset_m) for the active
-        track — reuses the Track Modelling review state when present."""
+    def _practice_track_identity(self):
+        """(track_location_id, layout_id) for the active event, or ("","")."""
+        try:
+            ev = self._build_event_context()
+            return (str(getattr(ev, "track_location_id", "") or ""),
+                    str(getattr(ev, "layout_id", "") or ""))
+        except Exception:
+            return "", ""
+
+    def _practice_reviewed_segments(self, loc: str, lay: str):
+        """Best-effort reviewed segments for (loc, lay): the Track Modelling review
+        state if present, else the best model on disk (same one the XYZ resolver
+        uses). Returns [] when nothing is available."""
         review = getattr(self, "_tm_review_result", None)
         segs = list(getattr(review, "segments", []) or []) if review is not None else []
+        if segs:
+            return segs
+        if not (loc and lay):
+            return []
+        try:
+            from data.track_model_resolver import resolve_best_track_model
+            res = resolve_best_track_model(loc, lay)
+            model = getattr(res, "resolved_model", None)
+            rev = getattr(model, "reviewed_model", None) if model is not None else None
+            return list(getattr(rev, "segments", []) or []) if rev is not None else []
+        except Exception:
+            return []
+
+    def _practice_segments_cache(self):
+        """Legacy accessor kept for the progress-resolver fallback:
+        (reviewed_segments, lap_length_m, offset_m) for the active track."""
+        loc, lay = self._practice_track_identity()
+        segs = self._practice_reviewed_segments(loc, lay)
         lap_len = 0.0
         try:
             lap_len = float(self._tm_get_track_length_m() or 0.0)
@@ -5537,13 +5565,32 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             except Exception:
                 drivetrain = ""
 
-            segs, lap_len, offset = self._practice_segments_cache()
             from strategy.practice_capture import (
-                build_progress_segment_resolver, compute_lap_capture,
-                segments_to_corner_names, segments_to_track_corners)
+                build_progress_segment_resolver, build_xyz_segment_resolver,
+                compute_lap_capture, segments_to_corner_names,
+                segments_to_track_corners)
+            loc, lay = self._practice_track_identity()
+            segs = self._practice_reviewed_segments(loc, lay)
+            offset = 0.0
+            cal = getattr(self, "_tm_offset_calibration", None)
+            if cal is not None:
+                offset = float(getattr(cal, "offset_m", 0.0) or 0.0)
+
             resolver = None
-            if segs and lap_len > 0:
-                resolver = build_progress_segment_resolver(segs, lap_len, offset)
+            if loc and lay:
+                # PRIMARY: XYZ → reference-path matcher (accumulates corner names).
+                resolver = build_xyz_segment_resolver(
+                    loc, lay, offset_calibration=cal,
+                    name_sink=self._practice_corner_names)
+            if resolver is None and segs:
+                # Fallback: road-distance → lap-progress over reviewed segments.
+                lap_len = 0.0
+                try:
+                    lap_len = float(self._tm_get_track_length_m() or 0.0)
+                except Exception:
+                    lap_len = 0.0
+                if lap_len > 0:
+                    resolver = build_progress_segment_resolver(segs, lap_len, offset)
 
             best = 0
             try:
@@ -5560,7 +5607,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                 self._practice_clean_laps.add(lap_num)
 
             if segs:
-                self._practice_corner_names = segments_to_corner_names(segs)
+                # Merge disk names with any the XYZ resolver accumulated.
+                for sid, nm in segments_to_corner_names(segs).items():
+                    if nm:
+                        self._practice_corner_names.setdefault(sid, nm)
                 self._practice_track_corners = segments_to_track_corners(segs)
         except Exception as e:
             print(f"[PracticeCapture] {e}")

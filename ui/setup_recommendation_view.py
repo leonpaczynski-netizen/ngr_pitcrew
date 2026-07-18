@@ -33,6 +33,7 @@ class SetupRecommendationView(QWidget):
     start_validation = pyqtSignal()
     submit_feedback = pyqtSignal()
     reject_recommendation = pyqtSignal()
+    accept_and_lock = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,13 +103,18 @@ class SetupRecommendationView(QWidget):
         self._btn_validate = QPushButton("Start Validation")
         self._btn_feedback = QPushButton("Submit Feedback")
         self._btn_reject = QPushButton("Reject Recommendation")
+        self._btn_lock = QPushButton("Accept && Lock Setup")
+        self._btn_lock.setToolTip(
+            "Happy with it? Lock this in as the confirmed baseline setup "
+            "(marks it Accepted for this car, track and layout).")
         self._btn_apply.clicked.connect(self.apply_in_game)
         self._btn_values.clicked.connect(self.values_entered)
         self._btn_validate.clicked.connect(self.start_validation)
         self._btn_feedback.clicked.connect(self.submit_feedback)
         self._btn_reject.clicked.connect(self.reject_recommendation)
+        self._btn_lock.clicked.connect(self.accept_and_lock)
         for b in (self._btn_apply, self._btn_values, self._btn_validate,
-                  self._btn_feedback, self._btn_reject):
+                  self._btn_feedback, self._btn_reject, self._btn_lock):
             bar.addWidget(b)
         bar.addStretch()
         self._next_action_lbl = QLabel("")

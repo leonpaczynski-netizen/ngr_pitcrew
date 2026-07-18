@@ -975,13 +975,19 @@ class TrackModellingMixin:
         self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
         # Guided "follow the bouncing ball" next-step banner across the top —
-        # driven by the canonical coordinator, one primary step at a time.
+        # driven by the canonical coordinator, one primary step at a time. Fixed
+        # vertical size so it stays a thin strip and never grabs body space.
+        from PyQt6.QtWidgets import QSizePolicy as _QSizePolicy
         self._tm_next_step_banner = QLabel("Select a track and layout to begin.")
         self._tm_next_step_banner.setWordWrap(True)
+        self._tm_next_step_banner.setSizePolicy(
+            _QSizePolicy.Policy.Expanding, _QSizePolicy.Policy.Fixed)
         self._tm_next_step_banner.setStyleSheet(
             "background:#12242E; color:#8BD3E6; border:1px solid #21455A; "
             "border-radius:4px; padding:6px 10px; font-size:11px; font-weight:bold;")
         outer_layout.insertWidget(0, self._tm_next_step_banner)
+        # The splitter takes all remaining vertical space below the banner.
+        outer_layout.setStretchFactor(splitter, 1)
         self._tm_refresh_workflow()
 
         return outer
