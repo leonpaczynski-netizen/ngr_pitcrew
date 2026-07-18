@@ -71,7 +71,29 @@ def test_render_empty_report_safe(window):
     assert "No coached laps" in window._coach_summary_lbl.text()
 
 
-def test_coach_handler_no_db_is_safe(window):
+def _drain(window, qapp):
+    for w in list(window._analysis_workers):
+        w.wait(3000)
+    qapp.processEvents()
+
+
+def test_coach_handler_no_db_is_safe(window, qapp):
     # db=None -> _build_perfect_lap_report returns None; handler must not raise.
     window._coach_perfect_lap()
+    _drain(window, qapp)
     assert window._coach_ideal_list.isHidden()
+
+
+def test_coach_runs_off_thread_with_loading_feedback(window, qapp):
+    per_lap = [[_corner(110, 118, 175)], [_corner(130, 126, 158)]]
+    report = perfect_lap_report(per_lap)
+    window._build_perfect_lap_report = lambda: report
+    window._coach_perfect_lap()
+    # Button shows a busy state immediately while the worker runs.
+    assert not window._btn_coach_lap.isEnabled()
+    assert window._btn_coach_lap.text() == "Coaching…"
+    _drain(window, qapp)
+    # Restored + rendered after completion.
+    assert window._btn_coach_lap.isEnabled()
+    assert window._btn_coach_lap.text() == "Coach My Perfect Lap"
+    assert window._coach_ideal_list.count() >= 1

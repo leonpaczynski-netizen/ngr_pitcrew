@@ -53,6 +53,15 @@ def test_coordinator_and_banner_exist(window):
     assert "Identify" in window._tm_next_step_banner.text()
 
 
+def test_stepper_renders_six_chips(window):
+    from ui.workflow_stepper_widget import _StageChip
+    window._tm_refresh_workflow()
+    chips = [window._tm_chip_row.itemAt(i).widget()
+             for i in range(window._tm_chip_row.count())]
+    chips = [c for c in chips if isinstance(c, _StageChip)]
+    assert len(chips) == 6   # Identify..Activate
+
+
 def test_banner_reflects_capturing_state(window):
     from data.track_modelling_coordinator import TrackModellingState
     # Force identity + a live capture, then refresh the workflow.

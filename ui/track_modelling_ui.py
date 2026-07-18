@@ -974,19 +974,29 @@ class TrackModellingMixin:
         # so selecting a segment did nothing).
         self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
-        # Guided "follow the bouncing ball" next-step banner across the top —
-        # driven by the canonical coordinator, one primary step at a time. Fixed
-        # vertical size so it stays a thin strip and never grabs body space.
+        # Guided "follow the bouncing ball" workflow across the top — a real
+        # 6-step stepper (chips coloured done/current/pending) driven by the
+        # canonical coordinator, with the single primary next-step below it.
         from PyQt6.QtWidgets import QSizePolicy as _QSizePolicy
+        from ui import ngr_theme as _T
+        self._tm_step_host = QWidget()
+        self._tm_step_host.setSizePolicy(
+            _QSizePolicy.Policy.Expanding, _QSizePolicy.Policy.Fixed)
+        _sh = QVBoxLayout(self._tm_step_host)
+        _sh.setContentsMargins(_T.SPACE_SM, _T.SPACE_XS, _T.SPACE_SM, _T.SPACE_XS)
+        _sh.setSpacing(_T.SPACE_XS)
+        self._tm_chip_row = QHBoxLayout()
+        self._tm_chip_row.setSpacing(_T.SPACE_XS)
+        _chips_w = QWidget()
+        _chips_w.setLayout(self._tm_chip_row)
+        _sh.addWidget(_chips_w)
+        # Kept (tests + code read it) — now the primary next-step line under the
+        # chips, styled from the design system's info banner tone.
         self._tm_next_step_banner = QLabel("Select a track and layout to begin.")
         self._tm_next_step_banner.setWordWrap(True)
-        self._tm_next_step_banner.setSizePolicy(
-            _QSizePolicy.Policy.Expanding, _QSizePolicy.Policy.Fixed)
-        self._tm_next_step_banner.setStyleSheet(
-            "background:#12242E; color:#8BD3E6; border:1px solid #21455A; "
-            "border-radius:4px; padding:6px 10px; font-size:11px; font-weight:bold;")
-        outer_layout.insertWidget(0, self._tm_next_step_banner)
-        # The splitter takes all remaining vertical space below the banner.
+        self._tm_next_step_banner.setStyleSheet(_T.banner_qss("info"))
+        _sh.addWidget(self._tm_next_step_banner)
+        outer_layout.insertWidget(0, self._tm_step_host)
         outer_layout.setStretchFactor(splitter, 1)
         self._tm_refresh_workflow()
 
@@ -1081,6 +1091,39 @@ class TrackModellingMixin:
                 banner.setText(
                     f"Step {step_num}/6 — {snap.step.value.title()}: "
                     f"{snap.primary_next_step}")
+            self._tm_render_step_chips(snap.step, snap.state)
+        except Exception:
+            pass
+
+    def _tm_render_step_chips(self, current_step, state) -> None:
+        """Render the 6 guided steps as status chips (done/current/pending),
+        highlighting the coordinator's current step."""
+        row = getattr(self, "_tm_chip_row", None)
+        if row is None:
+            return
+        try:
+            from ui.workflow_stepper_widget import _StageChip
+            from ui.workflow_stepper import StageStatus
+            from data.track_modelling_coordinator import (
+                WorkflowStep, TrackModellingState)
+            steps = list(WorkflowStep)
+            cur_idx = steps.index(current_step)
+            while row.count():
+                it = row.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            for i, step in enumerate(steps):
+                if state == TrackModellingState.ERROR and i == cur_idx:
+                    status = StageStatus.BLOCKED
+                elif i < cur_idx:
+                    status = StageStatus.DONE
+                elif i == cur_idx:
+                    status = StageStatus.CURRENT
+                else:
+                    status = StageStatus.PENDING
+                row.addWidget(_StageChip(i, step.value.title(), status))
+            row.addStretch(1)
         except Exception:
             pass
 

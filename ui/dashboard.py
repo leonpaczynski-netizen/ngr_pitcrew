@@ -340,6 +340,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._practice_total_laps: set = set()
         self._practice_corner_names: dict = {}
         self._practice_track_corners: list = []
+        # Live references to in-flight analysis workers (QThreads) so they are
+        # not garbage-collected mid-run. See _run_analysis_async.
+        self._analysis_workers: set = set()
 
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
@@ -5379,6 +5382,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         """Structured cross-lap pattern analysis (session summary + per-corner
         table + repeatable/strong/isolated lists + targeted tests). Deliberately
         NOT one plain-text box."""
+        from ui import ngr_theme as _ngr_pa_btn
         group = QGroupBox("Practice Analysis — Patterns Across Laps")
         group.setStyleSheet(self._group_style())
         v = QVBoxLayout(group)
@@ -5393,6 +5397,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
 
         btn_row = QHBoxLayout()
         self._btn_analyse_practice = QPushButton("Analyse Practice Patterns")
+        self._btn_analyse_practice.setStyleSheet(_ngr_pa_btn.primary_button_qss())
         self._btn_analyse_practice.clicked.connect(self._analyse_practice_patterns)
         btn_row.addWidget(self._btn_analyse_practice)
         btn_row.addStretch()
@@ -5401,7 +5406,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._pa_empty_lbl = QLabel(
             "Click “Analyse Practice Patterns” after a stint of clean laps.")
         self._pa_empty_lbl.setWordWrap(True)
-        self._pa_empty_lbl.setStyleSheet("color:#9AA0A6; font-size:11px;")
+        self._pa_empty_lbl.setStyleSheet(
+            f"color:{_ngr_pa_btn.TEXT_DIM}; font-size:{_ngr_pa_btn.FS_BODY}pt;")
         v.addWidget(self._pa_empty_lbl)
 
         # 1) Session summary (grid of label/value).
@@ -5413,16 +5419,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         summary_box.setVisible(False)
         v.addWidget(summary_box)
 
-        # 2) Per-corner pattern table.
+        # 2) Per-corner pattern table (sortable; numeric columns tabular).
         from ui.practice_analysis_vm import CORNER_TABLE_COLUMNS
+        from ui import ngr_theme as _ngr_pa
         self._pa_table = QTableWidget(0, len(CORNER_TABLE_COLUMNS))
         self._pa_table.setHorizontalHeaderLabels(list(CORNER_TABLE_COLUMNS))
         self._pa_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents)
         self._pa_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._pa_table.setSortingEnabled(True)             # P6: sortable table
+        self._pa_table.setAlternatingRowColors(True)
         self._pa_table.setVisible(False)
         self._pa_table_caption = QLabel("Per-corner pattern")
-        self._pa_table_caption.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        self._pa_table_caption.setStyleSheet(_ngr_pa.heading_qss(3))
         self._pa_table_caption.setVisible(False)
         v.addWidget(self._pa_table_caption)
         v.addWidget(self._pa_table)
@@ -5458,6 +5467,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         coach_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
         cv.addWidget(coach_intro)
         self._btn_coach_lap = QPushButton("Coach My Perfect Lap")
+        self._btn_coach_lap.setStyleSheet(_ngr_pa_btn.primary_button_qss())
         self._btn_coach_lap.clicked.connect(self._coach_perfect_lap)
         _crow = QHBoxLayout()
         _crow.addWidget(self._btn_coach_lap)
@@ -5466,7 +5476,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._coach_summary_lbl = QLabel(
             "Click “Coach My Perfect Lap” after some clean laps.")
         self._coach_summary_lbl.setWordWrap(True)
-        self._coach_summary_lbl.setStyleSheet("color:#8BC34A; font-size:11px;")
+        self._coach_summary_lbl.setStyleSheet(_ngr_pa_btn.banner_qss("success"))
         cv.addWidget(self._coach_summary_lbl)
         _ideal_cap = QLabel("Ideal lap — corner targets")
         _ideal_cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
@@ -5496,6 +5506,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         v_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
         vv.addWidget(v_intro)
         self._btn_setup_verdict = QPushButton("Compare Setups (session history)")
+        self._btn_setup_verdict.setStyleSheet(_ngr_pa_btn.primary_button_qss())
         self._btn_setup_verdict.clicked.connect(self._analyse_setup_verdict)
         _vrow = QHBoxLayout()
         _vrow.addWidget(self._btn_setup_verdict)
@@ -5504,8 +5515,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._verdict_summary_lbl = QLabel(
             "Click “Compare Setups” once you've run two setups here.")
         self._verdict_summary_lbl.setWordWrap(True)
-        self._verdict_summary_lbl.setStyleSheet(
-            "color:#8BD3E6; font-size:11px; font-weight:bold;")
+        self._verdict_summary_lbl.setStyleSheet(_ngr_pa_btn.banner_qss("info"))
         vv.addWidget(self._verdict_summary_lbl)
         self._verdict_reasons_list = QListWidget()
         self._verdict_reasons_list.setMaximumHeight(150)
@@ -5537,12 +5547,35 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             self._pa_summary_grid.addWidget(cell, r, c)
         self._pa_summary_box.setVisible(True)
 
-        # Per-corner table.
+        # Per-corner table. Numeric columns (Laps, Recur %) use tabular figures
+        # + right alignment so they line up; sorting is toggled off during the
+        # fill so rows aren't reordered mid-populate.
+        from PyQt6.QtGui import QFont as _QFont
+        from PyQt6.QtCore import Qt as _Qt
+        from ui import ngr_theme as _ngr_pa
+        _tab_font = _QFont("Consolas")
+        _tab_font.setStyleHint(_QFont.StyleHint.Monospace)
+        _numeric_cols = {3, 4}   # Laps, Recur %
+        _PA_TONES = {"success": _ngr_pa.STATUS_TONES["success"][1],
+                     "neutral": _ngr_pa.TEXT_DIM}
+        pav_cols = pav.CORNER_TABLE_COLUMNS
         table_rows = pav.corner_table_rows(report)
+        self._pa_table.setSortingEnabled(False)
         self._pa_table.setRowCount(len(table_rows))
         for ri, row in enumerate(table_rows):
             for ci, val in enumerate(row):
-                self._pa_table.setItem(ri, ci, QTableWidgetItem(str(val)))
+                item = QTableWidgetItem(str(val))
+                if ci in _numeric_cols:
+                    item.setFont(_tab_font)
+                    item.setTextAlignment(_Qt.AlignmentFlag.AlignRight
+                                          | _Qt.AlignmentFlag.AlignVCenter)
+                # Colour the Author? cell by eligibility (never colour-only —
+                # the text still reads Yes/No).
+                if pav_cols[ci] == "Author?":
+                    tone = "success" if str(val) == "Yes" else "neutral"
+                    item.setForeground(QColor(_PA_TONES[tone]))
+                self._pa_table.setItem(ri, ci, item)
+        self._pa_table.setSortingEnabled(True)
         has_rows = bool(table_rows)
         self._pa_table.setVisible(has_rows)
         self._pa_table_caption.setVisible(has_rows)
@@ -5771,14 +5804,53 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         resolver = self._perfect_lap_frame_resolver(loc, lay)
         return coach_from_laps(laps, resolver, segs)
 
+    def _run_analysis_async(self, build_fn, render_fn, button, busy_text: str):
+        """Run a (potentially slow, DB-reading) analysis off the UI thread with
+        loading feedback, then render on the main thread. Keeps the UI responsive
+        (skill: loading-buttons + progressive-loading). SessionDB is opened with
+        check_same_thread=False and lock-guarded, so cross-thread reads are safe.
+        """
+        from ui.track_model_build_worker import TrackModelBuildWorker
+        orig = button.text() if button is not None else ""
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(busy_text)
+
+        def _work(_report, _is_cancelled):
+            return build_fn()
+
+        worker = TrackModelBuildWorker(_work)
+
+        def _restore():
+            if button is not None:
+                button.setEnabled(True)
+                button.setText(orig)
+            self._analysis_workers.discard(worker)
+
+        def _done(result):
+            try:
+                render_fn(result)
+            finally:
+                _restore()
+
+        def _failed(msg):
+            print(f"[Analysis] {msg}")
+            try:
+                render_fn(None)
+            finally:
+                _restore()
+
+        worker.finished_ok.connect(_done)
+        worker.failed.connect(_failed)
+        self._analysis_workers.add(worker)   # hold a ref so the QThread survives
+        worker.start()
+        return worker
+
     def _coach_perfect_lap(self) -> None:
-        """Button handler: build + render the perfect-lap coaching."""
-        report = None
-        try:
-            report = self._build_perfect_lap_report()
-        except Exception as e:
-            print(f"[PerfectLap] {e}")
-        self._render_perfect_lap(report)
+        """Button handler: build + render the perfect-lap coaching (off-thread)."""
+        self._run_analysis_async(
+            self._build_perfect_lap_report, self._render_perfect_lap,
+            getattr(self, "_btn_coach_lap", None), "Coaching…")
 
     def _render_perfect_lap(self, report) -> None:
         lbl = getattr(self, "_coach_summary_lbl", None)
@@ -5852,12 +5924,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             feedback_vs_previous=fb)
 
     def _analyse_setup_verdict(self) -> None:
-        verdict = None
-        try:
-            verdict = self._build_setup_verdict()
-        except Exception as e:
-            print(f"[SetupVerdict] {e}")
-        self._render_setup_verdict(verdict)
+        self._run_analysis_async(
+            self._build_setup_verdict, self._render_setup_verdict,
+            getattr(self, "_btn_setup_verdict", None), "Comparing…")
 
     def _render_setup_verdict(self, verdict) -> None:
         lbl = getattr(self, "_verdict_summary_lbl", None)
