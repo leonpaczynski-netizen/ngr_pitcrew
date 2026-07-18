@@ -505,11 +505,16 @@ def test_ac6_no_connect_calls_to_removed_callbacks():
 # ---------------------------------------------------------------------------
 
 def test_ac7_joystick_sleep_value():
-    """The joystick poller uses time.sleep(0.1), not 0.02."""
+    """The joystick poller uses time.sleep(0.1), not 0.02.
+
+    The button-detection dialog (which owns the joystick poll loop) was extracted
+    from ui/dashboard.py into the canonical ui/button_detect_dialog.py module
+    during the UAT Finding 5 repair, so this assertion now targets that module.
+    """
     import ast
     from pathlib import Path
 
-    src = Path("C:/Projects/VR_Dashboard/ui/dashboard.py").read_text(encoding="utf-8")
+    src = Path("C:/Projects/VR_Dashboard/ui/button_detect_dialog.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
 
     sleep_args: list[float] = []
@@ -524,5 +529,5 @@ def test_ac7_joystick_sleep_value():
             if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):
                 sleep_args.append(float(arg.value))
 
-    assert 0.1 in sleep_args, "time.sleep(0.1) not found in dashboard.py"
-    assert 0.02 not in sleep_args, "old time.sleep(0.02) still present in dashboard.py"
+    assert 0.1 in sleep_args, "time.sleep(0.1) not found in button_detect_dialog.py"
+    assert 0.02 not in sleep_args, "old time.sleep(0.02) still present in button_detect_dialog.py"
