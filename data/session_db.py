@@ -5293,6 +5293,44 @@ class SessionDB:
                 "open_count": len(report.get("open_contradictions") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def build_programme_assumption_register(self, memory_context_key: str = "", *,
+                                            applied_setup=None, session_identity=None,
+                                            gearbox_state="", speed_context="", session_context=None,
+                                            session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Engineering Assumption Register (Program 2, Phase 30): the
+        assumptions the current knowledge relies on but has not established (facts are NOT listed).
+        Reuses the in-memory knowledge chain (Phase-22 built ONCE; Phase-23/24/25 derived purely) and
+        computes the Phase-26 re-validation + Phase-27 coverage + Phase-29 contradiction purely in
+        memory - it never calls their SessionDB entries. An assumption can only cap readiness, never
+        create it. Read-only; no N+1; no writes; no migration; no wall-clock; DB stays v26;
+        deterministic; never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+            from strategy.programme_coverage_report import (
+                build_programme_evidence_coverage_report as _bcov)
+            from strategy.programme_contradiction_report import (
+                build_programme_contradiction_report as _bcon)
+            from strategy.programme_assumption_register import (
+                build_programme_assumption_register as _breg)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase30 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "assumptions": None, "assumption_count": 0}
+        revalidation = _brr(chain["timeline"], chain["programme"]).to_dict()
+        coverage = _bcov(chain["timeline"], chain["programme"], revalidation,
+                         chain.get("records") or []).to_dict()
+        contradiction = _bcon(chain["timeline"], chain["programme"],
+                              chain.get("records") or []).to_dict()
+        report = _breg(chain["timeline"], revalidation, coverage, contradiction,
+                       chain["playbook"]).to_dict()
+        return {"ok": True, "assumptions": report,
+                "assumption_count": len(report.get("assumptions") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
