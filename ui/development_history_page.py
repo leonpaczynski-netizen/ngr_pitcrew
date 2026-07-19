@@ -30,6 +30,7 @@ from ui.experiment_synthesis_panel import ExperimentSynthesisPanel
 from ui.engineering_lifecycle_panel import EngineeringLifecyclePanel
 from ui.engineering_plan_panel import EngineeringPlanPanel
 from ui.engineering_campaign_panel import EngineeringCampaignPanel
+from ui.engineering_efficiency_panel import EngineeringEfficiencyPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -104,6 +105,12 @@ class DevelopmentHistoryPage(QWidget):
         # grouping the portfolio into bounded objectives. Read-only; advisory; not applied.
         self._campaign_panel = EngineeringCampaignPanel()
         root.addWidget(self._campaign_panel)
+
+        # Phase 19 (Program 2) — engineering efficiency: campaign age (from the persisted
+        # registry), evidence saturation and cost of knowledge. Read-only; advisory; saturation
+        # never completes a campaign; nothing is applied, frozen or edited here.
+        self._efficiency_panel = EngineeringEfficiencyPanel()
+        root.addWidget(self._efficiency_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -233,6 +240,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-18 engineering-campaign programme (read-only, advisory). Receives
         an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._campaign_panel.update_result(campaign_result)
+
+    def update_engineering_efficiency(self, efficiency_result) -> None:
+        """Render the Phase-19 engineering-efficiency advisory (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._efficiency_panel.update_result(efficiency_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))

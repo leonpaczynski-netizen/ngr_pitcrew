@@ -6663,6 +6663,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # Read-only; runs OFF the Qt thread; applies nothing.
             if hasattr(page, "update_engineering_campaigns"):
                 self._refresh_engineering_campaigns(car, track, layout_id, discipline)
+            # Phase 19 — engineering efficiency: campaign age (registry), evidence saturation
+            # and cost of knowledge. Read-only advisory; runs OFF the Qt thread. The only write
+            # is the additive, idempotent campaign-registry capture; nothing is applied.
+            if hasattr(page, "update_engineering_efficiency"):
+                self._refresh_engineering_efficiency(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -6941,6 +6946,64 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_engineering_campaigns"):
             try:
                 page.update_engineering_campaigns(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_efficiency(self, car, track, layout_id, discipline):
+        """Build the Phase-19 engineering-efficiency advisory OFF the Qt thread and render the
+        finished immutable result. The build additionally performs the phase's single additive,
+        idempotent campaign-registry capture (metadata only); it completes/freezes/applies
+        nothing and never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_efficiency"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_efficiency({"ok": True, "efficiency": None,
+                                                "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            sid = getattr(self, "_active_session_id", None)
+            register_session_id = str(sid) if sid is not None else ""
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_engineering_efficiency(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity,
+                    register_session_id=register_session_id, recorded_at=now_date,
+                    now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._efficiency_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_engineering_efficiency_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_efficiency_ready(
+                    {"ok": True, "efficiency": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_efficiency({"ok": True, "efficiency": None,
+                                                    "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_efficiency_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable engineering-efficiency result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_efficiency"):
+            try:
+                page.update_engineering_efficiency(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
