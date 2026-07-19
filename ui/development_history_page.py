@@ -31,6 +31,7 @@ from ui.engineering_lifecycle_panel import EngineeringLifecyclePanel
 from ui.engineering_plan_panel import EngineeringPlanPanel
 from ui.engineering_campaign_panel import EngineeringCampaignPanel
 from ui.engineering_efficiency_panel import EngineeringEfficiencyPanel
+from ui.engineering_confidence_panel import EngineeringConfidencePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -111,6 +112,12 @@ class DevelopmentHistoryPage(QWidget):
         # never completes a campaign; nothing is applied, frozen or edited here.
         self._efficiency_panel = EngineeringEfficiencyPanel()
         root.addWidget(self._efficiency_panel)
+
+        # Phase 20 (Program 2) — engineering knowledge quality: confidence-weighted evidence,
+        # development ROI and campaign opportunity. Read-only; advisory; measures trust and
+        # remaining engineering return; ranks/completes/applies nothing.
+        self._confidence_panel = EngineeringConfidencePanel()
+        root.addWidget(self._confidence_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -245,6 +252,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-19 engineering-efficiency advisory (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._efficiency_panel.update_result(efficiency_result)
+
+    def update_engineering_knowledge_quality(self, quality_result) -> None:
+        """Render the Phase-20 engineering knowledge-quality advisory (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._confidence_panel.update_result(quality_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
