@@ -5122,6 +5122,73 @@ class SessionDB:
                 "point_count": len(timeline.get("timeline_points") or []),
                 "content_fingerprint": timeline.get("content_fingerprint")}
 
+    def _build_knowledge_chain(self, memory_context_key: str = "", *,
+                               applied_setup=None, session_identity=None, gearbox_state="",
+                               speed_context="", session_context=None, session_budget=None,
+                               now_date="", **ctx):
+        """Shared read-only in-memory chain for Phases 26+: build the Phase-22 programme knowledge
+        report EXACTLY ONCE, derive the Phase-23 transfer, Phase-24 playbook and Phase-25 timeline
+        PURELY from that same programme (+ one bounded evidence bulk read). It never calls the
+        Phase-23/24/25 SessionDB entry points. Returns a dict {programme, transfer, playbook,
+        timeline} or None when there is no known knowledge. Read-only; no N+1; never raises."""
+        try:
+            from strategy.programme_transfer_report import build_transfer_report as _btr
+            from strategy.engineering_playbook import build_engineering_playbook as _bep
+            from strategy.programme_timeline_report import build_programme_timeline as _bpt
+        except Exception:  # pragma: no cover - defensive
+            return None
+        pk_result = self.build_programme_knowledge_report(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date,
+            **ctx)
+        if not isinstance(pk_result, dict) or not pk_result.get("ok"):
+            return None
+        programme = pk_result.get("programme_knowledge")
+        graph = programme.get("knowledge_graph") if isinstance(programme, dict) else None
+        if not isinstance(graph, dict) or not (graph.get("known_domains") or []):
+            return None
+        compatibility = programme.get("compatibility") or {}
+        source_ctx = dict(compatibility.get("primary_key") or {})
+        targets = [dict(g.get("compatibility_key") or {})
+                   for g in (compatibility.get("other_groups") or [])
+                   if isinstance(g, dict) and (g.get("compatibility_key") or {})]
+        transfer = _btr(graph, source_ctx, targets).to_dict()
+        playbook = _bep(programme, transfer).to_dict()
+        records = self._timeline_evidence_records(
+            car=str(source_ctx.get("car", "") or ""),
+            discipline=str(source_ctx.get("discipline", "") or ""),
+            gt7_version=str(source_ctx.get("gt7_version", "") or ""),
+            driver=str(source_ctx.get("driver", "") or ""))
+        timeline = _bpt(programme, playbook, records).to_dict()
+        return {"programme": programme, "transfer": transfer, "playbook": playbook,
+                "timeline": timeline}
+
+    def build_programme_revalidation_report(self, memory_context_key: str = "", *,
+                                            applied_setup=None, session_identity=None,
+                                            gearbox_state="", speed_context="", session_context=None,
+                                            session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Re-validation Report (Program 2, Phase 26): which
+        established knowledge remains current and which may need re-validation because context /
+        version changed or evidence weakened. Reuses the in-memory knowledge chain (Phase-22 built
+        ONCE; Phase-23/24/25 derived purely; never calls their SessionDB entries), then runs the
+        pure Phase-26 assembler. Read-only; no N+1; no writes; no migration; no wall-clock; DB stays
+        v26; deterministic; never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase26 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "revalidation": None, "domain_count": 0}
+        report = _brr(chain["timeline"], chain["programme"]).to_dict()
+        return {"ok": True, "revalidation": report,
+                "domain_count": len(report.get("items") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
