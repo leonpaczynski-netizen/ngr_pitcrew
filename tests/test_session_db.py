@@ -162,9 +162,12 @@ def test_schema_version_is_v10(db):
     # additive setup_experiment_outcome*/failed_directions tables).
     # Reconciled for Engineering-Brain Phase 5: 22 → 23 (_migrate_v23 added the two standalone
     # additive setup_working_window* tables).
+    # Reconciled for Engineering-Brain Phase 8: 23 → 24 (_migrate_v24 added the standalone
+    # additive engineering_development_records table).
     # The test name is kept stable to not disrupt git blame.
+    from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 23
+    assert version == DB_VERSION == 24
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

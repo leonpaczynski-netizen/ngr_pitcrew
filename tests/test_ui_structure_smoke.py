@@ -58,8 +58,10 @@ def _titles(win) -> list[str]:
     return [win._tabs.tabText(i) for i in range(win._tabs.count())]
 
 
-def test_twelve_tabs(window):
-    assert window._tabs.count() == 12
+def test_tab_count(window):
+    # 13 tabs: Development History added (Engineering Brain Phase 8 cross-session memory).
+    assert window._tabs.count() == 13
+    assert "Development History" in _titles(window)
 
 
 def test_no_guide_tab(window):

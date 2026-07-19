@@ -114,7 +114,11 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     (cross-lap persistence per-episode store).
 # v19 (Determinism Sprint 10 UI): additive applied_setup_checkpoints table
 #     (saved-vs-applied-in-GT7 three-state; "Changes Applied in Game" button).
-DB_VERSION: int = 23
+# v20 (Eng-Brain Phase 1): engineering_context + _links. v21 (Phase 2): setup_experiments*.
+# v22 (Phase 3): setup_experiment_outcomes*. v23 (Phase 5): setup_working_windows*.
+# v24 (Phase 8): engineering_development_records — one immutable, append-only record per
+#     completed engineering review (permanent cross-session engineering memory).
+DB_VERSION: int = 24
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

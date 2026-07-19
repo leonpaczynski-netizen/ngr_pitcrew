@@ -52,6 +52,7 @@ TAB_DIAGNOSTICS = "diagnostics"
 TAB_SETTINGS = "settings"
 TAB_HISTORY = "history"
 TAB_TRACK_MODELLING = "track_modelling"
+TAB_DEVELOPMENT_HISTORY = "development_history"
 TAB_HOME = "home"
 
 
@@ -77,6 +78,7 @@ DEFAULT_TAB_ORDER: Tuple[str, ...] = (
     TAB_SETTINGS,          # 9  Settings
     TAB_HISTORY,           # 10 History
     TAB_TRACK_MODELLING,   # 11 Track Modelling (⚙ tool)
+    TAB_DEVELOPMENT_HISTORY,  # 12 Development History (Eng-Brain Phase 8 cross-session memory)
 )
 
 
@@ -96,6 +98,7 @@ TAB_BASE_TITLES: Dict[str, str] = {
     TAB_SETTINGS: "Settings",
     TAB_HISTORY: "History",
     TAB_TRACK_MODELLING: "Track Modelling",
+    TAB_DEVELOPMENT_HISTORY: "Development History",
     TAB_HOME: "Home",
 }
 

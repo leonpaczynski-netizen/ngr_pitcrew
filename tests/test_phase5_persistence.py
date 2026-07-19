@@ -70,9 +70,10 @@ def _improve(db, eid, cp, seg="T3", issue="understeer"):
 
 
 # --- 12.7 persistence ------------------------------------------------------
-def test_user_version_23(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 23
-    assert DB_VERSION == 23
+def test_user_version_matches_db_version(db):
+    # Phase 5 brought the schema to v23; later phases (Phase 8 → v24) advance it.
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 23
 
 
 def test_tables_and_indexes_exist(db):
@@ -93,7 +94,7 @@ def test_migration_idempotent(tmp_path):
     _improve(a, eid, cp)
     a._conn.close()
     b = SessionDB(p)   # re-open: migration is a no-op, learning survives
-    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == 23
+    assert b._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     assert b._conn.execute("SELECT COUNT(*) FROM setup_working_window_evidence").fetchone()[0] == 1
 
 

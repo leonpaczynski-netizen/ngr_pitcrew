@@ -434,6 +434,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
         self._tabs.addTab(self._build_history_tab(),          "History")          # 10
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
+        self._tabs.addTab(self._build_development_history_tab(),
+                          "Development History")                                # 13
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -6574,6 +6576,59 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             (e for e in self._config.get("events", []) if e.get("name") == aid),
             {}
         )
+
+    def _build_development_history_tab(self):
+        """Engineering Brain Phase 8 — the Development History page (cross-session
+        engineering memory). READ-ONLY: it renders permanent engineering knowledge
+        folded from completed reviews and changes nothing. Defensive: any failure
+        yields an empty page rather than breaking dashboard construction."""
+        try:
+            from ui.development_history_page import DevelopmentHistoryPage
+            self._development_history_page = DevelopmentHistoryPage()
+            # Refresh when the tab is shown (read-only; no Apply controls).
+            try:
+                self._tabs.currentChanged.connect(self._on_tab_changed_dev_history)
+            except Exception:
+                pass
+            self._refresh_development_history()
+            return self._development_history_page
+        except Exception:  # pragma: no cover - defensive
+            from PyQt6.QtWidgets import QLabel
+            self._development_history_page = None
+            return QLabel("Development History is unavailable.")
+
+    def _on_tab_changed_dev_history(self, _index):
+        """Refresh the Development History page when it becomes visible."""
+        try:
+            page = getattr(self, "_development_history_page", None)
+            if page is not None and self._tabs.currentWidget() is page:
+                self._refresh_development_history()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_development_history(self):
+        """Resolve the current engineering context and populate the page from the
+        cross-session memory fold. Never raises; never writes."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None:
+            return
+        try:
+            ctx = self._build_event_context()
+            car = getattr(ctx, "car", "") or ""
+            track = getattr(ctx, "track", "") or ""
+            layout_id = getattr(ctx, "layout_id", "") or ""
+            discipline = getattr(ctx, "discipline", "") or ""
+            result = {"ok": True, "record_count": 0}
+            if self._db is not None and (car or track):
+                result = self._db.build_cross_session_memory(
+                    car=car, track=track, layout_id=layout_id,
+                    discipline=discipline)
+            page.update_result(result)
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_result({"ok": False})
+            except Exception:
+                pass
 
     def _build_event_context(self):
         """Canonical read model of the active event/race configuration.

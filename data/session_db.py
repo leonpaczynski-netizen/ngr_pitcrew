@@ -956,8 +956,50 @@ CREATE INDEX IF NOT EXISTS idx_ww_scope_field
     ON setup_working_windows (car, track, layout_id, discipline, field);
 """
 
+# Engineering-Brain Phase 8 — permanent cross-session engineering memory.
+# ONE append-only, IMMUTABLE row per completed engineering review, captured WITH its
+# full memory context (driver/car/track/layout/discipline/gt7/compound). The row is
+# never UPDATEd or DELETEd; re-recording the same review is a no-op (UNIQUE record_key).
+# Long-term memory, history, metrics and the scorecard are deterministic FOLDS over
+# these rows — regenerable, so a restart reproduces identical fingerprints.
+_DDL_V24 = """
+CREATE TABLE IF NOT EXISTS engineering_development_records (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_key               TEXT    NOT NULL UNIQUE,
+    memory_context_key       TEXT    NOT NULL DEFAULT '',
+    scope_fingerprint        TEXT    NOT NULL DEFAULT '',
+    driver                   TEXT    NOT NULL DEFAULT '',
+    car                      TEXT    NOT NULL DEFAULT '',
+    track                    TEXT    NOT NULL DEFAULT '',
+    layout_id                TEXT    NOT NULL DEFAULT '',
+    discipline               TEXT    NOT NULL DEFAULT '',
+    gt7_version              TEXT    NOT NULL DEFAULT '',
+    compound                 TEXT    NOT NULL DEFAULT '',
+    experiment_id            TEXT    NOT NULL DEFAULT '',
+    outcome_id               TEXT    NOT NULL DEFAULT '',
+    outcome_status           TEXT    NOT NULL DEFAULT '',
+    confidence_level         TEXT    NOT NULL DEFAULT '',
+    recorded_at              TEXT    NOT NULL DEFAULT '',
+    session_date             TEXT    NOT NULL DEFAULT '',
+    test_session_id          TEXT    NOT NULL DEFAULT '',
+    record_json              TEXT    NOT NULL DEFAULT '{}',
+    content_fingerprint      TEXT    NOT NULL DEFAULT '',
+    eval_version             TEXT    NOT NULL DEFAULT '',
+    created_at               TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_dev_record_ctx
+    ON engineering_development_records (memory_context_key);
+CREATE INDEX IF NOT EXISTS idx_dev_record_scope
+    ON engineering_development_records (scope_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_dev_record_experiment
+    ON engineering_development_records (experiment_id);
+CREATE INDEX IF NOT EXISTS idx_dev_record_context_cols
+    ON engineering_development_records (car, track, layout_id, discipline, compound);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
-        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23)
+        + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23
+        + _DDL_V24)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -1143,6 +1185,19 @@ class SessionDB:
             self._migrate_v23()
             self._conn.execute("PRAGMA user_version = 23")
             self._conn.commit()
+        if version < 24:
+            self._migrate_v24()
+            self._conn.execute("PRAGMA user_version = 24")
+            self._conn.commit()
+
+    def _migrate_v24(self) -> None:
+        """Engineering-Brain Phase 8 — permanent cross-session engineering memory
+        (schema v24). Adds ONE standalone additive table
+        (engineering_development_records) that stores one immutable, append-only row
+        per completed engineering review. Touches no existing table and rewrites no
+        historical data. CREATE IF NOT EXISTS throughout ⇒ the migration is
+        idempotent."""
+        self._conn.executescript(_DDL_V24)
 
     def _migrate_v22(self) -> None:
         """Engineering-Brain Phase 3 — closed-loop outcome evaluation (schema v22).
@@ -3404,6 +3459,14 @@ class SessionDB:
             int(experiment_id), association_status=str(review.get("association") or "resolved"),
             decision_state=str((review.get("next_experiment") or {}).get("decision_state") or ""),
             current_setup=current_setup)
+        # Phase 8: capture this completed review as an immutable cross-session
+        # development record (permanent engineering memory). Best-effort, idempotent,
+        # read-only w.r.t. all prior evidence — a capture failure never breaks review.
+        try:
+            review["development_record"] = self.record_engineering_development(
+                int(experiment_id), driver=driver)
+        except Exception:
+            review["development_record"] = {"ok": False, "reason": "capture skipped"}
         return review
 
     def build_engineering_plan(
@@ -3605,6 +3668,215 @@ class SessionDB:
             "track": track, "layout_id": layout_id,
             "valid_lap_count": len(valid_nums),
             "live_state": state.to_dict(), "ledger": ledger.to_dict(),
+        }
+
+    # ------------------------------------------------------------------
+    # Cross-session engineering development memory (Phase 8, DB v24)
+    # READ-ONLY intelligence: records immutable review facts + folds them
+    # into permanent memory / history / metrics. Decides nothing, authors
+    # no setup value, evaluates no lap, mutates no prior evidence.
+    # ------------------------------------------------------------------
+    def _dominant_compound(self, test_session_id) -> str:
+        """Most-frequent non-empty tyre compound over a session's laps (or '')."""
+        try:
+            sid = int(test_session_id)
+        except (TypeError, ValueError):
+            return ""
+        if not sid:
+            return ""
+        counts: dict = {}
+        for lap in self.get_laps_for_scoring(sid):
+            c = str(lap.get("compound") or "").strip()
+            if c:
+                counts[c] = counts.get(c, 0) + 1
+        if not counts:
+            return ""
+        return max(sorted(counts), key=lambda k: counts[k])
+
+    def _windows_for_record(self, scope_fingerprint: str) -> list:
+        """Learned working windows for a scope, normalised to the record shape
+        (low_bound/high_bound → min/max). Read-only."""
+        out = []
+        for w in self.list_working_windows(scope_fingerprint):
+            if not isinstance(w, dict) or not w.get("field"):
+                continue
+            out.append({
+                "field": str(w.get("field")),
+                "min": w.get("low_bound"), "max": w.get("high_bound"),
+                "confidence": str(w.get("confidence") or ""),
+                "valid_experiment_count": int(w.get("valid_experiment_count") or 0),
+                "improvement_count": int(w.get("improvement_count") or 0),
+                "regression_count": int(w.get("regression_count") or 0),
+            })
+        return out
+
+    def _memory_context_for_experiment(self, experiment_id: int, outcome: dict, *,
+                                       driver: str, gt7_version: str, compound: str):
+        """Build the Phase-8 MemoryContextKey for an experiment's review."""
+        from strategy.development_history import MemoryContextKey
+        _, scope = self._experiment_context_scope(int(experiment_id))
+        scope = scope or {}
+        comp = compound or self._dominant_compound(outcome.get("test_session_id"))
+        return MemoryContextKey(
+            driver=str(driver or ""), car=str(scope.get("car") or ""),
+            track=str(scope.get("track") or ""),
+            layout_id=str(scope.get("layout_id") or ""),
+            discipline=str(scope.get("discipline") or ""),
+            gt7_version=str(gt7_version or ""), compound=str(comp or "")), scope
+
+    def record_engineering_development(
+        self, experiment_id: int, *, recorded_at: "str | None" = None,
+        driver: str = "", gt7_version: str = "", compound: str = "",
+        session_date: str = "",
+    ) -> dict:
+        """Capture ONE completed engineering review as an immutable development record
+        (permanent cross-session memory). Idempotent: re-recording the same review is a
+        no-op (UNIQUE record_key). Read-only w.r.t. all prior evidence; never rewrites
+        history; never raises. Returns the record dict (or a reason)."""
+        try:
+            from strategy.development_history import build_development_record
+            from strategy.engineering_issue import residual_issues_from_outcome
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase8 import failed: {exc}"}
+        exp = self.get_setup_experiment(int(experiment_id))
+        if exp is None:
+            return {"ok": False, "reason": "experiment not found"}
+        outcome = self.get_latest_experiment_outcome(int(experiment_id))
+        if outcome is None:
+            return {"ok": False, "reason": "no persisted outcome to record"}
+        ctx, scope = self._memory_context_for_experiment(
+            int(experiment_id), outcome, driver=driver, gt7_version=gt7_version,
+            compound=compound)
+        scope_fp = str((scope or {}).get("scope_fingerprint")
+                       or outcome.get("scope_fingerprint") or "")
+        residuals = residual_issues_from_outcome(
+            outcome, discipline=str((scope or {}).get("discipline") or ""),
+            scope=scope_fp,
+            association_status="resolved")
+        windows = self._windows_for_record(scope_fp)
+        now = recorded_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = build_development_record(
+            outcome, exp, context=ctx, scope_fingerprint=scope_fp,
+            working_windows=windows, residuals=residuals, recorded_at=now,
+            session_date=session_date)
+        if record is None:
+            return {"ok": False, "reason": "outcome not recordable"}
+        inserted = self._persist_development_record(record, created_at=now)
+        return {"ok": True, "recorded": inserted, "record": record.to_dict()}
+
+    def _persist_development_record(self, record, *, created_at: str) -> bool:
+        """Append-only insert (idempotent by UNIQUE record_key). Returns True when a
+        NEW row was written, False when the review was already recorded. Never
+        UPDATEs or DELETEs an existing row (history is immutable). Never raises."""
+        import json as _json
+        ctx = record.context
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    """INSERT OR IGNORE INTO engineering_development_records
+                       (record_key, memory_context_key, scope_fingerprint, driver,
+                        car, track, layout_id, discipline, gt7_version, compound,
+                        experiment_id, outcome_id, outcome_status, confidence_level,
+                        recorded_at, session_date, test_session_id, record_json,
+                        content_fingerprint, eval_version, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (record.record_key, record.memory_context_key,
+                     record.scope_fingerprint, ctx.driver, ctx.car, ctx.track,
+                     ctx.layout_id, ctx.discipline, ctx.gt7_version, ctx.compound,
+                     record.experiment_id, record.outcome_id, record.outcome_status,
+                     record.confidence_level, record.recorded_at, record.session_date,
+                     record.test_session_id, _json.dumps(record.to_dict()),
+                     record.content_fingerprint, record.eval_version, created_at))
+                self._conn.commit()
+                return cur.rowcount > 0
+        except Exception:
+            return False
+
+    def get_development_records(
+        self, memory_context_key: str = "", *, car: str = "", track: str = "",
+        layout_id: str = "", discipline: str = "", compound: str = "",
+        driver: str = "", gt7_version: str = "",
+    ) -> list[dict]:
+        """Return the immutable development records for ONE memory context, oldest
+        first. Provide either a ``memory_context_key`` or the context components
+        (they are combined into the same key so incompatible contexts never mix).
+        Reconstructed purely from the stored record_json. Never raises."""
+        import json as _json
+        key = str(memory_context_key or "")
+        if not key:
+            from strategy.development_history import MemoryContextKey
+            key = MemoryContextKey(
+                driver=driver, car=car, track=track, layout_id=layout_id,
+                discipline=discipline, gt7_version=gt7_version, compound=compound).key()
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT record_json FROM engineering_development_records "
+                    "WHERE memory_context_key=? ORDER BY id ASC", (key,)).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    out.append(_json.loads(r[0]))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def build_development_history(self, memory_context_key: str = "", **ctx) -> dict:
+        """Fold the persisted immutable records into a chronological
+        ``DevelopmentHistory`` (regenerable; restart-deterministic). Never raises."""
+        try:
+            from strategy.development_history import (
+                build_history, MemoryContextKey)
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase8 import failed: {exc}"}
+        records = self.get_development_records(memory_context_key, **ctx)
+        context = None
+        if not memory_context_key and ctx:
+            context = MemoryContextKey(
+                driver=ctx.get("driver", ""), car=ctx.get("car", ""),
+                track=ctx.get("track", ""), layout_id=ctx.get("layout_id", ""),
+                discipline=ctx.get("discipline", ""),
+                gt7_version=ctx.get("gt7_version", ""),
+                compound=ctx.get("compound", ""))
+        history = build_history(records, context=context)
+        return {"ok": True, "history": history.to_dict(),
+                "record_count": history.review_count}
+
+    def build_cross_session_memory(self, memory_context_key: str = "", **ctx) -> dict:
+        """Fold the persisted records into permanent ``EngineeringMemory`` +
+        long-term ``ProgressMetrics`` + an ``EngineeringScorecard`` + the latest
+        session comparison + the engineering timeline. Deterministic + regenerable;
+        the whole result is a pure function of the immutable records. Never raises."""
+        try:
+            from strategy.development_history import build_history, build_timeline, MemoryContextKey
+            from strategy.engineering_memory import build_engineering_memory
+            from strategy.progress_metrics import (
+                build_progress_metrics, build_scorecard, compare_latest_sessions)
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase8 import failed: {exc}"}
+        records = self.get_development_records(memory_context_key, **ctx)
+        context = None
+        if not memory_context_key and ctx:
+            context = MemoryContextKey(
+                driver=ctx.get("driver", ""), car=ctx.get("car", ""),
+                track=ctx.get("track", ""), layout_id=ctx.get("layout_id", ""),
+                discipline=ctx.get("discipline", ""),
+                gt7_version=ctx.get("gt7_version", ""),
+                compound=ctx.get("compound", ""))
+        history = build_history(records, context=context)
+        memory = build_engineering_memory(history)
+        metrics = build_progress_metrics(history, memory)
+        scorecard = build_scorecard(history, memory, metrics)
+        comparison = compare_latest_sessions(history)
+        timeline = build_timeline(history)
+        return {
+            "ok": True, "history": history.to_dict(), "memory": memory.to_dict(),
+            "metrics": metrics.to_dict(), "scorecard": scorecard.to_dict(),
+            "comparison": (comparison.to_dict() if comparison else None),
+            "timeline": [e.to_dict() for e in timeline],
+            "record_count": history.review_count,
         }
 
     def get_learning_outcomes(

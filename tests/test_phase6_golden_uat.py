@@ -218,13 +218,16 @@ def test_scenario_L_restart_determinism(tmp_path):
     assert plan_a["snapshot"]["content_fingerprint"] == plan_b["snapshot"]["content_fingerprint"]
 
 
-# --- no migration (plan is regenerable) + frozen contracts ------------------
+# --- Phase 6 added no migration (plan is regenerable) — the live schema tracks
+# DB_VERSION, which later phases (Phase 8 → v24) legitimately advance ------------
 def test_no_migration_needed(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 23
     from strategy._setup_constants import DB_VERSION
-    assert DB_VERSION == 23
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
+    assert DB_VERSION >= 23
     src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-    assert "_migrate_v24" not in src
+    # Phase 6 itself introduced no _migrate_v24 (that arrived with Phase 8); guard
+    # against an unexpected next bump.
+    assert "_migrate_v25" not in src
 
 
 def test_frozen_contracts():

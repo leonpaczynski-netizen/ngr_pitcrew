@@ -54,7 +54,7 @@ def test_planning_subordinate_to_decision_authority():
 
 def test_no_migration_no_new_telemetry_table():
     src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-    assert "_DDL_V24" not in src and "_migrate_v24" not in src
+    assert "_DDL_V25" not in src and "_migrate_v25" not in src
 
 
 # --- architecture safety (20.11) -------------------------------------------

@@ -1,6 +1,37 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain Phase 7: Live Engineering State Monitor & Session Development Ledger — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain Phase 8: Cross-Session Engineering Development Memory & Driver Progress Intelligence — COMPLETE
+
+**Branch `eng-brain-phase8-development-memory` from `master` @ Phase 7 `dfc70a9` — committed, NOT pushed / no PR.** The permanent engineering memory ABOVE Phases 1-7: answers "what have we learned over every previous session?", not "what happened today?". DECIDES NOTHING — no experiment selection, setup authoring, lap evaluation, evidence mutation, or history rewriting. NO AI, no network, no prediction, no text interpretation.
+
+**Schema decision: additive migration to v24 (justified).** `DB_VERSION` 23 → **24** (`_migrate_v24` + `_DDL_V24` add ONE additive, append-only, IMMUTABLE table `engineering_development_records`); `RULE_ENGINE_VERSION` `46.0` unchanged. Unlike Phases 4/6/7 (regenerable → no migration), the memory context key needs driver/gt7_version/tyre_compound — only fully known at review time — so the immutable record is captured WITH its full context. Memory/history/metrics/scorecard/comparison are deterministic FOLDS over the stored record_json (regenerable → restart-identical fingerprints; immutability enforced via INSERT OR IGNORE, never UPDATE/DELETE, idempotent record_key).
+
+**Files changed:**
+- NEW `strategy/development_history.py` — `MemoryContextKey` (incompatible contexts never merge), `DevelopmentRecord` (idempotent key + time-independent fingerprint; changes/residuals/improvements/regressions/protected/window-snapshot/derived `ConstraintKind` knowledge), `build_history`, `build_timeline`.
+- NEW `strategy/engineering_memory.py` — `IssueMemory`/`WorkingWindowEvolution`/`ProtectedKnowledgeItem`/`EngineeringMemory` fold.
+- NEW `strategy/progress_metrics.py` — `numeric_trend` (single-session-never-flips), `ProgressMetrics`, `EngineeringScorecard`, `SessionComparison`.
+- MOD `data/session_db.py` — `_migrate_v24`/`_DDL_V24`; `record_engineering_development` (append-only, idempotent) wired best-effort into `review_and_learn`; `get_development_records`/`build_development_history`/`build_cross_session_memory` (read-only folds).
+- MOD `strategy/_setup_constants.py` — `DB_VERSION` 24.
+- NEW `ui/development_history_vm.py` (pure VM) + `ui/development_history_page.py` (`DevelopmentHistoryPage`, no Apply controls). MOD `ui/dashboard.py` + `ui/tab_registry.py` + `ui/product_flow.py` — NEW "Development History" tab (index 12, 13 tabs).
+- NEW `tests/test_phase8_{development_history,engineering_memory,progress_metrics,persistence,golden_uat,view_model}.py` (50) + `tests/test_phase8_ui_construction.py` (3, individual). Version guards advanced: group55-61 → v25; `test_session_db`/`test_phase5_persistence`/`test_phase6_golden_uat` track `DB_VERSION`; tab registry/count/order + `test_ui_structure_smoke` → 13 tabs. NEW `docs/ENGINEERING_BRAIN_PHASE8_DEVELOPMENT_MEMORY.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Reuse (no duplication):** Phase 3 outcomes (re-projected), Phase 6 residual re-classification + issue identity, Phase 5 working windows, Phase 3 failed-directions, Phase 1 scope. No second outcome/residual/recurrence/identity authority.
+
+**Central-loop proof (golden UAT through the production path):** `review_and_learn` (Phase 3→4→5→6) now also captures an immutable Phase-8 record; scenarios run the real loop across multiple Porsche-RSR-at-Fuji sessions and assert: a completed review is captured + retrievable; capture is idempotent (re-review → no duplicate); cross-session memory/metrics/scorecard/timeline build; restart-determinism; the capture writes nothing to prior stores.
+
+**Tests run / results:** new suites **50 non-UI + 3 UI (individual) passed**. Frozen contracts + tab wiring **340 passed**. Version-guard + adjacent **182 passed**. Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** driver/gt7_version are honest inputs (default unknown when unresolved); compound resolved from the test session's laps; a live "recompute on new review" push into the page is deferred (data is captured immediately regardless); trend thresholds are fixed constants.
+
+**GO/NO-GO: GO.** The system records each completed review immutably with its full context, never mixes incompatible contexts, folds permanent memory (recurring issues, successful/failed fixes, working-window evolution, protected behaviours + never-forget constraints), computes deterministic long-term progress/scorecard/comparison where a single session can never flip a trend, regenerates identically on restart, adds only an additive append-only table, rewrites no history and writes nothing to prior evidence, and exposes no setup-authoring control. Every Phase 1-7 guarantee preserved.
+
+**Recommended Phase 9:** cross-context transfer & regression-risk foresight — surface the relevant permanent-memory constraints (failed directions, learned minimums, known-unstable combinations) + prior cross-session outcomes when a new experiment is proposed, still a pure observer subordinate to the Phase-3/5 decision authority.
+
+---
+
+## Prior objective (2026-07-19) — Engineering Brain Phase 7: Live Engineering State Monitor & Session Development Ledger — COMPLETE
 
 **Branch `eng-brain-phase7-live-state-monitor` from `master` @ Phase 6 `abfa14b` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER over the Phase 1-6 spine: it answers "what is the car doing right now?", NOT "what experiment next?". It DECIDES NOTHING — no experiment selection, no evidence scoring, no lap evaluation, no setup authoring, no working-window mutation, no candidate reordering. NO generative AI, no network, no auto-apply/revert, no whole-app redesign, no new authority.
 
