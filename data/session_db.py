@@ -4259,6 +4259,36 @@ class SessionDB:
         result["record_count"] = int(memory_result.get("record_count") or 0)
         return result
 
+    # ------------------------------------------------------------------
+    # Mechanism-constrained intervention hypotheses (Program 2, Phase 14 —
+    # READ-ONLY). Converts each Phase-13 mechanism-annotated diagnosis into
+    # scientifically-defensible controlled-test DIRECTIONS constrained by the
+    # supported physical mechanism. It authors NO setup value, applies/approves
+    # nothing, and mutates no diagnosis/outcome/working-window/calibration/
+    # setup-history/active-setup. Reuses the Phase-13 annotation aggregate ONCE
+    # (no per-hypothesis / per-experiment queries). NO migration (DB stays v25).
+    # Never raises.
+    # ------------------------------------------------------------------
+    def build_intervention_hypotheses(self, memory_context_key: str = "", *,
+                                      gearbox_state: str = "", speed_context: str = "",
+                                      driver_preference: "dict | None" = None,
+                                      outcome_history=None, **ctx) -> dict:
+        """Build mechanism-constrained intervention hypotheses for a context. Composes the
+        Phase-13 ``build_mechanism_annotations`` aggregate exactly once, then runs the pure
+        Phase-14 reasoning. Deterministic + regenerable + restart-identical. Read-only."""
+        try:
+            from strategy.intervention_hypothesis import hypotheses_from_report
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase14 import failed: {exc}"}
+        report = self.build_mechanism_annotations(memory_context_key, **ctx)
+        if not isinstance(report, dict) or not report.get("ok"):
+            return {"ok": True, "hypothesis_sets": [], "count": 0, "sets_with_testable": 0}
+        result = hypotheses_from_report(
+            report, gearbox_state=gearbox_state, speed_context=speed_context,
+            driver_preference=driver_preference, outcome_history=outcome_history)
+        result["record_count"] = int(report.get("record_count") or 0)
+        return result
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
