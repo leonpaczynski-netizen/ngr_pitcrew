@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 17: Experiment Portfolio Optimisation & Information-Gain Selection — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 18: Engineering Campaigns & Multi-Session Development Planning — COMPLETE
+
+**Branch `eng-brain-phase18-engineering-campaigns` from `60a7e48` (Phase-17 tip) — committed, NOT pushed / no PR / not merged.** A deterministic, READ-ONLY layer that groups a Phase-17 experiment portfolio into coherent, multi-session vehicle-development CAMPAIGNS (what objective, what learned, what uncertain, which experiments, how close to complete). It is NOT a diagnosis/synthesis/ranking/lifecycle/Apply authority — it ORCHESTRATES the existing ones (ranking stays owned by Phase 17, lifecycle by Phase 16, outcomes/reconciliation/calibration by Program 1). NEVER applies/approves/freezes a setup, creates/updates experiments, alters outcomes, writes engineering records, performs hidden weighting, re-ranks independently of Phase 17, or marks a successful-but-unvalidated objective complete. No ML/stats/NLP/AI/network.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. Campaigns are reconstructed from existing records (portfolio + development records + calibration) → restart-identical `content_fingerprint`.
+
+**Files changed (Phase 18):**
+- NEW `strategy/engineering_campaign.py` — `CampaignIdentity` (scoped to exact context; incompatible never merged) + `CampaignObjective` (bounded, evidence-derived, traceable) + `CampaignStatus` (8) + `CampaignStageType` (7) + `CampaignRole` (7; references Phase-17 candidates, never copies ranking) + `CompletionCriterion` + `CampaignProgress` (transparent: progress_pct = criteria satisfied/total, factors visible) + `EngineeringCampaign`/`EngineeringCampaignProgramme`; deterministic grouping by objective key (issue-family, region); multi-session outcome projection; stale detection; recommended focus + roadmap; `build_campaign_programme`.
+- NEW `strategy/engineering_campaign_render.py` — programme summary + campaign list + per-campaign detail + roadmap; no Apply/freeze wording.
+- MOD `data/session_db.py` — NEW read-only `build_engineering_campaign_programme(**ctx, applied_setup=..., session_identity=..., session_context=...)` (reuses `build_experiment_portfolio` ONCE, feeding it the projected outcome history so Phase-17 retirement fires; + one dev-record read + one calibration read; no migration; DB stays v25) + `_campaign_outcome_history`.
+- NEW `ui/engineering_campaign_vm.py` + `ui/engineering_campaign_panel.py` (`EngineeringCampaignPanel`, NO Apply/Approve/Revert/freeze/edit/create controls). MOD `ui/development_history_page.py` (embed + `update_engineering_campaigns`). MOD `ui/dashboard.py` (`_refresh_engineering_campaigns` off the Qt thread).
+- NEW `tests/test_phase18_{campaign_domain,golden,safety,query_shape,ui_construction}.py` (41 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE18_ENGINEERING_CAMPAIGNS.md`.
+
+**Doctrine highlights:** grouping is by bounded objective (issue-family + region), not per candidate/field and not collapsing unrelated diagnoses; a single confirmed improvement → VALIDATION_REQUIRED (never COMPLETED); only-regressions never look near-complete; a prior-regressed direction stays retired/visible; incompatible-context evidence is excluded (never merged), and an active-context mismatch → STALE with the mismatch explained; progress is `criteria_satisfied/total` with visible factors (no black box); ranking stays owned by Phase 17 and execution by Phase 16 — the frozen Apply gate and existing lifecycle remain the only execution routes.
+
+**Next: Phase 19 — Campaign Persistence, Evidence-Saturation & Cost-of-Knowledge** (durable campaign records + explicit ABANDONED/COMPLETED transitions, evidence-saturation / diminishing-info-gain stop-testing detection, per-experiment cost modelling against a session budget — still read-only advisory through every gate + manual Apply). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 17: Experiment Portfolio Optimisation & Information-Gain Selection — COMPLETE
 
 **Branch `eng-brain-phase17-experiment-portfolio-optimisation` from `3cc36e8` (Phase-16 tip) — committed, NOT pushed / no PR / not merged.** The deterministic engineering PLANNER (immediately before Phase 15) that decides "which experiment should the driver perform next?" — optimising for ENGINEERING VALUE (information gain FIRST), NOT lap time. It CONSUMES the existing authorities (Phase-15 bounded experiments + the embedded Phase-14 hypotheses + outcome history + prediction calibration + working-window protection + confirmed-good) and replaces none. NEVER mutates a setup/experiment/outcome/reconciliation/calibration, applies anything, writes to the DB, or duplicates any lifecycle or scoring authority. No ML/stats/NLP/AI/network.
 
