@@ -28,6 +28,7 @@ from ui.mechanism_annotation_panel import MechanismAnnotationPanel
 from ui.intervention_hypothesis_panel import InterventionHypothesisPanel
 from ui.experiment_synthesis_panel import ExperimentSynthesisPanel
 from ui.engineering_lifecycle_panel import EngineeringLifecyclePanel
+from ui.engineering_plan_panel import EngineeringPlanPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -92,6 +93,11 @@ class DevelopmentHistoryPage(QWidget):
         # to calibration). Read-only orchestration connecting existing authorities; not applied.
         self._lifecycle_panel = EngineeringLifecyclePanel()
         root.addWidget(self._lifecycle_panel)
+
+        # Phase 17 (Program 2) — experiment portfolio optimisation & information-gain
+        # selection: which experiment next, ranked by engineering value. Advisory; not applied.
+        self._plan_panel = EngineeringPlanPanel()
+        root.addWidget(self._plan_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -211,6 +217,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-16 closed-loop engineering lifecycle (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._lifecycle_panel.update_result(lifecycle_result)
+
+    def update_engineering_plan(self, plan_result) -> None:
+        """Render the Phase-17 experiment portfolio / engineering plan (read-only, advisory).
+        Receives an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._plan_panel.update_result(plan_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
