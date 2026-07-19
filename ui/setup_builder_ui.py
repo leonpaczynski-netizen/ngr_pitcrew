@@ -1571,6 +1571,22 @@ class SetupBuilderMixin:
                 b0 = blocked[0]
                 parts.append(f"Blocked alternative: {b0.get('candidate_id')} — "
                              + "; ".join(b0.get("hard_blockers", [])) + ".")
+            # Phase 10: deterministic engineering pre-flight review of the EXACT selected
+            # experiment (read-only, advisory, never blocks). Surfaced beside the proposal.
+            try:
+                ev = self._build_event_context()
+                pf = self._db.build_experiment_preflight(
+                    dict(sel), car=str(getattr(ev, "car", "") or ""),
+                    track=str(getattr(ev, "track", "") or ""),
+                    layout_id=str(getattr(ev, "layout_id", "") or ""),
+                    discipline=str(getattr(ev, "discipline", "") or "")) \
+                    if self._db is not None else {"ok": False}
+                if pf.get("ok"):
+                    from ui import preflight_review_vm as _pf_vm
+                    for _line in _pf_vm.compact_summary(pf):
+                        parts.append(_line)
+            except Exception:
+                pass
         elif nxt.get("no_selection_reason"):
             parts.append("No safe next experiment: "
                          + str(nxt["no_selection_reason"]).replace("_", " ")

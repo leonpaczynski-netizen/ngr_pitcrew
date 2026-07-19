@@ -1,6 +1,36 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain Phase 9: Cross-Context Engineering Transfer & Regression Risk Intelligence — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain Phase 10: Engineering Experiment Pre-Flight Review — COMPLETE
+
+**Branch `eng-brain-phase10-preflight-review` from `master` @ Phase 9 `b979be0` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-9: before the selected experiment is shown to the driver, performs a deterministic engineering pre-flight review of the EXACT Phase-5 selection. NEVER creates experiments / changes priorities-ranking / changes setup values / blocks recommendations / changes working windows / mutates evidence-memory-outcomes. No AI, no prediction, no statistical inference.
+
+**Schema decision: NO migration.** `DB_VERSION` stays **24**; `RULE_ENGINE_VERSION` `46.0`. The review is a deterministic regenerable function of the Phase-5 candidate + Phase-9 context + Phase-8 memory + the canonical interaction graph — a restart reproduces identical fingerprints. No new table, no new tab.
+
+**Files changed:**
+- NEW `strategy/change_consequences.py` — `derive_consequences` (PRIMARY_EFFECT/SIDE_EFFECT/HISTORICAL/WORKING_WINDOW/INTERACTION; consumes the candidate's own interaction-graph effects, no re-derived physics), `coupled_fields` (shared handling axes).
+- NEW `strategy/engineering_checklist.py` — `build_checklist` (✓/⚠/? items + `RiskLevel` LOW/MODERATE/HIGH/UNKNOWN; descriptive only, never changes the recommendation).
+- NEW `strategy/preflight_review.py` — `build_preflight_review` (echoes the exact selection verbatim + 12 fixed sections + consequences + checklist + risk + time-independent fingerprint).
+- MOD `data/session_db.py` — `build_experiment_preflight` orchestrator (read-only, no persistence, never blocks).
+- NEW `ui/preflight_review_vm.py` (pure VM) + `ui/preflight_review_panel.py` (`PreFlightReviewPanel`, no Apply/approval controls). MOD `ui/setup_builder_ui.py` (`_display_outcome_result` appends a compact pre-flight summary beside the selected next experiment, guarded best-effort).
+- NEW `tests/test_phase10_{change_consequences,engineering_checklist,preflight_review,orchestrator,view_model}.py` (40) + `tests/test_phase10_ui_construction.py` (3, individual). NEW `docs/ENGINEERING_BRAIN_PHASE10_PREFLIGHT_REVIEW.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff. NO version-guard bumps (no migration).
+
+**Reuse (no duplication):** Phase 5 `CandidateExperiment` (echoed verbatim), Phase 9 `build_engineering_context`, Phase 8 `build_cross_session_memory`, `PARAMETER_INTERACTIONS`. No new physics/authority.
+
+**Central-loop proof (golden UAT through the production path):** the real `review_and_learn` loop resolves understeer at T3 by raising aero_front (Porsche RSR @ Fuji) → captured by Phase 8; Phase 10 then pre-flights a proposed follow-up aero_front change and surfaces the historical-success section + primary-effect consequence; confirmed high-severity failed-direction → HIGH risk; no comparable history → UNKNOWN; inputs never mutated; restart-determinism; writes-nothing.
+
+**Tests run / results:** new suites **40 non-UI + 3 UI (individual) passed**. Frozen contracts + phase7/8/9 + tabs + setup-builder **443 passed** (+ setup builder UI suites individually green: group25/41/42/44). Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** the compact pre-flight text is surfaced in the Setup Builder outcome flow; docking the full `PreFlightReviewPanel` widget into the Setup Builder layout is deferred (panel + orchestrator complete + tested); "current engineering state" uses the Phase-8 summary (a live Phase-7 feed is deferred); risk thresholds are fixed constants.
+
+**GO/NO-GO: GO.** Before the experiment is shown, the system reviews the exact Phase-5 selection: assembles 12 deterministic sections, lists expected consequences referencing engineering evidence, produces a ✓/⚠ checklist with explanations, and a descriptive LOW/MODERATE/HIGH/UNKNOWN risk — echoing the selection verbatim, mutating nothing, regenerating identically on restart, adding no schema, and exposing no Apply/approval control. Every Phase 1-9 guarantee preserved.
+
+**Recommended Phase 11:** post-flight reconciliation — after the experiment is tested, deterministically compare the pre-flight prediction vs the Phase-3 actual outcome (which cautions materialised, which consequences held) and fold that into the Phase-8 memory as pre-flight calibration, still a pure observer.
+
+---
+
+## Prior objective (2026-07-19) — Engineering Brain Phase 9: Cross-Context Engineering Transfer & Regression Risk Intelligence — COMPLETE
 
 **Branch `eng-brain-phase9-context-transfer` from `master` @ Phase 8 `da53569` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-8: before an experiment is proposed it surfaces every relevant lesson from COMPATIBLE historical contexts. REPORTS ONLY — evaluates no evidence, creates/chooses no experiment, modifies no working window, mutates nothing, and NEVER BLOCKS (authority stays with Phases 3/5/6). No AI, no prediction, no probability, no natural-language reasoning.
 

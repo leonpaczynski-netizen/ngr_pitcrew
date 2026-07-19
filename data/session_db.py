@@ -3980,6 +3980,48 @@ class SessionDB:
             "candidate_record_count": len(records),
         }
 
+    # ------------------------------------------------------------------
+    # Engineering experiment pre-flight review (Phase 10 — READ-ONLY,
+    # NO migration; regenerates from Phase-8/9 outputs). Reviews the EXACT
+    # Phase-5 selection; re-selects nothing, changes nothing, blocks nothing.
+    # ------------------------------------------------------------------
+    def build_experiment_preflight(
+        self, selection: dict, *, car: str = "", track: str = "", layout_id: str = "",
+        discipline: str = "", driver: str = "", gt7_version: str = "",
+        compound: str = "",
+    ) -> dict:
+        """Phase 10 orchestrator: perform a deterministic engineering pre-flight review
+        of the EXACT Phase-5 selected experiment before it is shown to the driver.
+
+        ``selection`` is the Phase-5 candidate dict (``select_next_experiment`` →
+        ``selected``); it is echoed verbatim and never re-selected or modified. Read-only:
+        builds the Phase-9 context for the proposed change + the Phase-8 memory, then
+        assembles the review. Regenerable (NO migration); never raises; NEVER blocks."""
+        try:
+            from strategy.preflight_review import build_preflight_review
+            from strategy.setup_synthesis import PARAMETER_INTERACTIONS
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase10 import failed: {exc}"}
+        if not isinstance(selection, dict) or not str(selection.get("field") or ""):
+            return {"ok": False, "reason": "no selected experiment to review"}
+        proposed_change = {
+            "field": str(selection.get("field") or ""),
+            "direction": str(selection.get("direction") or ""),
+            "value": selection.get("proposed_value"),
+        }
+        context = self.build_engineering_context(
+            car=car, track=track, layout_id=layout_id, discipline=discipline,
+            driver=driver, gt7_version=gt7_version, compound=compound,
+            proposed_change=proposed_change)
+        memory = self.build_cross_session_memory(
+            car=car, track=track, layout_id=layout_id, discipline=discipline,
+            gt7_version=gt7_version, compound=compound, driver=driver)
+        review = build_preflight_review(
+            selection, context=context, memory=memory,
+            interactions=PARAMETER_INTERACTIONS)
+        return {"ok": True, "review": review.to_dict(),
+                "context_fingerprints": context.get("fingerprints", {})}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
