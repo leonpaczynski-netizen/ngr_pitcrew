@@ -4226,6 +4226,39 @@ class SessionDB:
         return {"ok": True, "record_count": n, "records": records,
                 "calibration": calibration}
 
+    # ------------------------------------------------------------------
+    # Mechanism-annotated diagnosis (Program 2, Phase 13 — READ-ONLY).
+    # Explains the vehicle-dynamics MECHANISMS behind each canonical Program-1
+    # diagnosis by querying the Phase-12 knowledge authority. Regenerates purely
+    # from the immutable Phase-8 development records + Phase-11 reconciliation
+    # records + the static Phase-12 knowledge; NO migration (DB stays v25). It
+    # changes no outcome, working window, lockout or prediction calibration, and
+    # authors no setup value. Never raises.
+    # ------------------------------------------------------------------
+    def build_mechanism_annotations(self, memory_context_key: str = "", **ctx) -> dict:
+        """Annotate every eligible canonical diagnosis for a context with its
+        physical mechanisms. Deterministic + regenerable + restart-identical: a pure
+        function of the immutable records and the static Phase-12 knowledge. Read-only."""
+        try:
+            from strategy.mechanism_annotation import annotations_from_memory
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase13 import failed: {exc}"}
+        memory_result = self.build_cross_session_memory(memory_context_key, **ctx)
+        if not isinstance(memory_result, dict) or not memory_result.get("ok"):
+            return {"ok": True, "annotations": [], "count": 0, "supported_count": 0,
+                    "record_count": 0}
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx)
+        context = {
+            "driver": ctx.get("driver", ""), "car": ctx.get("car", ""),
+            "track": ctx.get("track", ""), "layout": ctx.get("layout_id", ""),
+            "discipline": ctx.get("discipline", ""),
+            "context_fingerprint": memory_context_key or "",
+        }
+        result = annotations_from_memory(
+            memory_result.get("memory") or {}, calibration=calibration, context=context)
+        result["record_count"] = int(memory_result.get("record_count") or 0)
+        return result
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
