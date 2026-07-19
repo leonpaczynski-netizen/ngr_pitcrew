@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 16: Guarded Experiment Lifecycle & Postflight Loop Closure — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 17: Experiment Portfolio Optimisation & Information-Gain Selection — COMPLETE
+
+**Branch `eng-brain-phase17-experiment-portfolio-optimisation` from `3cc36e8` (Phase-16 tip) — committed, NOT pushed / no PR / not merged.** The deterministic engineering PLANNER (immediately before Phase 15) that decides "which experiment should the driver perform next?" — optimising for ENGINEERING VALUE (information gain FIRST), NOT lap time. It CONSUMES the existing authorities (Phase-15 bounded experiments + the embedded Phase-14 hypotheses + outcome history + prediction calibration + working-window protection + confirmed-good) and replaces none. NEVER mutates a setup/experiment/outcome/reconciliation/calibration, applies anything, writes to the DB, or duplicates any lifecycle or scoring authority. No ML/stats/NLP/AI/network.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. The portfolio is a pure function of the Phase-15 aggregate + calibration + session context → restart-identical `content_fingerprint`.
+
+**Files changed (Phase 17):**
+- NEW `strategy/experiment_portfolio.py` — 13 individually-visible value dimensions (`DIMENSION_WEIGHTS` exposed, `information_gain` weighted highest — no hidden black box) → `ValueDimension`/`ExperimentValuation`/`EngineeringPortfolio`; `PortfolioRole` (HIGHEST_VALUE/ALTERNATIVE/DEFERRED/BLOCKED/REDUNDANT/OBSOLETE); `DependencyKind` dependency graph (SUPERSEDES/MUTUALLY_EXCLUSIVE/UNNECESSARY_IF_FAILS/DEPENDS_ON); retirement (already-confirmed/rejected/superseded → OBSOLETE); `SessionSuitability` (unknown context never invented); advisory roadmap; `build_portfolio`. Ranks legal experiments by engineering value; mutates/applies/persists nothing.
+- NEW `strategy/experiment_portfolio_render.py` — visible dimensions + roadmap; "information gain first, not lap time"; no Apply wording.
+- MOD `data/session_db.py` — NEW read-only `build_experiment_portfolio(**ctx, applied_setup=..., session_identity=..., session_context=..., outcome_history=...)` (reuses `build_bounded_setup_experiments` ONCE + calibration; no migration; DB stays v25).
+- NEW `ui/engineering_plan_vm.py` + `ui/engineering_plan_panel.py` (`EngineeringPlanPanel`, NO Apply/Approve/Revert/edit controls). MOD `ui/development_history_page.py` (embed + `update_engineering_plan`). MOD `ui/dashboard.py` (`_refresh_engineering_plan` off the Qt thread).
+- NEW `tests/test_phase17_{portfolio_domain,golden,safety,query_shape,ui_construction}.py` (37 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE17_EXPERIMENT_PORTFOLIO_OPTIMISATION.md`.
+
+**Doctrine highlights:** information gain is the primary objective (weight 3.0, highest); lap time is never a scoring dimension; every value dimension + weight is visible (no black box); experiments are never duplicated (redundant/superseded deduped); already-confirmed/rejected/superseded experiments are retired (OBSOLETE with reason); dependencies are explicit; unknown session context lowers confidence and is never invented; ties stay ties (manual choice); the roadmap and the whole plan are advisory — the frozen Apply gate remains the only route to the car.
+
+**Next: Phase 18 — Cross-Session Development Campaign & Convergence Detection** (sequence the ranked portfolio into a multi-session campaign, detect working-window convergence / diminishing information gain and recommend freezing, re-open on cross-session regression — still through every gate + manual Apply). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 16: Guarded Experiment Lifecycle & Postflight Loop Closure — COMPLETE
 
 **Branch `eng-brain-phase16-guarded-experiment-lifecycle` from `1f90367` (Phase-15 tip) — committed, NOT pushed / no PR / not merged.** The deterministic, READ-ONLY orchestration layer that CLOSES the Engineering-Brain loop by CONNECTING existing authorities — it creates no new experiment system, Apply path, outcome recorder or reconciler. It converts a READY Phase-15 bounded experiment into a canonical `SetupExperiment` request (via the existing `build_experiment_from_recommendation`), routes it through the existing Phase-10 preflight, and — for an executed experiment — assembles a read-only closed-loop summary from the existing Phase-3 outcome + Phase-11 reconciliation + prediction calibration. NEVER applies / bypasses the frozen Apply gate / persists-duplicates an experiment / creates an outcome or reconciliation / invents feedback / simulates results / mutates anything. No ML/stats/NLP/AI/network.
 
