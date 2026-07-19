@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 15: Minimum-Effective Experiment Synthesis Handoff — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 16: Guarded Experiment Lifecycle & Postflight Loop Closure — COMPLETE
+
+**Branch `eng-brain-phase16-guarded-experiment-lifecycle` from `1f90367` (Phase-15 tip) — committed, NOT pushed / no PR / not merged.** The deterministic, READ-ONLY orchestration layer that CLOSES the Engineering-Brain loop by CONNECTING existing authorities — it creates no new experiment system, Apply path, outcome recorder or reconciler. It converts a READY Phase-15 bounded experiment into a canonical `SetupExperiment` request (via the existing `build_experiment_from_recommendation`), routes it through the existing Phase-10 preflight, and — for an executed experiment — assembles a read-only closed-loop summary from the existing Phase-3 outcome + Phase-11 reconciliation + prediction calibration. NEVER applies / bypasses the frozen Apply gate / persists-duplicates an experiment / creates an outcome or reconciliation / invents feedback / simulates results / mutates anything. No ML/stats/NLP/AI/network.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. The lifecycle summary is a pure function of existing records → restart-identical `content_fingerprint`.
+
+**Files changed (Phase 16):**
+- NEW `strategy/experiment_lifecycle.py` — `ExperimentLifecycleState` (16) + `LifecycleTrace` (unbroken provenance chain, `is_unbroken_to`) + `ExperimentExecutionRequest`/`ExperimentExecutionResult`/`ExperimentLifecycleSummary`; `build_execution_request` (READY Phase-15 candidate → canonical `SetupExperiment` status=draft via `build_experiment_from_recommendation`), `assemble_execution_result` (preflight ok → READY_FOR_MANUAL_APPLY / fail → PREFLIGHT_FAILED), `assemble_lifecycle_summary` (from existing experiment+outcome+reconciliation+calibration). Applies/persists/records/mutates nothing.
+- NEW `strategy/experiment_lifecycle_render.py` — ordered loop-stage rows + traceability; no Apply-control wording.
+- MOD `data/session_db.py` — NEW read-only `build_experiment_execution(candidate, ...)` (one candidate → EXISTING Phase-10 preflight) + `build_engineering_lifecycle(**ctx, applied_setup=..., session_identity=...)` (aggregate; reuses `build_bounded_setup_experiments` ONCE + calibration + reconciliation records; no migration; DB stays v25).
+- NEW `ui/engineering_lifecycle_vm.py` + `ui/engineering_lifecycle_panel.py` (`EngineeringLifecyclePanel`, NO Apply/Approve/Revert/edit controls). MOD `ui/development_history_page.py` (embed + `update_engineering_lifecycle`). MOD `ui/dashboard.py` (`_refresh_engineering_lifecycle` off the Qt thread; passes the canonical applied setup).
+- NEW `tests/test_phase16_{lifecycle_domain,golden,safety,query_shape,ui_construction}.py` (35 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE16_GUARDED_EXPERIMENT_LIFECYCLE.md`.
+
+**The Engineering Brain loop is now closed end-to-end:** evidence → diagnosis → mechanism (P13) → hypothesis (P14) → bounded experiment (P15) → canonical `SetupExperiment` → Phase-10 preflight → frozen Apply gate (manual) → Phase-3 outcome → Phase-11 reconciliation → prediction calibration, with full traceability at every stage and no duplicate authority.
+
+**Next: Phase 17 — Autonomous Development Cadence & Regression Guard** (deterministic one-at-a-time next-experiment queue across diagnoses, respecting working-window locks / failed-direction lockouts / protected-good, still through every gate + manual Apply). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 15: Minimum-Effective Experiment Synthesis Handoff — COMPLETE
 
 **Branch `eng-brain-phase15-minimum-effective-experiment-synthesis` from `8e48beb` (Phase-14 tip) — committed, NOT pushed / no PR / not merged.** The deterministic, READ-ONLY handoff from a valid, testable Phase-14 intervention hypothesis into the existing setup-synthesis / setup-experiment authorities: the output is a BOUNDED setup-experiment candidate — the smallest legal, reversible numeric setup step that tests the hypothesis without disturbing confirmed-good behaviour. Answers "what is the smallest legal reversible numeric experiment that tests this?", never "what is the final ideal setup?". NEVER auto-applies / bypasses the Apply gate / invents limits / builds a second synthesiser / optimises the whole car / silently changes coupled fields / mutates diagnosis-mechanism-outcome-calibration-setup-history-active-setup / persists an experiment. No ML/stats/NLP/AI/network.
 
