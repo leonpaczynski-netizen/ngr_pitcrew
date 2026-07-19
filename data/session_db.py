@@ -5146,7 +5146,7 @@ class SessionDB:
             return None
         programme = pk_result.get("programme_knowledge")
         graph = programme.get("knowledge_graph") if isinstance(programme, dict) else None
-        if not isinstance(graph, dict) or not (graph.get("known_domains") or []):
+        if not isinstance(graph, dict) or not (graph.get("domains") or []):
             return None
         compatibility = programme.get("compatibility") or {}
         source_ctx = dict(compatibility.get("primary_key") or {})
@@ -5160,6 +5160,12 @@ class SessionDB:
             discipline=str(source_ctx.get("discipline", "") or ""),
             gt7_version=str(source_ctx.get("gt7_version", "") or ""),
             driver=str(source_ctx.get("driver", "") or ""))
+        # Proceed when the programme has established knowledge OR any recorded evidence: negative
+        # learning (regressions that retire a domain out of known_domains) must stay visible to the
+        # downstream read-only layers, not vanish. Only a programme with neither known knowledge nor
+        # any evidence yields no chain.
+        if not (graph.get("known_domains") or []) and not records:
+            return None
         timeline = _bpt(programme, playbook, records).to_dict()
         # Expose the bounded evidence records read here (the single bulk read) so later read-only
         # layers (Phase 27+) can derive per-domain context breadth WITHOUT a second DB query.
@@ -5256,6 +5262,35 @@ class SessionDB:
         report = _brdy(chain["timeline"], chain["programme"], revalidation, coverage).to_dict()
         return {"ok": True, "readiness": report, "grade": report.get("programme_grade"),
                 "domain_count": len(report.get("items") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
+    def build_programme_contradiction_report(self, memory_context_key: str = "", *,
+                                             applied_setup=None, session_identity=None,
+                                             gearbox_state="", speed_context="", session_context=None,
+                                             session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Knowledge Contradiction Report (Program 2, Phase 29): where
+        the evidence contradicts itself (a confirming and a regressing conclusion for the same known
+        domain) and whether each disagreement is resolved by context, resolved by stronger
+        independent evidence, or genuinely open. Reuses the in-memory knowledge chain (Phase-22 built
+        ONCE; Phase-23/24/25 derived purely) and the SAME bounded evidence records the chain read -
+        via the canonical Phase-25 record→domain mapping. Never resolves by majority or recency.
+        Read-only; no N+1; no writes; no migration; no wall-clock; DB stays v26; deterministic;
+        never raises."""
+        try:
+            from strategy.programme_contradiction_report import (
+                build_programme_contradiction_report as _bcon)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase29 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "contradiction": None, "contradiction_count": 0, "open_count": 0}
+        report = _bcon(chain["timeline"], chain["programme"], chain.get("records") or []).to_dict()
+        return {"ok": True, "contradiction": report,
+                "contradiction_count": len(report.get("contradictions") or []),
+                "open_count": len(report.get("open_contradictions") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
     def get_learning_outcomes(
