@@ -38,6 +38,7 @@ from ui.engineering_transfer_panel import EngineeringTransferPanel
 from ui.engineering_playbook_panel import EngineeringPlaybookPanel
 from ui.engineering_timeline_panel import EngineeringTimelinePanel
 from ui.engineering_revalidation_panel import EngineeringRevalidationPanel
+from ui.engineering_coverage_panel import EngineeringCoveragePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -160,6 +161,12 @@ class DevelopmentHistoryPage(QWidget):
         # or evidence weakened. Read-only; advisory; dates are evidence data not an expiry; no setup.
         self._revalidation_panel = EngineeringRevalidationPanel()
         root.addWidget(self._revalidation_panel)
+
+        # Phase 27 (Program 2) — evidence coverage & blind-spot mapping: where each known domain is
+        # well supported and where more evidence would strengthen confidence. Read-only; advisory;
+        # a blind spot is not a fault; missing coverage means untested not wrong; no setup values.
+        self._coverage_panel = EngineeringCoveragePanel()
+        root.addWidget(self._coverage_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -329,6 +336,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-26 knowledge decay & re-validation status (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._revalidation_panel.update_result(revalidation_result)
+
+    def update_programme_evidence_coverage_report(self, coverage_result) -> None:
+        """Render the Phase-27 evidence coverage & blind-spot map (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._coverage_panel.update_result(coverage_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
