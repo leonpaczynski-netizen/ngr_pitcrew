@@ -26,6 +26,7 @@ from ui.postflight_review_panel import PostFlightReviewPanel
 from ui.engineering_knowledge_panel import EngineeringKnowledgePanel
 from ui.mechanism_annotation_panel import MechanismAnnotationPanel
 from ui.intervention_hypothesis_panel import InterventionHypothesisPanel
+from ui.experiment_synthesis_panel import ExperimentSynthesisPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -80,6 +81,11 @@ class DevelopmentHistoryPage(QWidget):
         # controlled-test directions). Advisory-only; authors no value, applies nothing.
         self._intervention_panel = InterventionHypothesisPanel()
         root.addWidget(self._intervention_panel)
+
+        # Phase 15 (Program 2) — minimum-effective bounded experiment synthesis (smallest
+        # legal reversible numeric TEST off the applied baseline). Advisory; not applied.
+        self._synthesis_panel = ExperimentSynthesisPanel()
+        root.addWidget(self._synthesis_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -189,6 +195,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-14 mechanism-constrained intervention hypotheses (read-only,
         advisory). Receives an immutable, pre-built dict (build runs off the Qt thread)."""
         self._intervention_panel.update_result(hypothesis_result)
+
+    def update_experiment_synthesis(self, synthesis_result) -> None:
+        """Render the Phase-15 bounded experiment synthesis (read-only, advisory). Receives
+        an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._synthesis_panel.update_result(synthesis_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
