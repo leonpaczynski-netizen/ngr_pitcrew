@@ -4846,6 +4846,110 @@ class SessionDB:
                 "campaign_count": len(report.get("campaigns") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def _distinct_engineering_contexts(self) -> list:
+        """Return the distinct event contexts present in the immutable development records — one
+        SELECT DISTINCT (bounded by number of events, not campaigns). Read-only; never raises."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT DISTINCT car, track, layout_id, discipline, driver, gt7_version, "
+                    "compound, memory_context_key FROM engineering_development_records "
+                    "ORDER BY car, discipline, gt7_version, driver, track, layout_id").fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def build_programme_knowledge_report(self, memory_context_key: str = "", *,
+                                         applied_setup: "dict | None" = None,
+                                         session_identity: "dict | None" = None,
+                                         gearbox_state: str = "", speed_context: str = "",
+                                         session_context: "dict | None" = None,
+                                         session_budget: "dict | None" = None,
+                                         now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY Programme Knowledge Report (Program 2, Phase 22): the Engineering
+        Knowledge Graph rolled up across compatible events. Enumerates the distinct event contexts
+        (one SELECT DISTINCT), builds the Phase-21 season report ONCE for each context COMPATIBLE
+        with the current one (same car / discipline / GT7 version / driver — different tracks may
+        merge), enriches each campaign with its Phase-21 knowledge state, and runs the pure
+        Phase-22 aggregators. Incompatible contexts are surfaced as separate programme groups (with
+        the reason) but not merged. It ranks / schedules / completes / writes NOTHING; DB stays
+        v26 (no persistence); deterministic; regenerable; never raises."""
+        try:
+            from strategy.programme_knowledge_report import build_programme_knowledge as _bpk
+            from strategy.multi_event_rollup import COMPATIBILITY_FIELDS
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase22 import failed: {exc}"}
+
+        def _compat(d):
+            return tuple(str(d.get(f, "") or "").strip().lower() for f in COMPATIBILITY_FIELDS)
+
+        primary_ctx = {"car": str(ctx.get("car", "") or ""),
+                       "discipline": str(ctx.get("discipline", "") or ""),
+                       "gt7_version": str(ctx.get("gt7_version", "") or ""),
+                       "driver": str(ctx.get("driver", "") or "")}
+        primary_key = _compat(primary_ctx)
+
+        contexts = self._distinct_engineering_contexts()
+        if not contexts:
+            # fall back to the caller's context alone (empty DB / no records)
+            contexts = [{"car": primary_ctx["car"], "track": str(ctx.get("track", "") or ""),
+                         "layout_id": str(ctx.get("layout_id", "") or ""),
+                         "discipline": primary_ctx["discipline"],
+                         "driver": primary_ctx["driver"],
+                         "gt7_version": primary_ctx["gt7_version"],
+                         "compound": str(ctx.get("compound", "") or ""),
+                         "memory_context_key": memory_context_key}]
+
+        events = []
+        for row in contexts:
+            ev_ctx = {"car": row.get("car", ""), "track": row.get("track", ""),
+                      "layout": row.get("layout_id", ""), "discipline": row.get("discipline", ""),
+                      "gt7_version": row.get("gt7_version", ""), "driver": row.get("driver", "")}
+            # Only build the (heavy) season report for events in the PRIMARY compatibility group;
+            # incompatible events are listed as separate groups without campaigns.
+            if _compat({**ev_ctx, "car": row.get("car", "")}) == primary_key:
+                season = self.build_season_engineering_report(
+                    str(row.get("memory_context_key", "") or ""), applied_setup=applied_setup,
+                    session_identity=session_identity, gearbox_state=gearbox_state,
+                    speed_context=speed_context, session_context=session_context,
+                    session_budget=session_budget, now_date=now_date,
+                    car=row.get("car", ""), track=row.get("track", ""),
+                    layout_id=row.get("layout_id", ""), discipline=row.get("discipline", ""),
+                    driver=row.get("driver", ""), gt7_version=row.get("gt7_version", ""),
+                    compound=row.get("compound", ""))
+                campaigns = self._enrich_campaigns_with_state(season)
+                events.append({"context": ev_ctx, "campaigns": campaigns})
+            else:
+                events.append({"context": ev_ctx, "campaigns": []})
+
+        report = _bpk(events, primary_context=primary_ctx).to_dict()
+        graph = report.get("knowledge_graph") or {}
+        return {"ok": True, "programme_knowledge": report,
+                "known_domain_count": len(graph.get("known_domains") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
+    @staticmethod
+    def _enrich_campaigns_with_state(season_result: dict) -> list:
+        """Attach each campaign's Phase-21 knowledge_state (from the season report's knowledge_map)
+        to its normalised record — a join, NOT a recomputation. Never raises."""
+        if not isinstance(season_result, dict) or not season_result.get("ok"):
+            return []
+        report = season_result.get("season_report") or {}
+        if not isinstance(report, dict):
+            return []
+        states = {}
+        for k in report.get("knowledge_map") or []:
+            if isinstance(k, dict):
+                states[str(k.get("campaign_id") or "")] = str(k.get("state") or "")
+        out = []
+        for c in report.get("campaigns") or []:
+            if not isinstance(c, dict):
+                continue
+            rec = dict(c)
+            rec["knowledge_state"] = states.get(str(c.get("campaign_id") or ""), "")
+            out.append(rec)
+        return out
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
