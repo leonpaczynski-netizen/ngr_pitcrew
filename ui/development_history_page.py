@@ -29,6 +29,7 @@ from ui.intervention_hypothesis_panel import InterventionHypothesisPanel
 from ui.experiment_synthesis_panel import ExperimentSynthesisPanel
 from ui.engineering_lifecycle_panel import EngineeringLifecyclePanel
 from ui.engineering_plan_panel import EngineeringPlanPanel
+from ui.engineering_campaign_panel import EngineeringCampaignPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -98,6 +99,11 @@ class DevelopmentHistoryPage(QWidget):
         # selection: which experiment next, ranked by engineering value. Advisory; not applied.
         self._plan_panel = EngineeringPlanPanel()
         root.addWidget(self._plan_panel)
+
+        # Phase 18 (Program 2) — engineering campaigns: multi-session development programme
+        # grouping the portfolio into bounded objectives. Read-only; advisory; not applied.
+        self._campaign_panel = EngineeringCampaignPanel()
+        root.addWidget(self._campaign_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -222,6 +228,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-17 experiment portfolio / engineering plan (read-only, advisory).
         Receives an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._plan_panel.update_result(plan_result)
+
+    def update_engineering_campaigns(self, campaign_result) -> None:
+        """Render the Phase-18 engineering-campaign programme (read-only, advisory). Receives
+        an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._campaign_panel.update_result(campaign_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))

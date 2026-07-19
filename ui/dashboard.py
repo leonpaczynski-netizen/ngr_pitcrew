@@ -6659,6 +6659,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # engineering value). Read-only; runs OFF the Qt thread; applies nothing.
             if hasattr(page, "update_engineering_plan"):
                 self._refresh_engineering_plan(car, track, layout_id, discipline)
+            # Phase 18 — engineering campaigns / multi-session development programme.
+            # Read-only; runs OFF the Qt thread; applies nothing.
+            if hasattr(page, "update_engineering_campaigns"):
+                self._refresh_engineering_campaigns(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -6889,6 +6893,54 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_engineering_plan"):
             try:
                 page.update_engineering_plan(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_campaigns(self, car, track, layout_id, discipline):
+        """Build the Phase-18 engineering-campaign programme OFF the Qt thread and render the
+        finished immutable result. Read-only planner; applies/writes nothing; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_campaigns"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_campaigns({"ok": True, "programme": None, "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+
+            def _build():
+                return db.build_engineering_campaign_programme(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._campaign_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(lambda result: self._on_engineering_campaigns_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_campaigns_ready(
+                    {"ok": True, "programme": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_campaigns({"ok": True, "programme": None,
+                                                   "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_campaigns_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable campaign-programme result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_campaigns"):
+            try:
+                page.update_engineering_campaigns(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
