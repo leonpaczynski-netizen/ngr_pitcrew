@@ -4767,6 +4767,41 @@ class SessionDB:
                 "content_fingerprint": result.get("content_fingerprint"),
                 "record_count": int(prog_result.get("record_count") or 0)}
 
+    def build_engineering_knowledge_quality(self, memory_context_key: str = "", *,
+                                            applied_setup: "dict | None" = None,
+                                            session_identity: "dict | None" = None,
+                                            gearbox_state: str = "", speed_context: str = "",
+                                            session_context: "dict | None" = None,
+                                            session_budget: "dict | None" = None,
+                                            now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY Engineering Knowledge Quality advisory (Program 2, Phase 20):
+        per-campaign confidence-weighted knowledge quality + development ROI + campaign
+        opportunity. Composes the Phase-19 Engineering Efficiency view ONCE (which itself reuses
+        the Phase-18 programme once — no N+1) plus one Phase-11 prediction-calibration read, then
+        runs the pure Phase-20 estimators. It ranks / prioritises / sorts NOTHING, writes
+        nothing, completes nothing; deterministic; regenerable; never raises."""
+        try:
+            from strategy.knowledge_quality import build_knowledge_quality as _bkq
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase20 import failed: {exc}"}
+        # READ-ONLY efficiency (no register_session_id -> no registry write).
+        eff_result = self.build_engineering_efficiency(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date,
+            **ctx)
+        if not isinstance(eff_result, dict) or not eff_result.get("ok"):
+            return {"ok": True, "knowledge_quality": None, "campaign_count": 0}
+        efficiency = eff_result.get("efficiency")
+        if not isinstance(efficiency, dict) or not (efficiency.get("campaigns") or []):
+            return {"ok": True, "knowledge_quality": None, "campaign_count": 0}
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx) or {}
+        quality = _bkq(efficiency, calibration=calibration)
+        result = quality.to_dict()
+        return {"ok": True, "knowledge_quality": result,
+                "campaign_count": len(result.get("campaigns") or []),
+                "content_fingerprint": result.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
