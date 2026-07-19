@@ -5423,6 +5423,171 @@ class SessionDB:
                 "candidate_count": report.get("candidate_count"),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def _assurance_chain_products(self, memory_context_key: str = "", *, applied_setup=None,
+                                  session_identity=None, gearbox_state="", speed_context="",
+                                  session_context=None, session_budget=None, now_date="", **ctx):
+        """Shared READ-ONLY helper for Phases 33-35: build the Phase-22 chain ONCE, compute the
+        Phase-26..32 products PURELY in memory, and return (chain_products, export_context) or
+        (None, None) when there is nothing to export. Never calls the lower public SessionDB report
+        builders; no extra DB reads beyond the single shared chain. Never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+            from strategy.programme_coverage_report import (
+                build_programme_evidence_coverage_report as _bcov)
+            from strategy.programme_contradiction_report import (
+                build_programme_contradiction_report as _bcon)
+            from strategy.programme_readiness_report import (
+                build_programme_knowledge_readiness_report as _brdy)
+            from strategy.programme_assumption_register import (
+                build_programme_assumption_register as _breg)
+            from strategy.programme_assurance_report import (
+                build_programme_assurance_report as _basr)
+            from strategy.assurance_engineering_priority import (
+                build_assurance_engineering_priority as _baep)
+            from strategy._setup_constants import DB_VERSION as _DBV, RULE_ENGINE_VERSION as _REV
+        except Exception:  # pragma: no cover - defensive
+            return None, None
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return None, None
+        tl, pk, recs = chain["timeline"], chain["programme"], chain.get("records") or []
+        revalidation = _brr(tl, pk).to_dict()
+        coverage = _bcov(tl, pk, revalidation, recs).to_dict()
+        contradiction = _bcon(tl, pk, recs).to_dict()
+        readiness = _brdy(tl, pk, revalidation, coverage).to_dict()
+        assumptions = _breg(tl, revalidation, coverage, contradiction, chain["playbook"]).to_dict()
+        assurance = _basr(readiness, contradiction, assumptions, coverage, revalidation).to_dict()
+        priority = _baep(assurance, revalidation, coverage, contradiction, assumptions).to_dict()
+        products = {"phase26_revalidation": revalidation, "phase27_coverage": coverage,
+                    "phase28_readiness": readiness, "phase29_contradiction": contradiction,
+                    "phase30_assumptions": assumptions, "phase31_assurance": assurance,
+                    "phase32_priority": priority}
+        compat = (pk.get("compatibility") or {}) if isinstance(pk, dict) else {}
+        primary = dict(compat.get("primary_key") or {})
+        graph = (pk.get("knowledge_graph") or {}) if isinstance(pk, dict) else {}
+        export_context = {
+            "programme": primary,
+            "layout_id": str((session_identity or {}).get("layout_id", "") or ctx.get("layout_id", "")
+                             or ""),
+            "compound": str(primary.get("compound", "") or ctx.get("compound", "") or ""),
+            "domains": list(graph.get("known_domains") or []),
+            "db_schema_version": int(_DBV), "rule_engine_version": str(_REV),
+            "source_chain": {"programme_fingerprint": pk.get("content_fingerprint"),
+                             "timeline_fingerprint": tl.get("content_fingerprint"),
+                             "playbook_fingerprint": (chain.get("playbook") or {}).get(
+                                 "content_fingerprint")}}
+        return products, export_context
+
+    def build_assurance_chain_export_report(self, memory_context_key: str = "", *,
+                                            applied_setup=None, session_identity=None,
+                                            gearbox_state="", speed_context="", session_context=None,
+                                            session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Assurance-Chain Export (Program 2, Phase 33): an on-demand deterministic
+        export of the complete Phase 26-32 assurance chain. Reuses the shared knowledge chain ONCE and
+        computes the subordinate products purely in memory - it never calls the lower public SessionDB
+        report builders, performs no extra DB reads, and writes nothing. DB stays v26; deterministic;
+        never raises."""
+        try:
+            from strategy.assurance_chain_export import build_assurance_chain_export as _bexp
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase33 import failed: {exc}"}
+        products, context = self._assurance_chain_products(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if products is None:
+            return {"ok": True, "export": None, "grade": "insufficient_evidence",
+                    "chain_fingerprint": "", "content_fingerprint": ""}
+        export = _bexp(products, context).to_dict()
+        return {"ok": True, "export": export, "grade": export.get("assurance_grade"),
+                "chain_fingerprint": (export.get("manifest") or {}).get(
+                    "assurance_chain_fingerprint"),
+                "content_fingerprint": export.get("content_fingerprint")}
+
+    def build_assurance_snapshot_comparison_report(self, baseline, memory_context_key: str = "", *,
+                                                   applied_setup=None, session_identity=None,
+                                                   gearbox_state="", speed_context="",
+                                                   session_context=None, session_budget=None,
+                                                   now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Assurance Snapshot Comparison (Program 2, Phase 34): validate a
+        supplied baseline (a prior export dict or JSON text) with the strict pure loader (NO DB
+        reads), build the CURRENT export via the shared chain ONCE, and compare baseline -> candidate.
+        Never calls the lower public SessionDB builders; the baseline validation performs no database
+        query. DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.assurance_chain_export import build_assurance_chain_export as _bexp
+            from strategy.assurance_snapshot_comparison import compare_assurance_snapshots as _cmp
+            from strategy.assurance_manifest_loader import (validate_baseline as _vb,
+                                                            load_and_validate_baseline as _lvb)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase34 import failed: {exc}"}
+        # validate the baseline purely (no DB access whatsoever).
+        if isinstance(baseline, (str, bytes, bytearray)):
+            loaded = _lvb(baseline)
+        else:
+            loaded = _vb(baseline if isinstance(baseline, dict) else {})
+        if not loaded.ok or loaded.export is None:
+            return {"ok": True, "comparison": None, "baseline_valid": False,
+                    "baseline_errors": list(loaded.errors)}
+        products, context = self._assurance_chain_products(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if products is None:
+            return {"ok": True, "comparison": None, "baseline_valid": True,
+                    "note": "no current assurance state to compare against"}
+        candidate = _bexp(products, context).to_dict()
+        comparison = _cmp(loaded.export, candidate).to_dict()
+        return {"ok": True, "comparison": comparison, "baseline_valid": True,
+                "compatibility": comparison.get("compatibility"),
+                "assurance_direction": comparison.get("assurance_direction"),
+                "content_fingerprint": comparison.get("content_fingerprint")}
+
+    def build_assurance_review_package_report(self, memory_context_key: str = "", *, baseline=None,
+                                              applied_setup=None, session_identity=None,
+                                              gearbox_state="", speed_context="", session_context=None,
+                                              session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Assurance Review Package SPECIFICATION (Program 2, Phase 35): the
+        current export (+ an optional validated baseline comparison) assembled into a pure package
+        spec. Writes NOTHING - the separate writer adapter materialises it on an explicit user action.
+        Reuses the shared chain ONCE; never calls the lower public SessionDB builders; the baseline
+        validation performs no DB query. DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.assurance_chain_export import build_assurance_chain_export as _bexp
+            from strategy.assurance_snapshot_comparison import compare_assurance_snapshots as _cmp
+            from strategy.assurance_review_package import build_review_package_spec as _bpkg
+            from strategy.assurance_manifest_loader import (validate_baseline as _vb,
+                                                            load_and_validate_baseline as _lvb)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase35 import failed: {exc}"}
+        products, context = self._assurance_chain_products(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if products is None:
+            return {"ok": True, "package": None, "grade": "insufficient_evidence",
+                    "package_fingerprint": ""}
+        export = _bexp(products, context).to_dict()
+        comparison = None
+        baseline_valid = None
+        baseline_errors: list = []
+        if baseline is not None:
+            loaded = (_lvb(baseline) if isinstance(baseline, (str, bytes, bytearray))
+                      else _vb(baseline if isinstance(baseline, dict) else {}))
+            baseline_valid = bool(loaded.ok and loaded.export is not None)
+            baseline_errors = list(loaded.errors)
+            if baseline_valid:
+                comparison = _cmp(loaded.export, export).to_dict()
+        package = _bpkg(export, comparison).to_dict()
+        return {"ok": True, "package": package, "grade": package.get("assurance_grade"),
+                "has_comparison": package.get("has_comparison"),
+                "baseline_valid": baseline_valid, "baseline_errors": baseline_errors,
+                "package_fingerprint": package.get("package_fingerprint"),
+                "content_fingerprint": package.get("package_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
