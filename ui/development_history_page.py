@@ -36,6 +36,7 @@ from ui.engineering_season_panel import EngineeringSeasonPanel
 from ui.engineering_knowledge_graph_panel import EngineeringKnowledgeGraphPanel
 from ui.engineering_transfer_panel import EngineeringTransferPanel
 from ui.engineering_playbook_panel import EngineeringPlaybookPanel
+from ui.engineering_timeline_panel import EngineeringTimelinePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -146,6 +147,12 @@ class DevelopmentHistoryPage(QWidget):
         # Read-only; advisory; generates/copies/applies no setup values.
         self._playbook_panel = EngineeringPlaybookPanel()
         root.addWidget(self._playbook_panel)
+
+        # Phase 25 (Program 2) — engineering knowledge timeline & convergence: how understanding
+        # evolved over time, where evidence genuinely converged vs only repeated dependently.
+        # Read-only; advisory; dates are data not authority; no setup values.
+        self._timeline_panel = EngineeringTimelinePanel()
+        root.addWidget(self._timeline_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -305,6 +312,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-24 cross-programme engineering playbook (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._playbook_panel.update_result(playbook_result)
+
+    def update_programme_knowledge_timeline(self, timeline_result) -> None:
+        """Render the Phase-25 engineering knowledge timeline (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._timeline_panel.update_result(timeline_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))

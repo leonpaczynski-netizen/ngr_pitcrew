@@ -6693,6 +6693,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # thread; generates/copies/applies no setup values.
             if hasattr(page, "update_programme_engineering_playbook"):
                 self._refresh_programme_engineering_playbook(car, track, layout_id, discipline)
+            # Phase 25 — engineering knowledge timeline & convergence: how understanding evolved
+            # and where evidence genuinely converged. Read-only advisory; runs OFF the Qt thread;
+            # dates are data; no setup values; writes/schedules/applies nothing.
+            if hasattr(page, "update_programme_knowledge_timeline"):
+                self._refresh_programme_knowledge_timeline(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7299,6 +7304,63 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_programme_engineering_playbook"):
             try:
                 page.update_programme_engineering_playbook(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_knowledge_timeline(self, car, track, layout_id, discipline):
+        """Build the Phase-25 engineering knowledge timeline OFF the Qt thread and render the
+        finished immutable result. Read-only; dates are data; no setup values; writes nothing;
+        never raises into the UI. A stale worker result cannot replace a newer one (the handler
+        guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_knowledge_timeline"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_knowledge_timeline({"ok": True, "timeline": None,
+                                                      "point_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_knowledge_timeline(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._timeline_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_knowledge_timeline_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_knowledge_timeline_ready(
+                    {"ok": True, "timeline": None, "point_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_knowledge_timeline({"ok": True, "timeline": None,
+                                                          "point_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_knowledge_timeline_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable timeline result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_timeline_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_knowledge_timeline"):
+            try:
+                page.update_programme_knowledge_timeline(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
