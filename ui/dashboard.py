@@ -6638,10 +6638,56 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     calib = self._db.build_prediction_calibration(
                         car=car, track=track, layout_id=layout_id, discipline=discipline)
                 page.update_prediction_calibration(calib)
+            # Phase 13 — mechanism-annotated diagnosis. The build reads the immutable
+            # records + composes the Phase-12 knowledge; run it OFF the Qt thread and let
+            # the page render the finished, immutable result. Read-only; changes nothing.
+            if hasattr(page, "update_mechanism_annotations"):
+                self._refresh_mechanism_annotations(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
             except Exception:
+                pass
+
+    def _refresh_mechanism_annotations(self, car, track, layout_id, discipline):
+        """Build the Phase-13 mechanism annotations OFF the Qt thread and render the
+        finished immutable result on the page. Read-only; never writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_mechanism_annotations"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_mechanism_annotations({"ok": True, "annotations": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+
+            def _build():
+                return db.build_mechanism_annotations(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
+
+            worker = MechanismAnnotationWorker(_build)
+            # keep a reference so the QThread is not garbage-collected mid-run
+            self._mechanism_worker = worker
+            worker.finished_ok.connect(
+                lambda result: self._on_mechanism_annotations_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_mechanism_annotations_ready(
+                    {"ok": True, "annotations": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_mechanism_annotations({"ok": True, "annotations": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_mechanism_annotations_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable annotation result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_mechanism_annotations"):
+            try:
+                page.update_mechanism_annotations(result)
+            except Exception:  # pragma: no cover - defensive
                 pass
 
     def _build_event_context(self):
