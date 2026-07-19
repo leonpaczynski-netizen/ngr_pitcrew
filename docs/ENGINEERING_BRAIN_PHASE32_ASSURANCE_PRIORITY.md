@@ -178,4 +178,37 @@ No schema migration; no new persistent tables/fields; no DB write; no setup valu
 campaign / schedule / resource allocation; no Apply path; no AI/optimiser/scheduler; Phase-17
 portfolio not imported or mutated; `_setup_constants.py` byte-identical; DB v26 / rule-engine 46.0.
 
-**Phase 33 not started.**
+## Audit correction (2026-07-20, during the Phase 33–35 slice)
+
+A Phase 32 self-audit found and corrected two accuracy issues; both fixes are read-only,
+schema-free, persistence-free, advisory-only, setup-value-free and Apply-free:
+
+- **Exact git file counts (verified `git diff --name-status 4b485be..0e88b8e`).** Phase 32 added
+  **11** files (`strategy/assurance_engineering_priority.py`,
+  `strategy/assurance_engineering_priority_render.py`,
+  `ui/assurance_engineering_priority_{vm,panel}.py`, `tests/test_phase32_{domain,scoring,golden,
+  integration,safety,ui_construction}.py`, `docs/ENGINEERING_BRAIN_PHASE32_ASSURANCE_PRIORITY.md`)
+  and modified **6** (`data/session_db.py`, `ui/development_history_page.py`, `ui/dashboard.py`,
+  `docs/PROJECT_STATE.md`, `docs/CURRENT_CLAUDE_HANDOFF.md`, `MASTER_TESTING_REGISTER.md`). The
+  original completion-report header numbers ("9 added / 5 modified") were wrong; the file *lists*
+  were correct. No authoritative doc had stated the wrong counts.
+- **Fingerprint completeness remediation.** The Phase 32 `content_fingerprint` payload previously
+  projected only a subset of candidate fields (id, type, band, score, linked finding ids, dimension
+  raw/weight/contribution, dependency prerequisite id). It now fingerprints the **full ordered
+  candidate dicts** via the new pure `content_fingerprint_for_candidates(...)`, so a change to ANY
+  material field — `evidence_requested`, `why_needed`, `current_evidence_state`,
+  `discriminating_requirement`, `expected_assurance_impact`, `impact_limitations`, `defer_conditions`,
+  `rationale`, `finding_types`, `max_severity`, every dimension field, every dependency field
+  (`prerequisite_type`/`reason` included), band, score, linked finding ids — or to candidate
+  membership/order changes the fingerprint (the constant `eval_version` is excluded). Proven by
+  `tests/test_phase32_fingerprint.py` (13 mutation tests). Unchanged content retains its fingerprint;
+  shuffled legal input order is stable.
+- **Cross-domain grouping (verified, unchanged).** Candidate grouping by `(domain,
+  investigation_type)` intentionally keeps two same-type findings in different domains as two
+  distinct candidates — each domain needs its own distinct evidence — preventing over-merge of
+  unrelated cross-domain investigations. Cross-finding leverage accrues only WITHIN a group. This is
+  the correct behaviour (the doctrine warns against over-merging); it is documented and asserted by
+  `test_cross_domain_grouping_does_not_over_merge`, not changed.
+
+**Phase 33 not started at the time of the original Phase 32 delivery; the Phase 33–35 Assurance
+Review Pack was implemented subsequently on branch `eng-brain-phase33-35-assurance-review-pack`.**

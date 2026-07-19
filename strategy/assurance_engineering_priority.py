@@ -675,14 +675,8 @@ def _build_report(assurance: Mapping, revalidation: Mapping, coverage: Mapping,
             no_action = ("No actionable evidence investigation was derived from the current findings.")
 
     kv = knowledge_versions()
-    fp = _fp({"src": {k: _lc(source.get(k)) for k in ("car", "discipline", "gt7_version", "driver")},
-              "grade": grade, "n_blocking": n_blocking, "n_major": n_major,
-              "cands": [(c["candidate_id"], c["investigation_type"], c["priority_band"],
-                         c["priority_score"], list(c["linked_finding_ids"]),
-                         [(d["name"], d["raw"], d["weight"], d["contribution"]) for d in c["dimensions"]],
-                         [dep["prerequisite_candidate_id"] for dep in c["dependencies"]])
-                        for c in (prioritised + deferred)],
-              "kv": kv})
+    fp = content_fingerprint_for_candidates(source, grade, n_blocking, n_major,
+                                            list(prioritised) + list(deferred), kv)
 
     summary = (f"Assurance grade {grade.replace('_', ' ').upper()}: {len(findings)} finding(s) "
                f"({n_blocking} blocking, {n_major} major); {len(prioritised)} prioritised "
@@ -707,6 +701,37 @@ def _build_report(assurance: Mapping, revalidation: Mapping, coverage: Mapping,
         deferred_candidates=deferred, unresolved_prerequisites=tuple(prereqs), ordering=dict(_ORDERING),
         no_action_statement=no_action, safety_statement=_SAFETY, content_fingerprint=fp,
         knowledge_versions=kv)
+
+
+# Every candidate field except the constant eval_version is MATERIAL to the fingerprint. The
+# fingerprint is computed over the FULL, ordered candidate dicts so that a change to ANY material
+# field (evidence_requested, why_needed, current_evidence_state, discriminating_requirement,
+# expected_assurance_impact, impact_limitations, defer_conditions, rationale, finding_types,
+# max_severity, every dimension, every dependency field including prerequisite_type/reason, band,
+# score, linked finding ids) OR to candidate membership/order changes it. eval_version is dropped
+# because it is a constant version tag already present in the fingerprint prefix.
+_FP_DROP_CANDIDATE_KEYS = ("eval_version",)
+
+
+def _canonical_candidate(cand: Mapping) -> dict:
+    return {k: v for k, v in dict(cand).items() if k not in _FP_DROP_CANDIDATE_KEYS}
+
+
+def content_fingerprint_for_candidates(source: Mapping, grade: str, n_blocking: int, n_major: int,
+                                       ordered_candidates: Sequence[Mapping],
+                                       kv: Optional[Mapping] = None) -> str:
+    """Deterministic, timestamp-free fingerprint over the full ordered candidate set. Exposed so that
+    fingerprint-completeness mutation tests can prove every material candidate field participates.
+    Candidate ORDER and MEMBERSHIP are captured by the list; every field of each candidate (except
+    the constant eval_version) is captured verbatim. Never raises."""
+    payload = {
+        "src": {k: _lc((source or {}).get(k)) for k in ("car", "discipline", "gt7_version", "driver")},
+        "grade": _lc(grade), "n_blocking": int(n_blocking or 0), "n_major": int(n_major or 0),
+        "cands": [_canonical_candidate(c) for c in (ordered_candidates or [])
+                  if isinstance(c, Mapping)],
+        "kv": dict(kv) if kv is not None else knowledge_versions(),
+    }
+    return _fp(payload)
 
 
 def knowledge_versions() -> dict:
