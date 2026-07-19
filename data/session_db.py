@@ -5223,6 +5223,41 @@ class SessionDB:
                 "blind_spot_count": len(report.get("blind_spots") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def build_programme_knowledge_readiness_report(self, memory_context_key: str = "", *,
+                                                   applied_setup=None, session_identity=None,
+                                                   gearbox_state="", speed_context="",
+                                                   session_context=None, session_budget=None,
+                                                   now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Knowledge Readiness Report (Program 2, Phase 28): the
+        executive-summary capstone stating, per known domain, whether the evidence supports relying
+        on the knowledge, plus a transparent rule-based programme grade. Reuses the in-memory
+        knowledge chain (Phase-22 built ONCE; Phase-23/24/25 derived purely) and computes the
+        Phase-26 re-validation + Phase-27 coverage purely in memory - it never calls their SessionDB
+        entries. Read-only; no N+1; no writes; no migration; no wall-clock; DB stays v26;
+        deterministic; never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+            from strategy.programme_coverage_report import (
+                build_programme_evidence_coverage_report as _bcov)
+            from strategy.programme_readiness_report import (
+                build_programme_knowledge_readiness_report as _brdy)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase28 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "readiness": None, "grade": "insufficient_evidence",
+                    "domain_count": 0}
+        revalidation = _brr(chain["timeline"], chain["programme"]).to_dict()
+        coverage = _bcov(chain["timeline"], chain["programme"], revalidation,
+                         chain.get("records") or []).to_dict()
+        report = _brdy(chain["timeline"], chain["programme"], revalidation, coverage).to_dict()
+        return {"ok": True, "readiness": report, "grade": report.get("programme_grade"),
+                "domain_count": len(report.get("items") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
