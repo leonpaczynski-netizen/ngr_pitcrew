@@ -40,6 +40,7 @@ from ui.engineering_timeline_panel import EngineeringTimelinePanel
 from ui.engineering_revalidation_panel import EngineeringRevalidationPanel
 from ui.engineering_coverage_panel import EngineeringCoveragePanel
 from ui.engineering_readiness_panel import EngineeringReadinessPanel
+from ui.engineering_contradiction_panel import EngineeringContradictionPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -174,6 +175,13 @@ class DevelopmentHistoryPage(QWidget):
         # a blind spot is not a fault; missing coverage means untested not wrong; no setup values.
         self._coverage_panel = EngineeringCoveragePanel()
         root.addWidget(self._coverage_panel)
+
+        # Phase 29 (Program 2) — knowledge contradiction resolution: where the evidence contradicts
+        # itself and whether each disagreement is resolved by context, by stronger independent
+        # evidence, or is genuinely open. Read-only; advisory; never resolved by majority or
+        # recency; a contradiction may stay open; no setup values.
+        self._contradiction_panel = EngineeringContradictionPanel()
+        root.addWidget(self._contradiction_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -348,6 +356,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-27 evidence coverage & blind-spot map (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._coverage_panel.update_result(coverage_result)
+
+    def update_programme_contradiction_report(self, contradiction_result) -> None:
+        """Render the Phase-29 knowledge contradiction resolution (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._contradiction_panel.update_result(contradiction_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
