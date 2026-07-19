@@ -43,6 +43,7 @@ from ui.engineering_readiness_panel import EngineeringReadinessPanel
 from ui.engineering_contradiction_panel import EngineeringContradictionPanel
 from ui.engineering_assumption_panel import EngineeringAssumptionPanel
 from ui.engineering_assurance_panel import EngineeringAssurancePanel
+from ui.assurance_engineering_priority_panel import AssuranceEngineeringPriorityPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -92,6 +93,12 @@ class DevelopmentHistoryPage(QWidget):
         # over visible counts; no setup values.
         self._assurance_panel = EngineeringAssurancePanel()
         root.addWidget(self._assurance_panel)
+
+        # Phase 32 (Program 2) — assurance-driven engineering priority: given the assurance verdict,
+        # the highest-priority EVIDENCE to collect next and why (advisory only; not an experiment,
+        # setup or Apply). Read-only; pairs with the Phase-31 assurance verdict above it.
+        self._priority_panel = AssuranceEngineeringPriorityPanel()
+        root.addWidget(self._priority_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -386,6 +393,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-31 engineering knowledge assurance & audit (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._assurance_panel.update_result(assurance_result)
+
+    def update_assurance_engineering_priority_report(self, priority_result) -> None:
+        """Render the Phase-32 assurance-driven engineering priority (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._priority_panel.update_result(priority_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
