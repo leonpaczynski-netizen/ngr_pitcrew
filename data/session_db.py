@@ -4289,6 +4289,54 @@ class SessionDB:
         result["record_count"] = int(report.get("record_count") or 0)
         return result
 
+    # ------------------------------------------------------------------
+    # Minimum-effective bounded setup-experiment synthesis (Program 2,
+    # Phase 15 - READ-ONLY). Converts each eligible Phase-14 intervention
+    # hypothesis into the SMALLEST legal, reversible numeric setup experiment
+    # off the canonical applied setup baseline. It authors no final tune,
+    # applies/approves/persists nothing, mutates no diagnosis/mechanism/outcome/
+    # calibration/setup-history/active-setup, and reuses the Phase-14
+    # intervention aggregate ONCE (no per-hypothesis / per-field queries). The
+    # canonical applied setup is supplied by the caller's ActiveSetupAuthority
+    # (SessionDB does not own it). NO migration (DB stays v25). Never raises.
+    # ------------------------------------------------------------------
+    def build_bounded_setup_experiments(self, memory_context_key: str = "", *,
+                                        applied_setup: "dict | None" = None,
+                                        session_identity: "dict | None" = None,
+                                        gearbox_state: str = "", speed_context: str = "",
+                                        driver_preference: "dict | None" = None,
+                                        outcome_history=None,
+                                        larger_step_justifications: "dict | None" = None,
+                                        **ctx) -> dict:
+        """Synthesise bounded setup experiments for a context. Composes the Phase-14
+        ``build_intervention_hypotheses`` aggregate exactly once and runs the pure Phase-15
+        reasoning against the canonical applied setup baseline + legal ranges. Deterministic
+        + regenerable + restart-identical. Read-only."""
+        try:
+            from strategy.experiment_synthesis import synthesize_from_report
+            from strategy.setup_ranges import resolve_ranges
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase15 import failed: {exc}"}
+        report = self.build_intervention_hypotheses(
+            memory_context_key, gearbox_state=gearbox_state, speed_context=speed_context,
+            driver_preference=driver_preference, outcome_history=outcome_history, **ctx)
+        if not isinstance(report, dict) or not report.get("ok"):
+            return {"ok": True, "synthesis_results": [], "count": 0, "ready_for_preflight": 0}
+        car = str(ctx.get("car", "") or "")
+        try:
+            ranges = resolve_ranges(car) if car else {}
+        except Exception:
+            ranges = {}
+        identity = session_identity or {
+            "car": car, "track": str(ctx.get("track", "") or ""),
+            "layout_id": str(ctx.get("layout_id", "") or "")}
+        result = synthesize_from_report(
+            report, applied_setup=applied_setup, session_identity=identity, ranges=ranges,
+            working_windows={}, gearbox_state=gearbox_state,
+            larger_step_justifications=larger_step_justifications)
+        result["record_count"] = int(report.get("record_count") or 0)
+        return result
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
