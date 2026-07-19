@@ -32,6 +32,7 @@ from ui.engineering_plan_panel import EngineeringPlanPanel
 from ui.engineering_campaign_panel import EngineeringCampaignPanel
 from ui.engineering_efficiency_panel import EngineeringEfficiencyPanel
 from ui.engineering_confidence_panel import EngineeringConfidencePanel
+from ui.engineering_season_panel import EngineeringSeasonPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -118,6 +119,12 @@ class DevelopmentHistoryPage(QWidget):
         # remaining engineering return; ranks/completes/applies nothing.
         self._confidence_panel = EngineeringConfidencePanel()
         root.addWidget(self._confidence_panel)
+
+        # Phase 21 (Program 2) — season development plan & cross-campaign knowledge map: the
+        # Engineering Director's whole-programme view (summary + relationships + knowledge map).
+        # Read-only; advisory; explains engineering only; schedules/completes/applies nothing.
+        self._season_panel = EngineeringSeasonPanel()
+        root.addWidget(self._season_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -257,6 +264,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-20 engineering knowledge-quality advisory (read-only). Receives an
         immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._confidence_panel.update_result(quality_result)
+
+    def update_season_engineering_report(self, season_result) -> None:
+        """Render the Phase-21 season engineering report (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._season_panel.update_result(season_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
