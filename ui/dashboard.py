@@ -6683,6 +6683,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # the Qt thread; writes nothing; schedules/completes/applies nothing.
             if hasattr(page, "update_programme_knowledge_report"):
                 self._refresh_programme_knowledge_report(car, track, layout_id, discipline)
+            # Phase 23 — engineering knowledge transfer & cross-car reuse: whether established
+            # knowledge is reusable in other contexts. Read-only advisory; runs OFF the Qt
+            # thread; transfers no setup; writes/imports/applies nothing.
+            if hasattr(page, "update_programme_transfer_report"):
+                self._refresh_programme_transfer_report(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7178,6 +7183,59 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_programme_knowledge_report"):
             try:
                 page.update_programme_knowledge_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_transfer_report(self, car, track, layout_id, discipline):
+        """Build the Phase-23 knowledge-transfer report (is established knowledge reusable in
+        other contexts?) OFF the Qt thread and render the finished immutable result. Read-only;
+        transfers no setup; writes/imports/applies nothing; never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_transfer_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_transfer_report({"ok": True, "transfer_report": None,
+                                                   "candidate_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_transfer_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._transfer_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_programme_transfer_report_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_programme_transfer_report_ready(
+                    {"ok": True, "transfer_report": None, "candidate_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_transfer_report({"ok": True, "transfer_report": None,
+                                                       "candidate_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_transfer_report_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable knowledge-transfer result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_transfer_report"):
+            try:
+                page.update_programme_transfer_report(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
