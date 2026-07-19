@@ -3879,6 +3879,107 @@ class SessionDB:
             "record_count": history.review_count,
         }
 
+    # ------------------------------------------------------------------
+    # Cross-context engineering transfer + regression-risk intelligence
+    # (Phase 9 — READ-ONLY OBSERVER, NO migration; regenerates from the
+    # immutable Phase-8 records). Reports; decides nothing.
+    # ------------------------------------------------------------------
+    def _car_class_map(self) -> dict:
+        """{car name → category} from the cars table (e.g. 'Gr.3'). Read-only; the
+        Phase-9 RELATED tier only fires when a category is actually known."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT name, category FROM cars WHERE category != ''").fetchall()
+            return {str(r[0]): str(r[1]) for r in rows}
+        except Exception:
+            return {}
+
+    def get_development_records_for_context_search(
+        self, *, car: str = "", track: str = "", driver: str = "",
+    ) -> list[dict]:
+        """Return the immutable development records that share ANY of car / track /
+        (non-empty) driver with the query — the candidate pool for Phase-9 context
+        matching (the pure module classifies + filters). Read-only; never raises."""
+        import json as _json
+        clauses, params = [], []
+        if car:
+            clauses.append("car = ?"); params.append(str(car))
+        if track:
+            clauses.append("track = ?"); params.append(str(track))
+        if driver:
+            clauses.append("(driver = ? AND driver != '')"); params.append(str(driver))
+        if not clauses:
+            return []
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT record_json FROM engineering_development_records "
+                    "WHERE " + " OR ".join(clauses) + " ORDER BY id ASC",
+                    tuple(params)).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    out.append(_json.loads(r[0]))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def build_engineering_context(
+        self, *, car: str = "", track: str = "", layout_id: str = "",
+        discipline: str = "", driver: str = "", gt7_version: str = "",
+        compound: str = "", proposed_change: "dict | None" = None,
+    ) -> dict:
+        """Phase 9 orchestrator: before an experiment is proposed, surface every
+        relevant lesson from COMPATIBLE historical contexts — ranked transfers,
+        engineering constraints, and (for a proposed change) regression risks.
+
+        READ-ONLY: evaluates no evidence, creates/chooses no experiment, modifies no
+        working window, mutates nothing, and NEVER blocks. Deterministic + regenerable
+        from the immutable Phase-8 records (NO migration). Never raises."""
+        try:
+            from strategy.development_history import MemoryContextKey
+            from strategy.context_transfer import (
+                group_matched_records, build_context_transfers, transfer_fingerprint)
+            from strategy.engineering_constraints import (
+                derive_constraints, constraints_fingerprint)
+            from strategy.regression_risk import assess_regression_risk, risk_fingerprint
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase9 import failed: {exc}"}
+        query = MemoryContextKey(
+            driver=str(driver or ""), car=str(car or ""), track=str(track or ""),
+            layout_id=str(layout_id or ""), discipline=str(discipline or ""),
+            gt7_version=str(gt7_version or ""), compound=str(compound or ""))
+        records = self.get_development_records_for_context_search(
+            car=car, track=track, driver=driver)
+        car_class = self._car_class_map()
+        matched = group_matched_records(query, records, car_class_of=car_class)
+        transfers = build_context_transfers(query, records, car_class_of=car_class,
+                                            matched=matched)
+        constraints = derive_constraints(query, records, car_class_of=car_class,
+                                        matched=matched)
+        risks = assess_regression_risk(constraints, transfers,
+                                       proposed_change=proposed_change)
+        return {
+            "ok": True, "query_context": query.to_dict(),
+            "matched_contexts": [
+                {"context": m.context.to_dict(), "strength": m.strength.value,
+                 "reason": m.reason, "record_count": len(m.records)}
+                for m in matched],
+            "transfers": [t.to_dict() for t in transfers],
+            "constraints": [c.to_dict() for c in constraints],
+            "regression_risks": [r.to_dict() for r in risks],
+            "proposed_change": (dict(proposed_change) if proposed_change else None),
+            "fingerprints": {
+                "transfers": transfer_fingerprint(transfers),
+                "constraints": constraints_fingerprint(constraints),
+                "risks": risk_fingerprint(risks),
+            },
+            "candidate_record_count": len(records),
+        }
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:

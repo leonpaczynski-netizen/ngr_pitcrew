@@ -1,6 +1,36 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain Phase 8: Cross-Session Engineering Development Memory & Driver Progress Intelligence — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain Phase 9: Cross-Context Engineering Transfer & Regression Risk Intelligence — COMPLETE
+
+**Branch `eng-brain-phase9-context-transfer` from `master` @ Phase 8 `da53569` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-8: before an experiment is proposed it surfaces every relevant lesson from COMPATIBLE historical contexts. REPORTS ONLY — evaluates no evidence, creates/chooses no experiment, modifies no working window, mutates nothing, and NEVER BLOCKS (authority stays with Phases 3/5/6). No AI, no prediction, no probability, no natural-language reasoning.
+
+**Schema decision: NO migration.** `DB_VERSION` stays **24**; `RULE_ENGINE_VERSION` `46.0`. Transfers/constraints/risks are deterministic regenerable FOLDS over the immutable Phase-8 `engineering_development_records` — a restart reproduces identical per-artifact fingerprints. No new table, no new tab.
+
+**Files changed:**
+- NEW `strategy/context_transfer.py` — `classify_context_match` (fixed 5-tier hierarchy DIRECT/STRONG/RELATED/WEAK/UNKNOWN; incompatible contexts excluded; RELATED needs real `cars.category` class data), `EngineeringTransfer` + `build_context_transfers` (ranked, confirmed-vs-provisional; folds per-context memory via Phase-8 `build_history`/`build_engineering_memory`), `group_matched_records`.
+- NEW `strategy/engineering_constraints.py` — `derive_constraints` (folds per-record protected-knowledge + protected-behaviours; evidence source + supporting sessions/experiments + confirmed/provisional).
+- NEW `strategy/regression_risk.py` — `assess_regression_risk` (never blocks) → 6 risk kinds w/ severity.
+- MOD `data/session_db.py` — `build_engineering_context` orchestrator (read-only, no persistence) + `get_development_records_for_context_search` + `_car_class_map`.
+- NEW `ui/engineering_context_vm.py` (pure VM) + `ui/engineering_context_panel.py` (`EngineeringContextPanel`, no Apply/decision controls). MOD `ui/development_history_page.py` (embeds the panel) + `ui/dashboard.py` (`_refresh_development_history` also calls `build_engineering_context`). NO new tab / registry change.
+- NEW `tests/test_phase9_{context_transfer,constraints,regression_risk,orchestrator,view_model}.py` (36) + `tests/test_phase9_ui_construction.py` (3, individual). NEW `docs/ENGINEERING_BRAIN_PHASE9_CONTEXT_TRANSFER.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff. NO version-guard bumps (no migration).
+
+**Reuse (no duplication):** Phase 8 records + `build_history`/`build_engineering_memory`, Phase 8 `ConstraintKind` + per-record protected-knowledge, `cars.category`. No new outcome/residual/recurrence/identity/window authority.
+
+**Central-loop proof (golden UAT through the production path):** the real `review_and_learn` loop resolves understeer at T3 by raising aero_front (Porsche RSR @ Fuji) → captured by Phase 8 → Phase 9 `build_engineering_context` then surfaces that successful aero_front lesson for the same context; a repeated failed lsd_accel increase produces KNOWN_FAILED_DIRECTION + REPEATED_REGRESSION risks for a proposed increase; working-window edge + protected-field-conflict flagged; restart-determinism; writes-nothing.
+
+**Tests run / results:** new suites **36 non-UI + 3 UI (individual) passed**. Frozen contracts + phase7/8 + tab wiring **589 passed**. Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** the panel is populated for the current context with no proposed change (the orchestrator already supports a live `proposed_change`); wiring it into the Setup Builder to react to a specific Phase-5 candidate is deferred; RELATED uses `cars.category` equality (richer car-similarity deferred); driver/gt7_version are honest inputs.
+
+**GO/NO-GO: GO.** Before an experiment is proposed the system surfaces compatible past lessons with a deterministic match strength + explicit reasons, derives engineering constraints with provenance, flags regression risks without ever blocking, never mixes incompatible contexts, regenerates identically on restart, adds no schema and writes nothing, and exposes no Apply/decision control. Every Phase 1-8 guarantee preserved.
+
+**Recommended Phase 10:** proactive experiment pre-flight — attach the Phase-9 advisory to a specific Phase-5 proposed candidate (feed the proposed field/direction/value) and render the risks + constraints inline beside the candidate, still a pure observer subordinate to Phases 3/5/6.
+
+---
+
+## Prior objective (2026-07-19) — Engineering Brain Phase 8: Cross-Session Engineering Development Memory & Driver Progress Intelligence — COMPLETE
 
 **Branch `eng-brain-phase8-development-memory` from `master` @ Phase 7 `dfc70a9` — committed, NOT pushed / no PR.** The permanent engineering memory ABOVE Phases 1-7: answers "what have we learned over every previous session?", not "what happened today?". DECIDES NOTHING — no experiment selection, setup authoring, lap evaluation, evidence mutation, or history rewriting. NO AI, no network, no prediction, no text interpretation.
 

@@ -6619,11 +6619,18 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             layout_id = getattr(ctx, "layout_id", "") or ""
             discipline = getattr(ctx, "discipline", "") or ""
             result = {"ok": True, "record_count": 0}
+            context_result = {"ok": True}
             if self._db is not None and (car or track):
                 result = self._db.build_cross_session_memory(
                     car=car, track=track, layout_id=layout_id,
                     discipline=discipline)
+                # Phase 9 — cross-context engineering advisory for the current context
+                # (read-only; no proposed change here, so it surfaces standing lessons).
+                context_result = self._db.build_engineering_context(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
             page.update_result(result)
+            if hasattr(page, "update_engineering_context"):
+                page.update_engineering_context(context_result)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})

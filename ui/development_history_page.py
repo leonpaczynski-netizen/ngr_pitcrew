@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 
 from ui import ngr_theme as ngr
 from ui import development_history_vm as vm
+from ui.engineering_context_panel import EngineeringContextPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -57,6 +58,10 @@ class DevelopmentHistoryPage(QWidget):
         self._band = QLabel("Building picture…")
         self._band.setStyleSheet(ngr.banner_qss("info"))
         root.addWidget(self._band)
+
+        # Phase 9 — cross-context engineering transfer + regression-risk advisory.
+        self._context_panel = EngineeringContextPanel()
+        root.addWidget(self._context_panel)
 
         self._scorecard_grid = QGridLayout()
         root.addWidget(self._boxed("Engineering Scorecard", self._scorecard_grid))
@@ -143,6 +148,10 @@ class DevelopmentHistoryPage(QWidget):
         self._fill_table(self._knowledge, vm.protected_knowledge_rows(result))
         self._fill_table(self._experiments, vm.experiment_history_rows(result))
         self._fill_table(self._windows, vm.window_evolution_rows(result))
+
+    def update_engineering_context(self, context_result) -> None:
+        """Render the Phase-9 cross-context engineering advisory (read-only)."""
+        self._context_panel.update_result(context_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
