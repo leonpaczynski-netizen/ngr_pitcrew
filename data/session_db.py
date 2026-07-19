@@ -4950,6 +4950,46 @@ class SessionDB:
             out.append(rec)
         return out
 
+    def build_programme_transfer_report(self, memory_context_key: str = "", *,
+                                        applied_setup: "dict | None" = None,
+                                        session_identity: "dict | None" = None,
+                                        gearbox_state: str = "", speed_context: str = "",
+                                        session_context: "dict | None" = None,
+                                        session_budget: "dict | None" = None,
+                                        now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY Programme Transfer Report (Program 2, Phase 23): whether the
+        current programme's ESTABLISHED domain knowledge is likely reusable in other engineering
+        contexts (other cars / disciplines). Composes the Phase-22 programme knowledge report ONCE
+        (its established source domains + the other compatibility groups as targets), then runs the
+        pure Phase-23 transfer evaluation + reuse summary. It transfers NO setup values, recommends
+        applying NOTHING, writes NOTHING; DB stays v26 (no persistence); deterministic; never
+        raises."""
+        try:
+            from strategy.programme_transfer_report import build_transfer_report as _btr
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase23 import failed: {exc}"}
+        pk_result = self.build_programme_knowledge_report(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date,
+            **ctx)
+        if not isinstance(pk_result, dict) or not pk_result.get("ok"):
+            return {"ok": True, "transfer_report": None, "candidate_count": 0}
+        programme = pk_result.get("programme_knowledge")
+        if not isinstance(programme, dict) or not programme.get("knowledge_graph"):
+            return {"ok": True, "transfer_report": None, "candidate_count": 0}
+        graph = programme.get("knowledge_graph") or {}
+        compatibility = programme.get("compatibility") or {}
+        source_ctx = dict(compatibility.get("primary_key") or {})
+        # targets = the OTHER compatibility groups surfaced by Phase 22 (other cars / disciplines).
+        targets = [dict(g.get("compatibility_key") or {})
+                   for g in (compatibility.get("other_groups") or [])
+                   if isinstance(g, dict) and (g.get("compatibility_key") or {})]
+        report = _btr(graph, source_ctx, targets).to_dict()
+        return {"ok": True, "transfer_report": report,
+                "candidate_count": len(report.get("candidates") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
