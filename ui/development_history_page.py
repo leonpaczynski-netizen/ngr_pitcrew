@@ -27,6 +27,7 @@ from ui.engineering_knowledge_panel import EngineeringKnowledgePanel
 from ui.mechanism_annotation_panel import MechanismAnnotationPanel
 from ui.intervention_hypothesis_panel import InterventionHypothesisPanel
 from ui.experiment_synthesis_panel import ExperimentSynthesisPanel
+from ui.engineering_lifecycle_panel import EngineeringLifecyclePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -86,6 +87,11 @@ class DevelopmentHistoryPage(QWidget):
         # legal reversible numeric TEST off the applied baseline). Advisory; not applied.
         self._synthesis_panel = ExperimentSynthesisPanel()
         root.addWidget(self._synthesis_panel)
+
+        # Phase 16 (Program 2) — guarded experiment lifecycle & closed-loop status (evidence
+        # to calibration). Read-only orchestration connecting existing authorities; not applied.
+        self._lifecycle_panel = EngineeringLifecyclePanel()
+        root.addWidget(self._lifecycle_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -200,6 +206,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-15 bounded experiment synthesis (read-only, advisory). Receives
         an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
         self._synthesis_panel.update_result(synthesis_result)
+
+    def update_engineering_lifecycle(self, lifecycle_result) -> None:
+        """Render the Phase-16 closed-loop engineering lifecycle (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._lifecycle_panel.update_result(lifecycle_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
