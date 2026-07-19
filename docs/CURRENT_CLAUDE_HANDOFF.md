@@ -1,6 +1,37 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain Phase 10: Engineering Experiment Pre-Flight Review — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain Phase 11: Post-Flight Engineering Reconciliation & Prediction Calibration — COMPLETE
+
+**Branch `eng-brain-phase11-postflight-reconciliation` from `master` @ Phase 10 `fa9d1f4` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-10: after a completed experiment, deterministically compares what the Brain PREDICTED (Phase-10 pre-flight) vs what ACTUALLY occurred (Phase-3 outcome + Phase-6 residuals). NEVER changes experiments / outcomes / memory / working windows / setup values — only compares expectation with reality. No AI, no prediction, no learning, no statistics.
+
+**Schema decision: additive migration to v25 (justified).** `DB_VERSION` 24 → **25** (`_migrate_v25` + `_DDL_V25` add ONE additive, append-only, IMMUTABLE table `engineering_reconciliation_records`); `RULE_ENGINE_VERSION` `46.0` unchanged. Unlike Phases 9/10 (regenerable → no migration), the prediction is a point-in-time input made BEFORE the experiment and is not reliably regenerable after the outcome changes memory — so the immutable calibration log persists (INSERT OR IGNORE, never UPDATE/DELETE, idempotent record_key).
+
+**Files changed:**
+- NEW `strategy/postflight_reconciliation.py` — `reconcile_consequences` (6 statuses), `ReconciliationRecord` + `build_reconciliation_record` (idempotent, time-independent fingerprint).
+- NEW `strategy/preflight_validation.py` — `validate_checklist` (materialised/did-not/useful per item).
+- NEW `strategy/prediction_accuracy.py` — `compute_accuracy` (primary/side-effect/risk/constraint/historical/checklist + overall).
+- MOD `data/session_db.py` — `_migrate_v25`/`_DDL_V25`; `record_experiment_reconciliation` (append-only), `get_reconciliation_records`, `build_prediction_calibration`; `_residual_dicts_for_outcome` helper.
+- MOD `strategy/_setup_constants.py` — `DB_VERSION` 25.
+- NEW `ui/postflight_review_vm.py` + `ui/postflight_review_panel.py` (`PostFlightReviewPanel`, no Apply controls). MOD `ui/development_history_page.py` (embeds the panel) + `ui/dashboard.py` (populates the aggregate calibration).
+- NEW `tests/test_phase11_{reconciliation,validation,persistence,orchestrator,view_model}.py` (36) + `tests/test_phase11_ui_construction.py` (3, individual). Version guards advanced: group55-61 → v26; session_db/phase8-9-10 track `DB_VERSION`. NEW `docs/ENGINEERING_BRAIN_PHASE11_POSTFLIGHT_RECONCILIATION.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Reuse (no duplication):** Phase 10 pre-flight, Phase 3 outcome, Phase 6 residuals, Phase 8 `MemoryContextKey`. Nothing else consumed.
+
+**Central-loop proof (golden UAT through the production path):** the real `review_and_learn` loop resolves understeer at T3 by raising aero_front → completed Phase-3 outcome; Phase 11 builds the Phase-10 pre-flight for the same experiment, reconciles prediction vs actual (primary consequence CONFIRMED since the target resolved), persists an immutable calibration record; re-reconciling the same prediction → no duplicate; writes only its own log; calibration summary aggregates.
+
+**Tests run / results:** new suites **36 non-UI + 3 UI (individual) passed**. Frozen contracts + phase7-10 + tabs + migration guards **676 passed**. Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** the reconciler receives the Phase-10 pre-flight as an input (the caller captures it at proposal time); an automatic capture-at-apply-time hook is deferred; side-effect/interaction reconciliation uses a deterministic keyword→family map (a physics-precise axis→symptom model deferred); a per-experiment post-flight view wired into the Setup Builder is deferred (the Development History page shows the aggregate calibration).
+
+**GO/NO-GO: GO.** After a completed experiment the system reconciles every predicted consequence + checklist item against the observed outcome, classifies each (confirmed/partial/not-observed/contradicted/insufficient/unknown), computes deterministic per-category accuracy, and appends an immutable calibration record — mutating no experiment/outcome/memory/window, regenerating the calibration summary identically on restart, and exposing no Apply control. Every Phase 1-10 guarantee preserved.
+
+**Recommended Phase 12:** calibration-informed confidence — fold the accumulated calibration (per-category historical accuracy for a context) into the Phase-10 pre-flight's confidence labelling, so repeatedly-accurate predictions read as more trustworthy, still a pure observer that changes no authority.
+
+---
+
+## Prior objective (2026-07-19) — Engineering Brain Phase 10: Engineering Experiment Pre-Flight Review — COMPLETE
 
 **Branch `eng-brain-phase10-preflight-review` from `master` @ Phase 9 `b979be0` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-9: before the selected experiment is shown to the driver, performs a deterministic engineering pre-flight review of the EXACT Phase-5 selection. NEVER creates experiments / changes priorities-ranking / changes setup values / blocks recommendations / changes working windows / mutates evidence-memory-outcomes. No AI, no prediction, no statistical inference.
 

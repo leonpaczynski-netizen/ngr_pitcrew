@@ -118,7 +118,9 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v22 (Phase 3): setup_experiment_outcomes*. v23 (Phase 5): setup_working_windows*.
 # v24 (Phase 8): engineering_development_records — one immutable, append-only record per
 #     completed engineering review (permanent cross-session engineering memory).
-DB_VERSION: int = 24
+# v25 (Phase 11): engineering_reconciliation_records — one immutable, append-only calibration
+#     record per completed experiment comparing the pre-flight prediction with the actual outcome.
+DB_VERSION: int = 25
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

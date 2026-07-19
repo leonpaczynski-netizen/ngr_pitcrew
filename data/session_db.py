@@ -997,9 +997,38 @@ CREATE INDEX IF NOT EXISTS idx_dev_record_context_cols
     ON engineering_development_records (car, track, layout_id, discipline, compound);
 """
 
+# Engineering-Brain Phase 11 — immutable pre-flight/actual calibration records.
+# ONE append-only, IMMUTABLE row per completed experiment comparing the Phase-10
+# prediction with the Phase-3 actual outcome + Phase-6 residuals. The row is never
+# UPDATEd or DELETEd; re-recording the same reconciliation is a no-op (UNIQUE
+# record_key). The prediction is a point-in-time input that is not reliably
+# regenerable after the outcome exists, so the calibration history is persisted.
+_DDL_V25 = """
+CREATE TABLE IF NOT EXISTS engineering_reconciliation_records (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_key               TEXT    NOT NULL UNIQUE,
+    memory_context_key       TEXT    NOT NULL DEFAULT '',
+    experiment_id            TEXT    NOT NULL DEFAULT '',
+    outcome_id               TEXT    NOT NULL DEFAULT '',
+    predicted_risk           TEXT    NOT NULL DEFAULT '',
+    outcome_status           TEXT    NOT NULL DEFAULT '',
+    overall_accuracy         REAL    NOT NULL DEFAULT 0.0,
+    prediction_fingerprint   TEXT    NOT NULL DEFAULT '',
+    recorded_at              TEXT    NOT NULL DEFAULT '',
+    record_json              TEXT    NOT NULL DEFAULT '{}',
+    content_fingerprint      TEXT    NOT NULL DEFAULT '',
+    eval_version             TEXT    NOT NULL DEFAULT '',
+    created_at               TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_recon_record_ctx
+    ON engineering_reconciliation_records (memory_context_key);
+CREATE INDEX IF NOT EXISTS idx_recon_record_experiment
+    ON engineering_reconciliation_records (experiment_id);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
         + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23
-        + _DDL_V24)
+        + _DDL_V24 + _DDL_V25)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -1189,6 +1218,18 @@ class SessionDB:
             self._migrate_v24()
             self._conn.execute("PRAGMA user_version = 24")
             self._conn.commit()
+        if version < 25:
+            self._migrate_v25()
+            self._conn.execute("PRAGMA user_version = 25")
+            self._conn.commit()
+
+    def _migrate_v25(self) -> None:
+        """Engineering-Brain Phase 11 — pre-flight/actual calibration records (schema
+        v25). Adds ONE standalone additive table (engineering_reconciliation_records)
+        storing one immutable, append-only row per completed experiment reconciliation.
+        Touches no existing table and rewrites no historical data. CREATE IF NOT EXISTS
+        throughout ⇒ the migration is idempotent."""
+        self._conn.executescript(_DDL_V25)
 
     def _migrate_v24(self) -> None:
         """Engineering-Brain Phase 8 — permanent cross-session engineering memory
@@ -4021,6 +4062,169 @@ class SessionDB:
             interactions=PARAMETER_INTERACTIONS)
         return {"ok": True, "review": review.to_dict(),
                 "context_fingerprints": context.get("fingerprints", {})}
+
+    # ------------------------------------------------------------------
+    # Post-flight reconciliation + prediction calibration (Phase 11, DB v25)
+    # READ-ONLY: compares the Phase-10 prediction with the Phase-3 actual
+    # outcome; persists an immutable append-only calibration record. Changes
+    # no experiment, outcome, memory, working window, or setup value.
+    # ------------------------------------------------------------------
+    def _residual_dicts_for_outcome(self, outcome: dict, *, discipline: str = "",
+                                    scope: str = "") -> list:
+        """Normalise Phase-6 residuals for an outcome into the stable dict shape the
+        Phase-11 reconciler consumes. Read-only."""
+        try:
+            from strategy.engineering_issue import residual_issues_from_outcome
+        except Exception:  # pragma: no cover
+            return []
+        out = []
+        for ri in residual_issues_from_outcome(outcome, discipline=discipline, scope=scope):
+            ident = ri.identity
+            out.append({
+                "issue_key": ident.key(), "family": ident.issue_family.value,
+                "issue_type": ident.issue_type, "axle": ident.axle,
+                "phase": ident.phase, "corner": ident.corner_name or ident.segment_id,
+                "residual_state": ri.residual_state.value, "is_new": bool(ri.is_new),
+                "is_regression": bool(ri.is_regression),
+                "still_present": bool(ri.still_present),
+                "protected_good": bool(ri.protected_good),
+            })
+        return out
+
+    def record_experiment_reconciliation(
+        self, experiment_id: int, preflight_review: dict, *,
+        recorded_at: "str | None" = None, driver: str = "", gt7_version: str = "",
+        compound: str = "",
+    ) -> dict:
+        """Reconcile the Phase-10 pre-flight prediction for ``experiment_id`` against its
+        completed Phase-3 outcome + Phase-6 residuals, and persist an immutable append-only
+        calibration record. ``preflight_review`` is the exact Phase-10 review captured at
+        proposal time. Idempotent (UNIQUE record_key). Read-only w.r.t. all prior evidence;
+        never rewrites history; never raises."""
+        try:
+            from strategy.postflight_reconciliation import build_reconciliation_record
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase11 import failed: {exc}"}
+        if not isinstance(preflight_review, dict) or not preflight_review:
+            return {"ok": False, "reason": "no pre-flight prediction supplied"}
+        outcome = self.get_latest_experiment_outcome(int(experiment_id))
+        if outcome is None:
+            return {"ok": False, "reason": "no completed outcome to reconcile"}
+        exp = self.get_setup_experiment(int(experiment_id))
+        ctx, scope = self._memory_context_for_experiment(
+            int(experiment_id), outcome, driver=driver, gt7_version=gt7_version,
+            compound=compound)
+        scope_fp = str((scope or {}).get("scope_fingerprint")
+                       or outcome.get("scope_fingerprint") or "")
+        residuals = self._residual_dicts_for_outcome(
+            outcome, discipline=str((scope or {}).get("discipline") or ""), scope=scope_fp)
+        # ensure the record carries the real experiment id (the review echoes candidate_id)
+        review = dict(preflight_review.get("review") or preflight_review)
+        exp_block = dict(review.get("experiment") or {})
+        exp_block.setdefault("candidate_id", str(experiment_id))
+        review["experiment"] = exp_block
+        outcome = dict(outcome); outcome.setdefault("experiment_id", int(experiment_id))
+        now = recorded_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = build_reconciliation_record(
+            {"review": review}, outcome, residuals,
+            memory_context_key=ctx.key(), context=ctx.to_dict(), recorded_at=now)
+        if record is None:
+            return {"ok": False, "reason": "reconciliation not computable"}
+        inserted = self._persist_reconciliation_record(record, created_at=now)
+        return {"ok": True, "recorded": inserted, "record": record.to_dict()}
+
+    def _persist_reconciliation_record(self, record, *, created_at: str) -> bool:
+        """Append-only insert (idempotent by UNIQUE record_key). Returns True when a NEW
+        row was written, False when already recorded. Never UPDATE/DELETE. Never raises."""
+        import json as _json
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    """INSERT OR IGNORE INTO engineering_reconciliation_records
+                       (record_key, memory_context_key, experiment_id, outcome_id,
+                        predicted_risk, outcome_status, overall_accuracy,
+                        prediction_fingerprint, recorded_at, record_json,
+                        content_fingerprint, eval_version, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (record.record_key, record.memory_context_key, record.experiment_id,
+                     record.outcome_id, record.predicted_risk, record.outcome_status,
+                     float(record.accuracy.overall_accuracy),
+                     record.prediction_fingerprint, record.recorded_at,
+                     _json.dumps(record.to_dict()), record.content_fingerprint,
+                     record.eval_version, created_at))
+                self._conn.commit()
+                return cur.rowcount > 0
+        except Exception:
+            return False
+
+    def get_reconciliation_records(self, memory_context_key: str = "", **ctx) -> list[dict]:
+        """Return the immutable calibration records for a memory context, oldest first.
+        Reconstructed purely from the stored record_json. Read-only; never raises."""
+        import json as _json
+        key = str(memory_context_key or "")
+        if not key:
+            from strategy.development_history import MemoryContextKey
+            key = MemoryContextKey(
+                driver=ctx.get("driver", ""), car=ctx.get("car", ""),
+                track=ctx.get("track", ""), layout_id=ctx.get("layout_id", ""),
+                discipline=ctx.get("discipline", ""),
+                gt7_version=ctx.get("gt7_version", ""),
+                compound=ctx.get("compound", "")).key()
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT record_json FROM engineering_reconciliation_records "
+                    "WHERE memory_context_key=? ORDER BY id ASC", (key,)).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    out.append(_json.loads(r[0]))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def build_prediction_calibration(self, memory_context_key: str = "", **ctx) -> dict:
+        """Aggregate the immutable calibration records for a context into a deterministic
+        prediction-calibration summary (mean accuracies + confirmed/contradicted counts).
+        Regenerable from the stored records; restart-deterministic. Read-only."""
+        records = self.get_reconciliation_records(memory_context_key, **ctx)
+        n = len(records)
+        if not n:
+            return {"ok": True, "record_count": 0, "records": [],
+                    "calibration": {"reconciliations": 0}}
+
+        def _avg(path):
+            vals = []
+            for r in records:
+                acc = r.get("accuracy") or {}
+                v = acc.get(path)
+                if isinstance(v, (int, float)):
+                    vals.append(float(v))
+            return round(sum(vals) / len(vals), 4) if vals else 0.0
+
+        confirmed = sum(int((r.get("accuracy") or {}).get("confirmed_count") or 0)
+                        for r in records)
+        contradicted = sum(int((r.get("accuracy") or {}).get("contradicted_count") or 0)
+                           for r in records)
+        risk_hits = sum(1 for r in records
+                        if r.get("predicted_risk") in ("high", "moderate")
+                        and r.get("outcome_status") == "regression")
+        calibration = {
+            "reconciliations": n,
+            "overall_accuracy": _avg("overall_accuracy"),
+            "primary_consequence_accuracy": _avg("primary_consequence_accuracy"),
+            "side_effect_accuracy": _avg("side_effect_accuracy"),
+            "risk_accuracy": _avg("risk_accuracy"),
+            "constraint_accuracy": _avg("constraint_accuracy"),
+            "historical_transfer_usefulness": _avg("historical_transfer_usefulness"),
+            "checklist_usefulness": _avg("checklist_usefulness"),
+            "confirmed_total": confirmed, "contradicted_total": contradicted,
+            "elevated_risk_regressions": risk_hits,
+        }
+        return {"ok": True, "record_count": n, "records": records,
+                "calibration": calibration}
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

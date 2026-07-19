@@ -6631,6 +6631,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             page.update_result(result)
             if hasattr(page, "update_engineering_context"):
                 page.update_engineering_context(context_result)
+            # Phase 11 — aggregate prediction calibration for the current context.
+            if hasattr(page, "update_prediction_calibration"):
+                calib = {"ok": True, "calibration": {"reconciliations": 0}}
+                if self._db is not None and (car or track):
+                    calib = self._db.build_prediction_calibration(
+                        car=car, track=track, layout_id=layout_id, discipline=discipline)
+                page.update_prediction_calibration(calib)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})

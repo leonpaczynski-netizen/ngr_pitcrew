@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 from ui import ngr_theme as ngr
 from ui import development_history_vm as vm
 from ui.engineering_context_panel import EngineeringContextPanel
+from ui.postflight_review_panel import PostFlightReviewPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -62,6 +63,10 @@ class DevelopmentHistoryPage(QWidget):
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
         root.addWidget(self._context_panel)
+
+        # Phase 11 — prediction calibration (how accurate our expectations have been).
+        self._postflight_panel = PostFlightReviewPanel()
+        root.addWidget(self._postflight_panel)
 
         self._scorecard_grid = QGridLayout()
         root.addWidget(self._boxed("Engineering Scorecard", self._scorecard_grid))
@@ -152,6 +157,11 @@ class DevelopmentHistoryPage(QWidget):
     def update_engineering_context(self, context_result) -> None:
         """Render the Phase-9 cross-context engineering advisory (read-only)."""
         self._context_panel.update_result(context_result)
+
+    def update_prediction_calibration(self, calibration_result) -> None:
+        """Render the Phase-11 aggregate prediction calibration (read-only)."""
+        self._postflight_panel.update_result(None)
+        self._postflight_panel.update_calibration(calibration_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))

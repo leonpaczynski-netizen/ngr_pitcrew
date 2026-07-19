@@ -227,7 +227,7 @@ def test_no_migration_needed(db):
     src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
     # Phase 6 itself introduced no _migrate_v24 (that arrived with Phase 8); guard
     # against an unexpected next bump.
-    assert "_migrate_v25" not in src
+    assert "_migrate_v26" not in src
 
 
 def test_frozen_contracts():
