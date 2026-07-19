@@ -6643,6 +6643,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # the page render the finished, immutable result. Read-only; changes nothing.
             if hasattr(page, "update_mechanism_annotations"):
                 self._refresh_mechanism_annotations(car, track, layout_id, discipline)
+            # Phase 14 — mechanism-constrained intervention hypotheses (advisory). Also
+            # runs OFF the Qt thread; the page renders the finished immutable result.
+            if hasattr(page, "update_intervention_hypotheses"):
+                self._refresh_intervention_hypotheses(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -6687,6 +6691,46 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_mechanism_annotations"):
             try:
                 page.update_mechanism_annotations(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_intervention_hypotheses(self, car, track, layout_id, discipline):
+        """Build the Phase-14 intervention hypotheses OFF the Qt thread and render the
+        finished immutable result on the page. Read-only; never writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_intervention_hypotheses"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_intervention_hypotheses({"ok": True, "hypothesis_sets": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+
+            def _build():
+                return db.build_intervention_hypotheses(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._intervention_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_intervention_hypotheses_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_intervention_hypotheses_ready(
+                    {"ok": True, "hypothesis_sets": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_intervention_hypotheses({"ok": True, "hypothesis_sets": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_intervention_hypotheses_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable hypothesis result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_intervention_hypotheses"):
+            try:
+                page.update_intervention_hypotheses(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
