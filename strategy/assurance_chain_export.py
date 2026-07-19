@@ -15,7 +15,7 @@ never raises into the caller.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from strategy.assurance_chain_serialization import (
     ASSURANCE_CHAIN_SERIALIZATION_VERSION, CHAIN_PHASE_ORDER, CHAIN_PHASE_KEYS,
@@ -293,6 +293,61 @@ def _build(chain_products: Mapping, context: Mapping) -> AssuranceChainExport:
         integrity=tuple(i.to_dict() for i in integrity), assurance_grade=grade, empty_state=empty,
         advisory_statement=_ADVISORY, limitations=_LIMITATIONS, validation=validation.to_dict(),
         chain_versions=chain_versions(), content_fingerprint=export_fp)
+
+
+def _recomputed_section_digests(export: Mapping) -> Dict[str, Tuple[bool, str]]:
+    """Return {phase_key: (present, recomputed_content_digest)} recomputed from the section CONTENT
+    (never trusting the claimed digest). Used for independent integrity verification."""
+    out: Dict[str, Tuple[bool, str]] = {}
+    by_key = {_lc(s.get("phase_key")): s for s in (export.get("sections") or [])
+              if isinstance(s, Mapping)}
+    for _order, (phase_key, _title) in enumerate(CHAIN_PHASE_ORDER):
+        s = by_key.get(phase_key) or {}
+        present = bool(s.get("present"))
+        content = s.get("content") if isinstance(s.get("content"), Mapping) else {}
+        digest = recomputed_content_digest(content) if present else content_digest({})
+        out[phase_key] = (present, digest)
+    return out
+
+
+def recompute_chain_fingerprint(export: Mapping) -> str:
+    """Independently recompute the assurance-chain fingerprint from an export dict, recomputing each
+    section's content digest from its content (so tampered content is detected). Deterministic."""
+    m = export.get("manifest") or {}
+    digests = _recomputed_section_digests(export)
+    sections = [(phase_key, order, digests[phase_key][0], digests[phase_key][1])
+                for order, (phase_key, _t) in enumerate(CHAIN_PHASE_ORDER)]
+    return short_fingerprint(ASSURANCE_CHAIN_EXPORT_VERSION, {
+        "prog": m.get("programme_identity") or {}, "ctx": m.get("context_identity") or {},
+        "db": m.get("db_schema_version"), "rule": m.get("rule_engine_version"),
+        "src": m.get("source_chain_identity") or {}, "sections": sections,
+        "grade": _lc(m.get("assurance_grade")), "cv": chain_versions()})
+
+
+def verify_export_integrity(export: Mapping) -> dict:
+    """Independently verify an export dict: recompute each section digest and the chain fingerprint,
+    compare to the claimed values. Returns {ok, section_mismatches, chain_fingerprint_ok,
+    claimed_chain_fingerprint, recomputed_chain_fingerprint}. Never raises."""
+    try:
+        m = export.get("manifest") or {}
+        by_key = {_lc(s.get("phase_key")): s for s in (export.get("sections") or [])
+                  if isinstance(s, Mapping)}
+        recomputed = _recomputed_section_digests(export)
+        mismatches = []
+        for phase_key, (_present, digest) in recomputed.items():
+            claimed = _lc((by_key.get(phase_key) or {}).get("content_digest"))
+            if claimed and claimed != digest:
+                mismatches.append(phase_key)
+        claimed_fp = str(m.get("assurance_chain_fingerprint") or "")
+        recomputed_fp = recompute_chain_fingerprint(export)
+        chain_ok = (claimed_fp == recomputed_fp) if claimed_fp else False
+        return {"ok": (not mismatches) and chain_ok, "section_mismatches": mismatches,
+                "chain_fingerprint_ok": chain_ok, "claimed_chain_fingerprint": claimed_fp,
+                "recomputed_chain_fingerprint": recomputed_fp}
+    except Exception as exc:
+        return {"ok": False, "section_mismatches": ["error"], "chain_fingerprint_ok": False,
+                "claimed_chain_fingerprint": "", "recomputed_chain_fingerprint": "",
+                "error": type(exc).__name__}
 
 
 def chain_versions() -> dict:
