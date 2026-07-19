@@ -3525,6 +3525,88 @@ class SessionDB:
             generated_at=now, decision_blocks=decision_blocks)
         return {"ok": True, "snapshot": snapshot.to_dict(), "plan": plan.to_dict()}
 
+    # ------------------------------------------------------------------
+    # Live Engineering State Monitor + Session Development Ledger
+    # (Phase 7 — READ-ONLY OBSERVER, no migration, DB stays v23)
+    # ------------------------------------------------------------------
+    def build_live_engineering_state(
+        self, session_id: int, *, car_id: "int | None" = None, track: str = "",
+        layout_id: str = "", scope_fingerprint: str = "", discipline: str = "",
+        protected_keys: "Sequence[str] | None" = None,
+    ) -> dict:
+        """Phase 7 orchestrator: fold the persisted per-corner evidence for ONE live
+        session into the current Live Engineering State + append-only Session
+        Development Ledger.
+
+        Pure OBSERVER: it decides nothing, selects no experiment, authors no setup
+        value and writes nothing. It regenerates deterministically from
+        ``corner_issue_occurrences`` (session-keyed, per-lap) + the canonical
+        lap-validity authority — so no migration is required (the state and ledger
+        are a pure function of already-persisted rows; a restart rebuild yields the
+        SAME content fingerprints). Never raises."""
+        try:
+            from strategy.engineering_lap_validity import (
+                evaluate_session_laps, LapPurpose)
+            from strategy.corner_evidence import from_issue_occurrence_row
+            from strategy.live_engineering_state import update_live_state
+            from strategy.session_development import build_session_ledger
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": f"phase7 import failed: {exc}"}
+
+        sid = int(session_id or 0)
+        if not sid:
+            return {"ok": False, "reason": "no session id"}
+        # Resolve physical scope (car/track) when not supplied.
+        if car_id is None or not track:
+            meta = self.get_session_meta(sid) or {}
+            car_id = int(meta.get("car_id") or 0) if car_id is None else car_id
+            track = track or str(meta.get("track") or "")
+        if not track:
+            return {"ok": False, "reason": "session scope not resolvable"}
+
+        # All persisted occurrences for this scope, restricted to THIS session.
+        occ_rows = [r for r in self.get_issue_occurrences(int(car_id or 0), track,
+                                                          layout_id)
+                    if str(r.get("session_id")) == str(sid)]
+        # Canonical comparable-lap window (formation/pit/invalid/outlier removed by
+        # the Phase-4 authority — this observer trusts that, it does not re-judge laps).
+        laps = self.get_laps_for_scoring(sid)
+        _, summ = evaluate_session_laps(
+            laps, purpose=LapPurpose.PRACTICE_PATTERN,
+            scope_fingerprint=scope_fingerprint, expected_track=track)
+        valid_nums = tuple(getattr(summ, "valid_lap_numbers", ()) or ())
+
+        records = [from_issue_occurrence_row(r, scope_fingerprint=scope_fingerprint)
+                   for r in occ_rows]
+
+        # Current live state over the full comparable window.
+        state = update_live_state(
+            records, valid_nums, scope_fingerprint=scope_fingerprint,
+            discipline=discipline, session_id=sid, protected_keys=protected_keys)
+
+        # Deterministic development timeline: one snapshot per growing valid-lap
+        # prefix (a lap only ever appends events — append-only ledger contract).
+        snapshots = []
+        for i in range(1, len(valid_nums) + 1):
+            prefix = valid_nums[:i]
+            prefix_set = set(prefix)
+            prefix_recs = [rec for rec in records
+                           if rec.lap_number is not None
+                           and rec.lap_number in prefix_set]
+            snap = update_live_state(
+                prefix_recs, prefix, scope_fingerprint=scope_fingerprint,
+                discipline=discipline, session_id=sid, protected_keys=protected_keys)
+            snapshots.append((prefix[-1], snap))
+        ledger = build_session_ledger(
+            snapshots, session_id=sid, scope_fingerprint=scope_fingerprint)
+
+        return {
+            "ok": True, "session_id": sid, "car_id": int(car_id or 0),
+            "track": track, "layout_id": layout_id,
+            "valid_lap_count": len(valid_nums),
+            "live_state": state.to_dict(), "ledger": ledger.to_dict(),
+        }
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:

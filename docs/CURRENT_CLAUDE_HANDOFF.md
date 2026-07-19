@@ -1,6 +1,36 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-18) — Engineering Brain Phase 6: Live Residual-Issue Detection & Multi-Symptom Experiment Planning — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain Phase 7: Live Engineering State Monitor & Session Development Ledger — COMPLETE
+
+**Branch `eng-brain-phase7-live-state-monitor` from `master` @ Phase 6 `abfa14b` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER over the Phase 1-6 spine: it answers "what is the car doing right now?", NOT "what experiment next?". It DECIDES NOTHING — no experiment selection, no evidence scoring, no lap evaluation, no setup authoring, no working-window mutation, no candidate reordering. NO generative AI, no network, no auto-apply/revert, no whole-app redesign, no new authority.
+
+**Schema decision: NO migration.** `DB_VERSION` stays **23**; `RULE_ENGINE_VERSION` stays `46.0`. Proof: the live state + development ledger are a DETERMINISTIC regenerable function of persisted `corner_issue_occurrences` (session-keyed, per-lap) + the Phase-4 lap-validity authority; a restart rebuild yields byte-identical `content_fingerprint`s (`test_restart_determinism`). Nothing is persisted; no table added (`live_engineering*`/`development_ledger*` asserted absent).
+
+**Files changed:**
+- NEW `strategy/state_transitions.py` — Trend (IMPROVING/UNCHANGED/WORSENING/FLUCTUATING/INSUFFICIENT_EVIDENCE) + IssueStatus (UNKNOWN/NEW/ACTIVE/RECOVERING/STABLE/RESOLVED/PROTECTED/DAMAGED); `detect_trend` (window-fraction over VALID laps only; min-lap + jitter gates; ≥2-lap support rule so ONE exceptional lap can never flip a trend — IMPROVING needs ≥2 recent clear laps, WORSENING ≥2 recent affected); `next_status` (documented recovery/regression/protected paths).
+- NEW `strategy/live_engineering_state.py` — `LiveIssueState`, `ConsistencyMeasures` (engineering repeatability, NOT driver ratings), `SessionHealth`/`SessionHealthBand`, `LiveEngineeringState` (time-independent fingerprint); `update_live_state` pure order-independent fold (excluded/non-comparable laps never count).
+- NEW `strategy/session_development.py` — append-only immutable `SessionDevelopmentLedger` (positional `sequence_no`; `append_snapshot` returns a NEW ledger); `build_session_ledger` byte-equal to incremental append.
+- MOD `data/session_db.py` — `build_live_engineering_state(session_id, …)` orchestrator: reads occurrences + Phase-4 valid-lap window, folds the current live state + a per-lap-prefix development ledger. Read-only, NO persistence, writes nothing (asserted).
+- NEW `ui/live_engineering_vm.py` (pure VM: health rows, issue tables, `▇/·` trend sparkline, timeline) + `ui/live_engineering_monitor.py` (`LiveEngineeringMonitor` widget; NO Apply/Save/Revert controls — asserted). `dashboard.py` untouched (god-file + teardown-segfault surface).
+- NEW `tests/test_phase7_{state_transitions,live_state,ledger,orchestrator,view_model}.py` (55) + `tests/test_phase7_ui_construction.py` (3, run individually). NEW `docs/ENGINEERING_BRAIN_PHASE7_LIVE_STATE_MONITOR.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff.
+
+**Reuse (no duplication):** Phase 4 `corner_evidence.CornerObservationRecord`/`from_issue_occurrence_row`/`classify_recurrence` (the SINGLE recurrence authority via `RecurrenceThresholds`), Phase 4 `engineering_lap_validity.evaluate_session_laps` (comparable-lap window — never re-judges laps), Phase 6 `engineering_issue.EngineeringIssueIdentity` (display-text-free). Phase 7 defines no second recurrence/identity model and no competing telemetry table.
+
+**Central-loop proof (golden UAT + metamorphic through the production path):** end-to-end (persisted occurrences → live state + ledger); restart-determinism (identical state + ledger fingerprints); append==rebuild ledger; single-lap-no-flip both directions; pit/out-lap exclusion; golden resolution timeline (monotonic seq + lap); observer-writes-nothing; insertion-order invariance; no-Apply-control.
+
+**Tests run / results:** new non-UI suites **55 passed**; UI construction **3 passed** (individually). Frozen `config_id` / fan-out / engine-wiring / Apply-gate / rule-engine-version tests **196 passed**. Adjacent regression (Phase 4/5/6 wiring + `test_session_db`) **70 passed**. Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** `protected_keys` accepted but not yet auto-derived from accepted-checkpoint protected behaviours; live per-lap wiring into a running Practice session (off-thread tick → `LiveEngineeringMonitor.update_result`) deliberately left as a separate integration step (dashboard.py untouched); trend thresholds are fixed constants (per-discipline tuning deferred).
+
+**GO/NO-GO: GO.** The monitor observes the live engineering state deterministically, classifies trend/status from comparable laps only (one exceptional lap can never flip a trend), measures engineering consistency (not driver skill), records an append-only development timeline that is byte-identical whether built incrementally or from scratch, regenerates identically on restart, adds no schema and writes nothing, and exposes no setup-authoring control. Every Phase 1-6 guarantee preserved.
+
+**Recommended Phase 8:** Live in-session wiring (off-thread per-lap tick, mirroring the Phase-6 review worker) + cross-session development history + derive `protected_keys` from accepted-checkpoint protected behaviours — still a pure observer, still no auto-apply.
+
+---
+
+## Prior objective (2026-07-18) — Engineering Brain Phase 6: Live Residual-Issue Detection & Multi-Symptom Experiment Planning — COMPLETE
 
 **Branch `eng-brain-phase6-residual-experiment-planning` from `master` @ Phase 5 `535aed9` — committed, NOT pushed / no PR.** (Verified start: `535aed9` HEAD/tip; Phases 2-5 stacked on-branch, master at Phase 1; `DB_VERSION 23`, `RULE_ENGINE_VERSION 46.0`; pre-existing runtime diffs 9-145h old.) Residual detection + development-programme planning over the Phase 1-5 spine — NO generative AI, no auto-apply/revert, no live-coaching, no UI redesign.
 
