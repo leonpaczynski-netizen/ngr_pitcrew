@@ -6710,6 +6710,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # writes/schedules/applies nothing.
             if hasattr(page, "update_programme_evidence_coverage_report"):
                 self._refresh_programme_evidence_coverage_report(car, track, layout_id, discipline)
+            # Phase 28 — engineering knowledge readiness executive summary: per-domain readiness +
+            # a transparent rule-based programme grade. Read-only advisory; runs OFF the Qt thread;
+            # 'ready' never means 'apply this setup'; no setup values; writes/schedules nothing.
+            if hasattr(page, "update_programme_knowledge_readiness_report"):
+                self._refresh_programme_knowledge_readiness_report(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7488,6 +7493,66 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_programme_evidence_coverage_report"):
             try:
                 page.update_programme_evidence_coverage_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_knowledge_readiness_report(self, car, track, layout_id, discipline):
+        """Build the Phase-28 engineering knowledge readiness report OFF the Qt thread and render the
+        finished immutable result. Read-only; 'ready' never means 'apply this setup'; no setup
+        values; writes/schedules/applies nothing; never raises into the UI. A stale worker result
+        cannot replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_knowledge_readiness_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_knowledge_readiness_report({"ok": True, "readiness": None,
+                                                              "grade": "insufficient_evidence",
+                                                              "domain_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_knowledge_readiness_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._readiness_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_knowledge_readiness_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_knowledge_readiness_report_ready(
+                    {"ok": True, "readiness": None, "grade": "insufficient_evidence",
+                     "domain_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_knowledge_readiness_report({"ok": True, "readiness": None,
+                                                                  "grade": "insufficient_evidence",
+                                                                  "domain_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_knowledge_readiness_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable readiness result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_readiness_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_knowledge_readiness_report"):
+            try:
+                page.update_programme_knowledge_readiness_report(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 

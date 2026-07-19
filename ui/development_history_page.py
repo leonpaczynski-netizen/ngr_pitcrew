@@ -39,6 +39,7 @@ from ui.engineering_playbook_panel import EngineeringPlaybookPanel
 from ui.engineering_timeline_panel import EngineeringTimelinePanel
 from ui.engineering_revalidation_panel import EngineeringRevalidationPanel
 from ui.engineering_coverage_panel import EngineeringCoveragePanel
+from ui.engineering_readiness_panel import EngineeringReadinessPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -75,6 +76,12 @@ class DevelopmentHistoryPage(QWidget):
         self._band = QLabel("Building picture…")
         self._band.setStyleSheet(ngr.banner_qss("info"))
         root.addWidget(self._band)
+
+        # Phase 28 (Program 2) — engineering knowledge readiness EXECUTIVE SUMMARY (top-level):
+        # per-domain, is the knowledge ready to rely on, plus a transparent rule-based programme
+        # grade. Read-only; advisory; 'ready' never means 'apply this setup'; no setup values.
+        self._readiness_panel = EngineeringReadinessPanel()
+        root.addWidget(self._readiness_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -341,6 +348,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-27 evidence coverage & blind-spot map (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._coverage_panel.update_result(coverage_result)
+
+    def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
+        """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
+        Receives an immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._readiness_panel.update_result(readiness_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
