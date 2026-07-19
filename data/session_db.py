@@ -5331,6 +5331,50 @@ class SessionDB:
                 "assumption_count": len(report.get("assumptions") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def build_programme_assurance_report(self, memory_context_key: str = "", *,
+                                         applied_setup=None, session_identity=None, gearbox_state="",
+                                         speed_context="", session_context=None, session_budget=None,
+                                         now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Knowledge Assurance & Audit Report (Program 2, Phase 31 -
+        the FINAL layer): audits the knowledge products (re-validation, coverage, readiness,
+        contradiction, assumptions) for assurance defects and grades whether the engineering
+        knowledge can be assured (a single blocking finding prevents ASSURED). Reuses the in-memory
+        knowledge chain (Phase-22 built ONCE; Phase-23/24/25 derived purely) and computes the
+        Phase-26/27/28/29/30 products purely in memory - it never calls their SessionDB entries.
+        Read-only; no N+1; no writes; no migration; no wall-clock; DB stays v26; deterministic;
+        never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+            from strategy.programme_coverage_report import (
+                build_programme_evidence_coverage_report as _bcov)
+            from strategy.programme_contradiction_report import (
+                build_programme_contradiction_report as _bcon)
+            from strategy.programme_readiness_report import (
+                build_programme_knowledge_readiness_report as _brdy)
+            from strategy.programme_assumption_register import (
+                build_programme_assumption_register as _breg)
+            from strategy.programme_assurance_report import (
+                build_programme_assurance_report as _basr)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase31 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "assurance": None, "grade": "insufficient_evidence",
+                    "finding_count": 0}
+        tl, pk, recs = chain["timeline"], chain["programme"], chain.get("records") or []
+        revalidation = _brr(tl, pk).to_dict()
+        coverage = _bcov(tl, pk, revalidation, recs).to_dict()
+        contradiction = _bcon(tl, pk, recs).to_dict()
+        readiness = _brdy(tl, pk, revalidation, coverage).to_dict()
+        assumptions = _breg(tl, revalidation, coverage, contradiction, chain["playbook"]).to_dict()
+        report = _basr(readiness, contradiction, assumptions, coverage, revalidation).to_dict()
+        return {"ok": True, "assurance": report, "grade": report.get("assurance_grade"),
+                "finding_count": len(report.get("findings") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
