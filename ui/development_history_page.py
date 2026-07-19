@@ -41,6 +41,7 @@ from ui.engineering_revalidation_panel import EngineeringRevalidationPanel
 from ui.engineering_coverage_panel import EngineeringCoveragePanel
 from ui.engineering_readiness_panel import EngineeringReadinessPanel
 from ui.engineering_contradiction_panel import EngineeringContradictionPanel
+from ui.engineering_assumption_panel import EngineeringAssumptionPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -182,6 +183,12 @@ class DevelopmentHistoryPage(QWidget):
         # recency; a contradiction may stay open; no setup values.
         self._contradiction_panel = EngineeringContradictionPanel()
         root.addWidget(self._contradiction_panel)
+
+        # Phase 30 (Program 2) — engineering assumption register: what the current knowledge relies
+        # on but has not established (facts are not listed). Read-only; advisory; an assumption can
+        # only cap readiness, never create it; conservative bounds are labelled; no setup values.
+        self._assumption_panel = EngineeringAssumptionPanel()
+        root.addWidget(self._assumption_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -361,6 +368,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-29 knowledge contradiction resolution (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._contradiction_panel.update_result(contradiction_result)
+
+    def update_programme_assumption_register(self, assumption_result) -> None:
+        """Render the Phase-30 engineering assumption register (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._assumption_panel.update_result(assumption_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
