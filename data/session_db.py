@@ -4337,6 +4337,100 @@ class SessionDB:
         result["record_count"] = int(report.get("record_count") or 0)
         return result
 
+    # ------------------------------------------------------------------
+    # Guarded experiment lifecycle & postflight loop closure (Program 2,
+    # Phase 16 - READ-ONLY orchestration). Connects existing authorities: it
+    # converts a READY Phase-15 bounded experiment into a canonical
+    # SetupExperiment request (via build_experiment_from_recommendation), routes
+    # it through the EXISTING Phase-10 preflight, and assembles a read-only
+    # closed-loop summary from the EXISTING Phase-3 outcome + Phase-11
+    # reconciliation + prediction calibration. It APPLIES nothing, PERSISTS no
+    # experiment, records no outcome/reconciliation, and mutates nothing - the
+    # frozen Apply gate remains the sole mutation route. NO migration (DB v25).
+    # Never raises.
+    # ------------------------------------------------------------------
+    def build_experiment_execution(self, candidate: dict, *, diagnosis_key: str = "",
+                                   car: str = "", track: str = "", layout_id: str = "",
+                                   discipline: str = "", driver: str = "",
+                                   gt7_version: str = "", compound: str = "") -> dict:
+        """Convert ONE READY Phase-15 candidate into a canonical experiment request and route
+        it through the EXISTING Phase-10 preflight. Read-only: builds + validates only, writes
+        nothing, applies nothing. Deterministic."""
+        try:
+            from strategy.experiment_lifecycle import (
+                build_execution_request, assemble_execution_result)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase16 import failed: {exc}"}
+        scope = {"car": car, "track": track, "layout_id": layout_id, "discipline": discipline,
+                 "issue_type": str((candidate or {}).get("canonical_issue", {}).get("issue_type")
+                                   or "")}
+        request = build_execution_request(candidate, diagnosis_key=diagnosis_key, scope=scope)
+        review = None
+        if request.actionable and request.selection.get("field"):
+            review = self.build_experiment_preflight(
+                request.selection, car=car, track=track, layout_id=layout_id,
+                discipline=discipline, driver=driver, gt7_version=gt7_version,
+                compound=compound)
+        result = assemble_execution_result(request, review)
+        return {"ok": True, **result.to_dict()}
+
+    def build_engineering_lifecycle(self, memory_context_key: str = "", *,
+                                    applied_setup: "dict | None" = None,
+                                    session_identity: "dict | None" = None,
+                                    gearbox_state: str = "", speed_context: str = "",
+                                    **ctx) -> dict:
+        """Aggregate read-only lifecycle overview for a context: for each diagnosis, the full
+        chain diagnosis -> mechanism -> hypothesis -> synthesis (forward) plus the EXISTING
+        aggregate closed-loop state (prediction calibration + reconciliation records). Reuses
+        the Phase-15 aggregate ONCE (no per-diagnosis DB scan). Read-only; never writes."""
+        try:
+            from strategy.experiment_lifecycle import (
+                assemble_lifecycle_summary, EXPERIMENT_LIFECYCLE_VERSION, knowledge_versions)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase16 import failed: {exc}"}
+        synth = self.build_bounded_setup_experiments(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, **ctx)
+        if not isinstance(synth, dict) or not synth.get("ok"):
+            return {"ok": True, "stages": [], "count": 0, "ready_count": 0,
+                    "calibration": {"reconciliations": 0}, "reconciliation_count": 0}
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx) or {}
+        recon_records = self.get_reconciliation_records(memory_context_key, **ctx) or []
+        calib_summary = calibration.get("calibration") or {}
+        latest_recon = recon_records[-1] if recon_records else {}
+
+        stages = []
+        ready = 0
+        for res in synth.get("synthesis_results") or []:
+            hset = res.get("source_hypothesis_set") or {}
+            candidate = res.get("selected_candidate") or (
+                res.get("alternative_candidates") or [None])[0]
+            if res.get("overall_status") == "ready_for_preflight":
+                ready += 1
+            summary = assemble_lifecycle_summary(
+                candidate=candidate or {}, hypothesis_set=hset,
+                annotation=hset.get("source_annotation") or {},
+                calibration=calib_summary, reconciliation=latest_recon,
+                preflight_state=("ready" if candidate and
+                                 candidate.get("status") == "ready_for_preflight" else "n/a"),
+                diagnosis_key=str(hset.get("source_diagnosis_key") or ""))
+            stages.append(summary.to_dict())
+
+        kv = knowledge_versions()
+        import hashlib as _h
+        import json as _j
+        fp = (f"{EXPERIMENT_LIFECYCLE_VERSION}:lifecycle:"
+              + _h.sha256(_j.dumps(
+                  {"n": len(stages), "fps": [s["content_fingerprint"] for s in stages],
+                   "calib": calib_summary.get("reconciliations", 0), "kv": kv},
+                  sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()[:24])
+        return {"ok": True, "version": EXPERIMENT_LIFECYCLE_VERSION, "stages": stages,
+                "count": len(stages), "ready_count": ready,
+                "calibration": calib_summary,
+                "reconciliation_count": len(recon_records),
+                "knowledge_versions": kv, "content_fingerprint": fp,
+                "record_count": int(synth.get("record_count") or 0)}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
