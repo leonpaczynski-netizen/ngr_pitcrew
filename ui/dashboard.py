@@ -6736,6 +6736,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # evidence, never an experiment/setup/schedule/Apply; no setup values; writes nothing.
             if hasattr(page, "update_assurance_engineering_priority_report"):
                 self._refresh_assurance_engineering_priority_report(car, track, layout_id, discipline)
+            # Phases 33-35 — Assurance Review Pack: preview the current review package. Read-only
+            # advisory; runs OFF the Qt thread; export writes files only on an explicit user action.
+            if hasattr(page, "update_assurance_review_pack"):
+                self._wire_assurance_review_pack_actions(car, track, layout_id, discipline)
+                self._refresh_assurance_review_pack(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7809,6 +7814,192 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_assurance_engineering_priority_report"):
             try:
                 page.update_assurance_engineering_priority_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 33-35 Assurance Review Pack (export / compare / package) --------------------
+
+    def _assurance_review_context(self):
+        """Cache the current (car, track, layout, discipline) for the review-pack actions."""
+        return getattr(self, "_assurance_review_ctx", (None, None, None, None))
+
+    def _wire_assurance_review_pack_actions(self, car, track, layout_id, discipline):
+        """Attach the explicit Preview/Compare/Export handlers to the panel (idempotent). The heavy
+        build/write always runs OFF the Qt thread; a file dialog is the only UI-thread step."""
+        self._assurance_review_ctx = (car, track, layout_id, discipline)
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        if panel is None or getattr(self, "_assurance_review_wired", False):
+            return
+        try:
+            panel.set_action_handlers(preview=self._assurance_review_preview,
+                                      compare=self._assurance_review_compare,
+                                      export=self._assurance_review_export)
+            self._assurance_review_wired = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_assurance_review_pack(self, car, track, layout_id, discipline):
+        """Build the Assurance Review Pack PREVIEW (current export + optional loaded baseline) OFF the
+        Qt thread and render it. Read-only; writes nothing; never raises into the UI. A stale worker
+        result cannot replace a newer one."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_assurance_review_pack"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_assurance_review_pack({"ok": True, "package": None,
+                                               "grade": "insufficient_evidence"})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            baseline = getattr(self, "_assurance_baseline_text", None)
+
+            def _build():
+                return db.build_assurance_review_package_report(
+                    baseline=baseline, car=car, track=track, layout_id=layout_id,
+                    discipline=discipline, applied_setup=applied, session_identity=identity,
+                    now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._review_pack_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assurance_review_pack_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_assurance_review_pack_ready(
+                    {"ok": True, "package": None, "grade": "insufficient_evidence"}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_assurance_review_pack({"ok": True, "package": None,
+                                                   "grade": "insufficient_evidence"})
+            except Exception:
+                pass
+
+    def _on_assurance_review_pack_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable review-pack preview, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_review_pack_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_assurance_review_pack"):
+            try:
+                page.update_assurance_review_pack(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _assurance_review_preview(self):  # pragma: no cover - trivial UI handler
+        """Explicit 'Preview Assurance Review': clear any baseline and re-preview the current export."""
+        self._assurance_baseline_text = None
+        car, track, layout_id, discipline = self._assurance_review_context()
+        self._refresh_assurance_review_pack(car, track, layout_id, discipline)
+
+    def _assurance_review_compare(self):  # pragma: no cover - file-dialog UI handler
+        """Explicit 'Compare Baseline': choose a prior manifest, load it (validated purely), and
+        re-preview with the comparison. The read + build run off the Qt thread."""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select a previous assurance manifest (JSON)", "",
+                "Assurance manifest (*.json);;All files (*)")
+            if not path:
+                return
+            with open(path, "rb") as fh:
+                self._assurance_baseline_text = fh.read().decode("utf-8", errors="replace")
+        except Exception:
+            self._assurance_baseline_text = None
+            return
+        car, track, layout_id, discipline = self._assurance_review_context()
+        self._refresh_assurance_review_pack(car, track, layout_id, discipline)
+
+    def _assurance_review_export(self):  # pragma: no cover - file-dialog UI handler
+        """Explicit 'Export Review Package': choose a destination directory, then build the package
+        spec and WRITE it OFF the Qt thread via the writer adapter. The destination is shown outside
+        the report content."""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            dest = QFileDialog.getExistingDirectory(self, "Choose an export destination directory", "")
+            if not dest:
+                return
+        except Exception:
+            return
+        self._start_assurance_review_export(dest)
+
+    def _start_assurance_review_export(self, dest, *, allow_overwrite=False, make_archive=True):
+        """Build + write the review package to an explicit destination OFF the Qt thread. Separated
+        from the file dialog so it is unit-testable. Never writes without an explicit destination."""
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        db = self._db
+        if not dest or panel is None or db is None:
+            if panel is not None:
+                panel.update_export_status({"ok": False, "errors": ["no destination selected"]})
+            return
+        car, track, layout_id, discipline = self._assurance_review_context()
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            baseline = getattr(self, "_assurance_baseline_text", None)
+
+            def _build_and_write():
+                from strategy.assurance_chain_export import build_assurance_chain_export
+                from strategy.assurance_snapshot_comparison import compare_assurance_snapshots
+                from strategy.assurance_review_package import build_review_package_spec
+                from strategy.assurance_manifest_loader import load_and_validate_baseline
+                from data.assurance_review_package_writer import write_review_package
+                products, ctx = db._assurance_chain_products(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+                if products is None:
+                    return {"ok": False, "errors": ["no assurance state to export"]}
+                export = build_assurance_chain_export(products, ctx).to_dict()
+                comparison = None
+                if baseline:
+                    loaded = load_and_validate_baseline(baseline)
+                    if loaded.ok and loaded.export is not None:
+                        comparison = compare_assurance_snapshots(loaded.export, export).to_dict()
+                spec = build_review_package_spec(export, comparison)
+                return write_review_package(spec, dest, allow_overwrite=allow_overwrite,
+                                            make_archive=make_archive).to_dict()
+
+            worker = MechanismAnnotationWorker(_build_and_write)
+            self._review_export_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assurance_review_export_ready(result, w))
+            worker.failed.connect(
+                lambda msg, w=worker: self._on_assurance_review_export_ready(
+                    {"ok": False, "errors": [f"export failed: {msg}"]}, w))
+            worker.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            panel.update_export_status({"ok": False, "errors": [f"export failed: {exc}"]})
+
+    def _on_assurance_review_export_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: show the write result (destination or error) OUTSIDE the
+        report content, but only if it came from the CURRENT export worker."""
+        if worker is not None and getattr(self, "_review_export_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        if panel is not None:
+            try:
+                panel.update_export_status(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 
