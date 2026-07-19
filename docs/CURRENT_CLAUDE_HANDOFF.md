@@ -1,6 +1,36 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain Phase 11: Post-Flight Engineering Reconciliation & Prediction Calibration — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 12: Deterministic Vehicle Dynamics Knowledge Engine — COMPLETE
+
+**Branch `eng-brain-phase12-vehicle-dynamics` from `master` @ Phase 11 `0923f5c` — committed, NOT pushed / no PR.** Begins **Program 2**: a NEW read-only EXPLANATORY authority (Vehicle Dynamics Knowledge) that explains the physical mechanism behind each setup element. ADDITIONAL to Program 1 (Phases 1-11), not a replacement. NEVER creates experiments / ranks candidates / overrides evidence / modifies outcomes-memory-working-windows / authors setup. No ML, no statistics, no NLP, no black-box scoring.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. The knowledge is static deterministic code (restart-identical fingerprints). No DB, no session state, no new tab.
+
+**Files changed:**
+- NEW `strategy/vehicle_dynamics.py` — `Component` (25) + `ComponentGroup` (8) + `EngineeringExplanation`; consumes Program-1 `PARAMETER_INTERACTIONS` for signs (never duplicates); `explain_component`/`explain_change`/`build_engineering_knowledge`.
+- NEW `strategy/load_transfer.py` — `TransferMode` (7) + `LoadTransferRelation`.
+- NEW `strategy/handling_balance.py` — `HandlingPhase` (8) + `PhaseExplanation` (composes components + load transfer).
+- NEW `strategy/setup_interactions.py` — `ComponentInteraction` + `InteractionType` + LSD model + aero model.
+- NEW `ui/engineering_knowledge_vm.py` + `ui/engineering_knowledge_panel.py` (`EngineeringKnowledgePanel`, no Apply controls). MOD `ui/development_history_page.py` (embeds the panel).
+- NEW `tests/test_phase12_{vehicle_dynamics,models,view_model}.py` (36) + `tests/test_phase12_ui_construction.py` (3, individual). NEW `docs/ENGINEERING_BRAIN_PHASE12_VEHICLE_DYNAMICS.md`; MOD `PROJECT_STATE.md`, `MASTER_TESTING_REGISTER.md`, this handoff. NO version-guard bumps (no migration).
+
+**Reuse (no overlap):** Program-1 `setup_synthesis.PARAMETER_INTERACTIONS` as the single directional-sign source. No new sign data, no DB, no decision logic.
+
+**Central-loop proof (golden + property + metamorphic):** every component fully explained with primary mechanism + secondary interactions + GT7 limitations; `explain_change` raise vs lower flips every axis sign; every component's axis effects exactly match the Program-1 sign graph (no duplication/contradiction) and use only canonical axes; known relationships hold (raising front ARB → understeer, raising LSD accel → exit traction, ride-height GT7 note mentions bottoming, tyre GT7 note mentions wear); all reports restart-deterministic; modules verified free of setup-authoring/experiment-selection/mutation.
+
+**Tests run / results:** new suites **36 non-UI + 3 UI (individual) passed**. Frozen contracts + phase7-11 + tabs + migration guards **657 passed**. Full non-UI regression: see completion report. Pre-existing unrelated failure remains: `test_diagnostic_tab_cleanup::test_dead_imports_removed` (`_seg_rename` in `ui/track_modelling_ui.py`, untouched).
+
+**Runtime files confirmed untouched:** `data/setup_history.json`, `data/track_models/*`, `active_setup_state.json`, `config.json` — pre-existing UAT diffs only; tests used `:memory:` DBs.
+
+**Known limitations / deferred:** the knowledge is qualitative (directional mechanisms), not a numeric simulator; the panel is surfaced in the Development History page (a dedicated "Engineering Knowledge" tab is deferred — the panel is tab-ready); connecting this "why" authority to Program-1 diagnosis is deferred to Phase 13.
+
+**GO/NO-GO: GO.** Program 2 opens with a deterministic vehicle-dynamics knowledge base: 25 components across 8 groups, 7 load-transfer modes, 8 handling phases and 12 pairwise interactions + LSD/aero models, each with a primary mechanism, secondary interactions and GT7-specific limitations — consuming Program 1's sign graph without duplicating it, adding no schema, mutating nothing, and exposing no Apply control. Every Phase 1-11 guarantee preserved.
+
+**Recommended Phase 13:** mechanism-annotated diagnosis — attach the Vehicle-Dynamics mechanism explanation to a Program-1 residual issue / proposed change, joining the "why" authority to the "what happened" workflow, still a pure observer.
+
+---
+
+## Prior objective (2026-07-19) — Engineering Brain Phase 11: Post-Flight Engineering Reconciliation & Prediction Calibration — COMPLETE
 
 **Branch `eng-brain-phase11-postflight-reconciliation` from `master` @ Phase 10 `fa9d1f4` — committed, NOT pushed / no PR.** A READ-ONLY OBSERVER ABOVE Phases 1-10: after a completed experiment, deterministically compares what the Brain PREDICTED (Phase-10 pre-flight) vs what ACTUALLY occurred (Phase-3 outcome + Phase-6 residuals). NEVER changes experiments / outcomes / memory / working windows / setup values — only compares expectation with reality. No AI, no prediction, no learning, no statistics.
 

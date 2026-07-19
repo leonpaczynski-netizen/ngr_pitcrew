@@ -23,6 +23,7 @@ from ui import ngr_theme as ngr
 from ui import development_history_vm as vm
 from ui.engineering_context_panel import EngineeringContextPanel
 from ui.postflight_review_panel import PostFlightReviewPanel
+from ui.engineering_knowledge_panel import EngineeringKnowledgePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -67,6 +68,10 @@ class DevelopmentHistoryPage(QWidget):
         # Phase 11 — prediction calibration (how accurate our expectations have been).
         self._postflight_panel = PostFlightReviewPanel()
         root.addWidget(self._postflight_panel)
+
+        # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
+        self._knowledge_panel = EngineeringKnowledgePanel()
+        root.addWidget(self._knowledge_panel)
 
         self._scorecard_grid = QGridLayout()
         root.addWidget(self._boxed("Engineering Scorecard", self._scorecard_grid))
