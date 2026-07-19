@@ -4990,6 +4990,53 @@ class SessionDB:
                 "candidate_count": len(report.get("candidates") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
+    def build_programme_engineering_playbook(self, memory_context_key: str = "", *,
+                                             applied_setup: "dict | None" = None,
+                                             session_identity: "dict | None" = None,
+                                             gearbox_state: str = "", speed_context: str = "",
+                                             session_context: "dict | None" = None,
+                                             session_budget: "dict | None" = None,
+                                             now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY cross-programme Engineering Playbook (Program 2, Phase 24): the
+        reusable engineering knowledge across the driver's car stable, assembled into a
+        deterministic INVESTIGATION playbook (never a baseline setup).
+
+        Composes the Phase-22 programme knowledge report EXACTLY ONCE (the only heavy DB
+        reconstruction), derives the Phase-23 transfer report PURELY from that same programme (no
+        second Phase-22 build), then runs the pure Phase-24 assembler. It generates NO setup
+        values, copies NO fields, applies / schedules / persists NOTHING; DB stays v26 (no
+        persistence); deterministic; regenerable; never raises. No N+1 - the per-target work is
+        pure (no reads inside any target loop)."""
+        try:
+            from strategy.programme_transfer_report import build_transfer_report as _btr
+            from strategy.engineering_playbook import build_engineering_playbook as _bep
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase24 import failed: {exc}"}
+        # ONE Phase-22 DB reconstruction.
+        pk_result = self.build_programme_knowledge_report(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date,
+            **ctx)
+        if not isinstance(pk_result, dict) or not pk_result.get("ok"):
+            return {"ok": True, "playbook": None, "theme_count": 0}
+        programme = pk_result.get("programme_knowledge")
+        graph = programme.get("knowledge_graph") if isinstance(programme, dict) else None
+        if not isinstance(graph, dict) or not (graph.get("known_domains") or []):
+            # honest empty state — no established engineering knowledge to build a playbook from.
+            return {"ok": True, "playbook": None, "theme_count": 0}
+        compatibility = programme.get("compatibility") or {}
+        source_ctx = dict(compatibility.get("primary_key") or {})
+        targets = [dict(g.get("compatibility_key") or {})
+                   for g in (compatibility.get("other_groups") or [])
+                   if isinstance(g, dict) and (g.get("compatibility_key") or {})]
+        # PURE Phase-23 transfer build (no DB) + PURE Phase-24 assembly.
+        transfer = _btr(graph, source_ctx, targets).to_dict()
+        playbook = _bep(programme, transfer).to_dict()
+        return {"ok": True, "playbook": playbook,
+                "theme_count": len(playbook.get("stable_themes") or []),
+                "content_fingerprint": playbook.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
