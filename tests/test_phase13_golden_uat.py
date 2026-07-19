@@ -242,5 +242,5 @@ def test_scenario_L_db_production_path_and_restart_determinism(tmp_path):
     assert r2["content_fingerprint"] == r1["content_fingerprint"]
     assert [a["content_fingerprint"] for a in r2["annotations"]] == \
            [a["content_fingerprint"] for a in r1["annotations"]]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 25
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
     db2._conn.close()

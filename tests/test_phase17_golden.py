@@ -70,7 +70,7 @@ def test_portfolio_restart_determinism(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_experiment_portfolio(applied_setup=applied(), session_identity=IDENT, **_kw())
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 25
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
     db2._conn.close()
 
 
@@ -78,5 +78,5 @@ def test_empty_db_safe():
     db = SessionDB(":memory:")
     r = db.build_experiment_portfolio(car="Porsche 911 RSR", track="Fuji", discipline="Race")
     assert r["ok"] and r["count"] == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 25
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
     db.close()

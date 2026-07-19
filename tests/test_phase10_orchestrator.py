@@ -54,7 +54,7 @@ def _persist(db, oid, eid, status, sess, field, residuals, at):
 
 
 def test_no_migration(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 25
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
 
 
 def test_end_to_end_review(db):

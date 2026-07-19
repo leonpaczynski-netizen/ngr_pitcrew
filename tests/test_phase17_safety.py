@@ -58,10 +58,10 @@ def test_optimises_learning_not_lap_time():
 def test_db_version_and_rule_engine_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 25 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 26 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_experiment_portfolio(car="Porsche 911 RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 25
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
     db.close()
 
 
@@ -75,7 +75,7 @@ def test_runtime_writes_nothing(tmp_path):
     after = db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0]
     assert before == after == 0 and db._conn.execute(
-        "PRAGMA user_version").fetchone()[0] == v0 == 25
+        "PRAGMA user_version").fetchone()[0] == v0 == 26
     db.close()
 
 

@@ -29,7 +29,7 @@ def _record(outcome_id=55, status="confirmed_improvement"):
 
 
 def test_v25_migration(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 25
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
     t = db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name='engineering_reconciliation_records'").fetchone()
