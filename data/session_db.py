@@ -5161,8 +5161,10 @@ class SessionDB:
             gt7_version=str(source_ctx.get("gt7_version", "") or ""),
             driver=str(source_ctx.get("driver", "") or ""))
         timeline = _bpt(programme, playbook, records).to_dict()
+        # Expose the bounded evidence records read here (the single bulk read) so later read-only
+        # layers (Phase 27+) can derive per-domain context breadth WITHOUT a second DB query.
         return {"programme": programme, "transfer": transfer, "playbook": playbook,
-                "timeline": timeline}
+                "timeline": timeline, "records": [dict(r) for r in records]}
 
     def build_programme_revalidation_report(self, memory_context_key: str = "", *,
                                             applied_setup=None, session_identity=None,
@@ -5187,6 +5189,38 @@ class SessionDB:
         report = _brr(chain["timeline"], chain["programme"]).to_dict()
         return {"ok": True, "revalidation": report,
                 "domain_count": len(report.get("items") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
+    def build_programme_evidence_coverage_report(self, memory_context_key: str = "", *,
+                                                 applied_setup=None, session_identity=None,
+                                                 gearbox_state="", speed_context="",
+                                                 session_context=None, session_budget=None,
+                                                 now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Programme Evidence Coverage & Blind-Spot Report (Program 2, Phase 27):
+        where each known engineering domain's evidence is well supported and where MORE evidence
+        would help (a blind spot is not a fault, and missing coverage means untested, never wrong).
+        Reuses the in-memory knowledge chain (Phase-22 built ONCE; Phase-23/24/25 derived purely),
+        the Phase-26 re-validation (computed purely in memory), and the SAME bounded evidence records
+        the chain read (context breadth) - via the canonical Phase-25 record→domain mapping. Read-only;
+        no N+1; no writes; no migration; no wall-clock; DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.programme_revalidation_report import build_revalidation_report as _brr
+            from strategy.programme_coverage_report import (
+                build_programme_evidence_coverage_report as _bcov)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase27 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is None:
+            return {"ok": True, "coverage": None, "domain_count": 0, "blind_spot_count": 0}
+        revalidation = _brr(chain["timeline"], chain["programme"]).to_dict()
+        report = _bcov(chain["timeline"], chain["programme"], revalidation,
+                       chain.get("records") or []).to_dict()
+        return {"ok": True, "coverage": report,
+                "domain_count": len(report.get("domain_coverage") or []),
+                "blind_spot_count": len(report.get("blind_spots") or []),
                 "content_fingerprint": report.get("content_fingerprint")}
 
     def get_learning_outcomes(
