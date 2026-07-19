@@ -42,6 +42,7 @@ from ui.engineering_coverage_panel import EngineeringCoveragePanel
 from ui.engineering_readiness_panel import EngineeringReadinessPanel
 from ui.engineering_contradiction_panel import EngineeringContradictionPanel
 from ui.engineering_assumption_panel import EngineeringAssumptionPanel
+from ui.engineering_assurance_panel import EngineeringAssurancePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -84,6 +85,13 @@ class DevelopmentHistoryPage(QWidget):
         # grade. Read-only; advisory; 'ready' never means 'apply this setup'; no setup values.
         self._readiness_panel = EngineeringReadinessPanel()
         root.addWidget(self._readiness_panel)
+
+        # Phase 31 (Program 2, FINAL) — engineering knowledge assurance & audit (top-level): audits
+        # the whole knowledge programme for assurance defects and states whether the knowledge can be
+        # ASSURED (a single blocking finding prevents ASSURED). Read-only; advisory; rule-based grade
+        # over visible counts; no setup values.
+        self._assurance_panel = EngineeringAssurancePanel()
+        root.addWidget(self._assurance_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -373,6 +381,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-30 engineering assumption register (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._assumption_panel.update_result(assumption_result)
+
+    def update_programme_assurance_report(self, assurance_result) -> None:
+        """Render the Phase-31 engineering knowledge assurance & audit (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._assurance_panel.update_result(assurance_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
