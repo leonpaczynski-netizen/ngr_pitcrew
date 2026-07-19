@@ -35,6 +35,7 @@ from ui.engineering_confidence_panel import EngineeringConfidencePanel
 from ui.engineering_season_panel import EngineeringSeasonPanel
 from ui.engineering_knowledge_graph_panel import EngineeringKnowledgeGraphPanel
 from ui.engineering_transfer_panel import EngineeringTransferPanel
+from ui.engineering_playbook_panel import EngineeringPlaybookPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -139,6 +140,12 @@ class DevelopmentHistoryPage(QWidget):
         # contexts. Read-only; advisory; transfers no setup; imports/applies nothing.
         self._transfer_panel = EngineeringTransferPanel()
         root.addWidget(self._transfer_panel)
+
+        # Phase 24 (Program 2) — cross-programme engineering playbook: the reusable engineering
+        # knowledge across the car stable, assembled as an INVESTIGATION playbook (not a setup).
+        # Read-only; advisory; generates/copies/applies no setup values.
+        self._playbook_panel = EngineeringPlaybookPanel()
+        root.addWidget(self._playbook_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -293,6 +300,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-23 knowledge-transfer report (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._transfer_panel.update_result(transfer_result)
+
+    def update_programme_engineering_playbook(self, playbook_result) -> None:
+        """Render the Phase-24 cross-programme engineering playbook (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._playbook_panel.update_result(playbook_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
