@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 13: Mechanism-Annotated Diagnosis — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 14: Mechanism-Constrained Intervention Hypotheses — COMPLETE
+
+**Branch `eng-brain-phase14-mechanism-constrained-interventions` from `f3d4e90` (Phase-13 tip) — committed, NOT pushed / no PR / not merged.** A deterministic, READ-ONLY reasoning layer that converts a valid Phase-13 `MechanismAnnotatedDiagnosis` into structured intervention HYPOTHESES — scientifically-defensible controlled-test DIRECTIONS constrained by the supported physical mechanism. A hypothesis is NOT a setup recommendation and NOT an authored change; it answers "what controlled directions are defensible to test next?", never "set this value to X". NEVER authors a numeric value / applies / approves / persists; mutates no diagnosis/outcome/working-window/calibration/setup-history/active-setup; duplicates neither Phase-12 knowledge, the Phase-13 model, nor the Program-1 sign graph (consumes all three). No ML/stats/NLP/black-box/AI/network.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. The hypothesis set is a pure function of the Phase-13 annotation (itself regenerated from immutable records + static Phase-12 knowledge) + read-only inputs → restart-identical `content_fingerprint`.
+
+**Files changed (Phase 14):**
+- NEW `strategy/intervention_hypothesis.py` — `InterventionHypothesisStatus` (9) + `InterventionDirection` (qualitative) + `InterventionTestKind` + `InterventionTarget`/`ExpectedResponse`/`ControlledTestDesign`/`InterventionHypothesis`/`InterventionHypothesisSet`; direction resolved from the canonical sign authority (`explain_component(...).axis_effects`), gearing via `gearbox_evidence` state + final-drive invariant; `build_intervention_hypotheses`/`hypotheses_from_report`. Authors no value; mutates nothing.
+- NEW `strategy/intervention_hypothesis_render.py` — 12-section renderer (no numeric values / Apply / approval / false certainty).
+- MOD `data/session_db.py` — NEW read-only `build_intervention_hypotheses(**ctx)` (reuses `build_mechanism_annotations` ONCE; no migration; DB stays v25).
+- NEW `ui/intervention_hypothesis_vm.py` + `ui/intervention_hypothesis_panel.py` (`InterventionHypothesisPanel`, structured cards, NO Apply/Approve/Revert). MOD `ui/development_history_page.py` (embeds panel + `update_intervention_hypotheses`). MOD `ui/dashboard.py` (`_refresh_intervention_hypotheses` off the Qt thread via the reused `MechanismAnnotationWorker`).
+- NEW `tests/test_phase14_{intervention_domain,golden_uat,properties,safety,query_shape,ui_construction}.py` (84 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE14_MECHANISM_CONSTRAINED_INTERVENTIONS.md`.
+
+**Doctrine highlights:** wheelspin NEVER auto-increases LSD locking (LSD stays competing/blocked); a failed direction → `BLOCKED_BY_WORKING_WINDOW` (mechanism retained); a prior single-field regression → `CONTRADICTED_BY_OUTCOME` (physics retained); a confirmed outcome never proves a mechanism; coupled tests only from a prior coupled-improvement, capped at 2 fields crediting the SET; aero needs speed context; count-only bottoming → insufficient; unknown/conflicting gearbox → no direction (final-drive invariant preserved: lower ratio = longer); driver preference never overrides evidence or a lockout.
+
+**Next: Phase 15 — Minimum-Effective Experiment Synthesis Handoff** (hand the top defensible hypothesis to the existing deterministic setup-synthesis / experiment-selection authority to propose the smallest legal numeric step, still evidence-gated + manual Apply). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 13: Mechanism-Annotated Diagnosis — COMPLETE
 
 **Branch `eng-brain-phase13-mechanism-annotated-diagnosis` from `6010d5b` (Phase-12 tip) — committed, NOT pushed / no PR / not merged.** The strict bridge between **Program 1** ("what happened?") and **Program 2 / Phase 12** ("why could it have happened?"): for an already-decided canonical Program-1 diagnosis it produces an auditable, evidence-linked explanation of the vehicle-dynamics MECHANISMS behind it (from the Phase-12 authority) and keeps the diagnosis UNCHANGED. NEVER decides observation/validity/recurrence/improvement/safety/experiment-selection; authors no setup value/delta/Apply/Revert; mutates no outcome/working-window/lockout/prediction-calibration; duplicates neither the Phase-12 knowledge nor the Program-1 sign graph (consumes both). No ML/statistics/NLP/black-box/AI.
 
