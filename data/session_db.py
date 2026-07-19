@@ -1026,9 +1026,35 @@ CREATE INDEX IF NOT EXISTS idx_recon_record_experiment
     ON engineering_reconciliation_records (experiment_id);
 """
 
+_DDL_V26 = """
+CREATE TABLE IF NOT EXISTS engineering_campaign_registry (
+    campaign_id                TEXT    PRIMARY KEY,
+    car                        TEXT    NOT NULL DEFAULT '',
+    track                      TEXT    NOT NULL DEFAULT '',
+    layout                     TEXT    NOT NULL DEFAULT '',
+    discipline                 TEXT    NOT NULL DEFAULT '',
+    objective_family           TEXT    NOT NULL DEFAULT '',
+    objective_region           TEXT    NOT NULL DEFAULT '',
+    gt7_version                TEXT    NOT NULL DEFAULT '',
+    creation_session           TEXT    NOT NULL DEFAULT '',
+    first_seen                 TEXT    NOT NULL DEFAULT '',
+    last_seen                  TEXT    NOT NULL DEFAULT '',
+    last_updated               TEXT    NOT NULL DEFAULT '',
+    notes                      TEXT    NOT NULL DEFAULT '',
+    manual_archive_flag        INTEGER NOT NULL DEFAULT 0,
+    completion_state           TEXT    NOT NULL DEFAULT '',
+    abandonment_reason         TEXT    NOT NULL DEFAULT '',
+    linked_development_records TEXT    NOT NULL DEFAULT '[]',
+    linked_experiments         TEXT    NOT NULL DEFAULT '[]',
+    linked_outcomes            TEXT    NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_registry_scope
+    ON engineering_campaign_registry (car, track, layout, discipline);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
         + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23
-        + _DDL_V24 + _DDL_V25)
+        + _DDL_V24 + _DDL_V25 + _DDL_V26)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -1222,6 +1248,18 @@ class SessionDB:
             self._migrate_v25()
             self._conn.execute("PRAGMA user_version = 25")
             self._conn.commit()
+        if version < 26:
+            self._migrate_v26()
+            self._conn.execute("PRAGMA user_version = 26")
+            self._conn.commit()
+
+    def _migrate_v26(self) -> None:
+        """Engineering-Brain Phase 19 — campaign persistence registry (schema v26). Adds ONE
+        standalone additive table (engineering_campaign_registry) storing metadata-only
+        campaign identity (creation session, first/last seen, notes, manual archive flag,
+        completion state, links). Touches no existing table, alters no existing query, and
+        rewrites no historical data. CREATE IF NOT EXISTS throughout ⇒ idempotent."""
+        self._conn.executescript(_DDL_V26)
 
     def _migrate_v25(self) -> None:
         """Engineering-Brain Phase 11 — pre-flight/actual calibration records (schema
@@ -4568,6 +4606,166 @@ class SessionDB:
                     "compatible": True,
                 })
         return out
+
+    # ------------------------------------------------------------------
+    # Campaign persistence, evidence saturation & cost of knowledge
+    # (Program 2, Phase 19). The engineering NOTEBOOK: an additive,
+    # metadata-only campaign registry (DB v26) that lets campaigns survive
+    # across sessions, plus a READ-ONLY "engineering efficiency" advisory
+    # (campaign age + evidence saturation + cost-of-knowledge + budget fit).
+    # It owns no engineering logic, ranks nothing, applies/approves/freezes/
+    # creates/executes nothing, and mutates no setup / experiment / outcome /
+    # calibration. The ONLY write here is the metadata registry upsert
+    # (record_engineering_campaigns), which is idempotent and additive.
+    # ------------------------------------------------------------------
+    def record_engineering_campaigns(self, programme: dict, *, session_id: str = "",
+                                     recorded_at: str = "") -> dict:
+        """Persist the METADATA of a Phase-18 campaign programme into the additive campaign
+        registry (DB v26). Idempotent: ``first_seen`` / ``creation_session`` are preserved on
+        re-record; ``last_seen`` / ``last_updated`` / ``completion_state`` / links are refreshed.
+        Metadata only — it writes no setup / experiment / outcome. ``recorded_at`` is supplied
+        (never the clock). Never raises."""
+        try:
+            from strategy.campaign_persistence import registry_entry_from_campaign
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase19 import failed: {exc}"}
+        if not isinstance(programme, dict):
+            return {"ok": True, "recorded": 0}
+        import json as _json
+        recorded = 0
+        with self._lock:
+            for camp in programme.get("campaigns") or []:
+                try:
+                    e = registry_entry_from_campaign(camp, session_id=session_id,
+                                                     recorded_at=recorded_at)
+                except Exception:
+                    continue
+                if not e.campaign_id:
+                    continue
+                # INSERT OR IGNORE preserves first_seen/creation_session on re-record.
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO engineering_campaign_registry "
+                    "(campaign_id, car, track, layout, discipline, objective_family, "
+                    "objective_region, gt7_version, creation_session, first_seen, last_seen, "
+                    "last_updated, completion_state, linked_development_records, "
+                    "linked_experiments, linked_outcomes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (e.campaign_id, e.car, e.track, e.layout, e.discipline, e.objective_family,
+                     e.objective_region, e.gt7_version, e.creation_session, e.first_seen,
+                     e.last_seen, e.last_updated, e.completion_state,
+                     _json.dumps(list(e.linked_development_records)),
+                     _json.dumps(list(e.linked_experiments)),
+                     _json.dumps(list(e.linked_outcomes))))
+                # Refresh only the mutable-metadata columns (never first_seen / notes /
+                # manual_archive_flag which are user/point-in-time owned).
+                self._conn.execute(
+                    "UPDATE engineering_campaign_registry SET last_seen=?, last_updated=?, "
+                    "completion_state=?, linked_experiments=? WHERE campaign_id=?",
+                    (e.last_seen, e.last_updated, e.completion_state,
+                     _json.dumps(list(e.linked_experiments)), e.campaign_id))
+                recorded += 1
+            self._conn.commit()
+        return {"ok": True, "recorded": recorded}
+
+    def get_campaign_registry(self, *, car: str = "", track: str = "", layout_id: str = "",
+                              discipline: str = "") -> list[dict]:
+        """Return campaign-registry rows scoped to the context (all when unscoped). Read-only;
+        deterministic order (campaign_id); never raises."""
+        clauses, params = [], []
+        if car:
+            clauses.append("car = ?"); params.append(str(car))
+        if track:
+            clauses.append("track = ?"); params.append(str(track))
+        if layout_id:
+            clauses.append("layout = ?"); params.append(str(layout_id))
+        if discipline:
+            clauses.append("discipline = ?"); params.append(str(discipline))
+        sql = "SELECT * FROM engineering_campaign_registry"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY campaign_id ASC"
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def set_campaign_note(self, campaign_id: str, *, notes: str | None = None,
+                          manual_archive_flag: bool | None = None,
+                          abandonment_reason: str | None = None) -> dict:
+        """Explicit user-authored campaign-notebook metadata update (notes / archive flag /
+        abandonment reason). Metadata only; never touches engineering records. Idempotent."""
+        sets, params = [], []
+        if notes is not None:
+            sets.append("notes = ?"); params.append(str(notes))
+        if manual_archive_flag is not None:
+            sets.append("manual_archive_flag = ?"); params.append(1 if manual_archive_flag else 0)
+        if abandonment_reason is not None:
+            sets.append("abandonment_reason = ?"); params.append(str(abandonment_reason))
+        if not sets:
+            return {"ok": True, "updated": 0}
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "UPDATE engineering_campaign_registry SET " + ", ".join(sets)
+                    + " WHERE campaign_id = ?", tuple(params) + (str(campaign_id),))
+                self._conn.commit()
+            return {"ok": True, "updated": cur.rowcount}
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": str(exc)}
+
+    def build_engineering_efficiency(self, memory_context_key: str = "", *,
+                                     applied_setup: "dict | None" = None,
+                                     session_identity: "dict | None" = None,
+                                     gearbox_state: str = "", speed_context: str = "",
+                                     session_context: "dict | None" = None,
+                                     session_budget: "dict | None" = None,
+                                     now_date: str = "",
+                                     register_session_id: str = "",
+                                     recorded_at: str = "", **ctx) -> dict:
+        """Build the Engineering Efficiency advisory: campaign age (from the registry) +
+        evidence saturation + cost of knowledge + budget fit. Composes the Phase-18 campaign
+        programme ONCE + the campaign registry read; runs the pure Phase-19 estimators.
+        Deterministic; regenerable; never raises.
+
+        READ-ONLY by default: writes nothing. When (and only when) ``register_session_id`` is a
+        non-empty string, it additionally performs the phase's single, idempotent, additive
+        registry capture (``record_engineering_campaigns``) as a best-effort side effect BEFORE
+        reading the registry — so a freshly observed campaign's age/first-seen provenance is
+        available. The write never governs completion, never mutates a setup/experiment/outcome,
+        and never affects the returned advisory beyond the age/first-seen provenance it records."""
+        try:
+            from strategy.campaign_persistence import build_engineering_efficiency as _eff
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase19 import failed: {exc}"}
+        prog_result = self.build_engineering_campaign_programme(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, **ctx)
+        if not isinstance(prog_result, dict) or not prog_result.get("ok"):
+            return {"ok": True, "efficiency": None, "campaign_count": 0}
+        programme = prog_result.get("programme") or {}
+        # OPT-IN registry capture (the only Phase-19 write). Best-effort: a capture failure
+        # never breaks the advisory. Absent register_session_id → this method writes nothing.
+        if str(register_session_id or "").strip():
+            try:
+                self.record_engineering_campaigns(
+                    programme, session_id=str(register_session_id),
+                    recorded_at=str(recorded_at or ""))
+            except Exception:  # pragma: no cover - defensive
+                pass
+        registry = self.get_campaign_registry(
+            car=str(ctx.get("car", "") or ""), track=str(ctx.get("track", "") or ""),
+            layout_id=str(ctx.get("layout_id", "") or ""),
+            discipline=str(ctx.get("discipline", "") or ""))
+        efficiency = _eff(programme, registry=registry, session_budget=session_budget or {},
+                          now_date=now_date)
+        result = efficiency.to_dict()
+        return {"ok": True, "efficiency": result,
+                "campaign_count": len(result.get("campaigns") or []),
+                "content_fingerprint": result.get("content_fingerprint"),
+                "record_count": int(prog_result.get("record_count") or 0)}
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

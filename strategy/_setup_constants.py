@@ -120,7 +120,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     completed engineering review (permanent cross-session engineering memory).
 # v25 (Phase 11): engineering_reconciliation_records — one immutable, append-only calibration
 #     record per completed experiment comparing the pre-flight prediction with the actual outcome.
-DB_VERSION: int = 25
+# v26 (Program 2 Phase 19): engineering_campaign_registry — additive campaign-persistence metadata
+#     (stable CampaignID identity + first/last-seen provenance + manual note/archive). Non-
+#     reconstructable session-crossing metadata; the only new write in Phase 19. Idempotent.
+DB_VERSION: int = 26
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
