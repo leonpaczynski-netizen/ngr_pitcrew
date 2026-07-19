@@ -37,6 +37,7 @@ from ui.engineering_knowledge_graph_panel import EngineeringKnowledgeGraphPanel
 from ui.engineering_transfer_panel import EngineeringTransferPanel
 from ui.engineering_playbook_panel import EngineeringPlaybookPanel
 from ui.engineering_timeline_panel import EngineeringTimelinePanel
+from ui.engineering_revalidation_panel import EngineeringRevalidationPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -153,6 +154,12 @@ class DevelopmentHistoryPage(QWidget):
         # Read-only; advisory; dates are data not authority; no setup values.
         self._timeline_panel = EngineeringTimelinePanel()
         root.addWidget(self._timeline_panel)
+
+        # Phase 26 (Program 2) — knowledge decay & re-validation status: which established knowledge
+        # remains current/protected and which may need re-validation because context/version changed
+        # or evidence weakened. Read-only; advisory; dates are evidence data not an expiry; no setup.
+        self._revalidation_panel = EngineeringRevalidationPanel()
+        root.addWidget(self._revalidation_panel)
 
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
@@ -317,6 +324,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase-25 engineering knowledge timeline (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._timeline_panel.update_result(timeline_result)
+
+    def update_programme_revalidation_report(self, revalidation_result) -> None:
+        """Render the Phase-26 knowledge decay & re-validation status (read-only). Receives an
+        immutable, pre-built dict (the heavy build runs off the Qt thread)."""
+        self._revalidation_panel.update_result(revalidation_result)
 
     def _fill_table(self, table: QTableWidget, rows) -> None:
         table.setRowCount(len(rows))
