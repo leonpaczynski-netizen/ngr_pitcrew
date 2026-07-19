@@ -4470,6 +4470,105 @@ class SessionDB:
                 "content_fingerprint": result.get("content_fingerprint"),
                 "record_count": int(synth.get("record_count") or 0)}
 
+    # ------------------------------------------------------------------
+    # Engineering campaigns & multi-session development planning (Program 2,
+    # Phase 18 - READ-ONLY). Groups the Phase-17 experiment portfolio into
+    # coherent multi-session engineering CAMPAIGNS and projects the existing
+    # outcome / reconciliation / calibration evidence. It ranks nothing itself
+    # (Phase 17 owns ranking), executes nothing (Phase 16 owns the lifecycle),
+    # applies nothing, writes nothing, and never marks a successful-but-
+    # unvalidated objective complete. Reuses the Phase-17 portfolio aggregate
+    # ONCE + one development-record read + one calibration read (no per-campaign
+    # / per-diagnosis query). NO migration (DB v25). Never raises.
+    # ------------------------------------------------------------------
+    def build_engineering_campaign_programme(self, memory_context_key: str = "", *,
+                                             applied_setup: "dict | None" = None,
+                                             session_identity: "dict | None" = None,
+                                             gearbox_state: str = "", speed_context: str = "",
+                                             session_context: "dict | None" = None, **ctx) -> dict:
+        """Build the read-only engineering-campaign programme for a context. Composes the
+        Phase-17 ``build_experiment_portfolio`` aggregate exactly once, projects the immutable
+        development records (multi-session outcomes) + prediction calibration, and runs the
+        pure Phase-18 planner. Deterministic + regenerable + restart-identical. Read-only."""
+        try:
+            from strategy.engineering_campaign import build_campaign_programme
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase18 import failed: {exc}"}
+        # multi-session outcome history from the immutable development records (one read).
+        # Fed to Phase 17 so its retirement/dependency logic (the ranking authority) sees the
+        # prior confirmed / regressed directions, and to Phase 18 for the campaign projection.
+        outcome_history = self._campaign_outcome_history(memory_context_key, **ctx)
+        portfolio_result = self.build_experiment_portfolio(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            outcome_history=outcome_history, **ctx)
+        if not isinstance(portfolio_result, dict) or not portfolio_result.get("ok"):
+            return {"ok": True, "programme": None, "campaign_count": 0}
+        portfolio = portfolio_result.get("portfolio") or {}
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx) or {}
+        scope = {
+            "driver": str(ctx.get("driver", "") or ""), "car": str(ctx.get("car", "") or ""),
+            "track": str(ctx.get("track", "") or ""),
+            "layout_id": str(ctx.get("layout_id", "") or ""),
+            "discipline": str(ctx.get("discipline", "") or ""),
+            "gt7_version": str(ctx.get("gt7_version", "") or ""),
+        }
+        active_context = dict(scope)
+        if isinstance(applied_setup, dict):
+            # detect a stale campaign context from the actual applied-setup identity.
+            active_context = {
+                "car": str(applied_setup.get("car", scope["car"]) or ""),
+                "track": str(applied_setup.get("track", scope["track"]) or ""),
+                "layout_id": str(applied_setup.get("layout_id", scope["layout_id"]) or ""),
+                "discipline": scope["discipline"], "gt7_version": scope["gt7_version"],
+                "driver": scope["driver"],
+            }
+        programme = build_campaign_programme(
+            portfolio, outcome_history=outcome_history, calibration=calibration,
+            active_context=active_context, session_context=session_context or {}, scope=scope)
+        result = programme.to_dict()
+        return {"ok": True, "programme": result,
+                "campaign_count": len(result.get("campaigns") or []),
+                "content_fingerprint": result.get("content_fingerprint"),
+                "record_count": int(portfolio_result.get("record_count") or 0)}
+
+    def _campaign_outcome_history(self, memory_context_key: str = "", **ctx) -> list:
+        """Project the immutable Phase-8 development records into the {fields, direction,
+        outcome_status, session, single_field} shape the Phase-18 planner consumes. Read-only;
+        one query; never raises; never invents facts."""
+        try:
+            records = self.get_development_records(memory_context_key, **ctx)
+        except Exception:  # pragma: no cover
+            return []
+        out = []
+        for rec in records or []:
+            if not isinstance(rec, dict):
+                continue
+            status = str(rec.get("outcome_status") or "").strip().lower()
+            changes = rec.get("changes") or []
+            single = len(changes) == 1
+            for ch in changes:
+                if not isinstance(ch, dict):
+                    continue
+                fld = str(ch.get("field") or "").strip().lower()
+                if not fld:
+                    continue
+                direction = ""
+                try:
+                    fv = ch.get("from_value")
+                    tv = ch.get("to_value")
+                    if fv not in (None, "") and tv not in (None, ""):
+                        direction = "increase" if float(tv) > float(fv) else "decrease"
+                except (TypeError, ValueError):
+                    direction = ""
+                out.append({
+                    "fields": [fld], "direction": direction, "outcome_status": status,
+                    "session_id": str(rec.get("test_session_id") or rec.get("session_date") or ""),
+                    "single_field": single, "experiment_id": str(rec.get("experiment_id") or ""),
+                    "compatible": True,
+                })
+        return out
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
