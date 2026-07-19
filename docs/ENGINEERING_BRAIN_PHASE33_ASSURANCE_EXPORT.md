@@ -49,7 +49,25 @@ detected independent of the claimed labels.
   keeps the same summary label.
 - **Canonical-manifest fingerprint** — over the canonical manifest.
 
-No timestamp, filename, path, object identity or DB row order enters any fingerprint.
+### Fingerprint identity policy (clarified — audited in the Phase 36–38 slice)
+
+Earlier wording ("No ... object identity or DB row order enters any fingerprint") was correct but
+incomplete, because it did not distinguish *semantic* identity/order (which is material) from
+*runtime/accidental* identity/order (which is not). The precise policy, shared by every Program 2
+domain fingerprint, is:
+
+1. **Semantic engineering-context identity IS included** where it is part of the meaning — programme
+   identity (car / discipline / gt7_version / driver), layout/compound, knowledge domains, DB schema
+   and rule-engine versions. Two different contexts must not collide on one fingerprint.
+2. **Runtime / object / machine identity is excluded** — Python `id()`/memory addresses, `repr` of
+   objects, hostnames, usernames, filesystem paths, export destinations, wall-clock timestamps and
+   random identifiers never enter a fingerprint.
+3. **Accidental source-row order is excluded** — the order rows happen to arrive from a `SELECT`
+   (`id ASC`, insertion order) must not change any fingerprint; the pure layers re-order
+   deterministically before hashing.
+4. **Canonical semantic priority order MAY be fingerprint-material** — where an ordering *is* part of
+   the product meaning (e.g. `CHAIN_PHASE_ORDER`; a ranked priority list), that canonical order is
+   included, so deliberately changing the canonical order changes the fingerprint. This is intended.
 
 ## Read-only SessionDB entry
 
