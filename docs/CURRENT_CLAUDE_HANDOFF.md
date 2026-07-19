@@ -1,6 +1,26 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 12: Deterministic Vehicle Dynamics Knowledge Engine — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 13: Mechanism-Annotated Diagnosis — COMPLETE
+
+**Branch `eng-brain-phase13-mechanism-annotated-diagnosis` from `6010d5b` (Phase-12 tip) — committed, NOT pushed / no PR / not merged.** The strict bridge between **Program 1** ("what happened?") and **Program 2 / Phase 12** ("why could it have happened?"): for an already-decided canonical Program-1 diagnosis it produces an auditable, evidence-linked explanation of the vehicle-dynamics MECHANISMS behind it (from the Phase-12 authority) and keeps the diagnosis UNCHANGED. NEVER decides observation/validity/recurrence/improvement/safety/experiment-selection; authors no setup value/delta/Apply/Revert; mutates no outcome/working-window/lockout/prediction-calibration; duplicates neither the Phase-12 knowledge nor the Program-1 sign graph (consumes both). No ML/statistics/NLP/black-box/AI.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. Annotations regenerate deterministically from the immutable Phase-8 development records (folded into cross-session memory) + Phase-11 reconciliation records + the static Phase-12 knowledge + the sign-graph fingerprint → restart-identical `content_fingerprint`. No new table, no writes.
+
+**Files changed (Phase 13):**
+- NEW `strategy/mechanism_map.py` — `MechanismTemplate` structural table keyed by canonical `issue_type` → Phase-12 Component/HandlingPhase/TransferMode/interaction pairs; `resolve_handling_phase`; carries NO mechanism prose or sign data.
+- NEW `strategy/mechanism_annotation.py` — `MechanismStatus` (9) + `ConclusionKind`/`EvidenceGrade`/`EvidenceRelation` + `MechanismEvidenceLink`/`CausalMechanismCandidate`/`MechanismComparison`/`MechanismAnnotatedDiagnosis`; `annotate_diagnosis` / `annotate_diagnoses` / `annotations_from_memory`; consumes Phase-12 + Program-1 authorities, mutates nothing.
+- NEW `strategy/mechanism_annotation_render.py` — sectioned driver-readable renderer (observation vs interpretation separated; no setup values / Apply wording).
+- MOD `data/session_db.py` — NEW read-only `build_mechanism_annotations(**ctx)` (composes `build_cross_session_memory` + `build_prediction_calibration`; no migration; DB stays v25).
+- NEW `ui/mechanism_annotation_vm.py` + `ui/mechanism_annotation_panel.py` (`MechanismAnnotationPanel`, structured section cards, NO Apply/Revert). NEW `ui/mechanism_annotation_worker.py` (`MechanismAnnotationWorker(QThread)` — build OFF the Qt thread). MOD `ui/development_history_page.py` (embeds the panel + `update_mechanism_annotations` forwarder). MOD `ui/dashboard.py` (`_refresh_mechanism_annotations` runs the build off-thread and renders the immutable result).
+- NEW `tests/test_phase13_{mechanism_map,mechanism_annotation,golden_uat,properties,safety,ui_construction}.py` (103 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE13_MECHANISM_ANNOTATED_DIAGNOSIS.md`.
+
+**Doctrine highlights:** wheelspin primary = driven-wheel traction demand (`TRANSMISSION`), never auto-LSD; a prior failed LSD-accel direction flags the LSD candidate's intervention `contradicted` (kept as a possible mechanism, never a cure) — the Phase-3/Phase-5 evidence stays authoritative; aero stays PLAUSIBLE without speed evidence; a confirmed outcome never proves a mechanism; a regression disproves the intervention direction, not the physics; GT7-unavailable channels (tyre load, diff lock state, damper velocity, suspension travel, engine torque) are declared, never fabricated or treated as observed.
+
+**Next: Phase 14 — Mechanism-Constrained Intervention Hypotheses** (constrain which subsystems are physically eligible for a controlled experiment, still through every Program-1 gate + manual Apply). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 12: Deterministic Vehicle Dynamics Knowledge Engine — COMPLETE
 
 **Branch `eng-brain-phase12-vehicle-dynamics` from `master` @ Phase 11 `0923f5c` — committed, NOT pushed / no PR.** Begins **Program 2**: a NEW read-only EXPLANATORY authority (Vehicle Dynamics Knowledge) that explains the physical mechanism behind each setup element. ADDITIONAL to Program 1 (Phases 1-11), not a replacement. NEVER creates experiments / ranks candidates / overrides evidence / modifies outcomes-memory-working-windows / authors setup. No ML, no statistics, no NLP, no black-box scoring.
 
