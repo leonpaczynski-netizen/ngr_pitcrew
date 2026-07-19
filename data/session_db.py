@@ -4802,6 +4802,50 @@ class SessionDB:
                 "campaign_count": len(result.get("campaigns") or []),
                 "content_fingerprint": result.get("content_fingerprint")}
 
+    def build_season_engineering_report(self, memory_context_key: str = "", *,
+                                        applied_setup: "dict | None" = None,
+                                        session_identity: "dict | None" = None,
+                                        gearbox_state: str = "", speed_context: str = "",
+                                        session_context: "dict | None" = None,
+                                        session_budget: "dict | None" = None,
+                                        now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY Season Engineering Report (Program 2, Phase 21): the Engineering
+        Director's whole-programme view — season summary + cross-campaign relationship map +
+        per-campaign knowledge map. Composes the Phase-18 campaign programme ONCE, derives the
+        Phase-19 efficiency and Phase-20 knowledge-quality views purely from it (+ one registry
+        read + one calibration read — no N+1, no double programme build), then runs the pure
+        Phase-21 aggregators. It schedules / ranks / prioritises / completes / writes NOTHING;
+        deterministic; regenerable; never raises."""
+        try:
+            from strategy.campaign_persistence import build_engineering_efficiency as _eff
+            from strategy.knowledge_quality import build_knowledge_quality as _bkq
+            from strategy.season_engineering_report import build_season_report as _bsr
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase21 import failed: {exc}"}
+        prog_result = self.build_engineering_campaign_programme(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, **ctx)
+        if not isinstance(prog_result, dict) or not prog_result.get("ok"):
+            return {"ok": True, "season_report": None, "campaign_count": 0}
+        programme = prog_result.get("programme") or {}
+        if not (programme.get("campaigns") or []):
+            return {"ok": True, "season_report": None, "campaign_count": 0}
+        # READ-ONLY: reuse the campaign registry (no write) so campaign age is available to the
+        # Phase-19 view; then derive efficiency + quality purely (no further programme build).
+        registry = self.get_campaign_registry(
+            car=str(ctx.get("car", "") or ""), track=str(ctx.get("track", "") or ""),
+            layout_id=str(ctx.get("layout_id", "") or ""),
+            discipline=str(ctx.get("discipline", "") or ""))
+        efficiency = _eff(programme, registry=registry, session_budget=session_budget or {},
+                          now_date=now_date).to_dict()
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx) or {}
+        quality = _bkq(efficiency, calibration=calibration).to_dict()
+        report = _bsr(programme, efficiency, quality).to_dict()
+        return {"ok": True, "season_report": report,
+                "campaign_count": len(report.get("campaigns") or []),
+                "content_fingerprint": report.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
