@@ -5037,6 +5037,91 @@ class SessionDB:
                 "theme_count": len(playbook.get("stable_themes") or []),
                 "content_fingerprint": playbook.get("content_fingerprint")}
 
+    def _timeline_evidence_records(self, car: str = "", discipline: str = "",
+                                   gt7_version: str = "", driver: str = "") -> list:
+        """ONE bounded bulk read of the immutable development records for a compatibility group
+        (car + discipline + gt7-version + driver, across all tracks/layouts/compounds). A single
+        SELECT — its result grows with records but its query COUNT does not. Read-only; oldest
+        first for stable retrieval (the pure layer re-orders deterministically). Never raises."""
+        import json as _json
+        clauses, params = [], []
+        for col, val in (("car", car), ("discipline", discipline), ("gt7_version", gt7_version),
+                         ("driver", driver)):
+            if str(val or ""):
+                clauses.append(f"{col}=?")
+                params.append(str(val))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT record_json FROM engineering_development_records" + where
+                    + " ORDER BY id ASC", tuple(params)).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    out.append(_json.loads(r[0]))
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def build_programme_knowledge_timeline(self, memory_context_key: str = "", *,
+                                           applied_setup: "dict | None" = None,
+                                           session_identity: "dict | None" = None,
+                                           gearbox_state: str = "", speed_context: str = "",
+                                           session_context: "dict | None" = None,
+                                           session_budget: "dict | None" = None,
+                                           now_date: str = "", **ctx) -> dict:
+        """Build the READ-ONLY Programme Knowledge Timeline (Program 2, Phase 25): how engineering
+        understanding evolved across compatible events, where evidence genuinely converged (through
+        independent repeated evidence), where it remains unresolved, and where apparent repetition
+        is only duplicated / dependent evidence.
+
+        Composes the Phase-22 programme knowledge report EXACTLY ONCE (the only heavy DB
+        reconstruction), derives the Phase-23 transfer report and the Phase-24 playbook PURELY from
+        that same in-memory programme (never calls the Phase-23 or Phase-24 SessionDB entry points),
+        performs ONE bounded bulk read of the immutable development records for the compatibility
+        group, then runs the pure Phase-25 assembler. Read-only; no writes; no migration; no
+        persistence; no N+1 (no reads inside any timeline / convergence loop); DB stays v26;
+        deterministic; restart-identical; never raises."""
+        try:
+            from strategy.programme_transfer_report import build_transfer_report as _btr
+            from strategy.engineering_playbook import build_engineering_playbook as _bep
+            from strategy.programme_timeline_report import build_programme_timeline as _bpt
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase25 import failed: {exc}"}
+        # ONE Phase-22 DB reconstruction.
+        pk_result = self.build_programme_knowledge_report(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date,
+            **ctx)
+        if not isinstance(pk_result, dict) or not pk_result.get("ok"):
+            return {"ok": True, "timeline": None, "point_count": 0}
+        programme = pk_result.get("programme_knowledge")
+        graph = programme.get("knowledge_graph") if isinstance(programme, dict) else None
+        if not isinstance(graph, dict) or not (graph.get("known_domains") or []):
+            return {"ok": True, "timeline": None, "point_count": 0}
+        compatibility = programme.get("compatibility") or {}
+        source_ctx = dict(compatibility.get("primary_key") or {})
+        targets = [dict(g.get("compatibility_key") or {})
+                   for g in (compatibility.get("other_groups") or [])
+                   if isinstance(g, dict) and (g.get("compatibility_key") or {})]
+        # PURE Phase-23 + PURE Phase-24 (reuse the same in-memory programme; no recursion).
+        transfer = _btr(graph, source_ctx, targets).to_dict()
+        playbook = _bep(programme, transfer).to_dict()
+        # ONE bounded bulk read of the historical evidence for this compatibility group.
+        records = self._timeline_evidence_records(
+            car=str(source_ctx.get("car", "") or ""),
+            discipline=str(source_ctx.get("discipline", "") or ""),
+            gt7_version=str(source_ctx.get("gt7_version", "") or ""),
+            driver=str(source_ctx.get("driver", "") or ""))
+        timeline = _bpt(programme, playbook, records).to_dict()
+        return {"ok": True, "timeline": timeline,
+                "point_count": len(timeline.get("timeline_points") or []),
+                "content_fingerprint": timeline.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
