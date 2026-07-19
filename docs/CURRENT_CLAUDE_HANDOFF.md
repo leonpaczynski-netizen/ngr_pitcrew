@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 14: Mechanism-Constrained Intervention Hypotheses — COMPLETE
+## Current Objective (2026-07-19) — Engineering Brain PROGRAM 2, Phase 15: Minimum-Effective Experiment Synthesis Handoff — COMPLETE
+
+**Branch `eng-brain-phase15-minimum-effective-experiment-synthesis` from `8e48beb` (Phase-14 tip) — committed, NOT pushed / no PR / not merged.** The deterministic, READ-ONLY handoff from a valid, testable Phase-14 intervention hypothesis into the existing setup-synthesis / setup-experiment authorities: the output is a BOUNDED setup-experiment candidate — the smallest legal, reversible numeric setup step that tests the hypothesis without disturbing confirmed-good behaviour. Answers "what is the smallest legal reversible numeric experiment that tests this?", never "what is the final ideal setup?". NEVER auto-applies / bypasses the Apply gate / invents limits / builds a second synthesiser / optimises the whole car / silently changes coupled fields / mutates diagnosis-mechanism-outcome-calibration-setup-history-active-setup / persists an experiment. No ML/stats/NLP/AI/network.
+
+**Schema decision: NO migration / NO persistence.** `DB_VERSION` stays **25**; `RULE_ENGINE_VERSION` `46.0`. The candidate is a pure function of the canonical applied setup + Phase-14 hypothesis + canonical parameter semantics + outcome/window state → restart-identical `content_fingerprint`.
+
+**Files changed (Phase 15):**
+- NEW `strategy/experiment_synthesis.py` — `ExperimentSynthesisStatus` (12) + `BaselineSetupReference`/`ParameterExperimentDelta`/`BoundedSetupExperiment`/`ExperimentSynthesisResult`; baseline via `setup_state_authority.evaluate_analysis_gate`; minimum-effective one-step via `experiment_selection.legal_step` + `setup_synthesis._round` + `setup_ranges.resolve_ranges`; gearing via `gearbox_evidence` invariant; `build_baseline_reference`/`synthesize_bounded_experiments`/`synthesize_from_report`. Authors no value; mutates/persists/applies nothing.
+- NEW `strategy/experiment_synthesis_render.py` — numeric baseline vs candidate WITH provenance; no editable value / Apply / "optimal" / "final tune".
+- MOD `data/session_db.py` — NEW read-only `build_bounded_setup_experiments(**ctx, applied_setup=..., session_identity=...)` (reuses `build_intervention_hypotheses` ONCE + `resolve_ranges` once; no migration; DB stays v25).
+- NEW `ui/experiment_synthesis_vm.py` + `ui/experiment_synthesis_panel.py` (`ExperimentSynthesisPanel`, numeric shown, NO editable/Apply/Approve/Revert controls). MOD `ui/development_history_page.py` (embed + `update_experiment_synthesis`). MOD `ui/dashboard.py` (`_refresh_experiment_synthesis` off the Qt thread; passes the canonical applied setup from `self._active_setup_for_current`).
+- NEW `tests/test_phase15_{synthesis_domain,golden_uat,properties,safety,query_shape,ui_construction}.py` (103 cases). Doc: `docs/ENGINEERING_BRAIN_PHASE15_MINIMUM_EFFECTIVE_EXPERIMENT_SYNTHESIS.md`.
+
+**Doctrine highlights:** the baseline defaults to the canonical applied setup and blocks on missing/incomplete/mismatch/stale/drift (no fallback to defaults or last-viewed); the smallest legal step is used (larger only with a fixed canonical justification, bounded to 2 steps); wheelspin never auto-increases LSD locking; a failed direction is blocked; a prior single-field regression → `BLOCKED_BY_PRIOR_REGRESSION` (physics retained); competing → a `CONDITIONAL` discriminating single-field test only (never ready, never an auto-winner); unknown/conflicting gearbox → no gearing; count-only bottoming → no platform; low-speed aero → never ready; ties stay ties (manual choice); the final-drive invariant is preserved (shorten = higher ratio); the frozen Apply gate remains the only mutation route.
+
+**Next: Phase 16 — Guarded Experiment Lifecycle & Postflight Loop Closure** (convert a `READY_FOR_PREFLIGHT` candidate into the canonical `SetupExperiment` via the existing workflow → Phase-10 preflight → frozen Apply gate → Phase-3 outcome → Phase-11 reconciliation). NOT started.
+
+---
+
+### Prior context — Engineering Brain PROGRAM 2, Phase 14: Mechanism-Constrained Intervention Hypotheses — COMPLETE
 
 **Branch `eng-brain-phase14-mechanism-constrained-interventions` from `f3d4e90` (Phase-13 tip) — committed, NOT pushed / no PR / not merged.** A deterministic, READ-ONLY reasoning layer that converts a valid Phase-13 `MechanismAnnotatedDiagnosis` into structured intervention HYPOTHESES — scientifically-defensible controlled-test DIRECTIONS constrained by the supported physical mechanism. A hypothesis is NOT a setup recommendation and NOT an authored change; it answers "what controlled directions are defensible to test next?", never "set this value to X". NEVER authors a numeric value / applies / approves / persists; mutates no diagnosis/outcome/working-window/calibration/setup-history/active-setup; duplicates neither Phase-12 knowledge, the Phase-13 model, nor the Program-1 sign graph (consumes all three). No ML/stats/NLP/black-box/AI/network.
 
