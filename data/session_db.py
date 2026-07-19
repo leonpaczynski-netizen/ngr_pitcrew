@@ -4431,6 +4431,45 @@ class SessionDB:
                 "knowledge_versions": kv, "content_fingerprint": fp,
                 "record_count": int(synth.get("record_count") or 0)}
 
+    # ------------------------------------------------------------------
+    # Experiment portfolio optimisation & information-gain selection
+    # (Program 2, Phase 17 - READ-ONLY planner). Ranks the legal Phase-15
+    # bounded experiments by ENGINEERING VALUE (information gain first), models
+    # dependencies, retires experiments with no remaining value, and emits an
+    # advisory roadmap. It replaces no authority - it CONSUMES the Phase-15
+    # synthesis aggregate (reused ONCE) + the prediction calibration. It applies
+    # nothing, writes nothing, and mutates no setup/experiment/outcome/
+    # calibration. NO migration (DB v25). Never raises.
+    # ------------------------------------------------------------------
+    def build_experiment_portfolio(self, memory_context_key: str = "", *,
+                                   applied_setup: "dict | None" = None,
+                                   session_identity: "dict | None" = None,
+                                   gearbox_state: str = "", speed_context: str = "",
+                                   session_context: "dict | None" = None,
+                                   outcome_history=None, **ctx) -> dict:
+        """Rank the legal experiments for a context by engineering value. Composes the
+        Phase-15 ``build_bounded_setup_experiments`` aggregate exactly once + the prediction
+        calibration, then runs the pure Phase-17 planner. Deterministic + regenerable +
+        restart-identical. Read-only."""
+        try:
+            from strategy.experiment_portfolio import build_portfolio
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase17 import failed: {exc}"}
+        synth = self.build_bounded_setup_experiments(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, **ctx)
+        if not isinstance(synth, dict) or not synth.get("ok"):
+            return {"ok": True, "portfolio": None, "count": 0}
+        calibration = self.build_prediction_calibration(memory_context_key, **ctx) or {}
+        portfolio = build_portfolio(
+            synth, outcome_history=outcome_history, calibration=calibration,
+            session_context=session_context or {})
+        result = portfolio.to_dict()
+        return {"ok": True, "portfolio": result,
+                "count": len(result.get("valuations") or []),
+                "content_fingerprint": result.get("content_fingerprint"),
+                "record_count": int(synth.get("record_count") or 0)}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
