@@ -50,6 +50,7 @@ from ui.closed_loop_workflow_panel import ClosedLoopWorkflowPanel
 from ui.assisted_runtime_panel import AssistedRuntimePanel
 from ui.event_preparation_panel import EventPreparationPanel
 from ui.race_weekend_panel import RaceWeekendPanel
+from ui.certification_panel import CertificationPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -142,6 +143,12 @@ class DevelopmentHistoryPage(QWidget):
         # briefing, debrief). Read-only; no automatic pit/tyre/fuel command; voice disabled by default.
         self._race_weekend_panel = RaceWeekendPanel()
         root.addWidget(self._race_weekend_panel)
+
+        # Phase 56 (Program 2) — Operational Certification: a developer/UAT surface reporting the evidence
+        # supporting each area of the NGR event journey. Read-only; grants nothing; automated/offscreen/
+        # replay evidence never awards visual/live/operational certification. Kept off the driver Home.
+        self._certification_panel = CertificationPanel()
+        root.addWidget(self._certification_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -471,6 +478,10 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phase 50 Immersive Race Weekend surface (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._race_weekend_panel.update_result(weekend_result)
+
+    def update_certification(self, certification_result) -> None:
+        """Render the Phase 56 Operational Certification developer/UAT surface (read-only)."""
+        self._certification_panel.update_result(certification_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).

@@ -178,3 +178,32 @@ CERTIFICATION_AREAS: Tuple[str, ...] = (
     "cumulative_learning", "setup_convergence", "setup_lock", "strategy_finalisation", "event_revision",
     "restart_recovery", "voice_gating", "db_and_config_safety", "visual_clarity", "ngr_immersion",
 )
+
+
+def current_slice_certification() -> "EventProgrammeCertification":
+    """The HONEST self-certification of the Phase 54-56 slice: each area at the evidence type actually
+    achieved. Domain logic = automated; UI panels = offscreen; replay/shadow-tested areas = replay; the
+    live GT7 and visual areas were NOT run headlessly = NONE (NOT_TESTED). The overall level is therefore
+    bounded by the untested live/visual areas — no live or operational certification is claimed."""
+    A = EvidenceType
+    spec = {
+        "active_event_selection": A.AUTOMATED, "home_command_centre": A.OFFSCREEN, "timeline": A.OFFSCREEN,
+        "next_action_accuracy": A.AUTOMATED, "activity_start": A.AUTOMATED, "setup_verification": A.AUTOMATED,
+        "live_practice": A.NONE, "live_qualifying": A.NONE, "live_race": A.NONE,
+        "telemetry_loss": A.AUTOMATED, "session_end_detection": A.AUTOMATED,
+        "explicit_session_binding": A.AUTOMATED, "immediate_debrief": A.AUTOMATED,
+        "cumulative_learning": A.AUTOMATED, "setup_convergence": A.AUTOMATED, "setup_lock": A.AUTOMATED,
+        "strategy_finalisation": A.AUTOMATED, "event_revision": A.AUTOMATED, "restart_recovery": A.AUTOMATED,
+        "voice_gating": A.AUTOMATED, "db_and_config_safety": A.AUTOMATED, "visual_clarity": A.NONE,
+        "ngr_immersion": A.NONE,
+    }
+    live_note = "not run in this headless environment (requires live GT7 / visual UAT)"
+    areas = []
+    for name in CERTIFICATION_AREAS:
+        ev = spec.get(name, A.AUTOMATED)
+        findings = ()
+        if ev == A.NONE:
+            findings = (CertificationFinding("not_run", FindingSeverity.LIMITATION, live_note),)
+        areas.append(CertificationArea(name, ev, last_scenario="phase54-56 automated suite",
+                                       findings=findings))
+    return build_event_programme_certification(areas)
