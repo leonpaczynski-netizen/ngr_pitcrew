@@ -895,6 +895,89 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if panel is not None:
             panel.update_result(result)
 
+    # ------------------------------------------------------------------
+    # Phase 60 — production Live Pit Wall (off the UI thread; reuses RaceStateTracker)
+    # ------------------------------------------------------------------
+    def _live_pit_wall_nav(self):
+        """The operational navigation context for the production Live pit wall. Never enters an
+        engineering fingerprint. Opening Live sets entered_live; only an explicit Start sets started."""
+        from strategy.live_pit_wall_controller import LivePitWallNavigationContext
+        return LivePitWallNavigationContext(
+            active_event_id=str(self._config.get("active_cycle_id") or ""),
+            selected_activity_id=str(getattr(self, "_live_selected_activity_id", "") or ""),
+            entered_live=bool(getattr(self, "_live_entered", False)),
+            started=bool(getattr(self, "_live_started", False)),
+            abandoned=bool(getattr(self, "_live_abandoned", False)),
+            returning=bool(getattr(self, "_live_returning", False)))
+
+    def _build_tracker_runtime_snapshot(self):
+        """Read the EXISTING RaceStateTracker into a normalised, immutable TrackerRuntimeSnapshot. Thin
+        read only — creates no listener/socket/loop. Unknown fields stay empty (never fabricated)."""
+        from strategy.gt7_live_adapter import TrackerRuntimeSnapshot
+        t = getattr(self, "_tracker", None)
+
+        def _g(name, default=""):
+            return getattr(t, name, default) if t is not None else default
+        import time as _time
+        return TrackerRuntimeSnapshot(
+            car=str(_g("car_name", "") or ""), track=str(_g("track", "") or ""),
+            layout=str(_g("layout_id", "") or ""),
+            applied_setup_fingerprint=str(getattr(self, "_live_applied_setup_fingerprint", "") or ""),
+            live_context_digest=str(getattr(self, "_live_context_digest", "") or ""),
+            lap=int(_g("laps_recorded", 0) or 0), session_state=str(getattr(self, "_live_session_state", "") or ""),
+            fuel=str(_g("current_fuel", "") or ""), tyre_compound=str(_g("tyre_compound", "") or ""),
+            pit_state=("pit" if bool(_g("in_pit", False)) else ""),
+            valid_laps=int(_g("laps_recorded", 0) or 0),
+            last_packet_monotonic=getattr(self, "_live_last_packet_monotonic", None),
+            map_match_confidence=float(getattr(self, "_live_map_match_confidence", 0.0) or 0.0))
+
+    def _refresh_live_pit_wall(self) -> None:
+        """Rebuild the production Live pit wall OFF the UI thread. DB-free (the activity context is resolved
+        once on invalidation and cached in self._live_activity_ctx). A stale worker (different event/
+        activity) is dropped. Never writes; never starts/completes the activity."""
+        panel = getattr(self, "_live_pit_wall_panel", None)
+        if panel is None:
+            return
+        try:
+            from strategy.gt7_live_adapter import SelectedActivityContext
+            from strategy.live_pit_wall_build import build_live_pit_wall_view
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            nav = self._live_pit_wall_nav()
+            ctx = getattr(self, "_live_activity_ctx", None) or SelectedActivityContext(
+                cycle_id=nav.active_event_id, activity_id=nav.selected_activity_id)
+            tracker = self._build_tracker_runtime_snapshot()
+            was_running = bool(getattr(self, "_live_was_running", False))
+            import time as _time
+            now_mono = _time.monotonic()
+            event_line = str(getattr(self, "_live_event_line", "") or "")
+            nav_key = (nav.active_event_id, nav.selected_activity_id)
+
+            def _build():
+                return build_live_pit_wall_view(tracker, ctx, nav, was_running=was_running,
+                                                now_monotonic=now_mono, event_line=event_line)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._live_pit_wall_worker = worker
+            self._live_pit_wall_worker_key = nav_key
+            worker.finished_ok.connect(lambda result, w=worker, k=nav_key: self._on_live_pit_wall_ready(result, w, k))
+            worker.failed.connect(lambda _m, w=worker, k=nav_key: self._on_live_pit_wall_ready(None, w, k))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_live_pit_wall_ready(self, result, worker=None, nav_key=None) -> None:
+        """Render on the UI thread; drop a stale worker OR a result for a previously-selected event/
+        activity (event switching cannot update the new event)."""
+        if worker is not None and getattr(self, "_live_pit_wall_worker", None) is not worker:
+            return
+        current_key = (str(self._config.get("active_cycle_id") or ""),
+                       str(getattr(self, "_live_selected_activity_id", "") or ""))
+        if nav_key is not None and tuple(nav_key) != current_key:
+            return  # stale: selection changed since this worker started
+        panel = getattr(self, "_live_pit_wall_panel", None)
+        if panel is not None:
+            panel.update_result(result)
+
     def _home_update_next_action_button(self, next_action) -> None:
         """Point the next-action button at the recommended tab, or hide it.
 
