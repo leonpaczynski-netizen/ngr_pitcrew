@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 54-56: Canonical Activity Truth, Live GT7 Execution Bridge & Operational Certification — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 57-59: Real GT7 Runtime, NGR Live Pit Wall & Event Certification — COMPLETE
+
+**Branch `eng-brain-phase57-59-live-gt7-event-certification` from the Phase-54-56 tip `00111b4` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0.** Purpose: activate the Event Command Centre / activity-truth / live-bridge / certification architecture against the REAL GT7 telemetry runtime.
+
+**Commit 1 — P54-56 corrections + audits:** file counts corrected to **24 A / 6 M / 0 D = 30 files, +2761/-10** (added = 6 strategy + 2 UI + 11 tests + 5 docs; the report narrative's "9 strategy + 4 docs" was wrong). Audit B: active_cycle_id persists via the safe config_paths.save_config (atomic, explicit-only, restart-restored, never on refresh/packet, test-isolated). Audit C: the Phase-55 bridge tests are STATIC runtime-snapshot tests, NOT replay (corrected the wording). Audit D: recorded runtime/app-state file hashes, left unstaged, re-verified untouched.
+
+**Phase 57 (real runtime):** `gt7_live_adapter.py` maps the EXISTING tracker (daemon UDPListener -> RaceStateTracker; NO new listener) into LiveActivityRuntimeSnapshot (injected monotonic freshness; replay=live rules; real tracker -> MATCH_WITH_LIMITATIONS, EXACT needs context+compound+run-plan) + `live_runtime_cache.py` (operational invalidation key excludes volatile counters, never an eng fingerprint; cadence) + `live_runtime_authority.py` (session start/end; probable end freezes snapshot -> explicit binding; activity_completed always False; valid dropout -> BINDING_REQUIRED).
+
+**Phase 58 (live pit wall):** `ngr_live_pit_wall.py` (ONE coordinated low-density message; mode by activity type; single advisory suppressed on stale/blocked; no command) + `live_pit_wall_integration.py` (derive_voice_status via voice_gate_allows - UI cannot manufacture ELIGIBLE; coordinate_single_advisory; resolve_garage_return). VM+panel in Development History (post /ui-ux-pro-max; Live-tab + telemetry refresh deferred).
+
+**Phase 59 (certification):** extended `event_programme_certification.py` -> LIVE_CERTIFICATION_AREAS (31), live_event_certification() = per-area (20 AUTOMATED/1 OFFSCREEN/10 NONE + required-next-evidence), overall NOT_TESTED (live areas unrun, differentiated not collapsed); CertificationRun deterministic export (no DB). Strict caps retained.
+
+**Tests:** 90 new / 9 files (adapter 16, cadence 6, runtime_authority 10, pit_wall 10, pit_wall_ui 5, integration 11, cert 7, golden 17, safety 8). **Proof: unit/property/runtime-DB/STATIC-runtime-snapshot/offscreen-UI; manual visual UAT + live GT7 UAT + physical voice UAT NOT run.** 10 commits `71fa8e6`..(commit-10); P57-59 counts (00111b4..HEAD) so far 16 A / 4 M, +1804/-2 (+commit 10 docs). Apply gate + voice gate untouched; no new migration; NO new telemetry listener (reuses the pipeline). Program 2 now Phases 12-59. Phase 60 NOT started.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 54-56: Canonical Activity Truth, Live GT7 Execution Bridge & Operational Certification — COMPLETE
 
 **Branch `eng-brain-phase54-56-live-operational-certification` from the Phase-51-53 tip `da9d6db` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0 unchanged.** Purpose: turn the Command Centre + live workflow into an authoritative operational system backed by real persisted state + live GT7 telemetry.
 

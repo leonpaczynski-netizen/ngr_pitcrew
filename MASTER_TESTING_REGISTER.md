@@ -7464,3 +7464,20 @@ corrections applied**: file counts 26 A / 15 M / 0 D = 41 (was 20/11/31), test c
 20), UAT terminology (automated != manual UAT). Safety: new modules no AI/network/TTS/key/Qt (VMs Qt-
 free); no new migration; Apply gate + voice gate untouched; nothing auto-completes/binds/locks/finalises.
 Certification = NOT_TESTED overall (live areas unrun); manual visual + live GT7 UAT NOT run.
+
+## Engineering Brain Program 2 — Phases 57-59 (Real GT7 Runtime, NGR Live Pit Wall, Event Certification)
+
+Branch `eng-brain-phase57-59-live-gt7-event-certification` @ `00111b4`->(10 commits); DB v28 UNCHANGED (NO
+new migration); rule 46.0; committed-not-pushed; master unchanged `3d7c6af`. 90 new tests across 9 files:
+`test_phase57_adapter.py`[16], `test_phase57_cadence_cache.py`[6], `test_phase57_runtime_authority.py`[10],
+`test_phase58_pit_wall.py`[10], `test_phase58_pit_wall_ui.py`[5], `test_phase58_integration.py`[11],
+`test_phase59_certification.py`[7], `test_phase57_59_golden.py`[17], `test_phase57_59_safety.py`[8].
+Property/metamorphic: same-sequence-same-decision, ui-refresh-cannot-advance, mismatch-cannot-strengthen,
+stale-cannot-deliver-advice, voice-cannot-be-manufactured, voice-settings-cannot-alter-fingerprint,
+single-advisory-never-multiple-voices, event-switch-invalidates-cache, automated/replay certification caps.
+**P54-56 corrections applied**: exact counts 24 A / 6 M / 0 D = 30 (added = 6 strategy + 2 UI + 11 tests +
+5 docs; the "9 strategy + 4 docs" narrative was wrong); STATIC runtime-snapshot tests are NOT replay.
+Safety: new modules create NO telemetry listener (reuse the daemon UDPListener), are DB-free + Qt-free (VMs
+Qt-free); no new migration; Apply gate + voice gate untouched; telemetry evaluation touches no DB; nothing
+auto-completes/binds. Certification = per-area, overall NOT_TESTED (live areas unrun); manual visual + live
+GT7 + physical voice UAT NOT run.
