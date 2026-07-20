@@ -978,6 +978,82 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if panel is not None:
             panel.update_result(result)
 
+    def _refresh_audio_engineer(self) -> None:
+        """Rebuild the PSVR2 audio-first + adaptive-strategy view OFF the UI thread (Phases 63-68). DB-free.
+        Voice is off by default and gated; the strategy view is advisory only and executes nothing. A stale
+        worker (event/activity switched) is dropped. Phase 66 ACTIVATES the runtime: when the existing
+        RaceStateTracker exposes a live Race, the canonical live race-state adapter maps it into the
+        Phase-65 LiveStrategyState so the panel leaves INSUFFICIENT_EVIDENCE with a real feed; without a
+        live Race it stays an honest INSUFFICIENT default."""
+        panel = getattr(self, "_vr_audio_engineer_panel", None)
+        if panel is None:
+            return
+        try:
+            from strategy.adaptive_live_strategy import LiveStrategyState, StrategyObjective
+            from strategy.audio_first_engineer import VrRuntimeMode
+            from strategy.live_audio_strategy_build import build_live_audio_strategy_view
+            from strategy.canonical_live_race_state import build_canonical_live_race_state
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            nav = self._live_pit_wall_nav() if hasattr(self, "_live_pit_wall_nav") else None
+            nav_key = ((nav.active_event_id, nav.selected_activity_id) if nav is not None
+                       else (str(self._config.get("active_cycle_id") or ""), ""))
+            vr_mode = (VrRuntimeMode.AUDIO_FIRST if bool(self._config.get("vr_audio_first"))
+                       else VrRuntimeMode.DESKTOP)
+            voice_enabled = bool(self._config.get("voice", {}).get("enabled")) \
+                if isinstance(self._config.get("voice"), dict) else False
+            raw_tracker = getattr(self, "_tracker", None)
+            snap = self._build_tracker_runtime_snapshot() if hasattr(
+                self, "_build_tracker_runtime_snapshot") else None
+            telemetry_fresh = bool(getattr(snap, "telemetry_fresh", True)) if snap is not None else True
+
+            # Phase 66 runtime activation: map the REAL tracker into the canonical live race state when a
+            # live Race is present; else keep the honest INSUFFICIENT default. DB-free; reads the tracker
+            # thinly (no listener/socket/loop). The pre-race plan/pit-loss come from live context caches
+            # when available (populated by the strategy runtime), else remain unknown (never fabricated).
+            state = LiveStrategyState(objective=StrategyObjective.UNKNOWN, telemetry_fresh=telemetry_fresh)
+            try:
+                if raw_tracker is not None and getattr(raw_tracker, "race_type", None) is not None:
+                    canon = build_canonical_live_race_state(
+                        raw_tracker, elapsed_s=getattr(self, "_live_race_elapsed_s", None),
+                        telemetry_fresh=telemetry_fresh,
+                        fuel_per_lap_plan=getattr(self, "_live_fuel_plan", None),
+                        lap_time_plan_s=getattr(self, "_live_pace_plan_s", None),
+                        recent_fuel_burn_samples=getattr(self, "_live_fuel_samples", None),
+                        recent_clean_lap_times_s=getattr(self, "_live_clean_lap_times", None),
+                        pit_loss_s=getattr(self, "_live_pit_loss_s", None),
+                        driver_reports=getattr(self, "_live_driver_reports", None))
+                    state = canon.to_live_strategy_state()
+            except Exception:
+                pass
+
+            def _build():
+                return build_live_audio_strategy_view(
+                    state, vr_mode=vr_mode, voice_enabled=voice_enabled, gate_allows=False,
+                    tts_available=True, recognition_available=False)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._audio_engineer_worker = worker
+            self._audio_engineer_worker_key = nav_key
+            worker.finished_ok.connect(
+                lambda result, w=worker, k=nav_key: self._on_audio_engineer_ready(result, w, k))
+            worker.failed.connect(
+                lambda _m, w=worker, k=nav_key: self._on_audio_engineer_ready(None, w, k))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_audio_engineer_ready(self, result, worker=None, nav_key=None) -> None:
+        """Render on the UI thread; drop a stale worker OR a result for a previously-selected event/activity."""
+        if worker is not None and getattr(self, "_audio_engineer_worker", None) is not worker:
+            return
+        current_key = (str(self._config.get("active_cycle_id") or ""),
+                       str(getattr(self, "_live_selected_activity_id", "") or ""))
+        if nav_key is not None and tuple(nav_key) != current_key:
+            return
+        panel = getattr(self, "_vr_audio_engineer_panel", None)
+        if panel is not None:
+            panel.update_result(result)
+
     def _home_update_next_action_button(self, next_action) -> None:
         """Point the next-action button at the recommended tab, or hide it.
 
@@ -5170,7 +5246,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         reg = getattr(self, "_tab_registry", None)
         key = reg.key_at(index) if reg is not None else None
         if key == TAB_HISTORY:            self._refresh_history()
-        elif key == TAB_LIVE:             self._refresh_running_setup_combos(); self._refresh_live_pit_wall()
+        elif key == TAB_LIVE:             self._refresh_running_setup_combos(); self._refresh_live_pit_wall(); self._refresh_audio_engineer()
         elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
         elif key == TAB_STRATEGY_BUILDER:
             self._sync_strategy_from_event()

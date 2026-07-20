@@ -7503,3 +7503,48 @@ selection is explicit-only; no new UI module renders/alters the official NGR log
 auto-completes/binds/launches. `production_event_certification()` = per-area, overall NOT_TESTED (live-GT7/
 visual/voice areas NONE); `runtime_field_limitations()` records honest per-field status. Deterministic
 replay + manual visual + live GT7 + physical voice UAT NOT run (headless).
+
+## Engineering Brain Program 2 — Phases 63-65 (PSVR2 Audio-First, Push-to-Talk, Adaptive Live Strategy)
+
+Branch `eng-brain-phase63-65-vr-adaptive-strategy` from the MERGED `master @ 26c0975` (PR #75 merged; the
+stacked-branch workflow is retired — future branches from master). DB v28 UNCHANGED (NO new migration);
+rule 46.0; NO new telemetry listener (reuses UDPListener -> RaceStateTracker). 102 new tests across 8 files:
+`test_phase63_audio_engineer.py`[20], `test_phase64_ptt.py`[18], `test_phase65_adaptive_strategy.py`[24],
+`test_phase63_65_integration.py`[8], `test_phase63_65_deadimport_boundary.py`[5],
+`test_phase63_65_safety.py`[16], `test_phase63_65_certification.py`[6], `test_phase63_65_ui_and_config.py`[6].
+Property/metamorphic: voice cannot alter strategy maths; PTT/acknowledge execute nothing; ambiguous speech
+changes nothing; an unavailable weather field never becomes verified rain; small pace noise never spams;
+material fuel divergence can change the candidate ranking; time-certain optimisation never trades completed
+laps for a faster average; stale telemetry never yields a high-confidence replan; switching events
+invalidates stale audio/strategy work; no audio/PTT action writes the DB. **PR #75 commit-count correction:
+224 commits total (slice = 12); dead-import boundary pinned with positive/negative tests.** Merged baseline
+recorded in PROJECT_STATE + CURRENT_CLAUDE_HANDOFF. Safety: new modules create NO telemetry listener,
+carry no AI/network/keys/cloud-recognition, are DB-free + Qt-free domain; no new migration; Apply + voice +
+strategy authorities untouched; PTT binding config is dict-isolated and explicit-only; no new UI module
+renders/alters the official NGR logo; voice off by default; nothing auto-applies/binds/completes/executes.
+`audio_strategy_certification()` = per-area (23), physical-audio/mic/wheel/PSVR2/live-GT7 = NONE, overall
+below OPERATIONALLY_READY. Deterministic replay + manual visual + live GT7 + physical TTS + physical
+microphone/PTT + PSVR2 driving UAT NOT run (headless).
+
+## Engineering Brain Program 2 — Phases 66-68 (Canonical Live Race State, Physical VR Comms, Certification)
+
+Branch `eng-brain-phase66-68-live-vr-certification` from `eng-brain-phase63-65-vr-adaptive-strategy @ fddfb17` (authoritative merged base `master @ 26c0975`). DB v28 UNCHANGED (NO new migration); rule 46.0; NO new telemetry listener (reuses UDPListener -> RaceStateTracker). ~74 new tests across 5 files:
+`test_phase66_live_race_state.py`[18], `test_phase67_physical_voice_ptt.py`[13],
+`test_phase68_certification.py`[7], `test_phase66_68_safety.py`[24], `test_phase67_68_lifecycle_ui.py`[12].
+Property/metamorphic: identical telemetry -> identical strategy decision; live packet processing cannot
+write the DB; audio-device change cannot alter strategy; PTT cannot apply a setup; acknowledgement cannot
+execute a pit; uncertain recognition cannot update race state; telemetry loss never high-confidence;
+time-certain never prefers fewer completed laps for a faster average; a confirmed pit is not counted twice;
+repeated identical conditions do not spam; event switching invalidates stale recognition/strategy work;
+driver-reported rain is never verified telemetry. **Phase 63-65 corrections recorded** (merged base @
+26c0975; pre-impl regression did not complete but the final passed 10,210/27/0; live strategy had UI
+placement not real activation; PTT/recognition architecture-complete not physically certified). Pre-phase
+audits A-D. Defect remediation: time-certain Audit-B tie-break hierarchy; ambiguous utterance carries no
+driver-report label; PTT lifecycle enum extended. Safety: new modules create NO telemetry listener, carry
+no AI/network/keys/cloud-recognition, DB-free + Qt-free domain; concrete adapters use only win32com (existing
+dep, lazy) + ctypes (stdlib, poll not hook), disabled-default, offline; no new migration; Apply + voice +
+strategy authorities untouched; PTT binding config dict-isolated + explicit-only; no new UI module
+renders/alters the NGR logo; voice off by default; nothing auto-applies/binds/completes/executes.
+`live_vr_certification()` = per-area (31), physical/mic/wheel/PSVR2/live-GT7 = NONE, overall NOT_TESTED,
+per-area + overall separate. Deterministic replay + manual visual + live GT7 + physical TTS + physical
+microphone + physical PTT + PSVR2 driving UAT NOT run (headless).
