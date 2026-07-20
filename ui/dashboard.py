@@ -979,11 +979,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             panel.update_result(result)
 
     def _refresh_audio_engineer(self) -> None:
-        """Rebuild the PSVR2 audio-first + adaptive-strategy view OFF the UI thread (Phases 63-65). DB-free.
+        """Rebuild the PSVR2 audio-first + adaptive-strategy view OFF the UI thread (Phases 63-68). DB-free.
         Voice is off by default and gated; the strategy view is advisory only and executes nothing. A stale
-        worker (event/activity switched) is dropped. Full tracker→LiveStrategyState mapping is live-UAT
-        wiring; here it composes an honest voice/strategy state (INSUFFICIENT_EVIDENCE until a live race
-        supplies the strategy inputs), so the panel is safe and truthful without a live feed."""
+        worker (event/activity switched) is dropped. Phase 66 ACTIVATES the runtime: when the existing
+        RaceStateTracker exposes a live Race, the canonical live race-state adapter maps it into the
+        Phase-65 LiveStrategyState so the panel leaves INSUFFICIENT_EVIDENCE with a real feed; without a
+        live Race it stays an honest INSUFFICIENT default."""
         panel = getattr(self, "_vr_audio_engineer_panel", None)
         if panel is None:
             return
@@ -991,6 +992,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             from strategy.adaptive_live_strategy import LiveStrategyState, StrategyObjective
             from strategy.audio_first_engineer import VrRuntimeMode
             from strategy.live_audio_strategy_build import build_live_audio_strategy_view
+            from strategy.canonical_live_race_state import build_canonical_live_race_state
             from ui.mechanism_annotation_worker import MechanismAnnotationWorker
             nav = self._live_pit_wall_nav() if hasattr(self, "_live_pit_wall_nav") else None
             nav_key = ((nav.active_event_id, nav.selected_activity_id) if nav is not None
@@ -999,11 +1001,30 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                        else VrRuntimeMode.DESKTOP)
             voice_enabled = bool(self._config.get("voice", {}).get("enabled")) \
                 if isinstance(self._config.get("voice"), dict) else False
-            tracker = self._build_tracker_runtime_snapshot() if hasattr(
+            raw_tracker = getattr(self, "_tracker", None)
+            snap = self._build_tracker_runtime_snapshot() if hasattr(
                 self, "_build_tracker_runtime_snapshot") else None
-            telemetry_fresh = bool(getattr(tracker, "telemetry_fresh", True)) if tracker is not None else True
-            # honest default live-strategy state: objective/pace unknown until a live race supplies them.
+            telemetry_fresh = bool(getattr(snap, "telemetry_fresh", True)) if snap is not None else True
+
+            # Phase 66 runtime activation: map the REAL tracker into the canonical live race state when a
+            # live Race is present; else keep the honest INSUFFICIENT default. DB-free; reads the tracker
+            # thinly (no listener/socket/loop). The pre-race plan/pit-loss come from live context caches
+            # when available (populated by the strategy runtime), else remain unknown (never fabricated).
             state = LiveStrategyState(objective=StrategyObjective.UNKNOWN, telemetry_fresh=telemetry_fresh)
+            try:
+                if raw_tracker is not None and getattr(raw_tracker, "race_type", None) is not None:
+                    canon = build_canonical_live_race_state(
+                        raw_tracker, elapsed_s=getattr(self, "_live_race_elapsed_s", None),
+                        telemetry_fresh=telemetry_fresh,
+                        fuel_per_lap_plan=getattr(self, "_live_fuel_plan", None),
+                        lap_time_plan_s=getattr(self, "_live_pace_plan_s", None),
+                        recent_fuel_burn_samples=getattr(self, "_live_fuel_samples", None),
+                        recent_clean_lap_times_s=getattr(self, "_live_clean_lap_times", None),
+                        pit_loss_s=getattr(self, "_live_pit_loss_s", None),
+                        driver_reports=getattr(self, "_live_driver_reports", None))
+                    state = canon.to_live_strategy_state()
+            except Exception:
+                pass
 
             def _build():
                 return build_live_audio_strategy_view(
