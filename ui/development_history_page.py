@@ -51,6 +51,7 @@ from ui.assisted_runtime_panel import AssistedRuntimePanel
 from ui.event_preparation_panel import EventPreparationPanel
 from ui.race_weekend_panel import RaceWeekendPanel
 from ui.certification_panel import CertificationPanel
+from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -149,6 +150,12 @@ class DevelopmentHistoryPage(QWidget):
         # replay evidence never awards visual/live/operational certification. Kept off the driver Home.
         self._certification_panel = CertificationPanel()
         root.addWidget(self._certification_panel)
+
+        # Phase 58 (Program 2) — NGR Live Pit Wall: the driver-facing low-density live surface (one
+        # coordinated NGR message). Read-only; issues no command; voice off by default. Hosted here for
+        # offscreen construction; production placement is the Live tab with a telemetry-driven refresh.
+        self._live_pit_wall_panel = NgrLivePitWallPanel()
+        root.addWidget(self._live_pit_wall_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -482,6 +489,10 @@ class DevelopmentHistoryPage(QWidget):
     def update_certification(self, certification_result) -> None:
         """Render the Phase 56 Operational Certification developer/UAT surface (read-only)."""
         self._certification_panel.update_result(certification_result)
+
+    def update_live_pit_wall(self, pit_wall_result) -> None:
+        """Render the Phase 58 NGR Live Pit Wall driver surface (read-only)."""
+        self._live_pit_wall_panel.update_result(pit_wall_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).

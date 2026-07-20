@@ -192,3 +192,15 @@ def build_ngr_live_pit_wall(
         valid_laps=int(snap.valid_laps or 0), target_laps=int(snap.target_laps or 0),
         next_action=next_action, voice_status=voice_status, fingerprint="")
     return NgrLivePitWall(**{**pw.__dict__, "fingerprint": _fp(pw.as_stable_payload())})
+
+
+def pit_wall_to_dict(pw: NgrLivePitWall) -> dict:
+    """Serialise the pit wall to the immutable view dict the UI worker hands to the panel."""
+    return {
+        "ok": True, "mode": pw.mode.value, "event_line": pw.event_line, "objective": pw.objective,
+        "purpose_note": pw.purpose_note, "match_summary": pw.match_summary, "blocked": pw.blocked,
+        "telemetry_state": pw.telemetry_state, "advisory": pw.advisory,
+        "advisory_suppressed": pw.advisory_suppressed, "evidence_progress": pw.evidence_progress,
+        "valid_laps": pw.valid_laps, "target_laps": pw.target_laps, "next_action": pw.next_action,
+        "voice_status": pw.voice_status.value, "fingerprint": pw.fingerprint,
+    }
