@@ -82,10 +82,16 @@ class TestLegacyReviewButtonsRemoved:
                     f"string reference to deleted {name} remains in {fname}")
 
     def test_dead_imports_removed(self, tm_src):
+        # These legacy import / style aliases must be gone. Anchor on a leading
+        # word boundary so we match a deleted *standalone* alias but never a live
+        # identifier that merely CONTAINS one of these as a substring — e.g. the
+        # active controls `_btn_seg_rename` / `_tm_seg_rename` (and the parallel
+        # reject/split/merge handlers), which are current wired buttons, not the
+        # removed aliases.
         for alias in ("_get_review_btns", "_seg_confirm", "_seg_rename",
                       "_seg_reject", "_seg_needs_laps", "_seg_split",
                       "_seg_merge", "_export_seg_review", "_rev_btn_"):
-            assert alias not in tm_src, (
+            assert not re.search(rf"\b{re.escape(alias)}", tm_src), (
                 f"dead import/style alias {alias} remains in track_modelling_ui.py")
 
     def test_detection_review_model_creation_still_present(self, tm_src):
