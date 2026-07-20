@@ -131,6 +131,7 @@ def reduce_live_state(
         return _r(S.HARD_MISMATCH, f"hard mismatch ({match.value})")
     if match == LiveActivityMatch.EXACT_ACTIVITY_MATCH:
         return _r(S.EXACT_MATCH, "exact activity match — live")
-    if match == LiveActivityMatch.MATCH_WITH_LIMITATIONS:
+    if match in (LiveActivityMatch.MATCH_WITH_LIMITATIONS, LiveActivityMatch.UNVERIFIABLE):
+        # UNVERIFIABLE = a required field unknown -> cannot verify an exact match -> limited
         return _r(S.LIMITED_MATCH, "match with limitations — live")
     return _r(S.LIVE, "live")
