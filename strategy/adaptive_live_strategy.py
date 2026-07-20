@@ -357,6 +357,12 @@ class StrategyReplanCandidate:
     assumptions: Tuple[str, ...]
     expected_gain_detail: str
     legal: bool
+    # Audit-B time-certain tie-break fields (all optional; None = unknown, sorted last within its tier).
+    expected_finish_position: Optional[int] = None      # lower is better, only when trustworthy
+    pit_loss_exposure_s: Optional[float] = None          # lower is better
+    legal_completion_confidence: Optional[float] = None  # higher is better (0..1)
+    fuel_at_finish_margin_l: Optional[float] = None      # higher is safer
+    fragility: Optional[float] = None                    # lower is better (assumption sensitivity)
     fingerprint: str = ""
 
     def to_dict(self) -> dict:
@@ -365,7 +371,11 @@ class StrategyReplanCandidate:
                 "expected_completed_laps": self.expected_completed_laps,
                 "fuel_target_note": self.fuel_target_note, "tyre_note": self.tyre_note,
                 "assumptions": list(self.assumptions), "expected_gain_detail": self.expected_gain_detail,
-                "legal": bool(self.legal), "fingerprint": self.fingerprint}
+                "legal": bool(self.legal), "expected_finish_position": self.expected_finish_position,
+                "pit_loss_exposure_s": _r(self.pit_loss_exposure_s),
+                "legal_completion_confidence": self.legal_completion_confidence,
+                "fuel_at_finish_margin_l": _r(self.fuel_at_finish_margin_l), "fragility": self.fragility,
+                "fingerprint": self.fingerprint}
 
 
 def generate_replan_candidates(state: LiveStrategyState,
@@ -430,29 +440,52 @@ def generate_replan_candidates(state: LiveStrategyState,
         return tuple(cands)
 
 
-def _cand(label, delta, total, laps, fuel_note, tyre_note, assumptions, gain, *, legal=True):
+def _cand(label, delta, total, laps, fuel_note, tyre_note, assumptions, gain, *, legal=True,
+          expected_finish_position=None, pit_loss_exposure_s=None, legal_completion_confidence=None,
+          fuel_at_finish_margin_l=None, fragility=None):
     fp = _fp({"l": label, "d": int(delta), "t": _r(total), "laps": laps, "legal": bool(legal)})
-    return StrategyReplanCandidate(label=label, stop_count_delta=int(delta), projected_total_time_s=total,
-                                   expected_completed_laps=laps, fuel_target_note=fuel_note,
-                                   tyre_note=tyre_note, assumptions=tuple(assumptions),
-                                   expected_gain_detail=gain, legal=bool(legal), fingerprint=fp)
+    return StrategyReplanCandidate(
+        label=label, stop_count_delta=int(delta), projected_total_time_s=total,
+        expected_completed_laps=laps, fuel_target_note=fuel_note, tyre_note=tyre_note,
+        assumptions=tuple(assumptions), expected_gain_detail=gain, legal=bool(legal),
+        expected_finish_position=expected_finish_position, pit_loss_exposure_s=pit_loss_exposure_s,
+        legal_completion_confidence=legal_completion_confidence,
+        fuel_at_finish_margin_l=fuel_at_finish_margin_l, fragility=fragility, fingerprint=fp)
+
+
+# large sentinel so "unknown" always sorts LAST within a tie-break tier (never wins a tie by being unknown).
+_HI = float("inf")
+
+
+def _tc_sort_key(c: "StrategyReplanCandidate"):
+    """Audit-B time-certain hierarchy: (1) MOST completed laps, then deterministic meaningful tie-breaks —
+    (2) best finishing position, (3) lowest total time, (4) lowest pit-loss exposure, (5) highest
+    legal-completion confidence, (6) safest fuel-at-finish margin, (7) lowest fragility, (8) stable label."""
+    laps = c.expected_completed_laps if c.expected_completed_laps is not None else -1
+    pos = c.expected_finish_position if c.expected_finish_position is not None else _HI
+    total = c.projected_total_time_s if c.projected_total_time_s is not None else _HI
+    pit = c.pit_loss_exposure_s if c.pit_loss_exposure_s is not None else _HI
+    legalconf = c.legal_completion_confidence if c.legal_completion_confidence is not None else -1.0
+    fuelm = c.fuel_at_finish_margin_l if c.fuel_at_finish_margin_l is not None else -_HI
+    frag = c.fragility if c.fragility is not None else _HI
+    return (-laps, pos, total, pit, -legalconf, -fuelm, frag, c.label)
 
 
 def rank_candidates(objective, candidates: Sequence[StrategyReplanCandidate]
                     ) -> Tuple[StrategyReplanCandidate, ...]:
-    """Rank candidates by the OBJECTIVE: time-certain → most expected completed laps first (an extra stop
-    that loses a lap can never rank above keeping the plan); lap-count → least projected total time first.
-    Illegal candidates are dropped. Deterministic tie-break by label. Never raises."""
+    """Rank candidates by the OBJECTIVE. Time-certain uses the full Audit-B tie-break hierarchy (max
+    completed laps first; the stable label is only the FINAL tie-break — never the primary order). Lap-count
+    uses least projected total time then fewest stops. Illegal candidates are dropped. Never raises."""
     try:
         legal = [c for c in candidates if c.legal]
         obj = objective if isinstance(objective, StrategyObjective) else StrategyObjective(_lc(objective))
         if obj == StrategyObjective.TIME_CERTAIN:
-            return tuple(sorted(
-                legal, key=lambda c: (-(c.expected_completed_laps if c.expected_completed_laps is not None
-                                        else -1), c.stop_count_delta, c.label)))
+            return tuple(sorted(legal, key=_tc_sort_key))
         return tuple(sorted(
             legal, key=lambda c: (c.projected_total_time_s if c.projected_total_time_s is not None
-                                  else float("inf"), c.stop_count_delta, c.label)))
+                                  else _HI, c.stop_count_delta,
+                                  -(c.legal_completion_confidence if c.legal_completion_confidence
+                                    is not None else -1.0), c.label)))
     except Exception:  # pragma: no cover - defensive
         return tuple(candidates)
 
