@@ -45,6 +45,7 @@ from ui.engineering_assumption_panel import EngineeringAssumptionPanel
 from ui.engineering_assurance_panel import EngineeringAssurancePanel
 from ui.assurance_engineering_priority_panel import AssuranceEngineeringPriorityPanel
 from ui.assurance_review_pack_panel import AssuranceReviewPackPanel
+from ui.race_engineer_team_panel import RaceEngineerTeamPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -106,6 +107,12 @@ class DevelopmentHistoryPage(QWidget):
         # Read-only; advisory; export writes files only on explicit user action; no setup values.
         self._review_pack_panel = AssuranceReviewPackPanel()
         root.addWidget(self._review_pack_panel)
+
+        # Phases 36-38 (Program 2) — Race-Engineer Team Brief: the coordinated, context-safe
+        # activation of the whole Engineering Brain into ONE read-only race-engineer plan for the
+        # current event. Read-only; advisory; no Apply, no experiment, no setup values.
+        self._race_engineer_team_panel = RaceEngineerTeamPanel()
+        root.addWidget(self._race_engineer_team_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -410,6 +417,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phases 33-35 Assurance Review Pack preview (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._review_pack_panel.update_result(review_result)
+
+    def update_race_engineer_team_brief(self, brief_result) -> None:
+        """Render the Phases 36-38 Race-Engineer Team Brief (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._race_engineer_team_panel.update_result(brief_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
