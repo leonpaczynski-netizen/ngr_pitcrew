@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 51-53: NGR Event Command Centre, Live Cycle Orchestration & Operational Certification — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 54-56: Canonical Activity Truth, Live GT7 Execution Bridge & Operational Certification — COMPLETE
+
+**Branch `eng-brain-phase54-56-live-operational-certification` from the Phase-51-53 tip `da9d6db` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0 unchanged.** Purpose: turn the Command Centre + live workflow into an authoritative operational system backed by real persisted state + live GT7 telemetry.
+
+**Commit 1 — P51-53 report corrections + audits:** file counts corrected to **26 A / 15 M / 0 D = 41 files, +3489/-26** (was 20/11/31/+2975 — a mid-slice measurement); test count 117 (golden was mislisted [20], collects [19]); UAT terminology (automated != manual UAT); config-safety audit (active_cycle_id explicit-only, refresh writes nothing, conftest _guard_real_config, stale selection falls through safely); 20-field source-of-truth map. Persistence conclusion: NO v29 migration (v28 setup_lock_json/strategy_final_json + activity state + bindings + outcome tables suffice).
+
+**Phase 54 (canonical truth):** `canonical_activity_state.py` (ActivityFact -> derive_pending_binding [run ended + candidate + no binding + requires telemetry; telemetry alone insufficient] / derive_pending_debrief [bound + no outcome] / derive_activity_state [COMPLETED needs persisted-completed + binding + outcome] / check_consistency [read-only, never repairs]) + `setup_strategy_readiness.py` (LOCK_READY!=LOCKED, FINALISATION_READY!=FINALISED). SessionDB.build_command_centre_truth (constant query, no N+1) + build_event_command_centre_view now DERIVES the 4 formerly-defaulted flags -> real next action (bind -> debrief -> objective).
+
+**Phase 55 (live bridge):** `live_activity_bridge.py` (immutable runtime snapshot; classify_live_activity_match 11 outcomes; unknown!=verified match) + `live_bridge_views.py` (hard mismatch/stale BLOCKS; Race issues_commands=False) + `live_session_detection.py` (session-end -> BINDING_REQUIRED, never auto-completes; reuses canonical ranker + resolve_telemetry_dropout).
+
+**Phase 56 (certification):** `event_programme_certification.py` (23 areas, 10 levels, strict caps automated!->live/visual/operational, offscreen!->visual, replay!->live; blocker withholds readiness). current_slice_certification() = **NOT_TESTED overall** (live areas unrun). Developer/UAT `certification_vm/panel` in Development History (post /ui-ux-pro-max; card list not wide table; unknown renders neutral).
+
+**Tests:** 112 new / 11 files (canonical_truth 21, truth_db 8, lock_strategy 10, next_action 7, bridge_match 9, bridge_views 8, session_end 9, certification 11, certification_ui 5, golden 16, safety 8 = 112). Query shape constant; truth+CC views byte-identical across refreshes. **Proof automated only (unit/property/runtime-DB/offscreen-UI/replay-via-snapshots); manual visual UAT + live GT7 UAT NOT run.** 11 commits `724ba07`..(commit-11); P54-56 counts (da9d6db..HEAD) so far 18 A / 5 M, +2289/-9 (+commit 11 docs). Apply gate + voice gate untouched. Program 2 now Phases 12-56. Phase 57 NOT started.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 51-53: NGR Event Command Centre, Live Cycle Orchestration & Operational Certification — COMPLETE
 
 **Branch `eng-brain-phase51-53-event-command-centre` from the Phase-48-50 tip `ef49d6c` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0 unchanged.** Purpose: make the Event Preparation Cycle the ACTUAL product experience — the app opens into the current NGR round.
 

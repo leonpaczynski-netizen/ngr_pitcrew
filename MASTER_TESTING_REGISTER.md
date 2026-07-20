@@ -7446,3 +7446,21 @@ byte-identical across refreshes. Off-thread refresh + stale-worker rejection mir
 have no AI/network/TTS/key/Qt (VMs Qt-free); no new migration; Apply gate + voice gate untouched; nothing
 auto-completes/locks/finalises/binds/applies. Manual UAT: Stages B/D/G PASS (automated), A/C/E/F PARTIAL, H
 NOT RUN. Operational certification = AUTOMATED_ONLY (live GT7 not run headlessly).
+
+## Engineering Brain Program 2 — Phases 54-56 (Canonical Truth, Live GT7 Bridge, Certification)
+
+Branch `eng-brain-phase54-56-live-operational-certification` @ `da9d6db`->(11 commits); DB v28 UNCHANGED
+(NO new migration); rule 46.0 unchanged; committed-not-pushed; master unchanged `3d7c6af`. 112 new tests
+across 11 files: `test_phase54_canonical_truth.py`[21], `test_phase54_truth_db.py`[8],
+`test_phase54_lock_strategy_readiness.py`[10], `test_phase54_next_action_truth.py`[7],
+`test_phase55_bridge_match.py`[9], `test_phase55_bridge_views.py`[8], `test_phase55_session_end.py`[9],
+`test_phase56_certification.py`[11], `test_phase56_certification_ui.py`[5], `test_phase54_56_golden.py`[16],
+`test_phase54_56_safety.py`[8]. Property/metamorphic: refresh-cannot-change-pending, unbound-cannot-
+complete, lock-readiness-cannot-lock, strategy-readiness-cannot-finalise, newest-cannot-autobind,
+telemetry-cannot-strengthen, selection-cannot-change-evidence, config-cannot-change-fingerprint,
+automated-cannot-award-live, replay-cannot-award-visual, offscreen-cannot-award-operational. Query shape
+constant (1/20 sessions); truth + Command Centre views byte-identical across refreshes. **P51-53 report
+corrections applied**: file counts 26 A / 15 M / 0 D = 41 (was 20/11/31), test count 117 (golden 19 not
+20), UAT terminology (automated != manual UAT). Safety: new modules no AI/network/TTS/key/Qt (VMs Qt-
+free); no new migration; Apply gate + voice gate untouched; nothing auto-completes/binds/locks/finalises.
+Certification = NOT_TESTED overall (live areas unrun); manual visual + live GT7 UAT NOT run.
