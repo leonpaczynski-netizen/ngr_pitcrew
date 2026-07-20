@@ -53,3 +53,76 @@ mechanism key.
    historical reconstruction — Phase 45 persists immutable snapshot **content** (a v27 table), not just
    a fingerprint or a reference to a mutable event.
 4. The broad domain-level context requirements **required mechanism-level refinement** (Correction B).
+
+## Post-slice corrections (recorded during the Phase 48–50 slice)
+
+These five items were verified directly against the working tree and Git before Phase 48 began. No
+Phase 45–47 commit is amended; this is an additive documentation correction.
+
+### 1. Exact ordered Phase 45–47 commit hashes and subjects
+
+The slice landed as ten focused commits on `eng-brain-phase45-47-provenance-live-voice`
+(parent `ce01383`, the Phase 42–44 tip):
+
+| # | Hash | Subject |
+| --- | --- | --- |
+| 1 | `fdea935` | Eng Brain P2 Phase 45-47 (1/10): stale Phase-6 test repair (Correction A) + context-sensitivity (Correction B) |
+| 2 | `4cc0f44` | Eng Brain P2 Phase 45-47 (2/10): Phase 45 immutable context-snapshot domain |
+| 3 | `470cc67` | Eng Brain P2 Phase 45-47 (3/10): Phase 45 schema migration (v27) + snapshot capture/reference |
+| 4 | `d2da493` | Eng Brain P2 Phase 45-47 (4/10): Phase 45 legacy handling + historical reconstruction |
+| 5 | `dfdba59` | Eng Brain P2 Phase 45-47 (5/10): Phase 46 telemetry replay + message-duration budget |
+| 6 | `a228d94` | Eng Brain P2 Phase 45-47 (6/10): Phase 46 shadow-mode advisory validation |
+| 7 | `65a78e3` | Eng Brain P2 Phase 45-47 (7/10): Phase 47 offline voice adapter + delivery queue |
+| 8 | `d43c58a` | Eng Brain P2 Phase 45-47 (8/10): Phase 47 voice controller + acknowledgement + UI + failure handling |
+| 9 | `8c0407a` | Eng Brain P2 Phase 45-47 (9/10): SessionDB shadow-validation + snapshot preview + voice wiring |
+| 10 | `0447375` | Eng Brain P2 Phase 45-47 (10/10): tests, golden fixtures, runtime verification and documentation |
+
+### 2. Clarified migration wording (v26 → v27)
+
+Phase 45 is the **first** `DB_VERSION` bump since Phase 19 (v25 → v26). `_migrate_v27`
+(`data/session_db.py`) is a pure **additive** step: it `executescript(_DDL_V27)`, which is two
+`CREATE TABLE IF NOT EXISTS` statements plus one index — it never rewrites, drops, or back-fills any
+existing row. On a fresh database every table is created up-front by the concatenated `_DDL` and the
+migration ladder is a no-op against already-present tables; on a legacy v26 database only the two new
+snapshot tables are added and `user_version` advances 26 → 27. The step is idempotent across repeated
+opens. No legacy session, event, experiment, outcome, working-window, or context row is touched.
+
+### 3. Snapshot and snapshot-reference writer ownership (single canonical boundary)
+
+`SessionDB.capture_context_snapshot(content, *, ref_kind="", ref_key="", captured_at=None)` is the
+**only** public method that writes either the `engineering_context_snapshots` content table (content-
+addressed by `semantic_digest`, `INSERT OR IGNORE` → dedup) **or** the `engineering_context_snapshot_refs`
+mapping table. It is **explicit-only**: viewing, refreshing, replaying, live-advisory evaluation, and
+every `build_*_report` read-model perform SELECT-only access and never call it (proven by
+`tests/test_phase45_47_safety.py::test_snapshot_capture_is_explicit_write_only`). The intended explicit
+callers are session-finalize, experiment-create, outcome-record, applied-setup checkpoint, and
+assisted-run confirm. The digest excludes `event_name` (display-only), audit time, row identity, and
+paths, so the same environment content dedups to one immutable row regardless of when or under what
+event label it was captured.
+
+### 4. Database-version assertion audit
+
+Of the test files that reference the schema version, all but two assert
+`PRAGMA user_version == DB_VERSION` **dynamically** (imported constant) and therefore follow a bump
+automatically and correctly. Only the following pin a **literal**:
+
+- `tests/test_phase45_47_migration.py` lines 30, 39, 80 legitimately prove the **v26 → v27**
+  Phase-45 migration lands at exactly `27` (they simulate a legacy v26 DB). These are version-specific
+  step proofs and **remain literal 27** even after later bumps.
+- `tests/test_phase45_47_migration.py:16` (`== DB_VERSION == 27`) and
+  `tests/test_phase45_47_safety.py:71` (`assert DB_VERSION == 27`) conflate "current schema" with the
+  literal 27; when `DB_VERSION` advances these must move to the new current value (or, better, assert
+  `== DB_VERSION` and prove the v27 tables separately). The Phase 48–50 slice updates exactly these
+  "current schema" assertions when it introduces v28 and leaves the v26 → v27 step proofs untouched.
+
+### 5. Environment-snapshot vs execution-binding audit result
+
+The immutable **event-environment identity** (driver / car / track / layout / rules / BoP / restrictions
+/ tyre + fuel multipliers / GT7 version / rule-engine version) captured by
+`engineering_context_snapshot` is cleanly separate from **execution/session identity** (applied setup,
+parent setup, discipline, run plan, experiment, telemetry session, objective, feedback). The snapshot
+digest is content-addressed over environment fields only and deliberately excludes execution identity
+and audit time; execution rows (`sessions`, `setup_experiments`, `engineering_context_links`) reference
+context by the Phase-1 scope spine, not the reverse. This separation is what lets Phase 48 add a
+**preparation-programme** layer (grouping many execution sessions under one upcoming round) without
+mutating or re-binding any immutable environment snapshot.
