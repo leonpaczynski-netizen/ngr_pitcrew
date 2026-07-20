@@ -1,6 +1,21 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 33-35: Assurance Review Pack (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 36-38: Context-Safe Race-Engineer Activation (combined slice) — COMPLETE
+
+**Branch `eng-brain-phase36-38-race-engineer-activation` from the Phase-33-35 tip `9f64ce7` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26 (no migration, no persistence, no DB write); RULE_ENGINE_VERSION 46.0; `_setup_constants.py` byte-identical.** A deterministic, offline, read-only, advisory-only ACTIVATION slice that turns the whole Engineering Brain into ONE coordinated race-engineer team plan for the current event, in eight explicit layers.
+
+**Layers / modules (all pure unless noted):**
+- **Phase 36** — `strategy/engineering_context_scope.py` (canonical `EngineeringContextScope`, semantic `context_fingerprint`, completeness, `relate_context`); `strategy/contextual_knowledge_activation.py` (+render): classify every record vs the scope into EXACT_CONTEXT / EXPLICITLY_TRANSFERABLE / REFERENCE_ONLY / EXCLUDED / UNVERIFIABLE with a reason, transfer only via the Phase-23 authority, contamination guard.
+- **Phase 37** — `strategy/setup_outcome_learning.py` (lineage, directional guidance, no-repeat guard, rollback, protected behaviour); `strategy/setup_working_window.py` (per-field windows, union-not-average, avoid on regression, discipline-separated); `strategy/driver_development_state.py` (dimensions, trend, cause attribution); `strategy/coaching_priority.py` (falsifiable priorities + gearing/drive-out).
+- **Phase 38** — `strategy/race_engineer_team_brief.py` (+render): one coordinated Chief/Setup/Performance/Coach/Strategy brief, contradiction resolution by sequencing, one ordered plan, subordinate fingerprints; `ui/race_engineer_team_vm.py` + `ui/race_engineer_team_panel.py` in Development History; `SessionDB.build_race_engineer_team_brief(...)` read-only orchestration (chain once, no lower builders, constant query count, no write); dashboard off-thread worker + stale-guard.
+
+**Also corrected the Phase 33-35 fingerprint wording** (semantic identity IS material; runtime/object/machine identity excluded; accidental source-row order excluded; canonical semantic priority order MAY be material) in `docs/ENGINEERING_BRAIN_PHASE33_ASSURANCE_EXPORT.md`.
+
+**Tests:** 68 new across `tests/test_phase36_context.py` (11), `test_phase37_setup_learning.py` (12), `test_phase37_driver_coaching.py` (9), `test_phase38_team_brief.py` (9), `test_phase36_38_golden.py` (5), `..._query_shape.py` (4), `..._safety.py` (5), `..._runtime.py` (5), `..._ui.py` (8) — all green; Phase 32 + Phase 33-35 regression green. Runtime-verified: DB byte-identical before/after brief; user_version 26; restart/now_date-independent fingerprint; context change alters fingerprint; constant query count; no lower builders called; off-thread build; stale worker ignored; no setup values. **The brief is NOT a certification and never claims a final/ultimate setup. Program 2 now spans Phases 12-38. Phase 39 NOT started.** Docs: `docs/ENGINEERING_BRAIN_PHASE36_CONTEXT_ACTIVATION.md`, `..._PHASE37_SETUP_DRIVER_LEARNING.md`, `..._PHASE38_TEAM_BRIEF.md`.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 33-35: Assurance Review Pack (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase33-35-assurance-review-pack` from the Phase-32 tip `0e88b8e` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26 (no migration, no persistence, no DB write); RULE_ENGINE_VERSION 46.0; `_setup_constants.py` byte-identical.** A deterministic, offline, read-only, advisory-only external-review slice on ONE branch: assurance-chain EXPORT (33), baseline->candidate COMPARISON (34), external REVIEW PACKAGE (35).
 
