@@ -6170,12 +6170,75 @@ class SessionDB:
         min_clean = int((plan_d.get("run_structure") or {}).get("minimum_clean_laps") or 0)
         clean = int((telemetry or {}).get("clean_laps") or 0)
         outcome_ready = workflow.get("state") in ("outcome_review_required", "ready_to_record")
+        # Phase 45: a PURE snapshot PREVIEW of the current context (what an explicit confirm WOULD
+        # capture). Viewing does NOT persist - this is not written; capture_context_snapshot is the
+        # only writer, called from explicit workflows.
+        snapshot_preview = {}
+        try:
+            from strategy.engineering_context_snapshot import build_context_snapshot
+            snap_content = dict(current_material)
+            if scope.to_dict().get("event_id"):
+                snap_content.setdefault("event_id", scope.to_dict().get("event_id"))
+            snapshot_preview = build_context_snapshot(snap_content).to_dict()
+        except Exception:  # pragma: no cover - defensive
+            snapshot_preview = {}
         return {"ok": True, "workflow": workflow, "advisory": decision, "material_trust": mt,
                 "run_plan": plan_d, "candidate_selection": selection.to_dict(),
                 "evidence_progress": {"clean_laps": clean, "min_clean": min_clean},
                 "outcome_ready": outcome_ready, "advisory_state": decision.get("state"),
+                "snapshot": snapshot_preview,
+                "shadow": {"readiness": "not_ready",
+                           "note": "run a replay/live-shadow validation to raise readiness; voice stays "
+                                   "unavailable until VOICE_ELIGIBLE."},
                 "context_fingerprint": scope.context_fingerprint(),
                 "content_fingerprint": workflow.get("content_fingerprint")}
+
+    def build_live_shadow_validation_report(self, frames=None, memory_context_key="", *,
+                                            applied_setup=None, session_identity=None, gearbox_state="",
+                                            speed_context="", session_context=None, session_budget=None,
+                                            now_date="", parent_setup=None, playback_speed=1.0,
+                                            live_shadow_confirmed=False, **ctx) -> dict:
+        """Build the READ-ONLY Live Shadow Validation report (Program 2, Phase 46): replay ``frames``
+        deterministically and run the advisory engine in shadow mode (no speech, no DB write) to
+        produce a live-validation readiness. Reuses the run plan from the shared chain; resolves
+        context once; performs no writes. DB stays v27; deterministic; never raises."""
+        try:
+            from strategy.telemetry_replay import replay_telemetry
+            from strategy.shadow_advisory import run_shadow_replay
+            from strategy.engineering_run_plan import build_engineering_run_plan
+            from strategy.run_candidate_selection import select_run_candidate
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase46 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        chain, exact, sol, ww, dd, cp = self._closed_loop_phase37(scope, records)
+        valuations = []
+        try:
+            pf = self.build_experiment_portfolio(
+                memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+                gearbox_state=gearbox_state, speed_context=speed_context,
+                session_context=session_context, **ctx)
+            valuations = ((pf.get("portfolio") or {}).get("valuations") or []) if pf.get("ok") else []
+        except Exception:  # pragma: no cover - defensive
+            valuations = []
+        selection = select_run_candidate(valuations, protected_behaviours=sol.protected_behaviours)
+        plan = build_engineering_run_plan(scope.to_dict(), candidate=selection.selected,
+                                          applied_setup=applied_setup, parent_setup=parent_setup,
+                                          working_windows=ww.to_dict(), coaching_plan=cp.to_dict(),
+                                          protected_behaviours=sol.protected_behaviours)
+        replay = replay_telemetry(frames, playback_speed=float(playback_speed or 1.0))
+        summary = run_shadow_replay(replay.to_dict(), context_fingerprint=scope.context_fingerprint(),
+                                    run_plan=plan.to_dict(), coaching_plan=cp.to_dict(),
+                                    workflow={"state": "run_active"},
+                                    live_shadow_confirmed=bool(live_shadow_confirmed))
+        return {"ok": True, "replay": {"lap_count": replay.lap_count,
+                                       "stale_gap_count": replay.stale_gap_count,
+                                       "content_fingerprint": replay.content_fingerprint},
+                "shadow": summary.to_dict(), "readiness": summary.readiness,
+                "context_fingerprint": scope.context_fingerprint(),
+                "content_fingerprint": summary.content_fingerprint}
 
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str

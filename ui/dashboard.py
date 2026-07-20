@@ -7958,6 +7958,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         outcome, binds no session, speaks no voice; never raises into the UI. A stale worker result
         cannot replace a newer one. The monotonic cooldown clock is injected here (the pure engine
         never reads wall-clock)."""
+        self._assisted_runtime_ctx_tuple = (car, track, layout_id, discipline)
         page = getattr(self, "_development_history_page", None)
         if page is None or not hasattr(page, "update_assisted_runtime"):
             return
@@ -7989,6 +7990,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     applied_setup=applied, session_identity=identity, now_date=now_date,
                     now_monotonic=now_mono, advisory_state=adv_state)
 
+            self._wire_assisted_runtime_voice()
             worker = MechanismAnnotationWorker(_build)
             self._assisted_runtime_worker = worker
             worker.finished_ok.connect(
@@ -8002,6 +8004,64 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             except Exception:
                 pass
 
+    def _assisted_runtime_voice(self):
+        """Lazily create the opt-in advisory VoiceController (DISABLED by default; speaks nothing)."""
+        vc = getattr(self, "_advisory_voice_controller", None)
+        if vc is None:
+            try:
+                from voice.voice_controller import VoiceController
+                from voice.advisory_voice_port import make_voice_port
+                vc = VoiceController(port=make_voice_port("windows"))
+            except Exception:  # pragma: no cover - defensive
+                vc = None
+            self._advisory_voice_controller = vc
+        return vc
+
+    def _wire_assisted_runtime_voice(self):
+        """Attach the panel's opt-in voice control handlers (idempotent). Voice-only; no Apply."""
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_assisted_runtime_panel", None) if page is not None else None
+        if panel is None or getattr(self, "_assisted_runtime_voice_wired", False):
+            return
+        try:
+            panel.set_voice_handlers(toggle=self._voice_toggle, acknowledge=self._voice_acknowledge,
+                                     mute=self._voice_mute, test=self._voice_test)
+            self._assisted_runtime_voice_wired = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _voice_toggle(self):
+        vc = self._assisted_runtime_voice()
+        if vc is None:
+            return
+        if vc.enabled:
+            vc.disable()
+        else:
+            vc.enable()
+        self._refresh_assisted_runtime(*self._assisted_runtime_ctx())
+
+    def _voice_acknowledge(self):
+        vc = self._assisted_runtime_voice()
+        key = str((getattr(self, "_assisted_runtime_last_advisory", None) or {}).get("suppression_key")
+                  or "")
+        if vc is not None and key:
+            vc.acknowledge(key)
+
+    def _voice_mute(self):
+        vc = self._assisted_runtime_voice()
+        key = str((getattr(self, "_assisted_runtime_last_advisory", None) or {}).get("suppression_key")
+                  or "")
+        if vc is not None and key:
+            vc.mute_type(key)
+
+    def _voice_test(self):
+        vc = self._assisted_runtime_voice()
+        if vc is not None:
+            vc.test_voice()
+
+    def _assisted_runtime_ctx(self):
+        return getattr(self, "_assisted_runtime_ctx_tuple", (None, None, None, None))
+
     def _on_assisted_runtime_ready(self, result, worker=None):
         """Signal handler on the Qt thread: render the immutable assisted-runtime result, but only if
         it came from the CURRENT worker (a stale worker's result is ignored)."""
@@ -8010,6 +8070,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         # carry the advisory suppression state forward so cooldowns persist across refreshes.
         if isinstance(result, dict) and isinstance(result.get("advisory_state"), dict):
             self._assisted_runtime_adv_state = result.get("advisory_state")
+        # merge the opt-in voice controller status (operational, not engineering state); the pure
+        # engineering fingerprints are unaffected by voice settings.
+        if isinstance(result, dict):
+            self._assisted_runtime_last_advisory = (result.get("advisory") or {}).get("delivered")
+            vc = getattr(self, "_advisory_voice_controller", None)
+            if vc is not None:
+                try:
+                    result["voice"] = vc.status()
+                except Exception:  # pragma: no cover - defensive
+                    pass
         page = getattr(self, "_development_history_page", None)
         if page is not None and hasattr(page, "update_assisted_runtime"):
             try:
