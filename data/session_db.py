@@ -5588,6 +5588,103 @@ class SessionDB:
                 "package_fingerprint": package.get("package_fingerprint"),
                 "content_fingerprint": package.get("package_fingerprint")}
 
+    def build_race_engineer_team_brief(self, memory_context_key: str = "", *, applied_setup=None,
+                                       session_identity=None, gearbox_state="", speed_context="",
+                                       session_context=None, session_budget=None, now_date="",
+                                       next_experiment=None, strategy_context=None, **ctx) -> dict:
+        """Build the READ-ONLY Integrated Race-Engineer Team Brief (Program 2, Phase 38): the
+        capstone activation that turns the Engineering Brain into one coordinated race-engineer plan
+        for the CURRENT context.
+
+        Thin orchestration only. It resolves the current canonical context ONCE, reuses the shared
+        Phase-22 knowledge chain ONCE (via ``_build_knowledge_chain`` - the single bounded evidence
+        read), and computes the Phase-36 context activation and the Phase-37 setup/driver learning
+        PURELY in memory. It never calls the lower public SessionDB report builders, performs no extra
+        DB reads (constant query-shape for small and large histories), writes nothing, and creates no
+        experiment. ``next_experiment`` is an OPTIONAL reference to an existing canonical bounded
+        experiment (never created here); ``strategy_context`` is OPTIONAL race-plan evidence. DB stays
+        v26; deterministic; never raises."""
+        try:
+            from strategy.engineering_context_scope import build_engineering_context_scope
+            from strategy.contextual_knowledge_activation import activate_context_knowledge
+            from strategy.setup_outcome_learning import build_setup_outcome_learning
+            from strategy.setup_working_window import build_setup_working_windows
+            from strategy.driver_development_state import build_driver_development_state
+            from strategy.coaching_priority import build_coaching_plan
+            from strategy.race_engineer_team_brief import build_race_engineer_team_brief as _bbrief
+            from strategy._setup_constants import DB_VERSION as _DBV, RULE_ENGINE_VERSION as _REV
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase36-38 import failed: {exc}"}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        sid = session_identity if isinstance(session_identity, dict) else {}
+        if chain is None:
+            # honest empty programme: still resolve the current context so the brief is a truthful
+            # collection plan rather than a fabricated setup.
+            context = {"programme": {k: str(sid.get(k, "") or ctx.get(k, "") or "")
+                                     for k in ("car", "discipline", "gt7_version", "driver")},
+                       "track": str(sid.get("track", "") or ctx.get("track", "") or ""),
+                       "layout_id": str(sid.get("layout_id", "") or ctx.get("layout_id", "") or ""),
+                       "compound": str(sid.get("compound", "") or ctx.get("compound", "") or ""),
+                       "event_id": str(sid.get("event_id", "") or ctx.get("event_id", "") or ""),
+                       "db_schema_version": int(_DBV), "rule_engine_version": str(_REV)}
+            scope = build_engineering_context_scope(context)
+            activation = activate_context_knowledge(scope, [])
+            sfp = scope.context_fingerprint()
+            sol = build_setup_outcome_learning(sfp, [])
+            ww = build_setup_working_windows(sfp, scope.discipline.value, [], sol.blocked_directions)
+            dd = build_driver_development_state(sfp, [])
+            cp = build_coaching_plan(sfp, dd.to_dict())
+            brief = _bbrief(scope.to_dict(), activation.to_dict(), sol.to_dict(), ww.to_dict(),
+                            dd.to_dict(), cp.to_dict(), next_experiment=next_experiment,
+                            strategy_context=strategy_context).to_dict()
+            return {"ok": True, "brief": brief, "context_fingerprint": scope.context_fingerprint(),
+                    "completeness": scope.completeness().value,
+                    "plan_step_count": len(brief.get("ordered_development_plan") or []),
+                    "content_fingerprint": brief.get("content_fingerprint")}
+
+        pk = chain["programme"]
+        records = chain.get("records") or []
+        compat = (pk.get("compatibility") or {}) if isinstance(pk, dict) else {}
+        primary = dict(compat.get("primary_key") or {})
+        # resolve the CURRENT context: programme identity + the current session's track/layout/compound.
+        context = {
+            "programme": primary,
+            "car": str(primary.get("car", "") or ""),
+            "discipline": str(primary.get("discipline", "") or ""),
+            "gt7_version": str(primary.get("gt7_version", "") or ""),
+            "driver": str(primary.get("driver", "") or ""),
+            "track": str(sid.get("track", "") or ctx.get("track", "") or ""),
+            "layout_id": str(sid.get("layout_id", "") or ctx.get("layout_id", "") or ""),
+            "compound": str(primary.get("compound", "") or sid.get("compound", "")
+                            or ctx.get("compound", "") or ""),
+            "event_id": str(sid.get("event_id", "") or ctx.get("event_id", "") or ""),
+            "db_schema_version": int(_DBV), "rule_engine_version": str(_REV)}
+        scope = build_engineering_context_scope(context)
+        sfp = scope.context_fingerprint()
+        # Phase 36: classify all recorded evidence against the current scope (pure).
+        activation = activate_context_knowledge(scope, records)
+        exact_keys = set(activation.keys_for("exact_context"))
+        exact_records = [r for r in records
+                         if str((r or {}).get("record_key") or "") in exact_keys]
+        # Phase 37: setup + driver learning from the exact-context lineage (pure; no extra DB read).
+        sol = build_setup_outcome_learning(sfp, exact_records)
+        ww = build_setup_working_windows(sfp, scope.discipline.value, exact_records,
+                                         sol.blocked_directions)
+        dd = build_driver_development_state(sfp, exact_records)
+        cp = build_coaching_plan(sfp, dd.to_dict())
+        # Phase 38: one coordinated crew brief (pure).
+        brief = _bbrief(scope.to_dict(), activation.to_dict(), sol.to_dict(), ww.to_dict(),
+                        dd.to_dict(), cp.to_dict(), next_experiment=next_experiment,
+                        strategy_context=strategy_context).to_dict()
+        return {"ok": True, "brief": brief, "context_fingerprint": sfp,
+                "completeness": scope.completeness().value,
+                "exact_evidence_count": len(exact_records),
+                "plan_step_count": len(brief.get("ordered_development_plan") or []),
+                "content_fingerprint": brief.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
