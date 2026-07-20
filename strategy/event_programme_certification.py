@@ -458,3 +458,75 @@ def audio_strategy_certification() -> "EventProgrammeCertification":
         areas.append(CertificationArea(name, ev, last_scenario="phase63-65 automated suite",
                                        findings=findings))
     return build_event_programme_certification(areas)
+
+
+# ---------------------------------------------------------------------------
+# Phase 68 — live GT7 / PSVR2 / physical-device certification
+# ---------------------------------------------------------------------------
+
+# the areas of the full VR race-engineer workflow (task section 8)
+LIVE_VR_CERTIFICATION_AREAS: Tuple[str, ...] = (
+    "real_tracker_mapping", "race_clock", "fuel_burn", "pace_divergence", "tyre_proxy", "pit_detection",
+    "lap_count_strategy", "time_certain_strategy", "revised_candidate_ranking", "live_tab_strategy_card",
+    "physical_tts", "keyboard_ptt", "controller_ptt", "wheel_ptt", "microphone_recognition",
+    "command_grammar", "read_back", "driver_report_confirmation", "workload_aware_delivery",
+    "tts_ptt_coordination", "telemetry_loss", "device_failure", "psvr2_practice", "psvr2_qualifying",
+    "psvr2_race", "revised_plan_acknowledgement", "repeated_replanning", "visual_fallback",
+    "session_binding", "debrief", "cumulative_learning",
+)
+
+# deterministic domain areas fully exercised by unit/property tests (no hardware / live race needed).
+_LIVE_VR_AUTOMATED = frozenset({
+    "real_tracker_mapping", "race_clock", "fuel_burn", "pace_divergence", "tyre_proxy", "pit_detection",
+    "lap_count_strategy", "time_certain_strategy", "revised_candidate_ranking", "command_grammar",
+    "read_back", "driver_report_confirmation", "workload_aware_delivery", "tts_ptt_coordination",
+    "telemetry_loss", "repeated_replanning", "revised_plan_acknowledgement",
+})
+# offscreen (UI construction) areas.
+_LIVE_VR_OFFSCREEN = frozenset({"live_tab_strategy_card", "visual_fallback"})
+# areas requiring a live GT7 race, a physical audio device / microphone / wheel, or PSVR2 usage — an
+# automated suite can NEVER grant these (they can never exceed NONE headlessly).
+_LIVE_VR_PHYSICAL_OR_LIVE = frozenset({
+    "physical_tts", "keyboard_ptt", "controller_ptt", "wheel_ptt", "microphone_recognition",
+    "device_failure", "psvr2_practice", "psvr2_qualifying", "psvr2_race", "session_binding", "debrief",
+    "cumulative_learning",
+})
+
+_LIVE_VR_NEXT_EVIDENCE = {
+    "physical_tts": "physical TTS UAT on a real audio device",
+    "keyboard_ptt": "physical keyboard PTT UAT", "controller_ptt": "physical controller PTT UAT",
+    "wheel_ptt": "physical wheel-button PTT UAT",
+    "microphone_recognition": "physical microphone UAT with the offline SAPI recogniser",
+    "device_failure": "physical device-disconnect UAT",
+    "psvr2_practice": "PSVR2 Practice driving UAT", "psvr2_qualifying": "PSVR2 Qualifying driving UAT",
+    "psvr2_race": "PSVR2 Race driving UAT",
+    "session_binding": "live GT7 session-binding UAT", "debrief": "live GT7 debrief UAT",
+    "cumulative_learning": "live GT7 cumulative-learning UAT",
+}
+
+
+def live_vr_certification() -> "EventProgrammeCertification":
+    """The HONEST per-area certification of the full Phase 66-68 live GT7 / PSVR2 / physical VR workflow.
+
+    Deterministic domain areas (real-tracker mapping, race clock, fuel/pace/tyre/pit models, lap-count +
+    time-certain strategy, candidate ranking, grammar, read-back, coordination, telemetry-loss, replanning)
+    are AUTOMATED; the Live-tab card + visual fallback are OFFSCREEN; physical-audio / microphone /
+    keyboard-controller-wheel PTT / PSVR2 / live-GT7 binding-debrief-learning areas are NONE with required-
+    next-evidence. Per-area detail is preserved; overall is bounded by the untested live/physical areas —
+    OPERATIONALLY_READY is never awarded from automated substitutes."""
+    A = EvidenceType
+    areas = []
+    for name in LIVE_VR_CERTIFICATION_AREAS:
+        if name in _LIVE_VR_PHYSICAL_OR_LIVE:
+            ev = A.NONE
+        elif name in _LIVE_VR_OFFSCREEN:
+            ev = A.OFFSCREEN
+        else:
+            ev = A.AUTOMATED
+        findings = ()
+        if ev == A.NONE:
+            nxt = _LIVE_VR_NEXT_EVIDENCE.get(name, "physical / live GT7 UAT")
+            findings = (CertificationFinding("not_run", FindingSeverity.LIMITATION, f"needs {nxt}"),)
+        areas.append(CertificationArea(name, ev, last_scenario="phase66-68 automated suite",
+                                       findings=findings))
+    return build_event_programme_certification(areas)
