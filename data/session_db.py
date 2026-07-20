@@ -6076,6 +6076,20 @@ class SessionDB:
         except Exception:  # pragma: no cover - defensive
             return None
 
+    def resolve_historical_context(self, ref_kind: str = "", ref_key: str = "", *,
+                                   semantic_digest: str = "") -> dict:
+        """Resolve the historical context for a record (Program 2, Phase 45). Prefers a directly-
+        persisted immutable snapshot; a legacy record without a snapshot resolves to UNKNOWN fields
+        (never back-filled from the current event). Each field is marked directly_persisted /
+        resolved_through_reference / inferred_with_limitations / unknown. Read-only; never raises."""
+        try:
+            from strategy.historical_context_resolution import resolve_historical_context as _resolve
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase45 import failed: {exc}"}
+        snap = (self.get_context_snapshot(semantic_digest) if semantic_digest
+                else self.get_snapshot_for_ref(ref_kind, ref_key))
+        return {"ok": True, "resolution": _resolve(snap, ref_kind=ref_kind, ref_key=ref_key).to_dict()}
+
     def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
                                       session_identity=None, gearbox_state="", speed_context="",
                                       session_context=None, session_budget=None, now_date="",
