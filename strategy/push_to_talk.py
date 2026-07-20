@@ -97,12 +97,16 @@ class PushToTalkBinding:
 
 class PushToTalkState(str, Enum):
     IDLE = "idle"                       # not listening (default)
+    PRESSED = "pressed"                 # PTT edge — press detected
     LISTENING = "listening"             # PTT held / toggled on — capturing
     RECOGNISING = "recognising"         # processing the captured utterance
+    RECOGNISED = "recognised"           # a command was understood (no read-back needed)
+    AMBIGUOUS = "ambiguous"             # uncertain recognition — triggers nothing
     AWAITING_CONFIRMATION = "awaiting_confirmation"  # read-back issued, awaiting confirm/cancel
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
     UNAVAILABLE = "unavailable"         # no input device / recogniser
+    FAILED = "failed"                   # device / recogniser failure
 
 
 class PttOperationalReadiness(str, Enum):
@@ -267,11 +271,13 @@ def _intent(action, klass, confidence, ambiguous, phrase, *, original_class=None
     requires_readback = (klass in _READBACK_CLASSES) and not ambiguous
     executes_immediately = (klass == DriverCommandClass.SAFE_OPERATIONAL) and not ambiguous
     label = None
-    src_class = original_class or klass
-    if src_class == DriverCommandClass.DRIVER_REPORT:
+    # Phase-68 remediation: only a NON-ambiguous DRIVER_REPORT is labelled. An ambiguous utterance is
+    # UNRECOGNISED and carries no driver-report label — uncertain recognition can never seed a report.
+    if klass == DriverCommandClass.DRIVER_REPORT:
         # a report starts driver-reported + unverified (never verified telemetry).
         label = DriverReportLabel.UNVERIFIED.value if action in _TELEMETRY_UNVERIFIABLE_REPORTS \
             else DriverReportLabel.DRIVER_REPORTED.value
+    _ = original_class  # retained for signature compatibility; no longer used for labelling
     fp = _fp({"a": action, "c": klass.value, "amb": bool(ambiguous),
               "rb": bool(requires_readback), "ex": bool(executes_immediately), "lab": label})
     return DriverCommandIntent(action=action, command_class=klass, confidence=float(confidence or 0.0),
