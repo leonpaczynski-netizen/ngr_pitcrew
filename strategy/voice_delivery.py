@@ -60,11 +60,12 @@ class VoiceDeliveryRequest:
     @classmethod
     def from_prompt(cls, prompt: Optional[Mapping]) -> "VoiceDeliveryRequest":
         p = prompt if isinstance(prompt, Mapping) else {}
+        cd = p.get("cooldown_seconds")
         return cls(message=_norm(p.get("message")), priority=int(p.get("priority") or 7),
                    prompt_class=_norm(p.get("prompt_class")),
                    suppression_key=_norm(p.get("suppression_key") or p.get("prompt_type")),
                    ack_required=bool(p.get("ack_required")),
-                   cooldown_seconds=float(p.get("cooldown_seconds") or 30.0),
+                   cooldown_seconds=(float(cd) if cd is not None else 30.0),
                    prompt_type=_norm(p.get("prompt_type")))
 
 
@@ -182,6 +183,11 @@ class VoiceQueue:
 
     def mute_coaching_for_lap(self, lap: int) -> None:
         self._muted_coaching_lap = int(lap)
+
+    def clear_cooldown(self, key: str) -> None:
+        """Clear the cooldown for a key (used by an explicit user 'repeat once')."""
+        self._last_spoken.pop(_norm(key), None)
+        self._acknowledged.discard(_norm(key))
 
     def on_finished_speaking(self) -> None:
         self._active = None

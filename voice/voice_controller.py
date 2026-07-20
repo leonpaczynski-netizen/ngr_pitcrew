@@ -96,8 +96,12 @@ class VoiceController:
         self._queue.acknowledge(key)
 
     def repeat_once(self, prompt: Optional[Mapping]) -> None:
-        # repeat speaks the SAME approved message once; it creates no new recommendation.
+        # repeat speaks the SAME approved message once; it creates no new recommendation. An explicit
+        # repeat bypasses the cooldown for that key.
         if self.enabled and isinstance(prompt, Mapping):
+            key = str(prompt.get("suppression_key") or prompt.get("prompt_type") or "")
+            if key:
+                self._queue.clear_cooldown(key)
             self._queue.submit(prompt)
 
     def mute_type(self, key: str) -> None:

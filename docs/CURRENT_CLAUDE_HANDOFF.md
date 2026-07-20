@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 42-44: Trustworthy Assisted Runtime Activation (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 45-47: Immutable Provenance, Live Validation & Opt-In Voice (combined slice) — COMPLETE
+
+**Branch `eng-brain-phase45-47-provenance-live-voice` from the Phase-42-44 tip `ce01383` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB v26 -> v27 (only bump; rule 46.0 unchanged).** Preserve exact historical context -> prove live advisory via replay + shadow -> opt-in OFFLINE voice for already-approved prompts only. No auto pit/strategy/apply/experiment/outcome.
+
+**Corrections:** A - stale Phase-6 test rewritten to the real invariant (fresh DB user_version==DB_VERSION, no telemetry table). B - mechanism-level context caps (gearing/aero/suspension/LSD legacy -> PARTIAL when BoP/restrictions/applied-setup unknown; driver_technique exact).
+
+**Modules:**
+- Phase 45: `strategy/engineering_context_snapshot.py` (immutable semantic snapshot; digest excludes event_name/audit-time/row-id/paths), `strategy/historical_context_resolution.py` (legacy=unknown, never back-filled). v27 tables + `_migrate_v27`; SessionDB `capture_context_snapshot` (ONLY writer, explicit-only), `get_snapshot_for_ref`, `resolve_historical_context`. Event-edit reconstruction proven.
+- Phase 46: `strategy/telemetry_replay.py` (deterministic + injected clock), `strategy/prompt_timing.py` (duration budget), `strategy/shadow_advisory.py` (shadow = same decisions, no speech/write; readiness gate). SessionDB `build_live_shadow_validation_report`.
+- Phase 47: `strategy/voice_delivery.py` (PURE TTS-free: request/port/DisabledDefault/Fake/VoiceQueue), `voice/advisory_voice_port.py` (Windows SAPI5 offline, lazy, disabled default), `voice/voice_controller.py` (opt-in; speaks only enabled+voice-eligible+gated; ack/repeat/mute; failure=visual-only). Voice DISABLED by default; no cloud/API/pit/strategy commands.
+- UI: AssistedRuntimePanel + Context-Snapshot & Voice cards + opt-in voice controls; dashboard VoiceController (disabled) merged as operational status (not in engineering fingerprints).
+
+**Tests:** 76 new (test_phase45_context_provenance[10], test_phase46_replay_shadow[11], test_phase47_voice[15], test_phase45_47_{golden[5],query_shape[5],safety[7],migration[6],ui[5]}, corrected test_phase6_wiring). Also updated 47 DB_VERSION==26/user_version==26 guards to 27. **Manual UAT: Stage A + B executed programmatically; Stage C (live GT7) + Stage D (voice) NOT RUN (headless).** Program 2 now Phases 12-47. Phase 48 NOT started.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 42-44: Trustworthy Assisted Runtime Activation (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase42-44-assisted-runtime-activation` from the Phase-39-41 tip `a57d25a` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26; RULE_ENGINE 46.0; `_setup_constants.py` byte-identical.** Runtime activation of the race-engineer workflow WITHOUT voice / autonomous apply / autonomous experiment / auto pit: material context capture -> user-confirmed practice execution -> explicit outcome capture -> safely-gated live advisory text.
 

@@ -1,5 +1,16 @@
 # Engineering Brain — Program 2, Phase 42: Material Context Trust & Legacy Evidence
 
+> **Corrected/superseded in the Phase 45–47 slice (see
+> `docs/ENGINEERING_BRAIN_PHASE45_47_PREPHASE_CORRECTIONS.md`):** (1) the Phase-6 regression test
+> `test_no_migration_no_new_telemetry_table` was **stale** and has been corrected to prove the real
+> Phase-6 invariant. (2) The Phase 42–44 **offscreen UAT did not prove live GT7 prompt usability**.
+> (3) A **semantic fingerprint without persisted snapshot content was insufficient** for permanent
+> historical reconstruction — Phase 45 persists immutable snapshot *content* (a v27 table). (4) The
+> broad domain-level context requirements below **required mechanism-level refinement** (`MECHANISM_REQUIRED`
+> + `build_field_working_window_trust`) so gearing/aero/suspension/LSD legacy evidence with unknown
+> material setup/event conditions is capped, not exact.
+
+
 Read-only, offline, deterministic, advisory-only. Part of the **Phases 42–44 Assisted Runtime
 Activation** slice. DB stays **v26**; rule engine **46.0**; no migration; no DB write; no setup values.
 
