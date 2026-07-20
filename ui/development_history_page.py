@@ -46,6 +46,7 @@ from ui.engineering_assurance_panel import EngineeringAssurancePanel
 from ui.assurance_engineering_priority_panel import AssuranceEngineeringPriorityPanel
 from ui.assurance_review_pack_panel import AssuranceReviewPackPanel
 from ui.race_engineer_team_panel import RaceEngineerTeamPanel
+from ui.closed_loop_workflow_panel import ClosedLoopWorkflowPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -113,6 +114,12 @@ class DevelopmentHistoryPage(QWidget):
         # current event. Read-only; advisory; no Apply, no experiment, no setup values.
         self._race_engineer_team_panel = RaceEngineerTeamPanel()
         root.addWidget(self._race_engineer_team_panel)
+
+        # Phases 39-41 (Program 2) — Closed-Loop Engineering Development: the read-only three-step
+        # workflow (Evidence Readiness -> Practice Run Plan -> Outcome Review). Read-only; advisory;
+        # no Apply, no experiment/outcome creation, no setup values.
+        self._closed_loop_panel = ClosedLoopWorkflowPanel()
+        root.addWidget(self._closed_loop_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -422,6 +429,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phases 36-38 Race-Engineer Team Brief (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._race_engineer_team_panel.update_result(brief_result)
+
+    def update_closed_loop_workflow(self, workflow_result) -> None:
+        """Render the Phases 39-41 closed-loop engineering workflow (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._closed_loop_panel.update_result(workflow_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).

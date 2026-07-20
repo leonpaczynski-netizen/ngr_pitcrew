@@ -6745,6 +6745,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # whole Engineering Brain. Read-only advisory; runs OFF the Qt thread; writes nothing.
             if hasattr(page, "update_race_engineer_team_brief"):
                 self._refresh_race_engineer_team_brief(car, track, layout_id, discipline)
+            # Phases 39-41 — Closed-Loop Engineering Development: the read-only three-step workflow.
+            # Read-only advisory; runs OFF the Qt thread; writes/creates/applies/promotes nothing.
+            if hasattr(page, "update_closed_loop_workflow"):
+                self._refresh_closed_loop_workflow(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7878,6 +7882,66 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_race_engineer_team_brief"):
             try:
                 page.update_race_engineer_team_brief(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 39-41 Closed-Loop Engineering Development workflow ------------------------------
+
+    def _refresh_closed_loop_workflow(self, car, track, layout_id, discipline):
+        """Build the Phases 39-41 closed-loop workflow OFF the Qt thread and render the finished
+        immutable result. Read-only; context-safe; creates no experiment, applies no setup, promotes
+        nothing; never raises into the UI. A stale worker result cannot replace a newer one (the
+        handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_closed_loop_workflow"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_closed_loop_workflow({"ok": True, "run_plan": None, "posture": "collect"})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                # observation=None => a pure view; the outcome-review step shows its honest empty state
+                # and nothing is written merely by viewing the workflow.
+                return db.build_closed_loop_workflow_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date,
+                    observation=None)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._closed_loop_worker = worker   # newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_closed_loop_workflow_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_closed_loop_workflow_ready(
+                    {"ok": True, "run_plan": None, "posture": "collect"}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_closed_loop_workflow({"ok": True, "run_plan": None, "posture": "collect"})
+            except Exception:
+                pass
+
+    def _on_closed_loop_workflow_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable closed-loop workflow, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_closed_loop_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_closed_loop_workflow"):
+            try:
+                page.update_closed_loop_workflow(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 

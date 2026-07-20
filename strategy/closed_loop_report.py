@@ -199,7 +199,9 @@ def _primary_action(outcome: Mapping, run_plan: Mapping, counts_for_learning: bo
     if coaching_only:
         return act(NextAction.COACHING_ONLY_RUN, "continue the coaching-only test; hold the setup "
                    "constant and verify the technique change.")
-    if no_candidate:
+    # a completed run (any outcome state present) is reconciled by its outcome, even if no candidate
+    # was formally linked; only a genuinely empty review falls back to collect-a-baseline.
+    if no_candidate and not state:
         return act(NextAction.COLLECT_BASELINE, "collect a controlled baseline / validate the current "
                    "best-known setup - no candidate to test.")
     if validity in ("invalid", "context_mismatch"):

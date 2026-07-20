@@ -5828,6 +5828,78 @@ class SessionDB:
                 "exact_evidence_count": len(exact),
                 "content_fingerprint": plan.content_fingerprint}
 
+    def build_closed_loop_workflow_report(self, memory_context_key="", *, observation=None,
+                                          applied_setup=None, session_identity=None, gearbox_state="",
+                                          speed_context="", session_context=None, session_budget=None,
+                                          now_date="", parent_setup=None, available_practice_laps=None,
+                                          event_is_near=False, coaching_only=False, **ctx) -> dict:
+        """Build the READ-ONLY three-step closed-loop workflow (Program 2, Phases 39-41): (1) Evidence
+        Readiness (context-scoped chain + production-history validation), (2) Practice Run Plan
+        (candidate selection + run plan), (3) Outcome Review (reconciliation + closed-loop report for a
+        supplied ``observation`` of a completed session, else an honest empty review).
+
+        Resolves the context ONCE and reads the bounded records ONCE (via the shared chain); composes
+        the Phase-17 portfolio ONCE; everything else is pure in memory. It writes / applies / creates /
+        persists / promotes NOTHING. DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.context_scoped_chain import build_context_scoped_chain
+            from strategy.production_history_validation import validate_production_history
+            from strategy.engineering_run_plan import build_engineering_run_plan
+            from strategy.run_candidate_selection import select_run_candidate
+            from strategy.engineering_run_outcome import build_run_outcome
+            from strategy.closed_loop_report import build_closed_loop_report
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase39-41 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        scoped = build_context_scoped_chain(scope, records)
+        validation = validate_production_history(scope, records)
+        chain, exact, sol, ww, dd, cp = self._closed_loop_phase37(scope, records)
+        valuations = []
+        try:
+            pf = self.build_experiment_portfolio(
+                memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+                gearbox_state=gearbox_state, speed_context=speed_context,
+                session_context=session_context, **ctx)
+            valuations = ((pf.get("portfolio") or {}).get("valuations") or []) if pf.get("ok") else []
+        except Exception:  # pragma: no cover - defensive
+            valuations = []
+        coaching_holds = any(bool(p.get("hold_setup_constant"))
+                             for p in (cp.to_dict().get("priorities") or []))
+        selection = select_run_candidate(
+            valuations, protected_behaviours=sol.protected_behaviours,
+            coaching_holds_setup=coaching_holds, event_is_near=bool(event_is_near),
+            available_practice_laps=available_practice_laps)
+        plan = build_engineering_run_plan(
+            scope.to_dict(), candidate=selection.selected, applied_setup=applied_setup,
+            parent_setup=parent_setup, working_windows=ww.to_dict(), coaching_plan=cp.to_dict(),
+            protected_behaviours=sol.protected_behaviours,
+            available_practice_laps=available_practice_laps, event_is_near=bool(event_is_near))
+        # step 3: outcome review only when a completed-session observation is supplied.
+        outcome = None
+        closed_loop = None
+        if isinstance(observation, dict) and observation:
+            ro = build_run_outcome(observation, plan.to_dict(),
+                                   discipline=scope.discipline.value,
+                                   independent_repeat=bool(observation.get("independent_repeat")),
+                                   correct_baseline=bool(observation.get("correct_baseline", True)),
+                                   exact_context=bool(observation.get("exact_context", True)))
+            outcome = ro.to_dict()
+            closed_loop = build_closed_loop_report(
+                scope.to_dict(), plan.to_dict(), outcome, event_is_near=bool(event_is_near),
+                coaching_only=bool(coaching_only or observation.get("coaching_only"))).to_dict()
+        return {"ok": True,
+                "evidence_readiness": {"scoped_chain": scoped.to_dict(),
+                                       "validation": validation.to_dict()},
+                "run_plan": plan.to_dict(), "candidate_selection": selection.to_dict(),
+                "posture": selection.posture, "outcome": outcome, "closed_loop": closed_loop,
+                "context_fingerprint": scope.context_fingerprint(),
+                "completeness": scope.completeness().value,
+                "exact_evidence_count": len(exact),
+                "content_fingerprint": plan.content_fingerprint}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
