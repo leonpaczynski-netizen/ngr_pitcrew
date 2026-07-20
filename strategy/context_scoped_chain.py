@@ -124,34 +124,42 @@ def _domain_summary(exact_items: Sequence[Mapping],
                     exact_records_by_key: Mapping) -> List[dict]:
     """Per exact-context engineering domain: evidence count, independent sessions, improvements and
     regressions, and a convergence state derived ONLY from exact records."""
+    _CONCLUSIVE = _IMPROVED + ("regression", "no_change", "neutral", "unchanged")
     by_domain: "Dict[str, dict]" = {}
     for it in exact_items:
         rec = exact_records_by_key.get(it.get("record_key")) or {}
         status = _lc(rec.get("outcome_status"))
         improved = status in _IMPROVED and not (rec.get("new_regressions") or [])
         worsened = status == "regression" or bool(rec.get("new_regressions") or [])
+        # a confounded / insufficient-evidence run is VISIBLE but is not a conclusive result - it must
+        # not strengthen convergence or independence (an invalid run cannot move a proven window).
+        conclusive = status in _CONCLUSIVE
         session = _norm(rec.get("test_session_id")) or _norm(rec.get("session_date")) \
             or _norm(rec.get("record_key"))
         for dom in (it.get("domains") or ["(unmapped)"]):
-            d = by_domain.setdefault(dom, {"domain": dom, "evidence_count": 0, "sessions": set(),
+            d = by_domain.setdefault(dom, {"domain": dom, "evidence_count": 0,
+                                           "conclusive_sessions": set(), "improvement_sessions": set(),
                                            "improvements": 0, "regressions": 0})
             d["evidence_count"] += 1
-            d["sessions"].add(session)
+            if conclusive:
+                d["conclusive_sessions"].add(session)
             if improved:
                 d["improvements"] += 1
+                d["improvement_sessions"].add(session)
             if worsened:
                 d["regressions"] += 1
     out = []
     for dom in sorted(by_domain):
         d = by_domain[dom]
-        indep = len(d["sessions"])
+        indep = len(d["conclusive_sessions"])          # independence counts CONCLUSIVE sessions only
+        indep_improve = len(d["improvement_sessions"])
         if d["evidence_count"] == 0:
             conv = ConvergenceState.INSUFFICIENT
         elif d["regressions"] and d["improvements"]:
             conv = ConvergenceState.CONTESTED
-        elif indep >= 2 and d["improvements"] and not d["regressions"]:
+        elif indep_improve >= 2 and not d["regressions"]:
             conv = ConvergenceState.CONVERGED
-        elif indep <= 1:
+        elif indep_improve <= 1 and not d["regressions"]:
             conv = ConvergenceState.SINGLE_CONTEXT
         else:
             conv = ConvergenceState.EMERGING

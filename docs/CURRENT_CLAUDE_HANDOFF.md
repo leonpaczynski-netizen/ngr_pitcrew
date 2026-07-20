@@ -1,6 +1,23 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 36-38: Context-Safe Race-Engineer Activation (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 39-41: Closed-Loop Engineering Development (combined slice) — COMPLETE
+
+**Branch `eng-brain-phase39-41-closed-loop-development` from the Phase-36-38 tip `2cbe077` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26; RULE_ENGINE 46.0; `_setup_constants.py` byte-identical.** A deterministic, offline, read-only, advisory-only slice proving the Engineering Brain can run a complete, trustworthy loop: context-safe evidence -> candidate selection -> controlled practice-run plan -> observed outcome -> reconciliation -> knowledge-update proposal -> promotion / rejection / rollback.
+
+**Pre-phase audit (A-D):** A context-before-aggregation REMEDIATION REQUIRED (Phase-22 compat group excludes track/layout/compound) -> remediated by the context-scoped chain; B multi-field regression -> RegressionAttribution (bundle vs field); C driver attribution independence -> SetupIndependenceAssessment; D Qt harness -> TEST-HARNESS DEFECT RESOLVED (no product change) via `tests/_qt_worker_wait.py::drive_worker` (deterministic QThread.wait + processEvents; all 23 UI off-thread tests migrated; combined run 10 failed/707 passed -> 717 passed/0 failed).
+
+**Modules (all pure unless noted):**
+- Phase 39: `strategy/context_scoped_chain.py` (classify-before-aggregate; exact_content_fingerprint invariant to incompatible evidence), `strategy/context_equivalence.py`, `strategy/regression_attribution.py`, `strategy/setup_independence.py`, `strategy/production_history_validation.py`.
+- Phase 40: `strategy/engineering_run_plan.py` (+render), `strategy/run_candidate_selection.py`.
+- Phase 41: `strategy/engineering_run_outcome.py`, `strategy/closed_loop_report.py` (+render).
+- SessionDB read-only: build_context_scoped_evidence_report / build_production_history_validation_report / build_engineering_run_plan_report / build_closed_loop_workflow_report (context once, shared chain single read, portfolio once, constant query count, no writes).
+- UI: `ui/closed_loop_workflow_vm.py` + `ui/closed_loop_workflow_panel.py` (three-step read-only workflow) in Development History; off-thread + stale-guard; viewing writes nothing (observation=None).
+
+**Tests:** 73 new across test_phase39_context_pipeline (14), test_phase39_attribution (10), test_phase40_run_plan (12), test_phase41_outcomes (16), test_phase39_41_{golden[5],query_shape[6],safety[6],runtime[4],ui[9]} — all green. Qt harness now green in combined runs. **Manual UAT guide written (docs/ENGINEERING_BRAIN_PHASE39_41_MANUAL_UAT.md) but NOT executed in a live GUI this session** (proven equivalently by unit/property/runtime tests). **No setup is ever ultimate/optimal; the Apply gate + explicit outcome workflow are untouched. Program 2 now spans Phases 12-41. Phase 42 NOT started.**
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 36-38: Context-Safe Race-Engineer Activation (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase36-38-race-engineer-activation` from the Phase-33-35 tip `9f64ce7` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26 (no migration, no persistence, no DB write); RULE_ENGINE_VERSION 46.0; `_setup_constants.py` byte-identical.** A deterministic, offline, read-only, advisory-only ACTIVATION slice that turns the whole Engineering Brain into ONE coordinated race-engineer team plan for the current event, in eight explicit layers.
 
