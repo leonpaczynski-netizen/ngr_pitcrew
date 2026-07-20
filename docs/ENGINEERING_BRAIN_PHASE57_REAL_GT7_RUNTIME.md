@@ -46,3 +46,23 @@ end still permits binding when valid laps were collected before the dropout (a r
 
 `test_phase57_adapter.py` (16), `test_phase57_cadence_cache.py` (6), `test_phase57_runtime_authority.py`
 (10). These are STATIC runtime-snapshot tests (constructed snapshots) — not the replay timeline.
+
+## Corrections applied in the Phase 60–62 slice (authoritative)
+
+Recorded here so the Phase 57–59 record is accurate (full detail in
+`ENGINEERING_BRAIN_PHASE60_62_PREPHASE_AUDITS.md`):
+
+1. **Modified-file count:** the Phase 57–59 diff `00111b4..fd66f74` is **21 A / 6 M / 0 D** where the
+   6 modified = **2 SOURCE** (`strategy/event_programme_certification.py`, `ui/development_history_page.py`)
+   **+ 4 DOCS**. `strategy/ngr_live_pit_wall.py` is **Added**, not modified. The earlier "3 source + 3
+   docs" wording was wrong.
+2. **Threading:** at `fd66f74` these live modules are **pure domain (no threads)**. The production
+   off-thread Live-tab worker did **not** exist until Phase 60; any Phase-58 wording implying an existing
+   off-thread live worker is superseded by the Phase-60 worker/stale-guard.
+3. **Real-tracker limitations:** a real tracker yields `MATCH_WITH_LIMITATIONS`; the **applied-setup
+   fingerprint is a LOCAL PROXY** (GT7 does not broadcast the setup) and layout can be limited under low
+   map-match — these cap exact setup identity/attribution, not Practice pace.
+4. **Static snapshot ≠ replay:** the Phase 57 tests are static runtime-snapshot tests, distinct from the
+   deterministic telemetry replay timeline (which was NOT run live).
+5. **Runtime files:** `active_setup_state.json`, `data/setup_history.json` and other runtime/app-state
+   files are left **untouched/unstaged**; tests use in-memory / `tmp_path` and the config-safety fixtures.

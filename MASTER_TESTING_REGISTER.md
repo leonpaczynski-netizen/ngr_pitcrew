@@ -7481,3 +7481,25 @@ Safety: new modules create NO telemetry listener (reuse the daemon UDPListener),
 Qt-free); no new migration; Apply gate + voice gate untouched; telemetry evaluation touches no DB; nothing
 auto-completes/binds. Certification = per-area, overall NOT_TESTED (live areas unrun); manual visual + live
 GT7 + physical voice UAT NOT run.
+
+## Engineering Brain Program 2 — Phases 60-62 (Production Live Activation, Complete Event Loop, Operational Certification)
+
+Branch `eng-brain-phase60-62-production-live-activation` @ `fd66f74`->(11 commits); DB v28 UNCHANGED (NO new
+migration); rule 46.0; committed-not-pushed; master unchanged `3d7c6af`. 89 new tests across 10 files:
+`test_phase60_context_and_controller.py`[17], `test_phase60_live_worker.py`[6],
+`test_phase60_live_tab_integration.py`[4], `test_phase61_briefing_launch.py`[8],
+`test_phase61_discipline_workflow.py`[7], `test_phase61_binding_debrief.py`[7],
+`test_phase61_restart_eventswitch.py`[6], `test_phase62_certification.py`[8],
+`test_phase60_62_golden.py`[17], `test_phase60_62_safety.py`[9]. Property/metamorphic: build-is-DB-free,
+opening/refresh-cannot-start-or-complete, mismatch-cannot-strengthen, stale-cannot-advise,
+event-switch-rejects-stale-snapshot, voice-cannot-be-manufactured, automated-cannot-award-live. Golden net
+found ONE controller defect (`UNVERIFIABLE`->generic LIVE) remediated to `LIMITED_MATCH`. **P57-59
+corrections applied**: exact counts 21 A / 6 M / 0 D = 27 (6 M = 2 SOURCE + 4 DOCS; `ngr_live_pit_wall.py`
+is ADDED not modified); the live modules were pure domain at `fd66f74` (off-thread worker is Phase 60);
+applied-setup fingerprint is a LOCAL PROXY; static snapshot != replay; runtime files untouched. Safety:
+new modules create NO telemetry listener (reuse the daemon UDPListener), are DB-free + Qt-free; the
+production build touches no DB; no new migration; Apply gate + voice gate untouched; `active_cycle_id`
+selection is explicit-only; no new UI module renders/alters the official NGR logo; nothing
+auto-completes/binds/launches. `production_event_certification()` = per-area, overall NOT_TESTED (live-GT7/
+visual/voice areas NONE); `runtime_field_limitations()` records honest per-field status. Deterministic
+replay + manual visual + live GT7 + physical voice UAT NOT run (headless).
