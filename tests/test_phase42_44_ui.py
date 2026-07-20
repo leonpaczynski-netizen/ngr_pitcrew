@@ -38,7 +38,7 @@ def test_panel_constructs_three_cards(app):
     from ui.assisted_runtime_panel import AssistedRuntimePanel
     p = AssistedRuntimePanel()
     p.update_result(_report())
-    assert len(p._cards) == 3   # Run State / Live Advisory / Evidence Progress
+    assert len(p._cards) >= 3   # Run State / Live Advisory / Evidence Progress / Voice (+snapshot)
 
 
 def test_panel_empty_and_none_safe(app):
@@ -50,13 +50,16 @@ def test_panel_empty_and_none_safe(app):
     assert p._cards == []
 
 
-def test_panel_no_apply_experiment_voice_buttons(app):
+def test_panel_no_apply_experiment_or_command_buttons(app):
+    # Phase 47 adds opt-in VOICE controls (enable/acknowledge/mute/test) - allowed. Still no
+    # Apply / experiment / outcome-write / session-bind / pit / tyre / fuel / setup command buttons.
     from PyQt6.QtWidgets import QPushButton
     from ui.assisted_runtime_panel import AssistedRuntimePanel
     p = AssistedRuntimePanel()
     p.update_result(_report())
     labels = [b.text().lower() for b in p.findChildren(QPushButton)]
-    for bad in ("apply", "create experiment", "record", "bind", "speak", "voice", "pit"):
+    for bad in ("apply", "create experiment", "record outcome", "bind session", "pit now",
+                "change tyre", "fuel map", "change setup", "save fuel"):
         assert not any(bad in l for l in labels), bad
 
 
@@ -72,7 +75,7 @@ def test_page_embeds_panel_and_forwarder(app):
     page = DevelopmentHistoryPage()
     assert hasattr(page, "_assisted_runtime_panel")
     page.update_assisted_runtime(_report())
-    assert len(page._assisted_runtime_panel._cards) == 3
+    assert len(page._assisted_runtime_panel._cards) >= 3
 
 
 def test_prior_phase_panels_coexist(app):

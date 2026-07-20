@@ -100,4 +100,35 @@ def runtime_cards(result) -> List[dict]:
         ev_lines.append(f"Limitations: {mt.get('limitation_explanation')}")
     cards.append({"title": "3. Evidence Progress", "status_tag": "PROGRESS", "tone": "info",
                   "lines": ev_lines})
+
+    # 4 — immutable context snapshot state (Phase 45)
+    snap = r.get("snapshot") or {}
+    if snap:
+        vs = str(snap.get("validation_state") or "-")
+        cards.append({"title": "4. Context Snapshot",
+                      "status_tag": "VERIFIED" if vs == "valid" else vs.upper(),
+                      "tone": "success" if vs == "valid" else "warn",
+                      "lines": [f"Snapshot: {snap.get('short_fingerprint') or '-'}.",
+                                f"Validation: {vs.replace('_', ' ').upper()}.",
+                                "Immutable - a later event edit will not change this historical context."]})
+
+    # 5 — live validation readiness + opt-in voice (Phases 46-47)
+    sh = r.get("shadow") or {}
+    voice = r.get("voice") or {}
+    readiness = str(sh.get("readiness") or "not_ready")
+    v_enabled = bool(voice.get("enabled"))
+    v_health = str(voice.get("health") or "disabled")
+    v_lines = [f"Live validation: {readiness.replace('_', ' ').upper()}.",
+               f"Voice: {'ENABLED' if v_enabled else 'DISABLED (default)'} - adapter {v_health}.",
+               f"Current spoken: {voice.get('last_spoken') or '(none)'}.",
+               f"Queue: {(voice.get('queue') or {}).get('pending', 0)} pending.",
+               "Voice is offline-only, opt-in, and speaks only already-approved advisory messages; "
+               "no pit/tyre/fuel/setup commands."]
+    muted = (voice.get("queue") or {}).get("muted_types") or []
+    if muted:
+        v_lines.append("Muted: " + ", ".join(muted) + ".")
+    cards.append({"title": "5. Live Validation & Voice",
+                  "status_tag": "VOICE ON" if v_enabled else "VOICE OFF",
+                  "tone": "warn" if v_health == "failed" else ("success" if v_enabled else "advisory"),
+                  "lines": v_lines})
     return cards

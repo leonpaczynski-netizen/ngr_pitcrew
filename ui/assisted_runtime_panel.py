@@ -11,10 +11,10 @@ card states its status in WORDS (a text tag) plus a tone accent.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from ui import ngr_theme as ngr
 from ui import assisted_runtime_vm as vm
@@ -53,6 +53,28 @@ class AssistedRuntimePanel(QWidget):
         self._header.setStyleSheet(ngr.banner_qss("advisory"))
         self._root.addWidget(self._header)
 
+        # opt-in voice controls (delegated to dashboard handlers; disabled by default). NO Apply /
+        # experiment / outcome / pit / strategy control - voice only.
+        self._on_toggle_voice: Optional[Callable[[], None]] = None
+        self._on_acknowledge: Optional[Callable[[], None]] = None
+        self._on_mute: Optional[Callable[[], None]] = None
+        self._on_test_voice: Optional[Callable[[], None]] = None
+        vbar = QWidget()
+        vrow = QHBoxLayout(vbar)
+        vrow.setContentsMargins(0, 0, 0, 0)
+        self._voice_btn = QPushButton("Enable Voice")
+        self._ack_btn = QPushButton("Acknowledge")
+        self._mute_btn = QPushButton("Mute Prompt")
+        self._test_btn = QPushButton("Test Voice")
+        for b in (self._voice_btn, self._ack_btn, self._mute_btn, self._test_btn):
+            vrow.addWidget(b)
+        vrow.addStretch(1)
+        self._root.addWidget(vbar)
+        self._voice_btn.clicked.connect(lambda: self._fire(self._on_toggle_voice))
+        self._ack_btn.clicked.connect(lambda: self._fire(self._on_acknowledge))
+        self._mute_btn.clicked.connect(lambda: self._fire(self._on_mute))
+        self._test_btn.clicked.connect(lambda: self._fire(self._on_test_voice))
+
         self._cards_container = QWidget()
         self._cards_layout = QVBoxLayout(self._cards_container)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
@@ -62,12 +84,32 @@ class AssistedRuntimePanel(QWidget):
 
         self.update_result(None)
 
+    def set_voice_handlers(self, *, toggle: Optional[Callable[[], None]] = None,
+                           acknowledge: Optional[Callable[[], None]] = None,
+                           mute: Optional[Callable[[], None]] = None,
+                           test: Optional[Callable[[], None]] = None) -> None:
+        self._on_toggle_voice = toggle
+        self._on_acknowledge = acknowledge
+        self._on_mute = mute
+        self._on_test_voice = test
+
+    @staticmethod
+    def _fire(handler: Optional[Callable[[], None]]) -> None:
+        if callable(handler):
+            try:
+                handler()
+            except Exception:  # pragma: no cover - defensive; never propagate into Qt
+                pass
+
     def update_result(self, result: Optional[dict]) -> None:
         self._clear_cards()
         data = vm.build(result)
         self._header.setText(vm.header_text(data))
         self._header.setStyleSheet(ngr.banner_qss(vm.banner_tone(data)))
         self._header.setAccessibleDescription(vm.header_text(data))
+        # reflect voice enabled/disabled on the toggle button label.
+        voice = (data or {}).get("voice") or {}
+        self._voice_btn.setText("Disable Voice" if voice.get("enabled") else "Enable Voice")
         if vm.is_empty(data):
             return
         for card in vm.runtime_cards(data):
