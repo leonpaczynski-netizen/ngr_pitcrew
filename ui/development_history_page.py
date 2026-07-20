@@ -48,6 +48,8 @@ from ui.assurance_review_pack_panel import AssuranceReviewPackPanel
 from ui.race_engineer_team_panel import RaceEngineerTeamPanel
 from ui.closed_loop_workflow_panel import ClosedLoopWorkflowPanel
 from ui.assisted_runtime_panel import AssistedRuntimePanel
+from ui.event_preparation_panel import EventPreparationPanel
+from ui.race_weekend_panel import RaceWeekendPanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -127,6 +129,19 @@ class DevelopmentHistoryPage(QWidget):
         # no Apply, no experiment/outcome/session creation, no voice, no setup values.
         self._assisted_runtime_panel = AssistedRuntimePanel()
         root.addWidget(self._assisted_runtime_panel)
+
+        # Phases 48-50 (Program 2) — Event Preparation Cycle spine: groups every Practice session for
+        # one upcoming NGR round into one cumulative engineering programme (setup convergence, tyre/fuel/
+        # strategy maturation), with a preparation timeline and next-action. Read-only; advisory; no
+        # Apply, no session binding, no lock/finalise here; no setup values.
+        self._event_preparation_panel = EventPreparationPanel()
+        root.addWidget(self._event_preparation_panel)
+
+        # Phase 50 (Program 2) — Immersive Race Weekend: the ceremonial climax built FROM the accumulated
+        # preparation (final arrival, briefing, scrutineering, chief-engineer plan, qualifying, race
+        # briefing, debrief). Read-only; no automatic pit/tyre/fuel command; voice disabled by default.
+        self._race_weekend_panel = RaceWeekendPanel()
+        root.addWidget(self._race_weekend_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -446,6 +461,16 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phases 42-44 assisted runtime pit-wall (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._assisted_runtime_panel.update_result(runtime_result)
+
+    def update_event_preparation(self, preparation_result) -> None:
+        """Render the Phases 48-50 Event Preparation Cycle spine (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._event_preparation_panel.update_result(preparation_result)
+
+    def update_race_weekend(self, weekend_result) -> None:
+        """Render the Phase 50 Immersive Race Weekend surface (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._race_weekend_panel.update_result(weekend_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).
