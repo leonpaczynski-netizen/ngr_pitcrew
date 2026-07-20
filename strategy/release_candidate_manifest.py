@@ -57,13 +57,18 @@ class ManualUatReadinessResult:
     rationale: str
     required_physical_live_areas: Tuple[str, ...]
     physical_live_passed: Tuple[str, ...]
+    active_candidate_commit: str = ""
+    historical_observation_count: int = 0
     fingerprint: str = ""
 
     def to_dict(self) -> dict:
         return {"readiness": self.readiness.value, "blockers": list(self.blockers),
                 "caveats": list(self.caveats), "rationale": self.rationale,
                 "required_physical_live_areas": list(self.required_physical_live_areas),
-                "physical_live_passed": list(self.physical_live_passed), "fingerprint": self.fingerprint}
+                "physical_live_passed": list(self.physical_live_passed),
+                "active_candidate_commit": self.active_candidate_commit,
+                "historical_observation_count": int(self.historical_observation_count),
+                "fingerprint": self.fingerprint}
 
 
 def evaluate_manual_uat_readiness(
@@ -78,13 +83,19 @@ def evaluate_manual_uat_readiness(
     strategy_authority_ok: bool = True,
     ledger: Optional[ManualUatLedger] = None,
     operationally_granted: bool = False,
+    active_candidate_commit: str = "",
 ) -> ManualUatReadinessResult:
-    """The ONE pure readiness evaluator. Returns the honest decision + blockers + rationale. Never raises."""
+    """The ONE pure readiness evaluator. Returns the honest decision + blockers + rationale. Manual evidence
+    is CANDIDATE-SCOPED: only observations whose ``candidate_commit`` equals ``active_candidate_commit`` count
+    (DEF-UAT-072-001 — evidence from a different commit can never certify the current candidate). Never raises.
+    """
     try:
         led = ledger if isinstance(ledger, ManualUatLedger) else ManualUatLedger()
+        cand = _norm(active_candidate_commit)
         req = required_physical_live_areas()
-        passed = tuple(a for a in req if led.status_of(a) == ManualUatStatus.PASS)
+        passed = tuple(a for a in req if led.status_of(a, cand) == ManualUatStatus.PASS)
         physical_all_pass = len(passed) == len(req) and len(req) > 0
+        historical = sum(1 for o in led.observations if _norm(o.candidate_commit) != cand)
 
         blockers: List[str] = []
         caveats: List[str] = []
@@ -100,18 +111,18 @@ def evaluate_manual_uat_readiness(
             blockers.append(f"{int(bench_safety_failures)} bench safety failure(s)")
         if int(bench_certification_integrity_failures or 0) > 0:
             blockers.append(f"{int(bench_certification_integrity_failures)} certification-integrity failure(s)")
-        # a proven manual FAIL on any area is a defect that blocks the candidate
-        failed_areas = [a for a in (o.area for o in led.observations)
-                        if led.status_of(a) == ManualUatStatus.FAIL]
+        # a proven manual FAIL on any area (for THIS candidate) is a defect that blocks the candidate
+        failed_areas = [a for a in {o.area for o in led.observations}
+                        if led.status_of(a, cand) == ManualUatStatus.FAIL]
         for a in sorted(set(failed_areas)):
             blockers.append(f"manual FAIL on '{a}'")
         if not bench_ready:
             # bench not green is a blocker for manual UAT readiness (it is a software gate)
             blockers.append("bench UAT is not green")
 
-        # blocked (not failed) areas → caveats, and cap to conditional
-        blocked_areas = sorted({a for a in (o.area for o in led.observations)
-                                if led.status_of(a) == ManualUatStatus.BLOCKED})
+        # blocked (not failed) areas for THIS candidate → caveats, and cap to conditional
+        blocked_areas = sorted({a for a in {o.area for o in led.observations}
+                                if led.status_of(a, cand) == ManualUatStatus.BLOCKED})
         for a in blocked_areas:
             caveats.append(f"manual area '{a}' is BLOCKED (retest required)")
 
@@ -136,9 +147,14 @@ def evaluate_manual_uat_readiness(
             rationale = ("Automated regression + bench UAT are green and no safety/integrity/manual failure "
                          "exists — ready for manual UAT. Physical/live areas are not yet certified.")
 
+        if historical:
+            caveats.append(f"{historical} historical observation(s) from a different candidate are viewable "
+                           "but do NOT count toward this candidate")
+
         result = ManualUatReadinessResult(
             readiness=readiness, blockers=tuple(blockers), caveats=tuple(caveats), rationale=rationale,
-            required_physical_live_areas=req, physical_live_passed=passed)
+            required_physical_live_areas=req, physical_live_passed=passed, active_candidate_commit=cand,
+            historical_observation_count=historical)
         return _stamp_readiness(result)
     except Exception:  # pragma: no cover - defensive
         return _stamp_readiness(ManualUatReadinessResult(
@@ -149,6 +165,7 @@ def evaluate_manual_uat_readiness(
 def _stamp_readiness(r: ManualUatReadinessResult) -> ManualUatReadinessResult:
     import dataclasses
     payload = {"readiness": r.readiness.value, "blockers": sorted(r.blockers),
+               "cand": r.active_candidate_commit,
                "passed": sorted(r.physical_live_passed)}
     return dataclasses.replace(r, fingerprint=_fp(payload))
 
@@ -245,6 +262,9 @@ def build_release_candidate_manifest(
 ) -> ReleaseCandidateManifest:
     """Assemble the manifest for ONE exact build and evaluate its manual-UAT readiness. Pure; never raises."""
     led = ledger if isinstance(ledger, ManualUatLedger) else ManualUatLedger()
+    cand = _norm(commit)
+    # The manifest is THE candidate: readiness + per-area results are scoped to THIS commit so evidence
+    # from any other candidate is viewable history but never counts here (DEF-UAT-072-001).
     readiness = evaluate_manual_uat_readiness(
         automated_tests_passed=(automated_tests_failed == 0 and automated_tests_passed > 0),
         automated_tests_failed=automated_tests_failed, bench_ready=bench_ready,
@@ -252,11 +272,11 @@ def build_release_candidate_manifest(
         bench_certification_integrity_failures=bench_certification_integrity_failures,
         safety_checks_ok=safety_checks_ok, telemetry_integrity_ok=telemetry_integrity_ok,
         strategy_authority_ok=strategy_authority_ok, ledger=led,
-        operationally_granted=operationally_granted)
+        operationally_granted=operationally_granted, active_candidate_commit=cand)
     manual_results = tuple({"area": a.key, "category": a.category,
-                            "status": led.status_of(a.key).value,
-                            "retest_required": (led.active(a.key).retest_required
-                                                if led.active(a.key) is not None else False)}
+                            "status": led.status_of(a.key, cand).value,
+                            "retest_required": (led.active(a.key, cand).retest_required
+                                                if led.active(a.key, cand) is not None else False)}
                            for a in MANUAL_UAT_AREAS)
     m = ReleaseCandidateManifest(
         branch=_norm(branch), commit=_norm(commit), parent_commit=_norm(parent_commit),

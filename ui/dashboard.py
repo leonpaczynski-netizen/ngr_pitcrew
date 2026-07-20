@@ -6863,15 +6863,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         try:
             from pathlib import Path as _Path
             from data.manual_uat_store import ManualUatStore
+            from data.repo_identity import resolve_repo_commit, resolve_repo_branch
             store = None
             cfg_path = getattr(self, "_config_path", None)
             if cfg_path:
                 store = ManualUatStore(_Path(cfg_path).with_name("manual_uat_evidence.json"))
+            # Resolve the EXACT running commit so UI-recorded evidence is candidate-scoped (DEF-UAT-072-001);
+            # "" if it cannot be resolved (packaged/detached checkout) — never fabricated.
+            _repo_root = _Path(__file__).resolve().parent.parent
+            candidate_commit = resolve_repo_commit(_repo_root)
+            candidate_branch = resolve_repo_branch(_repo_root)
 
             def _facts():
                 from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
                 return {
-                    "branch": "", "commit": "", "parent_commit": "",
+                    "branch": candidate_branch, "commit": candidate_commit, "parent_commit": "",
                     "db_version": DB_VERSION, "rule_engine_version": RULE_ENGINE_VERSION,
                     "listener_status": "single UDPListener (telemetry/listener.py)",
                     "schema_migration_status": "no schema change (DB v%d)" % DB_VERSION,
@@ -6881,7 +6887,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     "bench_total": 0, "bench_passed": 0, "bench_ready": False,
                 }
 
-            page.set_manual_uat_context(store=store, facts_provider=_facts, candidate_commit="")
+            page.set_manual_uat_context(store=store, facts_provider=_facts,
+                                        candidate_commit=candidate_commit)
         except Exception:  # pragma: no cover - defensive
             pass
 
