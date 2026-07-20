@@ -387,3 +387,74 @@ def runtime_field_limitations() -> Tuple[RuntimeFieldLimitation, ...]:
         RuntimeFieldLimitation("map_match_confidence", F.EXACT, "segment resolver / tracker", (),
                                "tracker-provided"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phases 63-65 — PSVR2 audio-first / PTT / adaptive-strategy certification
+# ---------------------------------------------------------------------------
+
+# the per-area certification of the audio-first + PTT + adaptive-strategy experience (task section 11)
+AUDIO_STRATEGY_CERTIFICATION_AREAS: Tuple[str, ...] = (
+    "psvr2_audio_first_mode", "physical_tts", "message_prioritisation", "workload_aware_delivery",
+    "ptt_input_binding", "offline_speech_recognition", "command_grammar", "read_back",
+    "driver_confirmation", "transcript_ambiguity", "tts_ptt_interruption", "live_strategy_state",
+    "fuel_divergence", "pace_divergence", "tyre_divergence", "time_certain_optimisation",
+    "revised_strategy_delivery", "acknowledgement", "repeated_replanning", "audio_telemetry_loss",
+    "unavailable_weather_or_damage", "audio_visual_fallback", "physical_hardware_testing",
+)
+
+# areas that need real physical audio, a microphone, a wheel/controller button, PSVR2 usage, or a live GT7
+# race — none of which an automated suite can grant (they can never exceed NONE headlessly).
+_AUDIO_PHYSICAL_OR_LIVE = frozenset({
+    "psvr2_audio_first_mode", "physical_tts", "ptt_input_binding", "offline_speech_recognition",
+    "physical_hardware_testing", "audio_visual_fallback", "workload_aware_delivery",
+})
+# domain areas fully exercised by deterministic unit / property tests (no hardware needed).
+_AUDIO_AUTOMATED = frozenset({
+    "message_prioritisation", "command_grammar", "read_back", "driver_confirmation",
+    "transcript_ambiguity", "tts_ptt_interruption", "live_strategy_state", "fuel_divergence",
+    "pace_divergence", "tyre_divergence", "time_certain_optimisation", "revised_strategy_delivery",
+    "acknowledgement", "repeated_replanning", "audio_telemetry_loss", "unavailable_weather_or_damage",
+})
+
+_AUDIO_NEXT_EVIDENCE = {
+    "psvr2_audio_first_mode": "PSVR2 driving UAT (wear and use the headset while driving)",
+    "physical_tts": "physical TTS UAT on a real audio device",
+    "ptt_input_binding": "physical PTT UAT on a real keyboard/controller/wheel button",
+    "offline_speech_recognition": "physical microphone UAT with a local offline recogniser",
+    "physical_hardware_testing": "physical hardware UAT",
+    "audio_visual_fallback": "manual visual UAT of the audio failure fallback",
+    "workload_aware_delivery": "live GT7 telemetry UAT of workload windows",
+    "live_strategy_state": "live GT7 race-strategy UAT",
+    "fuel_divergence": "live GT7 race-strategy UAT",
+    "pace_divergence": "live GT7 race-strategy UAT",
+    "tyre_divergence": "live GT7 race-strategy UAT",
+    "time_certain_optimisation": "live GT7 time-certain race UAT",
+    "revised_strategy_delivery": "physical voice UAT during a live race",
+}
+
+
+def audio_strategy_certification() -> "EventProgrammeCertification":
+    """The HONEST per-area certification of the Phases 63-65 audio-first / PTT / adaptive-strategy work.
+
+    Deterministic domain areas (priority, grammar, read-back, confirmation, strategy state, divergence,
+    time-certain optimisation, acknowledgement, monitoring) are AUTOMATED. Physical-audio, microphone,
+    wheel-button, PSVR2 and live-GT7-race areas are NONE — an automated suite can never grant physical
+    voice, microphone, wheel-button, PSVR2 usability or live GT7 race-strategy certification. The overall
+    level is bounded by those untested areas; per-area detail is preserved (not collapsed)."""
+    A = EvidenceType
+    areas = []
+    for name in AUDIO_STRATEGY_CERTIFICATION_AREAS:
+        if name in _AUDIO_PHYSICAL_OR_LIVE:
+            ev = A.NONE
+        elif name in _AUDIO_AUTOMATED:
+            ev = A.AUTOMATED
+        else:
+            ev = A.AUTOMATED
+        findings = ()
+        if ev == A.NONE:
+            nxt = _AUDIO_NEXT_EVIDENCE.get(name, "physical / live GT7 UAT")
+            findings = (CertificationFinding("not_run", FindingSeverity.LIMITATION, f"needs {nxt}"),)
+        areas.append(CertificationArea(name, ev, last_scenario="phase63-65 automated suite",
+                                       findings=findings))
+    return build_event_programme_certification(areas)
