@@ -1,5 +1,33 @@
 # Current Claude Handoff
 
+## Engineering Brain Program 2 — Phases 69–71 (Pre-UAT Activation, Bench Certification & Manual Evidence Gate)
+
+Branch `eng-brain-phase69-71-uat-activation-gate` from clean **`master @ 1f4545c`** (PR #76). Committed
+locally, **NOT pushed / no PR / not merged**. **DB v28 + RULE_ENGINE 46.0 unchanged; no schema change; no new
+listener.** This slice is **pre-UAT activation, not operational certification**.
+
+- **Phase 69** — `strategy/live_uat_runtime_snapshot.py` (immutable `LiveUatRuntimeSnapshot` + read-only
+  builder over the real canonical/strategy/audio/certification objects; tyre value is a labelled PROXY;
+  missing evidence explicit; fingerprint excludes volatile identity/timestamp), `strategy/live_session_
+  lifecycle.py` (disjoint transient/preserved key model + reset seam wired into `_on_reset_clicked` and the
+  Practice/Qual/Race transition), read-only `ui/uat_runtime_{vm,panel}.py` on the Development History page
+  (off-thread `_refresh_uat_runtime`, stale-worker guard).
+- **Phase 70** — `strategy/bench_uat_harness.py`: 67 deterministic scenarios that inject at the Audit-C seam
+  and drive the REAL production authorities; `run_bench_uat()` returns `BenchUatReport` (67/67 pass, 0 safety
+  failures); `certification_from_bench` proves bench can only lower software areas, never promote physical/
+  live. Off-thread `ui/bench_uat_{vm,panel}.py` runner.
+- **Phase 71** — `strategy/manual_uat_evidence.py` (observation + append-only supersede ledger; 31 areas =
+  Phase-68 taxonomy), `data/manual_uat_store.py` (atomic, explicit writes, beside config),
+  `strategy/release_candidate_manifest.py` (readiness evaluator + manifest; `OPERATIONALLY_CERTIFIED`
+  unreachable from software evidence), `ui/manual_uat_{vm,panel}.py` entry form. Dashboard
+  `_wire_manual_uat_context` supplies a conservative facts provider (never optimistic).
+
+**Tests:** 70 new focused tests + 169 Phase 63-68 regression pass. **Manual UAT still NOT run** — physical
+microphone, keyboard/wheel PTT, physical TTS, PSVR2 and live GT7 are UNTESTED until the user records evidence
+(Manual UAT panel; staged procedures in `docs/ENGINEERING_BRAIN_PHASE69_71_UAT_ACTIVATION.md`). **No auto pit
+call / setup Apply / driver-game command. Phase 72 NOT started.**
+
+
 ## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 66-68: Canonical Live Race State, Physical VR Communications & Adaptive Strategy Certification — COMPLETE
 
 **Branch `eng-brain-phase66-68-live-vr-certification` from `eng-brain-phase63-65-vr-adaptive-strategy @ fddfb17` (authoritative merged base `master @ 26c0975`) — committed locally; DB v28 UNCHANGED (no new migration); rule 46.0; NO new telemetry listener (reuses UDPListener → RaceStateTracker).** Purpose: turn the Phase 63-65 audio-first/PTT/strategy architecture into a genuinely usable live GT7 + PSVR2 operating system.
