@@ -148,9 +148,7 @@ def test_worker_runs_build_off_ui_thread(app):
     w.finished_ok.connect(lambda r: (seen.__setitem__("handler", threading.get_ident()),
                                      seen.__setitem__("result", r), app.quit()))
     w.failed.connect(lambda m: (seen.__setitem__("err", m), app.quit()))
-    QTimer.singleShot(0, w.start)
-    QTimer.singleShot(5000, app.quit)
-    app.exec()
-    w.wait(2000)
+    from tests._qt_worker_wait import drive_worker
+    drive_worker(w)
     assert seen.get("worker") is not None and seen["worker"] != main
     assert seen.get("handler") == main and seen.get("result", {}).get("ok")
