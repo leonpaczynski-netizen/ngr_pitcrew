@@ -291,3 +291,99 @@ class CertificationRun:
         return {"scenario": _norm(self.scenario), "captured_label": _norm(self.captured_label),
                 "certification": self.certification.as_payload(),
                 "fingerprint": self.certification.fingerprint}
+
+
+# ---------------------------------------------------------------------------
+# Phase 62 — production event certification + real-tracker field limitations
+# ---------------------------------------------------------------------------
+
+# the 28 areas of the production event experience (task section 8)
+PRODUCTION_CERTIFICATION_AREAS: Tuple[str, ...] = (
+    "event_command_centre", "activity_briefing", "live_tab_navigation", "tracker_connection",
+    "activity_match", "setup_match", "track_and_layout_match", "practice_mode", "qualifying_mode",
+    "race_mode", "track_map", "live_advisory", "voice_gating", "telemetry_dropout", "telemetry_recovery",
+    "session_end_detection", "candidate_binding", "explicit_binding", "debrief", "cumulative_update",
+    "return_to_command_centre", "restart_recovery", "event_switching", "db_safety", "config_safety",
+    "thread_safety", "visual_clarity", "ngr_immersion",
+)
+
+# areas requiring a live GT7 feed, a human viewing the UI, or physical audio (cannot exceed NONE headlessly)
+_PRODUCTION_LIVE_OR_VISUAL = frozenset({
+    "tracker_connection", "activity_match", "setup_match", "track_and_layout_match", "practice_mode",
+    "qualifying_mode", "race_mode", "track_map", "live_advisory", "telemetry_dropout",
+    "telemetry_recovery", "visual_clarity", "ngr_immersion", "voice_gating",
+})
+
+
+def production_event_certification() -> "EventProgrammeCertification":
+    """The HONEST self-certification of the Phase 60-62 production workflow. Domain logic (event loop,
+    binding, debrief, cumulative update, restart, event switching, DB/config/thread safety) = automated;
+    Live-tab construction = offscreen; live-GT7 / visual / voice areas = NONE (not run headlessly). Per-
+    area detail is preserved; the overall level is bounded by the untested live areas."""
+    A = EvidenceType
+    offscreen = {"event_command_centre", "activity_briefing", "live_tab_navigation"}
+    areas = []
+    for name in PRODUCTION_CERTIFICATION_AREAS:
+        if name in _PRODUCTION_LIVE_OR_VISUAL:
+            ev = A.NONE
+        elif name in offscreen:
+            ev = A.OFFSCREEN
+        else:
+            ev = A.AUTOMATED
+        findings = ()
+        if ev == A.NONE:
+            findings = (CertificationFinding("not_run", FindingSeverity.LIMITATION,
+                                             f"needs {required_next_evidence(name) or 'live GT7 / visual UAT'}"),)
+        areas.append(CertificationArea(name, ev, last_scenario="phase60-62 automated suite", findings=findings))
+    return build_event_programme_certification(areas)
+
+
+class RuntimeFieldStatus(str, Enum):
+    EXACT = "exact"
+    INFERRED = "inferred"           # composed from canonical local state
+    LIMITED = "limited"             # partial / can be unreliable
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class RuntimeFieldLimitation:
+    field: str
+    status: RuntimeFieldStatus
+    source: str
+    blocks: Tuple[str, ...]
+    note: str
+
+    def as_payload(self) -> dict:
+        return {"field": _norm(self.field), "status": self.status.value, "source": _norm(self.source),
+                "blocks": sorted(_norm(b) for b in self.blocks if _norm(b)), "note": _norm(self.note)}
+
+
+def runtime_field_limitations() -> Tuple[RuntimeFieldLimitation, ...]:
+    """The honest per-field runtime limitation record (Audit B). Records which fields are exact / inferred
+    from canonical local state / limited / unavailable, and what each limitation blocks. Not disguised."""
+    F = RuntimeFieldStatus
+    return (
+        RuntimeFieldLimitation("car", F.EXACT, "GT7 telemetry via RaceStateTracker", (), "tracker-provided"),
+        RuntimeFieldLimitation("track", F.EXACT, "GT7 telemetry via tracker", (), "tracker-provided"),
+        RuntimeFieldLimitation("layout", F.LIMITED, "map-match / track model",
+                               ("exact_layout_confidence",),
+                               "confirmed only with sufficient map-match confidence"),
+        RuntimeFieldLimitation("event_context", F.INFERRED, "composed from resolved car+track+layout",
+                               (), "live context digest composed locally (Phase 60)"),
+        RuntimeFieldLimitation("setup_discipline", F.INFERRED, "selected activity", (), "resolved"),
+        RuntimeFieldLimitation("expected_setup_fingerprint", F.INFERRED, "Event Preparation + active setup",
+                               (), "resolved (canonical)"),
+        RuntimeFieldLimitation("applied_setup_fingerprint", F.LIMITED, "local ActiveSetupAuthority (PROXY)",
+                               ("exact_setup_identity", "setup_attribution"),
+                               "GT7 does not broadcast the setup; an unrecorded in-game change is undetectable"),
+        RuntimeFieldLimitation("tyre_compound", F.LIMITED, "GT7 telemetry (partial)",
+                               ("tyre_modelling_confidence",), "may be unknown before the first flying lap"),
+        RuntimeFieldLimitation("fuel_state", F.EXACT, "GT7 telemetry", (), "tracker-provided"),
+        RuntimeFieldLimitation("run_plan", F.INFERRED, "selected activity", (), "resolved"),
+        RuntimeFieldLimitation("selected_activity", F.INFERRED, "Event Preparation state", (), "resolved"),
+        RuntimeFieldLimitation("session_purpose", F.INFERRED, "selected activity (never telemetry)", (),
+                               "resolved"),
+        RuntimeFieldLimitation("telemetry_freshness", F.EXACT, "injected monotonic clock", (), "derived"),
+        RuntimeFieldLimitation("map_match_confidence", F.EXACT, "segment resolver / tracker", (),
+                               "tracker-provided"),
+    )
