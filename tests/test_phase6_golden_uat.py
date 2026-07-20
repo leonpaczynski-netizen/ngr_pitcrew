@@ -227,9 +227,11 @@ def test_no_migration_needed(db):
     src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
     # Phase 6 itself introduced no _migrate_v24 (that arrived with Phase 8); guard
     # against an unexpected next bump.
-    assert "_migrate_v26" not in src
-
-
+    # Repaired (Phase 51-53 Audit A): v26/v27/v28 are legitimate later migrations
+    # (Phase 19/45/48). Guard the real invariant: no migration hook BEYOND the current
+    # declared DB_VERSION (catches an accidental/unexpected new migration).
+    from strategy._setup_constants import DB_VERSION as _DBV
+    assert f"_migrate_v{_DBV + 1}" not in src
 def test_frozen_contracts():
     from tests.test_race_config_id_hash import GOLDEN_VECTORS, _bind
     for strategy, expected in GOLDEN_VECTORS:

@@ -117,7 +117,9 @@ def test_setup_constants_byte_identical():
 def test_no_schema_migration_added_by_slice():
     import subprocess
     # the slice must not add a migration; DB_VERSION line unchanged vs Phase-31 tip
-    out = subprocess.run(["git", "diff", "4b485be", "HEAD", "--", "strategy/_setup_constants.py"],
+    # Repaired (Phase 51-53 Audit A): pin to the P33-35 slice tip (9f64ce7), not a moving HEAD, so
+    # this tests the real historical fact (the P33-35 slice changed no setup constants).
+    out = subprocess.run(["git", "diff", "4b485be", "9f64ce7", "--", "strategy/_setup_constants.py"],
                          capture_output=True, text=True, cwd=".")
     assert out.stdout.strip() == ""
 
