@@ -56,7 +56,7 @@ DIRECT = MemoryContextKey(driver="", car=CAR, track=TRACK, layout_id=LAYOUT,
 
 # --- no migration -----------------------------------------------------------
 def test_no_migration(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
 
 
 # --- end-to-end -------------------------------------------------------------

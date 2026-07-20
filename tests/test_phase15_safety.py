@@ -43,10 +43,10 @@ def test_consumes_canonical_authorities_no_shadow():
 def test_db_version_and_rule_engine_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_bounded_setup_experiments(car="Porsche 911 RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
 
@@ -77,5 +77,5 @@ def test_synthesis_writes_nothing(tmp_path):
     db = SessionDB(str(tmp_path / "s.db"))
     v0 = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.build_bounded_setup_experiments(car="Porsche 911 RSR", track="Fuji", discipline="Race")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
     db.close()

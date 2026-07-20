@@ -1073,9 +1073,62 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_refs_digest
     ON engineering_context_snapshot_refs (semantic_digest);
 """
 
+_DDL_V28 = """
+CREATE TABLE IF NOT EXISTS event_preparation_cycles (
+    cycle_id              TEXT    PRIMARY KEY,
+    event_id              INTEGER NOT NULL DEFAULT 0,
+    event_name            TEXT    NOT NULL DEFAULT '',
+    series                TEXT    NOT NULL DEFAULT '',
+    round_label           TEXT    NOT NULL DEFAULT '',
+    driver_id             TEXT    NOT NULL DEFAULT '',
+    team                  TEXT    NOT NULL DEFAULT '',
+    car                   TEXT    NOT NULL DEFAULT '',
+    track                 TEXT    NOT NULL DEFAULT '',
+    layout                TEXT    NOT NULL DEFAULT '',
+    prep_open_date        TEXT    NOT NULL DEFAULT '',
+    official_quali_date   TEXT    NOT NULL DEFAULT '',
+    official_race_date    TEXT    NOT NULL DEFAULT '',
+    format_profile_id     TEXT    NOT NULL DEFAULT '',
+    disciplines_json      TEXT    NOT NULL DEFAULT '[]',
+    championship_objective TEXT   NOT NULL DEFAULT '',
+    context_digest        TEXT    NOT NULL DEFAULT '',
+    gt7_version           TEXT    NOT NULL DEFAULT '',
+    explicit_state        TEXT    NOT NULL DEFAULT '',
+    setup_lock_json       TEXT    NOT NULL DEFAULT '{}',
+    strategy_final_json   TEXT    NOT NULL DEFAULT '{}',
+    created_at            TEXT    NOT NULL DEFAULT '',
+    updated_at           TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_prep_cycles_event ON event_preparation_cycles (event_id);
+CREATE TABLE IF NOT EXISTS event_preparation_activities (
+    activity_id   TEXT    PRIMARY KEY,
+    cycle_id      TEXT    NOT NULL DEFAULT '',
+    activity_type TEXT    NOT NULL DEFAULT '',
+    title         TEXT    NOT NULL DEFAULT '',
+    objective     TEXT    NOT NULL DEFAULT '',
+    planned_date  TEXT    NOT NULL DEFAULT '',
+    state         TEXT    NOT NULL DEFAULT 'planned',
+    order_index   INTEGER NOT NULL DEFAULT 0,
+    optional      INTEGER NOT NULL DEFAULT 0,
+    phase         TEXT    NOT NULL DEFAULT '',
+    notes         TEXT    NOT NULL DEFAULT '',
+    created_at    TEXT    NOT NULL DEFAULT '',
+    updated_at    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_prep_activities_cycle ON event_preparation_activities (cycle_id);
+CREATE TABLE IF NOT EXISTS event_preparation_activity_sessions (
+    activity_id TEXT    NOT NULL DEFAULT '',
+    session_id  TEXT    NOT NULL DEFAULT '',
+    cycle_id    TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (activity_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prep_actsess_cycle ON event_preparation_activity_sessions (cycle_id);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
         + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23
-        + _DDL_V24 + _DDL_V25 + _DDL_V26 + _DDL_V27)
+        + _DDL_V24 + _DDL_V25 + _DDL_V26 + _DDL_V27 + _DDL_V28)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -1277,6 +1330,22 @@ class SessionDB:
             self._migrate_v27()
             self._conn.execute("PRAGMA user_version = 27")
             self._conn.commit()
+        if version < 28:
+            self._migrate_v28()
+            self._conn.execute("PRAGMA user_version = 28")
+            self._conn.commit()
+
+    def _migrate_v28(self) -> None:
+        """Engineering-Brain Phase 48 — Event Preparation Cycle persistence (schema v28). Adds THREE
+        standalone additive tables: event_preparation_cycles (one cycle per upcoming NGR round: the
+        preparation-programme identity + timeline + lock/strategy state, referencing events.id — Layer
+        B, kept separate from immutable event-environment identity), event_preparation_activities
+        (typed, ordered, optional/scheduled activities) and event_preparation_activity_sessions (the
+        explicit, canonical link from a telemetry session to an activity — sessions are NEVER auto-
+        bound). Touches no existing table, alters no existing query, and rewrites no historical data;
+        legacy sessions keep their flat event_id and gain no retroactive cycle association (unknown,
+        never fabricated). CREATE IF NOT EXISTS throughout ⇒ idempotent."""
+        self._conn.executescript(_DDL_V28)
 
     def _migrate_v27(self) -> None:
         """Engineering-Brain Phase 45 — immutable engineering context provenance (schema v27). Adds TWO
@@ -6089,6 +6158,299 @@ class SessionDB:
         snap = (self.get_context_snapshot(semantic_digest) if semantic_digest
                 else self.get_snapshot_for_ref(ref_kind, ref_key))
         return {"ok": True, "resolution": _resolve(snap, ref_kind=ref_kind, ref_key=ref_key).to_dict()}
+
+    # ------------------------------------------------------------------
+    # Event Preparation Cycle (Program 2, Phase 48-50)
+    # Persistence writers + read-only orchestration. The writers below are the ONLY code that writes
+    # the v28 preparation tables; no read/refresh/advisory/dashboard path calls them. Viewing the
+    # preparation cycle never creates a row.
+    # ------------------------------------------------------------------
+    def upsert_preparation_cycle(self, cycle: dict) -> str:
+        """Explicit event/cycle creation — the sole writer of event_preparation_cycles. Idempotent by
+        cycle_id. Returns the cycle_id, or '' if none supplied. Writes nothing else."""
+        import json as _json
+        c = dict(cycle or {})
+        cid = str(c.get("cycle_id") or "").strip()
+        if not cid:
+            return ""
+        disciplines = c.get("disciplines") or []
+        row = (cid, int(c.get("event_id") or 0), str(c.get("event_name") or ""),
+               str(c.get("series") or ""), str(c.get("round_label") or ""), str(c.get("driver_id") or ""),
+               str(c.get("team") or ""), str(c.get("car") or ""), str(c.get("track") or ""),
+               str(c.get("layout") or ""), str(c.get("prep_open_date") or ""),
+               str(c.get("official_quali_date") or ""), str(c.get("official_race_date") or ""),
+               str(c.get("format_profile_id") or ""), _json.dumps(list(disciplines)),
+               str(c.get("championship_objective") or ""), str(c.get("context_digest") or ""),
+               str(c.get("gt7_version") or ""), str(c.get("explicit_state") or ""),
+               _json.dumps(c.get("setup_lock") or {}), _json.dumps(c.get("strategy_final") or {}),
+               str(c.get("created_at") or ""), str(c.get("updated_at") or ""))
+        self._conn.execute(
+            "INSERT INTO event_preparation_cycles (cycle_id,event_id,event_name,series,round_label,"
+            "driver_id,team,car,track,layout,prep_open_date,official_quali_date,official_race_date,"
+            "format_profile_id,disciplines_json,championship_objective,context_digest,gt7_version,"
+            "explicit_state,setup_lock_json,strategy_final_json,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(cycle_id) DO UPDATE SET event_id=excluded.event_id,"
+            "event_name=excluded.event_name,series=excluded.series,round_label=excluded.round_label,"
+            "driver_id=excluded.driver_id,team=excluded.team,car=excluded.car,track=excluded.track,"
+            "layout=excluded.layout,prep_open_date=excluded.prep_open_date,"
+            "official_quali_date=excluded.official_quali_date,official_race_date=excluded.official_race_date,"
+            "format_profile_id=excluded.format_profile_id,disciplines_json=excluded.disciplines_json,"
+            "championship_objective=excluded.championship_objective,context_digest=excluded.context_digest,"
+            "gt7_version=excluded.gt7_version,explicit_state=excluded.explicit_state,"
+            "setup_lock_json=excluded.setup_lock_json,strategy_final_json=excluded.strategy_final_json,"
+            "updated_at=excluded.updated_at", row)
+        self._conn.commit()
+        return cid
+
+    def upsert_preparation_activity(self, activity: dict) -> str:
+        """Explicit activity creation/update — the sole writer of event_preparation_activities.
+        Idempotent by activity_id."""
+        a = dict(activity or {})
+        aid = str(a.get("activity_id") or "").strip()
+        if not aid:
+            return ""
+        row = (aid, str(a.get("cycle_id") or ""), str(a.get("activity_type") or ""),
+               str(a.get("title") or ""), str(a.get("objective") or ""), str(a.get("planned_date") or ""),
+               str(a.get("state") or "planned"), int(a.get("order_index") or 0),
+               1 if a.get("optional") else 0, str(a.get("phase") or ""), str(a.get("notes") or ""),
+               str(a.get("created_at") or ""), str(a.get("updated_at") or ""))
+        self._conn.execute(
+            "INSERT INTO event_preparation_activities (activity_id,cycle_id,activity_type,title,"
+            "objective,planned_date,state,order_index,optional,phase,notes,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(activity_id) DO UPDATE SET cycle_id=excluded.cycle_id,"
+            "activity_type=excluded.activity_type,title=excluded.title,objective=excluded.objective,"
+            "planned_date=excluded.planned_date,state=excluded.state,order_index=excluded.order_index,"
+            "optional=excluded.optional,phase=excluded.phase,notes=excluded.notes,"
+            "updated_at=excluded.updated_at", row)
+        self._conn.commit()
+        return aid
+
+    def bind_session_to_activity(self, activity_id: str, session_id, cycle_id: str = "",
+                                 created_at: str = "") -> bool:
+        """Explicit, canonical session binding — the sole writer of event_preparation_activity_sessions.
+        Sessions are NEVER auto-bound; this is called only from an explicit user binding workflow.
+        Idempotent by (activity_id, session_id)."""
+        aid = str(activity_id or "").strip()
+        sid = str(session_id if session_id is not None else "").strip()
+        if not aid or not sid:
+            return False
+        cid = str(cycle_id or "")
+        if not cid:
+            r = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_activities WHERE activity_id=?", (aid,)).fetchone()
+            cid = str(r[0]) if r else ""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO event_preparation_activity_sessions "
+            "(activity_id,session_id,cycle_id,created_at) VALUES (?,?,?,?)",
+            (aid, sid, cid, str(created_at or "")))
+        self._conn.commit()
+        return True
+
+    def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
+        """Read one preparation cycle (SELECT-only)."""
+        import json as _json
+        r = self._conn.execute(
+            "SELECT cycle_id,event_id,event_name,series,round_label,driver_id,team,car,track,layout,"
+            "prep_open_date,official_quali_date,official_race_date,format_profile_id,disciplines_json,"
+            "championship_objective,context_digest,gt7_version,explicit_state,setup_lock_json,"
+            "strategy_final_json FROM event_preparation_cycles WHERE cycle_id=?",
+            (str(cycle_id or ""),)).fetchone()
+        if not r:
+            return None
+        try:
+            disciplines = tuple(_json.loads(r[14] or "[]"))
+        except Exception:
+            disciplines = ()
+        return {"cycle_id": r[0], "event_id": r[1], "event_name": r[2], "series": r[3],
+                "round_label": r[4], "driver_id": r[5], "team": r[6], "car": r[7], "track": r[8],
+                "layout": r[9], "prep_open_date": r[10], "official_quali_date": r[11],
+                "official_race_date": r[12], "format_profile_id": r[13], "disciplines": disciplines,
+                "championship_objective": r[15], "context_digest": r[16], "gt7_version": r[17],
+                "explicit_state": r[18], "setup_lock_json": r[19], "strategy_final_json": r[20]}
+
+    def list_preparation_cycles(self) -> list:
+        """List all cycle ids + names (SELECT-only, ordered)."""
+        rows = self._conn.execute(
+            "SELECT cycle_id,event_name,explicit_state FROM event_preparation_cycles "
+            "ORDER BY official_race_date, cycle_id").fetchall()
+        return [{"cycle_id": r[0], "event_name": r[1], "explicit_state": r[2]} for r in rows]
+
+    def list_preparation_activities(self, cycle_id: str) -> list:
+        """All activities for one cycle, ordered (SELECT-only, single bounded query — no N+1)."""
+        rows = self._conn.execute(
+            "SELECT activity_id,activity_type,title,objective,planned_date,state,order_index,optional,"
+            "phase,notes FROM event_preparation_activities WHERE cycle_id=? ORDER BY order_index,activity_id",
+            (str(cycle_id or ""),)).fetchall()
+        return [{"activity_id": r[0], "activity_type": r[1], "title": r[2], "objective": r[3],
+                 "planned_date": r[4], "state": r[5], "order_index": r[6], "optional": bool(r[7]),
+                 "phase": r[8], "notes": r[9]} for r in rows]
+
+    def get_practice_sessions_for_cycle(self, cycle_id: str) -> list:
+        """All telemetry sessions bound to any activity in one cycle, with their activity type and lap
+        count (SELECT-only, single bounded JOIN — constant query count regardless of session count).
+        This is the event-scoped Practice query the flat sessions.event_id column never provided."""
+        rows = self._conn.execute(
+            "SELECT b.session_id, b.activity_id, a.activity_type, s.total_laps, s.track, s.car_name "
+            "FROM event_preparation_activity_sessions b "
+            "JOIN event_preparation_activities a ON a.activity_id = b.activity_id "
+            "LEFT JOIN sessions s ON CAST(s.id AS TEXT) = b.session_id "
+            "WHERE b.cycle_id = ? ORDER BY b.session_id",
+            (str(cycle_id or ""),)).fetchall()
+        return [{"session_id": r[0], "activity_id": r[1], "activity_type": r[2],
+                 "total_laps": int(r[3] or 0), "track": r[4] or "", "car_name": r[5] or ""}
+                for r in rows]
+
+    def build_event_preparation_report(self, cycle_id: str, memory_context_key: str = "",
+                                        *, now_date: str = "") -> dict:
+        """Read-only orchestration for the Event Preparation Cycle spine (Program 2, Phase 48-50).
+
+        Resolves the cycle ONCE, its activities ONCE, and its bound Practice sessions ONCE (a bounded
+        JOIN — constant query count for 1 / 6 / 20+ sessions, no N+1), then builds the deterministic
+        cycle view + cumulative evidence + per-discipline convergence + strategy maturity purely from
+        those rows. Performs NO writes. Returns the dict consumed by ui/event_preparation_vm.py."""
+        try:
+            from strategy.event_preparation_cycle import (
+                EventPreparationCycleIdentity, PreparationActivity, PreparationActivityType,
+                PreparationActivityState, PreparationPhase, build_event_preparation_cycle, resolve_profile)
+            from strategy.preparation_evidence import (
+                PracticeEvidenceSample, EvidenceCompatibility, EvidenceDomain, build_cumulative_evidence,
+                to_readiness, to_progress, to_objective, ConfidenceLevel, _CONFIDENCE_ORDER)
+            from strategy.setup_convergence import (
+                SetupDiscipline, DisciplineConvergenceInput, build_setup_convergence)
+            from strategy.strategy_maturity import StrategyEvidenceReadiness, build_strategy_maturity
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase48 import failed: {exc}"}
+
+        cyc_row = self.get_preparation_cycle(cycle_id)
+        if not cyc_row:
+            return {"ok": False, "error": "no such preparation cycle"}
+        act_rows = self.list_preparation_activities(cycle_id)
+        sess_rows = self.get_practice_sessions_for_cycle(cycle_id)
+
+        def _atype(v):
+            try:
+                return PreparationActivityType(str(v))
+            except Exception:
+                return PreparationActivityType.FREE_PRACTICE
+
+        def _astate(v):
+            try:
+                return PreparationActivityState(str(v))
+            except Exception:
+                return PreparationActivityState.PLANNED
+
+        def _aphase(v):
+            try:
+                return PreparationPhase(str(v)) if v else None
+            except Exception:
+                return None
+
+        identity = EventPreparationCycleIdentity(
+            cycle_id=cyc_row["cycle_id"], event_name=cyc_row["event_name"], series=cyc_row["series"],
+            round_label=cyc_row["round_label"], driver_id=cyc_row["driver_id"], team=cyc_row["team"],
+            car=cyc_row["car"], track=cyc_row["track"], layout=cyc_row["layout"],
+            prep_open_date=cyc_row["prep_open_date"], official_quali_date=cyc_row["official_quali_date"],
+            official_race_date=cyc_row["official_race_date"], format_profile_id=cyc_row["format_profile_id"],
+            disciplines=tuple(cyc_row["disciplines"]), championship_objective=cyc_row["championship_objective"],
+            context_digest=cyc_row["context_digest"], gt7_version=cyc_row["gt7_version"])
+
+        # bound sessions grouped by activity -> activity.bound_session_ids
+        by_activity = {}
+        for s in sess_rows:
+            by_activity.setdefault(s["activity_id"], []).append(str(s["session_id"]))
+
+        activities = [PreparationActivity(
+            activity_id=a["activity_id"], activity_type=_atype(a["activity_type"]), title=a["title"],
+            objective=a["objective"], planned_date=a["planned_date"], state=_astate(a["state"]),
+            order_index=int(a["order_index"]), optional=bool(a["optional"]), phase=_aphase(a["phase"]),
+            bound_session_ids=tuple(sorted(by_activity.get(a["activity_id"], ())))) for a in act_rows]
+
+        # cumulative evidence: each bound session becomes a context-safe sample. Compatibility is EXACT
+        # only when the session's track+car match the cycle context; otherwise INCOMPATIBLE (it must not
+        # silently strengthen exact event confidence). Invalid (no laps) sessions contribute nothing.
+        ctrack = (cyc_row["track"] or "").strip().lower()
+        ccar = (cyc_row["car"] or "").strip().lower()
+        samples = []
+        for s in sess_rows:
+            laps = int(s["total_laps"] or 0)
+            compat = EvidenceCompatibility.EXACT
+            if ctrack and (s["track"] or "").strip().lower() and (s["track"] or "").strip().lower() != ctrack:
+                compat = EvidenceCompatibility.INCOMPATIBLE
+            elif ccar and (s["car_name"] or "").strip().lower() and (s["car_name"] or "").strip().lower() != ccar:
+                compat = EvidenceCompatibility.INCOMPATIBLE
+            samples.append(PracticeEvidenceSample(
+                session_id=str(s["session_id"]), activity_id=s["activity_id"],
+                activity_type=_atype(s["activity_type"]), is_valid=laps > 0, valid_laps=laps,
+                compatibility=compat))
+
+        evidence = build_cumulative_evidence(samples)
+        readiness = to_readiness(evidence)
+        progress = to_progress(evidence, samples)
+        objective = to_objective(evidence)
+
+        cycle = build_event_preparation_cycle(
+            identity, activities, profile=resolve_profile(cyc_row["format_profile_id"]),
+            now_date=now_date, objective=objective, readiness=readiness, progress=progress)
+
+        # per-discipline convergence from evidence confidence (exact confirming samples)
+        def _conv(disc, domain):
+            de = evidence.domain(domain)
+            confirming = de.exact_samples if de else 0
+            inp = DisciplineConvergenceInput(discipline=disc, confirming_samples=confirming,
+                                             outstanding_experiments=0)
+            return build_setup_convergence(inp).state.value
+
+        setup = {"base": _conv(SetupDiscipline.BASE, EvidenceDomain.SETUP_BASE),
+                 "qualifying": _conv(SetupDiscipline.QUALIFYING, EvidenceDomain.SETUP_QUALIFYING),
+                 "race": _conv(SetupDiscipline.RACE, EvidenceDomain.SETUP_RACE)}
+
+        def _has(domain):
+            de = evidence.domain(domain)
+            return bool(de and de.exact_samples > 0)
+        srdy = StrategyEvidenceReadiness(
+            has_representative_race_pace=_has(EvidenceDomain.RACE_PACE),
+            has_lap_consistency=_has(EvidenceDomain.CONSISTENCY),
+            has_fuel_use=_has(EvidenceDomain.FUEL_MODEL), has_tyre_degradation=_has(EvidenceDomain.TYRE_MODEL))
+        strat = build_strategy_maturity(evidence, srdy)
+
+        timeline = []
+        # mark milestone state from activity completion/skip; else current for the next activity
+        state_by_name = {}
+        for a in activities:
+            key = a.title or a.activity_type.value
+            if a.state == PreparationActivityState.COMPLETED:
+                state_by_name[key] = "done"
+            elif a.state in (PreparationActivityState.SKIPPED, PreparationActivityState.CANCELLED):
+                state_by_name[key] = "skipped"
+        for m in cycle.timeline.milestones:
+            st = state_by_name.get(m.name, "upcoming")
+            if m.name == next((a.title or a.activity_type.value for a in activities
+                               if a.activity_id == cycle.next_activity_id), None):
+                st = "current"
+            timeline.append({"name": m.name, "date": m.milestone_date, "kind": m.kind, "state": st})
+
+        return {
+            "ok": True,
+            "cycle": {"event_name": identity.event_name, "series": identity.series,
+                      "round": identity.round_label, "state": cycle.state.value,
+                      "current_phase": cycle.current_phase.value,
+                      "days_until_race": cycle.days_until_race,
+                      "span_days": cycle.preparation_span_days, "fingerprint": cycle.fingerprint},
+            "next_action": {"headline": objective.headline, "rationale": objective.rationale,
+                            "tone": "info"},
+            "timeline": timeline,
+            "progress": {"valid_laps": progress.valid_laps, "practice_sessions": progress.practice_sessions,
+                         "setup_experiments": progress.setup_experiments_completed,
+                         "coaching_runs": progress.coaching_runs_completed,
+                         "tyre_samples": progress.tyre_samples, "fuel_samples": progress.fuel_samples,
+                         "race_simulations": progress.race_simulations},
+            "readiness": [[n, lvl.value, note] for (n, lvl, note) in readiness.dimensions],
+            "setup": setup,
+            "strategy": {"maturity": strat.maturity.value, "missing": list(strat.missing_evidence)},
+            "evidence_membership": list(evidence.evidence_membership),
+        }
 
     def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
                                       session_identity=None, gearbox_state="", speed_context="",

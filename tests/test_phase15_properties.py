@@ -309,7 +309,7 @@ def test_55_runtime_read_only(tmp_path):
     db.build_bounded_setup_experiments(car="Porsche 911 RSR", track="Fuji", discipline="Race")
     after = db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0]
-    assert before == after == 0 and db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert before == after == 0 and db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
 
@@ -369,5 +369,5 @@ def test_57_restart_determinism(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_bounded_setup_experiments(applied_setup=applied(), session_identity=IDENT, **kw)
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     db2._conn.close()

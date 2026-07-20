@@ -68,7 +68,7 @@ def test_builders_never_raise_on_garbage():
 
 def test_versions_v27():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
 
 
 def test_snapshot_capture_is_explicit_write_only():

@@ -110,7 +110,7 @@ def test_report_contains_no_setup_values_and_frames_blind_spots_safely():
 def test_db_version_unchanged_and_no_write(tmp_path):
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(str(tmp_path / "s.db"))
     v0 = db._conn.execute("PRAGMA user_version").fetchone()[0]
     dev0 = db._conn.execute(
@@ -119,7 +119,7 @@ def test_db_version_unchanged_and_no_write(tmp_path):
                                                 discipline="Race")
     assert db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0] == dev0 == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
     db.close()
 
 

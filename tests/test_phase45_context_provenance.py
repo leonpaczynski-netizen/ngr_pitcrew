@@ -115,9 +115,11 @@ def test_missing_ref_resolves_unknown(tmp_path):
 
 
 # ---- schema coherence ----------------------------------------------------------------------- #
-def test_fresh_db_is_v27(tmp_path):
+def test_fresh_db_is_current_schema(tmp_path):
     db = _db(tmp_path, "v")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    # fresh DB is at the current schema (follows DB_VERSION across bumps); the v27 snapshot tables are
+    # proven separately by the Phase-45 migration suite.
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     db.close()
 
 

@@ -13,7 +13,8 @@ def _tables(db):
 
 def test_fresh_db_creates_v27_snapshot_tables(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    # current schema follows DB_VERSION; the v27 tables are the version-specific proof below
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     t = _tables(db)
     assert "engineering_context_snapshots" in t and "engineering_context_snapshot_refs" in t
     db.close()
@@ -27,7 +28,7 @@ def test_migrate_from_legacy_v26(tmp_path):
     db._conn.execute("DROP TABLE IF EXISTS engineering_context_snapshot_refs")
     db._conn.execute("PRAGMA user_version = 26"); db._conn.commit(); db.close()
     db2 = SessionDB(p)   # reopen -> migration runs
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     assert "engineering_context_snapshots" in _tables(db2)
     db2.close()
 
@@ -36,7 +37,7 @@ def test_repeated_startup_idempotent(tmp_path):
     p = str(tmp_path / "repeat.db")
     for _ in range(3):
         db = SessionDB(p)
-        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
         db.close()
 
 
@@ -77,6 +78,6 @@ def test_no_runtime_files_modified_by_migration(tmp_path):
     db2 = SessionDB(p)   # reopen: _DDL + _migrate run again (idempotent), no schema change
     uv = db2._conn.execute("PRAGMA user_version").fetchone()[0]
     db2.close()
-    assert uv == 27
+    assert uv == DB_VERSION
     # (the WAL may differ, but the main DB structural content is stable across an idempotent reopen)
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0

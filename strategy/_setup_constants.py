@@ -123,7 +123,13 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v26 (Program 2 Phase 19): engineering_campaign_registry — additive campaign-persistence metadata
 #     (stable CampaignID identity + first/last-seen provenance + manual note/archive). Non-
 #     reconstructable session-crossing metadata; the only new write in Phase 19. Idempotent.
-DB_VERSION: int = 27
+# v27 (Program 2 Phase 45): engineering_context_snapshots + _refs — immutable content-addressed
+#     event-environment snapshots; sole writer capture_context_snapshot. Additive. Idempotent.
+# v28 (Program 2 Phase 48): event_preparation_cycles + event_preparation_activities +
+#     event_preparation_activity_sessions — the preparation-programme layer (one cycle per upcoming
+#     NGR round, typed/ordered activities, explicit session binding). References events.id; no legacy
+#     back-fill (legacy cycle association stays unknown). Additive. Idempotent.
+DB_VERSION: int = 28
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

@@ -74,7 +74,7 @@ def test_run_plan_and_report_declare_read_only():
 
 def test_versions_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
 
 
 def test_no_ai_no_apply_in_new_session_db_entries():

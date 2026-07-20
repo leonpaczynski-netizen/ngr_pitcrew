@@ -136,5 +136,5 @@ def test_real_export_determinism_and_no_db_write(tmp_path):
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
     assert e1["content_fingerprint"] == e2["content_fingerprint"]
-    assert uv == 27
+    assert uv == 28
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0   # no DB write

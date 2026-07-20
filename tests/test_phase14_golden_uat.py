@@ -212,7 +212,7 @@ def test_M_populated_history_production_path(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_intervention_hypotheses(**_kw())
     assert r2["content_fingerprint"] == r1["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     db2._conn.close()
 
 
@@ -220,5 +220,5 @@ def test_N_empty_database_safe_and_fast():
     db = SessionDB(":memory:")
     r = db.build_intervention_hypotheses(car="RSR", track="Fuji", discipline="race")
     assert r["ok"] and r["count"] == 0 and r["hypothesis_sets"] == []
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()

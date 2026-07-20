@@ -124,7 +124,7 @@ def test_no_writes_db_hash_and_counts_unchanged(tmp_path):
     counts_after = {t: db._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                     for t in counts_before}
     assert counts_after == counts_before
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv_before == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv_before == 28
     db.close()
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h_before
 

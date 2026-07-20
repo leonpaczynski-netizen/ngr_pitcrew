@@ -142,7 +142,7 @@ def test_registry_survives_restart(tmp_path):
                                     recorded_at="2026-07-01")
     db._conn.close()
     db2 = SessionDB(p)
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     assert len(db2.get_campaign_registry(**_kw())) == 1
     db2.close()
 
@@ -151,14 +151,14 @@ def test_registry_survives_restart(tmp_path):
 def test_migration_v26_idempotent(tmp_path):
     p = str(tmp_path / "m.db")
     db = SessionDB(p)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     # running the migration again is a harmless no-op (IF NOT EXISTS everywhere)
     db._migrate_v26()
     db._migrate_v26()
     assert db._conn.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
         "AND name='engineering_campaign_registry'").fetchone()[0] == 1
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
 

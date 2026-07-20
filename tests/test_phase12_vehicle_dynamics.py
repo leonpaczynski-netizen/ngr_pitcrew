@@ -114,4 +114,4 @@ def test_no_migration_needed():
     from strategy._setup_constants import DB_VERSION
     from data.session_db import SessionDB
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28

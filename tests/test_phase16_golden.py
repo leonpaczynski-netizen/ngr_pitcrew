@@ -89,7 +89,7 @@ def test_lifecycle_restart_determinism(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_engineering_lifecycle(applied_setup=applied(), session_identity=IDENT, **_kw())
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     db2._conn.close()
 
 
@@ -99,5 +99,5 @@ def test_empty_db_safe():
     assert r["ok"] and r["count"] == 0
     ex = db.build_experiment_execution({}, car="Porsche 911 RSR", track="Fuji")
     assert ex["ok"] and ex["lifecycle_state"] == "not_actionable"
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()

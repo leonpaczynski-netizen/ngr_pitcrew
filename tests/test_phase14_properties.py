@@ -337,5 +337,5 @@ def test_restart_determinism(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_intervention_hypotheses(**kw)
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     db2._conn.close()

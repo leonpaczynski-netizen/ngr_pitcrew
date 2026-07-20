@@ -141,7 +141,7 @@ def test_scenario_6_empty_and_single(tmp_path):
     db = SessionDB(":memory:")
     r = db.build_programme_engineering_playbook(car=PORSCHE, track="Fuji", discipline="Race")
     assert r["ok"] and r["theme_count"] == 0 and r["playbook"] is None
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
     db2 = SessionDB(str(tmp_path / "single.db"))
@@ -181,7 +181,7 @@ def test_production_writes_nothing(tmp_path):
         if before is None:
             continue
         assert db._conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0] == before
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
 
@@ -196,5 +196,5 @@ def test_production_restart_determinism(tmp_path):
     r2 = db2.build_programme_engineering_playbook(applied_setup=applied(), now_date="2026-07-06",
                                                   **_kw())
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
     db2._conn.close()

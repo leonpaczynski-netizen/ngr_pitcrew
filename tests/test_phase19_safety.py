@@ -65,10 +65,10 @@ def test_saturation_thresholds_are_named_constants():
 def test_db_version_and_rule_engine():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_engineering_efficiency(car="Porsche 911 RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
     db.close()
 
 
@@ -86,7 +86,7 @@ def test_read_only_build_writes_nothing(tmp_path):
         "SELECT COUNT(*) FROM engineering_campaign_registry").fetchone()[0] == reg0 == 0
     assert db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0] == dev0 == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 27
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
     db.close()
 
 
