@@ -52,6 +52,7 @@ from ui.event_preparation_panel import EventPreparationPanel
 from ui.race_weekend_panel import RaceWeekendPanel
 from ui.certification_panel import CertificationPanel
 from ui.uat_runtime_panel import UatRuntimePanel
+from ui.bench_uat_panel import BenchUatPanel
 from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
 
 
@@ -157,6 +158,12 @@ class DevelopmentHistoryPage(QWidget):
         # inspected before physical UAT. Advisory only; changes nothing; hardware is never auto-certified.
         self._uat_runtime_panel = UatRuntimePanel()
         root.addWidget(self._uat_runtime_panel)
+
+        # Phase 70 (Program 2) — Bench UAT: an explicit, offline, read-only runner that exercises the REAL
+        # production live path with deterministic scenarios before physical UAT. Sends no network/keyboard/
+        # joystick/microphone input; certifies no physical hardware; runs off the Qt thread.
+        self._bench_uat_panel = BenchUatPanel()
+        root.addWidget(self._bench_uat_panel)
 
         # Phase 58 (Program 2) — NGR Live Pit Wall: the driver-facing low-density live surface (one
         # coordinated NGR message). Read-only; issues no command; voice off by default. Hosted here for
