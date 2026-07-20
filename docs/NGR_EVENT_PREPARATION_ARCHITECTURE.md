@@ -133,3 +133,29 @@ but implements **no** API, network, authentication, or automatic import. The Hub
 NGR league/event authority; Pit Crew remains the engineering authority. Imported data must become an
 **immutable local event snapshot**; Hub revisions must never silently rewrite completed Practice, setup,
 or Race history. Offline manual event creation is never removed.
+
+## 7. Home spine, live orchestration & operational resilience (Phases 51–53)
+
+- **Active-cycle resolution (Layer B → Home):** `strategy/active_cycle_resolution.py` resolves which cycle
+  is active (8 states) using explicit rules; several active cycles → `EVENT_REQUIRES_SELECTION` (never the
+  newest row). The selected cycle id is **operational navigation state** (`config["active_cycle_id"]`),
+  separate from semantic evidence — selecting never alters a fingerprint.
+- **Home-spine authority:** `strategy/event_command_centre.py` orchestrates the resolution +
+  `build_event_preparation_report` into the Home Command Centre (one primary action, attention, readiness,
+  progress, timeline, quick-nav). It owns no state; `SessionDB.build_event_command_centre_view` is
+  read-only with constant query count. The panel is the first Home widget, refreshed off the Qt thread.
+- **Activity lifecycle (Layer C execution view):** `strategy/live_activity.py` gates start-readiness and
+  completion (explicit confirmations only); `live_activity_modes.py` provides the low-density live views;
+  `activity_binding.py` reuses the canonical session ranker and the Phase-48 session-purpose map for the
+  cumulative-update gate. None of these advance state or write.
+- **Restart & recovery:** `strategy/programme_resume.py` restores operational state without fabricating a
+  completion and classifies interruptions/telemetry dropouts honestly.
+- **Event revisions:** `strategy/event_revision_impact.py` assesses which prior evidence remains compatible
+  and whether locks/strategy must reopen — completed provenance is never rewritten.
+- **Setup-lock reopening:** `strategy/setup_lock_reopen.py` (Audit C) distinguishes noise/subjective (no
+  reopen) from the six valid reopening triggers + explicit override.
+- **Operational certification:** `strategy/operational_certification.py` bounds the overall certification
+  by the weakest area; live/operational certification requires live-GT7 evidence.
+
+No new schema was required (DB v28 unchanged): the active-event selection is operational config state, kept
+separate from the immutable engineering evidence.

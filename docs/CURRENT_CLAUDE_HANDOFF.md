@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 48-50: NGR Event Preparation Cycle & Immersive Race Weekend (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 51-53: NGR Event Command Centre, Live Cycle Orchestration & Operational Certification — COMPLETE
+
+**Branch `eng-brain-phase51-53-event-command-centre` from the Phase-48-50 tip `ef49d6c` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0 unchanged.** Purpose: make the Event Preparation Cycle the ACTUAL product experience — the app opens into the current NGR round.
+
+**Pre-phase audits (commit 1):** A — reproduced + REPAIRED all 9 pre-existing failures (7x group55-61 + phase6_golden_uat `_migrate_v26 not in src` → `_migrate_v{DB_VERSION+1}`; phase33_35 moving-HEAD diff pinned to slice tip 9f64ce7). B — `_setup_constants.py` change (DB_VERSION 27→28 @ 639da14) necessary/correctly-located/no setup-authoring change. C — convergence resists noise but lacked reopening taxonomy → Phase 53 fills it. D — no active-cycle resolver existed → Phase 51 fills it. Exact P48-50 counts: 31 A / 71 M / 0 D = 102 files, +6179/-115.
+
+**Phase 51 (Home spine):** `active_cycle_resolution.py` (8 states; several active → EVENT_REQUIRES_SELECTION, NEVER newest-by-default; selection = operational config state, not evidence) + `event_command_centre.py` (ONE primary action by priority: create/select/blocker/revision → bind → debrief → finalise → lock → objective). `SessionDB.build_event_command_centre_view` read-only, constant query count. Command Centre panel is the FIRST Home widget, refreshed OFF the Qt thread (worker + stale guard, loading state). Selection persists `config["active_cycle_id"]`.
+
+**Phase 52 (live orchestration):** `live_activity.py` (start-readiness gates per activity type; completion ONLY via explicit confirmations — session binding/evidence class/feedback/debrief) + `live_activity_modes.py` (low-density Practice/Qualifying/Race; Qualifying structurally excludes experiment detail; Race issues_commands=False) + `activity_binding.py` (reuses session_binding.rank_candidate_sessions — never auto-binds; cumulative-update gate: invalid/mismatched/abandoned update NOTHING).
+
+**Phase 53 (resilience + certification):** `programme_resume.py` (restart never restores interrupted as complete; telemetry dropout suppresses advisories + preserves evidence; never auto-completes) + `event_revision_impact.py` (evidence-sensitive change → incompatible + lock reopen; never rewrites history) + `setup_lock_reopen.py` (Audit C: 8 triggers; noise/subjective never reopen) + `operational_certification.py` (bounded by weakest area; live/operational needs live-GT7 evidence, never from automated alone).
+
+**Tests:** 117 new / 10 files (command_centre 17, command_centre_ui 6, dashboard_integration 7, live_activity 17, live_modes 6, binding_debrief 8, resume 11, revision_reopen_cert 17, golden 20, safety 9). Metamorphic: refresh-cannot-advance, selection-cannot-change-evidence, restart-cannot-complete, telemetry-cannot-strengthen, newest-cannot-autobind, invalid-cannot-update, noise-cannot-reopen, revision-cannot-rewrite, voice-cert-not-from-Home. Query shape constant (1/20 sessions); Command Centre view byte-identical across refreshes. **Manual UAT: Stages B/D/G PASS (automated), A/C/E/F PARTIAL, H NOT RUN; OperationalCertification = AUTOMATED_ONLY (live GT7 not run).** 10 commits `7af9e12`..(commit-10); P51-53 exact counts 20 A / 11 M / 0 D = 31 files, +2975/-25. Program 2 now Phases 12-53. Phase 54 NOT started.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 48-50: NGR Event Preparation Cycle & Immersive Race Weekend (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase48-50-event-preparation-cycle` from the Phase-45-47 tip `0447375` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB v27 -> v28 (additive, first structural growth of the preparation layer); rule 46.0 unchanged.** Doctrine: an NGR event has a preparation cycle (evening → weeks) whose every valid Practice session feeds ONE cumulative engineering programme; the race is its climax, not a fresh start.
 

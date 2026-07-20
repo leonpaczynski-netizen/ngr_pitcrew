@@ -7427,3 +7427,22 @@ bumped 27→28; v26→v27 step proofs decoupled to `== DB_VERSION`. **Pre-existi
 `test_phase33_35_safety::test_no_schema_migration_added_by_slice`. Safety: new modules have no AI/network/
 TTS/key/Qt (VMs Qt-free); Apply gate untouched; voice gate owned by `shadow_advisory`; nothing auto-locks/
 finalises/binds/applies. Manual UAT: Stages A/D PASS (automated), B/C/E/F/G PARTIAL, H NOT RUN (headless).
+
+## Engineering Brain Program 2 — Phases 51-53 (Event Command Centre, Live Orchestration, Certification)
+
+Branch `eng-brain-phase51-53-event-command-centre` @ `ef49d6c`→(10 commits); DB v28 unchanged (NO new
+migration); rule 46.0 unchanged; committed-not-pushed; master unchanged `3d7c6af`. 117 new tests across 10
+files: `test_phase51_command_centre.py`[17], `test_phase51_command_centre_ui.py`[6],
+`test_phase51_dashboard_integration.py`[7], `test_phase52_live_activity.py`[17],
+`test_phase52_live_modes.py`[6], `test_phase52_binding_debrief.py`[8], `test_phase53_resume.py`[11],
+`test_phase53_revision_reopen_cert.py`[17], `test_phase51_53_golden.py`[20], `test_phase51_53_safety.py`[9].
+Property/metamorphic: Home-refresh-cannot-advance, selection-cannot-change-evidence, restart-cannot-
+complete, telemetry-loss-cannot-increase-confidence, newest-cannot-auto-bind, invalid-cannot-update-
+maturity, noisy-lap-cannot-reopen, corroborated-critical-can-reopen, revision-cannot-rewrite-history,
+voice-cert-not-from-Home. Query shape proven constant (1/20 sessions, sqlite trace); Command Centre view
+byte-identical across refreshes. Off-thread refresh + stale-worker rejection mirror the canonical pattern.
+**Audit A repaired the 9 pre-existing failures** (7x group55-61 + phase6_golden_uat `_migrate_v26 not in`
+→ `_migrate_v{DB_VERSION+1}`; phase33_35 moving-HEAD diff pinned to slice tip 9f64ce7). Safety: new modules
+have no AI/network/TTS/key/Qt (VMs Qt-free); no new migration; Apply gate + voice gate untouched; nothing
+auto-completes/locks/finalises/binds/applies. Manual UAT: Stages B/D/G PASS (automated), A/C/E/F PARTIAL, H
+NOT RUN. Operational certification = AUTOMATED_ONLY (live GT7 not run headlessly).
