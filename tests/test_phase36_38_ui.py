@@ -37,7 +37,8 @@ def test_panel_constructs_and_renders(app):
     from ui.race_engineer_team_panel import RaceEngineerTeamPanel
     p = RaceEngineerTeamPanel()
     p.update_result(_brief())
-    assert len(p._cards) == 1
+    # one scannable card per crew role/section (Chief/Setup/Performance/Coach/Strategy + plan/etc).
+    assert len(p._cards) >= 5
 
 
 def test_panel_empty_and_none_safe(app):
@@ -76,7 +77,7 @@ def test_page_embeds_panel_and_forwarder(app):
     page = DevelopmentHistoryPage()
     assert hasattr(page, "_race_engineer_team_panel")
     page.update_race_engineer_team_brief(_brief())
-    assert len(page._race_engineer_team_panel._cards) == 1
+    assert len(page._race_engineer_team_panel._cards) >= 5
 
 
 def test_prior_phase_panels_coexist(app):
@@ -84,6 +85,27 @@ def test_prior_phase_panels_coexist(app):
     page = DevelopmentHistoryPage()
     # the Phase 33-35 pack panel and the new brief panel both exist.
     assert hasattr(page, "_review_pack_panel") and hasattr(page, "_race_engineer_team_panel")
+
+
+def test_severity_carried_by_text_not_colour_alone(app):
+    # NGR accessibility rule: a warn/rollback state must be stated in WORDS (a status tag), not by
+    # colour alone. The VM exposes a text status tag for every card + the overall banner.
+    import ui.race_engineer_team_vm as rvm
+    r = _brief()
+    tag, tone = rvm.status_summary(r)
+    assert tag and tag.isupper()          # explicit textual status, e.g. "ROLLBACK NEEDED"
+    cards = rvm.brief_cards(r)
+    assert cards and all("status_tag" in c and "tone" in c for c in cards)
+    # the seeded programme has 2 regressions -> the overall status is a rollback warning stated in text.
+    assert "ROLLBACK" in tag and tone == "warn"
+
+
+def test_panel_cards_have_accessible_names(app):
+    from ui.race_engineer_team_panel import RaceEngineerTeamPanel
+    p = RaceEngineerTeamPanel()
+    p.update_result(_brief())
+    assert all(c.accessibleName() for c in p._cards)
+    assert p._header.accessibleDescription()
 
 
 def test_stale_worker_result_ignored(app):
