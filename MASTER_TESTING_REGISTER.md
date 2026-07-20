@@ -7408,3 +7408,22 @@ target is now UNKNOWN→preserve, not gear_too_short→may_change) + a companion
 `_tabs.setCurrentIndex(idx)` sites in `ui/dashboard.py`, byte-identical to master — not caused by Group 63).
 Safety: new pure modules have no Qt/AI/DB import and no file writes; AI stays audit-only (cannot author values,
 cannot validate invalid evidence, cannot bypass the Apply gate); disabled AI-build stays disabled.
+
+## Engineering Brain Program 2 — Phases 48-50 (Event Preparation Cycle & Immersive Race Weekend)
+
+Branch `eng-brain-phase48-50-event-preparation-cycle` @ `0447375`→(12 commits); DB v27→v28 (additive);
+rule 46.0 unchanged; committed-not-pushed; master unchanged `3d7c6af`. 145 new tests across 13 files:
+`test_phase48_cycle_identity.py`[15], `test_phase48_transitions.py`[11], `test_phase48_evidence.py`[18],
+`test_phase49_convergence.py`[13], `test_phase49_setup_lock.py`[8], `test_phase49_strategy_maturity.py`[8],
+`test_phase49_finalisation_risk.py`[11], `test_phase50_race_weekend.py`[15], `test_phase48_50_ui.py`[6],
+`test_phase48_50_persistence.py`[11], `test_phase48_50_hub_manifest.py`[8], `test_phase48_50_safety.py`[9],
+`test_phase48_50_golden.py`[12]. Property/metamorphic: valid-add-never-reduces-evidence,
+invalid-never-raises-confidence, coaching≠setup, quali≠race, unknown-fuel-caps, incompatible-does-not-
+strengthen, order-independence, refresh-cannot-advance/lock/finalise. Query shape proven constant (1/6/20
+sessions, sqlite trace callback, no N+1); runtime DB byte-identical across reads; v28 migration
+fresh/upgrade/idempotent. **DB-version sweep:** ~50 current-schema literals across ~40 phase/group files
+bumped 27→28; v26→v27 step proofs decoupled to `== DB_VERSION`. **Pre-existing failures left unchanged
+(already red at `0447375`):** `test_phase6_golden_uat::test_no_migration_needed` and
+`test_phase33_35_safety::test_no_schema_migration_added_by_slice`. Safety: new modules have no AI/network/
+TTS/key/Qt (VMs Qt-free); Apply gate untouched; voice gate owned by `shadow_advisory`; nothing auto-locks/
+finalises/binds/applies. Manual UAT: Stages A/D PASS (automated), B/C/E/F/G PARTIAL, H NOT RUN (headless).

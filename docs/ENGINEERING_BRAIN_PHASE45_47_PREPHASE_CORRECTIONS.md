@@ -112,8 +112,25 @@ automatically and correctly. Only the following pin a **literal**:
 - `tests/test_phase45_47_migration.py:16` (`== DB_VERSION == 27`) and
   `tests/test_phase45_47_safety.py:71` (`assert DB_VERSION == 27`) conflate "current schema" with the
   literal 27; when `DB_VERSION` advances these must move to the new current value (or, better, assert
-  `== DB_VERSION` and prove the v27 tables separately). The Phase 48–50 slice updates exactly these
-  "current schema" assertions when it introduces v28 and leaves the v26 → v27 step proofs untouched.
+  `== DB_VERSION` and prove the v27 tables separately).
+
+**Correction to this audit (recorded during the Phase 48–50 slice).** The count above was too small.
+The repository convention is that *each phase's test suite pins the current schema version as a
+literal* and bumps it every slice (Phase 45 itself moved a large set of `… == 26` assertions to `27`).
+A full sweep at v28 found the current-schema literal in **~50 assertions across ~40 phase/group test
+files** (patterns `== DB_VERSION == N`, `fetchone()[0] == N`, `== v0 == N`, `== uv_before == N`,
+`uv == N`, `uv0 == N`, and `DB_VERSION == N and RULE_ENGINE_VERSION == …`). The Phase 48–50 slice
+bumped every such **current-schema** literal 27 → 28, decoupled the genuine **v26 → v27 step proofs**
+in `test_phase45_47_migration.py` to `== DB_VERSION` + table-existence checks, and left unrelated
+literals (e.g. a `len(labels) == 27` UI count) untouched. Two guards were verified to be **pre-existing
+failures already red at the `0447375` checkpoint** and were left unchanged, as they belong to prior
+slices and are out of scope here:
+
+- `tests/test_phase6_golden_uat.py::test_no_migration_needed` — asserts `"_migrate_v26" not in src`,
+  but `_migrate_v26` has existed since Phase 19 (same stale-guard class as Correction A above).
+- `tests/test_phase33_35_safety.py::test_no_schema_migration_added_by_slice` — diffs
+  `4b485be..HEAD` for `_setup_constants.py`, already non-empty at the checkpoint because Phase 45
+  bumped `DB_VERSION` 26 → 27 relative to that Phase-32 baseline.
 
 ### 5. Environment-snapshot vs execution-binding audit result
 

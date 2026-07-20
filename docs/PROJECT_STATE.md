@@ -468,3 +468,11 @@ No DB schema changes. No `session_db.py` changes. No other files changed.
 - **`isolation_level=None`** on the SQLite connection means autocommit — no explicit `commit()` needed.
 - **Python 3.14 / PyQt6.** QSpinBox.setValue() enforces `int` strictly in PyQt6. DB `REAL` columns return Python `float`. Always cast before passing to QSpinBox.
 - **`GT7_AI_DEBUG=1`** must be set as an env var before the Python process starts. In PowerShell: `$env:GT7_AI_DEBUG=1; python main.py`. In cmd: `set GT7_AI_DEBUG=1 && python main.py`.
+
+## Engineering Brain Program 2 — Phases 48-50 (Event Preparation Cycle & Race Weekend)
+
+- **Preparation cycle = Layer B** (`strategy/event_preparation_cycle.py`), groups every Practice session for one upcoming NGR round into one cumulative programme; references but never redefines the immutable event environment (Layer A) or execution/outcome authorities (C/D). See `NGR_EVENT_PREPARATION_ARCHITECTURE.md`.
+- **DB v28** adds `event_preparation_cycles` / `event_preparation_activities` / `event_preparation_activity_sessions`. Sole writers: `upsert_preparation_cycle` / `upsert_preparation_activity` / `bind_session_to_activity`. `build_event_preparation_report` is read-only, constant query count (no N+1). Sessions are never auto-bound; viewing writes nothing.
+- **Setup lock / strategy finalisation are explicit-confirm only**, never an Apply/auto bypass; `ActiveSetupAuthority.mark_applied` remains the sole setup-mutation route.
+- **Future NGR Hub** (`strategy/ngr_event_manifest.py`) is a contract only — no network/API/auth; a Hub revision never rewrites completed history; offline manual event creation is never removed.
+- **Each phase test suite pins the current DB schema version literally** and is bumped every slice (do not assume only a couple of files need updating on a DB_VERSION bump — sweep the whole `tests/` suite).

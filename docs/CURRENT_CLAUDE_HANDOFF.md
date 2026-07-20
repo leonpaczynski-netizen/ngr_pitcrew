@@ -1,6 +1,25 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 45-47: Immutable Provenance, Live Validation & Opt-In Voice (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 48-50: NGR Event Preparation Cycle & Immersive Race Weekend (combined slice) — COMPLETE
+
+**Branch `eng-brain-phase48-50-event-preparation-cycle` from the Phase-45-47 tip `0447375` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB v27 -> v28 (additive, first structural growth of the preparation layer); rule 46.0 unchanged.** Doctrine: an NGR event has a preparation cycle (evening → weeks) whose every valid Practice session feeds ONE cumulative engineering programme; the race is its climax, not a fresh start.
+
+**New domain (all pure/deterministic/offline/no-AI):**
+- Phase 48: `strategy/event_preparation_cycle.py` (identity + timeline + 17-phase model + 22 activity types; flexible duration; NGR-neutral profiles multiweek/single_evening/multi_race/endurance; fingerprint excludes the display countdown), `strategy/preparation_transitions.py` (deterministic transitions + pure scheduling transforms; never advances state on view), `strategy/preparation_evidence.py` (cumulative evidence §8: session-purpose map, context-safety EXACT/PARTIAL/INCOMPATIBLE/UNKNOWN, monotonic membership; coaching≠setup, fuel-test≠promotion, quali≠race).
+- Phase 49: `strategy/setup_convergence.py` (11-state ladder; LOCK_READY needs ≥3 confirming + final confirmation + no outstanding; one noisy lap never reopens; Base/Quali/Race independent), `strategy/setup_lock.py` (explicit-confirm-only; NOT an Apply bypass; NGR-neutral restriction states), `strategy/strategy_maturity.py` (9-state ladder + tyre/fuel maturity from evidence; unknown fuel mult → CAPPED), `strategy/strategy_finalisation.py` (explicit-confirm or low-confidence-accept; deadline-aware risk: late high-interaction experiment BLOCK_UNLESS_OVERRIDDEN).
+- Phase 50: `strategy/race_weekend.py` (final arrival/briefing+ack/scrutineering verdicts/chief-engineer meeting/qualifying/race briefing+grid-ready/runtime priority safety-first, no pit commands, voice off by default/post-race debrief), `strategy/ngr_event_manifest.py` (future Hub contract ONLY — no network/API/auth; immutable local snapshot; revision never rewrites history).
+
+**Persistence (v28):** `event_preparation_cycles` + `event_preparation_activities` + `event_preparation_activity_sessions` (Layer B, references events.id). Sole writers `upsert_preparation_cycle`/`upsert_preparation_activity`/`bind_session_to_activity` (sessions NEVER auto-bound). `get_practice_sessions_for_cycle` = the event-scoped Practice query the flat sessions.event_id never provided. `build_event_preparation_report` = read-only orchestration, constant query count (no N+1), no writes. `_migrate_v28` additive+idempotent; legacy sessions get no retroactive cycle association (unknown, never fabricated).
+
+**UI (post mandatory `/ui-ux-pro-max` gate):** pure VMs `ui/event_preparation_vm.py` + `ui/race_weekend_vm.py`; panels `ui/event_preparation_panel.py` (banner + horizontal preparation timeline + cards) + `ui/race_weekend_panel.py`, in the Development History page (proven pattern). Adopted Real-Time/Operations IA + NGR status tones + tabular numerals + tag-not-colour; deferred the Home-spine restructure (high-risk headless) — see `UAT_ENGINEERING_BRAIN_PHASE48_50.md`.
+
+**DB-version audit correction:** the Phase-45-47 audit undercounted — the repo pins the current schema literally per phase suite. Swept ~50 current-schema literals across ~40 files 27→28; decoupled the v26→v27 step proofs to `== DB_VERSION`. **Two PRE-EXISTING failures were already red at `0447375` and left unchanged: `test_phase6_golden_uat::test_no_migration_needed` (`_migrate_v26` exists since Phase 19) and `test_phase33_35_safety::test_no_schema_migration_added_by_slice` (`4b485be..HEAD` constants diff already non-empty from Phase 45).**
+
+**Tests:** 145 new across 13 files (cycle_identity[15], transitions[11], evidence[18], convergence[13], setup_lock[8], strategy_maturity[8], finalisation_risk[11], race_weekend[15], ui[6], persistence[11], hub_manifest[8], safety[9], golden[12]). Corrected Phase-45-47 targeted suite still green (76). **Manual UAT: Stages A/D PASS automated; B/C/E/F/G PARTIAL (core proved, live GUI/GT7 NOT run); H NOT RUN (headless).** Program 2 now Phases 12-50. Phase 51 NOT started. 12 focused commits (`e0dcb7b`..commit-12); ~92 files, ~5.6k insertions git-verified.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 45-47: Immutable Provenance, Live Validation & Opt-In Voice (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase45-47-provenance-live-voice` from the Phase-42-44 tip `ce01383` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB v26 -> v27 (only bump; rule 46.0 unchanged).** Preserve exact historical context -> prove live advisory via replay + shadow -> opt-in OFFLINE voice for already-approved prompts only. No auto pit/strategy/apply/experiment/outcome.
 
