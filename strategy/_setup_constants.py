@@ -123,7 +123,7 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v26 (Program 2 Phase 19): engineering_campaign_registry — additive campaign-persistence metadata
 #     (stable CampaignID identity + first/last-seen provenance + manual note/archive). Non-
 #     reconstructable session-crossing metadata; the only new write in Phase 19. Idempotent.
-DB_VERSION: int = 26
+DB_VERSION: int = 27
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

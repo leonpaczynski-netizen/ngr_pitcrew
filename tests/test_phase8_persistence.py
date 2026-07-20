@@ -41,7 +41,7 @@ def _record(oid, eid, status, sess, residuals, *, at, ctx=CTX):
 
 # --- migration --------------------------------------------------------------
 def test_v24_migration(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
     t = db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name='engineering_development_records'").fetchone()

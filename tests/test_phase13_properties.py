@@ -184,7 +184,7 @@ def test_source_diagnosis_unchanged():
 # --- Section 21: no migration needed (regenerable) --------------------------
 def test_no_migration_db_stays_v25():
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
     db.build_mechanism_annotations(car="RSR", track="Fuji")
     # building the annotation writes nothing / adds no table / bumps no version
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27

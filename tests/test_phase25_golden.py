@@ -188,7 +188,7 @@ def test_scenario_10_restart_and_shuffle_identical(tmp_path):
     db2 = SessionDB(p)
     r2 = db2.build_programme_knowledge_timeline(applied_setup=applied(), now_date="2026-07-20", **_kw())
     assert r1["content_fingerprint"] == r2["content_fingerprint"]
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
     db2._conn.close()
 
 
@@ -196,5 +196,5 @@ def test_empty_db_safe():
     db = SessionDB(":memory:")
     r = db.build_programme_knowledge_timeline(car=PORSCHE, track="Fuji", discipline="Race")
     assert r["ok"] and r["point_count"] == 0 and r["timeline"] is None
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
     db.close()

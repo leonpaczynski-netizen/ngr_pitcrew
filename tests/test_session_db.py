@@ -167,7 +167,7 @@ def test_schema_version_is_v10(db):
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 26
+    assert version == DB_VERSION == 27
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

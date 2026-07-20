@@ -24,7 +24,7 @@ def test_db_byte_identical_before_and_after_brief(tmp_path):
     r = db.build_race_engineer_team_brief(applied_setup=applied(), now_date="2026-07-10", **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert r["ok"] and uv == 26
+    assert r["ok"] and uv == 27
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 

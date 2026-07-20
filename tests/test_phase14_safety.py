@@ -54,10 +54,10 @@ def test_no_numeric_setup_values_authored():
 def test_db_version_and_rule_engine_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 26 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_intervention_hypotheses(car="RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
     db.close()
 
 
@@ -98,5 +98,5 @@ def test_build_is_read_only_writes_nothing(tmp_path):
     after = db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0]
     assert before == after == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 27
     db.close()

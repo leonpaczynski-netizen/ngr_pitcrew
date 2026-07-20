@@ -92,7 +92,7 @@ def _run_resolve(db):
 
 
 def test_no_migration_needed_beyond_v25(db):
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 26
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 27
 
 
 def test_no_preflight_returns_not_ok(db):

@@ -66,4 +66,4 @@ def test_brief_declares_not_a_setup_or_certification():
 
 def test_runtime_immutability_versions_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 26 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION == 27 and RULE_ENGINE_VERSION == "46.0"

@@ -1052,9 +1052,30 @@ CREATE INDEX IF NOT EXISTS idx_campaign_registry_scope
     ON engineering_campaign_registry (car, track, layout, discipline);
 """
 
+_DDL_V27 = """
+CREATE TABLE IF NOT EXISTS engineering_context_snapshots (
+    semantic_digest   TEXT    PRIMARY KEY,
+    short_fingerprint TEXT    NOT NULL DEFAULT '',
+    schema_version    INTEGER NOT NULL DEFAULT 1,
+    eval_version      TEXT    NOT NULL DEFAULT '',
+    content_json      TEXT    NOT NULL DEFAULT '{}',
+    validation_state  TEXT    NOT NULL DEFAULT '',
+    captured_at       TEXT    NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS engineering_context_snapshot_refs (
+    ref_kind        TEXT NOT NULL DEFAULT '',
+    ref_key         TEXT NOT NULL DEFAULT '',
+    semantic_digest TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (ref_kind, ref_key)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_refs_digest
+    ON engineering_context_snapshot_refs (semantic_digest);
+"""
+
 _DDL = (_DDL_BASE + _DDL_V1 + _DDL_V4 + _DDL_V5 + _DDL_V6 + _DDL_V8 + _DDL_V15
         + _DDL_V17 + _DDL_V18 + _DDL_V19 + _DDL_V20 + _DDL_V21 + _DDL_V22 + _DDL_V23
-        + _DDL_V24 + _DDL_V25 + _DDL_V26)
+        + _DDL_V24 + _DDL_V25 + _DDL_V26 + _DDL_V27)
 
 def ms_to_str(ms: int) -> str:
     if ms <= 0:
@@ -1252,6 +1273,19 @@ class SessionDB:
             self._migrate_v26()
             self._conn.execute("PRAGMA user_version = 26")
             self._conn.commit()
+        if version < 27:
+            self._migrate_v27()
+            self._conn.execute("PRAGMA user_version = 27")
+            self._conn.commit()
+
+    def _migrate_v27(self) -> None:
+        """Engineering-Brain Phase 45 — immutable engineering context provenance (schema v27). Adds TWO
+        standalone additive tables: engineering_context_snapshots (immutable semantic snapshot content,
+        keyed by its semantic digest ⇒ content-addressed dedup) and engineering_context_snapshot_refs
+        (one snapshot reference per canonical record: telemetry session / experiment / outcome /
+        assisted run / applied checkpoint). Touches no existing table, alters no existing query, and
+        rewrites no historical data. CREATE IF NOT EXISTS throughout ⇒ idempotent."""
+        self._conn.executescript(_DDL_V27)
 
     def _migrate_v26(self) -> None:
         """Engineering-Brain Phase 19 — campaign persistence registry (schema v26). Adds ONE
@@ -5970,6 +6004,77 @@ class SessionDB:
                 "legacy_evidence_trust": legacy,
                 "context_fingerprint": scope.context_fingerprint(),
                 "content_fingerprint": legacy.get("content_fingerprint")}
+
+    # ---- Phase 45: immutable engineering context provenance (explicit-write-only) --------------
+
+    _SNAPSHOT_REF_KINDS = ("telemetry_session", "setup_experiment", "experiment_outcome",
+                           "assisted_run", "applied_checkpoint", "session")
+
+    def capture_context_snapshot(self, content, *, ref_kind: str = "", ref_key: str = "",
+                                 captured_at: "str | None" = None) -> dict:
+        """EXPLICIT snapshot writer (Program 2, Phase 45): the ONLY path that persists a context
+        snapshot. Called from explicit workflows (session finalize / experiment create / outcome record
+        / applied-setup checkpoint / assisted-run confirm) - NEVER from a read/refresh. Content-addressed
+        by semantic digest: identical content re-uses the existing snapshot (immutable). An optional
+        (ref_kind, ref_key) links a canonical record to the snapshot (INSERT OR IGNORE - one per record).
+        The audit ``captured_at`` is stored but NEVER enters the semantic digest. Never raises."""
+        try:
+            from strategy.engineering_context_snapshot import build_context_snapshot
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase45 import failed: {exc}"}
+        snap = build_context_snapshot(content).to_dict()
+        digest = snap.get("semantic_digest") or ""
+        now = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO engineering_context_snapshots
+                       (semantic_digest, short_fingerprint, schema_version, eval_version,
+                        content_json, validation_state, captured_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (digest, snap.get("short_fingerprint", ""), int(snap.get("schema_version") or 1),
+                     snap.get("eval_version", ""), json.dumps(snap.get("content") or {}),
+                     snap.get("validation_state", ""), now))
+                if str(ref_kind) and str(ref_key):
+                    self._conn.execute(
+                        """INSERT OR IGNORE INTO engineering_context_snapshot_refs
+                           (ref_kind, ref_key, semantic_digest, created_at) VALUES (?,?,?,?)""",
+                        (str(ref_kind), str(ref_key), digest, now))
+                self._conn.commit()
+            return {"ok": True, "snapshot": snap, "semantic_digest": digest,
+                    "short_fingerprint": snap.get("short_fingerprint"),
+                    "ref_kind": str(ref_kind), "ref_key": str(ref_key)}
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"snapshot capture failed: {exc}", "snapshot": snap}
+
+    def get_context_snapshot(self, semantic_digest: str) -> "dict | None":
+        """Return the immutable snapshot content by its semantic digest, or None. Read-only."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT content_json, short_fingerprint, validation_state, schema_version, "
+                    "eval_version FROM engineering_context_snapshots WHERE semantic_digest=?",
+                    (str(semantic_digest),)).fetchone()
+            if not row:
+                return None
+            return {"semantic_digest": str(semantic_digest),
+                    "content": json.loads(row[0] or "{}"), "short_fingerprint": row[1],
+                    "validation_state": row[2], "schema_version": row[3], "eval_version": row[4]}
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def get_snapshot_for_ref(self, ref_kind: str, ref_key: str) -> "dict | None":
+        """Return the snapshot linked to a canonical record (no N+1: one indexed lookup). Read-only."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT semantic_digest FROM engineering_context_snapshot_refs "
+                    "WHERE ref_kind=? AND ref_key=?", (str(ref_kind), str(ref_key))).fetchone()
+            if not row:
+                return None
+            return self.get_context_snapshot(row[0])
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
                                       session_identity=None, gearbox_state="", speed_context="",

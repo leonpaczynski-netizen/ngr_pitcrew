@@ -40,7 +40,7 @@ def test_db_byte_identical_before_and_after_export_and_compare(tmp_path):
                                              now_date="2026-07-10", **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 26
+    assert uv == 27
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 
@@ -149,7 +149,7 @@ def test_dashboard_export_end_to_end_off_thread_no_db_mutation(app, tmp_path):
     assert os.path.exists(os.path.join(dest, "package_manifest.json"))
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 26
+    assert uv == 27
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0   # export did not mutate the DB
 
 
