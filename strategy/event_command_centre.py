@@ -288,3 +288,21 @@ def build_event_command_centre(
         attention_items=cc.attention_items, readiness=cc.readiness, progress=cc.progress,
         quick_actions=cc.quick_actions, timeline=cc.timeline, recent_learning=cc.recent_learning,
         candidates=cc.candidates, days_until_race=cc.days_until_race, fingerprint=_fp(cc.as_semantic_payload()))
+
+
+def command_centre_to_dict(cc: EventCommandCentre, *, loading: bool = False) -> dict:
+    """Serialise the Command Centre to the immutable view dict the UI worker hands to the panel. Includes
+    the display countdown + resolution state (runtime display), which are NOT in the fingerprint."""
+    return {
+        "ok": True, "loading": bool(loading), "resolution_state": cc.resolution_state.value,
+        "event": cc.event_identity, "days_until_race": cc.days_until_race,
+        "next_action": cc.next_action.as_payload(),
+        "attention": [a.as_payload() for a in cc.attention_items],
+        "readiness": [[n, l, note] for (n, l, note) in cc.readiness.dimensions],
+        "progress": cc.progress.as_payload(),
+        "timeline": list(cc.timeline),
+        "quick_actions": [q.as_payload() for q in cc.quick_actions],
+        "candidates": list(cc.candidates),
+        "recent_learning": list(cc.recent_learning),
+        "fingerprint": cc.fingerprint,
+    }
