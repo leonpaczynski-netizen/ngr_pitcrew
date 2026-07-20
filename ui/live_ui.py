@@ -45,6 +45,17 @@ class LiveMixin:
             "voice alerts. Next: pick Practice or Race mode and start driving; "
             "alerts and push-to-talk queries run automatically."))
 
+        # Phase 60 — production NGR Live Pit Wall: the primary driver surface (one coordinated low-density
+        # NGR message), fed OFF the UI thread from the existing RaceStateTracker. Read-only; issues no
+        # command; voice off by default. The existing telemetry/track-map panels remain below it. Opening
+        # the Live tab never starts the activity.
+        try:
+            from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
+            self._live_pit_wall_panel = NgrLivePitWallPanel()
+            root.addWidget(self._live_pit_wall_panel)
+        except Exception:  # pragma: no cover - defensive; the Live tab must still build
+            self._live_pit_wall_panel = None
+
         # UAT #6 Phase 2A: "refined track model available" notice — click to review
         # in Track Modelling. Hidden until a refinement produces an improving candidate.
         self._live_refine_banner = QPushButton("")

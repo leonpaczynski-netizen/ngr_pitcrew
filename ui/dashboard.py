@@ -5170,7 +5170,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         reg = getattr(self, "_tab_registry", None)
         key = reg.key_at(index) if reg is not None else None
         if key == TAB_HISTORY:            self._refresh_history()
-        elif key == TAB_LIVE:             self._refresh_running_setup_combos()
+        elif key == TAB_LIVE:             self._refresh_running_setup_combos(); self._refresh_live_pit_wall()
         elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
         elif key == TAB_STRATEGY_BUILDER:
             self._sync_strategy_from_event()
