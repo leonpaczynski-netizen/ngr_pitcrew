@@ -1,6 +1,33 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 60-62: Production Live Activation, Complete Event Loop & Operational Certification — COMPLETE
+## MERGED BASELINE (2026-07-20) — Engineering Brain Programs 1 & 2 (Phases 2–62) are now on master
+
+**PR #75 is MERGED; `origin/master` = `master` = `26c0975`; local master is synced with origin/master.** The
+previous stacked-branch workflow is **RETIRED** — future development branches from `master`. PR #75 landed
+**224 commits total** (the entire Program 1 + 2 history that had never been on origin/master; the prior
+origin/master `2e634e9` was an ancestor of the Phase-1 base), of which the Phase 60–62 slice contributed
+**12** (11 phase commits `954218b`→`6265a80` + the stale-test fix `c5a55ec`). **DB v28, Rule Engine 46.0**;
+the full suite is green; the production NGR Live Pit Wall is wired into `TAB_LIVE`. **NOT operationally
+certified:** visual, live-GT7 and physical-voice UAT remain **unexecuted**; certification stays honest and
+limited (NOT_TESTED for live/visual/voice). The Phase 60–62 remote branch remains present (not deleted).
+
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 63-65: PSVR2 Audio-First Race Engineer, Push-to-Talk & Adaptive Live Strategy — COMPLETE
+
+**Branch `eng-brain-phase63-65-vr-adaptive-strategy` from `master @ 26c0975` — committed locally; DB v28 UNCHANGED (no new migration); rule 46.0; NO new telemetry listener (reuses UDPListener → RaceStateTracker).** Purpose: make the live experience operational when the driver (PSVR2) cannot see the screen — essential info spoken via a concise, priority-ordered, workload-gated race engineer, with push-to-talk interaction and deterministic adaptive live strategy.
+
+**Commit 1 — PR #75 corrections + merged project-state:** exact PR #75 count = **224 commits** (slice = 12); dead-import boundary pinned with explicit positive/negative tests (`test_phase63_65_deadimport_boundary.py`); merged baseline recorded across PROJECT_STATE / handoff / testing register.
+
+**Phase 63 (audio-first engineer):** `strategy/audio_first_engineer.py` — `VrRuntimeMode` (desktop/audio-first; preserves visual UI, never alters conclusions/fingerprints/eligibility); the SINGLE priority authority (`EngineerMessageIntent`→`classify_message_priority`, safety→…→informational, lower never interrupts higher); `assess_driver_workload` (LOW/MODERATE/HIGH/UNKNOWN — unknown conservative); `decide_speech_window` (urgent OVERRIDE, routine only in LOW); concise duration budgets (routine ≤2.5s, strategy 3.0s headline); 12-state composite voice/listening state + `AudioOperationalReadiness`; voice-failure preserves the visual pit wall, no retry loop.
+
+**Phase 64 (push-to-talk):** `strategy/push_to_talk.py` + `voice/ptt_input_port.py` + `voice/speech_recognition_port.py` — hardware-neutral binding (keyboard/controller/wheel; no hard-coded button; press-and-hold default, mic not listening by default); OFFLINE recognition ports (disabled default + deterministic fake; `recognition_kind` reports true capability; honest deterministic command grammar, never NLU); four command classes (safe-operational execute-now; strategy-requests never force; driver-reports labelled never-verified-telemetry; engineering-feedback = DRAFT never canonical); ambiguity (PTT-not-held or conf<0.55) triggers nothing; read-back + confirm/correct/cancel/repeat/review; config-safe binding read/write (dict-isolated, explicit-only).
+
+**Phase 65 (adaptive live strategy):** `strategy/adaptive_live_strategy.py` — two objectives: LAP_COUNT (minimise total race time) and TIME_CERTAIN (maximise completed laps; `project_time_certain` floor((time−stops·pit_loss)/lap_time); an extra stop that loses a completed lap is rejected, one that gains a lap may be recommended; **never min-stint-time alone**); `detect_divergence_triggers` (fuel/pace/tyre with material thresholds — small noise never fires; unsupported = explicitly unavailable; rain/damage/penalty never fabricated, only telemetry or confirmed driver report); LEGAL candidate generation + objective ranking; 10 recommendation states (telemetry-loss/insufficient → never high-confidence; context-mismatch/rules-unverified surfaced); audio-first message (headline first, detail deferred); `acknowledge_strategy` executes nothing; `StrategyMonitor` cooldown+dedup (no per-lap spam). Production glue `strategy/live_audio_strategy_build.py` (DB-FREE) + `ui/vr_audio_engineer_vm.py`/`_panel.py` (post `/ui-ux-pro-max`, FIRST-fallback below the pit wall) + dashboard off-thread `_refresh_audio_engineer` + stale guard, dispatched from TAB_LIVE.
+
+**Tests:** 102 new (audio 20, ptt 18, strategy 24, integration 8, dead-import boundary 5, safety/metamorphic 16, certification 6, ui/config 6, plus 1 module-level). **Proof: source/unit/property-metamorphic/runtime-DB/static-snapshot/offscreen-UI; deterministic replay + manual visual + live GT7 + physical TTS + physical mic-PTT + PSVR2 UAT NOT run (headless).** Voice off by default; no autonomous pit/tyre/fuel/setup/experiment/binding/debrief/outcome. Program 2 now Phases 12-65. Phase 66 NOT started.
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 60-62: Production Live Activation, Complete Event Loop & Operational Certification — COMPLETE
 
 **Branch `eng-brain-phase60-62-production-live-activation` from the Phase-57-59 tip `fd66f74` — committed locally, NOT pushed / no PR / not merged; master unchanged `3d7c6af`; DB v28 UNCHANGED (no new migration); rule 46.0.** Purpose: move the NGR Live Pit Wall from a development surface into the real driver-facing Live tab (fed by the existing UDPListener → RaceStateTracker pipeline — NO new listener), complete the full driver event loop (briefing → launch → live → session-end → binding → debrief → cumulative update → Command-Centre return), and produce honest per-area operational certification.
 
