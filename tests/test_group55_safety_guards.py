@@ -157,8 +157,14 @@ class TestNoSchemaMigration:
         assert "_migrate_v14" in src
         # Engineering-Brain Phase 1 legitimately added _migrate_v15 (setup_lineage);
         # guard now protects against an unexpected _migrate_v16.
-        assert "_migrate_v20" not in src
-
-
+        # Engineering-Brain Phases 1-5 legitimately added _migrate_v20..v25
+        # (context/experiment/outcome/working-window/dev-history/reconciliation); guard protects v26.
+        assert "_migrate_v20" in src
+        assert "_migrate_v25" in src
+        # Repaired (Phase 51-53 Audit A): v26/v27/v28 are legitimate later migrations
+        # (Phase 19/45/48). Guard the real invariant: no migration hook BEYOND the current
+        # declared DB_VERSION (catches an accidental/unexpected new migration).
+        from strategy._setup_constants import DB_VERSION as _DBV
+        assert f"_migrate_v{_DBV + 1}" not in src
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -18,9 +18,10 @@ from strategy.setup_ranges import resolve_ranges, save_car_ranges, GENERIC_DEFAU
 from ui.car_ranges_dialog import CarRangesDialog  # noqa: F401 — used in _open_car_ranges_dialog
 from ui.setup_form_widget import SetupFormWidget
 
-# Module-level display constants — must match dashboard.py
-_DARK_CARD = "#2A2A2A"
-_TEXT       = "#E0E0E0"
+# Module-level display constants — sourced from the NGR design system.
+from ui import ngr_theme as _ngr_t
+_DARK_CARD = _ngr_t.CARBON_RAISED   # was "#2A2A2A"
+_TEXT       = _ngr_t.TEXT           # was "#E0E0E0"
 
 
 def _format_validation_errors_banner(validation_errors: list) -> str:
@@ -984,6 +985,8 @@ class SetupBuilderMixin:
         self._race_form._btn_build_setup.clicked.connect(self._run_build_setup)
         self._race_form._btn_applied_in_game.clicked.connect(
             lambda: self._on_changes_applied_in_game(self._race_form))
+        self._race_form._btn_review_outcome.clicked.connect(
+            lambda: self._review_experiment_outcome(self._race_form))
         # Race-form baseline button builds BOTH race + qualifying baselines in one
         # go (UAT); the Qualifying form's own button still builds just qualifying.
         self._race_form._btn_baseline.setText("Build Baseline (Race + Quali)")
@@ -1014,6 +1017,9 @@ class SetupBuilderMixin:
         )
         qf._btn_applied_in_game.clicked.connect(
             lambda: self._on_changes_applied_in_game(self._qual_form)
+        )
+        qf._btn_review_outcome.clicked.connect(
+            lambda: self._review_experiment_outcome(self._qual_form)
         )
         qf._btn_baseline.clicked.connect(
             lambda: self._generate_baseline_setup_for_form(self._qual_form)
@@ -1348,12 +1354,272 @@ class SetupBuilderMixin:
                              confirmed_at=confirmed_at)
         if self._db is not None:
             self._db.save_applied_checkpoint(car_id, track, layout_id, purpose, cp)
+            # Engineering-Brain Phase 2: link this applied checkpoint to the
+            # experiment awaiting apply for this scope (→ APPLIED + proposed-vs-
+            # applied comparison). Does NOT auto-apply and NEVER alters the
+            # original recommendation. Best-effort; never blocks the UI action.
+            try:
+                self._last_apply_match = self._db.link_apply_to_experiment(
+                    car_id=car_id, track=track, layout_id=layout_id,
+                    discipline=purpose, parent_setup_id=setup_id,
+                    checkpoint_id=cp.checkpoint_id, applied_fields=dict(fields))
+            except Exception:
+                self._last_apply_match = None
+
+        # UAT Finding 1: make this the canonical active setup for the Live Race
+        # Engineer. Persist the COMPLETE setup snapshot (not just the tuning
+        # subset used for the three-state comparison) under the authority so the
+        # Live baseline, telemetry attachment and analysis gate all resolve to
+        # exactly what was applied — no duplicate manual selection.
+        auth = getattr(self, "_setup_authority", None)
+        if auth is not None:
+            try:
+                from data.setup_state_authority import SetupIdentity
+                ev = self._build_event_context()
+                ident = SetupIdentity(
+                    car=str(getattr(ev, "car", "") or ""),
+                    track=str(getattr(ev, "track", "") or ""),
+                    layout_id=str(getattr(ev, "layout_id", "") or ""),
+                )
+                try:
+                    complete = dict(form.current_setup_dict() or {})
+                except Exception:
+                    complete = dict(fields)
+                name = ""
+                try:
+                    name = form._setup_label.text().strip()
+                except Exception:
+                    name = ""
+                auth.mark_applied(
+                    ident, setup_id=setup_id or name,
+                    name=name or setup_id or f"{purpose} setup",
+                    fields=complete, purpose=purpose, applied_at=confirmed_at)
+                self._refresh_active_setup_display()
+            except Exception:
+                pass
+
         try:
             self._bridge.event_log_entry.emit(
                 f"[Setup] {purpose} setup confirmed applied in GT7 ({confirmed_at})")
         except Exception:
             pass
         self._refresh_apply_status_for_form(form)
+
+        # UAT Finding 3: flip the structured recommendation rows proposed->applied
+        # (visibility/highlight unchanged) when the Race setup is applied.
+        if form is getattr(self, "_race_form", None):
+            view = getattr(self, "_setup_rec_view", None)
+            if view is not None and view.current_vm() is not None:
+                view.mark_applied()
+        # Phase 3: an applied experiment now exists → reveal the outcome-review action.
+        try:
+            btn = getattr(form, "_btn_review_outcome", None)
+            if btn is not None:
+                btn.setVisible(True)
+        except Exception:
+            pass
+
+    def _review_experiment_outcome(self, form: "SetupFormWidget") -> None:
+        """Driver-triggered, OFF-THREAD closed-loop outcome review (Phase 3).
+
+        Finds the latest applied experiment for this scope and evaluates it against
+        measured test evidence via the deterministic outcome engine. Read-only:
+        it never applies or reverts a setup. Runs on a worker thread (never the
+        telemetry packet thread); the result is drained + rendered on the Qt tick."""
+        db = getattr(self, "_db", None)
+        lbl = getattr(form, "_lbl_outcome_summary", None)
+        if db is None:
+            return
+        try:
+            car_id, track, layout_id, purpose, _sid = self._apply_checkpoint_scope(form)
+        except Exception:
+            return
+        exp = db.find_latest_reviewable_experiment(car_id, track, layout_id, purpose)
+        if exp is None:
+            if lbl is not None:
+                lbl.setText("No applied experiment to review for this car/track/layout yet.")
+            return
+        if lbl is not None:
+            lbl.setText("Evaluating test outcome…")
+        # Pick the two most-recent sessions for this scope as test/baseline windows.
+        test_sid = base_sid = None
+        try:
+            sessions = db.get_practice_sessions(car_id, track) or []
+            if sessions:
+                test_sid = sessions[0].get("id")
+            if len(sessions) > 1:
+                base_sid = sessions[1].get("id")
+        except Exception:
+            pass
+        import threading as _threading
+
+        q = self._ensure_outcome_queue()
+        exp_id = int(exp.get("id") or 0)
+
+        def _worker():
+            # Phase 4/5: the canonical assembler resolves the applied-checkpoint scope,
+            # selects baseline/test sessions, evaluates lap validity, and assembles
+            # per-corner baseline/test observations from the persisted stores — then
+            # calls the Phase 3 evaluator with REAL evidence, LEARNS working-window
+            # updates from the canonical outcome, and SELECTS the minimum-effective
+            # next experiment. Read-only: never applies or reverts a setup.
+            try:
+                res = db.review_and_learn(
+                    exp_id, test_session_id=test_sid, baseline_session_id=base_sid,
+                    complete_on_success=True)
+            except Exception as exc:  # never let the worker crash the app
+                res = {"ok": False, "phase": "infrastructure", "error": str(exc)}
+            try:
+                q.put((res, form))
+            except Exception:
+                pass
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _ensure_outcome_queue(self):
+        q = getattr(self, "_outcome_result_queue", None)
+        if q is None:
+            import queue as _queue
+            q = _queue.Queue()
+            self._outcome_result_queue = q
+        return q
+
+    def _display_outcome_result(self, payload: tuple) -> None:
+        """Render a compact, honest outcome summary next to the setup form."""
+        try:
+            res, form = payload
+        except Exception:
+            return
+        lbl = getattr(form, "_lbl_outcome_summary", None)
+        if lbl is None:
+            return
+        if not isinstance(res, dict) or not res.get("ok"):
+            # Distinguish an infrastructure failure from honest engineering
+            # insufficiency (never present a DB/parse error as a verdict).
+            if (res or {}).get("phase") in ("infrastructure", "assembly"):
+                reason = (res or {}).get("error") or (res or {}).get("reason") or "unavailable"
+                lbl.setText(f"Outcome review could not run ({res.get('phase')}): {reason}")
+                return
+            reason = (res or {}).get("reason") or (res or {}).get("error") or "no result"
+            lbl.setText(f"Outcome review unavailable: {reason}")
+            return
+        status = str(res.get("status", "")).replace("_", " ").title()
+        conf = str(res.get("confidence_level", "") or "")
+        laps = res.get("valid_laps", 0)
+        nxt = str(res.get("next_action", "") or "").replace("_", " ")
+        # Canonical driver-facing decision state (Phase 4 authority) — the UI
+        # renders it, never re-derives it.
+        decision = ""
+        try:
+            from strategy.setup_decision_status import resolve_setup_decision
+            _exp_status = "rejected" if res.get("status") == "regression" else (
+                "completed" if res.get("lifecycle") and "completed" in res.get("lifecycle")
+                else "ready_for_review")
+            decision = resolve_setup_decision(
+                experiment_status=_exp_status, outcome_status=res.get("status", ""),
+                outcome_confidence_level=conf,
+                rollback_eligible=bool(res.get("rollback_eligible"))).state.value
+        except Exception:
+            decision = ""
+        parts = [f"Decision: {decision.replace('_',' ').title()}." if decision else "",
+                 f"Outcome: {status} (confidence {conf}; {laps} valid laps).",
+                 f"Recommended next: {nxt}."]
+        # Evidence readiness (from the canonical assembler).
+        asm = res.get("assembly") or {}
+        if asm:
+            ct = asm.get("corner_test_count", 0)
+            cb = asm.get("corner_baseline_count", 0)
+            twl = asm.get("test_whole_lap") or {}
+            rej = twl.get("rejected_lap_count", 0)
+            parts.append(f"Evidence: {ct} test / {cb} baseline corners; "
+                         f"{rej} rejected laps.")
+            miss = asm.get("missing_evidence") or []
+            if miss:
+                parts.append("Missing: " + "; ".join(str(m) for m in miss[:2]) + ".")
+        parts = [p for p in parts if p]
+        regs = res.get("regressions") or []
+        if regs:
+            parts.append("Regressions: " + "; ".join(str(r) for r in regs[:3]) + ".")
+        imps = res.get("improvements") or []
+        if imps:
+            parts.append("Improvements: " + "; ".join(str(i) for i in imps[:3]) + ".")
+        fds = res.get("failed_directions") or []
+        if fds:
+            strengths = {str(f.get("strength")) for f in fds}
+            if "lockout" in strengths:
+                parts.append("A failed-direction LOCKOUT was recorded for this scope.")
+            elif "caution" in strengths:
+                parts.append("A failed-direction CAUTION was recorded for this scope.")
+        if res.get("rollback_eligible"):
+            parts.append(f"Rollback target if you revert: {res.get('rollback_target') or 'parent setup'} "
+                         "(not applied automatically).")
+        # Phase 5: learning + the selected minimum-effective next experiment.
+        learn = res.get("learning") or {}
+        if learn.get("ok") and learn.get("updated_fields"):
+            parts.append("Learned working windows updated for: "
+                         + ", ".join(str(f) for f in learn["updated_fields"][:4]) + ".")
+        nxt = res.get("next_experiment") or {}
+        sel = nxt.get("selected")
+        if sel:
+            parts.append(
+                f"Next experiment: {sel.get('field')} {sel.get('direction')} "
+                f"({sel.get('current_value')}→{sel.get('proposed_value')}). "
+                f"{sel.get('selection_rationale', '')} — apply manually to test "
+                "(nothing is applied automatically).")
+            blocked = [c for c in (nxt.get("rejected") or []) if c.get("hard_blockers")]
+            if blocked:
+                b0 = blocked[0]
+                parts.append(f"Blocked alternative: {b0.get('candidate_id')} — "
+                             + "; ".join(b0.get("hard_blockers", [])) + ".")
+            # Phase 10: deterministic engineering pre-flight review of the EXACT selected
+            # experiment (read-only, advisory, never blocks). Surfaced beside the proposal.
+            try:
+                ev = self._build_event_context()
+                pf = self._db.build_experiment_preflight(
+                    dict(sel), car=str(getattr(ev, "car", "") or ""),
+                    track=str(getattr(ev, "track", "") or ""),
+                    layout_id=str(getattr(ev, "layout_id", "") or ""),
+                    discipline=str(getattr(ev, "discipline", "") or "")) \
+                    if self._db is not None else {"ok": False}
+                if pf.get("ok"):
+                    from ui import preflight_review_vm as _pf_vm
+                    for _line in _pf_vm.compact_summary(pf):
+                        parts.append(_line)
+            except Exception:
+                pass
+        elif nxt.get("no_selection_reason"):
+            parts.append("No safe next experiment: "
+                         + str(nxt["no_selection_reason"]).replace("_", " ")
+                         + " (current setup should be retained / more evidence needed).")
+        # Phase 6: current engineering state + multi-symptom development plan.
+        plan_wrap = res.get("engineering_plan") or {}
+        if plan_wrap.get("ok"):
+            snap = plan_wrap.get("snapshot") or {}
+            plan = plan_wrap.get("plan") or {}
+            parts.append(
+                "Engineering state: "
+                f"{len(snap.get('resolved') or [])} resolved, "
+                f"{len(snap.get('improved') or [])} improved, "
+                f"{len(snap.get('unchanged') or [])} unchanged, "
+                f"{len(snap.get('worsened') or [])} worsened, "
+                f"{len(snap.get('new_issues') or [])} new, "
+                f"{len(snap.get('damaged_good') or [])} damaged-good.")
+            imm = plan.get("immediate_experiment")
+            if imm:
+                parts.append(
+                    f"Development plan: 1 immediate experiment ({imm.get('field')} "
+                    f"{imm.get('direction')}), {len(plan.get('queued') or [])} queued "
+                    "hypothesis(es). One change at a time — apply manually.")
+            else:
+                parts.append(
+                    "Development plan: "
+                    + str(plan.get("status", "")).replace("_", " ")
+                    + " — no immediate setup change; "
+                    + f"{len(plan.get('deferred_issues') or [])} review/evidence task(s).")
+            if plan.get("conflicts"):
+                parts.append(f"{len(plan['conflicts'])} candidate conflict(s) flagged.")
+            parts.append("Plan is advisory — setup values are not applied automatically.")
+        lbl.setText(" ".join(p for p in parts if p))
 
     def _refresh_apply_status_for_form(self, form: "SetupFormWidget") -> None:
         """Recompute + render the saved-vs-applied-in-GT7 three-state for ``form``.
@@ -2597,6 +2863,28 @@ class SetupBuilderMixin:
         _is_legacy: bool = _is_legacy_unknown(_rec_status)  # True for "", None, unrecognised
         _status_approved: bool = (not _is_legacy) and (_rec_status in _APPROVED_STATUSES)
 
+        # Engineering-Brain Phase 2: persist a controlled setup EXPERIMENT for a
+        # valid actionable Analyse recommendation (source-of-truth `data` dict, not
+        # rendered HTML). Idempotent — re-rendering/reopening never duplicates it.
+        # Baseline Build (entry_type == "baseline_setup") is deliberately EXCLUDED:
+        # a from-scratch full-field baseline is a setup ARTEFACT, not a reversible
+        # test of a hypothesis against a parent setup. Best-effort; never blocks UI.
+        self._last_experiment_id = getattr(self, "_last_experiment_id", None)
+        _exp_db = getattr(self, "_db", None)
+        if _status_approved and entry_type == "analyse_setup" and _exp_db is not None:
+            try:
+                _exp_form = _form or getattr(self, "_race_form", None)
+                if _exp_form is not None:
+                    _cid, _trk, _lay, _purpose, _psid = \
+                        self._apply_checkpoint_scope(_exp_form)
+                    self._last_experiment_id = _exp_db.record_recommendation_experiment(
+                        data, recommendation_source="analyse", car_id=_cid,
+                        track=_trk, layout_id=_lay, discipline=_purpose,
+                        parent_setup_id=_psid,
+                        label=f"{_purpose} setup experiment")
+            except Exception:
+                self._last_experiment_id = None
+
         # Build status banner (replaces old eng_banner + validation_banner logic).
         # For known non-approved statuses (validation_failed, blocked_no_safe_recommendation,
         # etc.) _rec_status is truthy and non-empty — render the status banner normally.
@@ -3106,6 +3394,26 @@ class SetupBuilderMixin:
         # Home tab current (display-only; no-op when Home is not visible).
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
+
+        # UAT Finding 3: mirror the recommendation into the structured tabbed
+        # view. Proposed changes highlight immediately here (at generate) — the
+        # "Applied in Game" button only flips status later, it is not what first
+        # highlights a field.
+        try:
+            self._populate_setup_recommendation_view(data, _status_approved)
+            _is_race_form = (_form is None) or (_form is getattr(self, "_race_form", None))
+            if _status_approved and approved_changes and _is_race_form:
+                # Highlight the ACTUAL setup-box spinboxes for the proposed
+                # fields at GENERATE time (previously only fired on Apply).
+                _changed_keys = [c.get("field") for c in approved_changes if c.get("field")]
+                if _changed_keys:
+                    self._highlight_changed_fields(_changed_keys)
+                # De-squash: the structured view is now the recommendation
+                # surface, so collapse the old cramped HTML result box.
+                if _result_text is not None:
+                    _result_text.setVisible(False)
+        except Exception as _e:
+            print(f"[SetupRecView] populate failed: {_e}")
 
     def _render_discipline_field_plan(self, plan: dict) -> str:
         """Thin wrapper — delegates to the module-level renderer so the surfaces
@@ -3915,9 +4223,150 @@ class SetupBuilderMixin:
 
         # ── Side-by-side setup panel — expands to fill remaining space ─────────
         setup_panel = self._build_car_setup_group()
-        tab_layout.addWidget(setup_panel, 1)  # stretch factor 1
+
+        # UAT Finding 3: the structured recommendation surface (header + tabbed
+        # Recommendation/Why/Practice Analysis/Test Plan/Advanced + action bar),
+        # replacing the text-box-first design. Shown once a recommendation
+        # exists; sits in a vertical splitter with the editor forms.
+        from ui.setup_recommendation_view import SetupRecommendationView
+        self._setup_rec_view = SetupRecommendationView()
+        self._setup_rec_view.setVisible(False)
+        self._wire_setup_rec_view()
+
+        _rec_split = QSplitter(Qt.Orientation.Vertical)
+        _rec_split.addWidget(setup_panel)
+        _rec_split.addWidget(self._setup_rec_view)
+        _rec_split.setStretchFactor(0, 1)
+        _rec_split.setStretchFactor(1, 1)
+        tab_layout.addWidget(_rec_split, 1)  # stretch factor 1
 
         return tab_widget
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 3 — structured recommendation view wiring.
+    # ------------------------------------------------------------------ #
+
+    def _wire_setup_rec_view(self) -> None:
+        v = self._setup_rec_view
+        v.apply_in_game.connect(lambda: self._rec_view_apply_in_game())
+        v.values_entered.connect(lambda: self._rec_view_values_entered())
+        v.start_validation.connect(lambda: self._rec_view_start_validation())
+        v.submit_feedback.connect(lambda: self._rec_view_submit_feedback())
+        v.reject_recommendation.connect(lambda: self._rec_view_reject())
+        v.accept_and_lock.connect(lambda: self._rec_view_accept_and_lock())
+
+    def _populate_setup_recommendation_view(self, data: dict, status_approved: bool) -> None:
+        """Build the structured VM from the recommendation payload and render it.
+
+        Called at generate time from ``_display_setup_result`` so proposed
+        changes highlight immediately — clicking "Applied in Game" later only
+        flips the status, it is not what first highlights a field.
+        """
+        view = getattr(self, "_setup_rec_view", None)
+        if view is None:
+            return
+        from ui.setup_recommendation_vm import build_recommendation_vm, HeaderInfo
+        ev = self._build_event_context()
+        active = ""
+        if hasattr(self, "_active_setup_for_current"):
+            a = self._active_setup_for_current("Race")
+            if a is not None:
+                active = a.label()
+        name = ""
+        try:
+            name = self._race_form._setup_label.text().strip()
+        except Exception:
+            name = ""
+        header = HeaderInfo(
+            car=str(getattr(ev, "car", "") or ""),
+            track=str(getattr(ev, "track", "") or ""),
+            layout=str(getattr(ev, "layout_id", "") or ""),
+            setup_name=name, revision="1", active_setup=active,
+        )
+        vm = build_recommendation_vm(data, header=header,
+                                     status_approved=status_approved)
+        view.set_vm(vm)
+        view.setVisible(vm.has_recommendation)
+
+    def _rec_view_apply_in_game(self) -> None:
+        form = getattr(self, "_race_form", None)
+        if form is not None:
+            self._on_changes_applied_in_game(form)
+        if getattr(self, "_setup_rec_view", None) is not None:
+            self._setup_rec_view.mark_applied()
+
+    def _rec_view_values_entered(self) -> None:
+        try:
+            self._bridge.event_log_entry.emit(
+                "[Setup] Recommended values entered in GT7 (awaiting on-track confirmation).")
+        except Exception:
+            pass
+
+    def _rec_view_start_validation(self) -> None:
+        auth = getattr(self, "_setup_authority", None)
+        if auth is not None and hasattr(self, "_current_setup_identity"):
+            try:
+                auth.start_validation(self._current_setup_identity(), "Race")
+                if hasattr(self, "_refresh_active_setup_display"):
+                    self._refresh_active_setup_display()
+            except Exception:
+                pass
+        try:
+            self._bridge.event_log_entry.emit(
+                "[Setup] Validation started — run the test plan laps.")
+        except Exception:
+            pass
+
+    def _rec_view_submit_feedback(self) -> None:
+        # Take the driver to the feedback surface (Practice Review).
+        try:
+            from ui.tab_registry import TAB_PRACTICE_REVIEW
+            self.select_tab(TAB_PRACTICE_REVIEW)
+        except Exception:
+            pass
+
+    def _rec_view_reject(self) -> None:
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.setVisible(False)
+        try:
+            self._bridge.event_log_entry.emit("[Setup] Recommendation rejected by driver.")
+        except Exception:
+            pass
+
+    def _rec_view_accept_and_lock(self) -> None:
+        """Lock the current setup in as the confirmed baseline (ACCEPTED state)."""
+        auth = getattr(self, "_setup_authority", None)
+        locked = None
+        if auth is not None and hasattr(self, "_current_setup_identity"):
+            try:
+                ident = self._current_setup_identity()
+                # Ensure it's applied first, then accept -> ACCEPTED baseline.
+                active = auth.active_setup(ident, "Race")
+                if active is None:
+                    # Nothing applied yet — apply the current form, then accept.
+                    self._on_changes_applied_in_game(getattr(self, "_race_form", None))
+                auth.start_validation(ident, "Race")
+                locked = auth.accept(ident, "Race")
+                if hasattr(self, "_refresh_active_setup_display"):
+                    self._refresh_active_setup_display()
+            except Exception as e:
+                print(f"[Setup] accept/lock error: {e}")
+        try:
+            if locked is not None:
+                self._bridge.event_log_entry.emit(
+                    f"[Setup] Locked in as confirmed baseline: {locked.label()} "
+                    f"(Accepted).")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self, "Setup locked in",
+                    f"“{locked.name}” (rev {locked.revision}) is now your confirmed "
+                    "baseline for this car, track and layout.")
+            else:
+                self._bridge.event_log_entry.emit(
+                    "[Setup] Could not lock setup — apply a setup in game first.")
+        except Exception:
+            pass
 
     def _refresh_setup_history_combo(self) -> None:
         try:

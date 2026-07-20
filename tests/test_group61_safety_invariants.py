@@ -145,11 +145,17 @@ class TestNoSchemaMigration:
         src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
         assert "_migrate_v14" in src
         # Engineering-Brain live telemetry legitimately added _migrate_v17
-        # (corner_slip_telemetry); guard now protects against an unexpected _migrate_v19.
+        # (corner_slip_telemetry). Engineering-Brain Phase 1 legitimately added
+        # _migrate_v20 (canonical engineering-context spine); the guard now
+        # protects against an unexpected _migrate_v21.
         assert "_migrate_v17" in src
-        assert "_migrate_v20" not in src
-
-
+        assert "_migrate_v20" in src
+        assert "_migrate_v25" in src
+        # Repaired (Phase 51-53 Audit A): v26/v27/v28 are legitimate later migrations
+        # (Phase 19/45/48). Guard the real invariant: no migration hook BEYOND the current
+        # declared DB_VERSION (catches an accidental/unexpected new migration).
+        from strategy._setup_constants import DB_VERSION as _DBV
+        assert f"_migrate_v{_DBV + 1}" not in src
 class TestStrategyDeterministic:
     def test_group48_49_scoring_stable(self):
         from ui.race_strategy_uat import run_fuji_uat

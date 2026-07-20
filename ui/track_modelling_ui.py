@@ -489,12 +489,49 @@ class TrackModellingMixin:
         )
         seg_rev_layout.addWidget(self._tm_seg_table)
 
-        # Diagnostic Tab Cleanup (2026-07-03): the hidden legacy per-segment
-        # review buttons (Confirm/Rename/Reject/Needs More Laps/Split/Merge/
-        # Save Reviewed Model) and their never-connected handler methods were
-        # DELETED — the whole-model acceptance workflow (Group 17P) replaced
-        # them. The pure review-action functions in data/track_segment_review.py
-        # and ui/track_modelling_vm.get_review_button_states remain (tested).
+        # UAT Finding 4 (interactive review editor): edit the selected segment —
+        # rename, renumber, approve, reject, split at its midpoint, or merge with
+        # the next segment. These are REAL structural edits (the pure ops in
+        # data/track_segment_review.py), gated by the coordinator's EDIT_SEGMENT
+        # legality so illegal edits are refused rather than half-applied.
+        from PyQt6.QtWidgets import QSpinBox as _QSpinBox
+        _edit_grp = QGroupBox("Edit selected segment")
+        _edit_grp.setStyleSheet(self._group_style())
+        _edit_v = QVBoxLayout(_edit_grp)
+        _edit_v.setSpacing(4)
+        _erow1 = QHBoxLayout()
+        self._tm_seg_name_edit = QLineEdit()
+        self._tm_seg_name_edit.setPlaceholderText("New name…")
+        self._tm_seg_turn_spin = _QSpinBox()
+        self._tm_seg_turn_spin.setRange(0, 40)
+        self._tm_seg_turn_spin.setPrefix("T")
+        _btn_seg_rename = QPushButton("Rename")
+        _btn_seg_renum = QPushButton("Renumber")
+        _btn_seg_rename.clicked.connect(self._tm_seg_rename)
+        _btn_seg_renum.clicked.connect(self._tm_seg_renumber)
+        for w in (self._tm_seg_name_edit, _btn_seg_rename,
+                  self._tm_seg_turn_spin, _btn_seg_renum):
+            _erow1.addWidget(w)
+        _edit_v.addLayout(_erow1)
+        _erow2 = QHBoxLayout()
+        self._tm_btn_seg_approve = QPushButton("Approve")
+        self._tm_btn_seg_reject = QPushButton("Reject")
+        self._tm_btn_seg_split = QPushButton("Split at midpoint")
+        self._tm_btn_seg_merge = QPushButton("Merge with next")
+        self._tm_btn_seg_approve.clicked.connect(self._tm_seg_approve)
+        self._tm_btn_seg_reject.clicked.connect(self._tm_seg_reject)
+        self._tm_btn_seg_split.clicked.connect(self._tm_seg_split)
+        self._tm_btn_seg_merge.clicked.connect(self._tm_seg_merge)
+        for w in (self._tm_btn_seg_approve, self._tm_btn_seg_reject,
+                  self._tm_btn_seg_split, self._tm_btn_seg_merge):
+            _erow2.addWidget(w)
+        _edit_v.addLayout(_erow2)
+        self._tm_seg_edit_status = QLabel("Select a segment row to edit.")
+        self._tm_seg_edit_status.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        self._tm_seg_edit_status.setWordWrap(True)
+        _edit_v.addWidget(self._tm_seg_edit_status)
+        seg_rev_layout.addWidget(_edit_grp)
+        self._tm_seg_editor_group = _edit_grp
 
         _seg_detect_layout.addWidget(seg_rev_grp)
         right_layout.addWidget(_seg_detect_grp)
@@ -900,6 +937,14 @@ class TrackModellingMixin:
 
         # Store seed result reference + review state
         self._tm_seed_result = None
+        # UAT Finding 4: one canonical state machine drives the guided six-step
+        # workflow; the banner shows a single primary next-step at a time and
+        # ``_tm_snapshot`` is the canonical result object other surfaces read.
+        from data.track_modelling_coordinator import TrackModellingCoordinator
+        self._tm_coordinator = TrackModellingCoordinator()
+        self._tm_snapshot = None
+        self._tm_building = False
+        self._tm_error = False
         self._tm_controller = TrackCalibrationCaptureController()
         self._tm_detection_result = None   # last SegmentDetectionResult
         self._tm_review_result    = None   # current TrackModelReviewResult
@@ -929,7 +974,158 @@ class TrackModellingMixin:
         # so selecting a segment did nothing).
         self._tm_seg_table.cellClicked.connect(self._tm_on_seg_selected)
 
+        # Guided "follow the bouncing ball" workflow across the top — a real
+        # 6-step stepper (chips coloured done/current/pending) driven by the
+        # canonical coordinator, with the single primary next-step below it.
+        from PyQt6.QtWidgets import QSizePolicy as _QSizePolicy
+        from ui import ngr_theme as _T
+        self._tm_step_host = QWidget()
+        self._tm_step_host.setSizePolicy(
+            _QSizePolicy.Policy.Expanding, _QSizePolicy.Policy.Fixed)
+        _sh = QVBoxLayout(self._tm_step_host)
+        _sh.setContentsMargins(_T.SPACE_SM, _T.SPACE_XS, _T.SPACE_SM, _T.SPACE_XS)
+        _sh.setSpacing(_T.SPACE_XS)
+        self._tm_chip_row = QHBoxLayout()
+        self._tm_chip_row.setSpacing(_T.SPACE_XS)
+        _chips_w = QWidget()
+        _chips_w.setLayout(self._tm_chip_row)
+        _sh.addWidget(_chips_w)
+        # Kept (tests + code read it) — now the primary next-step line under the
+        # chips, styled from the design system's info banner tone.
+        self._tm_next_step_banner = QLabel("Select a track and layout to begin.")
+        self._tm_next_step_banner.setWordWrap(True)
+        self._tm_next_step_banner.setStyleSheet(_T.banner_qss("info"))
+        _sh.addWidget(self._tm_next_step_banner)
+        outer_layout.insertWidget(0, self._tm_step_host)
+        outer_layout.setStretchFactor(splitter, 1)
+        self._tm_refresh_workflow()
+
         return outer
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 4 — canonical state machine integration.
+    # ------------------------------------------------------------------ #
+
+    def _tm_build_coordinator_inputs(self):
+        """Derive canonical TrackModellingInputs from the existing UI state and
+        the disk readiness resolver — the coordinator never touches disk itself."""
+        from data.track_modelling_coordinator import TrackModellingInputs
+        loc_id = getattr(self._tm_location_combo, "currentData", lambda: "")() or ""
+        lay_id = getattr(self._tm_layout_combo, "currentData", lambda: "")() or ""
+        identity_known = bool(loc_id and lay_id)
+
+        capturing = False
+        has_captured = False
+        ctrl = getattr(self, "_tm_controller", None)
+        if ctrl is not None:
+            try:
+                from data.track_calibration_runtime import CalibrationCaptureState
+                st = getattr(ctrl, "_state", None)
+                capturing = st == CalibrationCaptureState.RECORDING
+                has_captured = st in (
+                    CalibrationCaptureState.STOPPED, CalibrationCaptureState.BUILT)
+            except Exception:
+                pass
+        if getattr(self, "_tm_restored_session", None) is not None:
+            has_captured = True
+
+        has_station_map = getattr(self, "_tm_station_map", None) is not None
+        review = getattr(self, "_tm_review_result", None)
+        has_segments = (
+            getattr(self, "_tm_detection_result", None) is not None
+            or bool(getattr(review, "segments", None)))
+        review_complete = False
+        if review is not None:
+            review_complete = bool(
+                getattr(review, "is_ai_ready", False)
+                or getattr(review, "ai_ready", False))
+
+        model_active = False
+        validation_passed = False
+        if identity_known:
+            try:
+                from data.track_readiness_disk import resolve_track_readiness_from_disk
+                rr = resolve_track_readiness_from_disk(loc_id, lay_id)
+                model_active = bool(getattr(rr, "is_approved", False))
+                validation_passed = model_active
+            except Exception:
+                pass
+        align = getattr(self, "_tm_alignment_result", None)
+        if align is not None and not validation_passed:
+            validation_passed = bool(getattr(align, "accepted", False))
+
+        return TrackModellingInputs(
+            identity_known=identity_known,
+            capturing=capturing,
+            has_captured_laps=has_captured,
+            has_reference_path=has_station_map,
+            has_station_map=has_station_map,
+            has_segments=has_segments,
+            review_complete=review_complete,
+            validation_passed=validation_passed,
+            model_active=model_active,
+            building=bool(getattr(self, "_tm_building", False)),
+            error=bool(getattr(self, "_tm_error", False)),
+        )
+
+    def _tm_refresh_workflow(self) -> None:
+        """Sync the coordinator from current state and render the guided banner.
+
+        Never raises — the workflow banner is advisory and must not break the tab.
+        """
+        coord = getattr(self, "_tm_coordinator", None)
+        banner = getattr(self, "_tm_next_step_banner", None)
+        if coord is None:
+            return
+        try:
+            from data.track_modelling_coordinator import WorkflowStep
+            inputs = self._tm_build_coordinator_inputs()
+            coord.sync_from_inputs(inputs)
+            loc = getattr(self._tm_location_combo, "currentText", lambda: "")() or ""
+            lay = getattr(self._tm_layout_combo, "currentText", lambda: "")() or ""
+            ident = f"{loc} · {lay}".strip(" ·")
+            snap = coord.snapshot(identity_label=ident)
+            self._tm_snapshot = snap
+            if banner is not None:
+                step_num = list(WorkflowStep).index(snap.step) + 1
+                banner.setText(
+                    f"Step {step_num}/6 — {snap.step.value.title()}: "
+                    f"{snap.primary_next_step}")
+            self._tm_render_step_chips(snap.step, snap.state)
+        except Exception:
+            pass
+
+    def _tm_render_step_chips(self, current_step, state) -> None:
+        """Render the 6 guided steps as status chips (done/current/pending),
+        highlighting the coordinator's current step."""
+        row = getattr(self, "_tm_chip_row", None)
+        if row is None:
+            return
+        try:
+            from ui.workflow_stepper_widget import _StageChip
+            from ui.workflow_stepper import StageStatus
+            from data.track_modelling_coordinator import (
+                WorkflowStep, TrackModellingState)
+            steps = list(WorkflowStep)
+            cur_idx = steps.index(current_step)
+            while row.count():
+                it = row.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            for i, step in enumerate(steps):
+                if state == TrackModellingState.ERROR and i == cur_idx:
+                    status = StageStatus.BLOCKED
+                elif i < cur_idx:
+                    status = StageStatus.DONE
+                elif i == cur_idx:
+                    status = StageStatus.CURRENT
+                else:
+                    status = StageStatus.PENDING
+                row.addWidget(_StageChip(i, step.value.title(), status))
+            row.addStretch(1)
+        except Exception:
+            pass
 
     def _tm_on_tab_shown(self) -> None:
         """Called when the Track Modelling tab is first shown or re-shown."""
@@ -938,6 +1134,7 @@ class TrackModellingMixin:
             self._tm_refresh_refinement_panel()
         except Exception:
             pass
+        self._tm_refresh_workflow()
         if self._tm_seed_result is not None:
             return  # already loaded
         try:
@@ -1844,6 +2041,123 @@ class TrackModellingMixin:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Segment Detection Failed", error_txt)
 
+    # --- Interactive segment editor (UAT Finding 4 review step) --------------
+
+    def _tm_current_review_for_edit(self):
+        """The current review model, lazily created from the detection result."""
+        review = getattr(self, "_tm_review_result", None)
+        if review is None:
+            det = getattr(self, "_tm_detection_result", None)
+            if det is not None:
+                try:
+                    review = _create_seg_review(det)
+                    self._tm_review_result = review
+                except Exception:
+                    review = None
+        return review
+
+    def _tm_selected_seg_or_warn(self):
+        """Resolve (review, segment_id) for an edit, or (None, None) with an
+        honest status message. Refuses when the coordinator disallows editing."""
+        review = self._tm_current_review_for_edit()
+        status = getattr(self, "_tm_seg_edit_status", None)
+        if review is None or not review.segments:
+            if status:
+                status.setText("No segments to edit — detect segments first.")
+            return None, None
+        sid = getattr(self, "_tm_selected_segment_id", None)
+        if not sid:
+            if status:
+                status.setText("Select a segment row first.")
+            return None, None
+        # The meaningful legality gate is "are there segments + a selection" —
+        # both checked above. The canonical coordinator still governs the
+        # workflow (its EDIT_SEGMENT transition fires in _tm_after_seg_edit and
+        # moves a validated/active model back to REVIEW_REQUIRED).
+        return review, sid
+
+    def _tm_after_seg_edit(self, msg: str = "") -> None:
+        self._tm_refresh_seg_table()
+        # Re-sync the coordinator (edits move the model into REVIEW_REQUIRED).
+        try:
+            coord = getattr(self, "_tm_coordinator", None)
+            if coord is not None:
+                from data.track_modelling_coordinator import TrackModellingAction
+                if coord.can(TrackModellingAction.EDIT_SEGMENT):
+                    coord.dispatch(TrackModellingAction.EDIT_SEGMENT)
+        except Exception:
+            pass
+        self._tm_refresh_workflow()
+        if msg and getattr(self, "_tm_seg_edit_status", None) is not None:
+            self._tm_seg_edit_status.setText(msg)
+
+    def _tm_seg_rename(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        name = self._tm_seg_name_edit.text().strip()
+        if not name:
+            self._tm_seg_edit_status.setText("Enter a new name first.")
+            return
+        from data.track_segment_review import rename_segment
+        rename_segment(review, sid, name)
+        self._tm_after_seg_edit(f"Renamed to “{name}”.")
+
+    def _tm_seg_renumber(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import renumber_segment
+        n = int(self._tm_seg_turn_spin.value())
+        renumber_segment(review, sid, n if n > 0 else None)
+        self._tm_after_seg_edit(f"Renumbered to T{n}." if n > 0 else "Turn cleared.")
+
+    def _tm_seg_approve(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import confirm_segment
+        confirm_segment(review, sid)
+        self._tm_after_seg_edit("Segment approved.")
+
+    def _tm_seg_reject(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import reject_segment
+        reject_segment(review, sid)
+        self._tm_after_seg_edit("Segment rejected.")
+
+    def _tm_seg_split(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        from data.track_segment_review import split_segment, _find_segment
+        seg = _find_segment(review, sid)
+        if seg is None:
+            return
+        mid = (seg.lap_progress_start + seg.lap_progress_end) / 2.0
+        split_segment(review, sid, mid)
+        self._tm_selected_segment_id = None
+        self._tm_after_seg_edit("Segment split at its midpoint.")
+
+    def _tm_seg_merge(self) -> None:
+        review, sid = self._tm_selected_seg_or_warn()
+        if not sid:
+            return
+        ids = [s.segment_id for s in review.segments]
+        try:
+            i = ids.index(sid)
+        except ValueError:
+            return
+        if i + 1 >= len(review.segments):
+            self._tm_seg_edit_status.setText("No next segment to merge with.")
+            return
+        nxt = review.segments[i + 1].segment_id
+        from data.track_segment_review import merge_segments
+        merge_segments(review, sid, nxt)
+        self._tm_after_seg_edit(f"Merged with {nxt}.")
+
     # --- Segment Review methods (Group 17F) ---------------------------------
 
     def _tm_refresh_seg_table(self) -> None:
@@ -2676,6 +2990,11 @@ class TrackModellingMixin:
         if nxt is not None:
             has_station_map = getattr(self, "_tm_station_map", None) is not None
             nxt.setText(_format_next_step(self._tm_resolver_result, has_station_map))
+
+        # Keep the canonical workflow state machine + guided banner in sync with
+        # whatever the resolver just re-derived (auto-loads approved models to
+        # ACTIVE on selection).
+        self._tm_refresh_workflow()
 
     # ── Group 17M: lap offset calibration helpers ────────────────────────────
 

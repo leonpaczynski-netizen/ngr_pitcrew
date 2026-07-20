@@ -147,8 +147,21 @@ def _episode_from_run(run, drivetrain, cfg, segment_resolver) -> Optional[SlipEp
 
     seg_id, phase = ("", "")
     if segment_resolver is not None:
+        # Pass the episode's world position so resolvers can use the primary
+        # XYZ→reference-path path (road_distance alone is not lap-relative in
+        # GT7). Backward-compatible: resolvers that don't accept ``pos`` fall
+        # back to the 4-arg road-distance form.
+        _px = _f(frames[0], "pos_x", None)
+        _py = _f(frames[0], "pos_y", None)
+        _pz = _f(frames[0], "pos_z", None)
+        _pos = (_px, _py, _pz) if None not in (_px, _py, _pz) else None
         try:
-            seg_id, phase = segment_resolver(road_dist, mean_spd, mean_thr, mean_brk)
+            seg_id, phase = segment_resolver(road_dist, mean_spd, mean_thr, mean_brk, pos=_pos)
+        except TypeError:
+            try:
+                seg_id, phase = segment_resolver(road_dist, mean_spd, mean_thr, mean_brk)
+            except Exception:
+                seg_id, phase = ("", "")
         except Exception:
             seg_id, phase = ("", "")
 

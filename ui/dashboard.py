@@ -148,10 +148,13 @@ class SignalBridge(QObject):
 # Main Window
 # ---------------------------------------------------------------------------
 
-_DARK_BG   = "#1E1E1E"
-_DARK_CARD  = "#2A2A2A"
-_TEXT       = "#E0E0E0"
-_ACCENT     = "#2EA043"
+# Canonical display constants — sourced from the NGR design system so the whole
+# app shares one palette (ui/ngr_theme.py) instead of ad-hoc hex.
+from ui import ngr_theme as _ngrt
+_DARK_BG   = _ngrt.CARBON          # was "#1E1E1E" — window surface
+_DARK_CARD  = _ngrt.CARBON_RAISED  # was "#2A2A2A" — cards/panels
+_TEXT       = _ngrt.TEXT           # was "#E0E0E0" — body text
+_ACCENT     = _ngrt.NGR_GREEN      # was "#2EA043" — NGR neon-green accent
 
 from ui.guide_content import GUIDE_HTML as _GUIDE_HTML
 
@@ -315,6 +318,35 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         # driver feedback so the setup fix knows which setup was on the car.
         self._live_running_setup: str = ""
 
+        # UAT Finding 1: canonical applied-setup authority — the single owner of
+        # "the setup that is actually on the car right now". The Live Race
+        # Engineer defaults its baseline to this; the running-setup combo is only
+        # a manual override. Backed by a small JSON file next to the config so the
+        # last confirmed active setup restores after restart (and stays isolated
+        # under the temp config used by tests).
+        from data.setup_state_authority import ActiveSetupAuthority
+        from data.active_setup_store import JsonActiveSetupStore
+        _authority_store = None
+        try:
+            if self._config_path:
+                _authority_store = JsonActiveSetupStore(
+                    Path(self._config_path).with_name("active_setup_state.json"))
+        except Exception:
+            _authority_store = None
+        self._setup_authority = ActiveSetupAuthority(store=_authority_store)
+
+        # UAT Finding 2 wiring: per-lap slip-episode buffers feeding Practice
+        # Analysis. Populated at lap completion in Practice mode; reset per
+        # session so cross-session data never mixes.
+        self._practice_lap_episodes: dict = {}
+        self._practice_clean_laps: set = set()
+        self._practice_total_laps: set = set()
+        self._practice_corner_names: dict = {}
+        self._practice_track_corners: list = []
+        # Live references to in-flight analysis workers (QThreads) so they are
+        # not garbage-collected mid-run. See _run_analysis_async.
+        self._analysis_workers: set = set()
+
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.setMinimumSize(1100, 700)
         self._apply_dark_theme()
@@ -402,6 +434,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._tabs.addTab(self._build_settings_tab(),         "Settings")         # 9
         self._tabs.addTab(self._build_history_tab(),          "History")          # 10
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
+        self._tabs.addTab(self._build_development_history_tab(),
+                          "Development History")                                # 13
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -570,6 +604,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._home_btn_refresh.clicked.connect(self._home_refresh)
         header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header_bar)
+
+        # Phase 51 — Event Command Centre: the active NGR event is the PRIMARY Home surface. Read-only;
+        # the heavy build runs off the Qt thread (worker + stale guard); navigation and active-cycle
+        # selection are delegated back here. When there is no active event it renders a create/select
+        # next action. It applies/locks/finalises/binds nothing.
+        try:
+            from ui.event_command_centre_panel import EventCommandCentrePanel
+            self._event_command_centre_panel = EventCommandCentrePanel()
+            self._event_command_centre_panel.set_handlers(
+                navigate=self._cc_navigate, select=self._cc_select_active_cycle)
+            root.addWidget(self._event_command_centre_panel)
+        except Exception:  # pragma: no cover - defensive; Home must still build
+            self._event_command_centre_panel = None
 
         # Sprint 10: guided workflow stepper — the "follow the bouncing ball"
         # 12-stage journey. Clicking its next-action button navigates to the tab
@@ -783,6 +830,153 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     lbl.setText(hdvm.format_card_html(card))
         except Exception:  # pragma: no cover - defensive; must never break the UI
             pass
+        # Phase 51 — rebuild the Event Command Centre off the Qt thread (read-only).
+        self._refresh_event_command_centre()
+
+    # ------------------------------------------------------------------
+    # Phase 51 — Event Command Centre (read-only Home spine, off-thread)
+    # ------------------------------------------------------------------
+    _CC_SURFACE_TABS = {
+        "briefing": "development_history", "garage": "garage", "practice": "practice_review",
+        "setup": "setup_builder", "coaching": "development_history", "telemetry": "telemetry",
+        "strategy": "strategy_builder", "qualifying": "live", "live": "live",
+        "debrief": "development_history", "development_history": "development_history",
+    }
+
+    def _cc_navigate(self, surface) -> None:
+        """Command Centre quick-action → navigate to the mapped specialist tab (no state change)."""
+        try:
+            key = self._CC_SURFACE_TABS.get(str(surface or ""))
+            if key and self.has_tab(key):
+                self.select_tab(key)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _cc_select_active_cycle(self, cycle_id) -> None:
+        """Explicit active-cycle selection. OPERATIONAL navigation state only — persisted to config,
+        never an engineering write; it cannot alter historical evidence. Refreshes Home."""
+        try:
+            self._config["active_cycle_id"] = str(cycle_id or "")
+            self._refresh_event_command_centre()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_event_command_centre(self) -> None:
+        """Rebuild the Command Centre view off the Qt thread. Read-only; shows a loading state while the
+        build runs; a stale worker's result is dropped."""
+        panel = getattr(self, "_event_command_centre_panel", None)
+        if panel is None or self._db is None:
+            return
+        try:
+            panel.update_result({"loading": True})
+            import datetime
+            selected = str(self._config.get("active_cycle_id") or "")
+            now_date = datetime.date.today().isoformat()
+            db = self._db
+
+            def _build():
+                return db.build_event_command_centre_view(selected_cycle_id=selected, now_date=now_date)
+
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            worker = MechanismAnnotationWorker(_build)
+            self._event_command_centre_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_event_command_centre_ready(result, w))
+            worker.failed.connect(lambda _msg, w=worker: self._on_event_command_centre_ready(None, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_event_command_centre_ready(self, result, worker=None) -> None:
+        """Render the finished Command Centre dict on the Qt thread; ignore a stale worker's result."""
+        if worker is not None and getattr(self, "_event_command_centre_worker", None) is not worker:
+            return
+        panel = getattr(self, "_event_command_centre_panel", None)
+        if panel is not None:
+            panel.update_result(result)
+
+    # ------------------------------------------------------------------
+    # Phase 60 — production Live Pit Wall (off the UI thread; reuses RaceStateTracker)
+    # ------------------------------------------------------------------
+    def _live_pit_wall_nav(self):
+        """The operational navigation context for the production Live pit wall. Never enters an
+        engineering fingerprint. Opening Live sets entered_live; only an explicit Start sets started."""
+        from strategy.live_pit_wall_controller import LivePitWallNavigationContext
+        return LivePitWallNavigationContext(
+            active_event_id=str(self._config.get("active_cycle_id") or ""),
+            selected_activity_id=str(getattr(self, "_live_selected_activity_id", "") or ""),
+            entered_live=bool(getattr(self, "_live_entered", False)),
+            started=bool(getattr(self, "_live_started", False)),
+            abandoned=bool(getattr(self, "_live_abandoned", False)),
+            returning=bool(getattr(self, "_live_returning", False)))
+
+    def _build_tracker_runtime_snapshot(self):
+        """Read the EXISTING RaceStateTracker into a normalised, immutable TrackerRuntimeSnapshot. Thin
+        read only — creates no listener/socket/loop. Unknown fields stay empty (never fabricated)."""
+        from strategy.gt7_live_adapter import TrackerRuntimeSnapshot
+        t = getattr(self, "_tracker", None)
+
+        def _g(name, default=""):
+            return getattr(t, name, default) if t is not None else default
+        import time as _time
+        return TrackerRuntimeSnapshot(
+            car=str(_g("car_name", "") or ""), track=str(_g("track", "") or ""),
+            layout=str(_g("layout_id", "") or ""),
+            applied_setup_fingerprint=str(getattr(self, "_live_applied_setup_fingerprint", "") or ""),
+            live_context_digest=str(getattr(self, "_live_context_digest", "") or ""),
+            lap=int(_g("laps_recorded", 0) or 0), session_state=str(getattr(self, "_live_session_state", "") or ""),
+            fuel=str(_g("current_fuel", "") or ""), tyre_compound=str(_g("tyre_compound", "") or ""),
+            pit_state=("pit" if bool(_g("in_pit", False)) else ""),
+            valid_laps=int(_g("laps_recorded", 0) or 0),
+            last_packet_monotonic=getattr(self, "_live_last_packet_monotonic", None),
+            map_match_confidence=float(getattr(self, "_live_map_match_confidence", 0.0) or 0.0))
+
+    def _refresh_live_pit_wall(self) -> None:
+        """Rebuild the production Live pit wall OFF the UI thread. DB-free (the activity context is resolved
+        once on invalidation and cached in self._live_activity_ctx). A stale worker (different event/
+        activity) is dropped. Never writes; never starts/completes the activity."""
+        panel = getattr(self, "_live_pit_wall_panel", None)
+        if panel is None:
+            return
+        try:
+            from strategy.gt7_live_adapter import SelectedActivityContext
+            from strategy.live_pit_wall_build import build_live_pit_wall_view
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            nav = self._live_pit_wall_nav()
+            ctx = getattr(self, "_live_activity_ctx", None) or SelectedActivityContext(
+                cycle_id=nav.active_event_id, activity_id=nav.selected_activity_id)
+            tracker = self._build_tracker_runtime_snapshot()
+            was_running = bool(getattr(self, "_live_was_running", False))
+            import time as _time
+            now_mono = _time.monotonic()
+            event_line = str(getattr(self, "_live_event_line", "") or "")
+            nav_key = (nav.active_event_id, nav.selected_activity_id)
+
+            def _build():
+                return build_live_pit_wall_view(tracker, ctx, nav, was_running=was_running,
+                                                now_monotonic=now_mono, event_line=event_line)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._live_pit_wall_worker = worker
+            self._live_pit_wall_worker_key = nav_key
+            worker.finished_ok.connect(lambda result, w=worker, k=nav_key: self._on_live_pit_wall_ready(result, w, k))
+            worker.failed.connect(lambda _m, w=worker, k=nav_key: self._on_live_pit_wall_ready(None, w, k))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_live_pit_wall_ready(self, result, worker=None, nav_key=None) -> None:
+        """Render on the UI thread; drop a stale worker OR a result for a previously-selected event/
+        activity (event switching cannot update the new event)."""
+        if worker is not None and getattr(self, "_live_pit_wall_worker", None) is not worker:
+            return
+        current_key = (str(self._config.get("active_cycle_id") or ""),
+                       str(getattr(self, "_live_selected_activity_id", "") or ""))
+        if nav_key is not None and tuple(nav_key) != current_key:
+            return  # stale: selection changed since this worker started
+        panel = getattr(self, "_live_pit_wall_panel", None)
+        if panel is not None:
+            panel.update_result(result)
 
     def _home_update_next_action_button(self, next_action) -> None:
         """Point the next-action button at the recommended tab, or hide it.
@@ -1425,7 +1619,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             (self._baseline_result_queue,    self._display_baseline_result),
             (self._degradation_result_queue, self._display_degradation_result),
             (self._profile_update_queue,     self._display_profile_update_result),
+            # Engineering-Brain Phase 3: off-thread setup-experiment outcome review.
+            (getattr(self, "_outcome_result_queue", None),
+             getattr(self, "_display_outcome_result", None)),
         ]:
+            if _q is None or _handler is None:
+                continue
             try:
                 _handler(_q.get_nowait())
             except queue.Empty:
@@ -1443,6 +1642,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         mode = self._combo_live_mode.currentText()
         if mode == "Practice":
             self._update_practice_stats(record)
+            self._capture_practice_lap(record)
         elif mode == "Qualifying" and record.lap_time_ms > 0:
             if hasattr(self, "_spin_qual_min"):
                 target_ms = int(self._spin_qual_min.value() * 60_000
@@ -1905,7 +2105,15 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             if not os.path.exists("data/gt7_sessions.db"):
                 return ""
             db = _SDB("data/gt7_sessions.db")
-            rows = db.get_setup_comparison(0, track)
+            # Resolve the REAL car_id — the old code passed 0, which matched no
+            # rows, so setup-history comparison was always empty.
+            car_name = ""
+            try:
+                car_name = str(getattr(self._build_event_context(), "car", "") or "")
+            except Exception:
+                car_name = ""
+            car_id = int(db.get_car_id(car_name)) if car_name else self._current_car_id()
+            rows = db.get_setup_comparison(car_id, track)
             db.close()
             if not rows:
                 return ""
@@ -4962,7 +5170,7 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         reg = getattr(self, "_tab_registry", None)
         key = reg.key_at(index) if reg is not None else None
         if key == TAB_HISTORY:            self._refresh_history()
-        elif key == TAB_LIVE:             self._refresh_running_setup_combos()
+        elif key == TAB_LIVE:             self._refresh_running_setup_combos(); self._refresh_live_pit_wall()
         elif key == TAB_SETUP_BUILDER:    self._sync_setup_builder_from_event()
         elif key == TAB_STRATEGY_BUILDER:
             self._sync_strategy_from_event()
@@ -5069,6 +5277,62 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         """Store the declared running setup and keep both combos in sync."""
         self._live_running_setup = "" if (not text or text == "— none —") else text
         self._refresh_running_setup_combos()
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 1 — canonical applied-setup authority integration.
+    # ------------------------------------------------------------------ #
+
+    def _current_setup_identity(self):
+        """The (car, track, layout) identity of the current session/event."""
+        from data.setup_state_authority import SetupIdentity
+        try:
+            ev = self._build_event_context()
+            return SetupIdentity(
+                car=str(getattr(ev, "car", "") or ""),
+                track=str(getattr(ev, "track", "") or ""),
+                layout_id=str(getattr(ev, "layout_id", "") or ""),
+            )
+        except Exception:
+            return SetupIdentity()
+
+    def _active_setup_for_current(self, purpose: str = "Race"):
+        """The canonical active applied setup for this session, or None.
+
+        Prefers the requested purpose, then the other, so the Live baseline is
+        populated whichever discipline was last applied for this car/track."""
+        auth = getattr(self, "_setup_authority", None)
+        if auth is None:
+            return None
+        ident = self._current_setup_identity()
+        other = "Qualifying" if purpose == "Race" else "Race"
+        return auth.active_setup(ident, purpose) or auth.active_setup(ident, other)
+
+    def _refresh_active_setup_display(self) -> None:
+        """Render the Live baseline (canonical active setup) honestly, kept
+        visibly separate from the manual running-setup override combo."""
+        lbl = getattr(self, "_live_active_setup_lbl", None)
+        auth = getattr(self, "_setup_authority", None)
+        if lbl is None or auth is None:
+            return
+        ident = self._current_setup_identity()
+        active = self._active_setup_for_current("Race")
+        if active is not None:
+            at = f" · applied {active.applied_at}" if active.applied_at else ""
+            lbl.setText(
+                f"Live baseline: {active.name} · rev {active.revision} "
+                f"[{active.purpose}]{at}")
+            lbl.setStyleSheet("color:#8BC34A; font-size:10px; padding:2px 0;")
+            return
+        gate = auth.analysis_gate(ident, "Race")
+        if gate.reason.name == "IDENTITY_MISMATCH" and gate.active is not None:
+            lbl.setText(
+                "Live baseline: none for this car/track — the applied setup "
+                f"“{gate.active.name}” is for a different session.")
+        else:
+            lbl.setText(
+                "Live baseline: none applied yet — apply a setup in game "
+                "to set the Live Race Engineer baseline.")
+        lbl.setStyleSheet("color:#F0C070; font-size:10px; padding:2px 0;")
 
     def _sync_practice_from_event(self) -> None:
         # Keep the "setup run this stint" selector current with saved setups +
@@ -5274,9 +5538,634 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         layout.addWidget(analysis_group)
 
         layout.addWidget(self._build_driver_feedback_form())
+        # UAT Finding 2: dedicated Practice Analysis surface AFTER driver feedback.
+        layout.addWidget(self._build_practice_analysis_panel())
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
+
+    # ------------------------------------------------------------------ #
+    # UAT Finding 2 — Practice Analysis structured surface.
+    # ------------------------------------------------------------------ #
+
+    def _build_practice_analysis_panel(self) -> QGroupBox:
+        """Structured cross-lap pattern analysis (session summary + per-corner
+        table + repeatable/strong/isolated lists + targeted tests). Deliberately
+        NOT one plain-text box."""
+        from ui import ngr_theme as _ngr_pa_btn
+        group = QGroupBox("Practice Analysis — Patterns Across Laps")
+        group.setStyleSheet(self._group_style())
+        v = QVBoxLayout(group)
+        v.setSpacing(8)
+
+        intro = QLabel(
+            "Analyses repeated vs isolated issues, consistently strong corners, "
+            "and agreement with your feedback — across clean laps only.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        v.addWidget(intro)
+
+        btn_row = QHBoxLayout()
+        self._btn_analyse_practice = QPushButton("Analyse Practice Patterns")
+        self._btn_analyse_practice.setStyleSheet(_ngr_pa_btn.primary_button_qss())
+        self._btn_analyse_practice.clicked.connect(self._analyse_practice_patterns)
+        btn_row.addWidget(self._btn_analyse_practice)
+        btn_row.addStretch()
+        v.addLayout(btn_row)
+
+        self._pa_empty_lbl = QLabel(
+            "Click “Analyse Practice Patterns” after a stint of clean laps.")
+        self._pa_empty_lbl.setWordWrap(True)
+        self._pa_empty_lbl.setStyleSheet(
+            f"color:{_ngr_pa_btn.TEXT_DIM}; font-size:{_ngr_pa_btn.FS_BODY}pt;")
+        v.addWidget(self._pa_empty_lbl)
+
+        # 1) Session summary (grid of label/value).
+        self._pa_summary_grid = QGridLayout()
+        summary_box = QGroupBox("Session Summary")
+        summary_box.setStyleSheet(self._group_style())
+        summary_box.setLayout(self._pa_summary_grid)
+        self._pa_summary_box = summary_box
+        summary_box.setVisible(False)
+        v.addWidget(summary_box)
+
+        # 2) Per-corner pattern table (sortable; numeric columns tabular).
+        from ui.practice_analysis_vm import CORNER_TABLE_COLUMNS
+        from ui import ngr_theme as _ngr_pa
+        self._pa_table = QTableWidget(0, len(CORNER_TABLE_COLUMNS))
+        self._pa_table.setHorizontalHeaderLabels(list(CORNER_TABLE_COLUMNS))
+        self._pa_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self._pa_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._pa_table.setSortingEnabled(True)             # P6: sortable table
+        self._pa_table.setAlternatingRowColors(True)
+        self._pa_table.setVisible(False)
+        self._pa_table_caption = QLabel("Per-corner pattern")
+        self._pa_table_caption.setStyleSheet(_ngr_pa.heading_qss(3))
+        self._pa_table_caption.setVisible(False)
+        v.addWidget(self._pa_table_caption)
+        v.addWidget(self._pa_table)
+
+        # 3-7) Lists: repeatable issues, strong corners, isolated events,
+        #      driver-feedback agreement, targeted next tests.
+        def _make_list(title: str):
+            cap = QLabel(title)
+            cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+            cap.setVisible(False)
+            lst = QListWidget()
+            lst.setMaximumHeight(110)
+            lst.setVisible(False)
+            v.addWidget(cap)
+            v.addWidget(lst)
+            return cap, lst
+
+        self._pa_repeat_cap, self._pa_repeat_list = _make_list("Repeatable issues")
+        self._pa_strong_cap, self._pa_strong_list = _make_list("Strong & consistent corners")
+        self._pa_isolated_cap, self._pa_isolated_list = _make_list("Isolated events")
+        self._pa_feedback_cap, self._pa_feedback_list = _make_list("Driver-feedback agreement")
+        self._pa_tests_cap, self._pa_tests_list = _make_list("Targeted next tests")
+
+        # Holistic brain Phase 2: per-corner driving coach (your perfect lap).
+        coach_box = QGroupBox("Driving Coach — Your Perfect Lap")
+        coach_box.setStyleSheet(self._group_style())
+        cv = QVBoxLayout(coach_box)
+        cv.setSpacing(6)
+        coach_intro = QLabel(
+            "Your best clean-lap corner targets (brake point · gears · apex "
+            "speed · throttle-on), and where your normal laps leave time.")
+        coach_intro.setWordWrap(True)
+        coach_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        cv.addWidget(coach_intro)
+        self._btn_coach_lap = QPushButton("Coach My Perfect Lap")
+        self._btn_coach_lap.setStyleSheet(_ngr_pa_btn.primary_button_qss())
+        self._btn_coach_lap.clicked.connect(self._coach_perfect_lap)
+        _crow = QHBoxLayout()
+        _crow.addWidget(self._btn_coach_lap)
+        _crow.addStretch()
+        cv.addLayout(_crow)
+        self._coach_summary_lbl = QLabel(
+            "Click “Coach My Perfect Lap” after some clean laps.")
+        self._coach_summary_lbl.setWordWrap(True)
+        self._coach_summary_lbl.setStyleSheet(_ngr_pa_btn.banner_qss("success"))
+        cv.addWidget(self._coach_summary_lbl)
+        _ideal_cap = QLabel("Ideal lap — corner targets")
+        _ideal_cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        cv.addWidget(_ideal_cap)
+        self._coach_ideal_list = QListWidget()
+        self._coach_ideal_list.setMaximumHeight(130)
+        self._coach_ideal_list.setVisible(False)
+        cv.addWidget(self._coach_ideal_list)
+        _adv_cap = QLabel("Where to find time")
+        _adv_cap.setStyleSheet("color:#C8CDD2; font-weight:bold;")
+        cv.addWidget(_adv_cap)
+        self._coach_advice_list = QListWidget()
+        self._coach_advice_list.setMaximumHeight(150)
+        self._coach_advice_list.setVisible(False)
+        cv.addWidget(self._coach_advice_list)
+        v.addWidget(coach_box)
+
+        # Holistic brain Phase 3: cross-session setup verdict.
+        verdict_box = QGroupBox("Setup vs Previous — Did It Improve?")
+        verdict_box.setStyleSheet(self._group_style())
+        vv = QVBoxLayout(verdict_box)
+        vv.setSpacing(6)
+        v_intro = QLabel(
+            "Compares your two most-recent setups on this car/track: lap-time, "
+            "per-corner apex speed, wheelspin/lock-ups, and your own feedback.")
+        v_intro.setWordWrap(True)
+        v_intro.setStyleSheet("color:#9AA0A6; font-size:10px;")
+        vv.addWidget(v_intro)
+        self._btn_setup_verdict = QPushButton("Compare Setups (session history)")
+        self._btn_setup_verdict.setStyleSheet(_ngr_pa_btn.primary_button_qss())
+        self._btn_setup_verdict.clicked.connect(self._analyse_setup_verdict)
+        _vrow = QHBoxLayout()
+        _vrow.addWidget(self._btn_setup_verdict)
+        _vrow.addStretch()
+        vv.addLayout(_vrow)
+        self._verdict_summary_lbl = QLabel(
+            "Click “Compare Setups” once you've run two setups here.")
+        self._verdict_summary_lbl.setWordWrap(True)
+        self._verdict_summary_lbl.setStyleSheet(_ngr_pa_btn.banner_qss("info"))
+        vv.addWidget(self._verdict_summary_lbl)
+        self._verdict_reasons_list = QListWidget()
+        self._verdict_reasons_list.setMaximumHeight(150)
+        self._verdict_reasons_list.setVisible(False)
+        vv.addWidget(self._verdict_reasons_list)
+        v.addWidget(verdict_box)
+
+        return group
+
+    def _render_practice_analysis(self, report) -> None:
+        """Populate the structured Practice Analysis widgets from a report."""
+        from ui import practice_analysis_vm as pav
+
+        empty = pav.empty_state(report)
+        self._pa_empty_lbl.setText(empty or "")
+        self._pa_empty_lbl.setVisible(bool(empty))
+
+        # Session summary.
+        while self._pa_summary_grid.count():
+            item = self._pa_summary_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        rows = pav.session_summary_rows(report)
+        for i, (label, value) in enumerate(rows):
+            r, c = divmod(i, 3)
+            cell = QLabel(f"{label}: {value}")
+            cell.setStyleSheet(f"color: {_TEXT};")
+            self._pa_summary_grid.addWidget(cell, r, c)
+        self._pa_summary_box.setVisible(True)
+
+        # Per-corner table. Numeric columns (Laps, Recur %) use tabular figures
+        # + right alignment so they line up; sorting is toggled off during the
+        # fill so rows aren't reordered mid-populate.
+        from PyQt6.QtGui import QFont as _QFont
+        from PyQt6.QtCore import Qt as _Qt
+        from ui import ngr_theme as _ngr_pa
+        _tab_font = _QFont("Consolas")
+        _tab_font.setStyleHint(_QFont.StyleHint.Monospace)
+        _numeric_cols = {3, 4}   # Laps, Recur %
+        _PA_TONES = {"success": _ngr_pa.STATUS_TONES["success"][1],
+                     "neutral": _ngr_pa.TEXT_DIM}
+        pav_cols = pav.CORNER_TABLE_COLUMNS
+        table_rows = pav.corner_table_rows(report)
+        self._pa_table.setSortingEnabled(False)
+        self._pa_table.setRowCount(len(table_rows))
+        for ri, row in enumerate(table_rows):
+            for ci, val in enumerate(row):
+                item = QTableWidgetItem(str(val))
+                if ci in _numeric_cols:
+                    item.setFont(_tab_font)
+                    item.setTextAlignment(_Qt.AlignmentFlag.AlignRight
+                                          | _Qt.AlignmentFlag.AlignVCenter)
+                # Colour the Author? cell by eligibility (never colour-only —
+                # the text still reads Yes/No).
+                if pav_cols[ci] == "Author?":
+                    tone = "success" if str(val) == "Yes" else "neutral"
+                    item.setForeground(QColor(_PA_TONES[tone]))
+                self._pa_table.setItem(ri, ci, item)
+        self._pa_table.setSortingEnabled(True)
+        has_rows = bool(table_rows)
+        self._pa_table.setVisible(has_rows)
+        self._pa_table_caption.setVisible(has_rows)
+
+        # Lists.
+        for cap, lst, lines in (
+            (self._pa_repeat_cap, self._pa_repeat_list, pav.repeatable_lines(report)),
+            (self._pa_strong_cap, self._pa_strong_list, pav.strong_lines(report)),
+            (self._pa_isolated_cap, self._pa_isolated_list, pav.isolated_lines(report)),
+            (self._pa_feedback_cap, self._pa_feedback_list, pav.feedback_lines(report)),
+            (self._pa_tests_cap, self._pa_tests_list, pav.targeted_test_lines(report)),
+        ):
+            lst.clear()
+            for line in lines:
+                lst.addItem(line)
+            cap.setVisible(bool(lines))
+            lst.setVisible(bool(lines))
+
+    def _current_car_id(self) -> int:
+        """Best-effort DB car_id for the active car (0 if unknown).
+
+        Historical aggregates (setup comparison, car/track summary, corner-slip
+        rows) are scoped by car_id; passing 0 matches nothing, which was why
+        setup history read as empty. Resolve the real id from the live dispatcher
+        ref first, then the event-context car name."""
+        try:
+            ref = getattr(self, "_car_id_ref", None)
+            if ref and int(ref[0]) > 0:
+                return int(ref[0])
+        except Exception:
+            pass
+        try:
+            car = str(getattr(self._build_event_context(), "car", "") or "")
+            if car and self._db is not None:
+                return int(self._db.get_car_id(car) or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _reset_practice_capture(self) -> None:
+        """Clear the per-lap practice buffers (call when a new practice session
+        starts so cross-session evidence never mixes)."""
+        self._practice_lap_episodes = {}
+        self._practice_clean_laps = set()
+        self._practice_total_laps = set()
+
+    def _practice_track_identity(self):
+        """(track_location_id, layout_id) for the active event, or ("","")."""
+        try:
+            ev = self._build_event_context()
+            return (str(getattr(ev, "track_location_id", "") or ""),
+                    str(getattr(ev, "layout_id", "") or ""))
+        except Exception:
+            return "", ""
+
+    def _practice_reviewed_segments(self, loc: str, lay: str):
+        """Best-effort reviewed segments for (loc, lay): the Track Modelling review
+        state if present, else the best model on disk (same one the XYZ resolver
+        uses). Returns [] when nothing is available."""
+        review = getattr(self, "_tm_review_result", None)
+        segs = list(getattr(review, "segments", []) or []) if review is not None else []
+        if segs:
+            return segs
+        if not (loc and lay):
+            return []
+        try:
+            from data.track_model_resolver import resolve_best_track_model
+            res = resolve_best_track_model(loc, lay)
+            model = getattr(res, "resolved_model", None)
+            rev = getattr(model, "reviewed_model", None) if model is not None else None
+            return list(getattr(rev, "segments", []) or []) if rev is not None else []
+        except Exception:
+            return []
+
+    def _practice_segments_cache(self):
+        """Legacy accessor kept for the progress-resolver fallback:
+        (reviewed_segments, lap_length_m, offset_m) for the active track."""
+        loc, lay = self._practice_track_identity()
+        segs = self._practice_reviewed_segments(loc, lay)
+        lap_len = 0.0
+        try:
+            lap_len = float(self._tm_get_track_length_m() or 0.0)
+        except Exception:
+            lap_len = 0.0
+        offset = 0.0
+        cal = getattr(self, "_tm_offset_calibration", None)
+        if cal is not None:
+            offset = float(getattr(cal, "offset_m", 0.0) or 0.0)
+        return segs, lap_len, offset
+
+    def _capture_practice_lap(self, record) -> None:
+        """Snapshot the just-completed lap on the UI thread, then extract its slip
+        episodes OFF the UI thread (per-frame XYZ resolution + DB persist — the
+        heavy work) so lap completion never stutters. The result is folded into
+        the Practice Analysis buffers back on the main thread (see
+        ``_apply_lap_capture``), which is the only place they are mutated so there
+        is no cross-thread race. Never raises into the lap path.
+        """
+        try:
+            rec = getattr(self, "_recorder", None)
+            if rec is None:
+                return
+            lap_num = int(getattr(record, "lap", getattr(record, "lap_number", 0)) or 0)
+            stats = None
+            try:
+                stats = rec.get_lap(lap_num) if lap_num else None
+            except Exception:
+                stats = None
+            if stats is None and hasattr(rec, "last_lap"):
+                stats = rec.last_lap()
+            frames = getattr(stats, "frames", None) if stats is not None else None
+            if not frames:
+                return
+            # Snapshot the frame list (refs) so the worker reads a stable view
+            # even as the recorder advances to the next lap.
+            frames = list(frames)
+            lap_num = int(getattr(stats, "lap_num", lap_num) or lap_num)
+
+            # --- Snapshot every input on the main thread (all cheap reads) ---
+            drivetrain = ""
+            try:
+                if hasattr(self, "_setup_drivetrain"):
+                    drivetrain = self._setup_drivetrain.currentText() or ""
+            except Exception:
+                drivetrain = ""
+            loc, lay = self._practice_track_identity()
+            segs = self._practice_reviewed_segments(loc, lay)
+            cal = getattr(self, "_tm_offset_calibration", None)
+            offset = float(getattr(cal, "offset_m", 0.0) or 0.0) if cal is not None else 0.0
+            lap_len = 0.0
+            try:
+                lap_len = float(self._tm_get_track_length_m() or 0.0)
+            except Exception:
+                lap_len = 0.0
+            best = 0
+            try:
+                best = int(self._logger.best_lap_ms() or 0)
+            except Exception:
+                best = 0
+            lap_time_ms = int(getattr(record, "lap_time_ms", 0) or 0)
+            valid = bool(getattr(record, "is_valid", True))
+            track = str(getattr(self._build_event_context(), "track", "") or "")
+            car_id = self._current_car_id()
+            sid = int(getattr(getattr(self, "_dispatcher", None), "_session_id", 0) or 0)
+
+            def _extract():
+                # Runs on the worker thread: per-frame resolution + DB persist.
+                from strategy.practice_capture import (
+                    build_progress_segment_resolver, build_xyz_segment_resolver,
+                    compute_lap_capture, segments_to_corner_names,
+                    segments_to_track_corners, episodes_to_occurrences)
+                names: dict = {}   # local sink — merged into buffers on the main thread
+                resolver = None
+                if loc and lay:
+                    resolver = build_xyz_segment_resolver(
+                        loc, lay, offset_calibration=cal, name_sink=names)
+                if resolver is None and segs and lap_len > 0:
+                    resolver = build_progress_segment_resolver(segs, lap_len, offset)
+                episodes, is_clean = compute_lap_capture(
+                    frames, drivetrain, resolver,
+                    lap_time_ms=lap_time_ms, best_ms=best, valid=valid)
+                # Cross-session per-corner history (DB is thread-safe).
+                if self._db is not None and episodes and car_id and track:
+                    try:
+                        occ = episodes_to_occurrences(
+                            episodes, lap_number=lap_num, session_id=sid)
+                        self._db.save_issue_occurrences(car_id, track, lay, occ)
+                    except Exception as ex:
+                        print(f"[PracticeCapture] persist: {ex}")
+                return {
+                    "lap_num": lap_num, "episodes": episodes, "is_clean": is_clean,
+                    "names": names,
+                    "disk_names": segments_to_corner_names(segs) if segs else {},
+                    "track_corners": segments_to_track_corners(segs) if segs else None,
+                }
+
+            self._run_analysis_async(_extract, self._apply_lap_capture, None, "")
+        except Exception as e:
+            print(f"[PracticeCapture] {e}")
+
+    def _apply_lap_capture(self, result) -> None:
+        """Main-thread completion slot: fold a worker's capture result into the
+        Practice Analysis buffers (only mutated here — no cross-thread race)."""
+        if not result:
+            return
+        ln = int(result.get("lap_num", 0))
+        self._practice_lap_episodes[ln] = result.get("episodes") or []
+        self._practice_total_laps.add(ln)
+        if result.get("is_clean"):
+            self._practice_clean_laps.add(ln)
+        for sid, nm in (result.get("names") or {}).items():
+            if nm:
+                self._practice_corner_names.setdefault(sid, nm)
+        for sid, nm in (result.get("disk_names") or {}).items():
+            if nm:
+                self._practice_corner_names.setdefault(sid, nm)
+        if result.get("track_corners") is not None:
+            self._practice_track_corners = result["track_corners"]
+
+    def _perfect_lap_frame_resolver(self, loc: str, lay: str):
+        """A frame->(segment_id, phase) resolver over the XYZ path, for offline
+        per-corner extraction of stored lap frames."""
+        from strategy.practice_capture import build_xyz_segment_resolver
+        cal = getattr(self, "_tm_offset_calibration", None)
+        xyz = build_xyz_segment_resolver(loc, lay, offset_calibration=cal)
+
+        def _fr(frame):
+            get = (frame.get if isinstance(frame, dict)
+                   else lambda k, d=None: getattr(frame, k, d))
+            px, py, pz = get("pos_x", None), get("pos_y", None), get("pos_z", None)
+            pos = (px, py, pz) if None not in (px, py, pz) else None
+            return xyz(get("road_distance", 0.0), get("speed_kmh", 0.0),
+                       get("throttle", 0.0), get("brake", 0.0), pos=pos)
+
+        return _fr
+
+    def _build_perfect_lap_report(self):
+        """Holistic brain Phases 1-2: read recent practice laps' stored frames,
+        extract per-corner reference points, and coach against the driver's own
+        best clean laps. Returns None when there's no usable data."""
+        from strategy.perfect_lap_pipeline import coach_from_laps
+        if self._db is None:
+            return None
+        loc, lay = self._practice_track_identity()
+        car_id = self._current_car_id()
+        track = str(getattr(self._build_event_context(), "track", "") or "")
+        if not (car_id and track):
+            return None
+        laps = self._db.get_laps_with_telemetry(
+            car_id, track, session_type="Practice", limit=30)
+        if not laps:
+            return None
+        segs = self._practice_reviewed_segments(loc, lay)
+        resolver = self._perfect_lap_frame_resolver(loc, lay)
+        return coach_from_laps(laps, resolver, segs)
+
+    def _run_analysis_async(self, build_fn, render_fn, button, busy_text: str):
+        """Run a (potentially slow, DB-reading) analysis off the UI thread with
+        loading feedback, then render on the main thread. Keeps the UI responsive
+        (skill: loading-buttons + progressive-loading). SessionDB is opened with
+        check_same_thread=False and lock-guarded, so cross-thread reads are safe.
+        """
+        from ui.track_model_build_worker import TrackModelBuildWorker
+        orig = button.text() if button is not None else ""
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(busy_text)
+
+        def _work(_report, _is_cancelled):
+            return build_fn()
+
+        worker = TrackModelBuildWorker(_work)
+
+        def _restore():
+            if button is not None:
+                button.setEnabled(True)
+                button.setText(orig)
+            self._analysis_workers.discard(worker)
+
+        def _done(result):
+            try:
+                render_fn(result)
+            finally:
+                _restore()
+
+        def _failed(msg):
+            print(f"[Analysis] {msg}")
+            try:
+                render_fn(None)
+            finally:
+                _restore()
+
+        worker.finished_ok.connect(_done)
+        worker.failed.connect(_failed)
+        self._analysis_workers.add(worker)   # hold a ref so the QThread survives
+        worker.start()
+        return worker
+
+    def _coach_perfect_lap(self) -> None:
+        """Button handler: build + render the perfect-lap coaching (off-thread)."""
+        self._run_analysis_async(
+            self._build_perfect_lap_report, self._render_perfect_lap,
+            getattr(self, "_btn_coach_lap", None), "Coaching…")
+
+    def _render_perfect_lap(self, report) -> None:
+        lbl = getattr(self, "_coach_summary_lbl", None)
+        ideal_list = getattr(self, "_coach_ideal_list", None)
+        advice_list = getattr(self, "_coach_advice_list", None)
+        if lbl is None:
+            return
+        if report is None or not report.ideal_corners:
+            lbl.setText(
+                "No coached laps yet — drive clean practice laps on a track with "
+                "an approved model, then click again. (Corner identity needs the "
+                "track model.)")
+            for lst in (ideal_list, advice_list):
+                if lst is not None:
+                    lst.clear()
+                    lst.setVisible(False)
+            return
+        lbl.setText(report.session_consistency)
+        if ideal_list is not None:
+            ideal_list.clear()
+            for line in report.ideal_lap_lines:
+                ideal_list.addItem(line)
+            ideal_list.setVisible(True)
+        if advice_list is not None:
+            advice_list.clear()
+            for c in report.coaching:
+                for a in c.advice:
+                    advice_list.addItem(a)
+            advice_list.setVisible(True)
+
+    def _setup_id_labels(self) -> dict:
+        """Map DB setup_id -> display label from saved setups."""
+        out = {}
+        try:
+            from ui.setup_name_helper import setup_display_label
+            for s in (getattr(self, "_saved_setups", []) or []):
+                sid = s.get("setup_id")
+                if sid:
+                    out[sid] = setup_display_label(s) or f"Setup {sid}"
+        except Exception:
+            pass
+        return out
+
+    def _build_setup_verdict(self):
+        """Holistic brain Phase 3: compare the two most-recent setups on this
+        car/track using lap-time + per-corner + slip deltas and feedback."""
+        from strategy.setup_verdict_pipeline import build_verdict_from_laps
+        if self._db is None:
+            return None
+        loc, lay = self._practice_track_identity()
+        car_id = self._current_car_id()
+        track = str(getattr(self._build_event_context(), "track", "") or "")
+        if not (car_id and track):
+            return None
+        laps = self._db.get_laps_with_telemetry(
+            car_id, track, session_type="Practice", limit=60)
+        if not laps:
+            return None
+        segs = self._practice_reviewed_segments(loc, lay)
+        resolver = self._perfect_lap_frame_resolver(loc, lay)
+        # Best-effort latest vs-previous feedback.
+        fb = ""
+        try:
+            recent = self._db.get_recent_feedback(car_id, track, limit=1)
+            if recent:
+                fb = str(recent[0].get("vs_previous", "") or "")
+        except Exception:
+            fb = ""
+        return build_verdict_from_laps(
+            laps, resolver, segs, labels=self._setup_id_labels(),
+            feedback_vs_previous=fb)
+
+    def _analyse_setup_verdict(self) -> None:
+        self._run_analysis_async(
+            self._build_setup_verdict, self._render_setup_verdict,
+            getattr(self, "_btn_setup_verdict", None), "Comparing…")
+
+    def _render_setup_verdict(self, verdict) -> None:
+        lbl = getattr(self, "_verdict_summary_lbl", None)
+        reasons = getattr(self, "_verdict_reasons_list", None)
+        if lbl is None:
+            return
+        if verdict is None:
+            lbl.setText(
+                "Need at least two setups with clean laps on this car/track "
+                "(with a track model for corner detail) to compare.")
+            if reasons is not None:
+                reasons.clear()
+                reasons.setVisible(False)
+            return
+        lbl.setText(verdict.headline())
+        if reasons is not None:
+            reasons.clear()
+            for r in verdict.reasons:
+                reasons.addItem(r)
+            reasons.setVisible(True)
+
+    def _analyse_practice_patterns(self) -> None:
+        """Gather this session's slip episodes, run the deterministic engine and
+        render the structured result. Honest empty-state when data is thin."""
+        from strategy.practice_pattern_analysis import analyze_practice
+        try:
+            report = self._build_practice_analysis_report()
+        except Exception as e:
+            print(f"[PracticeAnalysis] {e}")
+            report = analyze_practice([], clean_lap_numbers=[], total_lap_numbers=[])
+        self._render_practice_analysis(report)
+
+    def _build_practice_analysis_report(self):
+        """Assemble a PracticeAnalysisReport from the current session's laps.
+
+        Best-effort: uses per-lap slip episodes + the driver feedback that was
+        just submitted. Returns an empty (honest) report when no clean-lap
+        episode data is available yet.
+        """
+        from strategy.practice_pattern_analysis import analyze_practice
+        from strategy.practice_observation_builder import build_observations
+
+        lap_episodes = getattr(self, "_practice_lap_episodes", None) or {}
+        clean = getattr(self, "_practice_clean_laps", None)
+        clean = sorted(int(l) for l in clean) if clean else []
+        if not clean:
+            # No lap passed the clean-lap gate (or none tracked) — fall back to
+            # every captured lap so the surface still analyses what exists.
+            clean = sorted(int(l) for l in lap_episodes.keys())
+        total = getattr(self, "_practice_total_laps", None)
+        total = sorted(int(l) for l in total) if total else sorted(
+            int(l) for l in lap_episodes.keys())
+        corner_names = getattr(self, "_practice_corner_names", None) or {}
+        driver_feedback = getattr(self, "_last_feedback_dict", None)
+
+        observations = build_observations(
+            lap_episodes, clean_lap_numbers=clean, corner_names=corner_names)
+        return analyze_practice(
+            observations, clean_lap_numbers=clean, total_lap_numbers=total,
+            track_corners=getattr(self, "_practice_track_corners", None),
+            driver_feedback=driver_feedback)
 
     def _build_driver_feedback_form(self) -> QGroupBox:
         group = QGroupBox("Driver Feedback — After Stint")
@@ -5399,7 +6288,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             running_setup = "" if (not _rs or _rs == "— none —") else _rs
         elif getattr(self, "_live_running_setup", ""):
             running_setup = self._live_running_setup
+        # UAT Finding 1: with no manual override, attach feedback to the canonical
+        # active applied setup (the Live baseline) so it's associated with the
+        # exact setup revision on the car — no duplicate manual selection.
+        setup_revision = 0
+        if not running_setup:
+            _active = self._active_setup_for_current("Race")
+            if _active is not None:
+                running_setup = _active.label()
+                setup_revision = _active.revision
+        else:
+            _active = self._active_setup_for_current("Race")
+            if _active is not None:
+                setup_revision = _active.revision
         feedback_dict["setup_run"] = running_setup
+        feedback_dict["setup_revision"] = setup_revision
         if running_setup:
             parts.append(f"Setup run this stint: {running_setup}")
 
@@ -5429,6 +6332,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         feedback_dict["vs_previous"] = _vs_prev
         if _vs_prev:
             parts.append(f"Compared to last setup: {_vsp}")
+        # Remember the latest feedback so Practice Analysis can check telemetry
+        # agreement/contradiction against the driver's own words.
+        self._last_feedback_dict = dict(feedback_dict)
 
         # Submit if there's any structured feedback, notes, a rating, or a vs-previous call.
         if not parts and not rating and not _vs_prev:
@@ -5830,6 +6736,1702 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             (e for e in self._config.get("events", []) if e.get("name") == aid),
             {}
         )
+
+    def _build_development_history_tab(self):
+        """Engineering Brain Phase 8 — the Development History page (cross-session
+        engineering memory). READ-ONLY: it renders permanent engineering knowledge
+        folded from completed reviews and changes nothing. Defensive: any failure
+        yields an empty page rather than breaking dashboard construction."""
+        try:
+            from ui.development_history_page import DevelopmentHistoryPage
+            self._development_history_page = DevelopmentHistoryPage()
+            # Refresh when the tab is shown (read-only; no Apply controls).
+            try:
+                self._tabs.currentChanged.connect(self._on_tab_changed_dev_history)
+            except Exception:
+                pass
+            self._refresh_development_history()
+            return self._development_history_page
+        except Exception:  # pragma: no cover - defensive
+            from PyQt6.QtWidgets import QLabel
+            self._development_history_page = None
+            return QLabel("Development History is unavailable.")
+
+    def _on_tab_changed_dev_history(self, _index):
+        """Refresh the Development History page when it becomes visible."""
+        try:
+            page = getattr(self, "_development_history_page", None)
+            if page is not None and self._tabs.currentWidget() is page:
+                self._refresh_development_history()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_development_history(self):
+        """Resolve the current engineering context and populate the page from the
+        cross-session memory fold. Never raises; never writes."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None:
+            return
+        try:
+            ctx = self._build_event_context()
+            car = getattr(ctx, "car", "") or ""
+            track = getattr(ctx, "track", "") or ""
+            layout_id = getattr(ctx, "layout_id", "") or ""
+            discipline = getattr(ctx, "discipline", "") or ""
+            result = {"ok": True, "record_count": 0}
+            context_result = {"ok": True}
+            if self._db is not None and (car or track):
+                result = self._db.build_cross_session_memory(
+                    car=car, track=track, layout_id=layout_id,
+                    discipline=discipline)
+                # Phase 9 — cross-context engineering advisory for the current context
+                # (read-only; no proposed change here, so it surfaces standing lessons).
+                context_result = self._db.build_engineering_context(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
+            page.update_result(result)
+            if hasattr(page, "update_engineering_context"):
+                page.update_engineering_context(context_result)
+            # Phase 11 — aggregate prediction calibration for the current context.
+            if hasattr(page, "update_prediction_calibration"):
+                calib = {"ok": True, "calibration": {"reconciliations": 0}}
+                if self._db is not None and (car or track):
+                    calib = self._db.build_prediction_calibration(
+                        car=car, track=track, layout_id=layout_id, discipline=discipline)
+                page.update_prediction_calibration(calib)
+            # Phase 13 — mechanism-annotated diagnosis. The build reads the immutable
+            # records + composes the Phase-12 knowledge; run it OFF the Qt thread and let
+            # the page render the finished, immutable result. Read-only; changes nothing.
+            if hasattr(page, "update_mechanism_annotations"):
+                self._refresh_mechanism_annotations(car, track, layout_id, discipline)
+            # Phase 14 — mechanism-constrained intervention hypotheses (advisory). Also
+            # runs OFF the Qt thread; the page renders the finished immutable result.
+            if hasattr(page, "update_intervention_hypotheses"):
+                self._refresh_intervention_hypotheses(car, track, layout_id, discipline)
+            # Phase 15 — minimum-effective bounded experiment synthesis (advisory). Runs
+            # OFF the Qt thread against the canonical applied setup baseline; not applied.
+            if hasattr(page, "update_experiment_synthesis"):
+                self._refresh_experiment_synthesis(car, track, layout_id, discipline)
+            # Phase 16 — guarded experiment lifecycle / closed-loop status (read-only). Runs
+            # OFF the Qt thread connecting existing authorities; applies nothing.
+            if hasattr(page, "update_engineering_lifecycle"):
+                self._refresh_engineering_lifecycle(car, track, layout_id, discipline)
+            # Phase 17 — experiment portfolio / engineering plan (which experiment next by
+            # engineering value). Read-only; runs OFF the Qt thread; applies nothing.
+            if hasattr(page, "update_engineering_plan"):
+                self._refresh_engineering_plan(car, track, layout_id, discipline)
+            # Phase 18 — engineering campaigns / multi-session development programme.
+            # Read-only; runs OFF the Qt thread; applies nothing.
+            if hasattr(page, "update_engineering_campaigns"):
+                self._refresh_engineering_campaigns(car, track, layout_id, discipline)
+            # Phase 19 — engineering efficiency: campaign age (registry), evidence saturation
+            # and cost of knowledge. Read-only advisory; runs OFF the Qt thread. The only write
+            # is the additive, idempotent campaign-registry capture; nothing is applied.
+            if hasattr(page, "update_engineering_efficiency"):
+                self._refresh_engineering_efficiency(car, track, layout_id, discipline)
+            # Phase 20 — engineering knowledge quality: confidence-weighted evidence,
+            # development ROI and campaign opportunity. Read-only advisory; runs OFF the Qt
+            # thread; writes nothing; ranks/completes/applies nothing.
+            if hasattr(page, "update_engineering_knowledge_quality"):
+                self._refresh_engineering_knowledge_quality(car, track, layout_id, discipline)
+            # Phase 21 — season development plan & cross-campaign knowledge map: the whole-
+            # programme view. Read-only advisory; runs OFF the Qt thread; writes nothing;
+            # schedules/ranks/completes/applies nothing.
+            if hasattr(page, "update_season_engineering_report"):
+                self._refresh_season_engineering_report(car, track, layout_id, discipline)
+            # Phase 22 — engineering knowledge graph & multi-event roll-up: knowledge by domain,
+            # maturity and gaps rolled up across compatible events. Read-only advisory; runs OFF
+            # the Qt thread; writes nothing; schedules/completes/applies nothing.
+            if hasattr(page, "update_programme_knowledge_report"):
+                self._refresh_programme_knowledge_report(car, track, layout_id, discipline)
+            # Phase 23 — engineering knowledge transfer & cross-car reuse: whether established
+            # knowledge is reusable in other contexts. Read-only advisory; runs OFF the Qt
+            # thread; transfers no setup; writes/imports/applies nothing.
+            if hasattr(page, "update_programme_transfer_report"):
+                self._refresh_programme_transfer_report(car, track, layout_id, discipline)
+            # Phase 24 — cross-programme engineering playbook: reusable knowledge across the car
+            # stable assembled as an investigation playbook. Read-only advisory; runs OFF the Qt
+            # thread; generates/copies/applies no setup values.
+            if hasattr(page, "update_programme_engineering_playbook"):
+                self._refresh_programme_engineering_playbook(car, track, layout_id, discipline)
+            # Phase 25 — engineering knowledge timeline & convergence: how understanding evolved
+            # and where evidence genuinely converged. Read-only advisory; runs OFF the Qt thread;
+            # dates are data; no setup values; writes/schedules/applies nothing.
+            if hasattr(page, "update_programme_knowledge_timeline"):
+                self._refresh_programme_knowledge_timeline(car, track, layout_id, discipline)
+            # Phase 26 — knowledge decay & re-validation status: which established knowledge stays
+            # current/protected and which may need re-validation (context/version change, weakened
+            # evidence). Read-only advisory; runs OFF the Qt thread; dates are evidence data not an
+            # expiry; no setup values; writes/schedules/applies nothing.
+            if hasattr(page, "update_programme_revalidation_report"):
+                self._refresh_programme_revalidation_report(car, track, layout_id, discipline)
+            # Phase 27 — evidence coverage & blind-spot mapping: where each known domain is well
+            # supported and where more evidence would help. Read-only advisory; runs OFF the Qt
+            # thread; a blind spot is not a fault; missing coverage means untested; no setup values;
+            # writes/schedules/applies nothing.
+            if hasattr(page, "update_programme_evidence_coverage_report"):
+                self._refresh_programme_evidence_coverage_report(car, track, layout_id, discipline)
+            # Phase 28 — engineering knowledge readiness executive summary: per-domain readiness +
+            # a transparent rule-based programme grade. Read-only advisory; runs OFF the Qt thread;
+            # 'ready' never means 'apply this setup'; no setup values; writes/schedules nothing.
+            if hasattr(page, "update_programme_knowledge_readiness_report"):
+                self._refresh_programme_knowledge_readiness_report(car, track, layout_id, discipline)
+            # Phase 29 — knowledge contradiction resolution: where the evidence contradicts itself
+            # and whether each disagreement is context-explained, resolved by stronger independent
+            # evidence, or genuinely open. Read-only advisory; runs OFF the Qt thread; never resolved
+            # by majority or recency; no setup values; writes/schedules nothing.
+            if hasattr(page, "update_programme_contradiction_report"):
+                self._refresh_programme_contradiction_report(car, track, layout_id, discipline)
+            # Phase 30 — engineering assumption register: what the current knowledge relies on but
+            # has not established. Read-only advisory; runs OFF the Qt thread; an assumption can only
+            # cap readiness, never create it; no setup values; writes/schedules nothing.
+            if hasattr(page, "update_programme_assumption_register"):
+                self._refresh_programme_assumption_register(car, track, layout_id, discipline)
+            # Phase 31 (FINAL) — engineering knowledge assurance & audit: whether the knowledge can
+            # be ASSURED. Read-only advisory; runs OFF the Qt thread; a single blocking finding
+            # prevents ASSURED; no setup values; writes/schedules nothing.
+            if hasattr(page, "update_programme_assurance_report"):
+                self._refresh_programme_assurance_report(car, track, layout_id, discipline)
+            # Phase 32 — assurance-driven engineering priority: the highest-priority EVIDENCE to
+            # collect next to improve assurance. Read-only advisory; runs OFF the Qt thread; ranks
+            # evidence, never an experiment/setup/schedule/Apply; no setup values; writes nothing.
+            if hasattr(page, "update_assurance_engineering_priority_report"):
+                self._refresh_assurance_engineering_priority_report(car, track, layout_id, discipline)
+            # Phases 33-35 — Assurance Review Pack: preview the current review package. Read-only
+            # advisory; runs OFF the Qt thread; export writes files only on an explicit user action.
+            if hasattr(page, "update_assurance_review_pack"):
+                self._wire_assurance_review_pack_actions(car, track, layout_id, discipline)
+                self._refresh_assurance_review_pack(car, track, layout_id, discipline)
+            # Phases 36-38 — Race-Engineer Team Brief: the coordinated context-safe activation of the
+            # whole Engineering Brain. Read-only advisory; runs OFF the Qt thread; writes nothing.
+            if hasattr(page, "update_race_engineer_team_brief"):
+                self._refresh_race_engineer_team_brief(car, track, layout_id, discipline)
+            # Phases 39-41 — Closed-Loop Engineering Development: the read-only three-step workflow.
+            # Read-only advisory; runs OFF the Qt thread; writes/creates/applies/promotes nothing.
+            if hasattr(page, "update_closed_loop_workflow"):
+                self._refresh_closed_loop_workflow(car, track, layout_id, discipline)
+            # Phases 42-44 — Assisted Runtime pit-wall: material-context readiness + user-confirmed
+            # workflow + safely-gated live advisory. Read-only; OFF the Qt thread; writes nothing;
+            # speaks no voice; issues no pit/strategy command.
+            if hasattr(page, "update_assisted_runtime"):
+                self._refresh_assisted_runtime(car, track, layout_id, discipline)
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_result({"ok": False})
+            except Exception:
+                pass
+
+    def _refresh_mechanism_annotations(self, car, track, layout_id, discipline):
+        """Build the Phase-13 mechanism annotations OFF the Qt thread and render the
+        finished immutable result on the page. Read-only; never writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_mechanism_annotations"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_mechanism_annotations({"ok": True, "annotations": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+
+            def _build():
+                return db.build_mechanism_annotations(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
+
+            worker = MechanismAnnotationWorker(_build)
+            # keep a reference so the QThread is not garbage-collected mid-run
+            self._mechanism_worker = worker
+            worker.finished_ok.connect(
+                lambda result: self._on_mechanism_annotations_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_mechanism_annotations_ready(
+                    {"ok": True, "annotations": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_mechanism_annotations({"ok": True, "annotations": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_mechanism_annotations_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable annotation result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_mechanism_annotations"):
+            try:
+                page.update_mechanism_annotations(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_intervention_hypotheses(self, car, track, layout_id, discipline):
+        """Build the Phase-14 intervention hypotheses OFF the Qt thread and render the
+        finished immutable result on the page. Read-only; never writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_intervention_hypotheses"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_intervention_hypotheses({"ok": True, "hypothesis_sets": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+
+            def _build():
+                return db.build_intervention_hypotheses(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._intervention_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_intervention_hypotheses_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_intervention_hypotheses_ready(
+                    {"ok": True, "hypothesis_sets": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_intervention_hypotheses({"ok": True, "hypothesis_sets": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_intervention_hypotheses_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable hypothesis result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_intervention_hypotheses"):
+            try:
+                page.update_intervention_hypotheses(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_experiment_synthesis(self, car, track, layout_id, discipline):
+        """Build the Phase-15 bounded experiments OFF the Qt thread and render the finished
+        immutable result. The canonical applied setup is the baseline (read-only). Never
+        writes; never applies; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_experiment_synthesis"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_experiment_synthesis({"ok": True, "synthesis_results": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+
+            def _build():
+                return db.build_bounded_setup_experiments(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._synthesis_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_experiment_synthesis_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_experiment_synthesis_ready(
+                    {"ok": True, "synthesis_results": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_experiment_synthesis({"ok": True, "synthesis_results": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_experiment_synthesis_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable synthesis result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_experiment_synthesis"):
+            try:
+                page.update_experiment_synthesis(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_lifecycle(self, car, track, layout_id, discipline):
+        """Build the Phase-16 closed-loop lifecycle OFF the Qt thread and render the finished
+        immutable result. Read-only orchestration connecting existing authorities; applies
+        nothing; never writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_lifecycle"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_lifecycle({"ok": True, "stages": [], "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+
+            def _build():
+                return db.build_engineering_lifecycle(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._lifecycle_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_engineering_lifecycle_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_lifecycle_ready(
+                    {"ok": True, "stages": [], "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_lifecycle({"ok": True, "stages": [], "count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_lifecycle_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable lifecycle result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_lifecycle"):
+            try:
+                page.update_engineering_lifecycle(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_plan(self, car, track, layout_id, discipline):
+        """Build the Phase-17 engineering plan / experiment portfolio OFF the Qt thread and
+        render the finished immutable result. Read-only planner; applies nothing; never
+        writes; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_plan"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_plan({"ok": True, "portfolio": None, "count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+
+            def _build():
+                return db.build_experiment_portfolio(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._plan_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(lambda result: self._on_engineering_plan_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_plan_ready(
+                    {"ok": True, "portfolio": None, "count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_plan({"ok": True, "portfolio": None, "count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_plan_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable engineering-plan result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_plan"):
+            try:
+                page.update_engineering_plan(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_campaigns(self, car, track, layout_id, discipline):
+        """Build the Phase-18 engineering-campaign programme OFF the Qt thread and render the
+        finished immutable result. Read-only planner; applies/writes nothing; never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_campaigns"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_campaigns({"ok": True, "programme": None, "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+
+            def _build():
+                return db.build_engineering_campaign_programme(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._campaign_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(lambda result: self._on_engineering_campaigns_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_campaigns_ready(
+                    {"ok": True, "programme": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_campaigns({"ok": True, "programme": None,
+                                                   "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_campaigns_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable campaign-programme result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_campaigns"):
+            try:
+                page.update_engineering_campaigns(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_efficiency(self, car, track, layout_id, discipline):
+        """Build the Phase-19 engineering-efficiency advisory OFF the Qt thread and render the
+        finished immutable result. The build additionally performs the phase's single additive,
+        idempotent campaign-registry capture (metadata only); it completes/freezes/applies
+        nothing and never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_efficiency"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_efficiency({"ok": True, "efficiency": None,
+                                                "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            sid = getattr(self, "_active_session_id", None)
+            register_session_id = str(sid) if sid is not None else ""
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_engineering_efficiency(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity,
+                    register_session_id=register_session_id, recorded_at=now_date,
+                    now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._efficiency_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_engineering_efficiency_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_efficiency_ready(
+                    {"ok": True, "efficiency": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_efficiency({"ok": True, "efficiency": None,
+                                                    "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_efficiency_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable engineering-efficiency result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_efficiency"):
+            try:
+                page.update_engineering_efficiency(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_engineering_knowledge_quality(self, car, track, layout_id, discipline):
+        """Build the Phase-20 engineering knowledge-quality advisory (confidence + ROI +
+        opportunity) OFF the Qt thread and render the finished immutable result. Read-only;
+        writes nothing; ranks/completes/applies nothing; never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_engineering_knowledge_quality"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_engineering_knowledge_quality({"ok": True, "knowledge_quality": None,
+                                                       "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_engineering_knowledge_quality(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._knowledge_quality_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_engineering_knowledge_quality_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_engineering_knowledge_quality_ready(
+                    {"ok": True, "knowledge_quality": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_engineering_knowledge_quality({"ok": True, "knowledge_quality": None,
+                                                           "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_engineering_knowledge_quality_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable knowledge-quality result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_engineering_knowledge_quality"):
+            try:
+                page.update_engineering_knowledge_quality(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_season_engineering_report(self, car, track, layout_id, discipline):
+        """Build the Phase-21 season engineering report (season summary + cross-campaign map +
+        knowledge map) OFF the Qt thread and render the finished immutable result. Read-only;
+        writes nothing; schedules/ranks/completes/applies nothing; never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_season_engineering_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_season_engineering_report({"ok": True, "season_report": None,
+                                                   "campaign_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_season_engineering_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._season_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_season_engineering_report_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_season_engineering_report_ready(
+                    {"ok": True, "season_report": None, "campaign_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_season_engineering_report({"ok": True, "season_report": None,
+                                                       "campaign_count": 0})
+            except Exception:
+                pass
+
+    def _on_season_engineering_report_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable season-report result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_season_engineering_report"):
+            try:
+                page.update_season_engineering_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_knowledge_report(self, car, track, layout_id, discipline):
+        """Build the Phase-22 programme knowledge graph (knowledge by domain + multi-event
+        roll-up) OFF the Qt thread and render the finished immutable result. Read-only; writes
+        nothing; schedules/completes/applies nothing; never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_knowledge_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_knowledge_report({"ok": True, "programme_knowledge": None,
+                                                    "known_domain_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_knowledge_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._knowledge_graph_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_programme_knowledge_report_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_programme_knowledge_report_ready(
+                    {"ok": True, "programme_knowledge": None, "known_domain_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_knowledge_report({"ok": True, "programme_knowledge": None,
+                                                        "known_domain_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_knowledge_report_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable programme-knowledge result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_knowledge_report"):
+            try:
+                page.update_programme_knowledge_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_transfer_report(self, car, track, layout_id, discipline):
+        """Build the Phase-23 knowledge-transfer report (is established knowledge reusable in
+        other contexts?) OFF the Qt thread and render the finished immutable result. Read-only;
+        transfers no setup; writes/imports/applies nothing; never raises into the UI."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_transfer_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_transfer_report({"ok": True, "transfer_report": None,
+                                                   "candidate_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_transfer_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._transfer_worker = worker   # keep a reference (avoid GC mid-run)
+            worker.finished_ok.connect(
+                lambda result: self._on_programme_transfer_report_ready(result))
+            worker.failed.connect(
+                lambda _msg: self._on_programme_transfer_report_ready(
+                    {"ok": True, "transfer_report": None, "candidate_count": 0}))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_transfer_report({"ok": True, "transfer_report": None,
+                                                       "candidate_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_transfer_report_ready(self, result):
+        """Signal handler on the Qt thread: render the immutable knowledge-transfer result."""
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_transfer_report"):
+            try:
+                page.update_programme_transfer_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_engineering_playbook(self, car, track, layout_id, discipline):
+        """Build the Phase-24 cross-programme engineering playbook OFF the Qt thread and render
+        the finished immutable result. Read-only; generates/copies/applies no setup values;
+        writes nothing; never raises into the UI. A stale worker result cannot replace a newer
+        one (each refresh installs a new worker; the handler renders whatever the current worker
+        produced)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_engineering_playbook"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_engineering_playbook({"ok": True, "playbook": None,
+                                                        "theme_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_engineering_playbook(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._playbook_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_engineering_playbook_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_engineering_playbook_ready(
+                    {"ok": True, "playbook": None, "theme_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_engineering_playbook({"ok": True, "playbook": None,
+                                                            "theme_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_engineering_playbook_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable playbook result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_playbook_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_engineering_playbook"):
+            try:
+                page.update_programme_engineering_playbook(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_knowledge_timeline(self, car, track, layout_id, discipline):
+        """Build the Phase-25 engineering knowledge timeline OFF the Qt thread and render the
+        finished immutable result. Read-only; dates are data; no setup values; writes nothing;
+        never raises into the UI. A stale worker result cannot replace a newer one (the handler
+        guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_knowledge_timeline"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_knowledge_timeline({"ok": True, "timeline": None,
+                                                      "point_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_knowledge_timeline(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._timeline_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_knowledge_timeline_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_knowledge_timeline_ready(
+                    {"ok": True, "timeline": None, "point_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_knowledge_timeline({"ok": True, "timeline": None,
+                                                          "point_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_knowledge_timeline_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable timeline result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_timeline_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_knowledge_timeline"):
+            try:
+                page.update_programme_knowledge_timeline(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_revalidation_report(self, car, track, layout_id, discipline):
+        """Build the Phase-26 knowledge decay & re-validation report OFF the Qt thread and render the
+        finished immutable result. Read-only; dates are evidence data not an expiry; no setup values;
+        writes/schedules/applies nothing; never raises into the UI. A stale worker result cannot
+        replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_revalidation_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_revalidation_report({"ok": True, "revalidation": None,
+                                                       "domain_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_revalidation_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._revalidation_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_revalidation_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_revalidation_report_ready(
+                    {"ok": True, "revalidation": None, "domain_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_revalidation_report({"ok": True, "revalidation": None,
+                                                           "domain_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_revalidation_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable re-validation result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_revalidation_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_revalidation_report"):
+            try:
+                page.update_programme_revalidation_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_evidence_coverage_report(self, car, track, layout_id, discipline):
+        """Build the Phase-27 evidence coverage & blind-spot report OFF the Qt thread and render the
+        finished immutable result. Read-only; a blind spot is not a fault; missing coverage means
+        untested; no setup values; writes/schedules/applies nothing; never raises into the UI. A
+        stale worker result cannot replace a newer one (the handler guards on the current worker
+        reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_evidence_coverage_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_evidence_coverage_report({"ok": True, "coverage": None,
+                                                            "domain_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_evidence_coverage_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._coverage_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_evidence_coverage_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_evidence_coverage_report_ready(
+                    {"ok": True, "coverage": None, "domain_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_evidence_coverage_report({"ok": True, "coverage": None,
+                                                                "domain_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_evidence_coverage_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable coverage result, but only if it came
+        from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_coverage_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_evidence_coverage_report"):
+            try:
+                page.update_programme_evidence_coverage_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_knowledge_readiness_report(self, car, track, layout_id, discipline):
+        """Build the Phase-28 engineering knowledge readiness report OFF the Qt thread and render the
+        finished immutable result. Read-only; 'ready' never means 'apply this setup'; no setup
+        values; writes/schedules/applies nothing; never raises into the UI. A stale worker result
+        cannot replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_knowledge_readiness_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_knowledge_readiness_report({"ok": True, "readiness": None,
+                                                              "grade": "insufficient_evidence",
+                                                              "domain_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_knowledge_readiness_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._readiness_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_knowledge_readiness_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_knowledge_readiness_report_ready(
+                    {"ok": True, "readiness": None, "grade": "insufficient_evidence",
+                     "domain_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_knowledge_readiness_report({"ok": True, "readiness": None,
+                                                                  "grade": "insufficient_evidence",
+                                                                  "domain_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_knowledge_readiness_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable readiness result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_readiness_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_knowledge_readiness_report"):
+            try:
+                page.update_programme_knowledge_readiness_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_contradiction_report(self, car, track, layout_id, discipline):
+        """Build the Phase-29 knowledge contradiction report OFF the Qt thread and render the
+        finished immutable result. Read-only; never resolves by majority or recency; no setup
+        values; writes/schedules/applies nothing; never raises into the UI. A stale worker result
+        cannot replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_contradiction_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_contradiction_report({"ok": True, "contradiction": None,
+                                                        "contradiction_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_contradiction_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._contradiction_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_contradiction_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_contradiction_report_ready(
+                    {"ok": True, "contradiction": None, "contradiction_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_contradiction_report({"ok": True, "contradiction": None,
+                                                            "contradiction_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_contradiction_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable contradiction result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_contradiction_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_contradiction_report"):
+            try:
+                page.update_programme_contradiction_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_assumption_register(self, car, track, layout_id, discipline):
+        """Build the Phase-30 engineering assumption register OFF the Qt thread and render the
+        finished immutable result. Read-only; an assumption can only cap readiness, never create it;
+        no setup values; writes/schedules/applies nothing; never raises into the UI. A stale worker
+        result cannot replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_assumption_register"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_assumption_register({"ok": True, "assumptions": None,
+                                                       "assumption_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_assumption_register(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._assumption_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_assumption_register_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_assumption_register_ready(
+                    {"ok": True, "assumptions": None, "assumption_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_assumption_register({"ok": True, "assumptions": None,
+                                                           "assumption_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_assumption_register_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable assumption result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_assumption_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_assumption_register"):
+            try:
+                page.update_programme_assumption_register(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_programme_assurance_report(self, car, track, layout_id, discipline):
+        """Build the Phase-31 engineering knowledge assurance & audit report OFF the Qt thread and
+        render the finished immutable result. Read-only; a single blocking finding prevents ASSURED;
+        no setup values; writes/schedules/applies nothing; never raises into the UI. A stale worker
+        result cannot replace a newer one (the handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_programme_assurance_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_programme_assurance_report({"ok": True, "assurance": None,
+                                                    "grade": "insufficient_evidence",
+                                                    "finding_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_programme_assurance_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._assurance_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_programme_assurance_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_programme_assurance_report_ready(
+                    {"ok": True, "assurance": None, "grade": "insufficient_evidence",
+                     "finding_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_programme_assurance_report({"ok": True, "assurance": None,
+                                                        "grade": "insufficient_evidence",
+                                                        "finding_count": 0})
+            except Exception:
+                pass
+
+    def _on_programme_assurance_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable assurance result, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_assurance_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_programme_assurance_report"):
+            try:
+                page.update_programme_assurance_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _refresh_assurance_engineering_priority_report(self, car, track, layout_id, discipline):
+        """Build the Phase-32 assurance-driven engineering priority report OFF the Qt thread and
+        render the finished immutable result. Read-only; ranks evidence to collect, never an
+        experiment/setup/schedule/Apply; no setup values; writes/schedules/applies nothing; never
+        raises into the UI. A stale worker result cannot replace a newer one (the handler guards on
+        the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_assurance_engineering_priority_report"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_assurance_engineering_priority_report({"ok": True, "priority": None,
+                                                               "grade": "insufficient_evidence",
+                                                               "candidate_count": 0})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_assurance_engineering_priority_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._priority_worker = worker   # keep the newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assurance_engineering_priority_report_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_assurance_engineering_priority_report_ready(
+                    {"ok": True, "priority": None, "grade": "insufficient_evidence",
+                     "candidate_count": 0}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_assurance_engineering_priority_report({"ok": True, "priority": None,
+                                                                   "grade": "insufficient_evidence",
+                                                                   "candidate_count": 0})
+            except Exception:
+                pass
+
+    def _on_assurance_engineering_priority_report_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable priority result, but only if it came
+        from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_priority_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_assurance_engineering_priority_report"):
+            try:
+                page.update_assurance_engineering_priority_report(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 36-38 Race-Engineer Team Brief -------------------------------------------------
+
+    def _refresh_race_engineer_team_brief(self, car, track, layout_id, discipline):
+        """Build the Phases 36-38 Race-Engineer Team Brief OFF the Qt thread and render the finished
+        immutable result. Read-only; context-safe; coordinates the whole Engineering Brain into one
+        plan; never an experiment/setup/schedule/Apply; no setup values; writes/schedules/applies
+        nothing; never raises into the UI. A stale worker result cannot replace a newer one (the
+        handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_race_engineer_team_brief"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_race_engineer_team_brief({"ok": True, "brief": None,
+                                                  "completeness": "insufficient"})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                return db.build_race_engineer_team_brief(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._race_engineer_brief_worker = worker  # newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_race_engineer_team_brief_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_race_engineer_team_brief_ready(
+                    {"ok": True, "brief": None, "completeness": "insufficient"}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_race_engineer_team_brief({"ok": True, "brief": None,
+                                                      "completeness": "insufficient"})
+            except Exception:
+                pass
+
+    def _on_race_engineer_team_brief_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable team brief, but only if it came from
+        the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_race_engineer_brief_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_race_engineer_team_brief"):
+            try:
+                page.update_race_engineer_team_brief(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 39-41 Closed-Loop Engineering Development workflow ------------------------------
+
+    def _refresh_closed_loop_workflow(self, car, track, layout_id, discipline):
+        """Build the Phases 39-41 closed-loop workflow OFF the Qt thread and render the finished
+        immutable result. Read-only; context-safe; creates no experiment, applies no setup, promotes
+        nothing; never raises into the UI. A stale worker result cannot replace a newer one (the
+        handler guards on the current worker reference)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_closed_loop_workflow"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_closed_loop_workflow({"ok": True, "run_plan": None, "posture": "collect"})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+
+            def _build():
+                # observation=None => a pure view; the outcome-review step shows its honest empty state
+                # and nothing is written merely by viewing the workflow.
+                return db.build_closed_loop_workflow_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date,
+                    observation=None)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._closed_loop_worker = worker   # newest reference (stale workers drop out)
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_closed_loop_workflow_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_closed_loop_workflow_ready(
+                    {"ok": True, "run_plan": None, "posture": "collect"}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_closed_loop_workflow({"ok": True, "run_plan": None, "posture": "collect"})
+            except Exception:
+                pass
+
+    def _on_closed_loop_workflow_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable closed-loop workflow, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_closed_loop_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_closed_loop_workflow"):
+            try:
+                page.update_closed_loop_workflow(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 42-44 Assisted Runtime pit-wall ------------------------------------------------
+
+    def _refresh_assisted_runtime(self, car, track, layout_id, discipline):
+        """Build the Phases 42-44 Assisted Runtime report OFF the Qt thread and render the finished
+        immutable result. Read-only; context-safe; applies no setup, creates no experiment, records no
+        outcome, binds no session, speaks no voice; never raises into the UI. A stale worker result
+        cannot replace a newer one. The monotonic cooldown clock is injected here (the pure engine
+        never reads wall-clock)."""
+        self._assisted_runtime_ctx_tuple = (car, track, layout_id, discipline)
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_assisted_runtime"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_assisted_runtime({"ok": True, "workflow": None})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            import time as _time
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            # injected monotonic clock for advisory cooldown (pure engine stays clock-free).
+            now_mono = float(_time.monotonic())
+            adv_state = getattr(self, "_assisted_runtime_adv_state", None)
+
+            def _build():
+                # viewing only: no telemetry frame, no confirmations => an honest PLAN/PREFLIGHT view;
+                # nothing is written merely by viewing.
+                return db.build_assisted_runtime_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date,
+                    now_monotonic=now_mono, advisory_state=adv_state)
+
+            self._wire_assisted_runtime_voice()
+            worker = MechanismAnnotationWorker(_build)
+            self._assisted_runtime_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assisted_runtime_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_assisted_runtime_ready({"ok": True, "workflow": None}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_assisted_runtime({"ok": True, "workflow": None})
+            except Exception:
+                pass
+
+    def _assisted_runtime_voice(self):
+        """Lazily create the opt-in advisory VoiceController (DISABLED by default; speaks nothing)."""
+        vc = getattr(self, "_advisory_voice_controller", None)
+        if vc is None:
+            try:
+                from voice.voice_controller import VoiceController
+                from voice.advisory_voice_port import make_voice_port
+                vc = VoiceController(port=make_voice_port("windows"))
+            except Exception:  # pragma: no cover - defensive
+                vc = None
+            self._advisory_voice_controller = vc
+        return vc
+
+    def _wire_assisted_runtime_voice(self):
+        """Attach the panel's opt-in voice control handlers (idempotent). Voice-only; no Apply."""
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_assisted_runtime_panel", None) if page is not None else None
+        if panel is None or getattr(self, "_assisted_runtime_voice_wired", False):
+            return
+        try:
+            panel.set_voice_handlers(toggle=self._voice_toggle, acknowledge=self._voice_acknowledge,
+                                     mute=self._voice_mute, test=self._voice_test)
+            self._assisted_runtime_voice_wired = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _voice_toggle(self):
+        vc = self._assisted_runtime_voice()
+        if vc is None:
+            return
+        if vc.enabled:
+            vc.disable()
+        else:
+            vc.enable()
+        self._refresh_assisted_runtime(*self._assisted_runtime_ctx())
+
+    def _voice_acknowledge(self):
+        vc = self._assisted_runtime_voice()
+        key = str((getattr(self, "_assisted_runtime_last_advisory", None) or {}).get("suppression_key")
+                  or "")
+        if vc is not None and key:
+            vc.acknowledge(key)
+
+    def _voice_mute(self):
+        vc = self._assisted_runtime_voice()
+        key = str((getattr(self, "_assisted_runtime_last_advisory", None) or {}).get("suppression_key")
+                  or "")
+        if vc is not None and key:
+            vc.mute_type(key)
+
+    def _voice_test(self):
+        vc = self._assisted_runtime_voice()
+        if vc is not None:
+            vc.test_voice()
+
+    def _assisted_runtime_ctx(self):
+        return getattr(self, "_assisted_runtime_ctx_tuple", (None, None, None, None))
+
+    def _on_assisted_runtime_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable assisted-runtime result, but only if
+        it came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_assisted_runtime_worker", None) is not worker:
+            return
+        # carry the advisory suppression state forward so cooldowns persist across refreshes.
+        if isinstance(result, dict) and isinstance(result.get("advisory_state"), dict):
+            self._assisted_runtime_adv_state = result.get("advisory_state")
+        # merge the opt-in voice controller status (operational, not engineering state); the pure
+        # engineering fingerprints are unaffected by voice settings.
+        if isinstance(result, dict):
+            self._assisted_runtime_last_advisory = (result.get("advisory") or {}).get("delivered")
+            vc = getattr(self, "_advisory_voice_controller", None)
+            if vc is not None:
+                try:
+                    result["voice"] = vc.status()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_assisted_runtime"):
+            try:
+                page.update_assisted_runtime(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 33-35 Assurance Review Pack (export / compare / package) --------------------
+
+    def _assurance_review_context(self):
+        """Cache the current (car, track, layout, discipline) for the review-pack actions."""
+        return getattr(self, "_assurance_review_ctx", (None, None, None, None))
+
+    def _wire_assurance_review_pack_actions(self, car, track, layout_id, discipline):
+        """Attach the explicit Preview/Compare/Export handlers to the panel (idempotent). The heavy
+        build/write always runs OFF the Qt thread; a file dialog is the only UI-thread step."""
+        self._assurance_review_ctx = (car, track, layout_id, discipline)
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        if panel is None or getattr(self, "_assurance_review_wired", False):
+            return
+        try:
+            panel.set_action_handlers(preview=self._assurance_review_preview,
+                                      compare=self._assurance_review_compare,
+                                      export=self._assurance_review_export)
+            self._assurance_review_wired = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_assurance_review_pack(self, car, track, layout_id, discipline):
+        """Build the Assurance Review Pack PREVIEW (current export + optional loaded baseline) OFF the
+        Qt thread and render it. Read-only; writes nothing; never raises into the UI. A stale worker
+        result cannot replace a newer one."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_assurance_review_pack"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_assurance_review_pack({"ok": True, "package": None,
+                                               "grade": "insufficient_evidence"})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            baseline = getattr(self, "_assurance_baseline_text", None)
+
+            def _build():
+                return db.build_assurance_review_package_report(
+                    baseline=baseline, car=car, track=track, layout_id=layout_id,
+                    discipline=discipline, applied_setup=applied, session_identity=identity,
+                    now_date=now_date)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._review_pack_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assurance_review_pack_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_assurance_review_pack_ready(
+                    {"ok": True, "package": None, "grade": "insufficient_evidence"}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_assurance_review_pack({"ok": True, "package": None,
+                                                   "grade": "insufficient_evidence"})
+            except Exception:
+                pass
+
+    def _on_assurance_review_pack_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable review-pack preview, but only if it
+        came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_review_pack_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_assurance_review_pack"):
+            try:
+                page.update_assurance_review_pack(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _assurance_review_preview(self):  # pragma: no cover - trivial UI handler
+        """Explicit 'Preview Assurance Review': clear any baseline and re-preview the current export."""
+        self._assurance_baseline_text = None
+        car, track, layout_id, discipline = self._assurance_review_context()
+        self._refresh_assurance_review_pack(car, track, layout_id, discipline)
+
+    def _assurance_review_compare(self):  # pragma: no cover - file-dialog UI handler
+        """Explicit 'Compare Baseline': choose a prior manifest, load it (validated purely), and
+        re-preview with the comparison. The read + build run off the Qt thread."""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select a previous assurance manifest (JSON)", "",
+                "Assurance manifest (*.json);;All files (*)")
+            if not path:
+                return
+            with open(path, "rb") as fh:
+                self._assurance_baseline_text = fh.read().decode("utf-8", errors="replace")
+        except Exception:
+            self._assurance_baseline_text = None
+            return
+        car, track, layout_id, discipline = self._assurance_review_context()
+        self._refresh_assurance_review_pack(car, track, layout_id, discipline)
+
+    def _assurance_review_export(self):  # pragma: no cover - file-dialog UI handler
+        """Explicit 'Export Review Package': choose a destination directory, then build the package
+        spec and WRITE it OFF the Qt thread via the writer adapter. The destination is shown outside
+        the report content."""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            dest = QFileDialog.getExistingDirectory(self, "Choose an export destination directory", "")
+            if not dest:
+                return
+        except Exception:
+            return
+        self._start_assurance_review_export(dest)
+
+    def _start_assurance_review_export(self, dest, *, allow_overwrite=False, make_archive=True):
+        """Build + write the review package to an explicit destination OFF the Qt thread. Separated
+        from the file dialog so it is unit-testable. Never writes without an explicit destination."""
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        db = self._db
+        if not dest or panel is None or db is None:
+            if panel is not None:
+                panel.update_export_status({"ok": False, "errors": ["no destination selected"]})
+            return
+        car, track, layout_id, discipline = self._assurance_review_context()
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            baseline = getattr(self, "_assurance_baseline_text", None)
+
+            def _build_and_write():
+                from strategy.assurance_chain_export import build_assurance_chain_export
+                from strategy.assurance_snapshot_comparison import compare_assurance_snapshots
+                from strategy.assurance_review_package import build_review_package_spec
+                from strategy.assurance_manifest_loader import load_and_validate_baseline
+                from data.assurance_review_package_writer import write_review_package
+                products, ctx = db._assurance_chain_products(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date)
+                if products is None:
+                    return {"ok": False, "errors": ["no assurance state to export"]}
+                export = build_assurance_chain_export(products, ctx).to_dict()
+                comparison = None
+                if baseline:
+                    loaded = load_and_validate_baseline(baseline)
+                    if loaded.ok and loaded.export is not None:
+                        comparison = compare_assurance_snapshots(loaded.export, export).to_dict()
+                spec = build_review_package_spec(export, comparison)
+                return write_review_package(spec, dest, allow_overwrite=allow_overwrite,
+                                            make_archive=make_archive).to_dict()
+
+            worker = MechanismAnnotationWorker(_build_and_write)
+            self._review_export_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assurance_review_export_ready(result, w))
+            worker.failed.connect(
+                lambda msg, w=worker: self._on_assurance_review_export_ready(
+                    {"ok": False, "errors": [f"export failed: {msg}"]}, w))
+            worker.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            panel.update_export_status({"ok": False, "errors": [f"export failed: {exc}"]})
+
+    def _on_assurance_review_export_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: show the write result (destination or error) OUTSIDE the
+        report content, but only if it came from the CURRENT export worker."""
+        if worker is not None and getattr(self, "_review_export_worker", None) is not worker:
+            return
+        page = getattr(self, "_development_history_page", None)
+        panel = getattr(page, "_review_pack_panel", None) if page is not None else None
+        if panel is not None:
+            try:
+                panel.update_export_status(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def _build_event_context(self):
         """Canonical read model of the active event/race configuration.
@@ -6366,206 +8968,13 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
 
 
 # ---------------------------------------------------------------------------
-# Qt key → pynput key-name mapping (used by _ButtonDetectDialog)
-# Keys must produce the same string that pynput's Listener gives in QueryListener.
+# Push-to-talk button detection now lives in its own canonical module so that
+# ui/settings_ui.py (which owns the Settings handlers after the decomposition)
+# and ui/dashboard.py share exactly ONE implementation. Re-exported here under
+# the historical private name for any external references.
 # ---------------------------------------------------------------------------
-
-_QT_TO_PYNPUT: dict = {
-    Qt.Key.Key_F1:  'f1',  Qt.Key.Key_F2:  'f2',  Qt.Key.Key_F3:  'f3',
-    Qt.Key.Key_F4:  'f4',  Qt.Key.Key_F5:  'f5',  Qt.Key.Key_F6:  'f6',
-    Qt.Key.Key_F7:  'f7',  Qt.Key.Key_F8:  'f8',  Qt.Key.Key_F9:  'f9',
-    Qt.Key.Key_F10: 'f10', Qt.Key.Key_F11: 'f11', Qt.Key.Key_F12: 'f12',
-    Qt.Key.Key_F13: 'f13', Qt.Key.Key_F14: 'f14', Qt.Key.Key_F15: 'f15',
-    Qt.Key.Key_F16: 'f16', Qt.Key.Key_F17: 'f17', Qt.Key.Key_F18: 'f18',
-    Qt.Key.Key_F19: 'f19', Qt.Key.Key_F20: 'f20',
-    Qt.Key.Key_Tab:        'tab',
-    Qt.Key.Key_CapsLock:   'caps_lock',
-    Qt.Key.Key_Space:      'space',
-    Qt.Key.Key_Return:     'enter',
-    Qt.Key.Key_Enter:      'enter',
-    Qt.Key.Key_Backspace:  'backspace',
-    Qt.Key.Key_Delete:     'delete',
-    Qt.Key.Key_Insert:     'insert',
-    Qt.Key.Key_Home:       'home',
-    Qt.Key.Key_End:        'end',
-    Qt.Key.Key_PageUp:     'page_up',
-    Qt.Key.Key_PageDown:   'page_down',
-    Qt.Key.Key_Left:       'left',
-    Qt.Key.Key_Right:      'right',
-    Qt.Key.Key_Up:         'up',
-    Qt.Key.Key_Down:       'down',
-    Qt.Key.Key_Print:      'print_screen',
-    Qt.Key.Key_ScrollLock: 'scroll_lock',
-    Qt.Key.Key_Pause:      'pause',
-    Qt.Key.Key_NumLock:    'num_lock',
-}
-
-_QT_MODIFIERS = {
-    Qt.Key.Key_Shift, Qt.Key.Key_Control, Qt.Key.Key_Alt,
-    Qt.Key.Key_Meta, Qt.Key.Key_AltGr,
-}
-
-
-# ---------------------------------------------------------------------------
-# Button detection dialog
-# ---------------------------------------------------------------------------
-
-class _ButtonDetectDialog(QDialog):
-    """Modal dialog that waits for a keypress or joystick button press."""
-
-    # Used by background threads (pynput, joystick) to report detections safely
-    _bg_detected = pyqtSignal(object)
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Detect Button")
-        self.setModal(True)
-        self.setFixedSize(380, 170)
-        self.detected_binding: dict = {}
-
-        self._info_lbl = QLabel(
-            "Press the button you want to use as push-to-talk.\n"
-            "Keyboard or joystick button — 5-second window."
-        )
-        self._info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._info_lbl.setWordWrap(True)
-
-        self._countdown_lbl = QLabel("5")
-        self._countdown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._countdown_lbl.setFont(QFont("Segoe UI", 28, QFont.Weight.Bold))
-
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.clicked.connect(self.reject)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self._info_lbl)
-        layout.addWidget(self._countdown_lbl)
-        layout.addWidget(btn_cancel)
-
-        self._stop = threading.Event()
-        self._bg_detected.connect(self._on_detected)
-
-        # grabKeyboard() forces ALL keyboard events to this dialog even if a
-        # child widget or parent window technically has focus.
-        self.grabKeyboard()
-
-        # pynput background thread: safety net for keys that might not route
-        # through Qt (e.g. some HID-keyboard devices on Windows).
-        threading.Thread(target=self._detect_pynput, daemon=True).start()
-        threading.Thread(target=self._detect_joystick, daemon=True).start()
-
-        self._remaining = 5
-        self._tick_timer = QTimer(self)
-        self._tick_timer.timeout.connect(self._tick)
-        self._tick_timer.start(1000)
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        self.activateWindow()
-        self.setFocus()
-        self.grabKeyboard()
-
-    # ------------------------------------------------------------------
-    # Qt path — fastest, runs in main thread
-    # ------------------------------------------------------------------
-
-    def keyPressEvent(self, event) -> None:
-        if self._stop.is_set():
-            return
-        key = event.key()
-
-        if key == Qt.Key.Key_Escape:
-            self._stop.set()
-            self._tick_timer.stop()
-            self.reject()
-            return
-        if key in _QT_MODIFIERS:
-            return
-
-        text = event.text()
-        if text and text.isprintable() and text.strip():
-            k = text
-        else:
-            k = _QT_TO_PYNPUT.get(key)
-            if k is None:
-                try:
-                    k = key.name.lower().replace('key_', '')
-                except AttributeError:
-                    k = str(int(key))
-
-        print(f"[ButtonDetect] Qt keypress: {k!r}")
-        self._on_detected({"type": "keyboard", "key": k})
-
-    # ------------------------------------------------------------------
-    # pynput fallback — background thread, signals back to main thread
-    # ------------------------------------------------------------------
-
-    def _detect_pynput(self) -> None:
-        try:
-            from pynput import keyboard as _kb
-
-            def on_press(key):
-                if self._stop.is_set():
-                    return False
-                try:
-                    k = key.char if (hasattr(key, "char") and key.char) else key.name
-                except Exception:
-                    k = str(key)
-                print(f"[ButtonDetect] pynput keypress: {k!r}")
-                self._stop.set()
-                self._bg_detected.emit({"type": "keyboard", "key": k})
-                return False
-
-            with _kb.Listener(on_press=on_press) as listener:
-                listener.join()
-        except ImportError:
-            pass
-
-    # ------------------------------------------------------------------
-
-    def _tick(self) -> None:
-        self._remaining -= 1
-        self._countdown_lbl.setText(str(max(0, self._remaining)))
-        if self._remaining <= 0:
-            self._stop.set()
-            self.reject()
-
-    def _detect_joystick(self) -> None:
-        try:
-            import pygame
-            pygame.init()
-            pygame.joystick.init()
-            if pygame.joystick.get_count() == 0:
-                return
-            joy = pygame.joystick.Joystick(0)
-            joy.init()
-            prev = [joy.get_button(i) for i in range(joy.get_numbuttons())]
-            while not self._stop.is_set():
-                pygame.event.pump()
-                for i in range(joy.get_numbuttons()):
-                    cur = bool(joy.get_button(i))
-                    if cur and not prev[i]:
-                        self._stop.set()
-                        self._bg_detected.emit({"type": "joystick", "button_index": i})
-                        return
-                    prev[i] = cur
-                time.sleep(0.1)
-        except ImportError:
-            pass
-        except Exception as e:
-            print(f"[ButtonDetect] joystick error: {e}")
-
-    def _on_detected(self, binding: dict) -> None:
-        if self.detected_binding:
-            return  # already accepted (Qt + pynput both fired)
-        print(f"[ButtonDetect] binding accepted: {binding!r}")
-        self._tick_timer.stop()
-        self._stop.set()
-        self.detected_binding = binding
-        self.accept()
-
-    def closeEvent(self, event) -> None:
-        self._stop.set()
-        self._tick_timer.stop()
-        self.releaseKeyboard()
-        event.accept()
+from ui.button_detect_dialog import (  # noqa: E402
+    ButtonDetectDialog as _ButtonDetectDialog,
+    _QT_TO_PYNPUT,
+    _QT_MODIFIERS,
+)

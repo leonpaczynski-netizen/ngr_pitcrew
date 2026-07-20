@@ -152,12 +152,21 @@ def arbitrate_setup_decision(
 ) -> SetupDecision:
     """Arbitrate proposed setup changes into ONE decision.
 
-    ⚠ EXPERIMENTAL — NOT WIRED INTO THE LIVE PATH
+    ⚠ EXPERIMENTAL / DEPRECATED — NOT WIRED INTO THE LIVE PATH
     (see tests/test_engine_wiring_status.py). The live Setup "Analyse" flow uses
     ``setup_diagnosis`` + ``setup_rule_engine``; the UI imports only this module's
     render dataclasses (``DecisionStatus``/``FieldDecision``, via
     ``render_setup_decision``), NOT this arbiter. Validated by its own tests + the
     golden UAT; kept as the intended future evidence-precedence layer.
+
+    Engineering-Brain Phase 4 formally deprecated this per-field arbiter as the
+    driver-facing decision authority. The canonical authorities are now:
+      * the Phase-2 experiment lifecycle (transitions) — data/session_db.py;
+      * the Phase-3 outcome status (evidence judgement) — strategy/setup_experiment_outcome.py;
+      * the Phase-4 driver-facing decision state — strategy/setup_decision_status.resolve_setup_decision.
+    This arbiter is not promoted; its evidence-precedence field logic is superseded
+    by the Phase 1–4 spine and remains dormant (no live caller — enforced by
+    tests/test_engine_wiring_status.py and tests/test_phase4_setup_decision.py).
 
     ``proposed_changes`` — iterable of dicts/objects with a ``field`` (and
     optional ``delta``). ``persistence_results`` — Sprint 5 IssuePersistenceResult

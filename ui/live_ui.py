@@ -21,10 +21,13 @@ from PyQt6.QtWidgets import (  # noqa: F401
     QTextEdit, QStackedWidget, QAbstractItemView,
 )
 
-# Module-level display constants — must match dashboard.py
-_DARK_CARD = "#2A2A2A"
-_TEXT = "#E0E0E0"
-_ACCENT = "#2EA043"
+# Module-level display constants — now sourced from the NGR design system so
+# these surfaces stay consistent with the global theme (ui/ngr_theme.py) instead
+# of drifting on ad-hoc hex.
+from ui import ngr_theme as _ngr
+_DARK_CARD = _ngr.CARBON_RAISED   # was "#2A2A2A" — carbon card surface
+_TEXT = _ngr.TEXT                 # was "#E0E0E0" — body text
+_ACCENT = _ngr.NGR_GREEN          # was "#2EA043" — NGR neon-green accent
 
 
 class LiveMixin:
@@ -41,6 +44,17 @@ class LiveMixin:
             "Real-time coaching during a session — fuel, tyres, pit windows and "
             "voice alerts. Next: pick Practice or Race mode and start driving; "
             "alerts and push-to-talk queries run automatically."))
+
+        # Phase 60 — production NGR Live Pit Wall: the primary driver surface (one coordinated low-density
+        # NGR message), fed OFF the UI thread from the existing RaceStateTracker. Read-only; issues no
+        # command; voice off by default. The existing telemetry/track-map panels remain below it. Opening
+        # the Live tab never starts the activity.
+        try:
+            from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
+            self._live_pit_wall_panel = NgrLivePitWallPanel()
+            root.addWidget(self._live_pit_wall_panel)
+        except Exception:  # pragma: no cover - defensive; the Live tab must still build
+            self._live_pit_wall_panel = None
 
         # UAT #6 Phase 2A: "refined track model available" notice — click to review
         # in Track Modelling. Hidden until a refinement produces an improving candidate.
@@ -342,14 +356,28 @@ class LiveMixin:
             f"QComboBox QAbstractItemView {{ background: {_DARK_CARD}; color: {_TEXT}; }}"
         )
         self._live_running_setup_combo.setToolTip(
-            "Tell the app which saved setup you're running this stint.\n"
-            "It carries into Practice Review and is sent to the AI with your feedback.")
+            "Manual override: tell the app which saved setup you're running this "
+            "stint. Normally the Live baseline below (the setup you applied in "
+            "game) is used automatically — only change this to override it.")
         self._live_running_setup_combo.currentTextChanged.connect(self._on_running_setup_changed)
-        _lrs_lbl = QLabel("Setup on car:")
+        _lrs_lbl = QLabel("Override (manual):")
         _lrs_lbl.setStyleSheet(f"color: {_TEXT};")
         setup_layout.addRow(_lrs_lbl, self._live_running_setup_combo)
+
+        # UAT Finding 1: the canonical Live baseline — the setup confirmed
+        # "Applied in Game". Read-only and kept visibly separate from the manual
+        # override above so unapplied recommendations never masquerade as active.
+        self._live_active_setup_lbl = QLabel(
+            "Live baseline: none applied yet — apply a setup in game to set the "
+            "Live Race Engineer baseline.")
+        self._live_active_setup_lbl.setWordWrap(True)
+        self._live_active_setup_lbl.setStyleSheet(
+            "color:#F0C070; font-size:10px; padding:2px 0;")
+        setup_layout.addRow("", self._live_active_setup_lbl)
+
         layout.addWidget(setup_box)
         self._refresh_running_setup_combos()
+        self._refresh_active_setup_display()
 
         stats_box = QGroupBox("Practice Stats")
         stats_box.setStyleSheet(self._group_style())
@@ -449,6 +477,9 @@ class LiveMixin:
         idx = {"Race": 0, "Practice": 1, "Qualifying": 2}.get(mode, 0)
         if hasattr(self, "_live_mode_stack"):
             self._live_mode_stack.setCurrentIndex(idx)
+        # Entering Practice starts a fresh capture window for Practice Analysis.
+        if mode == "Practice" and hasattr(self, "_reset_practice_capture"):
+            self._reset_practice_capture()
         self._config.setdefault("live", {})["mode"] = mode
         self._persist_config()
         # Suppress strategy pit alerts when not in Race mode
@@ -576,7 +607,7 @@ class LiveMixin:
                 if target_ms > 0:
                     delta_ms = p.last_lap_ms - target_ms
                     sign = "+" if delta_ms >= 0 else ""
-                    color = "#E8771A" if delta_ms > 0 else _ACCENT
+                    color = _ngr.WARN if delta_ms > 0 else _ACCENT
                     _dt = f"{sign}{delta_ms / 1000:.3f}s vs tgt"
                     _ds = f"color: {color};"
                     if self._live_label_cache.get("lbl_delta") != (_dt, _ds):
@@ -586,7 +617,7 @@ class LiveMixin:
             elif p.best_lap_ms > 0:
                 delta_ms = p.last_lap_ms - p.best_lap_ms
                 sign = "+" if delta_ms >= 0 else ""
-                color = "#E8771A" if delta_ms > 0 else _ACCENT
+                color = _ngr.WARN if delta_ms > 0 else _ACCENT
                 _dt = f"{sign}{delta_ms / 1000:.3f}s"
                 _ds = f"color: {color};"
                 if self._live_label_cache.get("lbl_delta") != (_dt, _ds):
@@ -656,7 +687,7 @@ class LiveMixin:
         def _delta(actual_ms: int, target_frac_ms: int) -> tuple[str, str]:
             d = actual_ms - target_frac_ms
             sign = "+" if d >= 0 else ""
-            col = "#E8771A" if d > 0 else _ACCENT
+            col = _ngr.WARN if d > 0 else _ACCENT
             return f"{sign}{d / 1000:.3f}s", col
 
         if lap_frac >= 0.333 and not self._qual_s1_done:
@@ -675,7 +706,7 @@ class LiveMixin:
             proj_ms = int(elapsed_ms / lap_frac)
             delta_total = proj_ms - target_ms
             sign = "+" if delta_total >= 0 else ""
-            col = "#E8771A" if delta_total > 0 else _ACCENT
+            col = _ngr.WARN if delta_total > 0 else _ACCENT
             self._lbl_qual_proj.setText(
                 f"{format_laptime_display(proj_ms)} ({sign}{delta_total / 1000:.3f}s)")
             self._lbl_qual_proj.setStyleSheet(f"color:{col};")

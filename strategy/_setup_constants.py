@@ -114,7 +114,22 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     (cross-lap persistence per-episode store).
 # v19 (Determinism Sprint 10 UI): additive applied_setup_checkpoints table
 #     (saved-vs-applied-in-GT7 three-state; "Changes Applied in Game" button).
-DB_VERSION: int = 19
+# v20 (Eng-Brain Phase 1): engineering_context + _links. v21 (Phase 2): setup_experiments*.
+# v22 (Phase 3): setup_experiment_outcomes*. v23 (Phase 5): setup_working_windows*.
+# v24 (Phase 8): engineering_development_records — one immutable, append-only record per
+#     completed engineering review (permanent cross-session engineering memory).
+# v25 (Phase 11): engineering_reconciliation_records — one immutable, append-only calibration
+#     record per completed experiment comparing the pre-flight prediction with the actual outcome.
+# v26 (Program 2 Phase 19): engineering_campaign_registry — additive campaign-persistence metadata
+#     (stable CampaignID identity + first/last-seen provenance + manual note/archive). Non-
+#     reconstructable session-crossing metadata; the only new write in Phase 19. Idempotent.
+# v27 (Program 2 Phase 45): engineering_context_snapshots + _refs — immutable content-addressed
+#     event-environment snapshots; sole writer capture_context_snapshot. Additive. Idempotent.
+# v28 (Program 2 Phase 48): event_preparation_cycles + event_preparation_activities +
+#     event_preparation_activity_sessions — the preparation-programme layer (one cycle per upcoming
+#     NGR round, typed/ordered activities, explicit session binding). References events.id; no legacy
+#     back-fill (legacy cycle association stays unknown). Additive. Idempotent.
+DB_VERSION: int = 28
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

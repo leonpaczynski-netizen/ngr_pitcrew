@@ -26,9 +26,10 @@ from PyQt6.QtWidgets import (
 if TYPE_CHECKING:
     pass  # host type is SetupBuilderMixin; avoid circular import
 
-# Module-level display constants — must match dashboard.py / setup_builder_ui.py
-_DARK_CARD = "#2A2A2A"
-_TEXT       = "#E0E0E0"
+# Module-level display constants — sourced from the NGR design system.
+from ui import ngr_theme as _ngr_t
+_DARK_CARD = _ngr_t.CARBON_RAISED   # was "#2A2A2A"
+_TEXT       = _ngr_t.TEXT           # was "#E0E0E0"
 
 
 def _set_spin_readonly(spin, readonly: bool) -> None:
@@ -657,6 +658,28 @@ class SetupFormWidget(QWidget):
             "Appears when you have reported the latest setup made the car worse.")
         self._btn_revert_setup.setVisible(False)
         outer.addWidget(self._btn_revert_setup)
+
+        # Engineering-Brain Phase 3 — closed-loop outcome review. After driving
+        # valid test laps on the applied setup, the driver presses this to have the
+        # deterministic outcome engine judge whether the change fixed the diagnosed
+        # problem without damaging a protected behaviour (off-thread; read-only —
+        # never auto-applies or auto-reverts). Hidden until an applied experiment
+        # exists for this scope; the host gates visibility and owns the click.
+        self._btn_review_outcome = QPushButton("Review Test Outcome")
+        self._btn_review_outcome.setStyleSheet(
+            "background: #16323A; color: #BFEAF2; font-weight: bold; "
+            "border: 1px solid #2E7C8C; padding: 6px 16px;")
+        self._btn_review_outcome.setToolTip(
+            "After driving valid test laps on the applied setup, evaluate whether it\n"
+            "fixed the problem it targeted — without hurting a protected behaviour.\n"
+            "Read-only: this never applies or reverts a setup for you.")
+        self._btn_review_outcome.setVisible(False)
+        self._lbl_outcome_summary = QLabel("")
+        self._lbl_outcome_summary.setWordWrap(True)
+        self._lbl_outcome_summary.setStyleSheet(
+            "color: #BFEAF2; font-size: 11px; padding: 4px 0;")
+        outer.addWidget(self._btn_review_outcome)
+        outer.addWidget(self._lbl_outcome_summary)
 
         # NOTE: the old "Rate this result" combo + "Applied" checkbox were removed.
 

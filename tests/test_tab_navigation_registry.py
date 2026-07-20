@@ -39,10 +39,11 @@ def _method_body(src: str, name: str) -> str:
 # --------------------------------------------------------------------------- #
 class TestRegistryKeys:
     def test_every_current_tab_has_a_stable_key(self):
-        # 12 tabs: the Guide tab was folded into Home (post-UAT overhaul) and the
-        # AI Log tab was removed in the no-AI refactor.
-        assert len(tr.DEFAULT_TAB_ORDER) == 12
-        assert len(set(tr.DEFAULT_TAB_ORDER)) == 12, "duplicate tab keys"
+        # 13 tabs: the Guide tab was folded into Home (post-UAT overhaul) and the
+        # AI Log tab was removed in the no-AI refactor; Development History was added
+        # (Engineering Brain Phase 8 cross-session memory).
+        assert len(tr.DEFAULT_TAB_ORDER) == 13
+        assert len(set(tr.DEFAULT_TAB_ORDER)) == 13, "duplicate tab keys"
         for key in tr.DEFAULT_TAB_ORDER:
             assert key in tr.TAB_BASE_TITLES, f"no base title for {key}"
 
@@ -62,6 +63,7 @@ class TestRegistryKeys:
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
             tr.TAB_SETTINGS, tr.TAB_HISTORY,
             tr.TAB_TRACK_MODELLING,
+            tr.TAB_DEVELOPMENT_HISTORY,
         )
         assert tr.DEFAULT_TAB_ORDER == expected
 
@@ -79,6 +81,7 @@ class TestRegistryKeys:
             tr.TAB_STRATEGY_BUILDER, tr.TAB_TELEMETRY, tr.TAB_DIAGNOSTICS,
             tr.TAB_SETTINGS, tr.TAB_HISTORY,
             tr.TAB_TRACK_MODELLING,
+            tr.TAB_DEVELOPMENT_HISTORY,
         )
 
     def test_default_order_matches_addtab_calls_in_dashboard(self, dash_src):

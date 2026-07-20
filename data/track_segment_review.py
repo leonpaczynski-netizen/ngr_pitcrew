@@ -86,6 +86,10 @@ class SegmentReviewAction(str, Enum):
     MARK_SPLIT_REQUIRED        = "mark_split_required"
     MARK_MERGE_REQUIRED        = "mark_merge_required"
     PROMOTE_ENGINEER_VALIDATED = "promote_engineer_validated"
+    # Interactive review-editor operations (UAT Finding 4 review step).
+    RENUMBER                   = "renumber"
+    MERGE                      = "merge"
+    SPLIT                      = "split"
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +348,134 @@ def promote_engineer_validated(
             seg.review_notes = notes
         seg.reviewed_at = datetime.now(timezone.utc).isoformat()
         _touch(review)
+    return review
+
+
+# ---------------------------------------------------------------------------
+# Interactive editor operations (UAT Finding 4 review step) — real structural
+# edits, not just flags. Renumber a corner, actually merge two adjacent
+# segments, or split one segment in two. Pure; mutate in place; return the
+# review for convenience.
+# ---------------------------------------------------------------------------
+
+def renumber_segment(
+    review: TrackModelReviewResult,
+    segment_id: str,
+    new_turn_number: Optional[int],
+    notes: str = "",
+) -> TrackModelReviewResult:
+    """Set a segment's corner (turn) number. Marks it RENAMED so the change is
+    recorded as an explicit review action."""
+    seg = _find_segment(review, segment_id)
+    if seg is not None:
+        seg.turn_number = int(new_turn_number) if new_turn_number is not None else None
+        seg.review_status = SegmentReviewStatus.RENAMED
+        seg.last_action = SegmentReviewAction.RENUMBER
+        if notes:
+            seg.review_notes = notes
+        seg.reviewed_at = datetime.now(timezone.utc).isoformat()
+        _touch(review)
+    return review
+
+
+def merge_segments(
+    review: TrackModelReviewResult,
+    keep_segment_id: str,
+    merge_segment_id: str,
+    notes: str = "",
+) -> TrackModelReviewResult:
+    """Actually merge ``merge_segment_id`` into ``keep_segment_id``.
+
+    The kept segment's lap-progress span grows to cover both, evidence/warnings
+    are combined, and the merged segment is removed from the list. No-op if
+    either id is missing or they are the same. The kept segment's type/name are
+    preserved; the result is marked CONFIRMED (a deliberate structural edit).
+    """
+    if keep_segment_id == merge_segment_id:
+        return review
+    keep = _find_segment(review, keep_segment_id)
+    other = _find_segment(review, merge_segment_id)
+    if keep is None or other is None:
+        return review
+    start = min(keep.lap_progress_start, other.lap_progress_start)
+    end = max(keep.lap_progress_end, other.lap_progress_end)
+    keep.lap_progress_start = start
+    keep.lap_progress_end = end
+    keep.lap_progress_mid = (start + end) / 2.0
+    # Combine evidence/warnings without duplicates, preserving order.
+    for src, dst in ((other.evidence, keep.evidence), (other.warnings, keep.warnings)):
+        for item in src:
+            if item not in dst:
+                dst.append(item)
+    keep.source_lap_count = max(keep.source_lap_count, other.source_lap_count)
+    keep.review_status = SegmentReviewStatus.CONFIRMED
+    keep.last_action = SegmentReviewAction.MERGE
+    if notes:
+        keep.review_notes = notes
+    keep.reviewed_at = datetime.now(timezone.utc).isoformat()
+    review.segments = [s for s in review.segments if s.segment_id != merge_segment_id]
+    review.detected_corner_count = sum(
+        1 for s in review.segments
+        if s.segment_type == TrackSegmentType.APEX_ZONE
+        and s.review_status != SegmentReviewStatus.REJECTED)
+    _touch(review)
+    return review
+
+
+def split_segment(
+    review: TrackModelReviewResult,
+    segment_id: str,
+    at_progress: float,
+    *,
+    first_name: str = "",
+    second_name: str = "",
+    notes: str = "",
+) -> TrackModelReviewResult:
+    """Split one segment into two at ``at_progress`` (an absolute lap-progress
+    value that must lie strictly inside the segment's span).
+
+    The original is replaced in place by two new segments (ids ``<id>__a`` /
+    ``<id>__b``) that inherit its type/direction. No-op if the segment is missing
+    or ``at_progress`` is not strictly inside the span.
+    """
+    seg = _find_segment(review, segment_id)
+    if seg is None:
+        return review
+    lo, hi = seg.lap_progress_start, seg.lap_progress_end
+    if not (lo < at_progress < hi):
+        return review
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _child(suffix: str, s: float, e: float, name: str) -> ReviewedTrackSegment:
+        c = ReviewedTrackSegment(
+            segment_id=f"{seg.segment_id}__{suffix}",
+            segment_type=seg.segment_type,
+            original_display_name=seg.original_display_name,
+            lap_progress_start=s,
+            lap_progress_end=e,
+            lap_progress_mid=(s + e) / 2.0,
+            confidence=seg.confidence,
+            evidence=list(seg.evidence),
+            warnings=list(seg.warnings),
+            source_lap_count=seg.source_lap_count,
+            turn_number=seg.turn_number,
+            track_location_id=seg.track_location_id,
+            layout_id=seg.layout_id,
+            direction=seg.direction,
+            calibration_car_id=seg.calibration_car_id,
+            review_status=SegmentReviewStatus.CONFIRMED,
+            reviewed_display_name=name.strip(),
+            last_action=SegmentReviewAction.SPLIT,
+            reviewed_at=now,
+            review_notes=notes,
+        )
+        return c
+
+    first = _child("a", lo, at_progress, first_name)
+    second = _child("b", at_progress, hi, second_name)
+    idx = review.segments.index(seg)
+    review.segments[idx:idx + 1] = [first, second]
+    _touch(review)
     return review
 
 
