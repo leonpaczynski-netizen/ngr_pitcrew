@@ -6496,6 +6496,96 @@ class SessionDB:
             lock_ready_disciplines=tuple(lock_ready_disciplines), recent_learning=tuple(recent_learning))
         return command_centre_to_dict(cc)
 
+    def build_command_centre_truth(self, cycle_id: str, now_date: str = "") -> dict:
+        """Read-only canonical activity truth for one cycle (Program 2, Phase 54). Resolves the cycle,
+        its activities, its bindings and its candidate telemetry sessions with a CONSTANT number of
+        bounded queries (no N+1), then derives per-activity live state + cycle-level pending-binding /
+        pending-debrief truth + a consistency report. Performs NO writes. This replaces the Command
+        Centre's previously-defaulted flags with canonical, derived state."""
+        try:
+            from strategy.event_preparation_cycle import (
+                PreparationActivityType, PreparationActivityState)
+            from strategy.canonical_activity_state import (
+                ActivityFact, derive_activity_state, ConsistencyInputs, check_consistency)
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase54 import failed: {exc}"}
+
+        cyc = self.get_preparation_cycle(cycle_id)
+        if not cyc:
+            return {"ok": False, "error": "no such preparation cycle"}
+        acts = self.list_preparation_activities(cycle_id)
+
+        # bindings for the cycle (one bulk query) -> per-activity + full bound-session set
+        by_activity: dict = {}
+        bound_sessions: set = set()
+        for r in self._conn.execute(
+                "SELECT activity_id, session_id FROM event_preparation_activity_sessions WHERE cycle_id=?",
+                (str(cycle_id or ""),)).fetchall():
+            by_activity.setdefault(str(r[0]), set()).add(str(r[1]))
+            bound_sessions.add(str(r[1]))
+
+        # candidate telemetry sessions for the cycle context (one bounded query); unbound ones only
+        candidate_unbound = 0
+        try:
+            for s in self.get_sessions_for_track(cyc.get("track", ""), car_name=cyc.get("car", "")):
+                sid = str(s.get("id") if isinstance(s, dict) else s)
+                if sid and sid not in bound_sessions:
+                    candidate_unbound += 1
+        except Exception:  # pragma: no cover - defensive; track query optional
+            candidate_unbound = 0
+
+        def _atype(v):
+            try:
+                return PreparationActivityType(str(v))
+            except Exception:
+                return PreparationActivityType.FREE_PRACTICE
+
+        def _astate(v):
+            try:
+                return PreparationActivityState(str(v))
+            except Exception:
+                return PreparationActivityState.PLANNED
+
+        facts = []
+        for a in acts:
+            st = _astate(a["state"])
+            has_binding = bool(by_activity.get(a["activity_id"]))
+            facts.append(ActivityFact(
+                activity_id=a["activity_id"], activity_type=_atype(a["activity_type"]), state=st,
+                # persisted signals: IN_PROGRESS = the run occurred; COMPLETED = explicit debrief/outcome
+                session_ended=(st == PreparationActivityState.IN_PROGRESS),
+                has_binding=has_binding,
+                has_debrief_outcome=(st == PreparationActivityState.COMPLETED),
+                candidate_session_count=(candidate_unbound if not has_binding else 0)))
+
+        states = [derive_activity_state(f) for f in facts]
+        pending_binding_ids = tuple(s.activity_id for s in states if s.pending_binding)
+        pending_debrief_ids = tuple(s.activity_id for s in states if s.pending_debrief)
+
+        consistency = check_consistency(
+            facts, ConsistencyInputs(
+                cycle_complete=(str(cyc.get("explicit_state") or "").lower() == "complete"),
+                selected_cycle_exists=True))
+
+        return {
+            "ok": True,
+            "cycle_id": cycle_id,
+            "pending_binding": bool(pending_binding_ids),
+            "pending_binding_activity_ids": list(pending_binding_ids),
+            "pending_debrief": bool(pending_debrief_ids),
+            "pending_debrief_activity_ids": list(pending_debrief_ids),
+            "activity_states": [s.as_payload() for s in states],
+            "consistency": consistency.as_payload(),
+            "fingerprint": self._truth_fingerprint(states, consistency),
+        }
+
+    @staticmethod
+    def _truth_fingerprint(states, consistency) -> str:
+        import hashlib as _h, json as _j
+        payload = {"states": [s.as_payload() for s in states], "consistency": consistency.as_payload()}
+        return "command_centre_truth_v1:" + _h.sha256(
+            _j.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()[:24]
+
     def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
                                       session_identity=None, gearbox_state="", speed_context="",
                                       session_context=None, session_budget=None, now_date="",
