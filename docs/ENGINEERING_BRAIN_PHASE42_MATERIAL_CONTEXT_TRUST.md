@@ -62,19 +62,26 @@ promotion / confirmed direction / best-known selection **only** when all fields 
 conclusion's domain are `KNOWN_MATCH`. Any required field unknown → capped to `PARTIAL_CONTEXT`
 (never exact). A different event id **alone** with all material conditions matching → `EQUIVALENT_VERIFIED`.
 
-## Domain → required-context map (visible)
+## Domain → required-context map (visible, as implemented in `DOMAIN_REQUIRED`)
 
-- **setup_working_windows** — driver, car(+variant), track/layout, discipline, tuning state, material
-  restrictions, gt7_version, applied-setup identity.
-- **tyre_degradation** — car, track/layout, compound, tyre_multiplier, stint conditions, discipline.
-- **fuel_use** — car, track/layout, fuel_multiplier, (fuel map), race conditions.
-- **gearing / aero** — car, track/layout, BoP, power/weight restriction, discipline.
-- **driver_technique** — driver, car, track, corner (transfer permitted across some event conditions,
-  but retains track/corner/car limits).
-- **vehicle_dynamics** — transferable via the Phase-23 authority; never exact merely because the
-  mechanism is general.
+A domain lists only the fields a conclusion GENUINELY depends on, so a missing field caps only the
+domains it truly affects (and `car_variant` / power / weight restrictions are soft refinements, not
+hard-required, since legacy records rarely carry them — hard-requiring them would wrongly cap
+otherwise-identity-exact evidence):
 
-Every trust decision lists **which missing fields** limited confidence.
+- **setup_working_windows** — driver, car, track, layout_id, discipline, gt7_version.
+- **tyre_degradation** — car, track, layout_id, compound, **tyre_multiplier**, discipline.
+- **fuel_use** — car, track, layout_id, **fuel_multiplier**.
+- **gearing_aero** — car, track, layout_id, **bop_state**, discipline, gt7_version.
+- **driver_technique** — driver, car, track (transfer permitted across some event conditions, but
+  retains track/corner/car limits).
+- **vehicle_dynamics** — car, gt7_version (transferable via the Phase-23 authority; never exact merely
+  because the mechanism is general).
+
+So a legacy record with unknown BoP/tyre/fuel multipliers is **exact** for setup_working_windows and
+driver_technique but **partial** for tyre_degradation (needs tyre_multiplier), fuel_use (needs
+fuel_multiplier) and gearing_aero (needs BoP). Every trust decision lists **which missing fields**
+limited confidence.
 
 ## Legacy evidence handling
 

@@ -1,6 +1,22 @@
 # Current Claude Handoff
 
-## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 39-41: Closed-Loop Engineering Development (combined slice) — COMPLETE
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 42-44: Trustworthy Assisted Runtime Activation (combined slice) — COMPLETE
+
+**Branch `eng-brain-phase42-44-assisted-runtime-activation` from the Phase-39-41 tip `a57d25a` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26; RULE_ENGINE 46.0; `_setup_constants.py` byte-identical.** Runtime activation of the race-engineer workflow WITHOUT voice / autonomous apply / autonomous experiment / auto pit: material context capture -> user-confirmed practice execution -> explicit outcome capture -> safely-gated live advisory text.
+
+**Phase 39-41 file-count correction:** 28 added / 28 modified / 0 deleted = 56 total (report's 56 correct; "57" was an overcount). No commit amended.
+
+**Modules (all pure unless noted):**
+- Phase 42: `strategy/material_context.py` (+render) (per-field + overall trust; unknown never proves match OR difference; domain-required caps), `strategy/legacy_evidence_trust.py` (legacy visible, never upgraded). Read-only `SessionDB.build_material_context_trust_report` + `_current_material_context` (by reference; NO migration - DB v26).
+- Phase 43: `strategy/assisted_run_workflow.py` (12-state; setup-fingerprint verify; READY_TO_RUN block gates), `strategy/session_binding.py` (never auto-bind; ambiguous flagged), `strategy/assisted_outcome_capture.py` (reuses Phase-41; explicit-confirm; canonical write path only).
+- Phase 44: `strategy/live_advisory.py` (+render) (text-only prompts, 1-8 priority), `strategy/live_advisory_engine.py` (staleness+window gates, supersession, cooldown via INJECTED monotonic clock), `strategy/runtime_snapshot.py`. Voice deferred; no pit/strategy commands.
+- Read-only `SessionDB.build_assisted_runtime_report` (context once, shared chain single read, portfolio once, constant query 5/50/500, no writes; now_monotonic injected, not in fp). UI `AssistedRuntimePanel` one coordinated pit-wall in Development History; off-thread + stale-guard; dashboard injects time.monotonic().
+
+**Tests:** 64 new across test_phase42_material_context (12), test_phase43_assisted_workflow (14), test_phase44_live_advisory (15), test_phase42_44_{golden[3],query_shape[4],safety[6],runtime[4],ui[9]} — all green. Qt harness (drive_worker) still green in combined runs. **Manual UAT:** offscreen end-to-end executed (see `docs/UAT_ENGINEERING_BRAIN_PHASE42_44.md`); full live-GUI UAT with real telemetry NOT run in this headless environment. **No setup ultimate; Apply gate + canonical outcome workflow untouched; voice deferred. Program 2 now spans Phases 12-44. Phase 45 NOT started.**
+
+---
+
+## Prior Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 39-41: Closed-Loop Engineering Development (combined slice) — COMPLETE
 
 **Branch `eng-brain-phase39-41-closed-loop-development` from the Phase-36-38 tip `2cbe077` — committed locally, NOT pushed / no PR / not merged; master unchanged at `3d7c6af`; DB stays v26; RULE_ENGINE 46.0; `_setup_constants.py` byte-identical.** A deterministic, offline, read-only, advisory-only slice proving the Engineering Brain can run a complete, trustworthy loop: context-safe evidence -> candidate selection -> controlled practice-run plan -> observed outcome -> reconciliation -> knowledge-update proposal -> promotion / rejection / rollback.
 
