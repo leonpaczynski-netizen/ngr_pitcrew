@@ -56,6 +56,17 @@ class LiveMixin:
         except Exception:  # pragma: no cover - defensive; the Live tab must still build
             self._live_pit_wall_panel = None
 
+        # Phases 63-65 — PSVR2 audio-first race engineer + adaptive live strategy. The visual FALLBACK for
+        # the audio-first channel: an always-visible voice/listening status line + ONE low-density live
+        # strategy card. Essential info is SPOKEN so it does not depend on the screen while in VR. Voice off
+        # by default and gated; acknowledgement executes nothing; issues no pit/tyre/fuel/setup command.
+        try:
+            from ui.vr_audio_engineer_panel import VrAudioEngineerPanel
+            self._vr_audio_engineer_panel = VrAudioEngineerPanel()
+            root.addWidget(self._vr_audio_engineer_panel)
+        except Exception:  # pragma: no cover - defensive; the Live tab must still build
+            self._vr_audio_engineer_panel = None
+
         # UAT #6 Phase 2A: "refined track model available" notice — click to review
         # in Track Modelling. Hidden until a refinement produces an improving candidate.
         self._live_refine_banner = QPushButton("")
