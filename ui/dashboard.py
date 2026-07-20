@@ -6749,6 +6749,11 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # Read-only advisory; runs OFF the Qt thread; writes/creates/applies/promotes nothing.
             if hasattr(page, "update_closed_loop_workflow"):
                 self._refresh_closed_loop_workflow(car, track, layout_id, discipline)
+            # Phases 42-44 — Assisted Runtime pit-wall: material-context readiness + user-confirmed
+            # workflow + safely-gated live advisory. Read-only; OFF the Qt thread; writes nothing;
+            # speaks no voice; issues no pit/strategy command.
+            if hasattr(page, "update_assisted_runtime"):
+                self._refresh_assisted_runtime(car, track, layout_id, discipline)
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
@@ -7942,6 +7947,73 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if page is not None and hasattr(page, "update_closed_loop_workflow"):
             try:
                 page.update_closed_loop_workflow(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    # ---- Phases 42-44 Assisted Runtime pit-wall ------------------------------------------------
+
+    def _refresh_assisted_runtime(self, car, track, layout_id, discipline):
+        """Build the Phases 42-44 Assisted Runtime report OFF the Qt thread and render the finished
+        immutable result. Read-only; context-safe; applies no setup, creates no experiment, records no
+        outcome, binds no session, speaks no voice; never raises into the UI. A stale worker result
+        cannot replace a newer one. The monotonic cooldown clock is injected here (the pure engine
+        never reads wall-clock)."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_assisted_runtime"):
+            return
+        db = self._db
+        if db is None or not (car or track):
+            page.update_assisted_runtime({"ok": True, "workflow": None})
+            return
+        try:
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            import datetime as _dt
+            import time as _time
+            applied = None
+            try:
+                active = self._active_setup_for_current("Race")
+                applied = active.to_record() if active is not None else None
+            except Exception:
+                applied = None
+            identity = {"car": car, "track": track, "layout_id": layout_id}
+            now_date = _dt.date.today().isoformat()
+            # injected monotonic clock for advisory cooldown (pure engine stays clock-free).
+            now_mono = float(_time.monotonic())
+            adv_state = getattr(self, "_assisted_runtime_adv_state", None)
+
+            def _build():
+                # viewing only: no telemetry frame, no confirmations => an honest PLAN/PREFLIGHT view;
+                # nothing is written merely by viewing.
+                return db.build_assisted_runtime_report(
+                    car=car, track=track, layout_id=layout_id, discipline=discipline,
+                    applied_setup=applied, session_identity=identity, now_date=now_date,
+                    now_monotonic=now_mono, advisory_state=adv_state)
+
+            worker = MechanismAnnotationWorker(_build)
+            self._assisted_runtime_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_assisted_runtime_ready(result, w))
+            worker.failed.connect(
+                lambda _msg, w=worker: self._on_assisted_runtime_ready({"ok": True, "workflow": None}, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            try:
+                page.update_assisted_runtime({"ok": True, "workflow": None})
+            except Exception:
+                pass
+
+    def _on_assisted_runtime_ready(self, result, worker=None):
+        """Signal handler on the Qt thread: render the immutable assisted-runtime result, but only if
+        it came from the CURRENT worker (a stale worker's result is ignored)."""
+        if worker is not None and getattr(self, "_assisted_runtime_worker", None) is not worker:
+            return
+        # carry the advisory suppression state forward so cooldowns persist across refreshes.
+        if isinstance(result, dict) and isinstance(result.get("advisory_state"), dict):
+            self._assisted_runtime_adv_state = result.get("advisory_state")
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_assisted_runtime"):
+            try:
+                page.update_assisted_runtime(result)
             except Exception:  # pragma: no cover - defensive
                 pass
 

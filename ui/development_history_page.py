@@ -47,6 +47,7 @@ from ui.assurance_engineering_priority_panel import AssuranceEngineeringPriority
 from ui.assurance_review_pack_panel import AssuranceReviewPackPanel
 from ui.race_engineer_team_panel import RaceEngineerTeamPanel
 from ui.closed_loop_workflow_panel import ClosedLoopWorkflowPanel
+from ui.assisted_runtime_panel import AssistedRuntimePanel
 
 
 class DevelopmentHistoryPage(QWidget):
@@ -120,6 +121,12 @@ class DevelopmentHistoryPage(QWidget):
         # no Apply, no experiment/outcome creation, no setup values.
         self._closed_loop_panel = ClosedLoopWorkflowPanel()
         root.addWidget(self._closed_loop_panel)
+
+        # Phases 42-44 (Program 2) — Assisted Runtime pit-wall: material-context readiness, the
+        # user-confirmed practice workflow and safely-gated live text advisories. Read-only; advisory;
+        # no Apply, no experiment/outcome/session creation, no voice, no setup values.
+        self._assisted_runtime_panel = AssistedRuntimePanel()
+        root.addWidget(self._assisted_runtime_panel)
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -434,6 +441,11 @@ class DevelopmentHistoryPage(QWidget):
         """Render the Phases 39-41 closed-loop engineering workflow (read-only). Receives an immutable,
         pre-built dict (the heavy build runs off the Qt thread)."""
         self._closed_loop_panel.update_result(workflow_result)
+
+    def update_assisted_runtime(self, runtime_result) -> None:
+        """Render the Phases 42-44 assisted runtime pit-wall (read-only). Receives an immutable,
+        pre-built dict (the heavy build runs off the Qt thread)."""
+        self._assisted_runtime_panel.update_result(runtime_result)
 
     def update_programme_knowledge_readiness_report(self, readiness_result) -> None:
         """Render the Phase-28 engineering knowledge readiness executive summary (read-only).

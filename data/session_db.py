@@ -5971,6 +5971,93 @@ class SessionDB:
                 "context_fingerprint": scope.context_fingerprint(),
                 "content_fingerprint": legacy.get("content_fingerprint")}
 
+    def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
+                                      session_identity=None, gearbox_state="", speed_context="",
+                                      session_context=None, session_budget=None, now_date="",
+                                      event_name="", parent_setup=None, expected_setup=None,
+                                      preflight=None, telemetry=None, confirmations=None,
+                                      lifecycle="plan_ready", now_monotonic=0.0,
+                                      advisory_state=None, event_is_near=False,
+                                      available_practice_laps=None, **ctx) -> dict:
+        """Build the READ-ONLY Assisted Runtime report (Program 2, Phases 42-44): the material-context
+        readiness, the Phase-40 run plan, the Phase-43 assisted-workflow state (setup-fingerprint
+        verified), and the Phase-44 live advisory decision. Resolves context ONCE, reuses the shared
+        chain's single bounded read, composes the Phase-17 portfolio ONCE; everything else is pure in
+        memory. ``now_monotonic`` (injected by the caller) drives cooldown only. It applies/creates/
+        records/binds/writes NOTHING. DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.engineering_run_plan import build_engineering_run_plan
+            from strategy.run_candidate_selection import select_run_candidate
+            from strategy.assisted_run_workflow import evaluate_assisted_run_workflow
+            from strategy.runtime_snapshot import build_runtime_snapshot
+            from strategy.live_advisory import build_candidate_prompts
+            from strategy.live_advisory_engine import evaluate_live_advisories
+            from strategy.material_context import build_material_context_trust
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase42-44 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        chain, exact, sol, ww, dd, cp = self._closed_loop_phase37(scope, records)
+        valuations = []
+        try:
+            pf = self.build_experiment_portfolio(
+                memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+                gearbox_state=gearbox_state, speed_context=speed_context,
+                session_context=session_context, **ctx)
+            valuations = ((pf.get("portfolio") or {}).get("valuations") or []) if pf.get("ok") else []
+        except Exception:  # pragma: no cover - defensive
+            valuations = []
+        coaching_holds = any(bool(p.get("hold_setup_constant"))
+                             for p in (cp.to_dict().get("priorities") or []))
+        selection = select_run_candidate(
+            valuations, protected_behaviours=sol.protected_behaviours,
+            coaching_holds_setup=coaching_holds, event_is_near=bool(event_is_near),
+            available_practice_laps=available_practice_laps)
+        plan = build_engineering_run_plan(
+            scope.to_dict(), candidate=selection.selected, applied_setup=applied_setup,
+            parent_setup=parent_setup, working_windows=ww.to_dict(), coaching_plan=cp.to_dict(),
+            protected_behaviours=sol.protected_behaviours,
+            available_practice_laps=available_practice_laps, event_is_near=bool(event_is_near))
+        plan_d = plan.to_dict()
+
+        # material-context readiness of the CURRENT context (completeness-driven).
+        current_material = self._current_material_context(scope, event_name=event_name,
+                                                          applied_setup=applied_setup)
+        mt = build_material_context_trust(current_material, current_material,
+                                          "setup_working_windows").to_dict()
+        # a run plan carries its protected fields for the setup verification.
+        plan_d["_protected_fields"] = [p.get("field") for p in sol.protected_behaviours
+                                       if isinstance(p, dict) and p.get("field")]
+
+        preflight_in = preflight if isinstance(preflight, dict) else {
+            "ok": bool(selection.selected), "blockers": ([] if selection.selected
+                                                         else ["no context-safe candidate selected"])}
+        workflow = evaluate_assisted_run_workflow(
+            run_plan=plan_d, applied_setup=applied_setup, expected_setup=expected_setup,
+            parent_setup=parent_setup, preflight=preflight_in, material_trust=mt,
+            session_identity=session_identity, candidate_stale=(selection.selected is None),
+            plan_fingerprint_current=plan.content_fingerprint, confirmations=confirmations,
+            lifecycle=lifecycle).to_dict()
+
+        snapshot = build_runtime_snapshot(
+            context_fingerprint=scope.context_fingerprint(), run_plan=plan_d, workflow=workflow,
+            material_trust=mt, telemetry=telemetry, event_is_near=bool(event_is_near))
+        candidates = build_candidate_prompts(snapshot, plan_d, workflow, cp.to_dict())
+        decision = evaluate_live_advisories(candidates, snapshot, now_monotonic=float(now_monotonic or 0.0),
+                                            state=advisory_state).to_dict()
+
+        min_clean = int((plan_d.get("run_structure") or {}).get("minimum_clean_laps") or 0)
+        clean = int((telemetry or {}).get("clean_laps") or 0)
+        outcome_ready = workflow.get("state") in ("outcome_review_required", "ready_to_record")
+        return {"ok": True, "workflow": workflow, "advisory": decision, "material_trust": mt,
+                "run_plan": plan_d, "candidate_selection": selection.to_dict(),
+                "evidence_progress": {"clean_laps": clean, "min_clean": min_clean},
+                "outcome_ready": outcome_ready, "advisory_state": decision.get("state"),
+                "context_fingerprint": scope.context_fingerprint(),
+                "content_fingerprint": workflow.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
