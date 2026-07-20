@@ -7435,7 +7435,7 @@ migration); rule 46.0 unchanged; committed-not-pushed; master unchanged `3d7c6af
 files: `test_phase51_command_centre.py`[17], `test_phase51_command_centre_ui.py`[6],
 `test_phase51_dashboard_integration.py`[7], `test_phase52_live_activity.py`[17],
 `test_phase52_live_modes.py`[6], `test_phase52_binding_debrief.py`[8], `test_phase53_resume.py`[11],
-`test_phase53_revision_reopen_cert.py`[17], `test_phase51_53_golden.py`[20], `test_phase51_53_safety.py`[9].
+`test_phase53_revision_reopen_cert.py`[17], `test_phase51_53_golden.py`[19], `test_phase51_53_safety.py`[9].
 Property/metamorphic: Home-refresh-cannot-advance, selection-cannot-change-evidence, restart-cannot-
 complete, telemetry-loss-cannot-increase-confidence, newest-cannot-auto-bind, invalid-cannot-update-
 maturity, noisy-lap-cannot-reopen, corroborated-critical-can-reopen, revision-cannot-rewrite-history,

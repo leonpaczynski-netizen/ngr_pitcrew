@@ -2,7 +2,7 @@
 
 Branch `eng-brain-phase51-53-event-command-centre`. Developed headlessly. Offscreen Qt construction and
 deterministic domain/persistence tests were executed; **live-GUI visual UX and live GT7 telemetry UAT
-were NOT run in this environment.** Legend: PASS (automated) · PARTIAL (core proved automatically; live
+were NOT run in this environment. Automated test results below are NOT manual UAT passes.** Legend: AUTOMATED-PROVEN (unit/property/runtime/offscreen tests) · PARTIAL (core proved by automated tests; live
 visual/GT7 step not run) · NOT RUN.
 
 ## `/ui-ux-pro-max` design gate (mandatory)
@@ -25,16 +25,16 @@ one prominent card, the timeline communicates weeks of preparation, and speciali
   next action, timeline, cumulative learning and specialist navigation proved via
   `test_phase51_command_centre*`, `test_phase51_dashboard_integration`, `test_phase51_53_golden`. Live
   visual layout NOT run.
-- **Stage B — Multiple events:** PASS (automated). Explicit selection required, never newest-by-default;
+- **Stage B — Multiple events:** AUTOMATED-PROVEN (not manual UAT). Explicit selection required, never newest-by-default;
   evidence does not cross-contaminate (`resolve_active_cycle`, candidate-payload invariance).
 - **Stage C — Live Practice:** PARTIAL. Start readiness, live view, binding, debrief handover and
   cumulative update proved via `test_phase52_*`; live GT7 telemetry NOT run.
-- **Stage D — Restart & recovery:** PASS (automated). Interrupted-not-complete, recovery classification,
+- **Stage D — Restart & recovery:** AUTOMATED-PROVEN (not manual UAT). Interrupted-not-complete, recovery classification,
   no fabricated completion (`test_phase53_resume`).
 - **Stage E — Qualifying:** PARTIAL. Low-density mode proved (`test_phase52_live_modes`); live NOT run.
 - **Stage F — Race:** PARTIAL. Safety-focused mode, no pit commands, learning carry-forward proved; live
   NOT run.
-- **Stage G — Event revision:** PASS (automated). Impact assessment, completed history unchanged, lock/
+- **Stage G — Event revision:** AUTOMATED-PROVEN (not manual UAT). Impact assessment, completed history unchanged, lock/
   strategy reopening where justified (`test_phase53_revision_reopen_cert`).
 - **Stage H — Visual experience:** NOT RUN (requires a live visual session).
 
