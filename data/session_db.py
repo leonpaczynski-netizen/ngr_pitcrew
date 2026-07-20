@@ -6487,14 +6487,57 @@ class SessionDB:
         resolution = resolve_active_cycle(candidates, selected_cycle_id=str(selected_cycle_id or ""),
                                           now_date=str(now_date or ""))
         report = None
+        # Phase 54: when a cycle resolves, derive the pending/lock/strategy flags from CANONICAL truth
+        # (no longer defaulted). Callers may still override via kwargs (used by tests).
+        p_bind, p_debrief, s_final, lock_disc = (bool(pending_binding), bool(pending_debrief),
+                                                 bool(strategy_final_ready), tuple(lock_ready_disciplines))
         if resolution.resolved_cycle_id:
             report = self.build_event_preparation_report(resolution.resolved_cycle_id,
                                                          now_date=str(now_date or ""))
+            try:
+                truth = self.build_command_centre_truth(resolution.resolved_cycle_id, now_date=str(now_date or ""))
+                if truth.get("ok"):
+                    p_bind = bool(truth.get("pending_binding"))
+                    p_debrief = bool(truth.get("pending_debrief"))
+                from strategy.setup_strategy_readiness import build_setup_strategy_readiness
+                locked_disc, strat_final = self._persisted_lock_strategy(resolution.resolved_cycle_id)
+                rdy = build_setup_strategy_readiness(
+                    (report or {}).get("setup") or {}, ((report or {}).get("strategy") or {}).get("maturity", ""),
+                    locked_disciplines=locked_disc, strategy_finalised=strat_final,
+                    missing_evidence=((report or {}).get("strategy") or {}).get("missing", ()))
+                s_final = bool(rdy.strategy_final_ready)
+                lock_disc = tuple(rdy.lock_ready_disciplines)
+            except Exception:  # pragma: no cover - defensive; fall back to caller flags
+                pass
         cc = build_event_command_centre(
-            resolution, report, now_date=str(now_date or ""), pending_binding=bool(pending_binding),
-            pending_debrief=bool(pending_debrief), strategy_final_ready=bool(strategy_final_ready),
-            lock_ready_disciplines=tuple(lock_ready_disciplines), recent_learning=tuple(recent_learning))
+            resolution, report, now_date=str(now_date or ""), pending_binding=p_bind,
+            pending_debrief=p_debrief, strategy_final_ready=s_final,
+            lock_ready_disciplines=lock_disc, recent_learning=tuple(recent_learning))
         return command_centre_to_dict(cc)
+
+    def _persisted_lock_strategy(self, cycle_id: str):
+        """Read the persisted per-discipline lock + strategy-finalised flags from the v28 cycle row
+        (setup_lock_json / strategy_final_json). Defensive parsing; returns (locked_disciplines, finalised)."""
+        import json as _json
+        cyc = self.get_preparation_cycle(cycle_id) or {}
+        locked = []
+        try:
+            lk = _json.loads(cyc.get("setup_lock_json") or "{}")
+            if isinstance(lk, dict):
+                for disc, v in lk.items():
+                    if isinstance(v, dict) and v.get("locked"):
+                        locked.append(str(disc))
+                    elif v is True:
+                        locked.append(str(disc))
+        except Exception:  # pragma: no cover - defensive
+            pass
+        finalised = False
+        try:
+            sf = _json.loads(cyc.get("strategy_final_json") or "{}")
+            finalised = bool(isinstance(sf, dict) and sf.get("finalised"))
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return tuple(locked), finalised
 
     def build_command_centre_truth(self, cycle_id: str, now_date: str = "") -> dict:
         """Read-only canonical activity truth for one cycle (Program 2, Phase 54). Resolves the cycle,
