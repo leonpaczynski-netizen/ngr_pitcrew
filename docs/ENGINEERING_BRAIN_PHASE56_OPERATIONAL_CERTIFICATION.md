@@ -29,7 +29,7 @@ History) via `update_certification`, keeping the driver Command Centre unclutter
 | --- | --- | --- |
 | unit / property / runtime-DB | AUTOMATED_ONLY | domain areas |
 | offscreen Qt | OFFSCREEN_VALIDATED | UI construction |
-| replay / shadow | REPLAY_VALIDATED | bridge tested via snapshots |
+| static runtime-snapshot | AUTOMATED_ONLY | bridge classifier tested via constructed snapshots (NOT the replay timeline) |
 | manual visual UAT | VISUAL_UAT_* | not run |
 | live GT7 UAT | LIVE_GT7_* / operational | not run |
 
