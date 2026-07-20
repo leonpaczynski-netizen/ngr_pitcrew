@@ -3357,7 +3357,22 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if self._tracker is not None:
             self._tracker.reset()
             self._tracker.set_session_type_override(None)
+        # Phase 69 — session-transition hardening: a fresh session must not inherit stale race advice,
+        # rolling fuel/pace evidence, pit history, the last recommendation, the spoken-message cooldown or
+        # any pending voice recognition. Clears only the TRANSIENT live-runtime keys; persistent
+        # engineering knowledge / config / Event Prep cycle are preserved.
+        self._reset_live_uat_runtime(reason="reset")
         self._bridge.race_state_changed.emit("IDLE")
+
+    def _reset_live_uat_runtime(self, *, reason: str = "") -> tuple:
+        """Phase 69 session-reset seam: clear the transient live-strategy / audio / PTT runtime state so a
+        new session/event/activity starts clean. Preserves persistent knowledge (DB, config, Event Prep).
+        Read-only w.r.t. persistent state; never raises. Returns the cleared attribute names."""
+        try:
+            from strategy.live_session_lifecycle import reset_live_runtime_attrs
+            return reset_live_runtime_attrs(self)
+        except Exception:  # pragma: no cover - defensive
+            return ()
 
     # ---------------------------------------------- UAT #6 Phase 2A: auto refinement
 
@@ -6990,11 +7005,112 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # speaks no voice; issues no pit/strategy command.
             if hasattr(page, "update_assisted_runtime"):
                 self._refresh_assisted_runtime(car, track, layout_id, discipline)
+            # Phase 69 — Live UAT Runtime diagnostics: observe the production live path (feed → canonical
+            # state → strategy → voice/PTT → certification) read-only, OFF the Qt thread. Changes nothing.
+            if hasattr(page, "update_uat_runtime"):
+                self._refresh_uat_runtime()
         except Exception:  # pragma: no cover - defensive
             try:
                 page.update_result({"ok": False})
             except Exception:
                 pass
+
+    def _refresh_uat_runtime(self) -> None:
+        """Phase 69 — build the Live UAT Runtime snapshot OFF the Qt thread from the REAL production
+        objects (tracker → canonical race state → strategy decision → audio state → certification) and
+        render the finished immutable payload. Read-only; DB-free; reads the tracker thinly (no listener/
+        socket/loop); a stale worker (event/activity switched) is dropped. Never raises; never writes."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "update_uat_runtime"):
+            return
+        try:
+            import time as _time
+            from strategy.live_uat_runtime_snapshot import build_live_uat_runtime_snapshot
+            from strategy.canonical_live_race_state import build_canonical_live_race_state
+            from strategy.adaptive_live_strategy import LiveStrategyState, StrategyObjective, decide_replan
+            from strategy.audio_first_engineer import VrRuntimeMode, resolve_audio_engineer_state
+            from strategy.event_programme_certification import live_vr_certification
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+
+            raw_tracker = getattr(self, "_tracker", None)
+            snap_tracker = self._build_tracker_runtime_snapshot() if hasattr(
+                self, "_build_tracker_runtime_snapshot") else None
+            telemetry_fresh = bool(getattr(snap_tracker, "telemetry_fresh", True)) if snap_tracker is not None else True
+            last_age = None
+            try:
+                last_mono = getattr(self, "_live_last_packet_monotonic", None)
+                if last_mono is not None:
+                    last_age = max(0.0, _time.monotonic() - float(last_mono))
+            except Exception:
+                last_age = None
+            session_identity = str(getattr(self, "_live_session_state", "") or "")
+            event_identity = str(self._config.get("active_cycle_id") or "") if hasattr(self, "_config") else ""
+            vr_mode = (VrRuntimeMode.AUDIO_FIRST if bool(self._config.get("vr_audio_first"))
+                       else VrRuntimeMode.DESKTOP) if hasattr(self, "_config") else VrRuntimeMode.DESKTOP
+            voice_cfg = self._config.get("voice", {}) if hasattr(self, "_config") else {}
+            voice_enabled = bool(voice_cfg.get("enabled")) if isinstance(voice_cfg, dict) else False
+            tracker_connected = raw_tracker is not None and getattr(raw_tracker, "race_type", None) is not None
+            nav_key = (event_identity, str(getattr(self, "_live_selected_activity_id", "") or ""))
+            ts = _time.strftime("%H:%M:%S")
+
+            def _build():
+                canonical = None
+                decision = None
+                if tracker_connected:
+                    try:
+                        canonical = build_canonical_live_race_state(
+                            raw_tracker, elapsed_s=getattr(self, "_live_race_elapsed_s", None),
+                            telemetry_fresh=telemetry_fresh,
+                            fuel_per_lap_plan=getattr(self, "_live_fuel_plan", None),
+                            lap_time_plan_s=getattr(self, "_live_pace_plan_s", None),
+                            recent_fuel_burn_samples=getattr(self, "_live_fuel_samples", None),
+                            recent_clean_lap_times_s=getattr(self, "_live_clean_lap_times", None),
+                            pit_loss_s=getattr(self, "_live_pit_loss_s", None),
+                            driver_reports=getattr(self, "_live_driver_reports", None))
+                    except Exception:
+                        canonical = None
+                strategy_state = (canonical.to_live_strategy_state() if canonical is not None
+                                  else LiveStrategyState(objective=StrategyObjective.UNKNOWN,
+                                                         telemetry_fresh=telemetry_fresh))
+                try:
+                    decision = decide_replan(strategy_state)
+                except Exception:
+                    decision = None
+                audio = resolve_audio_engineer_state(
+                    vr_mode=vr_mode, voice_enabled=voice_enabled, gate_allows=False,
+                    tts_available=True, recognition_available=False, telemetry_fresh=telemetry_fresh)
+                cert = live_vr_certification()
+                fuel_samples = getattr(self, "_live_fuel_samples", None) or []
+                pace_samples = getattr(self, "_live_clean_lap_times", None) or []
+                return build_live_uat_runtime_snapshot(
+                    timestamp=ts, session_identity=session_identity, event_identity=event_identity,
+                    tracker_connected=bool(tracker_connected), telemetry_fresh=telemetry_fresh,
+                    last_packet_age_s=last_age, canonical=canonical, strategy_state=strategy_state,
+                    decision=decision, audio=audio, certification=cert,
+                    fuel_sample_count=len(fuel_samples), pace_sample_count=len(pace_samples)).to_dict()
+
+            worker = MechanismAnnotationWorker(_build)
+            self._uat_runtime_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker, k=nav_key: self._on_uat_runtime_ready(result, w, k))
+            worker.failed.connect(
+                lambda _m, w=worker, k=nav_key: self._on_uat_runtime_ready(None, w, k))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_uat_runtime_ready(self, result, worker=None, nav_key=None) -> None:
+        """Render the Phase-69 UAT runtime snapshot on the UI thread; drop a stale worker OR a result for a
+        previously-selected event/activity."""
+        if worker is not None and getattr(self, "_uat_runtime_worker", None) is not worker:
+            return
+        current_key = (str(self._config.get("active_cycle_id") or ""),
+                       str(getattr(self, "_live_selected_activity_id", "") or ""))
+        if nav_key is not None and tuple(nav_key) != current_key:
+            return
+        page = getattr(self, "_development_history_page", None)
+        if page is not None and hasattr(page, "update_uat_runtime"):
+            page.update_uat_runtime(result)
 
     def _refresh_mechanism_annotations(self, car, track, layout_id, discipline):
         """Build the Phase-13 mechanism annotations OFF the Qt thread and render the

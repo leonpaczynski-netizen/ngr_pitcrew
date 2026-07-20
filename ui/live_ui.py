@@ -488,6 +488,11 @@ class LiveMixin:
         idx = {"Race": 0, "Practice": 1, "Qualifying": 2}.get(mode, 0)
         if hasattr(self, "_live_mode_stack"):
             self._live_mode_stack.setCurrentIndex(idx)
+        # Phase 69 — a Practice/Qualifying/Race transition is a session boundary: clear the transient
+        # live-runtime state so a prior mode's fuel/pace evidence, pit history, last recommendation,
+        # cooldown or pending recognition cannot bleed into the new session. Persistent knowledge is kept.
+        if hasattr(self, "_reset_live_uat_runtime"):
+            self._reset_live_uat_runtime(reason=f"mode:{mode}")
         # Entering Practice starts a fresh capture window for Practice Analysis.
         if mode == "Practice" and hasattr(self, "_reset_practice_capture"):
             self._reset_practice_capture()
