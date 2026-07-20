@@ -207,3 +207,87 @@ def current_slice_certification() -> "EventProgrammeCertification":
         areas.append(CertificationArea(name, ev, last_scenario="phase54-56 automated suite",
                                        findings=findings))
     return build_event_programme_certification(areas)
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 — full live-event journey certification (per-area, with required-next-evidence)
+# ---------------------------------------------------------------------------
+
+# the ~30 areas of the complete NGR event experience (task section 9)
+LIVE_CERTIFICATION_AREAS: Tuple[str, ...] = (
+    "active_event_selection", "command_centre", "next_action", "preparation_timeline",
+    "activity_selection", "start_readiness", "practice_runtime", "qualifying_runtime", "race_runtime",
+    "telemetry_freshness", "context_match", "setup_match", "advisory_delivery", "voice_gating",
+    "telemetry_dropout", "session_end_detection", "session_binding", "debrief", "cumulative_setup_learning",
+    "driver_development_learning", "tyre_and_fuel_maturity", "strategy_maturity", "setup_lock",
+    "strategy_finalisation", "restart_recovery", "event_revision", "visual_clarity", "ngr_immersion",
+    "db_safety", "config_safety", "runtime_performance",
+)
+
+# areas that fundamentally require a live GT7 feed or a human viewing the UI (cannot exceed NONE here)
+_LIVE_OR_VISUAL_AREAS = frozenset({
+    "practice_runtime", "qualifying_runtime", "race_runtime", "telemetry_freshness", "advisory_delivery",
+    "telemetry_dropout", "visual_clarity", "ngr_immersion", "runtime_performance",
+})
+
+_REQUIRED_NEXT_EVIDENCE = {
+    "practice_runtime": "live GT7 Practice UAT", "qualifying_runtime": "live GT7 Qualifying UAT",
+    "race_runtime": "live GT7 Race UAT", "telemetry_freshness": "live GT7 feed",
+    "advisory_delivery": "live GT7 advisory delivery UAT", "telemetry_dropout": "live telemetry-loss UAT",
+    "visual_clarity": "manual visual UAT", "ngr_immersion": "manual visual UAT",
+    "runtime_performance": "live runtime profiling", "voice_gating": "physical voice UAT",
+    "command_centre": "manual visual UAT", "session_binding": "live session-binding UAT",
+    "debrief": "live debrief UAT",
+}
+
+
+def required_next_evidence(area_name: str) -> str:
+    return _REQUIRED_NEXT_EVIDENCE.get(_norm(area_name), "")
+
+
+def live_event_certification() -> "EventProgrammeCertification":
+    """The HONEST self-certification of the full NGR live-event journey after Phase 57-59. Domain logic =
+    automated; UI panels = offscreen; live-GT7 / visual / voice areas = NONE (not run headlessly). Per-
+    area detail is preserved; the overall level is bounded by the untested live areas (NOT reduced to one
+    undifferentiated NOT_TESTED)."""
+    A = EvidenceType
+    automated = {
+        "next_action", "activity_selection", "start_readiness", "context_match", "setup_match",
+        "session_end_detection", "cumulative_setup_learning", "driver_development_learning",
+        "tyre_and_fuel_maturity", "strategy_maturity", "setup_lock", "strategy_finalisation",
+        "restart_recovery", "event_revision", "db_safety", "config_safety", "preparation_timeline",
+        "active_event_selection", "session_binding",
+    }
+    offscreen = {"command_centre"}
+    areas = []
+    for name in LIVE_CERTIFICATION_AREAS:
+        if name in _LIVE_OR_VISUAL_AREAS or name in ("debrief",):
+            ev = A.NONE
+        elif name in offscreen:
+            ev = A.OFFSCREEN
+        elif name in automated:
+            ev = A.AUTOMATED
+        else:
+            ev = A.AUTOMATED
+        findings = ()
+        if ev == A.NONE:
+            nxt = required_next_evidence(name) or "live GT7 / visual UAT"
+            findings = (CertificationFinding("not_run", FindingSeverity.LIMITATION,
+                                             f"not run headlessly — needs {nxt}"),)
+        areas.append(CertificationArea(name, ev, last_scenario="phase57-59 automated suite",
+                                       findings=findings))
+    return build_event_programme_certification(areas)
+
+
+@dataclass(frozen=True)
+class CertificationRun:
+    """A deterministic certification-run export (a report, NOT a new DB table). Certification evidence
+    never alters engineering state."""
+    scenario: str
+    certification: "EventProgrammeCertification"
+    captured_label: str = ""          # an optional injected label (never a wall-clock read)
+
+    def as_report(self) -> dict:
+        return {"scenario": _norm(self.scenario), "captured_label": _norm(self.captured_label),
+                "certification": self.certification.as_payload(),
+                "fingerprint": self.certification.fingerprint}
