@@ -275,8 +275,10 @@ def build_event_command_centre(
     quick = tuple(EventQuickAction(label, surf) for (label, surf) in QUICK_ACTION_SURFACES)
     timeline = tuple((rep or {}).get("timeline") or [])
     candidates = tuple(c.as_payload() for c in resolution.candidates)
-    days = _days_until(now_date, cyc.get("official_race_date", "") or
-                       identity.get("official_race_date", "")) if cyc else None
+    # prefer the report's already-computed countdown; else recompute from an explicit race date
+    days = cyc.get("days_until_race")
+    if days is None and cyc:
+        days = _days_until(now_date, cyc.get("official_race_date", ""))
 
     cc = EventCommandCentre(
         resolution_state=resolution.state, event_identity=identity, next_action=next_action,

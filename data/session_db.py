@@ -6452,6 +6452,50 @@ class SessionDB:
             "evidence_membership": list(evidence.evidence_membership),
         }
 
+    def list_preparation_cycle_candidates(self) -> list:
+        """All cycles with the fields the active-cycle resolver needs (SELECT-only, single bounded
+        query — resolved ONCE regardless of cycle count)."""
+        rows = self._conn.execute(
+            "SELECT cycle_id,event_name,series,round_label,explicit_state,prep_open_date,"
+            "official_race_date,context_digest FROM event_preparation_cycles "
+            "ORDER BY official_race_date, cycle_id").fetchall()
+        return [{"cycle_id": r[0], "event_name": r[1], "series": r[2], "round_label": r[3],
+                 "explicit_state": r[4], "prep_open_date": r[5], "official_race_date": r[6],
+                 "context_digest": r[7]} for r in rows]
+
+    def build_event_command_centre_view(self, selected_cycle_id: str = "", now_date: str = "", *,
+                                        pending_binding: bool = False, pending_debrief: bool = False,
+                                        strategy_final_ready: bool = False,
+                                        lock_ready_disciplines=(), recent_learning=()) -> dict:
+        """Read-only Home / Event Command Centre orchestration (Program 2, Phase 51). Resolves the active
+        cycle candidates ONCE, retrieves the selected cycle's preparation report ONCE (constant query
+        count), and assembles the Command Centre view. Performs NO writes — viewing/refreshing Home never
+        persists. ``selected_cycle_id`` is operational navigation state supplied by the caller (config);
+        it never alters engineering evidence."""
+        try:
+            from strategy.active_cycle_resolution import CycleCandidate, resolve_active_cycle
+            from strategy.event_command_centre import build_event_command_centre, command_centre_to_dict
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase51 import failed: {exc}"}
+
+        rows = self.list_preparation_cycle_candidates()
+        candidates = [CycleCandidate(
+            cycle_id=r["cycle_id"], event_name=r["event_name"], series=r["series"],
+            round_label=r["round_label"], explicit_state=r["explicit_state"],
+            prep_open_date=r["prep_open_date"], official_race_date=r["official_race_date"],
+            context_digest=r["context_digest"]) for r in rows]
+        resolution = resolve_active_cycle(candidates, selected_cycle_id=str(selected_cycle_id or ""),
+                                          now_date=str(now_date or ""))
+        report = None
+        if resolution.resolved_cycle_id:
+            report = self.build_event_preparation_report(resolution.resolved_cycle_id,
+                                                         now_date=str(now_date or ""))
+        cc = build_event_command_centre(
+            resolution, report, now_date=str(now_date or ""), pending_binding=bool(pending_binding),
+            pending_debrief=bool(pending_debrief), strategy_final_ready=bool(strategy_final_ready),
+            lock_ready_disciplines=tuple(lock_ready_disciplines), recent_learning=tuple(recent_learning))
+        return command_centre_to_dict(cc)
+
     def build_assisted_runtime_report(self, memory_context_key="", *, applied_setup=None,
                                       session_identity=None, gearbox_state="", speed_context="",
                                       session_context=None, session_budget=None, now_date="",

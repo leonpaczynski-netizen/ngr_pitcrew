@@ -605,6 +605,19 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         header_row.addWidget(self._home_btn_refresh, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header_bar)
 
+        # Phase 51 — Event Command Centre: the active NGR event is the PRIMARY Home surface. Read-only;
+        # the heavy build runs off the Qt thread (worker + stale guard); navigation and active-cycle
+        # selection are delegated back here. When there is no active event it renders a create/select
+        # next action. It applies/locks/finalises/binds nothing.
+        try:
+            from ui.event_command_centre_panel import EventCommandCentrePanel
+            self._event_command_centre_panel = EventCommandCentrePanel()
+            self._event_command_centre_panel.set_handlers(
+                navigate=self._cc_navigate, select=self._cc_select_active_cycle)
+            root.addWidget(self._event_command_centre_panel)
+        except Exception:  # pragma: no cover - defensive; Home must still build
+            self._event_command_centre_panel = None
+
         # Sprint 10: guided workflow stepper — the "follow the bouncing ball"
         # 12-stage journey. Clicking its next-action button navigates to the tab
         # the current stage lives on.
@@ -817,6 +830,70 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     lbl.setText(hdvm.format_card_html(card))
         except Exception:  # pragma: no cover - defensive; must never break the UI
             pass
+        # Phase 51 — rebuild the Event Command Centre off the Qt thread (read-only).
+        self._refresh_event_command_centre()
+
+    # ------------------------------------------------------------------
+    # Phase 51 — Event Command Centre (read-only Home spine, off-thread)
+    # ------------------------------------------------------------------
+    _CC_SURFACE_TABS = {
+        "briefing": "development_history", "garage": "garage", "practice": "practice_review",
+        "setup": "setup_builder", "coaching": "development_history", "telemetry": "telemetry",
+        "strategy": "strategy_builder", "qualifying": "live", "live": "live",
+        "debrief": "development_history", "development_history": "development_history",
+    }
+
+    def _cc_navigate(self, surface) -> None:
+        """Command Centre quick-action → navigate to the mapped specialist tab (no state change)."""
+        try:
+            key = self._CC_SURFACE_TABS.get(str(surface or ""))
+            if key and self.has_tab(key):
+                self.select_tab(key)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _cc_select_active_cycle(self, cycle_id) -> None:
+        """Explicit active-cycle selection. OPERATIONAL navigation state only — persisted to config,
+        never an engineering write; it cannot alter historical evidence. Refreshes Home."""
+        try:
+            self._config["active_cycle_id"] = str(cycle_id or "")
+            self._refresh_event_command_centre()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _refresh_event_command_centre(self) -> None:
+        """Rebuild the Command Centre view off the Qt thread. Read-only; shows a loading state while the
+        build runs; a stale worker's result is dropped."""
+        panel = getattr(self, "_event_command_centre_panel", None)
+        if panel is None or self._db is None:
+            return
+        try:
+            panel.update_result({"loading": True})
+            import datetime
+            selected = str(self._config.get("active_cycle_id") or "")
+            now_date = datetime.date.today().isoformat()
+            db = self._db
+
+            def _build():
+                return db.build_event_command_centre_view(selected_cycle_id=selected, now_date=now_date)
+
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            worker = MechanismAnnotationWorker(_build)
+            self._event_command_centre_worker = worker
+            worker.finished_ok.connect(
+                lambda result, w=worker: self._on_event_command_centre_ready(result, w))
+            worker.failed.connect(lambda _msg, w=worker: self._on_event_command_centre_ready(None, w))
+            worker.start()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_event_command_centre_ready(self, result, worker=None) -> None:
+        """Render the finished Command Centre dict on the Qt thread; ignore a stale worker's result."""
+        if worker is not None and getattr(self, "_event_command_centre_worker", None) is not worker:
+            return
+        panel = getattr(self, "_event_command_centre_panel", None)
+        if panel is not None:
+            panel.update_result(result)
 
     def _home_update_next_action_button(self, next_action) -> None:
         """Point the next-action button at the recommended tab, or hide it.
