@@ -51,6 +51,9 @@ from ui.assisted_runtime_panel import AssistedRuntimePanel
 from ui.event_preparation_panel import EventPreparationPanel
 from ui.race_weekend_panel import RaceWeekendPanel
 from ui.certification_panel import CertificationPanel
+from ui.uat_runtime_panel import UatRuntimePanel
+from ui.bench_uat_panel import BenchUatPanel
+from ui.manual_uat_panel import ManualUatPanel
 from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
 
 
@@ -150,6 +153,24 @@ class DevelopmentHistoryPage(QWidget):
         # replay evidence never awards visual/live/operational certification. Kept off the driver Home.
         self._certification_panel = CertificationPanel()
         root.addWidget(self._certification_panel)
+
+        # Phase 69 (Program 2) — Live UAT Runtime: read-only observability of the production live path
+        # (feed → canonical race state → strategy → voice/PTT → certification) so the whole runtime can be
+        # inspected before physical UAT. Advisory only; changes nothing; hardware is never auto-certified.
+        self._uat_runtime_panel = UatRuntimePanel()
+        root.addWidget(self._uat_runtime_panel)
+
+        # Phase 70 (Program 2) — Bench UAT: an explicit, offline, read-only runner that exercises the REAL
+        # production live path with deterministic scenarios before physical UAT. Sends no network/keyboard/
+        # joystick/microphone input; certifies no physical hardware; runs off the Qt thread.
+        self._bench_uat_panel = BenchUatPanel()
+        root.addWidget(self._bench_uat_panel)
+
+        # Phase 71 (Program 2) — Manual UAT Evidence & Release Readiness: record REAL physical / live UAT
+        # evidence against one exact candidate + an honest readiness decision. Writes are explicit; no test
+        # can create a PASS; physical/PSVR2/live-GT7 are certified only by user evidence.
+        self._manual_uat_panel = ManualUatPanel()
+        root.addWidget(self._manual_uat_panel)
 
         # Phase 58 (Program 2) — NGR Live Pit Wall: the driver-facing low-density live surface (one
         # coordinated NGR message). Read-only; issues no command; voice off by default. Hosted here for
@@ -489,6 +510,19 @@ class DevelopmentHistoryPage(QWidget):
     def update_certification(self, certification_result) -> None:
         """Render the Phase 56 Operational Certification developer/UAT surface (read-only)."""
         self._certification_panel.update_result(certification_result)
+
+    def update_uat_runtime(self, runtime_result) -> None:
+        """Render the Phase 69 Live UAT Runtime diagnostics surface (read-only). Receives a finished,
+        immutable ``LiveUatRuntimeSnapshot`` payload dict (the build runs off the Qt thread)."""
+        if hasattr(self, "_uat_runtime_panel"):
+            self._uat_runtime_panel.update_result(runtime_result)
+
+    def set_manual_uat_context(self, *, store=None, facts_provider=None, candidate_commit=None) -> None:
+        """Wire the Phase 71 Manual UAT evidence store + software-gate facts provider + exact candidate
+        commit into the panel (explicit user writes only)."""
+        if hasattr(self, "_manual_uat_panel"):
+            self._manual_uat_panel.set_context(store=store, facts_provider=facts_provider,
+                                               candidate_commit=candidate_commit)
 
     def update_live_pit_wall(self, pit_wall_result) -> None:
         """Render the Phase 58 NGR Live Pit Wall driver surface (read-only)."""
