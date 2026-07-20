@@ -5685,6 +5685,149 @@ class SessionDB:
                 "plan_step_count": len(brief.get("ordered_development_plan") or []),
                 "content_fingerprint": brief.get("content_fingerprint")}
 
+    # ---- Program 2, Phases 39-41: closed-loop engineering development (read-only) --------------
+
+    def _closed_loop_scope_and_records(self, memory_context_key="", *, applied_setup=None,
+                                       session_identity=None, gearbox_state="", speed_context="",
+                                       session_context=None, session_budget=None, now_date="", **ctx):
+        """Resolve the current canonical scope ONCE and read the bounded raw records ONCE (no N+1).
+        Returns (scope, raw_records). ``raw_records`` is the SAME single bounded evidence read the
+        Phase-22 chain uses. Never raises; may return ([], []) content on empty."""
+        from strategy.engineering_context_scope import build_engineering_context_scope
+        from strategy._setup_constants import DB_VERSION as _DBV, RULE_ENGINE_VERSION as _REV
+        sid = session_identity if isinstance(session_identity, dict) else {}
+        chain = self._build_knowledge_chain(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context,
+            session_context=session_context, session_budget=session_budget, now_date=now_date, **ctx)
+        if chain is not None:
+            pk = chain["programme"]
+            compat = (pk.get("compatibility") or {}) if isinstance(pk, dict) else {}
+            primary = dict(compat.get("primary_key") or {})
+            records = chain.get("records") or []
+        else:
+            primary = {k: str(sid.get(k, "") or ctx.get(k, "") or "")
+                       for k in ("car", "discipline", "gt7_version", "driver")}
+            records = []
+        context = {
+            "programme": primary, "car": str(primary.get("car", "") or ctx.get("car", "") or ""),
+            "discipline": str(primary.get("discipline", "") or ctx.get("discipline", "") or ""),
+            "gt7_version": str(primary.get("gt7_version", "") or ctx.get("gt7_version", "") or ""),
+            "driver": str(primary.get("driver", "") or ctx.get("driver", "") or ""),
+            "track": str(sid.get("track", "") or ctx.get("track", "") or ""),
+            "layout_id": str(sid.get("layout_id", "") or ctx.get("layout_id", "") or ""),
+            "compound": str(primary.get("compound", "") or sid.get("compound", "")
+                            or ctx.get("compound", "") or ""),
+            "event_id": str(sid.get("event_id", "") or ctx.get("event_id", "") or ""),
+            "db_schema_version": int(_DBV), "rule_engine_version": str(_REV)}
+        return build_engineering_context_scope(context), records
+
+    def build_context_scoped_evidence_report(self, memory_context_key="", *, applied_setup=None,
+                                             session_identity=None, gearbox_state="", speed_context="",
+                                             session_context=None, session_budget=None, now_date="",
+                                             **ctx) -> dict:
+        """Build the READ-ONLY Context-Scoped Evidence pipeline (Program 2, Phase 39; Audit A): classify
+        the raw records against the current scope BEFORE any aggregate, exposing exact / transferable /
+        excluded buckets, an exact-context summary and the exact-context fingerprint (invariant to
+        incompatible evidence). Reuses the shared chain ONCE; no extra DB reads; writes nothing; DB
+        stays v26; deterministic; never raises."""
+        try:
+            from strategy.context_scoped_chain import build_context_scoped_chain
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase39 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        chain = build_context_scoped_chain(scope, records)
+        return {"ok": True, "scoped_chain": chain.to_dict(),
+                "context_fingerprint": scope.context_fingerprint(),
+                "exact_content_fingerprint": chain.exact_content_fingerprint,
+                "content_fingerprint": chain.content_fingerprint}
+
+    def build_production_history_validation_report(self, memory_context_key="", *, applied_setup=None,
+                                                   session_identity=None, gearbox_state="",
+                                                   speed_context="", session_context=None,
+                                                   session_budget=None, now_date="", **ctx) -> dict:
+        """Build the READ-ONLY Production-History Validation (Program 2, Phase 39): evaluate the real
+        history for missing context, orphan/broken links, contradictory outcomes, ambiguous multi-field
+        regressions, thin fields and unsafe attribution. Performs NO repair / migration. Reuses the
+        shared chain ONCE; DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.production_history_validation import validate_production_history
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase39 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        report = validate_production_history(scope, records).to_dict()
+        return {"ok": True, "validation": report,
+                "context_fingerprint": scope.context_fingerprint(),
+                "content_fingerprint": report.get("content_fingerprint")}
+
+    def _closed_loop_phase37(self, scope, records):
+        """Compute the Phase-37 products (setup outcome, working windows, driver dev, coaching) PURELY
+        in memory from the EXACT-context records of ``scope``. No DB access; never raises."""
+        from strategy.context_scoped_chain import build_context_scoped_chain, exact_records as _exact
+        from strategy.setup_outcome_learning import build_setup_outcome_learning
+        from strategy.setup_working_window import build_setup_working_windows
+        from strategy.driver_development_state import build_driver_development_state
+        from strategy.coaching_priority import build_coaching_plan
+        chain = build_context_scoped_chain(scope, records)
+        exact = _exact(records, chain)
+        sfp = scope.context_fingerprint()
+        sol = build_setup_outcome_learning(sfp, exact)
+        ww = build_setup_working_windows(sfp, scope.discipline.value, exact, sol.blocked_directions)
+        dd = build_driver_development_state(sfp, exact)
+        cp = build_coaching_plan(sfp, dd.to_dict())
+        return chain, exact, sol, ww, dd, cp
+
+    def build_engineering_run_plan_report(self, memory_context_key="", *, applied_setup=None,
+                                          session_identity=None, gearbox_state="", speed_context="",
+                                          session_context=None, session_budget=None, now_date="",
+                                          parent_setup=None, available_practice_laps=None,
+                                          event_is_near=False, **ctx) -> dict:
+        """Build the READ-ONLY Controlled Practice-Run Plan (Program 2, Phase 40): resolve context ONCE,
+        build the context-scoped exact chain + Phase-37 products in memory, select the highest-value
+        EXISTING Phase-17 candidate (portfolio built once), and produce the advisory run plan. It
+        creates / persists / applies / schedules NOTHING. DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.engineering_run_plan import build_engineering_run_plan
+            from strategy.run_candidate_selection import select_run_candidate
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase40 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        chain, exact, sol, ww, dd, cp = self._closed_loop_phase37(scope, records)
+        # existing Phase-17 candidates (portfolio composed once; never creates an experiment).
+        valuations = []
+        try:
+            pf = self.build_experiment_portfolio(
+                memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+                gearbox_state=gearbox_state, speed_context=speed_context,
+                session_context=session_context, **ctx)
+            valuations = ((pf.get("portfolio") or {}).get("valuations") or []) if pf.get("ok") else []
+        except Exception:  # pragma: no cover - defensive
+            valuations = []
+        coaching_holds = any(bool(p.get("hold_setup_constant")) for p in (cp.to_dict().get("priorities")
+                                                                          or []))
+        protected = sol.protected_behaviours
+        selection = select_run_candidate(
+            valuations, protected_behaviours=protected, coaching_holds_setup=coaching_holds,
+            event_is_near=bool(event_is_near), available_practice_laps=available_practice_laps)
+        plan = build_engineering_run_plan(
+            scope.to_dict(), candidate=selection.selected, applied_setup=applied_setup,
+            parent_setup=parent_setup, working_windows=ww.to_dict(), coaching_plan=cp.to_dict(),
+            protected_behaviours=protected, available_practice_laps=available_practice_laps,
+            event_is_near=bool(event_is_near))
+        return {"ok": True, "run_plan": plan.to_dict(), "candidate_selection": selection.to_dict(),
+                "posture": selection.posture, "context_fingerprint": scope.context_fingerprint(),
+                "exact_evidence_count": len(exact),
+                "content_fingerprint": plan.content_fingerprint}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
