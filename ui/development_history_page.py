@@ -51,6 +51,7 @@ from ui.assisted_runtime_panel import AssistedRuntimePanel
 from ui.event_preparation_panel import EventPreparationPanel
 from ui.race_weekend_panel import RaceWeekendPanel
 from ui.certification_panel import CertificationPanel
+from ui.uat_runtime_panel import UatRuntimePanel
 from ui.ngr_live_pit_wall_panel import NgrLivePitWallPanel
 
 
@@ -150,6 +151,12 @@ class DevelopmentHistoryPage(QWidget):
         # replay evidence never awards visual/live/operational certification. Kept off the driver Home.
         self._certification_panel = CertificationPanel()
         root.addWidget(self._certification_panel)
+
+        # Phase 69 (Program 2) — Live UAT Runtime: read-only observability of the production live path
+        # (feed → canonical race state → strategy → voice/PTT → certification) so the whole runtime can be
+        # inspected before physical UAT. Advisory only; changes nothing; hardware is never auto-certified.
+        self._uat_runtime_panel = UatRuntimePanel()
+        root.addWidget(self._uat_runtime_panel)
 
         # Phase 58 (Program 2) — NGR Live Pit Wall: the driver-facing low-density live surface (one
         # coordinated NGR message). Read-only; issues no command; voice off by default. Hosted here for
@@ -489,6 +496,12 @@ class DevelopmentHistoryPage(QWidget):
     def update_certification(self, certification_result) -> None:
         """Render the Phase 56 Operational Certification developer/UAT surface (read-only)."""
         self._certification_panel.update_result(certification_result)
+
+    def update_uat_runtime(self, runtime_result) -> None:
+        """Render the Phase 69 Live UAT Runtime diagnostics surface (read-only). Receives a finished,
+        immutable ``LiveUatRuntimeSnapshot`` payload dict (the build runs off the Qt thread)."""
+        if hasattr(self, "_uat_runtime_panel"):
+            self._uat_runtime_panel.update_result(runtime_result)
 
     def update_live_pit_wall(self, pit_wall_result) -> None:
         """Render the Phase 58 NGR Live Pit Wall driver surface (read-only)."""
