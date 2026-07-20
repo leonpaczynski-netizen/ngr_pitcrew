@@ -6841,12 +6841,49 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                 self._tabs.currentChanged.connect(self._on_tab_changed_dev_history)
             except Exception:
                 pass
+            # Phase 71 — wire the Manual UAT evidence store (persisted beside the config, same discipline as
+            # active_setup_state.json) + the software-gate facts provider. Explicit user writes only.
+            self._wire_manual_uat_context()
             self._refresh_development_history()
             return self._development_history_page
         except Exception:  # pragma: no cover - defensive
             from PyQt6.QtWidgets import QLabel
             self._development_history_page = None
             return QLabel("Development History is unavailable.")
+
+    def _wire_manual_uat_context(self) -> None:
+        """Phase 71 — create the Manual UAT evidence store + software-gate facts provider and wire them into
+        the Development History page. The store persists beside the user's config (never a runtime data
+        file). Facts reflect what is known at runtime (DB / rule-engine versions, single listener); the
+        software regression + bench totals are NOT asserted here, so the live readiness stays conservative
+        (never an optimistic default) until a release run supplies them. Never raises."""
+        page = getattr(self, "_development_history_page", None)
+        if page is None or not hasattr(page, "set_manual_uat_context"):
+            return
+        try:
+            from pathlib import Path as _Path
+            from data.manual_uat_store import ManualUatStore
+            store = None
+            cfg_path = getattr(self, "_config_path", None)
+            if cfg_path:
+                store = ManualUatStore(_Path(cfg_path).with_name("manual_uat_evidence.json"))
+
+            def _facts():
+                from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
+                return {
+                    "branch": "", "commit": "", "parent_commit": "",
+                    "db_version": DB_VERSION, "rule_engine_version": RULE_ENGINE_VERSION,
+                    "listener_status": "single UDPListener (telemetry/listener.py)",
+                    "schema_migration_status": "no schema change (DB v%d)" % DB_VERSION,
+                    "runtime_file_integrity": "not evaluated in-session",
+                    # software gates are not evaluated from the UI — conservative (never optimistic).
+                    "automated_tests_passed": 0, "automated_tests_failed": 0,
+                    "bench_total": 0, "bench_passed": 0, "bench_ready": False,
+                }
+
+            page.set_manual_uat_context(store=store, facts_provider=_facts, candidate_commit="")
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def _on_tab_changed_dev_history(self, _index):
         """Refresh the Development History page when it becomes visible."""
