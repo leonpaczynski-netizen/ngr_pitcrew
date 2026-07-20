@@ -1,5 +1,21 @@
 # Current Claude Handoff
 
+## Current Objective (2026-07-20) — Engineering Brain PROGRAM 2, Phases 66-68: Canonical Live Race State, Physical VR Communications & Adaptive Strategy Certification — COMPLETE
+
+**Branch `eng-brain-phase66-68-live-vr-certification` from `eng-brain-phase63-65-vr-adaptive-strategy @ fddfb17` (authoritative merged base `master @ 26c0975`) — committed locally; DB v28 UNCHANGED (no new migration); rule 46.0; NO new telemetry listener (reuses UDPListener → RaceStateTracker).** Purpose: turn the Phase 63-65 audio-first/PTT/strategy architecture into a genuinely usable live GT7 + PSVR2 operating system.
+
+**Commit 1 — Phase 63-65 corrections + pre-phase audits (A-D):** authoritative base was merged `master @ 26c0975` (old Phase 60-62 branch name was NOT the base); Phase 63-65 pre-impl regression did NOT complete (resource contention) but the final DID pass (10,210/27/0); Phase 63-65 live strategy had UI placement but not real tracker-fed activation; PTT/recognition were architecture-complete not physically certified. Audit A live-state field matrix; Audit B time-certain ranking hierarchy; Audit C PTT command semantics; Audit D adapter inventory (win32com SAPI + ctypes — no new framework).
+
+**Phase 66 (canonical live race state):** `strategy/canonical_live_race_state.py` maps the EXISTING RaceStateTracker (thin duck-typed read; race_type/laps_recorded/laps_in_race/timed_duration/last_fuel/avg_fuel_per_lap/best_lap_ms/pit_stops/laps_since_pit/tyre_age/in_pit/pit_confidence/position) + injected elapsed + pre-race plan + confirmed driver reports → `CanonicalLiveRaceState` → Phase-65 `LiveStrategyState`. Race clock (lap-count vs time-certain expected_completed_laps + additional_stop_changes_lapcount; configurable finishing semantics); robust fuel (drop-extreme multi-lap), clean-lap-median pace, tyre PROXY (labelled, LOW conf), pit state (weak→uncertain, never increments), field-availability matrix (unknown stays unknown; weather/damage/penalty UNAVAILABLE unless confirmed driver report). `EvaluationCadence` bounded triggers (never per-packet; confirmed pit never double-counted). Dashboard `_refresh_audio_engineer` ACTIVATED — leaves INSUFFICIENT with a real feed.
+
+**Phase 67 (physical voice/PTT):** concrete offline Windows adapters behind the Phase 63-64 ports (no new framework — win32com + ctypes): reuse `advisory_voice_port` SAPI5 TTS; `voice/windows_sapi_recognition.py` (SAPI in-proc command grammar, PTT-gated, disabled-default, honest reliability limitation — never NLU); `voice/keyboard_ptt.py` (GetAsyncKeyState poll, no hook); `voice/joystick_ptt.py` (winmm joyGetPosEx — wheel buttons too, no Fanatec-specific code). `strategy/ptt_tts_coordination.py` (pause-routine/preserve-urgent; stale-recognition rejection; binding conflict detection/restore-default). `voice/ptt_runtime_controller.py` full lifecycle. Qt `ui/ptt_binding_panel.py` (binding workflow + PSVR2 readiness + certification, garage-only). Config-safe binding (dict-isolated).
+
+**Phase 68 (certification):** extended `event_programme_certification.py` → `LIVE_VR_CERTIFICATION_AREAS` (31), `live_vr_certification()` (domain AUTOMATED; Live-tab/fallback OFFSCREEN; physical-audio/mic/wheel/PSVR2/live-GT7 = NONE + required-next-evidence; overall NOT_TESTED; per-area + overall shown separately). Defect remediation: (1) time-certain ranking → full Audit-B tie-break hierarchy (max laps→position→time→pit-loss→legal-completion→fuel-margin→fragility→label); (2) ambiguous utterance no longer carries a driver-report label; (3) PTT lifecycle enum extended.
+
+**Tests:** ~74 new (audio-first suite unchanged 102). Phase 66-68: live_race_state 18, physical_voice_ptt 13, certification 7, safety/metamorphic 24, lifecycle_ui 12. **Proof: source/unit/property-metamorphic/runtime-DB/static-snapshot/offscreen-UI; deterministic replay + manual visual + live GT7 + physical TTS + physical mic-PTT + PSVR2 UAT NOT run (headless).** Voice off by default; no autonomous pit/tyre/fuel/setup/experiment/binding/debrief/outcome; runtime files untouched. Program 2 now Phases 12-68. Phase 69 NOT started.
+
+---
+
 ## MERGED BASELINE (2026-07-20) — Engineering Brain Programs 1 & 2 (Phases 2–62) are now on master
 
 **PR #75 is MERGED; `origin/master` = `master` = `26c0975`; local master is synced with origin/master.** The
