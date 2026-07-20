@@ -53,8 +53,42 @@ def test_planning_subordinate_to_decision_authority():
 
 
 def test_no_migration_no_new_telemetry_table():
-    src = (ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
-    assert "_DDL_V26" not in src and "_migrate_v26" not in src
+    """Phase 6 (residual detection) is pure and introduced NO telemetry persistence. The ORIGINAL
+    assertion ('_DDL_V26'/'_migrate_v26' absent) became stale once Phase 19 legitimately introduced
+    database version 26 (and Phase 45 version 27) - it forbade the whole legitimate migration chain
+    rather than the actual Phase-6 invariant. This corrected test proves the real invariant against a
+    freshly-created database: Phase 6 created no telemetry table, the legitimate migration chain is
+    allowed, the schema version is coherent, and no unexpected telemetry table exists. It does not
+    weaken migration safety generally."""
+    import os
+    import tempfile
+
+    from strategy._setup_constants import DB_VERSION
+    from data.session_db import SessionDB
+
+    p = tempfile.mktemp(suffix=".db")
+    db = SessionDB(p)
+    try:
+        uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = {r[0] for r in db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:
+        db.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(p + suffix)
+            except OSError:
+                pass
+
+    # the schema version is coherent with the (legitimate) migration chain, including v26/v27.
+    assert uv == DB_VERSION, (uv, DB_VERSION)
+    # Phase 6 introduced no residual/telemetry persistence table.
+    forbidden = {"residual_issues", "phase6_residuals", "telemetry_residuals", "residual_detection",
+                 "engineering_residuals"}
+    assert not (tables & forbidden), tables & forbidden
+    # no telemetry table exists beyond the canonical base telemetry stores.
+    telemetry_tables = {t for t in tables if "telemetry" in t.lower()}
+    assert telemetry_tables <= {"lap_telemetry", "corner_slip_telemetry"}, telemetry_tables
 
 
 # --- architecture safety (20.11) -------------------------------------------

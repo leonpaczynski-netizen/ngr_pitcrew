@@ -109,6 +109,55 @@ DOMAIN_REQUIRED: Dict[str, Tuple[str, ...]] = {
     KnowledgeDomain.VEHICLE_DYNAMICS.value: ("car", "gt7_version"),
 }
 
+# Mechanism / setup-field-family level requirements (Phase 45 Correction B). Finer than the coarse
+# domain map: a specific setup-field family caps to PARTIAL when its material *setup* or *event*
+# conditions are unknown - a legacy record that lacks BoP / restrictions / applied-setup identity is
+# not automatically exact for gearing, aero, suspension or LSD, even though those are physical
+# mechanisms. Driver technique transfers more broadly but retains limitations (see LIMITATION_CLASSES).
+MECHANISM_REQUIRED: Dict[str, Tuple[str, ...]] = {
+    "gearing_acceleration": ("car", "track", "layout_id", "bop_state", "power_restriction",
+                             "weight_restriction", "discipline", "gt7_version", "applied_setup_id",
+                             "compound"),
+    "aero": ("car", "track", "layout_id", "bop_state", "power_restriction", "weight_restriction",
+             "discipline", "gt7_version", "applied_setup_id"),
+    "suspension_ride_height": ("car", "track", "layout_id", "discipline", "compound",
+                               "applied_setup_id"),
+    "lsd_traction": ("car", "discipline", "compound", "applied_setup_id"),
+    "driver_technique": ("driver", "car", "track"),
+}
+
+# setup field -> mechanism family (for field-level working-window trust).
+_FIELD_MECHANISM = {
+    "final_drive": "gearing_acceleration", "gear_ratio": "gearing_acceleration",
+    "gearbox": "gearing_acceleration", "gear": "gearing_acceleration",
+    "downforce": "aero", "downforce_front": "aero", "downforce_rear": "aero", "wing": "aero",
+    "ride_height": "suspension_ride_height", "ride_height_front": "suspension_ride_height",
+    "ride_height_rear": "suspension_ride_height", "natural_frequency": "suspension_ride_height",
+    "natural_frequency_front": "suspension_ride_height",
+    "natural_frequency_rear": "suspension_ride_height", "spring_rate": "suspension_ride_height",
+    "anti_roll_bar": "suspension_ride_height", "anti_roll_bar_front": "suspension_ride_height",
+    "anti_roll_bar_rear": "suspension_ride_height", "arb_front": "suspension_ride_height",
+    "arb_rear": "suspension_ride_height", "compression_damping": "suspension_ride_height",
+    "rebound_damping": "suspension_ride_height", "camber": "suspension_ride_height",
+    "toe": "suspension_ride_height",
+    "lsd_initial": "lsd_traction", "lsd_acceleration": "lsd_traction", "lsd_braking": "lsd_traction",
+    "lsd": "lsd_traction", "differential": "lsd_traction",
+}
+
+# combined lookup: domain OR mechanism keys resolve to a required-field set.
+_ALL_REQUIRED: Dict[str, Tuple[str, ...]] = {**DOMAIN_REQUIRED, **MECHANISM_REQUIRED}
+
+
+def field_to_mechanism(field: str) -> str:
+    """Return the mechanism family for a setup field, or '' if unmapped."""
+    f = _lc(field)
+    if f in _FIELD_MECHANISM:
+        return _FIELD_MECHANISM[f]
+    for k, m in _FIELD_MECHANISM.items():
+        if k and k in f:
+            return m
+    return ""
+
 
 def field_trust(current_val, evidence_val, *, applicable: bool = True,
                 inferred: bool = False) -> ContextFieldTrust:
@@ -192,13 +241,14 @@ def _field_class(field: str) -> str:
 def build_material_context_trust(current: Optional[Mapping], evidence: Optional[Mapping],
                                  domain: str, *, inferred_fields: Optional[Sequence[str]] = None
                                  ) -> MaterialContextTrust:
-    """Assess how much ``evidence`` can be trusted for ``domain`` in the ``current`` context. Both are
-    material-field mappings. Deterministic; never raises."""
+    """Assess how much ``evidence`` can be trusted for ``domain`` in the ``current`` context.
+    ``domain`` may be a coarse knowledge domain OR a mechanism family (Phase 45 Correction B). Both
+    args are material-field mappings. Deterministic; never raises."""
     try:
         cur = current if isinstance(current, Mapping) else {}
         ev = evidence if isinstance(evidence, Mapping) else {}
         dom = _lc(domain)
-        required = set(DOMAIN_REQUIRED.get(dom, ()))
+        required = set(_ALL_REQUIRED.get(dom, ()))
         inferred = {_lc(f) for f in (inferred_fields or [])}
 
         fields: List[FieldTrust] = []
@@ -277,6 +327,16 @@ def context_snapshot_fingerprint(current: Optional[Mapping]) -> str:
     cur = current if isinstance(current, Mapping) else {}
     snap = {f: _lc(cur.get(f)) for f in MATERIAL_FIELDS if _lc(cur.get(f))}
     return _fp({"snapshot": snap})
+
+
+def build_field_working_window_trust(current: Optional[Mapping], evidence: Optional[Mapping],
+                                     field: str) -> MaterialContextTrust:
+    """Field-level working-window trust (Phase 45 Correction B): routes a specific setup field through
+    its MECHANISM family so a legacy record missing that mechanism's material setup/event conditions
+    (e.g. BoP / restrictions / applied-setup identity) is capped rather than automatically exact. Falls
+    back to the coarse setup_working_windows domain for an unmapped field. Deterministic; never raises."""
+    mech = field_to_mechanism(field) or KnowledgeDomain.SETUP_WORKING_WINDOWS.value
+    return build_material_context_trust(current, evidence, mech)
 
 
 def material_context_versions() -> dict:
