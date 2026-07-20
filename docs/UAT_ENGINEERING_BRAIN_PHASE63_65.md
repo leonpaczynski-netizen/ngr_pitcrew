@@ -78,3 +78,16 @@ wheel-button, PSVR2 usability, or live GT7 race-strategy certification.
 - **Runtime-DB / static-snapshot:** the production build touches no DB; PTT binding config is dict-isolated.
 - **Offscreen UI:** panel construction + rendering; dashboard stale-worker rejection.
 - **Deterministic replay / manual visual / live GT7 / physical TTS / physical mic-PTT / PSVR2:** NOT RUN.
+
+## Corrections (recorded in the Phase 66–68 pre-phase audits)
+
+1. **Authoritative starting base:** the merged **`master @ 26c0975`** (PR #75). The old Phase 60–62 branch
+   name was NOT the authoritative base — it is a now-merged feature branch that remains on the remote.
+2. **Pre-implementation full regression:** attempted but **did NOT complete** (resource contention from
+   concurrent focused runs; >2h vs the ~52-min baseline; stopped). It was not rerun successfully.
+3. **Final complete regression DID pass:** 10,210 passed / 27 skipped / 0 failed / 10,237 collected.
+4. **Live strategy:** has production UI placement but **not real tracker-fed runtime activation** (the
+   tracker→LiveStrategyState mapping was deferred to Phase 66; the panel showed an honest
+   INSUFFICIENT_EVIDENCE default).
+5. **PTT & recognition:** **architecture + grammar complete, NOT physically certified** (disabled-default
+   ports + deterministic fakes; concrete Windows adapters arrive in Phase 67 and still need physical UAT).
