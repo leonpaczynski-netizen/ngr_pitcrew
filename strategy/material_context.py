@@ -91,17 +91,20 @@ MATERIAL_FIELDS: Tuple[str, ...] = (
     "applied_setup_id", "setup_fingerprint", "session_purpose", "event_id")
 
 # knowledge domain -> the material fields REQUIRED for an exact conclusion in that domain.
+# NB: required sets are deliberately the fields a conclusion GENUINELY depends on. A domain does not
+# list a field merely because it exists (e.g. tyre-multiplier caps tyre-degradation and fuel-multiplier
+# caps fuel-use, but neither blocks a working-window or a trail-braking conclusion that does not depend
+# on them). ``car_variant`` is a soft refinement, not a hard requirement (legacy records rarely carry
+# it), so it is excluded from the hard-required sets to avoid capping otherwise-identity-exact evidence.
 DOMAIN_REQUIRED: Dict[str, Tuple[str, ...]] = {
     KnowledgeDomain.SETUP_WORKING_WINDOWS.value: (
-        "driver", "car", "car_variant", "track", "layout_id", "discipline", "tuning_permitted",
-        "bop_state", "power_restriction", "weight_restriction", "gt7_version", "applied_setup_id"),
+        "driver", "car", "track", "layout_id", "discipline", "gt7_version"),
     KnowledgeDomain.TYRE_DEGRADATION.value: (
         "car", "track", "layout_id", "compound", "tyre_multiplier", "discipline"),
     KnowledgeDomain.FUEL_USE.value: (
-        "car", "track", "layout_id", "fuel_multiplier", "race_objective"),
+        "car", "track", "layout_id", "fuel_multiplier"),
     KnowledgeDomain.GEARING_AERO.value: (
-        "car", "track", "layout_id", "bop_state", "power_restriction", "weight_restriction",
-        "discipline", "gt7_version"),
+        "car", "track", "layout_id", "bop_state", "discipline", "gt7_version"),
     KnowledgeDomain.DRIVER_TECHNIQUE.value: ("driver", "car", "track"),
     KnowledgeDomain.VEHICLE_DYNAMICS.value: ("car", "gt7_version"),
 }

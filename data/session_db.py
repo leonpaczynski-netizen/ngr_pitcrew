@@ -5900,6 +5900,77 @@ class SessionDB:
                 "exact_evidence_count": len(exact),
                 "content_fingerprint": plan.content_fingerprint}
 
+    def _current_material_context(self, scope, *, event_name="", applied_setup=None) -> dict:
+        """Assemble the CURRENT material context by REFERENCE from canonical records (scope + the
+        events table + applied-setup fingerprint). No persistence; unknown fields stay unknown. Never
+        raises."""
+        mat = {}
+        try:
+            sd = scope.to_dict() if hasattr(scope, "to_dict") else (scope if isinstance(scope, dict)
+                                                                    else {})
+            for f in ("driver", "car", "car_variant", "track", "layout_id", "discipline", "compound",
+                      "compound_policy", "bop_state", "tuning_permitted", "power_restriction",
+                      "weight_restriction", "gt7_version", "rule_engine_version", "data_schema_version",
+                      "event_id", "race_objective", "tyre_multiplier", "fuel_multiplier"):
+                v = str(sd.get(f, "") or "").strip()
+                if v:
+                    mat[f] = v
+            if event_name:
+                ev = self.get_event(str(event_name)) or {}
+                if ev:
+                    mat.setdefault("event_id", str(ev.get("name", "") or ""))
+                    if ev.get("tyre_wear") is not None:
+                        mat["tyre_multiplier"] = str(ev.get("tyre_wear"))
+                    if ev.get("fuel_mult") is not None:
+                        mat["fuel_multiplier"] = str(ev.get("fuel_mult"))
+                    if ev.get("refuel_rate_lps") is not None:
+                        mat["refuel_rate"] = str(ev.get("refuel_rate_lps"))
+                    mat["bop_state"] = "on" if ev.get("bop") else "off"
+                    mat["tuning_permitted"] = "yes" if ev.get("tuning", True) else "no"
+                    if ev.get("weather"):
+                        mat["weather"] = str(ev.get("weather"))
+                    rt = str(ev.get("race_type", "") or "")
+                    if rt == "laps" and ev.get("laps"):
+                        mat["race_objective"] = f"laps:{ev.get('laps')}"
+                    elif rt in ("time", "duration") and ev.get("duration_mins"):
+                        mat["race_objective"] = f"minutes:{ev.get('duration_mins')}"
+            applied = applied_setup if isinstance(applied_setup, dict) else {}
+            if applied.get("setup_hash"):
+                mat["setup_fingerprint"] = str(applied.get("setup_hash"))
+            if applied.get("setup_id") or applied.get("name"):
+                mat["applied_setup_id"] = str(applied.get("setup_id") or applied.get("name"))
+            if applied.get("purpose"):
+                mat["session_purpose"] = str(applied.get("purpose"))
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return mat
+
+    def build_material_context_trust_report(self, memory_context_key="", *, applied_setup=None,
+                                            session_identity=None, gearbox_state="", speed_context="",
+                                            session_context=None, session_budget=None, now_date="",
+                                            event_name="", **ctx) -> dict:
+        """Build the READ-ONLY Material-Context Trust report (Program 2, Phase 42): the current material
+        context (by reference), and per-legacy-record per-domain trust vs it. Reuses the shared chain's
+        single bounded read; writes nothing; leaves legacy material fields unknown (never fabricates).
+        DB stays v26; deterministic; never raises."""
+        try:
+            from strategy.legacy_evidence_trust import build_legacy_evidence_trust
+            from strategy.material_context import context_snapshot_fingerprint
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"phase42 import failed: {exc}"}
+        scope, records = self._closed_loop_scope_and_records(
+            memory_context_key, applied_setup=applied_setup, session_identity=session_identity,
+            gearbox_state=gearbox_state, speed_context=speed_context, session_context=session_context,
+            session_budget=session_budget, now_date=now_date, **ctx)
+        material = self._current_material_context(scope, event_name=event_name,
+                                                  applied_setup=applied_setup)
+        legacy = build_legacy_evidence_trust(material, records).to_dict()
+        return {"ok": True, "current_material": material,
+                "context_snapshot_fingerprint": context_snapshot_fingerprint(material),
+                "legacy_evidence_trust": legacy,
+                "context_fingerprint": scope.context_fingerprint(),
+                "content_fingerprint": legacy.get("content_fingerprint")}
+
     def get_learning_outcomes(
         self, car_id: int, track: str, layout_id: str
     ) -> list[dict]:
