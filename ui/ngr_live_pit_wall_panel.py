@@ -1,8 +1,9 @@
 """NGR Live Pit Wall panel (Program 2, Phase 58).
 
 The driver-facing live HUD: a mode banner + a strict low-density hierarchy of cards. Read-only; issues no
-pit/tyre/fuel/setup command; voice off by default and gated. The heavy build runs OFF the Qt thread (live
-worker + stale-result guard); this panel renders the finished dict.
+pit/tyre/fuel/setup command; voice off by default and gated. The panel is dict-driven (renders the
+finished pit-wall dict); the off-thread live worker + stale-result guard that FEEDS it is implemented in
+Phase 60 (production Live-tab activation), not here.
 
 Note: production placement is the Live tab with a telemetry-driven off-thread refresh; here it is hosted
 in the Development History surface for offscreen construction testing (consistent with prior eng-brain
