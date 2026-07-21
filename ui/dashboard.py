@@ -778,12 +778,25 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         "no_event": "event_planner", "event_planner": "event_planner",
     }
 
+    # DEF-UAT-073-012/015: departments that land on Development History open a DISTINCT sub-tab so each has
+    # a clear purpose (Event Briefing → the race-engineer brief; Debrief → the session records/overview).
+    _CC_SURFACE_SUBTABS = {
+        "briefing": "Race Engineer & Runtime", "debrief": "Overview & Records",
+        "development_history": "Overview & Records",
+    }
+
     def _cc_navigate(self, surface) -> None:
-        """Command Centre quick-action → navigate to the mapped specialist tab (no state change)."""
+        """Command Centre quick-action → navigate to the mapped specialist tab (no state change); on the
+        Development History tab, also select the department's distinct sub-tab."""
         try:
-            key = self._CC_SURFACE_TABS.get(str(surface or ""))
+            surf = str(surface or "")
+            key = self._CC_SURFACE_TABS.get(surf)
             if key and self.has_tab(key):
                 self.select_tab(key)
+                subtab = self._CC_SURFACE_SUBTABS.get(surf)
+                page = getattr(self, "_development_history_page", None)
+                if subtab and page is not None and hasattr(page, "select_subtab"):
+                    page.select_subtab(subtab)
         except Exception:  # pragma: no cover - defensive
             pass
 
