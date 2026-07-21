@@ -361,8 +361,9 @@ def to_objective(evidence: CumulativePreparationEvidence) -> PreparationObjectiv
         return PreparationObjective(
             headline="Confirm and protect the current best-known setup",
             rationale="Evidence is maturing across domains; prioritise low-risk confirmation.",
-            phase=PreparationPhase.ENGINEERING_CONVERGENCE)
+            phase=PreparationPhase.ENGINEERING_CONVERGENCE, domain="convergence")
     return PreparationObjective(
         headline=f"Build {weakest.value} evidence",
         rationale=f"{weakest.value} is the weakest domain (confidence: {conf.value}).",
-        phase=_DOMAIN_TO_PHASE.get(weakest, PreparationPhase.SETUP_DEVELOPMENT))
+        phase=_DOMAIN_TO_PHASE.get(weakest, PreparationPhase.SETUP_DEVELOPMENT),
+        domain=weakest.value)

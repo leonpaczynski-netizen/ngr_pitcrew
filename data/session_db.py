@@ -6439,7 +6439,7 @@ class SessionDB:
                       "days_until_race": cycle.days_until_race,
                       "span_days": cycle.preparation_span_days, "fingerprint": cycle.fingerprint},
             "next_action": {"headline": objective.headline, "rationale": objective.rationale,
-                            "tone": "info"},
+                            "tone": "info", "domain": getattr(objective, "domain", "")},
             "timeline": timeline,
             "progress": {"valid_laps": progress.valid_laps, "practice_sessions": progress.practice_sessions,
                          "setup_experiments": progress.setup_experiments_completed,

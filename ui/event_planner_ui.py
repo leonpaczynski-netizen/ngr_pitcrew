@@ -486,13 +486,19 @@ class EventPlannerMixin:
         except Exception:
             pass
 
-    def _ensure_active_preparation_cycle(self, evt_name: str) -> str:
+    def _ensure_active_preparation_cycle(self, evt_name: str, *, prefer_strategy_car: bool = False) -> str:
         """DEF-UAT-073-011: bridge the Event Planner's active EVENT to the Command Centre's active
         PREPARATION CYCLE. Setting an event active must make it appear on the Command Centre — the Phase-51
         resolver treats an explicit ``active_cycle_id`` that matches a non-terminal cycle as THE active event
         (an explicit user selection, never an auto-pick). So we deterministically ensure ONE cycle per event
         (idempotent by a stable cycle_id) populated from the event, and set it as the active cycle. A cycle
-        that was explicitly completed/abandoned is NOT silently reopened. Never raises."""
+        that was explicitly completed/abandoned is NOT silently reopened. Never raises.
+
+        DEF-073-019: car authority depends on the caller. When the user has just PICKED a car (Garage →
+        ``prefer_strategy_car=True``) the strategy car is authoritative. On ACTIVATION/refresh the car SAVED
+        on the event's cycle is authoritative and is RESTORED into the strategy context — otherwise a
+        strategy car that drifted (e.g. after driving a different car) would silently overwrite the event's
+        saved car and every car-scoped surface (Setup Builder) would show the wrong car."""
         try:
             if self._db is None or not evt_name:
                 return ""
@@ -516,10 +522,20 @@ class EventPlannerMixin:
                 existing = None
             now_iso = datetime.datetime.now().isoformat(timespec="seconds")
             # the car is not an event-table column — it lives in the strategy context (set by the Garage /
-            # Event Planner fanout). Prefer that, then any event mirror, then the existing cycle.
+            # Event Planner fanout) and on the cycle. Authority depends on the caller (DEF-073-019):
             _strat = self._config.get("strategy", {}) if isinstance(self._config.get("strategy"), dict) else {}
-            car = str(_strat.get("car") or ev.get("car") or ev.get("car_name")
-                      or (existing or {}).get("car") or "")
+            _strat_car = str(_strat.get("car") or "")
+            _existing_car = str((existing or {}).get("car") or "")
+            _event_car = str(ev.get("car") or ev.get("car_name") or "")
+            if prefer_strategy_car:
+                # user just chose the car in the Garage — the strategy car wins.
+                car = _strat_car or _existing_car or _event_car
+            else:
+                # activation / refresh — the cycle's SAVED car is authoritative; restore it into the
+                # strategy context so Setup Builder and other car-scoped surfaces match the event.
+                car = _existing_car or _event_car or _strat_car
+                if car and car != _strat_car:
+                    self._config.setdefault("strategy", {})["car"] = car
             cycle = {
                 "cycle_id": cycle_id,
                 "event_id": int(ev.get("event_id") or ev.get("id") or 0),
