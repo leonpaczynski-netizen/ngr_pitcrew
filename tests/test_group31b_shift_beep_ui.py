@@ -116,8 +116,13 @@ class TestSetupTypePracticeRef:
 # ---------------------------------------------------------------------------
 class TestStructuralGuarantees:
     def test_setup_spinboxes_made_readonly(self):
-        assert "_set_spin_readonly(self._spin_shift_rpm_qual, True)" in SBU_SRC
-        assert "_set_spin_readonly(self._spin_shift_rpm_race, True)" in SBU_SRC
+        # The Setup Builder shift-RPM spinboxes are read-only DISPLAY (the Live tab is the
+        # edit source). After the DEF-073-017 compaction both are built through the
+        # _mk_rpm_spin helper, which applies _set_spin_readonly(s, True) — assert the
+        # guarantee via the helper + both call sites so it stays robust to the refactor.
+        assert "_set_spin_readonly(s, True)" in SBU_SRC          # helper makes the spin read-only
+        assert "self._spin_shift_rpm_qual = _mk_rpm_spin(" in SBU_SRC
+        assert "self._spin_shift_rpm_race = _mk_rpm_spin(" in SBU_SRC
 
     def test_setup_spinboxes_no_longer_self_persist(self):
         # The old editable wiring (valueChanged -> _save_settings) must be gone now

@@ -544,6 +544,22 @@ class SetupFormWidget(QWidget):
         nitrous_inner.addRow(QLabel("Output Adjustment:", styleSheet=lbl_s), _nos_out_w)
         outer.addWidget(nitrous_grp)
 
+        # Section boxes exposed for progressive-disclosure hiding (DEF-073): the host
+        # hides tuning sections the Event rules lock out entirely, so the operator only
+        # scrolls what they can actually edit. Keyed by the setup-permission tuning
+        # categories each section contains (see MainWindow._SETUP_TUNING_GROUPS).
+        self.section_boxes = {
+            "transmission_gears": (auto_grp,    {"transmission"}),
+            "tyres":              (tyre_grp,    {"tyres"}),
+            "suspension":         (susp_grp,    {"suspension"}),
+            "differential":       (diff_grp,    {"differential", "brake_balance"}),
+            "aero":               (aero_grp,    {"aero"}),
+            "performance":        (perf_grp,    {"ballast", "power"}),
+            "ecu":                (ecu_grp,     {"power"}),
+            "transmission_type":  (trans_grp,   {"transmission"}),
+            "nitrous":            (nitrous_grp, {"nitrous"}),
+        }
+
         # ── Notes ─────────────────────────────────────────────────────────────
         notes_row = QFormLayout()
         notes_row.addRow(QLabel("Setup Label:", styleSheet=lbl_s), self._setup_label)
@@ -586,6 +602,15 @@ class SetupFormWidget(QWidget):
         setup_btn_row.addWidget(self._setup_load_combo)
         setup_btn_row.addWidget(self._btn_load_setup)
         setup_btn_row.addStretch()
+        # DEF-073-001/-007: open a compact, read-only "copy into GT7" reference of the
+        # whole setup at a glance (no scrolling the tall editable form). Wired by the host.
+        self._btn_transcribe = QPushButton("Transcribe to GT7")
+        self._btn_transcribe.setToolTip(
+            "Open a compact, read-only summary of this whole setup in GT7 tuning-menu order,\n"
+            "so you can copy the numbers into the game without scrolling the editor.")
+        self._btn_transcribe.setStyleSheet(
+            _ngr_t.secondary_button_qss() if hasattr(_ngr_t, "secondary_button_qss") else "")
+        setup_btn_row.addWidget(self._btn_transcribe)
         setup_btn_row.addWidget(self._btn_analyse_setup)
         outer.addLayout(setup_btn_row)
 
@@ -750,6 +775,23 @@ class SetupFormWidget(QWidget):
             self._lbl_lsd_front.setVisible(is_awd)
         if hasattr(self, "_lsd_front_widget"):
             self._lsd_front_widget.setVisible(is_awd)
+
+    def apply_section_visibility(self, allowed_cats, restricted: bool) -> None:
+        """Progressive disclosure (DEF-073): hide tuning sections the Event locks out.
+
+        When ``restricted`` is True (the Event allows tuning but only a subset of
+        categories), a section is shown only if at least one of its tuning categories
+        is permitted; sections that are entirely locked are hidden so the operator
+        does not scroll past controls they cannot use. When ``restricted`` is False
+        (unrestricted, or fully-locked-with-banner) every section is shown — the
+        fully-locked case keeps the sections visible-but-disabled behind the banner.
+        """
+        boxes = getattr(self, "section_boxes", None)
+        if not boxes:
+            return
+        allowed = set(allowed_cats or ())
+        for _key, (box, cats) in boxes.items():
+            box.setVisible(True if not restricted else bool(cats & allowed))
 
     # ------------------------------------------------------------------
     # Public accessors used by SetupBuilderMixin
@@ -965,6 +1007,17 @@ class SetupFormWidget(QWidget):
                 current["final_drive"] = _fd_val
                 if hasattr(self, "_spin_final_drive"):
                     self._spin_final_drive.setValue(_fd_val)
+            except (TypeError, ValueError):
+                pass
+
+        # Canonical recommendation param names → saved-setup-dict keys, for the fields
+        # whose recommendation key differs from the form-serialisation key that
+        # ``fill_setup_fields`` reads (DEF-073-008). Without this, brake bias came from
+        # the recommendation as ``brake_bias`` but fill_setup_fields reads
+        # ``brake_bias_front``, so the recommended value was silently dropped.
+        if "brake_bias" in fields and "brake_bias_front" not in fields:
+            try:
+                current["brake_bias_front"] = int(round(float(fields["brake_bias"])))
             except (TypeError, ValueError):
                 pass
 

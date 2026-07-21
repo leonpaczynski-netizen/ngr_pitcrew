@@ -128,12 +128,20 @@ class TestNavigationWiring:
                               "_launch_", "QThread", "QTimer"):
                 assert forbidden not in body, f"{name} triggers {forbidden}"
 
-    def test_cards_wire_buttons_by_stable_key(self, dash_src):
+    def test_home_is_command_centre_only(self, dash_src):
+        # DEF-UAT-073-004 remediation: the legacy per-card Home dashboard + workflow stepper were removed
+        # (they read the last-loaded config and contradicted the active-event resolver). Home is now the
+        # single Event Command Centre surface.
         body = _method_body(dash_src, "_build_home_tab")
-        # The per-card button resolves its target through the pure mapping and
-        # calls _home_navigate with a KEY captured in the lambda default.
-        assert "tab_key_for_card(key)" in body
-        assert "self._home_navigate(k)" in body
+        assert "EventCommandCentrePanel" in body
+        assert "tab_key_for_card(key)" not in body   # the old per-card grid is gone
+        assert "WorkflowStepper" not in body          # the old bouncing-ball stepper is gone
+
+    def test_command_centre_nav_button_returns_to_home(self, dash_src):
+        # DEF-UAT-073 remediation: a persistent tab-bar corner button returns to the Command Centre (Home)
+        # from any tab, and it changes the tab only.
+        assert "setCornerWidget" in dash_src
+        assert "self.select_tab(TAB_HOME)" in dash_src
 
     def test_next_action_button_maps_name_via_key_for_title(self, dash_src):
         body = _method_body(dash_src, "_home_update_next_action_button")

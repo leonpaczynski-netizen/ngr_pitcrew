@@ -59,15 +59,26 @@ def banner_tone(result) -> str:
     return (build(result).get("next_action") or {}).get("tone") or _ACTION_TONE_DEFAULT
 
 
+# DEF-UAT-073-005: the primary action renders a REAL clickable button (not a status badge). The label is
+# a plain-English verb keyed by category; the panel fires the navigate handler with ``action_target``.
+_PRIMARY_ACTION_LABELS = {
+    "create_event": "Create / Import Event", "select_event": "Choose Active Event",
+    "resolve_blocker": "Resolve Blocker", "bind_session": "Bind Session", "debrief": "Open Debrief",
+    "finalise_strategy": "Finalise Strategy", "lock_setup": "Lock Setup",
+}
+
+
 def next_action_card(result) -> dict:
     r = build(result)
     na = r.get("next_action") or {}
     if not na:
         return {}
-    return {"title": "Primary Action", "status_tag": str(na.get("category") or "").replace("_", " ").upper(),
+    category = str(na.get("category") or "")
+    return {"title": "Primary Action", "status_tag": category.replace("_", " ").upper(),
             "tone": na.get("tone") or _ACTION_TONE_DEFAULT,
-            "lines": [na.get("headline") or "-", na.get("detail") or "",
-                      f"Go to: {na.get('target_surface') or '-'}"]}
+            "lines": [na.get("headline") or "-", na.get("detail") or ""],
+            "action_target": str(na.get("target_surface") or ""),
+            "action_label": _PRIMARY_ACTION_LABELS.get(category, "Open")}
 
 
 def attention_cards(result) -> List[dict]:
@@ -96,7 +107,10 @@ def readiness_rows(result) -> List[dict]:
 def progress_card(result) -> dict:
     r = build(result)
     p = r.get("progress") or {}
-    return {"title": "Cumulative Learning", "status_tag": "PROGRESS", "tone": "info", "lines": [
+    # DEF-UAT-073-006: the Cumulative Learning card gets a REAL action that opens the learning surface
+    # (Development History) instead of a decorative "PROGRESS" badge that did nothing.
+    return {"title": "Cumulative Learning", "status_tag": "PROGRESS", "tone": "info",
+            "action_target": "development_history", "action_label": "View Progress", "lines": [
         f"Valid laps: {p.get('valid_laps', 0)}   Practice sessions: {p.get('practice_sessions', 0)}.",
         f"Experiments: {p.get('setup_experiments', 0)}   Coaching runs: {p.get('coaching_runs', 0)}.",
         f"Tyre samples: {p.get('tyre_samples', 0)}   Fuel samples: {p.get('fuel_samples', 0)}   "

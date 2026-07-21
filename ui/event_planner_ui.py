@@ -486,6 +486,62 @@ class EventPlannerMixin:
         except Exception:
             pass
 
+    def _ensure_active_preparation_cycle(self, evt_name: str) -> str:
+        """DEF-UAT-073-011: bridge the Event Planner's active EVENT to the Command Centre's active
+        PREPARATION CYCLE. Setting an event active must make it appear on the Command Centre — the Phase-51
+        resolver treats an explicit ``active_cycle_id`` that matches a non-terminal cycle as THE active event
+        (an explicit user selection, never an auto-pick). So we deterministically ensure ONE cycle per event
+        (idempotent by a stable cycle_id) populated from the event, and set it as the active cycle. A cycle
+        that was explicitly completed/abandoned is NOT silently reopened. Never raises."""
+        try:
+            if self._db is None or not evt_name:
+                return ""
+            import re
+            import datetime
+            slug = re.sub(r"[^a-z0-9]+", "-", str(evt_name).strip().lower()).strip("-")
+            if not slug:
+                return ""
+            cycle_id = f"cycle-{slug}"
+            ev = {}
+            try:
+                ev = self._db.get_event(evt_name) or {}
+            except Exception:
+                ev = {}
+            if not ev:
+                ev = self._active_event() or {}
+            existing = None
+            try:
+                existing = self._db.get_preparation_cycle(cycle_id)
+            except Exception:
+                existing = None
+            now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+            # the car is not an event-table column — it lives in the strategy context (set by the Garage /
+            # Event Planner fanout). Prefer that, then any event mirror, then the existing cycle.
+            _strat = self._config.get("strategy", {}) if isinstance(self._config.get("strategy"), dict) else {}
+            car = str(_strat.get("car") or ev.get("car") or ev.get("car_name")
+                      or (existing or {}).get("car") or "")
+            cycle = {
+                "cycle_id": cycle_id,
+                "event_id": int(ev.get("event_id") or ev.get("id") or 0),
+                "event_name": evt_name,
+                "series": str(ev.get("series") or ""),
+                "round_label": str(ev.get("round") or ev.get("round_label") or ""),
+                "car": car,
+                "track": str(ev.get("track") or ""),
+                "layout": str(ev.get("layout_id") or ev.get("layout") or ""),
+                "official_race_date": str(ev.get("race_date") or ev.get("official_race_date") or ""),
+                # preserve an existing (possibly terminal) state so activation never reopens a finished event;
+                # a brand-new cycle starts non-terminal ("") so the explicit selection resolves as active.
+                "explicit_state": str((existing or {}).get("explicit_state") or ""),
+                "created_at": str((existing or {}).get("created_at") or now_iso),
+                "updated_at": now_iso,
+            }
+            self._db.upsert_preparation_cycle(cycle)
+            self._config["active_cycle_id"] = cycle_id
+            return cycle_id
+        except Exception:  # pragma: no cover - defensive
+            return ""
+
     def _on_event_set_active(self) -> None:
         try:
             self._on_event_save()
@@ -493,6 +549,9 @@ class EventPlannerMixin:
             if not evt_name:
                 return
             self._config["active_event_id"] = evt_name
+            # DEF-UAT-073-011: also activate the matching preparation cycle so the event appears on the
+            # Command Centre (Home) instead of it still reading "create or import an event".
+            self._ensure_active_preparation_cycle(evt_name)
 
             # Phase 4: the fan-out block lives in _fanout_event_to_strategy so
             # the save path can re-sync it; activation keeps all its side

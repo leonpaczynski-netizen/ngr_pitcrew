@@ -1128,7 +1128,12 @@ class TrackModellingMixin:
             pass
 
     def _tm_on_tab_shown(self) -> None:
-        """Called when the Track Modelling tab is first shown or re-shown."""
+        """Called when the Track Modelling tab is first shown or re-shown.
+
+        DEF-UAT-073-002: the track-seed load (a bulk parse of every track location/layout) used to run
+        SYNCHRONOUSLY on the Qt thread here, freezing the tab on first open. It now runs OFF the Qt thread
+        via the established worker; the tab opens instantly showing 'Loading seed…' and populates when ready.
+        """
         # Continuous-refinement panel reflects capture/candidate state every open.
         try:
             self._tm_refresh_refinement_panel()
@@ -1137,21 +1142,46 @@ class TrackModellingMixin:
         self._tm_refresh_workflow()
         if self._tm_seed_result is not None:
             return  # already loaded
+        if getattr(self, "_tm_seed_worker", None) is not None:
+            return  # a load is already in flight
         try:
-            result = load_track_seed()
+            from ui.mechanism_annotation_worker import MechanismAnnotationWorker
+            self._tm_seed_status_lbl.setText("Loading seed…")
+            self._tm_seed_status_lbl.setStyleSheet("color:#9AA0A6; font-size: 11px;")
+            worker = MechanismAnnotationWorker(lambda: load_track_seed())
+            self._tm_seed_worker = worker
+            worker.finished_ok.connect(lambda result, w=worker: self._on_tm_seed_loaded(result, w))
+            worker.failed.connect(lambda _msg, w=worker: self._on_tm_seed_loaded(None, w))
+            worker.start()
+        except Exception:
+            # defensive fallback: synchronous load (prior behaviour) so the feature still works
+            try:
+                self._on_tm_seed_loaded(load_track_seed(), None)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._tm_seed_status_lbl.setText(f"Error loading seed: {exc}")
+                self._tm_seed_status_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
+
+    def _on_tm_seed_loaded(self, result, worker=None) -> None:
+        """Render the off-thread track-seed load on the Qt thread (DEF-UAT-073-002). Populates the combos +
+        restores the last track. Drops a superseded worker. Never raises."""
+        if worker is not None and getattr(self, "_tm_seed_worker", None) is not worker:
+            return
+        self._tm_seed_worker = None
+        if result is None:
+            self._tm_seed_status_lbl.setText("Error loading track seed data.")
+            self._tm_seed_status_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
+            return
+        try:
             self._tm_seed_result = result
             self._tm_seed_status_lbl.setText(describe_seed_load_status(result))
             self._tm_seed_status_lbl.setStyleSheet(
                 "color: #2EA043; font-size: 11px;" if result.success
-                else "color: #F44336; font-size: 11px;"
-            )
+                else "color: #F44336; font-size: 11px;")
             if result.success:
                 self._tm_populate_location_combo()
                 self._tm_populate_calibration_car()
-                # Restore the last-modelled track so the AI-ready status is visible
-                # on open without the user having to re-select (or re-Accept) it.
                 self._tm_restore_last_track()
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive
             self._tm_seed_status_lbl.setText(f"Error loading seed: {exc}")
             self._tm_seed_status_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
 

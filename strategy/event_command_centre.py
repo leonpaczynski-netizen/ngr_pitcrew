@@ -58,11 +58,13 @@ class NextActionCategory(str, Enum):
     NEXT_ACTIVITY = "next_activity"
 
 
-# specialist surfaces the Command Centre links into (never duplicates)
+# specialist surfaces the Command Centre links into (never duplicates). DEF-UAT-073-014/016: ordered by the
+# actual event workflow — Setup Development BEFORE Practice Programme (you build a setup, then practice it) —
+# and "Telemetry" is NOT an event department (it is a raw-capture view, reachable from the tab bar).
 QUICK_ACTION_SURFACES: Tuple[Tuple[str, str], ...] = (
     ("Event Briefing", "briefing"), ("Garage & Readiness", "garage"),
-    ("Practice Programme", "practice"), ("Setup Development", "setup"),
-    ("Driver Coaching", "coaching"), ("Telemetry", "telemetry"), ("Strategy", "strategy"),
+    ("Setup Development", "setup"), ("Practice Programme", "practice"),
+    ("Driver Coaching", "coaching"), ("Strategy", "strategy"),
     ("Qualifying Preparation", "qualifying"), ("Live Engineer", "live"), ("Debrief", "debrief"),
     ("Development History", "development_history"),
 )

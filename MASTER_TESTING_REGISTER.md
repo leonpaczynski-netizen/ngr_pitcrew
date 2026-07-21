@@ -1,5 +1,43 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> UAT Remediation (branch `uat-defect-073-navigation-and-home-state`, **candidate `b9ecdb4`**, 13 commits off
+> merged `master @ ecf922c`). Fixes DEF-073-004/005/006/009/010/011/013/014/015/016 + ENH-073-001, each with
+> focused tests (test_uat_defect_073_slice1[12], _setup_feedback[3], _event_activation[9], _command_centre_ia
+> [4], test_enh_073_shift_rpm[8], updated test_home_dashboard_promotion). **Full regression found + fixed a
+> real invariant break** (DEF-010's config['strategy'] read tripped the frozen fan-out allowlist — rerouted
+> via the allowlisted `_build_event_context`). **Bench 67/67** (0 safety). **Authoritative full regression on
+> `b9ecdb4`: 10,392 passed / 27 skipped / 0 failed** (3:19:06; exit 0). Runtime files changed by USER app
+> activity (setup_history.json, active_setup_state.json, car_setup_ranges.json — race-prep setup building) —
+> reported separately, never staged/committed; `.claude/settings.local.json` unchanged. Remaining backlog:
+> DEF-073-001/002/003/007/008/012(partial)/017 (Dev-History split, layout, dual setup-surface, Track-Modelling
+> perf) for a focused next pass.
+
+> UAT Remediation **Slice 1** (branch `uat-defect-073-navigation-and-home-state`, candidate `e24c7c6` from
+> base `ecf922c`) — DEF-073-004/005/006 + Command Centre navigation. New suite
+> `tests/test_uat_defect_073_slice1.py`[12] (primary-action + progress navigable targets, real CTA buttons
+> fire navigate, inert pill-badge suppressed on action cards, MainWindow Home = Command-Centre-only [no
+> legacy stepper/cards/banner], corner "Command Centre" button returns Home, create-event → Event Planner,
+> `_home_refresh` survives without legacy widgets); updated `test_home_dashboard_promotion` wiring
+> assertions. **Bench 67/67** (0 safety). **Full regression: 10,368 passed / 27 skipped / 0 failed**
+> (1:33:58; exit 0). Runtime files: `setup_history.json` + `active_setup_state.json` changed by legitimate
+> USER app activity (building setups for the Porsche Cup event) — reported separately, never staged/committed;
+> `.claude/settings.local.json` unchanged.
+
+> Phases 72–74 (Operational UAT, Candidate Integrity & Live/VR Certification) — Phases 69–71 MERGED via PR #77
+> (`ecf922c` = `UAT_BASE_COMMIT`); branch `eng-brain-phase72-74-operational-uat`; **candidate `45928b4`**.
+> **Phase 72 — DEF-UAT-072-001 (release-blocking certification-integrity defect: manual readiness counted
+> evidence from ANY commit) FIXED** with candidate-scoped evidence. New suite
+> `tests/test_phase72_candidate_integrity.py`[12]: old-commit evidence cannot certify a new candidate;
+> matching-candidate evidence does; manifest scopes readiness to its own commit; code change doesn't inherit
+> certification; area shows NOT_RUN for a new candidate; failed area stays failed until an explicit
+> same-candidate passing retest; supersede is within same area+candidate; historical evidence viewable but not
+> counted; no optimistic fallback with blank candidate; every observation records candidate_commit;
+> `data/repo_identity.py` resolves the running commit == `git rev-parse HEAD` + defensive on a non-repo.
+> **Bench UAT:** 67/67 passed, 0 failed, 0 blocked, 0 safety. **Full regression (candidate `45928b4`):
+> 10,359 passed / 27 skipped / 0 failed** (10,386 collected; 3:06:02; exit 0) = 10,347 + 12 new. Runtime files
+> byte-identical before/after; no evidence file leaked into the project. **Phases 73–74 physical/live/PSVR2
+> UAT NOT run — require the USER's real evidence (Manual UAT panel, per-candidate `45928b4`).**
+
 > Phases 69–71 (Pre-UAT Activation, Bench Certification & Manual Evidence Gate) — branch
 > `eng-brain-phase69-71-uat-activation-gate` from `master @ 1f4545c`. **DB v28 / RULE_ENGINE 46.0 unchanged;
 > no new listener.** **70 new focused tests** (all pass): `test_phase69_runtime_snapshot.py`[11] (empty/

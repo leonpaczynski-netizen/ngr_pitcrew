@@ -994,6 +994,9 @@ class SetupBuilderMixin:
         self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
         self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
+        if hasattr(self._race_form, "_btn_transcribe"):
+            self._race_form._btn_transcribe.clicked.connect(
+                lambda: self._open_transcribe_dialog(self._race_form))
 
         # ── Wire Qualifying form buttons to per-form handlers ─────────────────
         qf = self._qual_form
@@ -1027,6 +1030,9 @@ class SetupBuilderMixin:
         qf._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         qf._btn_bop_edit.clicked.connect(self._open_bop_file)
         qf._btn_bop_reload.clicked.connect(self._reload_bop_data)
+        if hasattr(qf, "_btn_transcribe"):
+            qf._btn_transcribe.clicked.connect(
+                lambda: self._open_transcribe_dialog(self._qual_form))
 
         # ── Tyre compound → Lap Data tab default compound (Race form only) ────
         self._race_form._setup_tyre_f.currentTextChanged.connect(
@@ -1091,36 +1097,74 @@ class SetupBuilderMixin:
         self._qual_scroll = qual_scroll
         self._disc_view_btns["both"].setChecked(True)  # default: side-by-side
 
-        # ── Shift RPM display (shared, below the splitter) ────────────────────
+        # ── Shift RPM (shared, below the splitter) — COMPACT single row ───────
+        # DEF-UAT-073-017: this box used a 5-row full-width QFormLayout that ate a large vertical band and
+        # squeezed the setup fields. It is now ONE compact row (Qualifying · Race · Live-beep · Recommend)
+        # that hugs its content, freeing that space for the car setup.
         _sb = self._config.get("shift_beep", {})
         shift_rpm_box = QGroupBox("Shift RPM")
         shift_rpm_box.setStyleSheet(self._group_style())
-        shift_rpm_form = QFormLayout(shift_rpm_box)
-        self._spin_shift_rpm_qual = QSpinBox()
-        self._spin_shift_rpm_qual.setRange(0, 20000)
-        self._spin_shift_rpm_qual.setSingleStep(100)
-        self._spin_shift_rpm_qual.setSuffix(" RPM")
-        self._spin_shift_rpm_qual.setSpecialValueText("Not set")
-        self._spin_shift_rpm_qual.setValue(int(_sb.get("qual_rpm", _sb.get("rpm", 0))))
-        self._spin_shift_rpm_qual.setToolTip(
-            "Optimal RPM to upshift for qualifying / unrestricted power.\n"
-            "Edit via the Live tab Shift Beep controls.")
-        _set_spin_readonly(self._spin_shift_rpm_qual, True)
-        self._spin_shift_rpm_race = QSpinBox()
-        self._spin_shift_rpm_race.setRange(0, 20000)
-        self._spin_shift_rpm_race.setSingleStep(100)
-        self._spin_shift_rpm_race.setSuffix(" RPM")
-        self._spin_shift_rpm_race.setSpecialValueText("Not set")
-        self._spin_shift_rpm_race.setValue(int(_sb.get("race_rpm", _sb.get("rpm", 0))))
-        self._spin_shift_rpm_race.setToolTip(
+
+        def _mk_rpm_spin(value: int, tip: str) -> QSpinBox:
+            s = QSpinBox()
+            s.setRange(0, 20000)
+            s.setSingleStep(100)
+            s.setSuffix(" RPM")
+            s.setSpecialValueText("Not set")
+            s.setValue(int(value))
+            s.setToolTip(tip)
+            s.setMaximumWidth(110)
+            _set_spin_readonly(s, True)
+            return s
+
+        self._spin_shift_rpm_qual = _mk_rpm_spin(
+            _sb.get("qual_rpm", _sb.get("rpm", 0)),
+            "Optimal RPM to upshift for qualifying / unrestricted power.\nEdit via the Live tab Shift Beep controls.")
+        self._spin_shift_rpm_race = _mk_rpm_spin(
+            _sb.get("race_rpm", _sb.get("rpm", 0)),
             "Optimal RPM to upshift during the race (may be lower if ECU/power restrictor is applied).\n"
             "Edit via the Live tab Shift Beep controls.")
-        _set_spin_readonly(self._spin_shift_rpm_race, True)
-        shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
-        shift_rpm_form.addRow("Race:", self._spin_shift_rpm_race)
-        # The live shift-beep threshold selector (formerly the top-of-tab "Live
-        # Session Mode" row) sits here next to the two RPM values it chooses.
-        shift_rpm_form.addRow("Live beep uses:", self._setup_type)
+
+        _srl = QVBoxLayout(shift_rpm_box)
+        _srl.setContentsMargins(10, 4, 10, 4)
+        _srl.setSpacing(3)
+        _srr = QHBoxLayout()
+        _srr.setSpacing(6)
+        _srr.addWidget(QLabel("Qualifying:", styleSheet=f"color:{_TEXT};"))
+        _srr.addWidget(self._spin_shift_rpm_qual)
+        _srr.addSpacing(14)
+        _srr.addWidget(QLabel("Race:", styleSheet=f"color:{_TEXT};"))
+        _srr.addWidget(self._spin_shift_rpm_race)
+        _srr.addSpacing(14)
+        _srr.addWidget(QLabel("Live beep uses:", styleSheet=f"color:{_TEXT};"))
+        self._setup_type.setMaximumWidth(150)
+        _srr.addWidget(self._setup_type)
+        _srr.addSpacing(14)
+        # ENH-073-001: recommend the shift RPM from the car's REAL data (never fabricated).
+        try:
+            from ui import ngr_theme as _ngr_sr
+            self._btn_recommend_shift_rpm = QPushButton("Recommend from car")
+            self._btn_recommend_shift_rpm.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._btn_recommend_shift_rpm.setStyleSheet(_ngr_sr.secondary_button_qss())
+            self._btn_recommend_shift_rpm.setMaximumWidth(170)
+            self._btn_recommend_shift_rpm.setToolTip(
+                "Suggest the shift-beep RPM from the car's own data. Drive the car once so GT7 broadcasts its "
+                "rpm-alert band for a high-confidence value; no value is guessed.")
+            self._btn_recommend_shift_rpm.clicked.connect(self._on_recommend_shift_rpm)
+            _srr.addWidget(self._btn_recommend_shift_rpm)
+            _srr.addStretch(1)
+            _srl.addLayout(_srr)
+            self._shift_rpm_reco_lbl = QLabel("")
+            self._shift_rpm_reco_lbl.setWordWrap(True)
+            self._shift_rpm_reco_lbl.setStyleSheet(f"color:{_ngr_sr.TEXT_DIM}; font-size:{_ngr_sr.FS_CAPTION}pt;")
+            _srl.addWidget(self._shift_rpm_reco_lbl)
+        except Exception:  # pragma: no cover - defensive; the box must still build
+            self._btn_recommend_shift_rpm = None
+            self._shift_rpm_reco_lbl = None
+            _srr.addStretch(1)
+            _srl.addLayout(_srr)
+        # hug the content vertically so the box never stretches into a tall band
+        shift_rpm_box.setMaximumHeight(shift_rpm_box.sizeHint().height() + 8)
         outer_layout.addWidget(shift_rpm_box)
 
         self._refresh_setup_combo()
@@ -1129,6 +1173,48 @@ class SetupBuilderMixin:
         self._refresh_apply_status_for_form(self._race_form)
         self._refresh_apply_status_for_form(self._qual_form)
         return container
+
+    def _on_recommend_shift_rpm(self) -> None:
+        """ENH-073-001: fill the shift-beep RPM from the car's REAL data. Prefers GT7's per-car rpm-alert band
+        (from the last live packet), else the car spec's peak-power RPM. Never fabricates — an unknown car
+        yields a clear 'drive it first' message rather than a guessed value. Never raises."""
+        try:
+            from strategy.shift_rpm_recommendation import recommend_shift_rpm
+            rpm_alert_max = None
+            p = getattr(self, "_last_packet", None)
+            if p is not None:
+                rpm_alert_max = getattr(p, "rpm_alert_max", None)
+            power_rpm = None
+            try:
+                _name, specs = self._load_car_specs_for_current()
+                power_rpm = (specs or {}).get("power_rpm")
+            except Exception:
+                power_rpm = None
+            rec = recommend_shift_rpm(rpm_alert_max=rpm_alert_max, power_rpm=power_rpm)
+            lbl = getattr(self, "_shift_rpm_reco_lbl", None)
+            if rec.qualifying_rpm is None:
+                if lbl is not None:
+                    lbl.setText(rec.rationale)   # honest "no data yet — drive the car" message
+                return
+            sb = self._config.setdefault("shift_beep", {})
+            sb["qual_rpm"] = int(rec.qualifying_rpm)
+            sb["race_rpm"] = int(rec.race_rpm)
+            self._persist_config()
+            # reflect on the read-only Setup Builder displays + the editable Live-tab spins
+            for attr, val in (("_spin_shift_rpm_qual", rec.qualifying_rpm), ("_spin_shift_rpm_race", rec.race_rpm),
+                              ("_spin_live_shift_rpm_qual", rec.qualifying_rpm),
+                              ("_spin_live_shift_rpm_race", rec.race_rpm)):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    try:
+                        w.setValue(int(val))
+                    except Exception:
+                        pass
+            if lbl is not None:
+                lbl.setText(f"[{rec.confidence.value.upper()}] Qualifying {rec.qualifying_rpm} · "
+                            f"Race {rec.race_rpm} rpm — {rec.rationale}")
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def _current_setup_dict(self) -> dict:
         """Read all manual fields including editable gear ratios.
@@ -1717,6 +1803,15 @@ class SetupBuilderMixin:
             w = getattr(self, attr, None)
             if w:
                 w.setEnabled(True)
+        # Progressive disclosure (DEF-073): when the Event permits tuning but only a
+        # subset of categories, hide the sections that are fully locked out — on BOTH
+        # forms — so the operator only scrolls what they can edit. Fully-locked and
+        # unrestricted contexts leave every section visible.
+        for _form_attr in ("_race_form", "_qual_form"):
+            _form = getattr(self, _form_attr, None)
+            _apply_vis = getattr(_form, "apply_section_visibility", None)
+            if callable(_apply_vis):
+                _apply_vis(allowed_cats, partially_restricted)
 
     def _refresh_setup_combo(self, select_index: int = -1) -> None:
         """Refresh the Race form's load combo (filters to Race setups)."""
@@ -3395,6 +3490,28 @@ class SetupBuilderMixin:
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
+        # DEF-073-008: a from-scratch BASELINE is a COMPLETE authored setup, not an
+        # incremental change to a parent — its values must POPULATE the Car Setup form
+        # so the driver can read and transfer the whole setup into GT7. Previously the
+        # form kept its defaults (fields were only highlighted), so e.g. ride height
+        # showed the 80 mm default instead of the authored baseline value, and most
+        # fields "didn't load". The Analyse path stays Apply-gated (it changes a handful
+        # of fields over an existing setup and has something to apply over); a baseline
+        # does not, so it fills directly. ``approved_fields`` is already category-gated
+        # by the backend, so locked-category fields are never written.
+        if entry_type == "baseline_setup" and approved_fields:
+            _fill_form = _form or getattr(self, "_race_form", None)
+            if _fill_form is not None and hasattr(_fill_form, "apply_ai_fields"):
+                try:
+                    _fill_form.apply_ai_fields(dict(approved_fields))
+                    if _fill_form is getattr(self, "_race_form", None):
+                        _bl_keys = [k for k, v in approved_fields.items()
+                                    if isinstance(v, (int, float))]
+                        if _bl_keys:
+                            self._highlight_changed_fields(_bl_keys)
+                except Exception as _bl_e:  # pragma: no cover - defensive; never break display
+                    print(f"[Baseline] form fill failed: {_bl_e}")
+
         # UAT Finding 3: mirror the recommendation into the structured tabbed
         # view. Proposed changes highlight immediately here (at generate) — the
         # "Applied in Game" button only flips status later, it is not what first
@@ -4236,8 +4353,13 @@ class SetupBuilderMixin:
         _rec_split = QSplitter(Qt.Orientation.Vertical)
         _rec_split.addWidget(setup_panel)
         _rec_split.addWidget(self._setup_rec_view)
-        _rec_split.setStretchFactor(0, 1)
-        _rec_split.setStretchFactor(1, 1)
+        # DEF-UAT-073-007/017: when a recommendation is present it should be readable, not a squished strip.
+        # The rec pane gets the larger share; while hidden the setup form keeps all the height. The user can
+        # still drag the splitter. Sizes are (re)applied in _populate_setup_recommendation_view.
+        _rec_split.setStretchFactor(0, 3)
+        _rec_split.setStretchFactor(1, 5)
+        _rec_split.setCollapsible(1, True)
+        self._rec_split = _rec_split
         tab_layout.addWidget(_rec_split, 1)  # stretch factor 1
 
         return tab_widget
@@ -4287,13 +4409,54 @@ class SetupBuilderMixin:
                                      status_approved=status_approved)
         view.set_vm(vm)
         view.setVisible(vm.has_recommendation)
+        # DEF-UAT-073-007/017: give the recommendation generous, readable height when it appears (the user
+        # can still drag the splitter); collapse it back so the setup form reclaims the space when there is
+        # no recommendation.
+        split = getattr(self, "_rec_split", None)
+        if split is not None:
+            try:
+                total = max(split.height(), 600)
+                if vm.has_recommendation:
+                    split.setSizes([int(total * 0.42), int(total * 0.58)])
+                else:
+                    split.setSizes([total, 0])
+            except Exception:
+                pass
+
+    def _open_transcribe_dialog(self, form) -> None:
+        """DEF-073-001/-007: show the whole setup as a compact, read-only "copy into GT7"
+        reference (GT7 tuning-menu order, tabular figures), so the driver can transcribe it
+        without scrolling the tall editable form. Non-modal so it can stay open beside GT7."""
+        try:
+            from ui.setup_transcribe_view import SetupTranscribeDialog
+        except Exception:
+            return
+        d = form.current_setup_dict() if hasattr(form, "current_setup_dict") else {}
+        # keep a per-purpose handle so re-clicking re-uses (and refreshes) the window
+        _attr = f"_transcribe_dlg_{getattr(form, 'purpose', 'race')}".replace(" ", "_").lower()
+        dlg = getattr(self, _attr, None)
+        if dlg is None:
+            dlg = SetupTranscribeDialog(self)
+            setattr(self, _attr, dlg)
+        header = {
+            "car": d.get("car", ""),
+            "track": d.get("track", ""),
+            "setup_name": d.get("setup_label", ""),
+        }
+        dlg.set_setup(d, header)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _rec_view_apply_in_game(self) -> None:
         form = getattr(self, "_race_form", None)
         if form is not None:
             self._on_changes_applied_in_game(form)
-        if getattr(self, "_setup_rec_view", None) is not None:
-            self._setup_rec_view.mark_applied()
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.mark_applied()
+            # DEF-UAT-073-009: visible confirmation — the action previously only reached the event log.
+            view.show_action_feedback("✓ Applied in game — marked as the active setup baseline.")
 
     def _rec_view_values_entered(self) -> None:
         try:
@@ -4301,6 +4464,9 @@ class SetupBuilderMixin:
                 "[Setup] Recommended values entered in GT7 (awaiting on-track confirmation).")
         except Exception:
             pass
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.show_action_feedback("✓ Values entered — awaiting on-track confirmation.", "info")
 
     def _rec_view_start_validation(self) -> None:
         auth = getattr(self, "_setup_authority", None)
@@ -4316,6 +4482,11 @@ class SetupBuilderMixin:
                 "[Setup] Validation started — run the test plan laps.")
         except Exception:
             pass
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            if hasattr(view, "mark_validation_started"):
+                view.mark_validation_started()
+            view.show_action_feedback("✓ Validation started — run the test-plan laps, then submit feedback.")
 
     def _rec_view_submit_feedback(self) -> None:
         # Take the driver to the feedback surface (Practice Review).

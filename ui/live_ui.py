@@ -18,7 +18,7 @@ from ui.widgets import TyreWidget, FuelBar, BigValueLabel  # noqa: F401
 from PyQt6.QtWidgets import (  # noqa: F401
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QGroupBox,
     QLabel, QPushButton, QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
-    QTextEdit, QStackedWidget, QAbstractItemView,
+    QTextEdit, QStackedWidget, QAbstractItemView, QScrollArea, QFrame,
 )
 
 # Module-level display constants — now sourced from the NGR design system so
@@ -29,13 +29,23 @@ _DARK_CARD = _ngr.CARBON_RAISED   # was "#2A2A2A" — carbon card surface
 _TEXT = _ngr.TEXT                 # was "#E0E0E0" — body text
 _ACCENT = _ngr.NGR_GREEN          # was "#2EA043" — NGR neon-green accent
 
+# DEF-073-017 — Live mode differentiation. Race / Practice / Qualifying share the
+# same telemetry chrome, so switching mode felt like "the same tab". A prominent,
+# colour-coded banner names the active mode and what it is FOR, so Race and
+# Qualifying are unmistakably distinct. (title, purpose, accent colour)
+_LIVE_MODE_INFO = {
+    "Race":       ("RACE MODE",       "Strategy, pit windows & fuel to the flag", "#F5A623"),
+    "Practice":   ("PRACTICE MODE",   "Validate the setup & build consistent pace", _ngr.NGR_GREEN),
+    "Qualifying": ("QUALIFYING MODE", "One-lap target time & sector deltas",        "#42A5F5"),
+}
+
 
 class LiveMixin:
     """Live Race Engineer tab construction + telemetry display for MainWindow."""
 
     def _build_live_tab(self) -> QWidget:
-        w = QWidget()
-        root = QVBoxLayout(w)
+        content = QWidget()
+        root = QVBoxLayout(content)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
@@ -253,19 +263,51 @@ class LiveMixin:
         self._qual_s1_done: bool = False
         self._qual_s2_done: bool = False
 
-        # Row 4: Mode-specific panel (Race / Practice / Qualifying)
+        # Row 4: Mode banner — a prominent, colour-coded heading so the mode-specific
+        # section below is unmistakably Race vs Practice vs Qualifying (DEF-073-017).
+        self._live_mode_banner = QLabel("")
+        self._live_mode_banner.setTextFormat(Qt.TextFormat.RichText)
+        root.addWidget(self._live_mode_banner)
+
+        # Row 5: Mode-specific panel (Race / Practice / Qualifying)
         self._live_mode_stack = QStackedWidget()
         self._live_mode_stack.addWidget(self._build_live_race_panel())       # 0
         self._live_mode_stack.addWidget(self._build_live_practice_panel())   # 1
         self._live_mode_stack.addWidget(self._build_live_qualifying_panel()) # 2
-        root.addWidget(self._live_mode_stack)
+        # Give the mode-specific panel real space (it carries the differentiating
+        # content) and keep it from collapsing to a squished strip.
+        root.addWidget(self._live_mode_stack, 1)
 
         # Restore saved mode
         _saved_mode = self._config.get("live", {}).get("mode", "Race")
         _mode_idx = {"Race": 0, "Practice": 1, "Qualifying": 2}.get(_saved_mode, 0)
         self._combo_live_mode.setCurrentIndex(_mode_idx)
+        self._update_live_mode_banner(_saved_mode)
 
-        return w
+        # DEF-073-017 — the Live tab stacks many cards; without a scroll area the
+        # mode-specific panel (and its bottom content) got clipped on limited-height
+        # and VR windows, and everything read as "squished". Wrap the content so the
+        # whole surface is always reachable; the page never scrolls horizontally.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
+    def _update_live_mode_banner(self, mode: str) -> None:
+        """Render the colour-coded active-mode banner (DEF-073-017). Never raises."""
+        lbl = getattr(self, "_live_mode_banner", None)
+        if lbl is None:
+            return
+        title, purpose, colour = _LIVE_MODE_INFO.get(mode, _LIVE_MODE_INFO["Race"])
+        lbl.setStyleSheet(
+            f"background:{_DARK_CARD}; border-left:5px solid {colour}; "
+            f"border-radius:4px; padding:6px 12px;")
+        lbl.setText(
+            f"<span style='color:{colour}; font-size:15px; font-weight:bold; "
+            f"letter-spacing:1px;'>{title}</span>"
+            f"<span style='color:{_TEXT}; font-size:12px;'> &nbsp;·&nbsp; {purpose}</span>")
 
     def _build_live_race_panel(self) -> QWidget:
         w = QWidget()
@@ -488,6 +530,9 @@ class LiveMixin:
         idx = {"Race": 0, "Practice": 1, "Qualifying": 2}.get(mode, 0)
         if hasattr(self, "_live_mode_stack"):
             self._live_mode_stack.setCurrentIndex(idx)
+        # DEF-073-017 — keep the prominent mode banner in sync so Race/Practice/Qualifying
+        # are unmistakably distinct.
+        self._update_live_mode_banner(mode)
         # Phase 69 — a Practice/Qualifying/Race transition is a session boundary: clear the transient
         # live-runtime state so a prior mode's fuel/pace evidence, pit history, last recommendation,
         # cooldown or pending recognition cannot bleed into the new session. Persistent knowledge is kept.

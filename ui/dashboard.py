@@ -436,6 +436,18 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         self._tabs.addTab(self._build_track_modelling_tab(), "Track Modelling")  # 12
         self._tabs.addTab(self._build_development_history_tab(),
                           "Development History")                                # 13
+        # DEF-UAT-073 remediation (Slice 1): a persistent, always-visible "Command Centre" button in the
+        # tab-bar corner so the user can return to the Home command centre from ANY tab (a single consistent
+        # nav affordance rather than a duplicated per-page button). Tab-change only; changes no state.
+        try:
+            self._cc_home_btn = QPushButton("⌂  Command Centre")
+            self._cc_home_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._cc_home_btn.setStyleSheet(_ngrt.secondary_button_qss())
+            self._cc_home_btn.setToolTip("Return to the Race Engineer Command Centre (Home)")
+            self._cc_home_btn.clicked.connect(lambda: self.select_tab(TAB_HOME))
+            self._tabs.setCornerWidget(self._cc_home_btn, Qt.Corner.TopRightCorner)
+        except Exception:  # pragma: no cover - defensive; the tab bar must still build
+            self._cc_home_btn = None
         # Tab Navigation Refactor (2026-07-03): stable tab keys, registered in
         # the SAME order as the addTab calls above (DEFAULT_TAB_ORDER mirrors
         # them; a source-scan test + this count check guard the pairing).
@@ -618,86 +630,20 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         except Exception:  # pragma: no cover - defensive; Home must still build
             self._event_command_centre_panel = None
 
-        # Sprint 10: guided workflow stepper — the "follow the bouncing ball"
-        # 12-stage journey. Clicking its next-action button navigates to the tab
-        # the current stage lives on.
-        try:
-            from ui.workflow_stepper_widget import WorkflowStepper
-            self._home_stepper = WorkflowStepper()
-            self._home_stepper.go_to_tab.connect(self.select_tab)
-            root.addWidget(self._home_stepper)
-        except Exception:
-            self._home_stepper = None
-
-        # Next-best-action banner + a click-to-navigate button (Home Dashboard
-        # Promotion). The button opens the recommended tab via select_tab; its
-        # target is resolved in _home_refresh from the flow summary's tab name
-        # (mapped to a stable key with tab_registry.key_for_title).
-        na_banner = QWidget()
-        na_banner.setStyleSheet(
-            f"background: {_DARK_CARD}; border-left: 4px solid #F5C542;"
-            " border-radius: 6px;"
-        )
-        na_row = QHBoxLayout(na_banner)
-        na_row.setContentsMargins(14, 10, 14, 10)
-        self._home_next_action_lbl = QLabel("")
-        self._home_next_action_lbl.setWordWrap(True)
-        self._home_next_action_lbl.setTextFormat(Qt.TextFormat.RichText)
-        na_row.addWidget(self._home_next_action_lbl, 1)
-        self._home_next_action_btn = QPushButton("Open")
-        self._home_next_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._home_next_action_btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
-        self._home_next_action_btn.clicked.connect(self._home_navigate_next_action)
-        self._home_next_action_btn.setVisible(False)
+        # DEF-UAT-073-004 remediation (Slice 1): the legacy Home dashboard (the "bouncing-ball" workflow
+        # stepper, the next-best-action banner and the duplicate Race-Setup/Track-Intelligence card grid)
+        # is REMOVED. It predated the Phase-51 Event Command Centre and read the last-loaded config, so it
+        # showed a prior event's state ("no active event" up top while a stale event's setup/journey showed
+        # below). The Command Centre (above) is now the SINGLE Home surface — it carries the primary action,
+        # attention items, readiness, cumulative learning, timeline and department navigation. The pure
+        # view-model logic (home_dashboard_vm / workflow_stepper) is retained but no longer rendered here.
+        # These attributes are set to inert defaults so the shared refresh helpers stay safe.
+        self._home_stepper = None
+        self._home_next_action_lbl = None
+        self._home_next_action_btn = None
         self._home_next_action_tab_key = None
-        na_row.addWidget(self._home_next_action_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addWidget(na_banner)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
-        container = QWidget()
-        grid = QGridLayout(container)
-        grid.setSpacing(8)
-        from ui.home_dashboard_vm import tab_key_for_card
         self._home_card_labels = {}
-        for i, key in enumerate(CARD_ORDER):
-            cell = QWidget()
-            cell.setStyleSheet(
-                f"background: {_DARK_CARD}; border-radius: 6px;")
-            cell_l = QVBoxLayout(cell)
-            cell_l.setContentsMargins(10, 10, 10, 8)
-            cell_l.setSpacing(6)
-
-            lbl = QLabel("—")
-            lbl.setWordWrap(True)
-            lbl.setTextFormat(Qt.TextFormat.RichText)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            lbl.setStyleSheet("background: transparent;")
-            self._home_card_labels[key] = lbl
-            cell_l.addWidget(lbl, 1)
-
-            # Click-to-navigate: an "Open <Tab>" button per mapped card. Stable
-            # key only (never the visible label) so the ⚙ decoration is
-            # irrelevant. Tab-change only — see _home_navigate.
-            tab_key = tab_key_for_card(key)
-            if tab_key:
-                btn = QPushButton(self._home_nav_button_text(tab_key))
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.setStyleSheet(self._HOME_NAV_BTN_QSS)
-                btn.setToolTip("Open this tool tab")
-                btn.clicked.connect(
-                    lambda _checked=False, k=tab_key: self._home_navigate(k))
-                btn_row = QHBoxLayout()
-                btn_row.setContentsMargins(0, 0, 0, 0)
-                btn_row.addStretch(1)
-                btn_row.addWidget(btn)
-                cell_l.addLayout(btn_row)
-
-            grid.addWidget(cell, i // 2, i % 2)
-        grid.setRowStretch(grid.rowCount(), 1)
-        scroll.setWidget(container)
-        root.addWidget(scroll, 1)
+        root.addStretch(1)
 
         # User Guide + reference, folded in from the old Guide tab (collapsed by
         # default). Keeps the how-to where the workflow starts.
@@ -809,46 +755,48 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             return False
 
     def _home_refresh(self) -> None:
-        """Rebuild and render the Home Dashboard. Display-only; never raises."""
-        if not hasattr(self, "_home_card_labels"):
-            return
-        try:
-            from ui import home_dashboard_vm as hdvm
-            state = self._build_home_dashboard_state()
-            self._home_next_action_lbl.setText(
-                hdvm.format_next_action_html(state.next_action))
-            self._home_update_next_action_button(state.next_action)
-            # Sprint 10: update the guided workflow stepper.
-            _stepper = getattr(self, "_home_stepper", None)
-            _wf = getattr(self, "_home_workflow_inputs", None)
-            if _stepper is not None and _wf is not None:
-                from ui.workflow_stepper import build_workflow_state
-                _stepper.set_state(build_workflow_state(_wf))
-            for key, lbl in self._home_card_labels.items():
-                card = state.card(key)
-                if card is not None:
-                    lbl.setText(hdvm.format_card_html(card))
-        except Exception:  # pragma: no cover - defensive; must never break the UI
-            pass
-        # Phase 51 — rebuild the Event Command Centre off the Qt thread (read-only).
+        """Rebuild and render the Home command centre (read-only; never raises).
+
+        DEF-UAT-073-004 remediation: the legacy Home dashboard (workflow stepper + next-action banner +
+        duplicate card grid) was removed because it read the last-loaded config and contradicted the
+        active-event resolver. The Phase-51 Event Command Centre is now the single Home surface, rebuilt off
+        the Qt thread with a stale-result guard."""
         self._refresh_event_command_centre()
 
     # ------------------------------------------------------------------
     # Phase 51 — Event Command Centre (read-only Home spine, off-thread)
     # ------------------------------------------------------------------
     _CC_SURFACE_TABS = {
+        # DEF-UAT-073-015: Driver Coaching → Practice Review (its Driving Advice surface) so it is DISTINCT
+        # from Event Briefing instead of both landing on the same Development History catch-all.
         "briefing": "development_history", "garage": "garage", "practice": "practice_review",
-        "setup": "setup_builder", "coaching": "development_history", "telemetry": "telemetry",
+        "setup": "setup_builder", "coaching": "practice_review", "telemetry": "telemetry",
         "strategy": "strategy_builder", "qualifying": "live", "live": "live",
         "debrief": "development_history", "development_history": "development_history",
+        # DEF-UAT-073-005: the "create / import an NGR event" primary action targets the Event Planner tab
+        # (previously the surface was "no_event", which mapped to nothing so the button did nothing).
+        "no_event": "event_planner", "event_planner": "event_planner",
+    }
+
+    # DEF-UAT-073-012/015: departments that land on Development History open a DISTINCT sub-tab so each has
+    # a clear purpose (Event Briefing → the race-engineer brief; Debrief → the session records/overview).
+    _CC_SURFACE_SUBTABS = {
+        "briefing": "Race Engineer & Runtime", "debrief": "Overview & Records",
+        "development_history": "Overview & Records",
     }
 
     def _cc_navigate(self, surface) -> None:
-        """Command Centre quick-action → navigate to the mapped specialist tab (no state change)."""
+        """Command Centre quick-action → navigate to the mapped specialist tab (no state change); on the
+        Development History tab, also select the department's distinct sub-tab."""
         try:
-            key = self._CC_SURFACE_TABS.get(str(surface or ""))
+            surf = str(surface or "")
+            key = self._CC_SURFACE_TABS.get(surf)
             if key and self.has_tab(key):
                 self.select_tab(key)
+                subtab = self._CC_SURFACE_SUBTABS.get(surf)
+                page = getattr(self, "_development_history_page", None)
+                if subtab and page is not None and hasattr(page, "select_subtab"):
+                    page.select_subtab(subtab)
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -5348,8 +5296,22 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
     def _refresh_running_setup_combos(self) -> None:
         """Repopulate both running-setup combos from saved setups, preserving the
         declared selection (``_live_running_setup``). Safe to call before either
-        combo exists."""
-        labels = [self._running_setup_label_for(s) for s in getattr(self, "_saved_setups", [])]
+        combo exists.
+
+        DEF-UAT-073-010: filter to the ACTIVE car's setups (a setup carries its car under ``car``/``name``)
+        instead of listing every setup ever built — so Practice Review shows only the setups relevant to the
+        car you're running. Falls back to all setups when the active car is unknown or no setup is tagged
+        with it (older setups), so a valid setup is never hidden. The active car is read via the canonical
+        allowlisted ``_build_event_context`` (NOT a new direct config['strategy'] fan-out access)."""
+        car_name = str(getattr(self._build_event_context(), "car", "") or "").strip()
+        all_setups = list(getattr(self, "_saved_setups", []))
+        if car_name:
+            filtered = [s for s in all_setups
+                        if str(s.get("car") or s.get("name") or "").strip() == car_name]
+            relevant = filtered if filtered else all_setups
+        else:
+            relevant = all_setups
+        labels = [self._running_setup_label_for(s) for s in relevant]
         current = getattr(self, "_live_running_setup", "") or ""
         for combo in (getattr(self, "_live_running_setup_combo", None),
                       getattr(self, "_prac_running_setup_combo", None)):
@@ -6863,15 +6825,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         try:
             from pathlib import Path as _Path
             from data.manual_uat_store import ManualUatStore
+            from data.repo_identity import resolve_repo_commit, resolve_repo_branch
             store = None
             cfg_path = getattr(self, "_config_path", None)
             if cfg_path:
                 store = ManualUatStore(_Path(cfg_path).with_name("manual_uat_evidence.json"))
+            # Resolve the EXACT running commit so UI-recorded evidence is candidate-scoped (DEF-UAT-072-001);
+            # "" if it cannot be resolved (packaged/detached checkout) — never fabricated.
+            _repo_root = _Path(__file__).resolve().parent.parent
+            candidate_commit = resolve_repo_commit(_repo_root)
+            candidate_branch = resolve_repo_branch(_repo_root)
 
             def _facts():
                 from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
                 return {
-                    "branch": "", "commit": "", "parent_commit": "",
+                    "branch": candidate_branch, "commit": candidate_commit, "parent_commit": "",
                     "db_version": DB_VERSION, "rule_engine_version": RULE_ENGINE_VERSION,
                     "listener_status": "single UDPListener (telemetry/listener.py)",
                     "schema_migration_status": "no schema change (DB v%d)" % DB_VERSION,
@@ -6881,7 +6849,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
                     "bench_total": 0, "bench_passed": 0, "bench_ready": False,
                 }
 
-            page.set_manual_uat_context(store=store, facts_provider=_facts, candidate_commit="")
+            page.set_manual_uat_context(store=store, facts_provider=_facts,
+                                        candidate_commit=candidate_commit)
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -9173,6 +9142,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             if not car_name:
                 return
             self._config.setdefault("strategy", {})["car"] = car_name
+            # DEF-UAT-073-013: the car lives in the strategy context (set above) — persist it and push it
+            # onto the active event's preparation cycle so the Command Centre / Garage readiness reflect it
+            # and it STICKS across refreshes (previously it never reached the cycle).
+            aid = str(self._config.get("active_event_id") or "")
+            if aid and hasattr(self, "_ensure_active_preparation_cycle"):
+                self._ensure_active_preparation_cycle(aid)
             self._persist_config()
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()

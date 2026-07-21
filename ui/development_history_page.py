@@ -63,34 +63,52 @@ class DevelopmentHistoryPage(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        # DEF-UAT-073-003: the Development History page was one ~30-panel scroll ("catch-all"). It is now
+        # split into purpose-specific SUB-TABS (Readiness & Assurance · Race Engineer & Runtime ·
+        # Certification & UAT · Experiments & Development · Season & Knowledge · Overview & Records) so each
+        # serves a clear purpose — mirroring the Command Centre "departments" pattern. A persistent header
+        # (title + status band) stays above the sub-tabs; every panel attribute is preserved so the
+        # off-thread refresh methods are unchanged.
+        from PyQt6.QtWidgets import QTabWidget
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer.addWidget(scroll)
-        container = QWidget()
-        scroll.setWidget(container)
-        root = QVBoxLayout(container)
-        root.setContentsMargins(ngr.SPACE_MD, ngr.SPACE_MD, ngr.SPACE_MD, ngr.SPACE_MD)
-        root.setSpacing(ngr.SPACE_MD)
+        outer.setContentsMargins(ngr.SPACE_SM, ngr.SPACE_SM, ngr.SPACE_SM, ngr.SPACE_SM)
+        outer.setSpacing(ngr.SPACE_SM)
 
         title = QLabel("Development History — What We've Learned Across Sessions")
         title.setStyleSheet(ngr.heading_qss(1))
-        root.addWidget(title)
+        outer.addWidget(title)
 
         self._context = QLabel("")
         self._context.setStyleSheet(f"color:{ngr.TEXT_DIM}; font-size:{ngr.FS_LABEL}pt;")
-        root.addWidget(self._context)
+        outer.addWidget(self._context)
 
         note = QLabel("Read-only engineering memory. Learns only from completed, "
                       "canonical engineering reviews — nothing is changed here.")
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{ngr.TEXT_DIM}; font-size:{ngr.FS_CAPTION}pt;")
-        root.addWidget(note)
+        outer.addWidget(note)
 
         self._band = QLabel("Building picture…")
         self._band.setStyleSheet(ngr.banner_qss("info"))
-        root.addWidget(self._band)
+        outer.addWidget(self._band)
+
+        self._subtabs = QTabWidget()
+        outer.addWidget(self._subtabs, 1)
+
+        def _new_subtab(name: str):
+            _scroll = QScrollArea()
+            _scroll.setWidgetResizable(True)
+            _scroll.setStyleSheet("QScrollArea { border: none; }")
+            _c = QWidget()
+            _scroll.setWidget(_c)
+            _lay = QVBoxLayout(_c)
+            _lay.setContentsMargins(ngr.SPACE_MD, ngr.SPACE_MD, ngr.SPACE_MD, ngr.SPACE_MD)
+            _lay.setSpacing(ngr.SPACE_MD)
+            self._subtabs.addTab(_scroll, name)
+            return _lay
+
+        # ── Sub-tab: Readiness & Assurance ────────────────────────────────────
+        root = _new_subtab("Readiness & Assurance")
 
         # Phase 28 (Program 2) — engineering knowledge readiness EXECUTIVE SUMMARY (top-level):
         # per-domain, is the knowledge ready to rely on, plus a transparent rule-based programme
@@ -116,6 +134,9 @@ class DevelopmentHistoryPage(QWidget):
         # Read-only; advisory; export writes files only on explicit user action; no setup values.
         self._review_pack_panel = AssuranceReviewPackPanel()
         root.addWidget(self._review_pack_panel)
+
+        # ── Sub-tab: Race Engineer & Runtime ──────────────────────────────────
+        root = _new_subtab("Race Engineer & Runtime")
 
         # Phases 36-38 (Program 2) — Race-Engineer Team Brief: the coordinated, context-safe
         # activation of the whole Engineering Brain into ONE read-only race-engineer plan for the
@@ -148,6 +169,9 @@ class DevelopmentHistoryPage(QWidget):
         self._race_weekend_panel = RaceWeekendPanel()
         root.addWidget(self._race_weekend_panel)
 
+        # ── Sub-tab: Certification & UAT ──────────────────────────────────────
+        root = _new_subtab("Certification & UAT")
+
         # Phase 56 (Program 2) — Operational Certification: a developer/UAT surface reporting the evidence
         # supporting each area of the NGR event journey. Read-only; grants nothing; automated/offscreen/
         # replay evidence never awards visual/live/operational certification. Kept off the driver Home.
@@ -177,6 +201,9 @@ class DevelopmentHistoryPage(QWidget):
         # offscreen construction; production placement is the Live tab with a telemetry-driven refresh.
         self._live_pit_wall_panel = NgrLivePitWallPanel()
         root.addWidget(self._live_pit_wall_panel)
+
+        # ── Sub-tab: Experiments & Development ─────────────────────────────────
+        root = _new_subtab("Experiments & Development")
 
         # Phase 9 — cross-context engineering transfer + regression-risk advisory.
         self._context_panel = EngineeringContextPanel()
@@ -227,6 +254,9 @@ class DevelopmentHistoryPage(QWidget):
         # remaining engineering return; ranks/completes/applies nothing.
         self._confidence_panel = EngineeringConfidencePanel()
         root.addWidget(self._confidence_panel)
+
+        # ── Sub-tab: Season & Knowledge ───────────────────────────────────────
+        root = _new_subtab("Season & Knowledge")
 
         # Phase 21 (Program 2) — season development plan & cross-campaign knowledge map: the
         # Engineering Director's whole-programme view (summary + relationships + knowledge map).
@@ -286,6 +316,9 @@ class DevelopmentHistoryPage(QWidget):
         # Phase 12 (Program 2) — deterministic vehicle-dynamics knowledge (static reference).
         self._knowledge_panel = EngineeringKnowledgePanel()
         root.addWidget(self._knowledge_panel)
+
+        # ── Sub-tab: Overview & Records (the core Phase-8 cross-session memory) ─
+        root = _new_subtab("Overview & Records")
 
         self._scorecard_grid = QGridLayout()
         root.addWidget(self._boxed("Engineering Scorecard", self._scorecard_grid))
@@ -510,6 +543,21 @@ class DevelopmentHistoryPage(QWidget):
     def update_certification(self, certification_result) -> None:
         """Render the Phase 56 Operational Certification developer/UAT surface (read-only)."""
         self._certification_panel.update_result(certification_result)
+
+    def select_subtab(self, name: str) -> bool:
+        """Select a Development History sub-tab by its title (DEF-073-012/015 — lets Command Centre
+        departments land on a DISTINCT purpose-specific sub-tab). Returns True on a match. Never raises."""
+        try:
+            subs = getattr(self, "_subtabs", None)
+            if subs is None:
+                return False
+            for i in range(subs.count()):
+                if subs.tabText(i) == name:
+                    subs.setCurrentIndex(i)
+                    return True
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return False
 
     def update_uat_runtime(self, runtime_result) -> None:
         """Render the Phase 69 Live UAT Runtime diagnostics surface (read-only). Receives a finished,

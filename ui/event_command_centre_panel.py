@@ -120,7 +120,10 @@ class EventCommandCentrePanel(QWidget):
         hdr = QWidget(); hrow = QHBoxLayout(hdr); hrow.setContentsMargins(0, 0, 0, 0)
         htitle = QLabel(str(card.get("title") or "")); htitle.setStyleSheet(ngr.heading_qss(heading_level))
         hrow.addWidget(htitle); hrow.addStretch(1)
-        if card.get("status_tag"):
+        has_action = bool(card.get("action_target")) and callable(self._on_navigate)
+        # DEF-UAT-073-005/006: on an action card the pill badge is suppressed — it previously LOOKED like a
+        # button but was an inert QLabel. The real CTA button below is the only clickable control.
+        if card.get("status_tag") and not has_action:
             badge = QLabel(card["status_tag"]); badge.setStyleSheet(ngr.badge_qss(tone))
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter); hrow.addWidget(badge)
         lay.addWidget(hdr)
@@ -130,6 +133,16 @@ class EventCommandCentrePanel(QWidget):
             lbl = QLabel(str(ln)); lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color:{ngr.TEXT}; font-size:{ngr.FS_CAPTION}pt;")
             lay.addWidget(lbl)
+        if has_action:
+            arow = QHBoxLayout(); arow.setContentsMargins(0, ngr.SPACE_XS, 0, 0)
+            btn = QPushButton(str(card.get("action_label") or "Open"))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(ngr.TOUCH_MIN_H)
+            btn.setStyleSheet(ngr.primary_button_qss() if heading_level <= 2 else ngr.secondary_button_qss())
+            target = card.get("action_target")
+            btn.clicked.connect(lambda _=False, t=target: self._fire(self._on_navigate, t))
+            arow.addStretch(1); arow.addWidget(btn)
+            lay.addLayout(arow)
         self._add(frame)
 
     def _add_selector(self, rows) -> None:

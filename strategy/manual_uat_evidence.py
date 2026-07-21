@@ -192,33 +192,54 @@ class ManualUatLedger:
 
     def append(self, obs: ManualUatObservation) -> "ManualUatLedger":
         """Return a NEW ledger with ``obs`` appended, wired to supersede the current active observation for
-        its area (the prior one is preserved for audit). Explicit user action only."""
-        prior = self.active(obs.area)
+        its area WITHIN THE SAME CANDIDATE SCOPE (the prior one is preserved for audit; an observation from a
+        different candidate commit is never superseded — it stays historical). Explicit user action only."""
+        prior = self.active(obs.area, obs.candidate_commit)
         wired = obs
         if prior is not None and prior.fingerprint and not obs.supersedes:
             wired = stamp_observation(replace(obs, supersedes=prior.fingerprint))
         return ManualUatLedger(observations=self.observations + (wired,))
 
-    def active(self, area: str) -> Optional[ManualUatObservation]:
-        """The latest observation for ``area`` (append order = chronological). Latest supersedes prior."""
+    def active(self, area: str, candidate_commit=None) -> Optional[ManualUatObservation]:
+        """The latest observation for ``area`` (append order = chronological). When ``candidate_commit`` is
+        given (a string, possibly ""), ONLY observations recorded against that exact candidate count —
+        evidence from a different commit is ignored (DEF-UAT-072-001: evidence is candidate-scoped). When
+        ``candidate_commit`` is None the latest observation is returned regardless (used for display/history).
+        """
         latest = None
         for o in self.observations:
-            if o.area == area:
-                latest = o
+            if o.area != area:
+                continue
+            if candidate_commit is not None and _norm(o.candidate_commit) != _norm(candidate_commit):
+                continue
+            latest = o
         return latest
 
-    def active_by_area(self) -> Dict[str, ManualUatObservation]:
+    def active_by_area(self, candidate_commit=None) -> Dict[str, ManualUatObservation]:
         out: Dict[str, ManualUatObservation] = {}
         for o in self.observations:
+            if candidate_commit is not None and _norm(o.candidate_commit) != _norm(candidate_commit):
+                continue
             out[o.area] = o
         return out
 
-    def status_of(self, area: str) -> ManualUatStatus:
-        a = self.active(area)
+    def status_of(self, area: str, candidate_commit=None) -> ManualUatStatus:
+        a = self.active(area, candidate_commit)
         return a.status if a is not None else ManualUatStatus.NOT_RUN
 
     def history(self, area: str) -> Tuple[ManualUatObservation, ...]:
+        """Every observation for ``area`` across ALL candidates (viewable audit trail; scoping does not hide
+        history — it only governs what COUNTS toward the active candidate)."""
         return tuple(o for o in self.observations if o.area == area)
+
+    def candidates(self) -> Tuple[str, ...]:
+        """The distinct candidate commits present in the ledger (for visibility of cross-candidate history)."""
+        seen = []
+        for o in self.observations:
+            c = _norm(o.candidate_commit)
+            if c and c not in seen:
+                seen.append(c)
+        return tuple(seen)
 
     def to_payload(self) -> dict:
         return {"version": MANUAL_UAT_EVIDENCE_VERSION,
