@@ -5288,8 +5288,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         DEF-UAT-073-010: filter to the ACTIVE car's setups (a setup carries its car under ``car``/``name``)
         instead of listing every setup ever built — so Practice Review shows only the setups relevant to the
         car you're running. Falls back to all setups when the active car is unknown or no setup is tagged
-        with it (older setups), so a valid setup is never hidden."""
-        car_name = str(self._config.get("strategy", {}).get("car") or "").strip()
+        with it (older setups), so a valid setup is never hidden. The active car is read via the canonical
+        allowlisted ``_build_event_context`` (NOT a new direct config['strategy'] fan-out access)."""
+        car_name = str(getattr(self._build_event_context(), "car", "") or "").strip()
         all_setups = list(getattr(self, "_saved_setups", []))
         if car_name:
             filtered = [s for s in all_setups
