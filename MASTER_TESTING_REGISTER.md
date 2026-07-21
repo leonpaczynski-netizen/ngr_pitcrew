@@ -1,5 +1,17 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> UAT Remediation (branch `uat-defect-073-navigation-and-home-state`, **candidate `b9ecdb4`**, 13 commits off
+> merged `master @ ecf922c`). Fixes DEF-073-004/005/006/009/010/011/013/014/015/016 + ENH-073-001, each with
+> focused tests (test_uat_defect_073_slice1[12], _setup_feedback[3], _event_activation[9], _command_centre_ia
+> [4], test_enh_073_shift_rpm[8], updated test_home_dashboard_promotion). **Full regression found + fixed a
+> real invariant break** (DEF-010's config['strategy'] read tripped the frozen fan-out allowlist — rerouted
+> via the allowlisted `_build_event_context`). **Bench 67/67** (0 safety). **Authoritative full regression on
+> `b9ecdb4`: 10,392 passed / 27 skipped / 0 failed** (3:19:06; exit 0). Runtime files changed by USER app
+> activity (setup_history.json, active_setup_state.json, car_setup_ranges.json — race-prep setup building) —
+> reported separately, never staged/committed; `.claude/settings.local.json` unchanged. Remaining backlog:
+> DEF-073-001/002/003/007/008/012(partial)/017 (Dev-History split, layout, dual setup-surface, Track-Modelling
+> perf) for a focused next pass.
+
 > UAT Remediation **Slice 1** (branch `uat-defect-073-navigation-and-home-state`, candidate `e24c7c6` from
 > base `ecf922c`) — DEF-073-004/005/006 + Command Centre navigation. New suite
 > `tests/test_uat_defect_073_slice1.py`[12] (primary-action + progress navigable targets, real CTA buttons
