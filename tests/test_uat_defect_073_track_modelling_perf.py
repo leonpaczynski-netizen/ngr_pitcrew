@@ -12,7 +12,9 @@ _SRC = Path(__file__).resolve().parent.parent.joinpath("ui", "track_modelling_ui
 
 
 def _method_body(name: str) -> str:
-    m = re.search(rf"\n    def {name}\(self.*?\):(.*?)(?=\n    def )", _SRC, re.DOTALL)
+    # match the full signature line (handles '-> None:' return annotations), then the body up to the next
+    # top-level method definition.
+    m = re.search(rf"\n    def {name}\(self[^\n]*:\n(.*?)(?=\n    def )", _SRC, re.DOTALL)
     return m.group(1) if m else ""
 
 
