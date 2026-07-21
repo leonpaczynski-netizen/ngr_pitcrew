@@ -1,5 +1,32 @@
 # Current Claude Handoff
 
+## Engineering Brain Program 2 — Phases 72–74 (Operational UAT, Candidate Integrity & Live/VR Certification)
+
+**Phases 69–71 are MERGED** into `master` via **PR #77**, merge commit **`ecf922c`** (`UAT_BASE_COMMIT`).
+Branch `eng-brain-phase72-74-operational-uat` from `ecf922c`; **candidate commit `45928b4`**; committed
+locally, NOT pushed / no PR / not merged.
+
+- **Phase 72 (done — candidate freeze + evidence integrity):** Section-2 starting verification passed items
+  1–19. **Item 20 was a release-blocking defect → `DEF-UAT-072-001` (FIXED):** manual UAT readiness now
+  candidate-scoped — only observations stamped with the active candidate commit count; a code change never
+  inherits operational certification; a failed area needs an explicit same-candidate passing retest; no
+  optimistic fallback. `strategy/manual_uat_evidence.py` (scoped `active/status_of/append` + `history`/
+  `candidates`), `strategy/release_candidate_manifest.py` (threads `active_candidate_commit`, manifest scopes
+  to its own commit), `data/repo_identity.py` (resolves the running commit, no subprocess), dashboard stamps
+  UI evidence with it. 12 tests `tests/test_phase72_candidate_integrity.py`. 31-area taxonomy enumerated
+  exactly (no wildcards); 8 physical/live areas gate `OPERATIONALLY_CERTIFIED` + explicit grant. Report:
+  `docs/UAT_EXECUTION_PHASE72_74.md`.
+- **Phases 73–74 (NOT started — require the USER's physical testing):** Claude guides one test step at a time,
+  states the expected result, asks the user to record PASS/FAIL/BLOCKED in the Manual UAT panel, never infers
+  a PASS, and cannot grant operational certification. Stage sequence: 73-A desktop smoke → 73-B stationary
+  GT7 → 73-C practice → 73-D lap-count race → 73-E time-certain race → 74 physical TTS/PTT/mic/PSVR2 →
+  operational rehearsal. Defects `DEF-UAT-073/074-NNN`. Remediation on focused branches from the candidate;
+  any code change mints a new candidate identity (never reuse old PASS evidence).
+
+**Software gates (candidate `45928b4`):** bench 67/67 (0 safety); full regression per MASTER_TESTING_REGISTER.
+**Readiness `READY_FOR_MANUAL_UAT`; overall cert `NOT_TESTED`.** No DB/rule-engine/schema/listener change; no
+Apply/pit-call path.
+
 ## Engineering Brain Program 2 — Phases 69–71 (Pre-UAT Activation, Bench Certification & Manual Evidence Gate)
 
 Branch `eng-brain-phase69-71-uat-activation-gate` from clean **`master @ 1f4545c`** (PR #76). Committed

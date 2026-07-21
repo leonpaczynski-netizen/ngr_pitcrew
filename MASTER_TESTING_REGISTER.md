@@ -1,5 +1,20 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> Phases 72–74 (Operational UAT, Candidate Integrity & Live/VR Certification) — Phases 69–71 MERGED via PR #77
+> (`ecf922c` = `UAT_BASE_COMMIT`); branch `eng-brain-phase72-74-operational-uat`; **candidate `45928b4`**.
+> **Phase 72 — DEF-UAT-072-001 (release-blocking certification-integrity defect: manual readiness counted
+> evidence from ANY commit) FIXED** with candidate-scoped evidence. New suite
+> `tests/test_phase72_candidate_integrity.py`[12]: old-commit evidence cannot certify a new candidate;
+> matching-candidate evidence does; manifest scopes readiness to its own commit; code change doesn't inherit
+> certification; area shows NOT_RUN for a new candidate; failed area stays failed until an explicit
+> same-candidate passing retest; supersede is within same area+candidate; historical evidence viewable but not
+> counted; no optimistic fallback with blank candidate; every observation records candidate_commit;
+> `data/repo_identity.py` resolves the running commit == `git rev-parse HEAD` + defensive on a non-repo.
+> **Bench UAT:** 67/67 passed, 0 failed, 0 blocked, 0 safety. **Full regression (candidate `45928b4`):
+> 10,359 passed / 27 skipped / 0 failed** (10,386 collected; 3:06:02; exit 0) = 10,347 + 12 new. Runtime files
+> byte-identical before/after; no evidence file leaked into the project. **Phases 73–74 physical/live/PSVR2
+> UAT NOT run — require the USER's real evidence (Manual UAT panel, per-candidate `45928b4`).**
+
 > Phases 69–71 (Pre-UAT Activation, Bench Certification & Manual Evidence Gate) — branch
 > `eng-brain-phase69-71-uat-activation-gate` from `master @ 1f4545c`. **DB v28 / RULE_ENGINE 46.0 unchanged;
 > no new listener.** **70 new focused tests** (all pass): `test_phase69_runtime_snapshot.py`[11] (empty/
