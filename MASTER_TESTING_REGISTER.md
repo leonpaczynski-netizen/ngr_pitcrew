@@ -1,5 +1,16 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> UAT Remediation **Slice 1** (branch `uat-defect-073-navigation-and-home-state`, candidate `e24c7c6` from
+> base `ecf922c`) — DEF-073-004/005/006 + Command Centre navigation. New suite
+> `tests/test_uat_defect_073_slice1.py`[12] (primary-action + progress navigable targets, real CTA buttons
+> fire navigate, inert pill-badge suppressed on action cards, MainWindow Home = Command-Centre-only [no
+> legacy stepper/cards/banner], corner "Command Centre" button returns Home, create-event → Event Planner,
+> `_home_refresh` survives without legacy widgets); updated `test_home_dashboard_promotion` wiring
+> assertions. **Bench 67/67** (0 safety). **Full regression: 10,368 passed / 27 skipped / 0 failed**
+> (1:33:58; exit 0). Runtime files: `setup_history.json` + `active_setup_state.json` changed by legitimate
+> USER app activity (building setups for the Porsche Cup event) — reported separately, never staged/committed;
+> `.claude/settings.local.json` unchanged.
+
 > Phases 72–74 (Operational UAT, Candidate Integrity & Live/VR Certification) — Phases 69–71 MERGED via PR #77
 > (`ecf922c` = `UAT_BASE_COMMIT`); branch `eng-brain-phase72-74-operational-uat`; **candidate `45928b4`**.
 > **Phase 72 — DEF-UAT-072-001 (release-blocking certification-integrity defect: manual readiness counted

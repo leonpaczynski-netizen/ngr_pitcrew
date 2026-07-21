@@ -139,14 +139,23 @@ currently `NOT_RUN`.** This table is updated as evidence is entered; Claude neve
 | DEF-UAT-073-001 | Medium (usability) | desktop_visual_layout, live_dashboard_readability | OPEN — compressed/squashed layout across tabs; poor use of screen real-estate; legacy UI not removed after enhancements |
 | DEF-UAT-073-002 | Low–Medium (performance) | desktop_visual_layout (Track Modelling) | OPEN — Track Modelling tab slow to open |
 | DEF-UAT-073-003 | Medium (usability / IA) | desktop_visual_layout (Development History) | OPEN — Development History page huge, unclear how it works; poor process/flow legibility (all Phase 12–71 panels stacked on one page). **Proposed remediation (user):** break it into smaller grouped sub-sections/sub-tabs, mirroring the Command Centre "Departments" tab pattern (Event Briefing / Garage Readiness / Practice Programme / Setup Development / Driver Coaching / Telemetry / Strategy / … ) — e.g. Knowledge Readiness / Assurance & Audit / Experiments & Campaigns / Season & Transfer / Certification / UAT (Runtime + Bench + Manual Evidence). |
-| DEF-UAT-073-004 | High (state consistency) | home_command_centre, next_action_accuracy, active-cycle resolution | OPEN — Command Centre shows "no active event / Create event" while a prior event (NGR Porsche Cup Rd7, Porsche 911 RSR @ Fuji, Timed 50 min, 7× tyre / 3× fuel) race setup, track intelligence and 5/12 journey remain displayed (stale state from a previous iteration not cleared) |
-| DEF-UAT-073-005 | High (broken primary workflow) | home_command_centre, activity_start | OPEN — Command Centre **"CREATE EVENT"** primary-action button does nothing when clicked (no dialog, no navigation) — the primary event-creation entry point is dead |
-| DEF-UAT-073-006 | Medium (dead control) | home_command_centre, cumulative_learning | OPEN — Command Centre **"PROGRESS"** button (Cumulative Learning card) does nothing when clicked |
+| DEF-UAT-073-004 | High (state consistency) | home_command_centre, next_action_accuracy, active-cycle resolution | **FIXED** in `e24c7c6` (Slice 1) — removed the legacy Home dashboard (stepper + duplicate cards + banner) that read the last-loaded config; the Event Command Centre is now the single Home surface. **User visual retest required.** |
+| DEF-UAT-073-005 | High (broken primary workflow) | home_command_centre, activity_start | **FIXED** in `e24c7c6` (Slice 1) — the primary action is now a real button → Event Planner (was an inert status-badge QLabel; target `no_event`→`event_planner`). **User retest required.** |
+| DEF-UAT-073-006 | Medium (dead control) | home_command_centre, cumulative_learning | **FIXED** in `e24c7c6` (Slice 1) — Cumulative Learning now has a real "View Progress" button → Development History (was an inert badge). **User retest required.** |
 
 | DEF-UAT-073-007 | Medium (usability) | desktop_visual_layout (Setup Builder) | OPEN — Setup Builder recommendation display is tall + small text + needs lots of scrolling to read detail |
 | DEF-UAT-073-008 | High (functional) | Setup Builder recommendation→car-settings mapping | OPEN — applying recommendations did not load ALL values into the car-settings fields above; some fields highlighted but showed the WRONG settings |
 | DEF-UAT-073-009 | High (functional / dead controls) | Setup Builder Apply-in-Game / value entry / Start Validation | OPEN — "Apply in Game" appears to do nothing; entering values does nothing; "Start Validation" does nothing. **Remediation must preserve the FROZEN setup Apply authority** — repair only the control wiring/state, never the Apply-gate predicate |
 | DEF-UAT-073-010 | Medium (functional + usability) | Practice Review setup selector | OPEN — the setup just built (Porsche GT4) cannot be selected in Practice Review; the dropdown lists ALL setups ever instead of only the car-relevant ones |
+
+### Remediation log
+- **Slice 1 (branch `uat-defect-073-navigation-and-home-state`, candidate `e24c7c6` from base `ecf922c`):**
+  fixed DEF-073-004/005/006 + delivered the "back to Command Centre" navigation (persistent tab-bar corner
+  button, returns Home from any tab). Bench 67/67; full regression per MASTER_TESTING_REGISTER. **This mints a
+  NEW candidate — per DEF-072-001 candidate-scoping, the manual UAT areas reset to NOT_RUN/RETEST_REQUIRED for
+  `e24c7c6`; the user must re-verify the Home/nav behaviour in-app.** Remaining Slice-2+ backlog:
+  DEF-073-001 (layout), -003 (Dev-History sub-tabs), -007 (Setup Builder readability), -008/-009 (Setup Builder
+  functional), -010 (Practice Review selector), -002 (Track Modelling perf).
 
 ### Observations (not defects)
 - **OBS-073-A — startup voice greeting: intended.** User confirms the spoken welcome at launch is wanted. No action.
