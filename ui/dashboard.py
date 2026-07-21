@@ -767,8 +767,10 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
     # Phase 51 — Event Command Centre (read-only Home spine, off-thread)
     # ------------------------------------------------------------------
     _CC_SURFACE_TABS = {
+        # DEF-UAT-073-015: Driver Coaching → Practice Review (its Driving Advice surface) so it is DISTINCT
+        # from Event Briefing instead of both landing on the same Development History catch-all.
         "briefing": "development_history", "garage": "garage", "practice": "practice_review",
-        "setup": "setup_builder", "coaching": "development_history", "telemetry": "telemetry",
+        "setup": "setup_builder", "coaching": "practice_review", "telemetry": "telemetry",
         "strategy": "strategy_builder", "qualifying": "live", "live": "live",
         "debrief": "development_history", "development_history": "development_history",
         # DEF-UAT-073-005: the "create / import an NGR event" primary action targets the Event Planner tab
