@@ -1121,6 +1121,25 @@ class SetupBuilderMixin:
         # The live shift-beep threshold selector (formerly the top-of-tab "Live
         # Session Mode" row) sits here next to the two RPM values it chooses.
         shift_rpm_form.addRow("Live beep uses:", self._setup_type)
+        # ENH-073-001: recommend the shift RPM from the car's REAL data (GT7's per-car rpm-alert band once
+        # driven, else peak-power/rev-limit) — never a fabricated value.
+        try:
+            from ui import ngr_theme as _ngr_sr
+            self._btn_recommend_shift_rpm = QPushButton("Recommend from car")
+            self._btn_recommend_shift_rpm.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._btn_recommend_shift_rpm.setStyleSheet(_ngr_sr.secondary_button_qss())
+            self._btn_recommend_shift_rpm.setToolTip(
+                "Suggest the shift-beep RPM from the car's own data. Drive the car once so GT7 broadcasts its "
+                "rpm-alert band for a high-confidence value; no value is guessed.")
+            self._btn_recommend_shift_rpm.clicked.connect(self._on_recommend_shift_rpm)
+            shift_rpm_form.addRow("", self._btn_recommend_shift_rpm)
+            self._shift_rpm_reco_lbl = QLabel("")
+            self._shift_rpm_reco_lbl.setWordWrap(True)
+            self._shift_rpm_reco_lbl.setStyleSheet(f"color:{_ngr_sr.TEXT_DIM}; font-size:{_ngr_sr.FS_CAPTION}pt;")
+            shift_rpm_form.addRow("", self._shift_rpm_reco_lbl)
+        except Exception:  # pragma: no cover - defensive; the box must still build
+            self._btn_recommend_shift_rpm = None
+            self._shift_rpm_reco_lbl = None
         outer_layout.addWidget(shift_rpm_box)
 
         self._refresh_setup_combo()
@@ -1129,6 +1148,48 @@ class SetupBuilderMixin:
         self._refresh_apply_status_for_form(self._race_form)
         self._refresh_apply_status_for_form(self._qual_form)
         return container
+
+    def _on_recommend_shift_rpm(self) -> None:
+        """ENH-073-001: fill the shift-beep RPM from the car's REAL data. Prefers GT7's per-car rpm-alert band
+        (from the last live packet), else the car spec's peak-power RPM. Never fabricates — an unknown car
+        yields a clear 'drive it first' message rather than a guessed value. Never raises."""
+        try:
+            from strategy.shift_rpm_recommendation import recommend_shift_rpm
+            rpm_alert_max = None
+            p = getattr(self, "_last_packet", None)
+            if p is not None:
+                rpm_alert_max = getattr(p, "rpm_alert_max", None)
+            power_rpm = None
+            try:
+                _name, specs = self._load_car_specs_for_current()
+                power_rpm = (specs or {}).get("power_rpm")
+            except Exception:
+                power_rpm = None
+            rec = recommend_shift_rpm(rpm_alert_max=rpm_alert_max, power_rpm=power_rpm)
+            lbl = getattr(self, "_shift_rpm_reco_lbl", None)
+            if rec.qualifying_rpm is None:
+                if lbl is not None:
+                    lbl.setText(rec.rationale)   # honest "no data yet — drive the car" message
+                return
+            sb = self._config.setdefault("shift_beep", {})
+            sb["qual_rpm"] = int(rec.qualifying_rpm)
+            sb["race_rpm"] = int(rec.race_rpm)
+            self._persist_config()
+            # reflect on the read-only Setup Builder displays + the editable Live-tab spins
+            for attr, val in (("_spin_shift_rpm_qual", rec.qualifying_rpm), ("_spin_shift_rpm_race", rec.race_rpm),
+                              ("_spin_live_shift_rpm_qual", rec.qualifying_rpm),
+                              ("_spin_live_shift_rpm_race", rec.race_rpm)):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    try:
+                        w.setValue(int(val))
+                    except Exception:
+                        pass
+            if lbl is not None:
+                lbl.setText(f"[{rec.confidence.value.upper()}] Qualifying {rec.qualifying_rpm} · "
+                            f"Race {rec.race_rpm} rpm — {rec.rationale}")
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def _current_setup_dict(self) -> dict:
         """Read all manual fields including editable gear ratios.

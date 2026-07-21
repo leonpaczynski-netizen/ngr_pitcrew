@@ -126,6 +126,28 @@ def test_practice_setup_dropdown_falls_back_when_no_match(window):
     assert any("Legacy" in it for it in items)
 
 
+def test_shift_rpm_recommend_from_live_alert(window):
+    # ENH-073-001: with a live packet carrying GT7's rpm-alert band, Recommend fills the shift-beep config.
+    import types
+    window._last_packet = types.SimpleNamespace(rpm_alert_max=7600)
+    window._on_recommend_shift_rpm()
+    sb = window._config.get("shift_beep", {})
+    assert sb.get("qual_rpm") == 7600
+    assert 0 < sb.get("race_rpm") <= 7600
+    assert window._spin_shift_rpm_qual.value() == 7600
+
+
+def test_shift_rpm_recommend_unknown_is_honest(window):
+    # no live packet + no car spec power_rpm → no fabricated value; a clear message instead.
+    window._last_packet = None
+    window._config["shift_beep"] = {}
+    window._on_recommend_shift_rpm()
+    # nothing was written (no guess); the rationale label explains why
+    assert not window._config.get("shift_beep", {}).get("qual_rpm")
+    if window._shift_rpm_reco_lbl is not None:
+        assert window._shift_rpm_reco_lbl.text()   # an explanatory message is shown
+
+
 def test_activation_defensive_without_db(qapp, tmp_path):
     cfg_path = str(tmp_path / "config.json")
     cp.write_default_config(cfg_path)
