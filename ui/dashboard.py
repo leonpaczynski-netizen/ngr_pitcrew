@@ -5283,8 +5283,21 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
     def _refresh_running_setup_combos(self) -> None:
         """Repopulate both running-setup combos from saved setups, preserving the
         declared selection (``_live_running_setup``). Safe to call before either
-        combo exists."""
-        labels = [self._running_setup_label_for(s) for s in getattr(self, "_saved_setups", [])]
+        combo exists.
+
+        DEF-UAT-073-010: filter to the ACTIVE car's setups (a setup carries its car under ``car``/``name``)
+        instead of listing every setup ever built — so Practice Review shows only the setups relevant to the
+        car you're running. Falls back to all setups when the active car is unknown or no setup is tagged
+        with it (older setups), so a valid setup is never hidden."""
+        car_name = str(self._config.get("strategy", {}).get("car") or "").strip()
+        all_setups = list(getattr(self, "_saved_setups", []))
+        if car_name:
+            filtered = [s for s in all_setups
+                        if str(s.get("car") or s.get("name") or "").strip() == car_name]
+            relevant = filtered if filtered else all_setups
+        else:
+            relevant = all_setups
+        labels = [self._running_setup_label_for(s) for s in relevant]
         current = getattr(self, "_live_running_setup", "") or ""
         for combo in (getattr(self, "_live_running_setup_combo", None),
                       getattr(self, "_prac_running_setup_combo", None)):

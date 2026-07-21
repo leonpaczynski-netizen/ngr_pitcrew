@@ -102,6 +102,30 @@ def test_garage_car_persists_to_event_and_cycle(window):
     assert cyc.get("car") == "Porsche Cayman GT4 Clubsport '16"
 
 
+def test_practice_setup_dropdown_filters_by_active_car(window):
+    # DEF-UAT-073-010: the running-setup combos show only the ACTIVE car's setups, not every setup ever.
+    window._config.setdefault("strategy", {})["car"] = "Porsche Cayman GT4 Clubsport '16"
+    window._saved_setups = [
+        {"setup_label": "GT4 Race", "setup_type": "Race", "car": "Porsche Cayman GT4 Clubsport '16"},
+        {"setup_label": "MX5 Race", "setup_type": "Race", "car": "Mazda MX-5"},
+    ]
+    window._refresh_running_setup_combos()
+    combo = window._prac_running_setup_combo
+    items = [combo.itemText(i) for i in range(combo.count())]
+    assert any("GT4 Race" in it for it in items)
+    assert not any("MX5 Race" in it for it in items)   # other car's setup is filtered out
+
+
+def test_practice_setup_dropdown_falls_back_when_no_match(window):
+    # older setups with no car tag must not be hidden (graceful fallback to all)
+    window._config.setdefault("strategy", {})["car"] = "Some Car"
+    window._saved_setups = [{"setup_label": "Legacy", "setup_type": "Race"}]  # no car field
+    window._refresh_running_setup_combos()
+    combo = window._prac_running_setup_combo
+    items = [combo.itemText(i) for i in range(combo.count())]
+    assert any("Legacy" in it for it in items)
+
+
 def test_activation_defensive_without_db(qapp, tmp_path):
     cfg_path = str(tmp_path / "config.json")
     cp.write_default_config(cfg_path)
