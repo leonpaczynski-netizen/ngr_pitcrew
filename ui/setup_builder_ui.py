@@ -1091,55 +1091,74 @@ class SetupBuilderMixin:
         self._qual_scroll = qual_scroll
         self._disc_view_btns["both"].setChecked(True)  # default: side-by-side
 
-        # ── Shift RPM display (shared, below the splitter) ────────────────────
+        # ── Shift RPM (shared, below the splitter) — COMPACT single row ───────
+        # DEF-UAT-073-017: this box used a 5-row full-width QFormLayout that ate a large vertical band and
+        # squeezed the setup fields. It is now ONE compact row (Qualifying · Race · Live-beep · Recommend)
+        # that hugs its content, freeing that space for the car setup.
         _sb = self._config.get("shift_beep", {})
         shift_rpm_box = QGroupBox("Shift RPM")
         shift_rpm_box.setStyleSheet(self._group_style())
-        shift_rpm_form = QFormLayout(shift_rpm_box)
-        self._spin_shift_rpm_qual = QSpinBox()
-        self._spin_shift_rpm_qual.setRange(0, 20000)
-        self._spin_shift_rpm_qual.setSingleStep(100)
-        self._spin_shift_rpm_qual.setSuffix(" RPM")
-        self._spin_shift_rpm_qual.setSpecialValueText("Not set")
-        self._spin_shift_rpm_qual.setValue(int(_sb.get("qual_rpm", _sb.get("rpm", 0))))
-        self._spin_shift_rpm_qual.setToolTip(
-            "Optimal RPM to upshift for qualifying / unrestricted power.\n"
-            "Edit via the Live tab Shift Beep controls.")
-        _set_spin_readonly(self._spin_shift_rpm_qual, True)
-        self._spin_shift_rpm_race = QSpinBox()
-        self._spin_shift_rpm_race.setRange(0, 20000)
-        self._spin_shift_rpm_race.setSingleStep(100)
-        self._spin_shift_rpm_race.setSuffix(" RPM")
-        self._spin_shift_rpm_race.setSpecialValueText("Not set")
-        self._spin_shift_rpm_race.setValue(int(_sb.get("race_rpm", _sb.get("rpm", 0))))
-        self._spin_shift_rpm_race.setToolTip(
+
+        def _mk_rpm_spin(value: int, tip: str) -> QSpinBox:
+            s = QSpinBox()
+            s.setRange(0, 20000)
+            s.setSingleStep(100)
+            s.setSuffix(" RPM")
+            s.setSpecialValueText("Not set")
+            s.setValue(int(value))
+            s.setToolTip(tip)
+            s.setMaximumWidth(110)
+            _set_spin_readonly(s, True)
+            return s
+
+        self._spin_shift_rpm_qual = _mk_rpm_spin(
+            _sb.get("qual_rpm", _sb.get("rpm", 0)),
+            "Optimal RPM to upshift for qualifying / unrestricted power.\nEdit via the Live tab Shift Beep controls.")
+        self._spin_shift_rpm_race = _mk_rpm_spin(
+            _sb.get("race_rpm", _sb.get("rpm", 0)),
             "Optimal RPM to upshift during the race (may be lower if ECU/power restrictor is applied).\n"
             "Edit via the Live tab Shift Beep controls.")
-        _set_spin_readonly(self._spin_shift_rpm_race, True)
-        shift_rpm_form.addRow("Qualifying:", self._spin_shift_rpm_qual)
-        shift_rpm_form.addRow("Race:", self._spin_shift_rpm_race)
-        # The live shift-beep threshold selector (formerly the top-of-tab "Live
-        # Session Mode" row) sits here next to the two RPM values it chooses.
-        shift_rpm_form.addRow("Live beep uses:", self._setup_type)
-        # ENH-073-001: recommend the shift RPM from the car's REAL data (GT7's per-car rpm-alert band once
-        # driven, else peak-power/rev-limit) — never a fabricated value.
+
+        _srl = QVBoxLayout(shift_rpm_box)
+        _srl.setContentsMargins(10, 4, 10, 4)
+        _srl.setSpacing(3)
+        _srr = QHBoxLayout()
+        _srr.setSpacing(6)
+        _srr.addWidget(QLabel("Qualifying:", styleSheet=f"color:{_TEXT};"))
+        _srr.addWidget(self._spin_shift_rpm_qual)
+        _srr.addSpacing(14)
+        _srr.addWidget(QLabel("Race:", styleSheet=f"color:{_TEXT};"))
+        _srr.addWidget(self._spin_shift_rpm_race)
+        _srr.addSpacing(14)
+        _srr.addWidget(QLabel("Live beep uses:", styleSheet=f"color:{_TEXT};"))
+        self._setup_type.setMaximumWidth(150)
+        _srr.addWidget(self._setup_type)
+        _srr.addSpacing(14)
+        # ENH-073-001: recommend the shift RPM from the car's REAL data (never fabricated).
         try:
             from ui import ngr_theme as _ngr_sr
             self._btn_recommend_shift_rpm = QPushButton("Recommend from car")
             self._btn_recommend_shift_rpm.setCursor(Qt.CursorShape.PointingHandCursor)
             self._btn_recommend_shift_rpm.setStyleSheet(_ngr_sr.secondary_button_qss())
+            self._btn_recommend_shift_rpm.setMaximumWidth(170)
             self._btn_recommend_shift_rpm.setToolTip(
                 "Suggest the shift-beep RPM from the car's own data. Drive the car once so GT7 broadcasts its "
                 "rpm-alert band for a high-confidence value; no value is guessed.")
             self._btn_recommend_shift_rpm.clicked.connect(self._on_recommend_shift_rpm)
-            shift_rpm_form.addRow("", self._btn_recommend_shift_rpm)
+            _srr.addWidget(self._btn_recommend_shift_rpm)
+            _srr.addStretch(1)
+            _srl.addLayout(_srr)
             self._shift_rpm_reco_lbl = QLabel("")
             self._shift_rpm_reco_lbl.setWordWrap(True)
             self._shift_rpm_reco_lbl.setStyleSheet(f"color:{_ngr_sr.TEXT_DIM}; font-size:{_ngr_sr.FS_CAPTION}pt;")
-            shift_rpm_form.addRow("", self._shift_rpm_reco_lbl)
+            _srl.addWidget(self._shift_rpm_reco_lbl)
         except Exception:  # pragma: no cover - defensive; the box must still build
             self._btn_recommend_shift_rpm = None
             self._shift_rpm_reco_lbl = None
+            _srr.addStretch(1)
+            _srl.addLayout(_srr)
+        # hug the content vertically so the box never stretches into a tall band
+        shift_rpm_box.setMaximumHeight(shift_rpm_box.sizeHint().height() + 8)
         outer_layout.addWidget(shift_rpm_box)
 
         self._refresh_setup_combo()
