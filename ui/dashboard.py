@@ -9113,6 +9113,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             if not car_name:
                 return
             self._config.setdefault("strategy", {})["car"] = car_name
+            # DEF-UAT-073-013: the car lives in the strategy context (set above) — persist it and push it
+            # onto the active event's preparation cycle so the Command Centre / Garage readiness reflect it
+            # and it STICKS across refreshes (previously it never reached the cycle).
+            aid = str(self._config.get("active_event_id") or "")
+            if aid and hasattr(self, "_ensure_active_preparation_cycle"):
+                self._ensure_active_preparation_cycle(aid)
             self._persist_config()
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()

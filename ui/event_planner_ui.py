@@ -515,13 +515,18 @@ class EventPlannerMixin:
             except Exception:
                 existing = None
             now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+            # the car is not an event-table column — it lives in the strategy context (set by the Garage /
+            # Event Planner fanout). Prefer that, then any event mirror, then the existing cycle.
+            _strat = self._config.get("strategy", {}) if isinstance(self._config.get("strategy"), dict) else {}
+            car = str(_strat.get("car") or ev.get("car") or ev.get("car_name")
+                      or (existing or {}).get("car") or "")
             cycle = {
                 "cycle_id": cycle_id,
                 "event_id": int(ev.get("event_id") or ev.get("id") or 0),
                 "event_name": evt_name,
                 "series": str(ev.get("series") or ""),
                 "round_label": str(ev.get("round") or ev.get("round_label") or ""),
-                "car": str(ev.get("car") or ev.get("car_name") or ""),
+                "car": car,
                 "track": str(ev.get("track") or ""),
                 "layout": str(ev.get("layout_id") or ev.get("layout") or ""),
                 "official_race_date": str(ev.get("race_date") or ev.get("official_race_date") or ""),

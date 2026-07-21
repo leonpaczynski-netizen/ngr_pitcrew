@@ -26,10 +26,13 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.fixture
-def window(qapp, tmp_path):
+@pytest.fixture(scope="module")
+def window(qapp, tmp_path_factory):
+    # module-scoped: ONE MainWindow reused across tests (many MainWindow constructions segfault PyQt on
+    # Win/Py3.14). Operations under test are idempotent, so the tests stay order-independent.
     from data.session_db import SessionDB
-    cfg_path = str(tmp_path / "config.json")
+    tmp = tmp_path_factory.mktemp("evt_activation")
+    cfg_path = str(tmp / "config.json")
     cp.write_default_config(cfg_path)
     config = cp.load_config(cfg_path)
     db = SessionDB(":memory:")
@@ -56,17 +59,20 @@ def test_activation_creates_cycle_and_sets_active_cycle(window):
 
 
 def test_command_centre_resolves_the_activated_event(window):
+    from strategy.active_cycle_resolution import resolve_active_cycle, CycleCandidate
     db = window._db
-    db.upsert_event({"name": "GR Enduro Rd2", "car": "Porsche Cayman GT4 Clubsport '16",
-                     "track": "Watkins Glen International", "layout_id": "grand_prix"})
+    db.upsert_event({"name": "GR Enduro Rd2", "track": "Watkins Glen International",
+                     "layout_id": "grand_prix"})
     window._ensure_active_preparation_cycle("GR Enduro Rd2")
-    view = db.build_event_command_centre_view(
-        selected_cycle_id=window._config["active_cycle_id"], now_date="2026-07-21")
-    # the Command Centre now resolves an active event (no longer "no active event / create event")
-    assert view.get("ok", True) is not False
-    import json
-    blob = json.dumps(view).lower()
-    assert "gr enduro rd2" in blob or view.get("resolved_cycle_id") or view.get("active_cycle_id")
+    active = window._config["active_cycle_id"]
+    # the Phase-51 resolver resolves the explicitly-activated cycle (no longer NO_ACTIVE_EVENT)
+    cands = [CycleCandidate(cycle_id=r["cycle_id"], event_name=r["event_name"], series=r["series"],
+                            round_label=r["round_label"], explicit_state=r["explicit_state"],
+                            prep_open_date=r["prep_open_date"], official_race_date=r["official_race_date"],
+                            context_digest=r["context_digest"])
+             for r in db.list_preparation_cycle_candidates()]
+    res = resolve_active_cycle(cands, selected_cycle_id=active, now_date="2026-07-21")
+    assert res.resolved_cycle_id == active
 
 
 def test_activation_is_idempotent(window):
@@ -78,6 +84,22 @@ def test_activation_is_idempotent(window):
     # no duplicate cycles created for the same event
     cycles = [c for c in db.list_preparation_cycles() if c.get("cycle_id") == a]
     assert len(cycles) == 1
+
+
+def test_garage_car_persists_to_event_and_cycle(window):
+    # DEF-UAT-073-013: selecting a car for the event in the Garage must persist it (event + cycle).
+    db = window._db
+    db.upsert_event({"name": "GR Enduro Rd2", "car": "old car", "track": "Watkins Glen International",
+                     "layout_id": "grand_prix"})
+    window._config["active_event_id"] = "GR Enduro Rd2"
+    window._ensure_active_preparation_cycle("GR Enduro Rd2")
+    # simulate the Garage selection + "Load to Event"
+    window._garage_car_name_lbl.setText("Porsche Cayman GT4 Clubsport '16")
+    window._on_garage_select_for_event()
+    # the car is persisted in the strategy context AND pushed onto the active cycle (so it sticks)
+    assert window._config["strategy"]["car"] == "Porsche Cayman GT4 Clubsport '16"
+    cyc = db.get_preparation_cycle(window._config["active_cycle_id"])
+    assert cyc.get("car") == "Porsche Cayman GT4 Clubsport '16"
 
 
 def test_activation_defensive_without_db(qapp, tmp_path):
