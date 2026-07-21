@@ -152,10 +152,31 @@ class SetupRecommendationView(QWidget):
 
     # ------------------------------------------------------------------ #
     def _set_actions_enabled(self, has_reco: bool) -> None:
-        self._btn_apply.setEnabled(has_reco)
-        self._btn_values.setEnabled(has_reco)
-        self._btn_reject.setEnabled(has_reco)
-        # Validation/feedback come after applying.
+        # DEF-073-009: EVERY driver action requires a live recommendation in view.
+        # Validation/Feedback/Lock used to be left in their default-enabled state, so
+        # with nothing loaded they looked clickable but did nothing — a core reason the
+        # action bar felt dead. Gate them all on ``has_reco`` so the bar is honest;
+        # _style_action_bar then promotes the ONE next-expected action to primary.
+        for b in (self._btn_apply, self._btn_values, self._btn_reject,
+                  self._btn_validate, self._btn_feedback, self._btn_lock):
+            b.setEnabled(has_reco)
+
+    def mark_validation_started(self) -> None:
+        """Reflect that validation has begun with an in-view change (DEF-073-009).
+
+        Previously Start Validation only refreshed off-view state, so the button looked
+        dead. Now the header Status reads 'Validating' and the view jumps to the Test
+        Plan tab, so the click visibly moves the workflow forward.
+        """
+        if "Status" in self._h_labels:
+            self._h_labels["Status"].setText("Validating — run the test plan")
+        try:
+            for i in range(self._tabs.count()):
+                if self._tabs.tabText(i) == "Test Plan":
+                    self._tabs.setCurrentIndex(i)
+                    break
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def set_vm(self, vm: SetupRecommendationVM) -> None:
         self._vm = vm

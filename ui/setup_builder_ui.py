@@ -4453,6 +4453,8 @@ class SetupBuilderMixin:
             pass
         view = getattr(self, "_setup_rec_view", None)
         if view is not None:
+            if hasattr(view, "mark_validation_started"):
+                view.mark_validation_started()
             view.show_action_feedback("✓ Validation started — run the test-plan laps, then submit feedback.")
 
     def _rec_view_submit_feedback(self) -> None:
