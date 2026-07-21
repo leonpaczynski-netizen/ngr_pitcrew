@@ -4292,8 +4292,11 @@ class SetupBuilderMixin:
         form = getattr(self, "_race_form", None)
         if form is not None:
             self._on_changes_applied_in_game(form)
-        if getattr(self, "_setup_rec_view", None) is not None:
-            self._setup_rec_view.mark_applied()
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.mark_applied()
+            # DEF-UAT-073-009: visible confirmation — the action previously only reached the event log.
+            view.show_action_feedback("✓ Applied in game — marked as the active setup baseline.")
 
     def _rec_view_values_entered(self) -> None:
         try:
@@ -4301,6 +4304,9 @@ class SetupBuilderMixin:
                 "[Setup] Recommended values entered in GT7 (awaiting on-track confirmation).")
         except Exception:
             pass
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.show_action_feedback("✓ Values entered — awaiting on-track confirmation.", "info")
 
     def _rec_view_start_validation(self) -> None:
         auth = getattr(self, "_setup_authority", None)
@@ -4316,6 +4322,9 @@ class SetupBuilderMixin:
                 "[Setup] Validation started — run the test plan laps.")
         except Exception:
             pass
+        view = getattr(self, "_setup_rec_view", None)
+        if view is not None:
+            view.show_action_feedback("✓ Validation started — run the test-plan laps, then submit feedback.")
 
     def _rec_view_submit_feedback(self) -> None:
         # Take the driver to the feedback surface (Practice Review).

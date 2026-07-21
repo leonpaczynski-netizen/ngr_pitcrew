@@ -129,8 +129,26 @@ class SetupRecommendationView(QWidget):
         bar.addWidget(self._next_action_lbl)
         root.addLayout(bar)
 
+        # DEF-UAT-073-009: an explicit, visible confirmation line so an action (Apply in Game / Values
+        # Entered / Start Validation) is never silent — previously the effect only reached an off-screen
+        # event log, so the buttons looked dead. Success-feedback (post /ui-ux-pro-max).
+        self._action_feedback_lbl = QLabel("")
+        self._action_feedback_lbl.setWordWrap(True)
+        self._action_feedback_lbl.setStyleSheet(f"color:{_ngr.SUCCESS}; font-size:11px; font-weight:bold;")
+        root.addWidget(self._action_feedback_lbl)
+
         self._set_actions_enabled(False)
         self._style_action_bar()
+
+    def show_action_feedback(self, text: str, tone: str = "success") -> None:
+        """Show a brief, visible confirmation that a driver-triggered action was carried out. Display-only;
+        never raises. ``tone`` is one of the NGR status tones."""
+        try:
+            colour = _ngr.STATUS_TONES.get(tone, _ngr.STATUS_TONES["success"])[1]
+            self._action_feedback_lbl.setStyleSheet(f"color:{colour}; font-size:11px; font-weight:bold;")
+            self._action_feedback_lbl.setText(str(text or ""))
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     # ------------------------------------------------------------------ #
     def _set_actions_enabled(self, has_reco: bool) -> None:
@@ -141,6 +159,9 @@ class SetupRecommendationView(QWidget):
 
     def set_vm(self, vm: SetupRecommendationVM) -> None:
         self._vm = vm
+        # a freshly-rendered recommendation clears any stale action confirmation from a prior setup
+        if hasattr(self, "_action_feedback_lbl"):
+            self._action_feedback_lbl.setText("")
         h = vm.header
         self._h_labels["Car"].setText(h.car or "—")
         self._h_labels["Track"].setText(h.track or "—")
