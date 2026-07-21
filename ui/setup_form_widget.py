@@ -602,6 +602,15 @@ class SetupFormWidget(QWidget):
         setup_btn_row.addWidget(self._setup_load_combo)
         setup_btn_row.addWidget(self._btn_load_setup)
         setup_btn_row.addStretch()
+        # DEF-073-001/-007: open a compact, read-only "copy into GT7" reference of the
+        # whole setup at a glance (no scrolling the tall editable form). Wired by the host.
+        self._btn_transcribe = QPushButton("Transcribe to GT7")
+        self._btn_transcribe.setToolTip(
+            "Open a compact, read-only summary of this whole setup in GT7 tuning-menu order,\n"
+            "so you can copy the numbers into the game without scrolling the editor.")
+        self._btn_transcribe.setStyleSheet(
+            _ngr_t.secondary_button_qss() if hasattr(_ngr_t, "secondary_button_qss") else "")
+        setup_btn_row.addWidget(self._btn_transcribe)
         setup_btn_row.addWidget(self._btn_analyse_setup)
         outer.addLayout(setup_btn_row)
 

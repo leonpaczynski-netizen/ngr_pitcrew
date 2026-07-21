@@ -994,6 +994,9 @@ class SetupBuilderMixin:
         self._race_form._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         self._race_form._btn_bop_edit.clicked.connect(self._open_bop_file)
         self._race_form._btn_bop_reload.clicked.connect(self._reload_bop_data)
+        if hasattr(self._race_form, "_btn_transcribe"):
+            self._race_form._btn_transcribe.clicked.connect(
+                lambda: self._open_transcribe_dialog(self._race_form))
 
         # ── Wire Qualifying form buttons to per-form handlers ─────────────────
         qf = self._qual_form
@@ -1027,6 +1030,9 @@ class SetupBuilderMixin:
         qf._btn_set_car_ranges.clicked.connect(self._open_car_ranges_dialog)
         qf._btn_bop_edit.clicked.connect(self._open_bop_file)
         qf._btn_bop_reload.clicked.connect(self._reload_bop_data)
+        if hasattr(qf, "_btn_transcribe"):
+            qf._btn_transcribe.clicked.connect(
+                lambda: self._open_transcribe_dialog(self._qual_form))
 
         # ── Tyre compound → Lap Data tab default compound (Race form only) ────
         self._race_form._setup_tyre_f.currentTextChanged.connect(
@@ -4416,6 +4422,31 @@ class SetupBuilderMixin:
                     split.setSizes([total, 0])
             except Exception:
                 pass
+
+    def _open_transcribe_dialog(self, form) -> None:
+        """DEF-073-001/-007: show the whole setup as a compact, read-only "copy into GT7"
+        reference (GT7 tuning-menu order, tabular figures), so the driver can transcribe it
+        without scrolling the tall editable form. Non-modal so it can stay open beside GT7."""
+        try:
+            from ui.setup_transcribe_view import SetupTranscribeDialog
+        except Exception:
+            return
+        d = form.current_setup_dict() if hasattr(form, "current_setup_dict") else {}
+        # keep a per-purpose handle so re-clicking re-uses (and refreshes) the window
+        _attr = f"_transcribe_dlg_{getattr(form, 'purpose', 'race')}".replace(" ", "_").lower()
+        dlg = getattr(self, _attr, None)
+        if dlg is None:
+            dlg = SetupTranscribeDialog(self)
+            setattr(self, _attr, dlg)
+        header = {
+            "car": d.get("car", ""),
+            "track": d.get("track", ""),
+            "setup_name": d.get("setup_label", ""),
+        }
+        dlg.set_setup(d, header)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _rec_view_apply_in_game(self) -> None:
         form = getattr(self, "_race_form", None)
