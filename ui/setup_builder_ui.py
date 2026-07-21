@@ -3484,6 +3484,28 @@ class SetupBuilderMixin:
         if hasattr(self, "_home_refresh_if_visible"):
             self._home_refresh_if_visible()
 
+        # DEF-073-008: a from-scratch BASELINE is a COMPLETE authored setup, not an
+        # incremental change to a parent — its values must POPULATE the Car Setup form
+        # so the driver can read and transfer the whole setup into GT7. Previously the
+        # form kept its defaults (fields were only highlighted), so e.g. ride height
+        # showed the 80 mm default instead of the authored baseline value, and most
+        # fields "didn't load". The Analyse path stays Apply-gated (it changes a handful
+        # of fields over an existing setup and has something to apply over); a baseline
+        # does not, so it fills directly. ``approved_fields`` is already category-gated
+        # by the backend, so locked-category fields are never written.
+        if entry_type == "baseline_setup" and approved_fields:
+            _fill_form = _form or getattr(self, "_race_form", None)
+            if _fill_form is not None and hasattr(_fill_form, "apply_ai_fields"):
+                try:
+                    _fill_form.apply_ai_fields(dict(approved_fields))
+                    if _fill_form is getattr(self, "_race_form", None):
+                        _bl_keys = [k for k, v in approved_fields.items()
+                                    if isinstance(v, (int, float))]
+                        if _bl_keys:
+                            self._highlight_changed_fields(_bl_keys)
+                except Exception as _bl_e:  # pragma: no cover - defensive; never break display
+                    print(f"[Baseline] form fill failed: {_bl_e}")
+
         # UAT Finding 3: mirror the recommendation into the structured tabbed
         # view. Proposed changes highlight immediately here (at generate) — the
         # "Applied in Game" button only flips status later, it is not what first

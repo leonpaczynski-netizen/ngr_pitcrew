@@ -1001,6 +1001,17 @@ class SetupFormWidget(QWidget):
             except (TypeError, ValueError):
                 pass
 
+        # Canonical recommendation param names → saved-setup-dict keys, for the fields
+        # whose recommendation key differs from the form-serialisation key that
+        # ``fill_setup_fields`` reads (DEF-073-008). Without this, brake bias came from
+        # the recommendation as ``brake_bias`` but fill_setup_fields reads
+        # ``brake_bias_front``, so the recommended value was silently dropped.
+        if "brake_bias" in fields and "brake_bias_front" not in fields:
+            try:
+                current["brake_bias_front"] = int(round(float(fields["brake_bias"])))
+            except (TypeError, ValueError):
+                pass
+
         # Strip display-only fields and already-applied gearbox keys before update.
         _skip = frozenset(_GEAR_KEYS) | {"transmission_max_speed_kmh", "final_drive"}
         _remaining = {k: v for k, v in fields.items() if k not in _skip}
