@@ -99,11 +99,12 @@ currently `NOT_RUN`.** This table is updated as evidence is entered; Claude neve
 
 | Area | Stage | Status | Defect | Notes |
 |------|-------|--------|--------|-------|
-| application_startup | 73-A | NOT_RUN | | |
-| desktop_visual_layout | 73-A | NOT_RUN | | |
-| windows_scaling | 73-A | NOT_RUN | | |
-| live_dashboard_readability | 73-A/B | NOT_RUN | | |
-| telemetry_connection | 73-B | NOT_RUN | | |
+| application_startup | 73-A | **PASS** | | Window opened; welcome greeting spoken (intended — OBS-073-A); no console exceptions. |
+| desktop_visual_layout | 73-A | **FAIL** | DEF-UAT-073-001, -002, -003 | Tabs open, but layout compressed/squashed across tabs; Track Modelling slow to open; Development History overloaded/unclear. |
+| windows_scaling | 73-A | NOT_RUN | | (deferred — pending layout defects) |
+| live_dashboard_readability | 73-A/B | RETEST_REQUIRED | DEF-UAT-073-001 | Affected by the compressed-layout defect. |
+| home_command_centre_state | 73-A | **FAIL** | DEF-UAT-073-004 | "No active event / Create event" primary action while a prior event's race setup + 5/12 journey + track intelligence remain displayed. |
+| telemetry_connection | 73-B | PRELIM PASS | | Bottom-left + Telemetry tab showed "not connected" until GT7 was up; once GT7 connected, telemetry connects and updates. Full Stage-B checks (packet freshness / session+event+car+track identity / fuel / race-clock) not yet formally verified. |
 | telemetry_reconnect | 73-B | NOT_RUN | | |
 | session_transition | 73-B | NOT_RUN | | |
 | fuel_mapping | 73-B/C | NOT_RUN | | |
@@ -135,8 +136,28 @@ currently `NOT_RUN`.** This table is updated as evidence is entered; Claude neve
 | ID | Severity | Area(s) | Status |
 |----|----------|---------|--------|
 | DEF-UAT-072-001 | Blocker (certification integrity) | manual-evidence readiness | **FIXED** in `45928b4` |
+| DEF-UAT-073-001 | Medium (usability) | desktop_visual_layout, live_dashboard_readability | OPEN — compressed/squashed layout across tabs; poor use of screen real-estate; legacy UI not removed after enhancements |
+| DEF-UAT-073-002 | Low–Medium (performance) | desktop_visual_layout (Track Modelling) | OPEN — Track Modelling tab slow to open |
+| DEF-UAT-073-003 | Medium (usability / IA) | desktop_visual_layout (Development History) | OPEN — Development History page huge, unclear how it works; poor process/flow legibility (all Phase 12–71 panels stacked on one page). **Proposed remediation (user):** break it into smaller grouped sub-sections/sub-tabs, mirroring the Command Centre "Departments" tab pattern (Event Briefing / Garage Readiness / Practice Programme / Setup Development / Driver Coaching / Telemetry / Strategy / … ) — e.g. Knowledge Readiness / Assurance & Audit / Experiments & Campaigns / Season & Transfer / Certification / UAT (Runtime + Bench + Manual Evidence). |
+| DEF-UAT-073-004 | High (state consistency) | home_command_centre, next_action_accuracy, active-cycle resolution | OPEN — Command Centre shows "no active event / Create event" while a prior event (NGR Porsche Cup Rd7, Porsche 911 RSR @ Fuji, Timed 50 min, 7× tyre / 3× fuel) race setup, track intelligence and 5/12 journey remain displayed (stale state from a previous iteration not cleared) |
+| DEF-UAT-073-005 | High (broken primary workflow) | home_command_centre, activity_start | OPEN — Command Centre **"CREATE EVENT"** primary-action button does nothing when clicked (no dialog, no navigation) — the primary event-creation entry point is dead |
+| DEF-UAT-073-006 | Medium (dead control) | home_command_centre, cumulative_learning | OPEN — Command Centre **"PROGRESS"** button (Cumulative Learning card) does nothing when clicked |
 
-_(DEF-UAT-073-NNN / DEF-UAT-074-NNN added as physical stages run.)_
+| DEF-UAT-073-007 | Medium (usability) | desktop_visual_layout (Setup Builder) | OPEN — Setup Builder recommendation display is tall + small text + needs lots of scrolling to read detail |
+| DEF-UAT-073-008 | High (functional) | Setup Builder recommendation→car-settings mapping | OPEN — applying recommendations did not load ALL values into the car-settings fields above; some fields highlighted but showed the WRONG settings |
+| DEF-UAT-073-009 | High (functional / dead controls) | Setup Builder Apply-in-Game / value entry / Start Validation | OPEN — "Apply in Game" appears to do nothing; entering values does nothing; "Start Validation" does nothing. **Remediation must preserve the FROZEN setup Apply authority** — repair only the control wiring/state, never the Apply-gate predicate |
+| DEF-UAT-073-010 | Medium (functional + usability) | Practice Review setup selector | OPEN — the setup just built (Porsche GT4) cannot be selected in Practice Review; the dropdown lists ALL setups ever instead of only the car-relevant ones |
+
+### Observations (not defects)
+- **OBS-073-A — startup voice greeting: intended.** User confirms the spoken welcome at launch is wanted. No action.
+
+### Enhancement requests (NOT defects; out of the UAT/remediation scope — logged for a future dev programme)
+- **ENH-073-001 — torque-curve shift-beep recommendation.** Setup Builder should recommend the shift-beep RPM
+  for Race and Qualifying from the specific car's torque curve + race requirements. This is NEW setup/engineering
+  logic, which the current operational-UAT programme explicitly excludes — do not implement during UI
+  remediation; requires a separate, scoped development effort.
+
+_(DEF-UAT-074-NNN added as physical stages run.)_
 
 ## 8. Remaining blockers / certification result
 - No open blockers on the software candidate.
