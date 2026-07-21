@@ -241,12 +241,21 @@ class TestTrackModellingRenames:
 
     def test_tab_show_restores_last_track(self, tm_src):
         # The reviewed model persists, but the status panel only re-resolves on
-        # (re)selection. On first tab show we must restore the last-used track so
-        # an AI-ready track shows as such without the user re-selecting/re-Accepting.
-        body = _method_body(tm_src, "_tm_on_tab_shown")
-        assert "_tm_restore_last_track" in body, (
-            "Tab show must restore the last-used track so its AI-ready status is "
-            "visible on open without a manual re-select."
+        # (re)selection. On tab show we must restore the last-used track so an AI-ready
+        # track shows as such without the user re-selecting/re-Accepting.
+        #
+        # DEF-073-002 moved the seed load OFF the Qt thread, so the restore now runs in
+        # the render handler (_on_tm_seed_loaded) that tab-show kicks off — not
+        # synchronously in _tm_on_tab_shown. The guarantee (open → last track restored
+        # once the seed is ready) still holds; assert it against the new structure.
+        render = _method_body(tm_src, "_on_tm_seed_loaded")
+        assert "_tm_restore_last_track" in render, (
+            "The seed-load render handler must restore the last-used track so its "
+            "AI-ready status is visible on open without a manual re-select."
+        )
+        shown = _method_body(tm_src, "_tm_on_tab_shown")
+        assert ("_on_tm_seed_loaded" in shown) or ("_tm_seed_worker" in shown), (
+            "Tab show must trigger the seed-load path that performs the restore."
         )
 
     def test_restore_last_track_reselects_both_combos_from_config(self, tm_src):
