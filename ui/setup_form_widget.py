@@ -544,6 +544,22 @@ class SetupFormWidget(QWidget):
         nitrous_inner.addRow(QLabel("Output Adjustment:", styleSheet=lbl_s), _nos_out_w)
         outer.addWidget(nitrous_grp)
 
+        # Section boxes exposed for progressive-disclosure hiding (DEF-073): the host
+        # hides tuning sections the Event rules lock out entirely, so the operator only
+        # scrolls what they can actually edit. Keyed by the setup-permission tuning
+        # categories each section contains (see MainWindow._SETUP_TUNING_GROUPS).
+        self.section_boxes = {
+            "transmission_gears": (auto_grp,    {"transmission"}),
+            "tyres":              (tyre_grp,    {"tyres"}),
+            "suspension":         (susp_grp,    {"suspension"}),
+            "differential":       (diff_grp,    {"differential", "brake_balance"}),
+            "aero":               (aero_grp,    {"aero"}),
+            "performance":        (perf_grp,    {"ballast", "power"}),
+            "ecu":                (ecu_grp,     {"power"}),
+            "transmission_type":  (trans_grp,   {"transmission"}),
+            "nitrous":            (nitrous_grp, {"nitrous"}),
+        }
+
         # ── Notes ─────────────────────────────────────────────────────────────
         notes_row = QFormLayout()
         notes_row.addRow(QLabel("Setup Label:", styleSheet=lbl_s), self._setup_label)
@@ -750,6 +766,23 @@ class SetupFormWidget(QWidget):
             self._lbl_lsd_front.setVisible(is_awd)
         if hasattr(self, "_lsd_front_widget"):
             self._lsd_front_widget.setVisible(is_awd)
+
+    def apply_section_visibility(self, allowed_cats, restricted: bool) -> None:
+        """Progressive disclosure (DEF-073): hide tuning sections the Event locks out.
+
+        When ``restricted`` is True (the Event allows tuning but only a subset of
+        categories), a section is shown only if at least one of its tuning categories
+        is permitted; sections that are entirely locked are hidden so the operator
+        does not scroll past controls they cannot use. When ``restricted`` is False
+        (unrestricted, or fully-locked-with-banner) every section is shown — the
+        fully-locked case keeps the sections visible-but-disabled behind the banner.
+        """
+        boxes = getattr(self, "section_boxes", None)
+        if not boxes:
+            return
+        allowed = set(allowed_cats or ())
+        for _key, (box, cats) in boxes.items():
+            box.setVisible(True if not restricted else bool(cats & allowed))
 
     # ------------------------------------------------------------------
     # Public accessors used by SetupBuilderMixin

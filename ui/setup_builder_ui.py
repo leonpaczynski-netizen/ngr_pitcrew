@@ -1797,6 +1797,15 @@ class SetupBuilderMixin:
             w = getattr(self, attr, None)
             if w:
                 w.setEnabled(True)
+        # Progressive disclosure (DEF-073): when the Event permits tuning but only a
+        # subset of categories, hide the sections that are fully locked out — on BOTH
+        # forms — so the operator only scrolls what they can edit. Fully-locked and
+        # unrestricted contexts leave every section visible.
+        for _form_attr in ("_race_form", "_qual_form"):
+            _form = getattr(self, _form_attr, None)
+            _apply_vis = getattr(_form, "apply_section_visibility", None)
+            if callable(_apply_vis):
+                _apply_vis(allowed_cats, partially_restricted)
 
     def _refresh_setup_combo(self, select_index: int = -1) -> None:
         """Refresh the Race form's load combo (filters to Race setups)."""
