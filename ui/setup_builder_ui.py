@@ -4316,8 +4316,13 @@ class SetupBuilderMixin:
         _rec_split = QSplitter(Qt.Orientation.Vertical)
         _rec_split.addWidget(setup_panel)
         _rec_split.addWidget(self._setup_rec_view)
-        _rec_split.setStretchFactor(0, 1)
-        _rec_split.setStretchFactor(1, 1)
+        # DEF-UAT-073-007/017: when a recommendation is present it should be readable, not a squished strip.
+        # The rec pane gets the larger share; while hidden the setup form keeps all the height. The user can
+        # still drag the splitter. Sizes are (re)applied in _populate_setup_recommendation_view.
+        _rec_split.setStretchFactor(0, 3)
+        _rec_split.setStretchFactor(1, 5)
+        _rec_split.setCollapsible(1, True)
+        self._rec_split = _rec_split
         tab_layout.addWidget(_rec_split, 1)  # stretch factor 1
 
         return tab_widget
@@ -4367,6 +4372,19 @@ class SetupBuilderMixin:
                                      status_approved=status_approved)
         view.set_vm(vm)
         view.setVisible(vm.has_recommendation)
+        # DEF-UAT-073-007/017: give the recommendation generous, readable height when it appears (the user
+        # can still drag the splitter); collapse it back so the setup form reclaims the space when there is
+        # no recommendation.
+        split = getattr(self, "_rec_split", None)
+        if split is not None:
+            try:
+                total = max(split.height(), 600)
+                if vm.has_recommendation:
+                    split.setSizes([int(total * 0.42), int(total * 0.58)])
+                else:
+                    split.setSizes([total, 0])
+            except Exception:
+                pass
 
     def _rec_view_apply_in_game(self) -> None:
         form = getattr(self, "_race_form", None)
