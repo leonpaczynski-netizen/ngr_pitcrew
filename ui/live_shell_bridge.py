@@ -89,14 +89,72 @@ class LiveShellBridge(QObject):
             self._controller.set_state(state)
         except Exception:
             pass
+        view = None
         try:
             view = fetch_guidance_view(self._db, self._config)
+        except Exception:
+            view = None
+        try:
             if hasattr(self._shell, "set_guidance_view"):
                 self._shell.set_guidance_view(view)
         except Exception:
             pass
         self._feed_garage()
+        self._feed_qualifying(view)
+        self._feed_strategy()
         self._feed_live()
+        self._feed_debrief()
+
+    def _connected(self) -> bool:
+        try:
+            se = self._window._build_session_context() if self._window else None
+            return bool(getattr(se, "connected", False))
+        except Exception:
+            return False
+
+    def _feed_qualifying(self, view) -> None:
+        try:
+            qp = getattr(self._shell, "qualifying_page", None)
+            if qp is None:
+                return
+            from ui.shell_feed_adapters import qualifying_vm_from_cc_view
+            label, _applied = _active_setup(self._window)
+            qp.set_readiness(qualifying_vm_from_cc_view(view, active_setup_label=label))
+        except Exception:
+            pass
+
+    def _feed_strategy(self) -> None:
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            if sp is None:
+                return
+            from ui.shell_feed_adapters import strategy_plan_vm_from_rpvm
+            result = getattr(self._window, "_last_race_plan_result", None)
+            rpvm = None
+            if result is not None:
+                try:
+                    from ui.race_strategy_vm import build_race_plan_view_model
+                    rpvm = build_race_plan_view_model(result)
+                except Exception:
+                    rpvm = None
+            sp.set_plan(strategy_plan_vm_from_rpvm(rpvm))
+        except Exception:
+            pass
+
+    def _feed_debrief(self) -> None:
+        try:
+            dp = getattr(self._shell, "debrief_page", None)
+            db = self._db
+            if dp is None or db is None or not hasattr(db, "build_cross_session_memory"):
+                return
+            from ui.shell_feed_adapters import debrief_vm_from_memory
+            try:
+                mem = db.build_cross_session_memory()
+            except Exception:
+                mem = None
+            dp.set_debrief(debrief_vm_from_memory(mem))
+        except Exception:
+            pass
 
     def _feed_garage(self) -> None:
         """Show the driver's REAL current setup in the Garage GT7 sheet."""
@@ -118,26 +176,23 @@ class LiveShellBridge(QObject):
             pass
 
     def _feed_live(self) -> None:
-        """Feed the Live Pit Wall from the tracker/session (basic, defensive)."""
+        """Feed the Live Pit Wall from the canonical live race state. Never raises."""
         try:
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
                 return
-            from ui.components.live_pit_wall import LivePitWallVM
-            se = None
+            from ui.shell_feed_adapters import live_pit_wall_vm_from_state
+            connected = self._connected()
+            state = None
             try:
-                se = self._window._build_session_context()
+                tracker = getattr(self._window, "_tracker", None)
+                if tracker is not None and getattr(tracker, "race_type", None) is not None:
+                    from strategy.canonical_live_race_state import build_canonical_live_race_state
+                    canon = build_canonical_live_race_state(tracker, telemetry_fresh=connected)
+                    state = canon.to_live_strategy_state()
             except Exception:
-                se = None
-            connected = bool(getattr(se, "connected", False))
-            laps = getattr(se, "laps_recorded", 0) if se is not None else 0
-            lp.set_state(LivePitWallVM(
-                lap=str(laps) if laps else "—",
-                freshness="live" if connected else "none",
-                confidence="unknown",
-                map_trust="none",
-                engineer_instruction="Waiting for live telemetry…" if not connected else "",
-            ))
+                state = None
+            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected))
         except Exception:
             pass
 
