@@ -1,5 +1,8 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **UI REBUILD (branch `ui-rebuild-ngr-pit-crew`, 2026-07-22):** 23 new test files, **182 new UI-rebuild tests pass together, 0 failures** (view-model/state/component/shell/bridge + safety tests: strategy exposes no setup-apply, live issues no command, Garage Apply routes only through the classic gated path, shown==applied). Full-suite single-process runs still hit the **pre-existing Win/Py3.14 PyQt segfault** (reproduces on master; not caused by the rebuild) — validated in batches (0 failures observed). DB v28 / RULE_ENGINE 46.0 unchanged. See `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`.
+
+
 > UAT Remediation (branch `uat-defect-073-navigation-and-home-state`, **candidate `b9ecdb4`**, 13 commits off
 > merged `master @ ecf922c`). Fixes DEF-073-004/005/006/009/010/011/013/014/015/016 + ENH-073-001, each with
 > focused tests (test_uat_defect_073_slice1[12], _setup_feedback[3], _event_activation[9], _command_centre_ia
