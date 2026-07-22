@@ -20,6 +20,7 @@ from ui.components.gt7_settings_sheet import GT7SettingsSheet
 from ui.components.setup_lineage import SetupLineageTree, LineageNode
 from ui.components.setup_comparison import SetupComparison, build_comparison_rows
 from ui.components.run_card import RunCard, RunCardVM
+from ui.components.practice_feedback import StructuredFeedbackForm
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -33,4 +34,5 @@ __all__ = [
     "GT7SettingsSheet", "SetupLineageTree", "LineageNode",
     "SetupComparison", "build_comparison_rows",
     "RunCard", "RunCardVM",
+    "StructuredFeedbackForm",
 ]

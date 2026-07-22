@@ -27,6 +27,8 @@ from ui.components import (
     NavRail, EventHeaderBar, ProgressRail, EngineerGuidanceCard, EngineerGuidanceVM,
     SectionHeading, SetupWorkspace, RunCard,
 )
+from ui.components.practice_feedback import StructuredFeedbackForm
+from ui.components.setup_workspace import SetupDisciplineSelector as _Seg
 from ui.components.nav_rail import NAV_LABELS
 
 
@@ -208,17 +210,39 @@ class PitCrewShell(QMainWindow):
             self.pages.addWidget(page)
 
     def _build_practice_page(self) -> QWidget:
+        from PyQt6.QtWidgets import QStackedWidget, QToolButton, QButtonGroup
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
         lay.setSpacing(_t.SPACE_MD)
-        lay.addWidget(SectionHeading("PRACTICE", level=1))
-        sub = QLabel("What are we testing — and did it work?")
-        sub.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
-        lay.addWidget(sub)
+
+        top = QHBoxLayout()
+        top.addWidget(SectionHeading("PRACTICE", level=1))
+        top.addSpacing(_t.SPACE_LG)
+        grp = QButtonGroup(page)
+        grp.setExclusive(True)
+        self._practice_stack = QStackedWidget()
+        self._btn_runcard = QToolButton()
+        self._btn_runcard.setText("Run card")
+        self._btn_review = QToolButton()
+        self._btn_review.setText("Review")
+        for i, b in enumerate((self._btn_runcard, self._btn_review)):
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(_Seg._qss())
+            grp.addButton(b)
+            top.addWidget(b)
+        top.addStretch(1)
+        self._btn_runcard.setChecked(True)
+        self._btn_runcard.clicked.connect(lambda: self._practice_stack.setCurrentIndex(0))
+        self._btn_review.clicked.connect(lambda: self._practice_stack.setCurrentIndex(1))
+        lay.addLayout(top)
+
         self.run_card = RunCard()
-        lay.addWidget(self.run_card)
-        lay.addStretch(1)
+        self.feedback_form = StructuredFeedbackForm()
+        self._practice_stack.addWidget(self.run_card)
+        self._practice_stack.addWidget(self.feedback_form)
+        lay.addWidget(self._practice_stack, 1)
         return page
 
     # ---- navigation -------------------------------------------------------
