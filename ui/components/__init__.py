@@ -10,9 +10,12 @@ passes in. Import the public widgets from here:
 from ui.components.status import StatusPill, ConfidenceMeter, TONE_BASE_COLOR
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 from ui.components.cards import Card, SectionHeading
+from ui.components.guidance_vm import EngineerGuidanceVM
+from ui.components.guidance_card import EngineerGuidanceCard
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
     "PrimaryActionButton", "SecondaryActionButton",
     "Card", "SectionHeading",
+    "EngineerGuidanceVM", "EngineerGuidanceCard",
 ]
