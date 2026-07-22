@@ -32,6 +32,8 @@ from ui.components.practice_outcome import PracticeOutcome
 from ui.components.qualifying_readiness import QualifyingReadiness
 from ui.components.strategy_plan import StrategyPlanView
 from ui.components.live_pit_wall import LivePitWall
+from ui.components.debrief_view import DebriefView
+from ui.components.engineering_library import EngineeringLibrary
 from ui.components.setup_workspace import SetupDisciplineSelector as _Seg
 from ui.components.nav_rail import NAV_LABELS
 
@@ -203,6 +205,8 @@ class PitCrewShell(QMainWindow):
         self.qualifying_page = QualifyingReadiness()
         self.strategy_page = StrategyPlanView()
         self.live_page = LivePitWall()
+        self.debrief_page = DebriefView()
+        self.library_page = EngineeringLibrary()
         for dest in NAV_DESTINATIONS:
             if dest == "active_event":
                 page = self.active_event_page
@@ -216,6 +220,10 @@ class PitCrewShell(QMainWindow):
                 page = self.strategy_page
             elif dest == "live_pit_wall":
                 page = self.live_page
+            elif dest == "debrief":
+                page = self.debrief_page
+            elif dest == "engineering_library":
+                page = self.library_page
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)
