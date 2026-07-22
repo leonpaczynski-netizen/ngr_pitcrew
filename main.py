@@ -693,6 +693,12 @@ def main() -> None:
         _new_shell = None
 
     if _new_shell is not None:
+        # Cutover: open into the new shell; keep the classic window reachable for the
+        # editable/advanced workflows the new shell does not yet own.
+        try:
+            _new_shell.classic_ui_requested.connect(window.show)
+        except Exception:
+            pass
         _new_shell.show()
     else:
         window.show()

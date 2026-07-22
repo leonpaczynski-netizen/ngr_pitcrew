@@ -43,19 +43,24 @@ class _FakeDB:
 
 
 class TestShouldUseNewShell:
-    def test_env_flag_variants(self, monkeypatch):
-        for v in ("1", "true", "YES", "on"):
-            monkeypatch.setenv("NGR_NEW_SHELL", v)
-            assert should_use_new_shell({}) is True
-        monkeypatch.setenv("NGR_NEW_SHELL", "0")
-        assert should_use_new_shell({}) is False
+    def test_new_shell_is_the_default(self, monkeypatch):
+        # Cutover (F9): the new shell is the default surface.
+        monkeypatch.delenv("NGR_CLASSIC_UI", raising=False)
+        assert should_use_new_shell({}) is True
+        assert should_use_new_shell(None) is True
+        assert should_use_new_shell({"ui": {}}) is True
 
-    def test_config_flag(self, monkeypatch):
-        monkeypatch.delenv("NGR_NEW_SHELL", raising=False)
-        assert should_use_new_shell({"ui": {"new_shell": True}}) is True
-        assert should_use_new_shell({"ui": {"new_shell": False}}) is False
-        assert should_use_new_shell({}) is False
-        assert should_use_new_shell(None) is False
+    def test_classic_env_escape(self, monkeypatch):
+        for v in ("1", "true", "YES", "on"):
+            monkeypatch.setenv("NGR_CLASSIC_UI", v)
+            assert should_use_new_shell({}) is False
+        monkeypatch.setenv("NGR_CLASSIC_UI", "0")
+        assert should_use_new_shell({}) is True
+
+    def test_classic_config_escape(self, monkeypatch):
+        monkeypatch.delenv("NGR_CLASSIC_UI", raising=False)
+        assert should_use_new_shell({"ui": {"classic_shell": True}}) is False
+        assert should_use_new_shell({"ui": {"classic_shell": False}}) is True
 
 
 class TestPopulate:

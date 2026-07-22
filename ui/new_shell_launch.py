@@ -18,14 +18,22 @@ from typing import Optional
 
 
 def should_use_new_shell(config: Optional[dict] = None) -> bool:
-    """True when the new shell is requested via env NGR_NEW_SHELL or config.ui.new_shell."""
-    env = str(os.environ.get("NGR_NEW_SHELL", "")).strip().lower()
-    if env in ("1", "true", "yes", "on"):
-        return True
-    try:
-        return bool((config or {}).get("ui", {}).get("new_shell", False))
-    except Exception:
+    """Whether to open into the new NGR Pit Crew shell.
+
+    CUTOVER (F9): the new shell is now the DEFAULT surface. It is used unless the
+    classic UI is explicitly requested via env ``NGR_CLASSIC_UI`` or
+    ``config.ui.classic_shell`` — the escape hatch for the editable/advanced classic
+    workflows the display shell does not yet own.
+    """
+    classic_env = str(os.environ.get("NGR_CLASSIC_UI", "")).strip().lower()
+    if classic_env in ("1", "true", "yes", "on"):
         return False
+    try:
+        if bool((config or {}).get("ui", {}).get("classic_shell", False)):
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _safe_ctx(window, method: str):

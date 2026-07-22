@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional, Mapping
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QLabel,
 )
@@ -119,6 +119,10 @@ class ActiveEventPage(_SimplePage):
 
 
 class PitCrewShell(QMainWindow):
+    #: Emitted when the user asks for the classic tools/dashboard (setup analysis,
+    #: track modelling, full settings) that the new shell does not yet own.
+    classic_ui_requested = pyqtSignal()
+
     def __init__(self, controller: Optional[PitCrewController] = None, parent=None):
         super().__init__(parent)
         self.setObjectName("ngrPitCrewShell")
@@ -207,6 +211,7 @@ class PitCrewShell(QMainWindow):
         self.live_page = LivePitWall()
         self.debrief_page = DebriefView()
         self.library_page = EngineeringLibrary()
+        self.settings_page = self._build_settings_page()
         for dest in NAV_DESTINATIONS:
             if dest == "active_event":
                 page = self.active_event_page
@@ -224,6 +229,8 @@ class PitCrewShell(QMainWindow):
                 page = self.debrief_page
             elif dest == "engineering_library":
                 page = self.library_page
+            elif dest == "settings":
+                page = self.settings_page
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)
@@ -273,6 +280,26 @@ class PitCrewShell(QMainWindow):
         self.feedback_form.submitted.connect(
             lambda _d: (self._btn_outcome.setChecked(True),
                         self._practice_stack.setCurrentIndex(2)))
+        return page
+
+    def _build_settings_page(self) -> QWidget:
+        from ui.components.buttons import SecondaryActionButton
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
+        lay.setSpacing(_t.SPACE_MD)
+        lay.addWidget(SectionHeading("SETTINGS", level=1))
+        note = QLabel(
+            "The classic tools remain available for the editable and advanced workflows "
+            "the new experience does not yet own — Setup Builder analysis, Track Modelling, "
+            "Event Planner and full Settings.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        lay.addWidget(note)
+        self._btn_classic = SecondaryActionButton("Open classic tools & settings")
+        self._btn_classic.clicked.connect(lambda: self.classic_ui_requested.emit())
+        lay.addWidget(self._btn_classic)
+        lay.addStretch(1)
         return page
 
     # ---- navigation -------------------------------------------------------
