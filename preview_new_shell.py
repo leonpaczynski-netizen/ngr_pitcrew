@@ -26,6 +26,7 @@ from ui.pit_crew_shell import PitCrewShell
 from ui.pit_crew_controller import PitCrewController
 from ui import ngr_theme as theme
 from data.event_context import build_event_context
+from ui.setup_recommendation_vm import build_recommendation_vm
 
 
 def main() -> int:
@@ -72,6 +73,26 @@ def main() -> int:
                        "message": "Rear tyres graining after lap 6", "tone": "warn"}],
         "quick_actions": [{"label": "Open Practice", "target_surface": "practice"}],
     })
+
+    # Populate the Garage workspace so clicking "Garage" shows a live example.
+    shell.garage_page.set_recommendation(
+        build_recommendation_vm({
+            "changes": [
+                {"field": "arb_rear", "setting": "Rear anti-roll bar", "from": 5, "to": 3,
+                 "to_clamped": 4, "confidence_level": "High",
+                 "rationale": "reduce mid-corner understeer", "symptom": "mid-corner understeer"},
+                {"field": "brake_bias_front", "setting": "Brake bias (front %)", "from": 54.0,
+                 "to": 52.5, "confidence_level": "Medium",
+                 "rationale": "improve entry stability", "symptom": "entry instability"},
+                {"field": "ride_height_rear", "setting": "Ride height rear", "from": 70, "to": 74,
+                 "confidence_level": "Medium", "rationale": "raise rear for rotation", "symptom": "understeer"},
+                {"field": "aero_rear", "setting": "Rear downforce", "from": 350, "to": 320,
+                 "confidence_level": "Low", "rationale": "reduce drag for the straights", "symptom": "low top speed"},
+            ],
+            "diagnosis": {"primary_issue": "Mid-corner understeer through the Esses limiting rotation"},
+        }),
+        discipline="qualifying", active_setup="Quali v3", saved=True, applied=False,
+    )
 
     shell.show()
     return app.exec()
