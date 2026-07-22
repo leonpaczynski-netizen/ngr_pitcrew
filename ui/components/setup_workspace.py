@@ -30,6 +30,14 @@ from ui.components.setup_lineage import SetupLineageTree, LineageNode
 from ui.components.setup_comparison import SetupComparison
 from ui.setup_recommendation_vm import SetupRecommendationVM, build_recommendation_vm
 
+try:
+    from strategy.gearbox_objectives import gearbox_headline, gearbox_objectives
+except Exception:  # pragma: no cover - defensive
+    def gearbox_headline(_d):
+        return ""
+    def gearbox_objectives(_d):
+        return ()
+
 
 DISCIPLINES = (("base", "Base"), ("qualifying", "Qualifying"), ("race", "Race"))
 
@@ -220,8 +228,12 @@ class SetupWorkspace(QWidget):
         self._explain = SecondaryActionButton("Why these changes")
         self._explain.setCheckable(True)
         self._explain.toggled.connect(self._on_explain)
+        self._gearbox_btn = SecondaryActionButton("Gearbox objectives")
+        self._gearbox_btn.setCheckable(True)
+        self._gearbox_btn.toggled.connect(self._on_gearbox)
         act.addWidget(self._apply)
         act.addWidget(self._explain)
+        act.addWidget(self._gearbox_btn)
         act.addStretch(1)
         lay.addLayout(act)
 
@@ -230,6 +242,12 @@ class SetupWorkspace(QWidget):
         self._why.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         self._why.setVisible(False)
         lay.addWidget(self._why)
+
+        self._gearbox = QLabel("")
+        self._gearbox.setWordWrap(True)
+        self._gearbox.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._gearbox.setVisible(False)
+        lay.addWidget(self._gearbox)
 
         self.set_recommendation(self._vm)
 
@@ -288,6 +306,12 @@ class SetupWorkspace(QWidget):
         else:
             self._why.setText("")
 
+        # Discipline-specific gearbox/RPM objectives (never silently identical).
+        head = gearbox_headline(discipline)
+        bullets = gearbox_objectives(discipline)
+        self._gearbox.setText(
+            (head + "\n" if head else "") + "\n".join(f"• {b}" for b in bullets))
+
         # Full GT7-style settings sheet — the changed fields are highlighted.
         changed = {r.field for r in vm.proposed_rows() if r.field}
         self._sheet.set_setup(setup_values, changed_fields=changed)
@@ -303,3 +327,6 @@ class SetupWorkspace(QWidget):
 
     def _on_explain(self, checked: bool):
         self._why.setVisible(bool(checked))
+
+    def _on_gearbox(self, checked: bool):
+        self._gearbox.setVisible(bool(checked))
