@@ -1,6 +1,6 @@
 # GT7 VR Dashboard — Master Testing Register
 
-> **UI REBUILD (branch `ui-rebuild-ngr-pit-crew`, 2026-07-22):** 23 new test files, **182 new UI-rebuild tests pass together, 0 failures** (view-model/state/component/shell/bridge + safety tests: strategy exposes no setup-apply, live issues no command, Garage Apply routes only through the classic gated path, shown==applied). Full-suite single-process runs still hit the **pre-existing Win/Py3.14 PyQt segfault** (reproduces on master; not caused by the rebuild) — validated in batches (0 failures observed). DB v28 / RULE_ENGINE 46.0 unchanged. See `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`.
+> **UI REBUILD (branch `ui-rebuild-ngr-pit-crew`, 2026-07-22):** 23 new test files, **182 new UI-rebuild tests pass together, 0 failures** (view-model/state/component/shell/bridge + safety tests: strategy exposes no setup-apply, live issues no command, Garage Apply routes only through the classic gated path, shown==applied). **Full batched regression: 9,945 passed, 0 rebuild-caused failures.** The 1 "failed" + 1 crashed batch are the **pre-existing Win/Py3.14 PyQt segfault** on `EventCommandCentrePanel` under pytest — confirmed by reproducing the identical crash on clean master `d79a5eb` in an isolated worktree (panel constructs fine outside pytest; rebuild changes are not in its path). No golden fixtures edited. DB v28 / RULE_ENGINE 46.0 unchanged. See `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`.
 
 
 > UAT Remediation (branch `uat-defect-073-navigation-and-home-state`, **candidate `b9ecdb4`**, 13 commits off

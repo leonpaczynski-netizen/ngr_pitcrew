@@ -61,7 +61,7 @@ Colour+icon+text status (never colour-only); visible NGR-green focus rings; keyb
 
 ## 24–25. Test results / regression
 - **New UI-rebuild tests: 182 passed together, 0 failed.**
-- Regression: see `MASTER_TESTING_REGISTER.md` update. Full-suite/large-batch runs hit the **pre-existing Win/Py3.14 PyQt segfault** (reproduces on master; not caused by the rebuild) — validated via batched runs (half-2 = 3,936 passed/0 failed; blast radius 329+/0 failed). **No test failures attributable to the rebuild.**
+- **Full batched regression: 9,945 passed, 0 rebuild-caused failures.** One batch crashed and one test reported "failed" — both are the **pre-existing Win/Py3.14 PyQt segfault** hitting `EventCommandCentrePanel` construction under pytest. **Confirmed by running the exact test on clean master `d79a5eb` in an isolated worktree: it crashes identically there** (the panel constructs fine outside pytest; my changes are not in its import/execution path). No golden fixtures were edited. **No test failure is attributable to the rebuild.**
 
 ## 26. Safety verification
 Safety tests assert: the strategy surface exposes no setup-apply control; the live surface issues no pit/fuel/strategy command; Garage Apply routes only through the classic gated path; `applied_field_values()` == displayed rows (shown==applied). Deterministic functionality requires no API key.
