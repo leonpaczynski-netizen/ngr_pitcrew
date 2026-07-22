@@ -76,8 +76,9 @@ User runtime data (`data/*`, `active_setup_state.json`, `config.json`) **untouch
 `docs/NGR_PIT_CREW_UI_REBUILD_UAT.md` authored; desktop cases runnable, **physical/live-GT7/PSVR2/voice/PTT cases remain NOT TESTED**.
 
 ## 32. Known limitations
-- **Live-data write path (Apply/Save/Revert persisting to the car) needs live-rig verification** — routing is tested against a duck-typed window; end-to-end persistence with real GT7 is unverified here.
-- The new shell is a **display + orchestration layer**; the **editable/advanced classic surfaces** (Setup Builder analysis form, Track Modelling, Event Planner, full Settings) are **not yet rebuilt** and remain reachable via the classic escape. Full classic retirement + dead-path removal is deferred.
+- **Live-data write path (Apply/Save/Revert/Analyse persisting/running against the car) needs live-rig verification** — routing is tested against a duck-typed window; end-to-end behaviour with real GT7 is unverified here.
+- **Native Settings page added** (Connection / Voice / Shift-beep, read+write config) and a **Garage "Analyse setup"** trigger routes to the setup brain — so everyday config + running the brain no longer bounce to the classic tab.
+- The remaining **classic-only surfaces** are the **editable Setup Builder form (manual field edits), Track Modelling, and Event Planner**; they stay reachable via Settings → "Advanced classic tools". Rebuilding those as native pages + full classic retirement/dead-path removal is deferred.
 - Full-suite regression can't be run green in one process here (pre-existing segfault); validated in batches.
 
 ## 33. Deferred items
