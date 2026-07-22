@@ -161,6 +161,19 @@ class EventCommandCentre:
 _REQUIRED_READINESS = ("base_setup", "race_setup", "qualifying_setup")
 
 
+# DEF-073-018: the cumulative-evidence objective names an evidence DOMAIN; route it to the specialist
+# surface that actually performs that objective. Setup domains → the Setup Builder; driver domains →
+# Practice Review (coaching); pace/tyre/fuel → Practice Review (driving); strategy → Strategy Builder.
+# Surface keys match MainWindow._CC_SURFACE_TABS. Unknown domains fall back to "practice".
+_OBJECTIVE_DOMAIN_TO_SURFACE = {
+    "setup_base": "setup", "setup_race": "setup", "setup_qualifying": "setup",
+    "working_window": "setup", "convergence": "setup",
+    "driver_coaching": "coaching", "consistency": "coaching",
+    "race_pace": "practice", "tyre_model": "practice", "fuel_model": "practice",
+    "strategy": "strategy",
+}
+
+
 def _primary_next_action(
     resolution: ActiveEventCycleResolution,
     report: Optional[dict],
@@ -209,7 +222,12 @@ def _primary_next_action(
                                "A setup is lock-ready — confirm the lock explicitly.", "setup", "info")
     na = (report or {}).get("next_action") or {}
     headline = _norm(na.get("headline")) or "Prepare for the next activity"
-    return EventNextAction(A.NEXT_ACTIVITY, headline, _norm(na.get("rationale")), "practice", "info")
+    # DEF-073-018: route the cumulative-evidence objective to the surface that ACTUALLY performs it.
+    # Building a setup domain's evidence starts in the Setup Builder, not Practice Review (the old
+    # hardcoded "practice" sent "Build setup_base evidence" to the wrong tab). Fall back to "practice"
+    # for pace/tyre/fuel objectives that are gathered by driving.
+    surface = _OBJECTIVE_DOMAIN_TO_SURFACE.get(_norm(na.get("domain")), "practice")
+    return EventNextAction(A.NEXT_ACTIVITY, headline, _norm(na.get("rationale")), surface, "info")
 
 
 def _attention_items(report: Optional[dict], resolution: ActiveEventCycleResolution,

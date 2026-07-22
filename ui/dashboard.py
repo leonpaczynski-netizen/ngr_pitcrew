@@ -626,7 +626,9 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             self._event_command_centre_panel = EventCommandCentrePanel()
             self._event_command_centre_panel.set_handlers(
                 navigate=self._cc_navigate, select=self._cc_select_active_cycle)
-            root.addWidget(self._event_command_centre_panel)
+            # DEF-073-020: give the panel the stretch so its internal card scroll-area has room to fill,
+            # instead of the cards squishing to the size hint on a short window.
+            root.addWidget(self._event_command_centre_panel, 1)
         except Exception:  # pragma: no cover - defensive; Home must still build
             self._event_command_centre_panel = None
 
@@ -9147,7 +9149,8 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
             # and it STICKS across refreshes (previously it never reached the cycle).
             aid = str(self._config.get("active_event_id") or "")
             if aid and hasattr(self, "_ensure_active_preparation_cycle"):
-                self._ensure_active_preparation_cycle(aid)
+                # the user just PICKED this car — the strategy car is authoritative here (DEF-073-019).
+                self._ensure_active_preparation_cycle(aid, prefer_strategy_car=True)
             self._persist_config()
             self._sync_setup_builder_from_event()
             self._sync_strategy_from_event()

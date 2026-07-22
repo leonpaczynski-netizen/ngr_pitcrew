@@ -404,6 +404,10 @@ class PreparationObjective:
     headline: str
     rationale: str = ""
     phase: Optional[PreparationPhase] = None
+    # The evidence domain this objective addresses (e.g. "setup_base", "race_pace"). Used ONLY to route
+    # the Command Centre primary action to the right specialist tab; deliberately NOT in as_payload() so the
+    # cycle fingerprint is unchanged (routing is a UI concern, not part of the engineering state).
+    domain: str = ""
 
     def as_payload(self) -> dict:
         return {"headline": _norm(self.headline), "rationale": _norm(self.rationale),

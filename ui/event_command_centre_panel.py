@@ -49,7 +49,16 @@ class EventCommandCentrePanel(QWidget):
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(ngr.SPACE_SM)
-        self._root.addWidget(self._body)
+        # DEF-073-020: on a non-maximised / short window the stacked cards used to squish and the bottom
+        # card (Cumulative Learning) clipped, because there was no scroll region. Wrap the card body in a
+        # scroll area so the whole command centre stays readable at any height; the page never scrolls
+        # horizontally. The title + status banner stay pinned above the scroll.
+        self._body_scroll = QScrollArea()
+        self._body_scroll.setWidgetResizable(True)
+        self._body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._body_scroll.setWidget(self._body)
+        self._root.addWidget(self._body_scroll, 1)
         self._widgets: list = []
 
         self.update_result(None)
