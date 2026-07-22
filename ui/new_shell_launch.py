@@ -83,11 +83,22 @@ def fetch_guidance_view(db=None, config=None):
 
 
 def launch_new_shell(window=None, config=None, db=None, controller=None):
-    """Build + one-shot-populate the new shell. Returns the shell (never raises)."""
+    """Build the shell and attach a live bridge that keeps it in sync with the real
+    services. Falls back to a one-shot populate if the bridge can't start. Returns the
+    shell (never raises)."""
     from ui.pit_crew_controller import PitCrewController
     from ui.pit_crew_shell import PitCrewShell
     controller = controller or PitCrewController()
     shell = PitCrewShell(controller)
+    try:
+        from ui.live_shell_bridge import LiveShellBridge
+        bridge = LiveShellBridge(shell, controller, window=window, config=config, db=db)
+        shell._live_bridge = bridge   # keep a reference so it isn't garbage-collected
+        bridge.start()
+        return shell
+    except Exception as exc:
+        print(f"[NewShell] live bridge unavailable, one-shot populate: {exc}")
+    # Fallback: static one-shot populate.
     try:
         controller.set_state(build_initial_app_state(window, config))
     except Exception:
