@@ -66,16 +66,13 @@ class EngineerGuidanceCard(Card):
         self._objective.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
         self.body.addWidget(self._objective)
 
-        # Evidence + confidence row
-        ev_row = QHBoxLayout()
-        ev_row.setContentsMargins(0, 0, 0, 0)
+        # Evidence + confidence, stacked so neither truncates in the narrow column.
         self._evidence = QLabel()
+        self._evidence.setWordWrap(True)
         self._evidence.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self.body.addWidget(self._evidence)
         self._confidence = ConfidenceMeter("unknown")
-        ev_row.addWidget(self._evidence)
-        ev_row.addStretch(1)
-        ev_row.addWidget(self._confidence)
-        self.body.addLayout(ev_row)
+        self.body.addWidget(self._confidence)
 
         # Warnings (hidden unless present) — never suppressed when domain has them.
         self._warnings = QLabel()

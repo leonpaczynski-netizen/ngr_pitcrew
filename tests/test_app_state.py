@@ -119,14 +119,10 @@ class TestCanonicalConstants:
 
 class TestQtFree:
     def test_module_imports_no_qt(self):
-        import sys
-        # Importing app_state must not pull PyQt6 into the process on its own.
-        mods_before = set(sys.modules)
-        import importlib
-        import ui.app_state as aps
-        importlib.reload(aps)
-        # If PyQt6 was already imported by another test that's fine; we only assert
-        # app_state itself declares no PyQt import at module scope.
+        # app_state must declare no Qt import at module scope. Assert on the source
+        # rather than reloading the module — reloading would create a second
+        # AppState class and break isinstance() for every later test in the suite.
         import inspect
+        import ui.app_state as aps
         src = inspect.getsource(aps)
         assert "PyQt6" not in src and "QtWidgets" not in src
