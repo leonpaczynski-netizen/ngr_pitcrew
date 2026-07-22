@@ -121,6 +121,16 @@ def main() -> int:
             LineageNode("n0", "Base", outcome="", summary="Baseline build from car + track profile",
                         discipline="base"),
         ],
+        comparisons=[
+            ("Base ↔ Qualifying", "Base",
+             {"ride_height_front": 60, "ride_height_rear": 70, "arb_front": 5, "arb_rear": 5,
+              "aero_front": 430, "aero_rear": 560, "brake_bias_front": 54,
+              "tyre_front": "Racing: Medium", "tyre_rear": "Racing: Medium"},
+             "Qualifying",
+             {"ride_height_front": 60, "ride_height_rear": 74, "arb_front": 5, "arb_rear": 4,
+              "aero_front": 430, "aero_rear": 590, "brake_bias_front": 52,
+              "tyre_front": "Racing: Soft", "tyre_rear": "Racing: Soft"}),
+        ],
     )
 
     shell.show()
