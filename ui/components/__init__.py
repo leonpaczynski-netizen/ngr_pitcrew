@@ -15,6 +15,7 @@ from ui.components.guidance_card import EngineerGuidanceCard
 from ui.components.progress_rail import ProgressRail, STAGE_LABELS
 from ui.components.nav_rail import NavRail, NAV_LABELS
 from ui.components.event_header import EventHeaderBar
+from ui.components.setup_workspace import SetupWorkspace, SetupDisciplineSelector
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -24,4 +25,5 @@ __all__ = [
     "ProgressRail", "STAGE_LABELS",
     "NavRail", "NAV_LABELS",
     "EventHeaderBar",
+    "SetupWorkspace", "SetupDisciplineSelector",
 ]

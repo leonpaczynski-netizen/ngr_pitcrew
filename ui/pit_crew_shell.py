@@ -25,7 +25,7 @@ from ui.app_state import AppState, NAV_DESTINATIONS
 from ui.pit_crew_controller import PitCrewController
 from ui.components import (
     NavRail, EventHeaderBar, ProgressRail, EngineerGuidanceCard, EngineerGuidanceVM,
-    SectionHeading,
+    SectionHeading, SetupWorkspace,
 )
 from ui.components.nav_rail import NAV_LABELS
 
@@ -192,9 +192,12 @@ class PitCrewShell(QMainWindow):
             "engineering_library": ("ENGINEERING LIBRARY", "Evidence, rules and advanced detail."),
             "settings": ("SETTINGS", "Configuration."),
         }
+        self.garage_page = SetupWorkspace()
         for dest in NAV_DESTINATIONS:
             if dest == "active_event":
                 page = self.active_event_page
+            elif dest == "garage":
+                page = self.garage_page
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)
