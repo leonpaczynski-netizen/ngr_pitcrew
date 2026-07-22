@@ -18,12 +18,14 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QButtonGroup,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QStackedWidget, QScrollArea, QFrame,
 )
 
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading
 from ui.components.status import StatusPill
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
+from ui.components.gt7_settings_sheet import GT7SettingsSheet
 from ui.setup_recommendation_vm import SetupRecommendationVM, build_recommendation_vm
 
 
@@ -126,6 +128,33 @@ class SetupWorkspace(QWidget):
         self._primary_issue.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_BODY}pt;")
         lay.addWidget(self._primary_issue)
 
+        # View toggle: Changed fields | Full setup sheet (GT7-style)
+        view_row = QHBoxLayout()
+        view_row.setSpacing(2)
+        self._view_group = QButtonGroup(self)
+        self._view_group.setExclusive(True)
+        self._btn_changed = QToolButton()
+        self._btn_changed.setText("Changed fields")
+        self._btn_full = QToolButton()
+        self._btn_full.setText("Full setup sheet")
+        for i, b in enumerate((self._btn_changed, self._btn_full)):
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(SetupDisciplineSelector._qss())
+            self._view_group.addButton(b)
+            view_row.addWidget(b)
+        view_row.addStretch(1)
+        self._btn_changed.setChecked(True)
+        self._btn_changed.clicked.connect(lambda: self._stack.setCurrentIndex(0))
+        self._btn_full.clicked.connect(lambda: self._stack.setCurrentIndex(1))
+        lay.addLayout(view_row)
+
+        self._stack = QStackedWidget()
+
+        # Page 0 — changed fields
+        changed_page = QWidget()
+        cp = QVBoxLayout(changed_page)
+        cp.setContentsMargins(0, 0, 0, 0)
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
             ["Setting", "Current", "Recommended", "Δ", "Confidence"])
@@ -143,11 +172,23 @@ class SetupWorkspace(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for c in range(1, 5):
             hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
-        lay.addWidget(self._table, 1)
+        cp.addWidget(self._table, 1)
 
         self._empty = QLabel("No recommendation yet. Run an analysis to get setup guidance.")
         self._empty.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
-        lay.addWidget(self._empty)
+        cp.addWidget(self._empty)
+        self._stack.addWidget(changed_page)
+
+        # Page 1 — full GT7-style settings sheet (scrollable)
+        self._sheet = GT7SettingsSheet()
+        sheet_scroll = QScrollArea()
+        sheet_scroll.setWidgetResizable(True)
+        sheet_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sheet_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sheet_scroll.setWidget(self._sheet)
+        self._stack.addWidget(sheet_scroll)
+
+        lay.addWidget(self._stack, 1)
 
         # Actions
         act = QHBoxLayout()
@@ -173,7 +214,7 @@ class SetupWorkspace(QWidget):
     def set_recommendation(
         self, vm: SetupRecommendationVM, *, discipline: str = "race",
         active_setup: str = "", saved: bool = False, applied: bool = False,
-        validated: bool = False,
+        validated: bool = False, setup_values: Optional[dict] = None,
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
@@ -220,6 +261,14 @@ class SetupWorkspace(QWidget):
             self._why.setText("\n".join(parts))
         else:
             self._why.setText("")
+
+        # Full GT7-style settings sheet — the changed fields are highlighted.
+        changed = {r.field for r in vm.proposed_rows() if r.field}
+        self._sheet.set_setup(setup_values, changed_fields=changed)
+        self._btn_full.setEnabled(bool(setup_values))
+        if not setup_values:
+            self._btn_changed.setChecked(True)
+            self._stack.setCurrentIndex(0)
 
     # ---- signals ----------------------------------------------------------
     def _on_apply(self):
