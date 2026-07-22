@@ -25,7 +25,7 @@ from ui.app_state import AppState, NAV_DESTINATIONS
 from ui.pit_crew_controller import PitCrewController
 from ui.components import (
     NavRail, EventHeaderBar, ProgressRail, EngineerGuidanceCard, EngineerGuidanceVM,
-    SectionHeading, SetupWorkspace,
+    SectionHeading, SetupWorkspace, RunCard,
 )
 from ui.components.nav_rail import NAV_LABELS
 
@@ -193,16 +193,33 @@ class PitCrewShell(QMainWindow):
             "settings": ("SETTINGS", "Configuration."),
         }
         self.garage_page = SetupWorkspace()
+        self.practice_page = self._build_practice_page()
         for dest in NAV_DESTINATIONS:
             if dest == "active_event":
                 page = self.active_event_page
             elif dest == "garage":
                 page = self.garage_page
+            elif dest == "practice":
+                page = self.practice_page
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)
             self._page_by_dest[dest] = page
             self.pages.addWidget(page)
+
+    def _build_practice_page(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
+        lay.setSpacing(_t.SPACE_MD)
+        lay.addWidget(SectionHeading("PRACTICE", level=1))
+        sub = QLabel("What are we testing — and did it work?")
+        sub.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        lay.addWidget(sub)
+        self.run_card = RunCard()
+        lay.addWidget(self.run_card)
+        lay.addStretch(1)
+        return page
 
     # ---- navigation -------------------------------------------------------
     def _navigate(self, dest: str) -> None:
