@@ -679,7 +679,23 @@ def main() -> None:
     listener.start()
     query_listener.start()
 
-    window.show()
+    # UI rebuild (F1): optionally open the new NGR Pit Crew shell behind a flag
+    # (env NGR_NEW_SHELL=1 or config.ui.new_shell). Defensive — any failure falls
+    # back to the existing dashboard so startup is never blocked. The old window is
+    # still constructed (the backend graph/timers reference it); it just stays hidden.
+    _new_shell = None
+    try:
+        from ui.new_shell_launch import should_use_new_shell, launch_new_shell
+        if should_use_new_shell(config):
+            _new_shell = launch_new_shell(window=window, config=config, db=db)
+    except Exception as _exc:
+        print(f"[NewShell] launch failed, using classic dashboard: {_exc}")
+        _new_shell = None
+
+    if _new_shell is not None:
+        _new_shell.show()
+    else:
+        window.show()
     exit_code = app.exec()
 
     # Graceful shutdown (query_listener first — may be mid-recording)
