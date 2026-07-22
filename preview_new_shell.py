@@ -27,6 +27,7 @@ from ui.pit_crew_controller import PitCrewController
 from ui import ngr_theme as theme
 from data.event_context import build_event_context
 from ui.setup_recommendation_vm import build_recommendation_vm
+from ui.components.setup_lineage import LineageNode
 
 
 def main() -> int:
@@ -108,6 +109,18 @@ def main() -> int:
             "ballast_kg": 0, "power_restrictor": 100,
             "ecu_ingame": "Fully Customisable", "ecu_ingame_output": 100,
         },
+        lineage_nodes=[
+            LineageNode("n3", "Quali v3", outcome="improved", is_current=True,
+                        summary="Rear ARB 5->4 + rear ride height 70->74 - rotation improved",
+                        discipline="qualifying"),
+            LineageNode("n2", "Quali v2", outcome="worse",
+                        summary="Softer front springs - lost front end on entry (reverted)",
+                        discipline="qualifying"),
+            LineageNode("n1", "Quali v1", outcome="unchanged",
+                        summary="Brake bias 54->53 - no measurable change", discipline="qualifying"),
+            LineageNode("n0", "Base", outcome="", summary="Baseline build from car + track profile",
+                        discipline="base"),
+        ],
     )
 
     shell.show()
