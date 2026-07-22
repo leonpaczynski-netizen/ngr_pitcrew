@@ -148,6 +148,67 @@ def main() -> int:
     shell.feedback_form.set_corner_options(
         ["Turn 1", "Turn 5", "Turn 6 (Esses)", "Turn 10", "Turn 11 (Bus Stop)"])
 
+    # Practice outcome
+    from ui.components.practice_outcome import PracticeOutcomeVM
+    shell.practice_outcome.set_outcome(PracticeOutcomeVM(
+        verdict="improved", verdict_summary="The rear ARB change worked — rotation up, no new instability.",
+        telemetry_findings=("Mid-corner min speed +1.8 km/h at Turn 6",),
+        feedback_summary="Better than previous; less understeer mid-corner",
+        agreements=("Both show improved mid-corner rotation",),
+        changed_vs_previous=("Rear ARB 5->4", "Rear ride height 70->74"),
+        confidence="high", primary_action_label="Keep change & build next", primary_action_key="keep",
+        secondary_action_label="Prepare qualifying", secondary_action_key="to_qualifying"))
+
+    # Qualifying readiness
+    from ui.components.qualifying_readiness import QualifyingReadinessVM, ReadinessItem
+    shell.qualifying_page.set_readiness(QualifyingReadinessVM(
+        items=(ReadinessItem("Qualifying setup selected", "ok", "Quali v3"),
+               ReadinessItem("Soft tyres confirmed", "ok", "Racing: Soft"),
+               ReadinessItem("Fuel target", "ok", "2 laps + margin"),
+               ReadinessItem("Out-lap plan", "ok", "1 build lap, then push"),
+               ReadinessItem("Traffic plan", "warn", "Leave a gap on the out-lap"),
+               ReadinessItem("Risk corners", "warn", "Turn 1 lock-up risk on cold fronts")),
+        explanation="Softer rear ARB gives more rotation for one-lap pace. Protect the fronts on the out-lap; "
+                    "if the first push lap is compromised, back out and reset for a second run."))
+
+    # Race strategy
+    from ui.components.strategy_plan import StrategyPlanVM, StrategyOption, StrategyInput
+    shell.strategy_page.set_plan(StrategyPlanVM(
+        options=(StrategyOption("2-stop (Soft-Soft-Medium)", total_time="1:02:14", expected_laps="34",
+                                stints=("12 Soft", "12 Soft", "10 Medium"), tyre_sequence="S→S→M",
+                                fuel_target="Full each stint", pit_windows="L12, L24", confidence="high",
+                                summary="Fastest total time on measured degradation.", recommended=True),
+                 StrategyOption("1-stop (Medium-Hard)", total_time="1:02:49", expected_laps="34",
+                                confidence="medium", summary="Safer on a safety car, ~35s slower.")),
+        risks=(("Tyre deg", "medium"), ("Traffic", "low")),
+        inputs=(StrategyInput("Tyre deg", "0.06 s/lap", "measured"),
+                StrategyInput("Pit loss", "22 s", "manual"),
+                StrategyInput("Fuel burn", "2.1 L/lap", "measured"),
+                StrategyInput("Safety car", "unknown", "missing")),
+        replan_triggers=("Degradation exceeds 0.10 s/lap", "A safety car inside the first 10 laps")))
+
+    # Live pit wall
+    from ui.components.live_pit_wall import LivePitWallVM
+    shell.live_page.set_state(LivePitWallVM(
+        lap="18 / 34", position="P4", stint="Stint 2 · L6", fuel="34 L (12 laps)",
+        tyre="Soft · 62%", pit_window="L22–L25", gap_to_plan="+1.2s",
+        engineer_instruction="Hold this pace — box in 4 laps for Mediums.",
+        next_decision="Pit call on lap 22", freshness="live", confidence="high",
+        map_trust="approved", ptt_status="RADIO READY"))
+
+    # Debrief
+    from ui.components.debrief_view import DebriefVM
+    shell.debrief_page.set_debrief(DebriefVM(
+        what_happened="5-lap diagnosis run on Softs at Watkins Glen.",
+        improved=("Mid-corner rotation at the Esses (+1.8 km/h)",),
+        regressed=("Slight entry instability into Turn 1",),
+        learned=("Rear ARB is the dominant lever for this car/track",),
+        predictions_correct=("ARB softening improves rotation",),
+        predictions_wrong=("Expected no entry change — there was one",),
+        setup_outcome="Quali v3 kept — improved", strategy_outcome="No change",
+        carry_forward=("Rear ARB working window 4–5 for this layout",),
+        primary_action_label="Prepare qualifying", primary_action_key="to_qualifying"))
+
     shell.show()
     return app.exec()
 
