@@ -75,10 +75,14 @@ User runtime data (`data/*`, `active_setup_state.json`, `config.json`) **untouch
 ## 30–31. Manual / physical UAT status
 `docs/NGR_PIT_CREW_UI_REBUILD_UAT.md` authored; desktop cases runnable, **physical/live-GT7/PSVR2/voice/PTT cases remain NOT TESTED**.
 
-## 32. Known limitations
-- **Live-data write path (Apply/Save/Revert/Analyse persisting/running against the car) needs live-rig verification** — routing is tested against a duck-typed window; end-to-end behaviour with real GT7 is unverified here.
-- **Native Settings page added** (Connection / Voice / Shift-beep, read+write config) and a **Garage "Analyse setup"** trigger routes to the setup brain — so everyday config + running the brain no longer bounce to the classic tab.
-- The remaining **classic-only surfaces** are the **editable Setup Builder form (manual field edits), Track Modelling, and Event Planner**; they stay reachable via Settings → "Advanced classic tools". Rebuilding those as native pages + full classic retirement/dead-path removal is deferred.
+## 32. Known limitations (updated after live wiring)
+**Now genuinely live** — `LiveShellBridge` feeds every surface from its canonical service each refresh (Home guidance, Garage setup+recommendation, Practice run card, Qualifying readiness, Race Strategy plan, Live Pit Wall from canonical live state, Debrief from cross-session memory) and routes **every** action to real behaviour (Analyse/Apply/Revert, Settings save, run Start, feedback persist, outcome keep/revert/refine, Qualifying Begin, Strategy Approve, Debrief next-action, Library→classic panel, guidance Read-aloud). Adapters in `ui/shell_feed_adapters.py`; 207 new UI tests green.
+
+Remaining, honestly:
+- **Needs live-rig sanity check (data mappings + write path):** the feed adapters map documented service shapes and the action handlers try the real method names defensively, but end-to-end behaviour against a real GT7 session / populated DB is unverified here. Verify during UAT: Garage Apply persists to the car; feedback/read-aloud call the real methods; the mapped fields read correctly.
+- **Practice Outcome verdict** is not yet fed from the post-run telemetry-vs-feedback reconciliation (that runs in the classic review flow); it stays empty until a real review exists.
+- **Race Strategy** populates once a race plan has been built (`window._last_race_plan_result`); a native "Build plan" trigger is not yet added.
+- **Editable classic surfaces** — Setup Builder *manual field editing*, Track Modelling, Event Planner — remain classic (reachable via Settings → Advanced). Everyday config (Settings) and running the setup brain (Garage → Analyse) are native.
 - Full-suite regression can't be run green in one process here (pre-existing segfault); validated in batches.
 
 ## 33. Deferred items
