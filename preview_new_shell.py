@@ -133,6 +133,21 @@ def main() -> int:
         ],
     )
 
+    # Populate the Practice run card + corner options so 'Practice' shows a live example.
+    from ui.components.run_card import RunCardVM
+    shell.run_card.set_run(RunCardVM.from_run_plan({
+        "objective": "Confirm the rear ARB change improves mid-corner rotation without hurting entry",
+        "setup": "Quali v3",
+        "changes": ["Rear ARB 5 -> 4", "Rear ride height 70 -> 74"],
+        "expected_effect": "Less understeer through the Esses; entry stability unchanged",
+        "monitor": ["Turn 6 (Esses)", "Turn 10 entry", "Turn 1 braking"],
+        "fuel": "12 L", "tyre": "Racing: Soft", "target_laps": "5",
+        "push_level": "Qualifying push", "purpose": "diagnosis",
+        "invalidation": ["Lock-up into Turn 1", "Any off-track excursion"],
+    }))
+    shell.feedback_form.set_corner_options(
+        ["Turn 1", "Turn 5", "Turn 6 (Esses)", "Turn 10", "Turn 11 (Bus Stop)"])
+
     shell.show()
     return app.exec()
 
