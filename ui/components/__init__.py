@@ -28,6 +28,7 @@ from ui.components.qualifying_readiness import (
 from ui.components.strategy_plan import (
     StrategyPlanView, StrategyPlanVM, StrategyOption, StrategyInput,
 )
+from ui.components.live_pit_wall import LivePitWall, LivePitWallVM
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -44,4 +45,5 @@ __all__ = [
     "StructuredFeedbackForm", "PracticeOutcome", "PracticeOutcomeVM",
     "QualifyingReadiness", "QualifyingReadinessVM", "ReadinessItem",
     "StrategyPlanView", "StrategyPlanVM", "StrategyOption", "StrategyInput",
+    "LivePitWall", "LivePitWallVM",
 ]
