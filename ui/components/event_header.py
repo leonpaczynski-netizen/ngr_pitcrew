@@ -34,10 +34,11 @@ class EventHeaderBar(QWidget):
         lay.setContentsMargins(_t.SPACE_LG, _t.SPACE_SM, _t.SPACE_LG, _t.SPACE_SM)
         lay.setSpacing(_t.SPACE_LG)
 
-        # Logo (official asset, unchanged) with text fallback.
+        # Logo (official asset, unchanged) with text fallback. Rendered prominently
+        # as the brand anchor of the persistent header.
         self._logo = QLabel()
         self._logo.setObjectName("ngrHeaderLogo")
-        pix = _t_logo_pixmap(height=26)
+        pix = _t_logo_pixmap(height=48)
         if pix is not None:
             self._logo.setPixmap(pix)
         else:
@@ -54,11 +55,14 @@ class EventHeaderBar(QWidget):
         ident.setSpacing(0)
         self._event_line = QLabel()
         self._event_line.setStyleSheet(
-            f"color: {_t.TEXT_HI}; font-size: {_t.FS_H3}pt; font-weight: 700;"
+            f"color: {_t.TEXT_HI}; font-size: {_t.FS_H2}pt; font-weight: 700;"
         )
-        self._ctx_line = _dim("", _t.FS_CAPTION)
+        self._ctx_line = _dim("", _t.FS_BODY)
+        # Centre the two lines vertically against the prominent logo.
+        ident.addStretch(1)
         ident.addWidget(self._event_line)
         ident.addWidget(self._ctx_line)
+        ident.addStretch(1)
         lay.addLayout(ident)
 
         lay.addStretch(1)
