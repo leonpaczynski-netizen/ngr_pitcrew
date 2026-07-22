@@ -30,6 +30,7 @@ from ui.components import (
 from ui.components.practice_feedback import StructuredFeedbackForm
 from ui.components.practice_outcome import PracticeOutcome
 from ui.components.qualifying_readiness import QualifyingReadiness
+from ui.components.strategy_plan import StrategyPlanView
 from ui.components.setup_workspace import SetupDisciplineSelector as _Seg
 from ui.components.nav_rail import NAV_LABELS
 
@@ -199,6 +200,7 @@ class PitCrewShell(QMainWindow):
         self.garage_page = SetupWorkspace()
         self.practice_page = self._build_practice_page()
         self.qualifying_page = QualifyingReadiness()
+        self.strategy_page = StrategyPlanView()
         for dest in NAV_DESTINATIONS:
             if dest == "active_event":
                 page = self.active_event_page
@@ -208,6 +210,8 @@ class PitCrewShell(QMainWindow):
                 page = self.practice_page
             elif dest == "qualifying":
                 page = self.qualifying_page
+            elif dest == "race_strategy":
+                page = self.strategy_page
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)

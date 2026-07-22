@@ -25,6 +25,9 @@ from ui.components.practice_outcome import PracticeOutcome, PracticeOutcomeVM
 from ui.components.qualifying_readiness import (
     QualifyingReadiness, QualifyingReadinessVM, ReadinessItem,
 )
+from ui.components.strategy_plan import (
+    StrategyPlanView, StrategyPlanVM, StrategyOption, StrategyInput,
+)
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -40,4 +43,5 @@ __all__ = [
     "RunCard", "RunCardVM",
     "StructuredFeedbackForm", "PracticeOutcome", "PracticeOutcomeVM",
     "QualifyingReadiness", "QualifyingReadinessVM", "ReadinessItem",
+    "StrategyPlanView", "StrategyPlanVM", "StrategyOption", "StrategyInput",
 ]
