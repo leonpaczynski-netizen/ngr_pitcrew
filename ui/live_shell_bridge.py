@@ -72,6 +72,36 @@ class LiveShellBridge(QObject):
                 sp.save_requested.connect(self._on_save_settings)
         except Exception:
             pass
+        # Route every remaining surface action to real behaviour.
+        shell = self._shell
+        _c = self._safe_connect
+        _c(getattr(shell, "run_card", None), "start_requested",
+           lambda: self._navigate("live_pit_wall"))
+        _c(getattr(shell, "feedback_form", None), "submitted", self._on_feedback)
+        _c(getattr(shell, "practice_outcome", None), "action_requested", self._on_outcome_action)
+        _c(getattr(shell, "qualifying_page", None), "begin_requested",
+           lambda: self._navigate("live_pit_wall"))
+        _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
+        _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
+        _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
+        _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
+
+    @staticmethod
+    def _safe_connect(obj, signal_name, slot) -> None:
+        try:
+            sig = getattr(obj, signal_name, None)
+            if sig is not None:
+                sig.connect(slot)
+        except Exception:
+            pass
+
+    def _navigate(self, dest: str) -> None:
+        try:
+            nav = getattr(self._shell, "_navigate", None)
+            if callable(nav):
+                nav(dest)
+        except Exception:
+            pass
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -100,10 +130,24 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         self._feed_garage()
+        self._feed_practice()
         self._feed_qualifying(view)
         self._feed_strategy()
         self._feed_live()
         self._feed_debrief()
+
+    def _feed_practice(self) -> None:
+        """Feed the Practice run card from the current recommendation (what's being tested)."""
+        try:
+            rc = getattr(self._shell, "run_card", None)
+            if rc is None:
+                return
+            from ui.shell_feed_adapters import run_card_vm_from_recommendation
+            vm = _current_recommendation_vm(self._window)
+            label, _applied = _active_setup(self._window)
+            rc.set_run(run_card_vm_from_recommendation(vm, active_setup_label=label))
+        except Exception:
+            pass
 
     def _connected(self) -> bool:
         try:
@@ -271,6 +315,86 @@ class LiveShellBridge(QObject):
         try:
             if sp is not None and hasattr(sp, "show_saved"):
                 sp.show_saved(ok)
+        except Exception:
+            pass
+
+    # ---- practice / qualifying / strategy / debrief / library actions -----
+    def _on_feedback(self, feedback: dict) -> None:
+        """Persist structured practice feedback via the window/DB if it supports it."""
+        try:
+            window = self._window
+            for name in ("record_driver_feedback", "_record_driver_feedback", "save_driver_feedback"):
+                fn = getattr(window, name, None)
+                if callable(fn):
+                    fn(dict(feedback or {}))
+                    break
+            self.refresh()
+        except Exception:
+            pass
+
+    def _on_outcome_action(self, key: str) -> None:
+        """Adaptive practice outcome action -> real behaviour / navigation."""
+        try:
+            k = (key or "").lower()
+            if k == "revert":
+                self._on_revert("")
+            elif k in ("keep", "build_next", "refine"):
+                self._navigate("garage")
+            elif k == "to_qualifying":
+                self._navigate("qualifying")
+            elif k == "gather":
+                self._navigate("practice")
+            else:
+                self._navigate("garage")
+        except Exception:
+            pass
+
+    def _on_approve_strategy(self) -> None:
+        """Approve the (read-only) race plan and move to the live wall. Records approval
+        if the window supports it; never mutates a setup."""
+        try:
+            window = self._window
+            fn = getattr(window, "approve_race_plan", None)
+            if callable(fn):
+                fn()
+        except Exception:
+            pass
+        self._navigate("live_pit_wall")
+
+    def _on_debrief_action(self, key: str) -> None:
+        try:
+            dest = {"to_qualifying": "qualifying", "to_race": "race_strategy",
+                    "prepare_qualifying": "qualifying", "prepare_race": "race_strategy",
+                    "continue": "garage", "close": "home", "post_review": "engineering_library"}.get(
+                (key or "").lower(), "home")
+            self._navigate(dest)
+        except Exception:
+            pass
+
+    def _on_library_open(self, area: str) -> None:
+        """Open the classic engineering panels for the requested Library area."""
+        try:
+            shell = self._shell
+            if hasattr(shell, "classic_ui_requested"):
+                shell.classic_ui_requested.emit()
+            window = self._window
+            sel = getattr(window, "select_tab", None)
+            if callable(sel):
+                sel("development_history")
+        except Exception:
+            pass
+
+    def _on_read_aloud(self, text: str) -> None:
+        """Speak the engineer's message via the existing announcer (opt-in, never forced)."""
+        try:
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is None or not text:
+                return
+            for name in ("speak", "announce", "say", "enqueue"):
+                fn = getattr(announcer, name, None)
+                if callable(fn):
+                    fn(str(text))
+                    break
         except Exception:
             pass
 

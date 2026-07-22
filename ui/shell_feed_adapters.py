@@ -176,6 +176,41 @@ def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "", soft_confi
 
 
 # ---------------------------------------------------------------------------
+# Practice run card  <-  the current setup recommendation (what's being tested)
+# ---------------------------------------------------------------------------
+def run_card_vm_from_recommendation(rec_vm, *, active_setup_label: str = ""):
+    from ui.components.run_card import RunCardVM
+    if rec_vm is None or not getattr(rec_vm, "has_recommendation", False):
+        return RunCardVM()
+    rows = list(rec_vm.proposed_rows())
+    changes = tuple(
+        f"{r.setting} {r.current_value}→{r.recommended_value}".strip() for r in rows
+    )
+    # Corners/behaviours to watch come from the changes' target symptoms.
+    monitor = tuple(dict.fromkeys(
+        c.symptom for c in (getattr(rec_vm, "why_cards", None) or ()) if getattr(c, "symptom", "")
+    ))
+    issue = getattr(rec_vm.header, "primary_issue", "") if getattr(rec_vm, "header", None) else ""
+    expected = ""
+    for c in (getattr(rec_vm, "why_cards", None) or ()):
+        if getattr(c, "rationale", ""):
+            expected = c.rationale
+            break
+    return RunCardVM(
+        objective=(f"Validate the recommended changes for {issue}" if issue
+                   else "Validate the recommended setup changes"),
+        setup_label=active_setup_label,
+        changes=changes,
+        expected_effect=expected,
+        monitor=monitor,
+        purpose="diagnosis",
+        target_laps="3–5",
+        push_level="Representative pace",
+        invalidation=("A lock-up or off-track that skews the lap",),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Debrief  <-  session_db.build_cross_session_memory (conservative top-level map)
 # ---------------------------------------------------------------------------
 def debrief_vm_from_memory(mem, *, next_label: str = "Continue development", next_key: str = "continue"):
