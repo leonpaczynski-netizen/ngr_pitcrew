@@ -10,6 +10,8 @@ in dashboard.py acyclic).
 """
 from __future__ import annotations
 
+import threading
+
 from PyQt6.QtCore import Qt, QTimer  # noqa: F401
 from PyQt6.QtWidgets import (  # noqa: F401
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
