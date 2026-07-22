@@ -27,6 +27,7 @@ from ui.components.status import StatusPill
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 from ui.components.gt7_settings_sheet import GT7SettingsSheet
 from ui.components.setup_lineage import SetupLineageTree, LineageNode
+from ui.components.setup_comparison import SetupComparison
 from ui.setup_recommendation_vm import SetupRecommendationVM, build_recommendation_vm
 
 
@@ -141,7 +142,9 @@ class SetupWorkspace(QWidget):
         self._btn_full.setText("Full setup sheet")
         self._btn_lineage = QToolButton()
         self._btn_lineage.setText("Lineage")
-        for b in (self._btn_changed, self._btn_full, self._btn_lineage):
+        self._btn_compare = QToolButton()
+        self._btn_compare.setText("Compare")
+        for b in (self._btn_changed, self._btn_full, self._btn_lineage, self._btn_compare):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(SetupDisciplineSelector._qss())
@@ -152,6 +155,7 @@ class SetupWorkspace(QWidget):
         self._btn_changed.clicked.connect(lambda: self._stack.setCurrentIndex(0))
         self._btn_full.clicked.connect(lambda: self._stack.setCurrentIndex(1))
         self._btn_lineage.clicked.connect(lambda: self._stack.setCurrentIndex(2))
+        self._btn_compare.clicked.connect(lambda: self._stack.setCurrentIndex(3))
         lay.addLayout(view_row)
 
         self._stack = QStackedWidget()
@@ -203,6 +207,10 @@ class SetupWorkspace(QWidget):
         lineage_scroll.setWidget(self._lineage)
         self._stack.addWidget(lineage_scroll)
 
+        # Page 3 — setup comparison
+        self._compare = SetupComparison()
+        self._stack.addWidget(self._compare)
+
         lay.addWidget(self._stack, 1)
 
         # Actions
@@ -230,12 +238,13 @@ class SetupWorkspace(QWidget):
         self, vm: SetupRecommendationVM, *, discipline: str = "race",
         active_setup: str = "", saved: bool = False, applied: bool = False,
         validated: bool = False, setup_values: Optional[dict] = None,
-        lineage_nodes=None,
+        lineage_nodes=None, comparisons=None,
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
         self._vm = vm
         self._lineage.set_nodes(lineage_nodes or ())
+        self._compare.set_comparisons(comparisons or ())
         self._selector.set_discipline(discipline)
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
 

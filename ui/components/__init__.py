@@ -18,6 +18,7 @@ from ui.components.event_header import EventHeaderBar
 from ui.components.setup_workspace import SetupWorkspace, SetupDisciplineSelector
 from ui.components.gt7_settings_sheet import GT7SettingsSheet
 from ui.components.setup_lineage import SetupLineageTree, LineageNode
+from ui.components.setup_comparison import SetupComparison, build_comparison_rows
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -29,4 +30,5 @@ __all__ = [
     "EventHeaderBar",
     "SetupWorkspace", "SetupDisciplineSelector",
     "GT7SettingsSheet", "SetupLineageTree", "LineageNode",
+    "SetupComparison", "build_comparison_rows",
 ]
