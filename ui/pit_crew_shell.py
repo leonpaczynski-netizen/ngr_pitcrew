@@ -28,6 +28,7 @@ from ui.components import (
     SectionHeading, SetupWorkspace, RunCard,
 )
 from ui.components.practice_feedback import StructuredFeedbackForm
+from ui.components.practice_outcome import PracticeOutcome
 from ui.components.setup_workspace import SetupDisciplineSelector as _Seg
 from ui.components.nav_rail import NAV_LABELS
 
@@ -226,7 +227,9 @@ class PitCrewShell(QMainWindow):
         self._btn_runcard.setText("Run card")
         self._btn_review = QToolButton()
         self._btn_review.setText("Review")
-        for i, b in enumerate((self._btn_runcard, self._btn_review)):
+        self._btn_outcome = QToolButton()
+        self._btn_outcome.setText("Outcome")
+        for b in (self._btn_runcard, self._btn_review, self._btn_outcome):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(_Seg._qss())
@@ -236,13 +239,20 @@ class PitCrewShell(QMainWindow):
         self._btn_runcard.setChecked(True)
         self._btn_runcard.clicked.connect(lambda: self._practice_stack.setCurrentIndex(0))
         self._btn_review.clicked.connect(lambda: self._practice_stack.setCurrentIndex(1))
+        self._btn_outcome.clicked.connect(lambda: self._practice_stack.setCurrentIndex(2))
         lay.addLayout(top)
 
         self.run_card = RunCard()
         self.feedback_form = StructuredFeedbackForm()
+        self.practice_outcome = PracticeOutcome()
         self._practice_stack.addWidget(self.run_card)
         self._practice_stack.addWidget(self.feedback_form)
+        self._practice_stack.addWidget(self.practice_outcome)
         lay.addWidget(self._practice_stack, 1)
+        # After submitting feedback, surface the Outcome view.
+        self.feedback_form.submitted.connect(
+            lambda _d: (self._btn_outcome.setChecked(True),
+                        self._practice_stack.setCurrentIndex(2)))
         return page
 
     # ---- navigation -------------------------------------------------------
