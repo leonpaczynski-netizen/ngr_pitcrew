@@ -31,6 +31,7 @@ from ui.components.strategy_plan import (
 from ui.components.live_pit_wall import LivePitWall, LivePitWallVM
 from ui.components.debrief_view import DebriefView, DebriefVM
 from ui.components.engineering_library import EngineeringLibrary, LIBRARY_AREAS
+from ui.components.settings_page import SettingsPage
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -50,4 +51,5 @@ __all__ = [
     "LivePitWall", "LivePitWallVM",
     "DebriefView", "DebriefVM",
     "EngineeringLibrary", "LIBRARY_AREAS",
+    "SettingsPage",
 ]

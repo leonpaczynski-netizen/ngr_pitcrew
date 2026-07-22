@@ -283,23 +283,9 @@ class PitCrewShell(QMainWindow):
         return page
 
     def _build_settings_page(self) -> QWidget:
-        from ui.components.buttons import SecondaryActionButton
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
-        lay.setSpacing(_t.SPACE_MD)
-        lay.addWidget(SectionHeading("SETTINGS", level=1))
-        note = QLabel(
-            "The classic tools remain available for the editable and advanced workflows "
-            "the new experience does not yet own — Setup Builder analysis, Track Modelling, "
-            "Event Planner and full Settings.")
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
-        lay.addWidget(note)
-        self._btn_classic = SecondaryActionButton("Open classic tools & settings")
-        self._btn_classic.clicked.connect(lambda: self.classic_ui_requested.emit())
-        lay.addWidget(self._btn_classic)
-        lay.addStretch(1)
+        from ui.components.settings_page import SettingsPage
+        page = SettingsPage()
+        page.open_classic_requested.connect(lambda: self.classic_ui_requested.emit())
         return page
 
     # ---- navigation -------------------------------------------------------

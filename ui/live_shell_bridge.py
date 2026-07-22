@@ -55,12 +55,21 @@ class LiveShellBridge(QObject):
             pass
 
     def _wire_actions(self) -> None:
-        """Route Garage Apply/Revert back through the classic (gated) apply path."""
+        """Route Garage Apply/Revert/Analyse + Settings save through the classic services."""
         try:
             gp = getattr(self._shell, "garage_page", None)
             if gp is not None:
                 gp.apply_requested.connect(self._on_apply)
                 gp.revert_requested.connect(self._on_revert)
+                if hasattr(gp, "analyse_requested"):
+                    gp.analyse_requested.connect(self._on_analyse)
+        except Exception:
+            pass
+        try:
+            sp = getattr(self._shell, "settings_page", None)
+            if sp is not None and hasattr(sp, "set_config"):
+                sp.set_config(self._config)
+                sp.save_requested.connect(self._on_save_settings)
         except Exception:
             pass
 
@@ -166,6 +175,47 @@ class LiveShellBridge(QObject):
             if callable(reverter) and form is not None:
                 reverter(form)
             self.refresh()
+        except Exception:
+            pass
+
+    def _on_analyse(self) -> None:
+        """Run the setup brain on the current setup via the window's analyse path."""
+        try:
+            window = self._window
+            analyse = getattr(window, "_setup_analyse_ai", None)
+            if callable(analyse):
+                analyse()
+                # the recommendation appears asynchronously; refresh picks it up.
+                self.refresh()
+        except Exception:
+            pass
+
+    def _on_save_settings(self) -> None:
+        """Persist the edited config and apply it to the live services. Never raises."""
+        sp = getattr(self._shell, "settings_page", None)
+        ok = False
+        try:
+            cfg = sp.apply_to_config() if sp is not None else self._config
+            # Persist through the canonical config saver (config-safety aware).
+            try:
+                import config_paths
+                path = getattr(self._window, "config_path", None) or config_paths.resolve_config_path()
+                config_paths.save_config(cfg, path)
+                ok = True
+            except Exception:
+                ok = False
+            # Apply to the live announcer / tracker where available.
+            try:
+                announcer = getattr(self._window, "_announcer", None)
+                if announcer is not None and hasattr(announcer, "update_config"):
+                    announcer.update_config(cfg.get("voice", {}))
+            except Exception:
+                pass
+        except Exception:
+            ok = False
+        try:
+            if sp is not None and hasattr(sp, "show_saved"):
+                sp.show_saved(ok)
         except Exception:
             pass
 

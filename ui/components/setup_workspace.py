@@ -100,6 +100,7 @@ class SetupWorkspace(QWidget):
     apply_requested = pyqtSignal(dict)     # {field: value} from applied_field_values()
     discipline_changed = pyqtSignal(str)
     revert_requested = pyqtSignal(str)     # lineage node_id to revert to
+    analyse_requested = pyqtSignal()       # run the setup brain on the current setup
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -223,6 +224,9 @@ class SetupWorkspace(QWidget):
 
         # Actions
         act = QHBoxLayout()
+        self._analyse = SecondaryActionButton("Analyse setup")
+        self._analyse.clicked.connect(lambda: self.analyse_requested.emit())
+        act.addWidget(self._analyse)
         self._apply = PrimaryActionButton()
         self._apply.clicked.connect(self._on_apply)
         self._explain = SecondaryActionButton("Why these changes")

@@ -209,6 +209,14 @@ def main() -> int:
         carry_forward=("Rear ARB working window 4–5 for this layout",),
         primary_action_label="Prepare qualifying", primary_action_key="to_qualifying"))
 
+    # Native Settings (sample config)
+    shell.settings_page.set_config({
+        "connection": {"host": "127.0.0.1", "port": 33741},
+        "voice": {"enabled": True, "rate": 175, "volume": 0.8,
+                  "tyre_alerts": True, "lap_alerts": True, "fuel_alerts": True},
+        "shift_beep": {"qual_rpm": 8200, "race_rpm": 7800},
+    })
+
     shell.show()
     return app.exec()
 
