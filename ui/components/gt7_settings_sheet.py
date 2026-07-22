@@ -115,8 +115,8 @@ class GT7SettingsSheet(QWidget):
         )
         grid = QGridLayout(box)
         grid.setContentsMargins(_t.SPACE_MD, _t.SPACE_SM, _t.SPACE_MD, _t.SPACE_SM)
-        grid.setVerticalSpacing(4)
-        grid.setHorizontalSpacing(_t.SPACE_MD)
+        grid.setVerticalSpacing(3)
+        grid.setHorizontalSpacing(_t.SPACE_SM)
 
         # Centered section header bar (GT7 look)
         title = QLabel(sec.get("title", ""))
@@ -155,9 +155,13 @@ class GT7SettingsSheet(QWidget):
                 r_changed = len(fkeys) > 1 and fkeys[1] in changed
                 grid.addWidget(self._value_box(rear, r_changed), ri, 2)
 
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
+        # Labels take all the slack (max readability); value fields stay compact —
+        # they only hold short numbers.
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 0)
+        grid.setColumnStretch(2, 0)
+        grid.setColumnMinimumWidth(1, 50)
+        grid.setColumnMinimumWidth(2, 50)
         return box
 
     def _value_box(self, value, changed: bool) -> QLabel:
@@ -180,7 +184,7 @@ class GT7SettingsSheet(QWidget):
         v.setStyleSheet(
             f"color: {colour}; background: {_t.CARBON}; "
             f"border: 1px solid {border}; border-radius: {_t.RADIUS_SM}px; "
-            f"padding: 2px 8px; min-width: 44px;"
+            f"padding: 1px 6px; min-width: 38px;"
         )
         return v
 

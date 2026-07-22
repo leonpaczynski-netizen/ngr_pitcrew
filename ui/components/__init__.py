@@ -16,6 +16,8 @@ from ui.components.progress_rail import ProgressRail, STAGE_LABELS
 from ui.components.nav_rail import NavRail, NAV_LABELS
 from ui.components.event_header import EventHeaderBar
 from ui.components.setup_workspace import SetupWorkspace, SetupDisciplineSelector
+from ui.components.gt7_settings_sheet import GT7SettingsSheet
+from ui.components.setup_lineage import SetupLineageTree, LineageNode
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -26,4 +28,5 @@ __all__ = [
     "NavRail", "NAV_LABELS",
     "EventHeaderBar",
     "SetupWorkspace", "SetupDisciplineSelector",
+    "GT7SettingsSheet", "SetupLineageTree", "LineageNode",
 ]

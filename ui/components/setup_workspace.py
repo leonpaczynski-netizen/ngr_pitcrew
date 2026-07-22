@@ -26,6 +26,7 @@ from ui.components.cards import SectionHeading
 from ui.components.status import StatusPill
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 from ui.components.gt7_settings_sheet import GT7SettingsSheet
+from ui.components.setup_lineage import SetupLineageTree, LineageNode
 from ui.setup_recommendation_vm import SetupRecommendationVM, build_recommendation_vm
 
 
@@ -89,6 +90,7 @@ class SetupDisciplineSelector(QWidget):
 class SetupWorkspace(QWidget):
     apply_requested = pyqtSignal(dict)     # {field: value} from applied_field_values()
     discipline_changed = pyqtSignal(str)
+    revert_requested = pyqtSignal(str)     # lineage node_id to revert to
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -137,7 +139,9 @@ class SetupWorkspace(QWidget):
         self._btn_changed.setText("Changed fields")
         self._btn_full = QToolButton()
         self._btn_full.setText("Full setup sheet")
-        for i, b in enumerate((self._btn_changed, self._btn_full)):
+        self._btn_lineage = QToolButton()
+        self._btn_lineage.setText("Lineage")
+        for b in (self._btn_changed, self._btn_full, self._btn_lineage):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(SetupDisciplineSelector._qss())
@@ -147,6 +151,7 @@ class SetupWorkspace(QWidget):
         self._btn_changed.setChecked(True)
         self._btn_changed.clicked.connect(lambda: self._stack.setCurrentIndex(0))
         self._btn_full.clicked.connect(lambda: self._stack.setCurrentIndex(1))
+        self._btn_lineage.clicked.connect(lambda: self._stack.setCurrentIndex(2))
         lay.addLayout(view_row)
 
         self._stack = QStackedWidget()
@@ -188,6 +193,16 @@ class SetupWorkspace(QWidget):
         sheet_scroll.setWidget(self._sheet)
         self._stack.addWidget(sheet_scroll)
 
+        # Page 2 — vertical setup lineage
+        self._lineage = SetupLineageTree()
+        self._lineage.revert_requested.connect(self.revert_requested)
+        lineage_scroll = QScrollArea()
+        lineage_scroll.setWidgetResizable(True)
+        lineage_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        lineage_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lineage_scroll.setWidget(self._lineage)
+        self._stack.addWidget(lineage_scroll)
+
         lay.addWidget(self._stack, 1)
 
         # Actions
@@ -215,10 +230,12 @@ class SetupWorkspace(QWidget):
         self, vm: SetupRecommendationVM, *, discipline: str = "race",
         active_setup: str = "", saved: bool = False, applied: bool = False,
         validated: bool = False, setup_values: Optional[dict] = None,
+        lineage_nodes=None,
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
         self._vm = vm
+        self._lineage.set_nodes(lineage_nodes or ())
         self._selector.set_discipline(discipline)
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
 
