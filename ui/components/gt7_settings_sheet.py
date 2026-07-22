@@ -161,8 +161,18 @@ class GT7SettingsSheet(QWidget):
         return box
 
     def _value_box(self, value, changed: bool) -> QLabel:
-        v = QLabel(str(value))
-        v.setFont(_tabular_font(bold=True))
+        text = str(value)
+        # Numbers are bold tabular figures; longer enum strings (compound, ECU,
+        # transmission type) use a smaller font so they fit the field without clipping.
+        is_numeric = _looks_numeric(text)
+        v = QLabel(text)
+        if is_numeric:
+            v.setFont(_tabular_font(bold=True))
+        else:
+            f = QFont(_t.FONT_FAMILY)
+            f.setPointSize(_t.FS_CAPTION)
+            v.setFont(f)
+        v.setToolTip(text)
         v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         border = _t.NGR_GREEN if changed else _t.HAIRLINE
@@ -170,9 +180,17 @@ class GT7SettingsSheet(QWidget):
         v.setStyleSheet(
             f"color: {colour}; background: {_t.CARBON}; "
             f"border: 1px solid {border}; border-radius: {_t.RADIUS_SM}px; "
-            f"padding: 2px 8px; min-width: 46px;"
+            f"padding: 2px 8px; min-width: 44px;"
         )
         return v
+
+
+def _looks_numeric(text: str) -> bool:
+    try:
+        float(str(text).replace(":", "").strip())
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _clear_layout(layout) -> None:
