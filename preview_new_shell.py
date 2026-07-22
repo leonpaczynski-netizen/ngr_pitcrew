@@ -92,6 +92,22 @@ def main() -> int:
             "diagnosis": {"primary_issue": "Mid-corner understeer through the Esses limiting rotation"},
         }),
         discipline="qualifying", active_setup="Quali v3", saved=True, applied=False,
+        setup_values={
+            "tyre_front": "Racing: Hard", "tyre_rear": "Racing: Hard",
+            "ride_height_front": 60, "ride_height_rear": 74,
+            "arb_front": 5, "arb_rear": 4,
+            "dampers_front_comp": 30, "dampers_rear_comp": 30,
+            "dampers_front_ext": 40, "dampers_rear_ext": 40,
+            "springs_front": 3.50, "springs_rear": 3.50,
+            "camber_front": 3.0, "camber_rear": 3.0,
+            "toe_front": 0.10, "toe_rear": 0.20,
+            "aero_front": 430, "aero_rear": 590,
+            "lsd_initial": 15, "lsd_accel": 40, "lsd_decel": 50,
+            "torque_distribution_rear": 100, "brake_bias_front": 0,
+            "final_drive": 3.90, "transmission_max_speed_kmh": 300,
+            "ballast_kg": 0, "power_restrictor": 100,
+            "ecu_ingame": "Fully Customisable", "ecu_ingame_output": 100,
+        },
     )
 
     shell.show()
