@@ -1231,9 +1231,12 @@ def _active_setup(window, purpose: str = "Race"):
 
 
 def _track_choices():
-    """(locations, layouts) for the track pickers, as (id, label) pairs. Never raises.
+    """(locations, layouts_by_location) for the track pickers. Never raises.
 
-    Uses the same view-model helpers the classic tab uses, so the lists read identically.
+    ``layouts_by_location`` maps each location id to ONLY its own layouts, so choosing a
+    circuit shows that circuit's layouts — not a flat list of every "Full Course" of
+    every track. Uses the same view-model helpers the classic tab uses, so the lists
+    read identically.
     """
     try:
         from data.track_intelligence import load_track_seed
@@ -1243,10 +1246,11 @@ def _track_choices():
         seed = load_track_seed()
         locations = [(loc_id, display)
                      for display, loc_id in build_location_display_items(seed)]
-        layouts = []
-        for _display, loc_id in build_location_display_items(seed):
-            for lay_display, lay_id in build_layout_display_items(seed, loc_id):
-                layouts.append((lay_id, lay_display))
-        return locations, layouts
+        layouts_by_location = {
+            loc_id: [(lay_id, lay_display)
+                     for lay_display, lay_id in build_layout_display_items(seed, loc_id)]
+            for _display, loc_id in build_location_display_items(seed)
+        }
+        return locations, layouts_by_location
     except Exception:
-        return (), ()
+        return (), {}

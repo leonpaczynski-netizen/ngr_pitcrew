@@ -95,9 +95,60 @@ class TestActionsAreEmitted:
         seen = []
         page.track_selected.connect(lambda a, b: seen.append((a, b)))
         page._location.setCurrentIndex(1)
+        page._location.activated.emit(1)          # circuit chosen → layouts appear
         page._layout_combo.setCurrentIndex(1)
         page._layout_combo.activated.emit(1)
         assert seen[-1] == ("watkins_glen", "watkins_glen__long")
+
+
+class TestLayoutsAreScopedToTheChosenCircuit:
+    """UAT-6: "when selecting a track only the relevant layouts should appear" — the
+    combo showed every layout of every circuit (six unrelated "Full Course" entries)."""
+
+    def _multi(self, qapp):
+        p = TrackModellingPage()
+        p.set_tracks(
+            locations=[("watkins_glen", "Watkins Glen International"),
+                       ("fuji", "Fuji Speedway")],
+            layouts={
+                "watkins_glen": [("watkins_glen__long", "Long Course"),
+                                 ("watkins_glen__short", "Short Course")],
+                "fuji": [("fuji__gp", "Grand Prix"), ("fuji__full", "Full Course")],
+            })
+        return p
+
+    def test_no_layouts_are_shown_until_a_circuit_is_chosen(self, qapp):
+        p = self._multi(qapp)
+        # Only the "Choose a layout…" placeholder — not 4 layouts from 2 circuits.
+        assert p._layout_combo.count() == 1
+        assert p._layout_combo.isEnabled() is False
+
+    def test_choosing_a_circuit_shows_only_its_layouts(self, qapp):
+        p = self._multi(qapp)
+        p._location.setCurrentIndex(p._location.findData("watkins_glen"))
+        p._location.activated.emit(p._location.currentIndex())
+        labels = [p._layout_combo.itemText(i) for i in range(1, p._layout_combo.count())]
+        assert labels == ["Long Course", "Short Course"]
+        assert "Grand Prix" not in labels and "Full Course" not in labels
+
+    def test_switching_circuit_replaces_the_layout_list(self, qapp):
+        p = self._multi(qapp)
+        p._location.setCurrentIndex(p._location.findData("watkins_glen"))
+        p._location.activated.emit(p._location.currentIndex())
+        p._location.setCurrentIndex(p._location.findData("fuji"))
+        p._location.activated.emit(p._location.currentIndex())
+        ids = [p._layout_combo.itemData(i) for i in range(1, p._layout_combo.count())]
+        assert ids == ["fuji__gp", "fuji__full"]
+
+    def test_switching_circuit_clears_a_stale_layout_selection(self, qapp):
+        """A layout from the old circuit must not stay selected against the new one."""
+        p = self._multi(qapp)
+        p._location.setCurrentIndex(p._location.findData("watkins_glen"))
+        p._location.activated.emit(p._location.currentIndex())
+        p._layout_combo.setCurrentIndex(1)                     # Long Course
+        p._location.setCurrentIndex(p._location.findData("fuji"))
+        p._location.activated.emit(p._location.currentIndex())
+        assert p._layout_combo.currentData() == ""             # back to placeholder
 
     def test_a_corner_edit_names_its_row(self, page):
         seen = []

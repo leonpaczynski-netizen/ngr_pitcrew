@@ -221,37 +221,113 @@ def run_card_vm_from_recommendation(rec_vm, *, active_setup_label: str = ""):
 
 
 # ---------------------------------------------------------------------------
-# Debrief  <-  session_db.build_cross_session_memory (conservative top-level map)
+# Debrief  <-  session_db.build_cross_session_memory
 # ---------------------------------------------------------------------------
+# build_cross_session_memory returns the NESTED shape
+#   {ok, history, memory, metrics, scorecard, comparison, timeline, record_count}
+# where memory = EngineeringMemory.to_dict (issues / protected_knowledge / ...),
+# scorecard = EngineeringScorecard.to_dict (band / issues_solved / confidence),
+# and comparison = SessionComparison.to_dict (verdict / *_delta). The previous adapter
+# read issues/band/regressions/protected_knowledge as TOP-LEVEL keys — none of which
+# exist there — so every field mapped to nothing and the Debrief was always empty.
+
+def _issue_label(issue) -> str:
+    """A human line for one IssueMemory dict: 'understeer at Turn 6 (entry)'."""
+    if not isinstance(issue, dict):
+        return str(issue or "")
+    what = str(issue.get("issue_type") or issue.get("family") or "issue").replace("_", " ")
+    corner = str(issue.get("corner") or "").strip()
+    phase = str(issue.get("phase") or "").strip().replace("_", " ")
+    bits = [what]
+    if corner:
+        bits.append(f"at {corner}")
+    if phase:
+        bits.append(f"({phase})")
+    return " ".join(bits)
+
+
+def _knowledge_label(item) -> str:
+    """A human line for one ProtectedKnowledgeItem dict: 'front_wing — higher is better'."""
+    if not isinstance(item, dict):
+        return str(item or "")
+    field = str(item.get("field") or item.get("kind") or "").strip()
+    direction = str(item.get("direction") or "").strip()
+    if field and direction:
+        return f"{field} — {direction}"
+    return field or direction or str(item.get("value") or "")
+
+
+def _behaviour_label(item) -> str:
+    if isinstance(item, dict):
+        for k in ("label", "behaviour", "field", "detail", "name"):
+            if item.get(k):
+                return str(item.get(k))
+        return ""
+    return str(item or "")
+
+
 def debrief_vm_from_memory(mem, *, next_label: str = "Continue development", next_key: str = "continue"):
     from ui.components.debrief_view import DebriefVM
-    if not isinstance(mem, dict) or mem.get("insufficient"):
+    if not isinstance(mem, dict) or not mem.get("ok", True) or mem.get("insufficient"):
         return DebriefVM()
 
-    def _names(items, *keys):
-        out = []
-        for it in (items or []):
-            if isinstance(it, dict):
-                for k in keys:
-                    if it.get(k):
-                        out.append(str(it.get(k)))
-                        break
-            elif it:
-                out.append(str(it))
-        return tuple(out)
+    # No records = no debrief. An empty programme still reports a scorecard band of
+    # "insufficient", which would render a hollow "Development band: insufficient"
+    # debrief instead of the honest "No debrief yet — complete a session" placeholder.
+    try:
+        if int(mem.get("record_count") or 0) <= 0:
+            return DebriefVM()
+    except (TypeError, ValueError):
+        return DebriefVM()
 
-    issues = mem.get("issues") or {}
-    resolved = issues.get("resolved") if isinstance(issues, dict) else None
-    remaining = issues.get("remaining") if isinstance(issues, dict) else None
-    band = str(mem.get("band", "") or mem.get("scorecard_band", "") or "")
+    memory = mem.get("memory") if isinstance(mem.get("memory"), dict) else {}
+    scorecard = mem.get("scorecard") if isinstance(mem.get("scorecard"), dict) else {}
+    comparison = mem.get("comparison") if isinstance(mem.get("comparison"), dict) else {}
+
+    issues = [i for i in (memory.get("issues") or []) if isinstance(i, dict)]
+    resolved = [i for i in issues if i.get("currently_resolved")]
+    # A regression is an issue that HAS been regressed and is not currently resolved —
+    # this is the prominent, colour-coded section, so it must not include stale history.
+    regressed = [i for i in issues
+                 if int(i.get("times_regressed") or 0) > 0 and not i.get("currently_resolved")]
+    remaining = [i for i in issues
+                 if not i.get("currently_resolved") and i not in regressed]
+
+    band = str(scorecard.get("band") or "").replace("_", " ")
+    verdict = str(comparison.get("verdict") or "").strip()
+
+    # "What happened" = the session-to-session verdict, then the development band.
+    happened_bits = []
+    if comparison:
+        earlier = str(comparison.get("earlier_label") or "the previous session")
+        later = str(comparison.get("later_label") or "this session")
+        if verdict:
+            happened_bits.append(f"{later} vs {earlier}: {verdict}.")
+    if band:
+        happened_bits.append(f"Development band: {band}.")
+    what_happened = " ".join(happened_bits)
+
+    # The setup outcome line reports the measured deltas behind the verdict.
+    outcome_bits = []
+    for key, word in (("issues_resolved_delta", "issues resolved"),
+                      ("regressions_delta", "regressions"),
+                      ("improvements_delta", "improvements")):
+        try:
+            n = int(comparison.get(key) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n:
+            outcome_bits.append(f"{n:+d} {word}")
+    setup_outcome = ", ".join(outcome_bits)
 
     return DebriefVM(
-        what_happened=(f"Development band: {band}." if band else ""),
-        improved=_names(resolved, "label", "issue_type", "detail"),
-        regressed=_names(mem.get("regressions"), "label", "detail"),
-        learned=_names(mem.get("protected_knowledge") or mem.get("behaviour"), "label", "detail"),
-        carry_forward=_names(mem.get("protected_behaviours"), "label", "detail"),
-        contradictions=_names(mem.get("contradictions"), "label", "detail"),
-        setup_outcome=str(mem.get("latest_setup_outcome", "") or ""),
+        what_happened=what_happened,
+        improved=tuple(_issue_label(i) for i in resolved),
+        regressed=tuple(_issue_label(i) for i in regressed),
+        learned=tuple(_knowledge_label(k) for k in (memory.get("protected_knowledge") or [])),
+        carry_forward=tuple(filter(None, (_behaviour_label(b)
+                                          for b in (memory.get("protected_behaviours") or [])))),
+        findings=tuple(f"Still open: {_issue_label(i)}" for i in remaining),
+        setup_outcome=setup_outcome,
         primary_action_label=next_label, primary_action_key=next_key,
     )

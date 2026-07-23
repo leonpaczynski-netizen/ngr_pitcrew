@@ -87,3 +87,36 @@ class TestPhraseList:
                        "how many laps", "is it raining"):
             assert phrase in EXTRA_PHRASES
             assert _match_intent(phrase) != ""
+
+
+class TestIntentSpecificityBeatsListOrder:
+    """UAT-6: "PTT is still just saying not enough laps to determine pace instead of
+    answering my tyre temp question or fuel". The matcher returned the FIRST intent in
+    list order whose keyword appeared, and the pace intent (keywords "going",
+    "performance") sits above tyre_state and fuel — so a topic word was shadowed by a
+    filler word and the question was answered as a pace query."""
+
+    def test_a_tyre_question_is_not_answered_as_pace(self):
+        assert _match_intent("how are the tyre temps going") == "tyre_state"
+        assert _match_intent("are my tyres overheating") == "tyre_state"
+
+    def test_a_fuel_question_is_not_answered_as_pace(self):
+        assert _match_intent("how much fuel have i got left") == "fuel"
+        assert _match_intent("am i going to run out of fuel") == "fuel"
+
+    def test_a_genuine_pace_question_still_routes_to_pace(self):
+        assert _match_intent("how am i going") == "pace"
+        assert _match_intent("hows my pace") == "pace"
+
+    def test_a_multiword_command_beats_an_overlapping_single_word(self):
+        # "fuel check" (a deliberate command) must not be swallowed by the "fuel" intent.
+        assert _match_intent("give me a fuel check") == "fuel_check"
+        # "should i pit" beats a stray "pit" mention elsewhere.
+        assert _match_intent("should i pit") == "pit"
+
+    def test_a_specific_topic_word_anywhere_wins_over_a_filler_word(self):
+        # "how many" (generic) appears, but "position" is the real topic.
+        assert _match_intent("how many places am i behind in position") == "position"
+
+    def test_nothing_matched_returns_empty(self):
+        assert _match_intent("hello there engineer") == ""

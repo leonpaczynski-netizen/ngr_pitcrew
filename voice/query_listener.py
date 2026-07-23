@@ -63,12 +63,52 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
 ]
 
 
+#: Weak, ambiguous filler words. On their own they name no topic — "how am i going"
+#: could be about pace, tyres, fuel or position — so a specific topic word anywhere in
+#: the phrase must win over them. Matching these by LIST ORDER is exactly why "how are
+#: the tyre temps going" was answered with "Not enough laps yet to assess pace": the
+#: pace intent sits above tyre_state and its filler word "going" matched first.
+_GENERIC_KEYWORDS = frozenset({
+    "going", "how am i", "performance", "consistent", "falling", "how",
+    "how many", "how long", "where", "time", "remaining", "clock", "minutes",
+    "place", "standing", "rank", "record",
+})
+
+
+def _keyword_weight(kw: str) -> int:
+    """How strong a signal a matched keyword is. Higher = more specific.
+
+    A multi-word phrase ("fuel check", "should i pit") is a deliberate command and the
+    strongest signal; a specific single topic word ("tyre", "fuel") is next; a generic
+    filler word only counts when nothing more specific matched.
+    """
+    # Generic first: "how many"/"how long"/"how am i" are multi-word but still filler,
+    # so they must NOT collect the command bonus below.
+    if kw in _GENERIC_KEYWORDS:
+        return 1
+    if " " in kw:
+        return 100 + len(kw)
+    return 10 + len(kw)
+
+
 def _match_intent(text: str) -> str:
+    """Pick the intent whose STRONGEST matched keyword is the most specific.
+
+    Ties break by list order, so the existing priorities still decide between two
+    equally-specific matches — but a specific topic word now beats a generic filler word
+    regardless of which intent happens to be listed first.
+    """
     lower = text.lower()
-    for intent, keywords in _INTENT_KEYWORDS:
-        if any(kw in lower for kw in keywords):
-            return intent
-    return ""
+    best_intent, best_key = "", (0, 0)
+    for order, (intent, keywords) in enumerate(_INTENT_KEYWORDS):
+        matched = [kw for kw in keywords if kw in lower]
+        if not matched:
+            continue
+        strength = max(_keyword_weight(kw) for kw in matched)
+        key = (strength, -order)          # stronger wins; earlier list order breaks ties
+        if key > best_key:
+            best_key, best_intent = key, intent
+    return best_intent
 
 
 def _build_response(intent: str, tracker: "RaceStateTracker") -> str:

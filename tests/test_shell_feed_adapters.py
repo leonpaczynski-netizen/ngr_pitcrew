@@ -93,16 +93,36 @@ class TestQualifying:
 
 class TestDebrief:
     def test_maps_memory(self):
-        mem = {"band": "Improving",
-               "issues": {"resolved": [{"label": "Mid-corner understeer"}],
-                          "remaining": [{"label": "Entry instability"}]},
-               "protected_behaviours": [{"label": "Rear ARB 4-5 window"}]}
+        # The REAL build_cross_session_memory shape: nested memory/scorecard/comparison,
+        # not the top-level band/issues this used to assert (which never existed, so the
+        # Debrief was always empty — UAT-6 "debrief doesn't seem to be doing anything").
+        mem = {
+            "ok": True, "record_count": 2,
+            "memory": {
+                "issues": [
+                    {"issue_type": "understeer", "corner": "the Esses",
+                     "currently_resolved": True, "times_regressed": 0},
+                    {"issue_type": "entry_instability", "corner": "Turn 1",
+                     "currently_resolved": False, "times_regressed": 1},
+                ],
+                "protected_behaviours": [{"label": "Rear ARB 4-5 window"}],
+            },
+            "scorecard": {"band": "improving"},
+            "comparison": {"earlier_label": "Session 1", "later_label": "Session 2",
+                           "verdict": "improved", "regressions_delta": -1},
+        }
         vm = debrief_vm_from_memory(mem)
         assert vm.has_debrief is True
-        assert "Improving" in vm.what_happened
-        assert vm.improved == ("Mid-corner understeer",)
+        assert "improving" in vm.what_happened
+        assert vm.improved == ("understeer at the Esses",)
+        assert vm.regressed == ("entry instability at Turn 1",)
         assert vm.carry_forward == ("Rear ARB 4-5 window",)
 
     def test_insufficient_empty(self):
         assert debrief_vm_from_memory({"insufficient": True}).has_debrief is False
         assert debrief_vm_from_memory(None).has_debrief is False
+        assert debrief_vm_from_memory({"ok": False}).has_debrief is False
+        # No records = the honest placeholder, not a hollow "band: insufficient" debrief.
+        assert debrief_vm_from_memory(
+            {"ok": True, "record_count": 0, "scorecard": {"band": "insufficient"}}
+        ).has_debrief is False

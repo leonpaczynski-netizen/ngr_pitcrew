@@ -47,7 +47,10 @@ class TrackModellingPage(QWidget):
         self.setObjectName("ngrTrackModelling")
         self._view = GuidedView()
         self._locations: list = []
-        self._layouts: list = []
+        #: location_id -> [(layout_id, label)]. The layout combo shows only the
+        #: layouts of the CHOSEN circuit — a flat list of every layout of every track
+        #: (six "Full Course" entries for six unrelated circuits) is unusable.
+        self._layouts_by_location: dict = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -118,7 +121,7 @@ class TrackModellingPage(QWidget):
                 f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
                 f"padding: 4px 10px; font-size: {_t.FS_LABEL}pt; }}")
             pick.addWidget(combo)
-        self._location.activated.connect(lambda _i: self._emit_selection())
+        self._location.activated.connect(lambda _i: self._on_location_changed())
         self._layout_combo.activated.connect(lambda _i: self._emit_selection())
         pick.addStretch(1)
         self._card.body.addWidget(self._picker)
@@ -190,27 +193,66 @@ class TrackModellingPage(QWidget):
         self.set_view(GuidedView(), session=None)
 
     # ---- population -------------------------------------------------------
-    def set_tracks(self, locations: Sequence = (), layouts: Sequence = ()) -> None:
-        """Fill the pickers. Items are (id, label) pairs."""
+    def set_tracks(self, locations: Sequence = (), layouts=()) -> None:
+        """Fill the pickers. Location items are (id, label) pairs.
+
+        ``layouts`` is a ``{location_id: [(layout_id, label), ...]}`` mapping so the
+        layout combo can show ONLY the chosen circuit's layouts. A flat list is still
+        accepted (legacy callers/tests): it is treated as belonging to the sole location
+        if there is one, else to every location — but a flat list across many circuits is
+        exactly the bug this replaces, so real callers pass the mapping.
+        """
         self._locations = list(locations or [])
-        self._layouts = list(layouts or [])
-        for combo, items, placeholder in (
-                (self._location, self._locations, "Choose a circuit…"),
-                (self._layout_combo, self._layouts, "Choose a layout…")):
-            current = combo.currentData()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem(placeholder, "")
-            for item in items:
-                try:
-                    ident, label = item
-                except (TypeError, ValueError):
-                    ident = label = str(item)
-                combo.addItem(str(label), str(ident))
-            idx = combo.findData(current)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
-        self._layout_combo.setEnabled(bool(self._layouts))
+        self._layouts_by_location = self._normalise_layouts(layouts)
+
+        current_loc = self._location.currentData()
+        self._location.blockSignals(True)
+        self._location.clear()
+        self._location.addItem("Choose a circuit…", "")
+        for item in self._locations:
+            ident, label = self._pair(item)
+            self._location.addItem(label, ident)
+        idx = self._location.findData(current_loc)
+        self._location.setCurrentIndex(idx if idx >= 0 else 0)
+        self._location.blockSignals(False)
+
+        self._populate_layouts(self._location.currentData() or "",
+                               keep=self._layout_combo.currentData())
+
+    def _normalise_layouts(self, layouts) -> dict:
+        """Accept a {loc_id: [...]} mapping or a flat list, always return the mapping."""
+        if isinstance(layouts, dict):
+            return {str(k): [self._pair(v) for v in (vals or [])]
+                    for k, vals in layouts.items()}
+        flat = [self._pair(v) for v in (layouts or [])]
+        if not flat:
+            return {}
+        # Legacy flat list: attach to the single location if there is exactly one,
+        # otherwise make it available under every location so nothing disappears.
+        if len(self._locations) == 1:
+            return {self._pair(self._locations[0])[0]: flat}
+        return {self._pair(loc)[0]: list(flat) for loc in self._locations}
+
+    def _populate_layouts(self, location_id: str, keep=None) -> None:
+        """Fill the layout combo with one circuit's layouts. ``keep`` re-selects if still present."""
+        items = self._layouts_by_location.get(str(location_id or ""), [])
+        self._layout_combo.blockSignals(True)
+        self._layout_combo.clear()
+        self._layout_combo.addItem("Choose a layout…", "")
+        for ident, label in items:
+            self._layout_combo.addItem(label, ident)
+        idx = self._layout_combo.findData(keep) if keep else -1
+        self._layout_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._layout_combo.blockSignals(False)
+        self._layout_combo.setEnabled(bool(items))
+
+    @staticmethod
+    def _pair(item):
+        try:
+            ident, label = item
+            return str(ident), str(label)
+        except (TypeError, ValueError):
+            return str(item), str(item)
 
     def set_session(self, session: Optional[TrackModellingSession],
                     *, laps_captured: int = 0, corners: Sequence = ()) -> None:
@@ -285,6 +327,14 @@ class TrackModellingPage(QWidget):
             btn.setEnabled(bool(rows))
 
     # ---- signals ----------------------------------------------------------
+    def _on_location_changed(self) -> None:
+        """Picking a circuit refills the layout combo with THAT circuit's layouts.
+
+        The layout selection is reset — a layout from the previous circuit cannot apply
+        to this one — so nothing is emitted until the driver also chooses a layout.
+        """
+        self._populate_layouts(self._location.currentData() or "")
+
     def _emit_selection(self) -> None:
         loc = self._location.currentData() or ""
         lay = self._layout_combo.currentData() or ""
