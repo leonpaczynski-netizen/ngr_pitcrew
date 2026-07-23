@@ -11,6 +11,8 @@ Covers the six defects raised against the rebuilt shell:
   U-6  "Analyse setup" gave no feedback at all when pressed.
 """
 
+import json
+
 import pytest
 
 from PyQt6.QtWidgets import QApplication, QVBoxLayout
@@ -34,6 +36,25 @@ class _Announcer:
     def announce(self, text, priority, cooldown_key, cooldown_secs=0.0,
                  interrupt=False, version_key=""):
         self.calls.append((text, priority, cooldown_key))
+
+
+_BASELINE_JSON = json.dumps({"setup_fields": {"arb_front": 6, "arb_rear": 5}})
+_REC_JSON = json.dumps({
+    "analysis": "a",
+    "changes": [{"field": "arb_front", "from": 6, "to": 5, "reason": "r"}],
+    "setup_fields": {"arb_front": 5}, "recommendation_status": "approved"})
+
+
+class _Advisor:
+    def __init__(self):
+        self.purposes = []
+
+    def build_baseline_setup_response(self, **kw):
+        return _BASELINE_JSON
+
+    def build_combined_setup_response(self, setup, **kw):
+        self.purposes.append(kw.get("purpose"))
+        return _REC_JSON
 
 
 class _Form:
@@ -79,7 +100,7 @@ class _Win:
         self._qual_form = _Form({"body_height_front": 60})
         self._announcer = _Announcer()
         self._event_list = _EventList(["GR Enduro Rd1", "GR Enduro Rd2"])
-        self._driving_advisor = object()
+        self._driving_advisor = _Advisor()
         self.analysed = []
         self.baseline_built = 0
         self.activated = 0
@@ -111,7 +132,10 @@ def wired(qapp):
     ctrl = PitCrewController()
     shell = PitCrewShell(ctrl)
     win = _Win()
-    bridge = LiveShellBridge(shell, ctrl, window=win, config={"voice": {"enabled": True}})
+    bridge = LiveShellBridge(shell, ctrl, window=win, spawn=lambda fn: fn(),
+                             config={"voice": {"enabled": True},
+                                     "strategy": {"car": "Porsche Cayman GT4",
+                                                  "track": "Watkins Glen International"}})
     return shell, win, bridge
 
 
@@ -176,36 +200,31 @@ class TestU1GarageDisciplineIsSticky:
         assert shell.garage_page._baseline.isVisibleTo(shell.garage_page) is True
         assert "initial setup" in shell.garage_page._baseline.text().lower()
         shell.garage_page._baseline.click()
-        assert win.baseline_built == 1
+        assert bridge._setups.sheet("race").is_authored is True
 
     def test_there_is_no_base_discipline(self, wired):
         shell, _win, _bridge = wired
         assert set(shell.garage_page._selector._buttons) == {"race", "qualifying"}
 
     def test_a_race_recommendation_is_not_shown_under_qualifying(self, wired):
-        """The window keeps ONE recommendation VM; showing the Race one on the
-        Qualifying tab would let Apply write Race deltas into the Qualifying sheet."""
-        shell, win, bridge = wired
-        from ui.setup_recommendation_vm import build_recommendation_vm
-        rec = build_recommendation_vm({
-            "status": "approved",
-            "changes": [{"field": "body_height_front", "from": 80, "to": 70,
-                         "reason": "reduce understeer"}],
-        })
-        win.current_recommendation_vm = lambda: rec
-        bridge.refresh()
+        """A recommendation belongs to the sheet it was produced for; rendering it on
+        the other one would let Apply write the wrong deltas."""
+        shell, _win, bridge = wired
+        shell.garage_page._baseline.click()
+        shell.garage_page.analyse_requested.emit()
         assert shell.garage_page._vm.proposed_rows()          # Race: shown
         shell.garage_page._selector._buttons["qualifying"].click()
         assert shell.garage_page._vm.proposed_rows() == ()    # Qualifying: withheld
         shell.garage_page._selector._buttons["race"].click()
         assert shell.garage_page._vm.proposed_rows()          # back on its own sheet
 
-    def test_apply_targets_the_selected_discipline_form(self, wired):
-        shell, win, bridge = wired
+    def test_apply_targets_the_selected_discipline_sheet(self, wired):
+        shell, _win, bridge = wired
+        shell.garage_page._baseline.click()
         shell.garage_page._selector._buttons["qualifying"].click()
-        shell.garage_page.apply_requested.emit({"body_height_front": 55})
-        assert win._qual_form.applied == {"body_height_front": 55}
-        assert win._race_form.applied is None
+        shell.garage_page.apply_requested.emit({"ride_height_front": 55})
+        assert bridge._setups.sheet("qualifying").get("ride_height_front") == 55.0
+        assert bridge._setups.sheet("race").get("ride_height_front") != 55.0
 
 
 class TestU2ReadAloud:
@@ -328,27 +347,24 @@ class TestU5EventSelection:
 
 
 class TestU6AnalyseFeedback:
-    def test_analyse_reports_it_started(self, wired):
-        shell, win, _bridge = wired
+    def test_analyse_reports_its_result(self, wired):
+        shell, _win, bridge = wired
+        shell.garage_page._baseline.click()
         shell.garage_page.analyse_requested.emit()
-        assert win.analysed == ["race"]
-        assert "Analysing" in shell.garage_page._status.text()
+        assert "1 change recommended." in shell.garage_page._status.text()
+        assert bridge._pending_work == ""
 
-    def test_analyse_uses_the_qualifying_path(self, wired):
+    def test_analyse_uses_the_selected_disciplines_purpose(self, wired):
         shell, win, bridge = wired
+        shell.garage_page._baseline.click()
         shell.garage_page._selector._buttons["qualifying"].click()
         shell.garage_page.analyse_requested.emit()
-        assert win.analysed == ["qualifying"]
+        assert win._driving_advisor.purposes[-1] == "Qualifying"
 
-    def test_missing_advisor_is_reported(self, qapp):
-        ctrl = PitCrewController()
-        shell = PitCrewShell(ctrl)
-        win = _Win()
-        win._driving_advisor = None
-        LiveShellBridge(shell, ctrl, window=win, config={})
+    def test_an_empty_sheet_explains_the_order_of_work(self, wired):
+        shell, _win, _bridge = wired
         shell.garage_page.analyse_requested.emit()
-        assert win.analysed == []
-        assert "unavailable" in shell.garage_page._status.text()
+        assert "build the initial setup first" in shell.garage_page._status.text()
 
     def test_switching_discipline_clears_stale_status(self, wired):
         shell, _win, _bridge = wired

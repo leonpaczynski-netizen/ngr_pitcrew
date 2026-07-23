@@ -9,6 +9,8 @@
   V-10 The Engineering Library opened the classic dashboard window.
 """
 
+import json
+
 import pytest
 
 from PyQt6.QtWidgets import QApplication, QTabWidget, QWidget
@@ -114,7 +116,7 @@ class _Win:
         self._qual_form = _Form({"body_height_front": 60})
         self._dispatcher = _Dispatcher()
         self._setup_authority = _Authority({"Race": _ActiveSetup()})
-        self._driving_advisor = object()
+        self._driving_advisor = _Advisor()
         self._setup_result_text = _ResultBox()
         self.confirmed = []
         self.analysed = []
@@ -144,8 +146,39 @@ class _Win:
         self.baseline_built += 1
 
 
+BASELINE_JSON = json.dumps({"setup_fields": {"arb_front": 6, "arb_rear": 5,
+                                             "springs_front": 3.4}})
+RECOMMENDATION_JSON = json.dumps({
+    "analysis": "Front washes out on entry.",
+    "changes": [{"field": "arb_front", "from": 6, "to": 5, "reason": "reduce understeer"}],
+    "setup_fields": {"arb_front": 5}, "recommendation_status": "approved"})
+NO_CHANGE_JSON = json.dumps({"analysis": "Inside its window.", "changes": [],
+                             "setup_fields": {}, "recommendation_status": "approved"})
+
+
+class _Advisor:
+    """Stands in for DrivingAdvisor — both entry points return a JSON string."""
+
+    def __init__(self, baseline=BASELINE_JSON, combined=NO_CHANGE_JSON):
+        self.baseline, self.combined = baseline, combined
+        self.analysed = []
+
+    def build_baseline_setup_response(self, **kw):
+        if isinstance(self.baseline, Exception):
+            raise self.baseline
+        return self.baseline
+
+    def build_combined_setup_response(self, setup, **kw):
+        self.analysed.append(kw.get("purpose"))
+        if isinstance(self.combined, Exception):
+            raise self.combined
+        return self.combined
+
+
 def _cfg():
-    return {"active_cycle_id": "c1", "voice": {"enabled": True}}
+    return {"active_cycle_id": "c1", "voice": {"enabled": True},
+            "strategy": {"car": "Porsche Cayman GT4",
+                         "track": "Watkins Glen International"}}
 
 
 @pytest.fixture
@@ -154,7 +187,10 @@ def wired(qapp):
     shell = PitCrewShell(ctrl)
     win = _Win()
     db = _DB()
-    bridge = LiveShellBridge(shell, ctrl, window=win, config=_cfg(), db=db)
+    # Workers run INLINE: a real thread emitting into a QObject under teardown aborts
+    # the process, and inline keeps the assertions deterministic.
+    bridge = LiveShellBridge(shell, ctrl, window=win, config=_cfg(), db=db,
+                             spawn=lambda fn: fn())
     return shell, win, db, bridge
 
 
@@ -212,17 +248,32 @@ class TestV9ActiveSetupRegisters:
         bridge.refresh()
         assert bridge._controller.state().active_setup_label == "Race baseline · rev 2"
 
-    def test_confirming_in_gt7_routes_to_the_gated_classic_path(self, wired):
-        shell, win, _db, _bridge = wired
+    def test_confirming_in_gt7_marks_the_setup_active(self, wired):
+        """The confirmation now goes straight to the setup authority — the ONLY thing
+        that can make a setup active, because only the driver can change GT7."""
+        shell, win, _db, bridge = wired
+        recorded = []
+        win._setup_authority.mark_applied = lambda ident, **kw: (
+            recorded.append(kw["purpose"]) or _ActiveSetup())
+        shell.garage_page._baseline.click()          # author a sheet to confirm
         shell.garage_page.applied_in_game_confirmed.emit("race")
-        assert win.confirmed == [win._race_form]
+        assert recorded == ["Race"]
         assert "active setup" in shell.garage_page._status.text().lower()
 
-    def test_confirming_on_qualifying_targets_the_qualifying_sheet(self, wired):
+    def test_confirming_on_qualifying_is_a_separate_scope(self, wired):
         shell, win, _db, _bridge = wired
+        recorded = []
+        win._setup_authority.mark_applied = lambda ident, **kw: (
+            recorded.append(kw["purpose"]) or _ActiveSetup())
+        shell.garage_page._baseline.click()
         shell.garage_page._selector._buttons["qualifying"].click()
         shell.garage_page.applied_in_game_confirmed.emit("qualifying")
-        assert win.confirmed == [win._qual_form]
+        assert recorded == ["Qualifying"]
+
+    def test_an_empty_sheet_cannot_be_confirmed(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.garage_page.applied_in_game_confirmed.emit("race")
+        assert "no setup on it" in shell.garage_page._status.text()
 
 
 class TestV5RunRecording:
@@ -479,31 +530,33 @@ class TestV13TyreCompoundControl:
         assert shell.garage_page._tyre_codes  # populated from the event regulations
 
     def test_the_current_compound_is_preselected(self, wired):
-        shell, win, _db, bridge = wired
-        win._race_form.values.update({"tyre_front": "Racing Medium",
+        shell, _win, _db, bridge = wired
+        shell.garage_page._baseline.click()      # a sheet must exist to be shown
+        bridge._setups.apply("race", {"tyre_front": "Racing Medium",
                                       "tyre_rear": "Racing Medium"})
         bridge.refresh()
         idx = shell.garage_page._tyre.currentIndex()
         assert shell.garage_page._tyre_codes[idx] == "RM"
 
     def test_choosing_hard_writes_both_axles_to_the_sheet(self, wired):
-        shell, win, _db, bridge = wired
+        shell, _win, _db, bridge = wired
         bridge.refresh()
         codes = list(shell.garage_page._tyre_codes)
         shell.garage_page._tyre.setCurrentIndex(codes.index("RH"))
         shell.garage_page._tyre.activated.emit(codes.index("RH"))
-        assert win._race_form.values["tyre_front"] == "Racing Hard"
-        assert win._race_form.values["tyre_rear"] == "Racing Hard"
+        sheet = bridge._setups.sheet("race")
+        assert sheet.get("tyre_front") == "Racing Hard"
+        assert sheet.get("tyre_rear") == "Racing Hard"
         assert "Racing Hard" in shell.garage_page._status.text()
         assert "entered this in GT7" in shell.garage_page._status.text()
 
     def test_the_qualifying_sheet_is_the_one_changed_on_that_tab(self, wired):
-        shell, win, _db, bridge = wired
+        shell, _win, _db, bridge = wired
         shell.garage_page._selector._buttons["qualifying"].click()
         codes = list(shell.garage_page._tyre_codes)
         shell.garage_page._tyre.activated.emit(codes.index("RS"))
-        assert win._qual_form.values["tyre_front"] == "Racing Soft"
-        assert "tyre_front" not in win._race_form.values
+        assert bridge._setups.sheet("qualifying").get("tyre_front") == "Racing Soft"
+        assert bridge._setups.sheet("race").get("tyre_front") != "Racing Soft"
 
     def test_qualifying_names_the_softest_allowed(self, wired):
         shell, _win, _db, bridge = wired
@@ -550,83 +603,100 @@ class TestV14GarageFlowOrder:
         assert "Build initial setup" in shell.garage_page._empty.text()
 
     def test_the_build_button_reflects_whether_a_setup_exists(self, wired):
-        shell, win, db, bridge = wired
-        win._race_form.values = {}
+        shell, _win, _db, bridge = wired
         bridge.refresh()
         assert shell.garage_page._baseline.text() == "Build initial setup"
-        win._race_form.values = {"body_height_front": 80}
+        shell.garage_page._baseline.click()          # authors both sheets
         bridge.refresh()
         assert shell.garage_page._baseline.text() == "Rebuild initial setup"
 
 
 class TestV15AnalyseAlwaysSettles:
     """UAT-5: 'clicking analyse setup just sits on this, nothing is returned.' The
-    analysis runs in the classic window; the shell had no way to learn it had finished
-    without proposing changes (or failed), so it said "Analysing..." forever."""
+    classic path reported into a QTextEdit, so a run that finished with no proposed
+    change and a run that failed both looked exactly like a run still going. Every
+    outcome is now a result object, and every one of them is reported."""
 
-    def test_a_finished_analysis_with_no_changes_is_reported(self, wired):
+    def _built(self, wired):
         shell, win, _db, bridge = wired
-        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
+        shell.garage_page._baseline.click()     # a sheet to analyse
+        return shell, win, bridge
+
+    def test_finishing_with_no_change_is_reported_as_a_result(self, wired):
+        shell, win, bridge = self._built(wired)
+        win._driving_advisor.combined = NO_CHANGE_JSON
         shell.garage_page.analyse_requested.emit()
-        assert "Analysing" in shell.garage_page._status.text()
-        bridge.refresh()
-        assert "Analysing" in shell.garage_page._status.text()   # still running
-        win._setup_result_text.text = "No change recommended — the setup is inside its window."
-        bridge.refresh()
-        status = shell.garage_page._status.text()
-        assert "Analysis finished" in status
-        assert "No change recommended" in status
+        assert "No change recommended" in shell.garage_page._status.text()
         assert bridge._pending_work == ""
 
     def test_a_failed_analysis_surfaces_its_error(self, wired):
-        shell, win, _db, bridge = wired
-        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
+        shell, win, bridge = self._built(wired)
+        win._driving_advisor.combined = RuntimeError("no telemetry baseline")
         shell.garage_page.analyse_requested.emit()
-        win._setup_result_text.text = "Analysis failed: no telemetry baseline"
-        bridge.refresh()
         assert "no telemetry baseline" in shell.garage_page._status.text()
-
-    def test_a_real_recommendation_clears_the_status(self, wired):
-        shell, win, _db, bridge = wired
-        from ui.setup_recommendation_vm import build_recommendation_vm
-        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
-        shell.garage_page.analyse_requested.emit()
-        win._setup_result_text.text = "done"
-        win.current_recommendation_vm = lambda: build_recommendation_vm({
-            "status": "approved",
-            "changes": [{"field": "arb_front", "from": 5, "to": 4, "reason": "r"}]})
-        bridge.refresh()
-        assert shell.garage_page._status.text() == ""
         assert bridge._pending_work == ""
+
+    def test_an_unreadable_reply_is_never_shown_raw(self, wired):
+        shell, win, bridge = self._built(wired)
+        win._driving_advisor.combined = '{"analysis": "truncated mid'
+        shell.garage_page.analyse_requested.emit()
+        assert "incomplete" in shell.garage_page._status.text()
+
+    def test_a_real_recommendation_is_reported_and_rendered(self, wired):
+        shell, win, bridge = self._built(wired)
+        win._driving_advisor.combined = RECOMMENDATION_JSON
+        shell.garage_page.analyse_requested.emit()
+        assert "1 change recommended." in shell.garage_page._status.text()
+        assert shell.garage_page.displayed_fields() == ("arb_front",)
+
+    def test_a_race_recommendation_never_renders_under_qualifying(self, wired):
+        shell, win, bridge = self._built(wired)
+        win._driving_advisor.combined = RECOMMENDATION_JSON
+        shell.garage_page.analyse_requested.emit()
+        assert shell.garage_page.displayed_fields() == ("arb_front",)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert shell.garage_page.displayed_fields() == ()
+
+    def test_analysing_an_empty_sheet_explains_the_order_of_work(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.garage_page.analyse_requested.emit()
+        assert "build the initial setup first" in shell.garage_page._status.text()
 
 
 class TestV16InitialSetupConfirmsBothSheets:
-    """UAT-5: 'not convinced qualifying is getting a setup when clicking build baseline.'
-    Both sheets are authored on separate worker threads — each is now confirmed."""
+    """UAT-5: 'not convinced qualifying is getting a setup.' The engine reports each
+    sheet individually, so one that did not build is never implied to have built."""
 
-    def test_each_sheet_is_confirmed_as_it_lands(self, wired):
-        shell, win, _db, bridge = wired
+    def test_both_sheets_are_confirmed_when_both_build(self, wired):
+        shell, _win, _db, bridge = wired
         shell.garage_page._baseline.click()
-        assert "Building the initial setup" in shell.garage_page._status.text()
-
-        win._race_form.values.update({"arb_front": 4})       # race sheet lands first
-        bridge.refresh()
-        status = shell.garage_page._status.text()
-        assert "Race sheet ✓" in status and "still building the Qualifying" in status
-
-        win._qual_form.values.update({"arb_front": 3})       # then qualifying
-        bridge.refresh()
         status = shell.garage_page._status.text()
         assert "Race sheet ✓" in status and "Qualifying sheet ✓" in status
+        assert bridge._setups.sheet("race").is_authored is True
+        assert bridge._setups.sheet("qualifying").is_authored is True
         assert bridge._pending_work == ""
 
     def test_a_qualifying_sheet_that_never_lands_is_not_claimed(self, wired):
         shell, win, _db, bridge = wired
+        calls = {"n": 0}
+
+        def _only_race(**kw):
+            calls["n"] += 1
+            return BASELINE_JSON if kw["session_type"].startswith("Race") else "{}"
+
+        win._driving_advisor.build_baseline_setup_response = _only_race
         shell.garage_page._baseline.click()
-        win._race_form.values.update({"arb_front": 4})
-        bridge.refresh()
-        assert "Qualifying sheet ✓" not in shell.garage_page._status.text()
-        assert bridge._pending_work == "baseline"
+        status = shell.garage_page._status.text()
+        assert "Race sheet built" in status or "Race sheet ✓" in status
+        assert "Qualifying sheet ✓" not in status
+        assert bridge._setups.sheet("qualifying").is_authored is False
+
+    def test_the_classic_form_is_kept_in_step_while_it_still_exists(self, wired):
+        """Transitional, removed in stage 6."""
+        shell, win, _db, _bridge = wired
+        shell.garage_page._baseline.click()
+        assert win._race_form.values["arb_front"] == 6.0
+        assert win._qual_form.values["arb_front"] == 6.0
 
 
 class TestV17CoachingRunIsStartable:

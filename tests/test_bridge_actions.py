@@ -41,6 +41,11 @@ class _Win:
         self.feedback = fb
 
 
+def _revert_ok():
+    from services.setup_service import SetupOutcome
+    return SetupOutcome(ok=True, reason="Reverted to the previous values.")
+
+
 @pytest.fixture
 def wired(qapp):
     ctrl = PitCrewController()
@@ -83,10 +88,13 @@ class TestNavigationActions:
 
 
 class TestRealBehaviourActions:
-    def test_outcome_revert_calls_window(self, wired):
-        shell, win, _ = wired
+    def test_outcome_revert_goes_to_the_setup_engine(self, wired):
+        """Revert is a sheet operation now, not a call into the classic form."""
+        shell, _win, bridge = wired
+        reverted = []
+        bridge._setups.revert = lambda d="race": reverted.append(d) or _revert_ok()
         shell.practice_outcome.action_requested.emit("revert")
-        assert win.reverted is True
+        assert reverted == ["race"]
 
     def test_feedback_persisted(self, wired):
         shell, win, _ = wired

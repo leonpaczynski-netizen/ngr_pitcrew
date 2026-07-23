@@ -21,6 +21,12 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+def _config():
+    """A realistic config. The setup engine resolves car/track from the DB + config —
+    NOT from the window — so a setup is always scoped to a real car at a real track."""
+    return {"strategy": {"car": "GT-R", "track": "Fuji Speedway"}}
+
+
 class _Auth:
     """Mirrors the REAL ActiveSetupAuthority contract.
 
@@ -76,60 +82,78 @@ class TestBridgeReadSide:
         ctrl = PitCrewController()
         shell = PitCrewShell(ctrl)
         win = _FakeWindow(connected=True)
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
         b.refresh()
         st = ctrl.state()
         assert st.car == "GT-R"
         assert st.connected is True
         assert st.active_setup_label == "Race v2"
-        # Garage GT7 sheet shows the real current setup (arb rear 4).
+        # The Garage sheet is fed from the STORE now. The classic form's in-progress
+        # setup is SEEDED into it once, so nothing the driver had is lost on the switch.
+        assert b._setups.sheet("race").get("arb_rear") == 4.0
         assert shell.garage_page._sheet._empty.isHidden() is True
 
     def test_disconnected_state(self, qapp):
         ctrl = PitCrewController()
         shell = PitCrewShell(ctrl)
         win = _FakeWindow(connected=False)
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
         b.refresh()
         assert ctrl.state().connected is False
 
     def test_none_window_is_safe(self, qapp):
         ctrl = PitCrewController()
         shell = PitCrewShell(ctrl)
-        b = LiveShellBridge(shell, ctrl, window=None, config={})
+        b = LiveShellBridge(shell, ctrl, window=None, config=_config())
         b.refresh()   # must not raise
         assert ctrl.state().has_active_event is False
 
 
 class TestBridgeWriteSide:
-    def test_apply_routes_to_form_apply(self, qapp):
+    """Apply and revert go through the headless setup engine, not the classic form."""
+
+    def _wired(self, qapp):
         ctrl = PitCrewController()
         shell = PitCrewShell(ctrl)
         win = _FakeWindow()
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()          # seeds the store from the classic form
+        return shell, win, b
+
+    def test_apply_writes_the_sheet(self, qapp):
+        _shell, _win, b = self._wired(qapp)
         b._on_apply({"arb_rear": 4, "brake_bias_front": 52})
-        assert win._race_form.applied_with == {"arb_rear": 4, "brake_bias_front": 52}
+        sheet = b._setups.sheet("race")
+        assert sheet.get("arb_rear") == 4.0
+        assert sheet.get("brake_bias_front") == 52.0
 
     def test_apply_via_garage_signal(self, qapp):
-        ctrl = PitCrewController()
-        shell = PitCrewShell(ctrl)
-        win = _FakeWindow()
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+        shell, _win, b = self._wired(qapp)
         shell.garage_page.apply_requested.emit({"arb_rear": 3})
-        assert win._race_form.applied_with == {"arb_rear": 3}
+        assert b._setups.sheet("race").get("arb_rear") == 3.0
 
-    def test_revert_routes_to_window(self, qapp):
-        ctrl = PitCrewController()
-        shell = PitCrewShell(ctrl)
-        win = _FakeWindow()
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+    def test_the_classic_form_is_kept_in_step_while_it_still_exists(self, qapp):
+        """Transitional, removed in stage 6: the old window must never display numbers
+        that disagree with the real sheet."""
+        _shell, win, b = self._wired(qapp)
+        b._on_apply({"arb_rear": 4})
+        assert win._race_form.applied_with is not None
+        assert win._race_form.applied_with["arb_rear"] == 4.0
+
+    def test_revert_undoes_the_last_apply(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        before = b._setups.sheet("race").get("arb_rear")
+        b._on_apply({"arb_rear": 4})
         b._on_revert("n2")
-        assert win.reverted is True
+        assert b._setups.sheet("race").get("arb_rear") == before
 
-    def test_empty_apply_is_noop(self, qapp):
-        ctrl = PitCrewController()
-        shell = PitCrewShell(ctrl)
-        win = _FakeWindow()
-        b = LiveShellBridge(shell, ctrl, window=win, config={})
+    def test_revert_with_nothing_to_undo_is_safe(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        b._on_revert("n2")          # must not raise
+        assert b._setups.sheet("race").get("arb_rear") == 4.0
+
+    def test_empty_apply_changes_nothing(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        before = b._setups.sheet("race").as_dict()
         b._on_apply({})
-        assert win._race_form.applied_with is None
+        assert b._setups.sheet("race").as_dict() == before

@@ -73,10 +73,7 @@ class TestBridgeSettingsAndAnalyse:
         from ui.pit_crew_shell import PitCrewShell
 
         class _Win:
-            def __init__(self):
-                self.analysed = False
-            def _setup_analyse_ai(self):
-                self.analysed = True
+            """Analyse no longer routes into the window — it goes to the setup engine."""
 
         ctrl = PitCrewController()
         shell = PitCrewShell(ctrl)
@@ -85,6 +82,6 @@ class TestBridgeSettingsAndAnalyse:
         b = LiveShellBridge(shell, ctrl, window=win, config=cfg)
         # Settings page was fed the config on wire.
         assert shell.settings_page._host.text() == "10.0.0.5"
-        # Analyse routes to the window's setup brain.
+        # Analyse goes to the headless engine and reports its result, whatever it is.
         shell.garage_page.analyse_requested.emit()
-        assert win.analysed is True
+        assert shell.garage_page._status.text() != ""

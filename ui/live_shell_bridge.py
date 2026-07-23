@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QTimer
+import threading
+
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from ui.app_state import build_app_state
 from ui.new_shell_launch import build_initial_app_state, fetch_guidance_view
@@ -43,9 +45,20 @@ _LIBRARY_TAB = {
 
 
 class LiveShellBridge(QObject):
+    #: Emitted from the setup workers so results are handled on the Qt thread —
+    #: a worker must never touch a widget.
+    _analysis_done = pyqtSignal(object)
+    _baseline_done = pyqtSignal(object)
+
     def __init__(self, shell, controller, window=None, config=None, db=None,
-                 *, refresh_ms: int = 750, parent=None):
+                 *, refresh_ms: int = 750, parent=None, spawn=None):
         super().__init__(parent)
+        #: How long-running setup work is started. INJECTABLE: the engine is synchronous
+        #: by design and only this bridge decides where it runs. Tests pass an inline
+        #: runner — a real thread emitting into a QObject under teardown aborts the
+        #: process, and inline keeps the assertions deterministic.
+        self._spawn = spawn or (
+            lambda fn: threading.Thread(target=fn, daemon=True).start())
         self._shell = shell
         self._controller = controller
         self._window = window
@@ -58,12 +71,6 @@ class LiveShellBridge(QObject):
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
-        #: Which discipline the window's single ``current_recommendation_vm()`` was
-        #: produced for. The classic window keeps ONE recommendation VM (whichever
-        #: analysis finished last), so the Garage must not show a Race recommendation
-        #: under the Qualifying tab — Apply would then write Race deltas into the
-        #: Qualifying sheet. "race" is the classic default until we start a run.
-        self._rec_discipline = "race"
         #: The write side of the guided practice loop. Without it, nothing the driver
         #: does in a run ever reaches the event programme, so the engineer never moves.
         from ui.practice_run_recorder import PracticeRunRecorder
@@ -73,6 +80,23 @@ class LiveShellBridge(QObject):
         self._events = EventSetupService(
             db=db, config=self._config,
             persist=getattr(window, "_persist_config", None))
+        # The setup engine, headless: the store owns the working sheets and the service
+        # performs build/analyse/apply/revert/confirm without touching a widget.
+        from services.setup_inputs import build_setup_inputs
+        from services.setup_service import SetupService
+        from services.setup_store import SetupSheetStore, default_store_path
+        self._sheets = SetupSheetStore(default_store_path(
+            str(getattr(window, "config_path", "") or "")))
+        self._setups = SetupService(
+            store=self._sheets, advisor=getattr(window, "_driving_advisor", None),
+            authority=getattr(window, "_setup_authority", None), db=db,
+            inputs_provider=lambda: build_setup_inputs(db, self._config))
+        #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
+        self._seeded: set = set()
+        #: The last AnalysisResult (it carries the discipline it belongs to).
+        self._last_analysis = None
+        self._analysis_done.connect(self._on_analysis_done)
+        self._baseline_done.connect(self._on_baseline_done)
         #: Last Event Command Centre view — the run planner reads the current objective
         #: from it so a started run carries the purpose the engineer actually asked for.
         self._last_guidance_view = None
@@ -85,9 +109,6 @@ class LiveShellBridge(QObject):
         self._last_recorded_session_id = 0
         #: The previous recorded run's session id, for the outcome comparison.
         self._previous_recorded_session_id = 0
-        #: (race, qualifying) sheet fingerprints taken before an initial-setup build, so
-        #: each sheet can be confirmed as it is actually written.
-        self._baseline_before = ("", "")
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -219,8 +240,8 @@ class LiveShellBridge(QObject):
             if rc is None:
                 return
             from ui.shell_feed_adapters import run_card_vm_from_recommendation
-            vm = _current_recommendation_vm(self._window)
-            label, _applied = _active_setup(self._window)
+            vm = self._recommendation_vm()
+            label, _applied = self._setups.active_setup(self._discipline)
             card = run_card_vm_from_recommendation(vm, active_setup_label=label)
             if not card.has_plan:
                 # No setup recommendation to validate does NOT mean no run to do — the
@@ -389,26 +410,14 @@ class LiveShellBridge(QObject):
         """Register that the driver typed this sheet into GT7.
 
         Applying a recommendation only writes the SHEET; GT7 can only be updated by the
-        driver. This routes the confirmation through the classic, already-gated
-        "applied in game" path, which is what marks the active setup, links the applied
-        checkpoint to the awaiting experiment and persists the snapshot.
+        driver. This confirmation is therefore the ONLY thing that can make a setup
+        active — nothing is able to infer it.
         """
-        window = self._window
-        form = self._form_for_discipline(discipline)
-        fn = getattr(window, "_on_changes_applied_in_game", None)
-        if not callable(fn) or form is None:
-            self._garage_status("Cannot confirm the setup — the setup services are unavailable.")
-            return
-        try:
-            fn(form)
-        except Exception as exc:
-            self._garage_status(f"Could not confirm the setup: {exc}")
-            return
-        label, applied = _active_setup(window, _PURPOSE.get(
-            (discipline or self._discipline).lower(), "Race"))
-        self._garage_status(
-            f"Registered as the active setup: {label}" if applied and label
-            else "Confirmed — but no complete setup was captured; check the sheet has values.")
+        import time
+        outcome = self._setups.confirm_applied_in_game(
+            discipline or self._discipline,
+            applied_at=time.strftime("%Y-%m-%d %H:%M"))
+        self._garage_status(outcome.reason)
         self.refresh()
 
     def _connected(self) -> bool:
@@ -424,7 +433,7 @@ class LiveShellBridge(QObject):
             if qp is None:
                 return
             from ui.shell_feed_adapters import qualifying_vm_from_cc_view
-            label, _applied = _active_setup(self._window)
+            label, _applied = self._setups.active_setup("qualifying")
             qp.set_readiness(qualifying_vm_from_cc_view(view, active_setup_label=label))
         except Exception:
             pass
@@ -472,13 +481,96 @@ class LiveShellBridge(QObject):
         attr = "_qual_form" if d == "qualifying" else "_race_form"
         return getattr(self._window, attr, None)
 
-    def _recommendation_applies_here(self) -> bool:
-        """Whether the window's current recommendation belongs to the shown discipline.
+    def _recommendation_vm(self):
+        """The recommendation VM for the SHOWN discipline, or None.
 
         Race and Qualifying are separate sheets and never share a recommendation —
-        applying one to the other would write the wrong deltas.
+        rendering one on the other would let Apply write the wrong deltas.
         """
-        return self._rec_discipline == self._discipline
+        result = self._last_analysis
+        if result is None or result.discipline != self._discipline:
+            return None
+        if not result.has_recommendation:
+            return None
+        try:
+            from ui.setup_recommendation_vm import build_recommendation_vm
+            return build_recommendation_vm({
+                "status": result.status or "approved",
+                "analysis": result.analysis,
+                "changes": list(result.changes),
+                "setup_fields": dict(result.setup_fields),
+            })
+        except Exception:
+            return None
+
+    def _seed_sheets(self) -> None:
+        """Copy an in-progress classic setup into the store ONCE, per scope.
+
+        The store is the source of truth now, but the driver may already have a setup
+        sitting in the classic form from before the switch. It is copied across the
+        first time a scope is seen, and only where the store holds nothing authored —
+        an existing sheet is never overwritten by a stale form.
+        """
+        try:
+            inputs = self._setups.inputs()
+            scope = inputs.scope
+            if not inputs.is_known or scope in self._seeded:
+                return
+            self._seeded.add(scope)
+            from strategy.setup_sheet import sheet_from_dict
+            for discipline, attr in (("race", "_race_form"), ("qualifying", "_qual_form")):
+                if self._sheets.has_setup(scope, discipline):
+                    continue
+                form = getattr(self._window, attr, None)
+                try:
+                    values = form.current_setup_dict() if form is not None else None
+                except Exception:
+                    values = None
+                if not values:
+                    continue
+                sheet = sheet_from_dict(values)
+                if sheet.is_authored:
+                    self._sheets.set(scope, discipline, sheet)
+        except Exception:
+            pass
+
+    def _mirror_to_classic(self, discipline: str = "") -> None:
+        """Keep the classic form showing what the store holds.
+
+        TRANSITIONAL, removed with the classic window in stage 6: while that window can
+        still be opened it must not display numbers that disagree with the real sheet.
+        """
+        try:
+            form = self._form_for_discipline(discipline)
+            if form is None or not hasattr(form, "apply_ai_fields"):
+                return
+            form.apply_ai_fields(self._setups.sheet(discipline or self._discipline).as_dict())
+        except Exception:
+            pass
+
+    def _feed_garage(self) -> None:
+        """Show the driver's REAL current setup for the SELECTED discipline."""
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is None:
+                return
+            self._seed_sheets()
+            sheet = self._setups.sheet(self._discipline)
+            # A defaults-only sheet is NOT a setup. Passing it would present numbers
+            # nobody authored as though they were the driver's own.
+            setup = sheet.as_dict() if sheet.is_authored else None
+            label, applied = self._setups.active_setup(self._discipline)
+            from ui.setup_recommendation_vm import build_recommendation_vm
+            vm = self._recommendation_vm()
+            gp.set_recommendation(
+                vm if vm is not None else build_recommendation_vm({}),
+                discipline=self._discipline, active_setup=label, applied=applied,
+                setup_values=setup,
+                has_recorded_run=self._has_recorded_run(),
+            )
+            self._feed_tyres(gp, setup or {})
+        except Exception:
+            pass
 
     def _on_discipline(self, discipline: str) -> None:
         """Remember the selected discipline and re-feed the Garage for it."""
@@ -493,113 +585,6 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         self._feed_garage()
-
-    def _feed_garage(self) -> None:
-        """Show the driver's REAL current setup for the SELECTED discipline."""
-        try:
-            gp = getattr(self._shell, "garage_page", None)
-            form = self._form_for_discipline()
-            if gp is None or form is None or not hasattr(form, "current_setup_dict"):
-                return
-            setup = form.current_setup_dict()
-            label, applied = _active_setup(self._window, _PURPOSE.get(self._discipline, "Race"))
-            from ui.setup_recommendation_vm import build_recommendation_vm
-            vm = _current_recommendation_vm(self._window)
-            if not self._recommendation_applies_here():
-                vm = None
-            self._settle_pending_work(gp, vm)
-            gp.set_recommendation(
-                vm if vm is not None else build_recommendation_vm({}),
-                discipline=self._discipline, active_setup=label, applied=applied,
-                setup_values=setup,
-                has_recorded_run=self._has_recorded_run(),
-            )
-            self._feed_tyres(gp, setup)
-        except Exception:
-            pass
-
-    def _has_recorded_run(self) -> bool:
-        """Whether any practice run has been recorded against the active event.
-
-        Analyse reads how a setup BEHAVED, so it only becomes available once there is a
-        recorded run to read.
-        """
-        try:
-            cid = self._runs.active_cycle_id()
-            if not cid or self._db is None or not hasattr(self._db, "get_practice_sessions_for_cycle"):
-                return False
-            return bool(self._db.get_practice_sessions_for_cycle(cid))
-        except Exception:
-            return False
-
-    def _classic_result_text(self) -> str:
-        """The classic Setup Builder's own result box, as plain text ("" if absent).
-
-        The analysis runs on a worker in the classic window and reports there. Without
-        reading it back, the new shell could only ever say "Analysing…" — and would say
-        it forever when the run returned an error, or a valid "no change recommended".
-        """
-        try:
-            box = getattr(self._window, "_setup_result_text", None)
-            if box is None:
-                return ""
-            getter = getattr(box, "toPlainText", None)
-            return str(getter()).strip() if callable(getter) else ""
-        except Exception:
-            return ""
-
-    def _sheet_fingerprint(self, form) -> str:
-        """A cheap signature of a form's values, to detect it actually being written."""
-        try:
-            d = form.current_setup_dict() if form is not None else {}
-            return repr(sorted((str(k), str(v)) for k, v in (d or {}).items()))
-        except Exception:
-            return ""
-
-    def _settle_baseline(self) -> None:
-        """Report which sheets the initial-setup build actually filled.
-
-        The build authors the Race and Qualifying sheets on two separate worker threads.
-        Whether the Qualifying one landed was previously unknowable from the new shell —
-        the driver had to take it on faith. Each sheet is now confirmed as it changes.
-        """
-        race = self._sheet_fingerprint(getattr(self._window, "_race_form", None))
-        qual = self._sheet_fingerprint(getattr(self._window, "_qual_form", None))
-        before_race, before_qual = self._baseline_before
-        done_race = bool(race) and race != before_race
-        done_qual = bool(qual) and qual != before_qual
-        if done_race and done_qual:
-            self._pending_work = ""
-            self._garage_status("Initial setup built — Race sheet ✓  ·  Qualifying sheet ✓")
-        elif done_race or done_qual:
-            which = "Race" if done_race else "Qualifying"
-            other = "Qualifying" if done_race else "Race"
-            self._garage_status(f"{which} sheet ✓ — still building the {other} sheet…")
-
-    def _settle_pending_work(self, garage, vm) -> None:
-        """Resolve a pending Analyse/Baseline into a real outcome message."""
-        if not self._pending_work:
-            return
-        if self._pending_work == "baseline":
-            self._settle_baseline()
-            return
-        rows = bool(vm is not None and vm.proposed_rows())
-        text = self._classic_result_text()
-        still_running = text.startswith(("Analysing setup", "Building baseline"))
-        if still_running:
-            return
-        if rows:
-            self._pending_work = ""
-            self._garage_status("")
-            return
-        if not text:
-            return    # nothing reported yet; keep waiting rather than claim a result
-        # Finished with no proposed change — say what the engine actually reported
-        # instead of leaving "Analysing…" on screen forever.
-        self._pending_work = ""
-        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-        self._garage_status(f"Analysis finished — {first[:240]}" if first
-                            else "Analysis finished with no proposed changes.")
 
     def _feed_tyres(self, garage, setup) -> None:
         """Offer the compounds this event's regulations allow for this discipline."""
@@ -621,34 +606,6 @@ class LiveShellBridge(QObject):
                 current_code(setup))
         except Exception:
             pass
-
-    def _on_tyre_change(self, code: str) -> None:
-        """Put a different compound on the car via the canonical apply path."""
-        from strategy.tyre_selection import setup_fields_for
-        fields = setup_fields_for(code)
-        if not fields:
-            self._garage_status("That compound is not recognised.")
-            return
-        form = self._form_for_discipline()
-        if form is None or not hasattr(form, "apply_ai_fields"):
-            self._garage_status("Cannot change the tyres — the setup form is unavailable.")
-            return
-        try:
-            form.apply_ai_fields(dict(fields))
-            # Persist like any other sheet edit, via the window's own autosave.
-            saver = getattr(self._window, "_autosave_applied_setup", None)
-            if callable(saver):
-                try:
-                    saver(form)
-                except Exception:
-                    pass
-        except Exception as exc:
-            self._garage_status(f"Could not change the tyres: {exc}")
-            return
-        self._garage_status(
-            f"{fields['tyre_front']} on the {self._discipline} sheet — "
-            f"set it in GT7, then press “I've entered this in GT7”.")
-        self.refresh()
 
     def _feed_live(self) -> None:
         """Feed the Live Pit Wall from the canonical live race state. Never raises."""
@@ -672,41 +629,56 @@ class LiveShellBridge(QObject):
             pass
 
     # ---- write side (reuse the classic, gated apply path) ----------------
-    def _on_apply(self, field_values: dict) -> None:
-        """Apply the shown recommendation via the window's existing apply path.
+    def _has_recorded_run(self) -> bool:
+        """Whether any practice run has been recorded against the active event.
 
-        Routes the exact {field: value} the driver saw (shown == applied) through the
-        classic form apply, which clamps to ranges, updates the active-setup authority
-        and persists — reusing every existing safety gate. Never raises.
+        Analyse reads how a setup BEHAVED, so it only becomes available once there is a
+        recorded run to read.
         """
         try:
-            window = self._window
-            form = self._form_for_discipline()
-            if not field_values or form is None or not hasattr(form, "apply_ai_fields"):
-                return
-            form.apply_ai_fields(dict(field_values))
-            # Persist via the window's autosave if available.
-            saver = getattr(window, "_autosave_applied_setup", None)
-            if callable(saver):
-                try:
-                    saver(form)
-                except Exception:
-                    pass
-            self.refresh()
+            cid = self._runs.active_cycle_id()
+            if not cid or self._db is None or not hasattr(self._db, "get_practice_sessions_for_cycle"):
+                return False
+            return bool(self._db.get_practice_sessions_for_cycle(cid))
         except Exception:
-            pass
+            return False
+
+    def _on_tyre_change(self, code: str) -> None:
+        """Put a different compound on the car, through the setup engine."""
+        from strategy.tyre_selection import setup_fields_for
+        fields = setup_fields_for(code)
+        if not fields:
+            self._garage_status("That compound is not recognised.")
+            return
+        outcome = self._setups.apply(self._discipline, fields)
+        if not outcome.ok:
+            self._garage_status(outcome.reason or "Could not change the tyres.")
+            return
+        self._mirror_to_classic(self._discipline)
+        self._garage_status(
+            f"{fields['tyre_front']} on the {self._discipline} sheet — "
+            f"set it in GT7, then press “I've entered this in GT7”.")
+        self.refresh()
+
+    def _on_apply(self, field_values: dict) -> None:
+        """Write the shown recommendation onto the sheet (shown == applied).
+
+        The exact {field: value} the driver saw goes to the service, which stores it and
+        keeps the previous sheet so the change can be undone in one step.
+        """
+        outcome = self._setups.apply(self._discipline, field_values)
+        self._garage_status(outcome.reason)
+        if outcome.ok:
+            self._mirror_to_classic(self._discipline)
+        self.refresh()
 
     def _on_revert(self, node_id: str) -> None:
-        """Route a lineage revert to the window's revert path. Never raises."""
-        try:
-            window = self._window
-            reverter = getattr(window, "_revert_last_change_for_form", None)
-            form = self._form_for_discipline()
-            if callable(reverter) and form is not None:
-                reverter(form)
-            self.refresh()
-        except Exception:
-            pass
+        """Undo the last apply on the shown sheet."""
+        outcome = self._setups.revert(self._discipline)
+        self._garage_status(outcome.reason)
+        if outcome.ok:
+            self._mirror_to_classic(self._discipline)
+        self.refresh()
 
     def _garage_status(self, text: str) -> None:
         try:
@@ -717,69 +689,48 @@ class LiveShellBridge(QObject):
             pass
 
     def _on_analyse(self) -> None:
-        """Run the setup brain on the current setup via the window's analyse path.
+        """Run the setup brain over the current sheet, off the Qt thread.
 
-        The analysis runs on a worker thread in the classic window and lands
-        asynchronously; the button used to be completely silent while that happened
-        (and silent forever when the advisor was unavailable). Report both.
+        The result comes back as an OBJECT, so every outcome is reported — including
+        "finished with nothing to change", which the old text-box path could not tell
+        apart from "still running".
         """
-        window = self._window
-        # Only report "unavailable" when the window HAS an advisor slot and it is
-        # empty — an absent attribute just means an alternate/duck-typed host.
-        if hasattr(window, "_driving_advisor") and window._driving_advisor is None:
-            self._garage_status(
-                "Setup analysis is unavailable — the driving advisor did not load.")
-            return
+        discipline = self._discipline
+        self._pending_work = "analyse"
+        self._garage_status("Analysing the current setup…")
+        self._spawn(lambda: self._analysis_done.emit(self._setups.analyse(
+            discipline, live_corner_aggregates=self._live_corner_aggregates())))
+
+    def _live_corner_aggregates(self) -> list:
+        """Live per-corner telemetry, when the host runs an aggregator ([] otherwise)."""
         try:
-            if self._discipline == "qualifying":
-                fn = getattr(window, "_setup_analyse_ai_for_form", None)
-                form = getattr(window, "_qual_form", None)
-                started = bool(callable(fn) and form is not None)
-                if started:
-                    fn(form)
-            else:
-                fn = getattr(window, "_setup_analyse_ai", None)
-                started = callable(fn)
-                if started:
-                    fn()
+            tel = getattr(self._window, "_live_corner_tel", None)
+            return list(tel.aggregates()) if tel is not None else []
         except Exception:
-            started = False
-        if started:
-            self._rec_discipline = self._discipline
-            self._pending_work = "analyse"
-            self._garage_status(
-                "Analysing the current setup… the recommendation appears here when it is ready.")
-            self.refresh()
-        else:
-            self._garage_status("Setup analysis is not available in this build.")
+            return []
+
+    def _on_analysis_done(self, result) -> None:
+        """Report what the analysis concluded — every outcome, never silence."""
+        self._pending_work = ""
+        self._last_analysis = result
+        self._garage_status(result.headline)
+        self.refresh()
 
     def _on_build_baseline(self, discipline: str = "") -> None:
-        """Build the BASE tune for this event via the classic baseline builder.
-
-        This is the missing "how do I get a base setup" route: it fires the same
-        deterministic baseline build the classic Setup Builder uses, which fills BOTH
-        the Race and Qualifying sheets from the car ranges + driving profile.
-        """
-        window = self._window
-        fn = getattr(window, "_generate_baseline_setup_both", None)
-        if not callable(fn):
-            fn = getattr(window, "_generate_baseline_setup", None)
-        if not callable(fn):
-            self._garage_status("Baseline builder is not available in this build.")
-            return
-        # Snapshot both sheets first, so each one landing can be confirmed individually.
-        self._baseline_before = (
-            self._sheet_fingerprint(getattr(window, "_race_form", None)),
-            self._sheet_fingerprint(getattr(window, "_qual_form", None)))
-        try:
-            fn()
-        except Exception:
-            self._garage_status("Initial setup build could not be started.")
-            return
-        self._rec_discipline = self._discipline
+        """Author the initial setup for BOTH sheets through the headless engine."""
         self._pending_work = "baseline"
         self._garage_status(
             "Building the initial setup for the Race and Qualifying sheets…")
+        self._spawn(lambda: self._baseline_done.emit(
+            self._setups.build_initial_setup()))
+
+    def _on_baseline_done(self, result) -> None:
+        """Confirm each sheet individually — a sheet that did not build is never
+        implied to have built."""
+        self._pending_work = ""
+        self._garage_status(result.headline)
+        for built in result.built:
+            self._mirror_to_classic(built)
         self.refresh()
 
     # ---- event selection / creation --------------------------------------
@@ -1098,14 +1049,3 @@ def _active_setup(window, purpose: str = "Race"):
         return str(label or getattr(active, "name", "") or ""), bool(active.is_active_on_car)
     except Exception:
         return "", False
-
-
-def _current_recommendation_vm(window):
-    """Return the window's most recent recommendation VM, if it has one exposed."""
-    try:
-        getter = getattr(window, "current_recommendation_vm", None)
-        if callable(getter):
-            return getter()
-    except Exception:
-        pass
-    return None
