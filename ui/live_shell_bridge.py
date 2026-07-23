@@ -68,6 +68,11 @@ class LiveShellBridge(QObject):
         #: does in a run ever reaches the event programme, so the engineer never moves.
         from ui.practice_run_recorder import PracticeRunRecorder
         self._runs = PracticeRunRecorder(db=db, config=self._config)
+        # Event create/edit/activate, headless — no classic Event Planner involved.
+        from services.event_setup import EventSetupService
+        self._events = EventSetupService(
+            db=db, config=self._config,
+            persist=getattr(window, "_persist_config", None))
         #: Last Event Command Centre view — the run planner reads the current objective
         #: from it so a started run carries the purpose the engineer actually asked for.
         self._last_guidance_view = None
@@ -149,6 +154,9 @@ class LiveShellBridge(QObject):
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
         _c(home, "manage_events_requested", self._on_manage_events)
+        esp = getattr(shell, "event_setup_page", None)
+        _c(esp, "save_requested", self._on_event_draft_saved)
+        _c(esp, "edit_requested", self._on_event_draft_open)
 
     @staticmethod
     def _safe_connect(obj, signal_name, slot) -> None:
@@ -776,46 +784,72 @@ class LiveShellBridge(QObject):
 
     # ---- event selection / creation --------------------------------------
     def _on_activate_event(self, event_name: str) -> None:
-        """Make a different event the active one, through the classic activation path.
+        """Switch the event being prepared, through the headless service.
 
-        Reuses ``_on_event_set_active`` so the preparation cycle, strategy fan-out,
-        tracker race config and advisor context all follow exactly as they do from the
-        Event Planner — this bridge never writes the active event itself.
+        Previously this drove the classic Event Planner's QListWidget and called its
+        activation handler. It now saves + activates directly, so switching events does
+        not depend on the old UI existing.
         """
         name = str(event_name or "").strip()
-        window = self._window
+        if not name:
+            return
         try:
-            lst = getattr(window, "_event_list", None)
-            if name and lst is not None:
-                for row in range(lst.count()):
-                    item = lst.item(row)
-                    if item is not None and item.text().strip() == name:
-                        lst.setCurrentRow(row)
-                        break
-            fn = getattr(window, "_on_event_set_active", None)
-            if callable(fn):
-                fn()
-            persist = getattr(window, "_persist_config", None)
-            if callable(persist):
-                persist()
+            result = self._events.save_and_activate(self._events.draft_for(name))
         except Exception:
-            pass
+            result = None
+        if result is not None and not result.ok:
+            self._guidance_status(result.message or "Could not switch to that event.")
+        self._review_cache.clear()
+        self._last_guidance_view = None
         self.refresh()
 
     def _on_manage_events(self) -> None:
-        """Open the classic Event Planner — the full create/edit/delete event editor."""
+        """Open the NATIVE event setup, primed with the events already known.
+
+        This used to raise the classic Event Planner window. Creating an event is part
+        of the guided flow, not a trip into the old UI.
+        """
+        page = getattr(self._shell, "event_setup_page", None)
+        if page is None:
+            return
         try:
-            shell = self._shell
-            if hasattr(shell, "classic_ui_requested"):
-                shell.classic_ui_requested.emit()
-            sel = getattr(self._window, "select_tab", None)
-            if callable(sel):
-                sel("event_planner")
-            raise_ = getattr(self._window, "raise_", None)
-            if callable(raise_):
-                raise_()
+            page.set_existing_events([str(e.get("name") or "")
+                                      for e in self._events.known_events()
+                                      if str(e.get("name") or "").strip()])
+            page.set_draft(self._events.draft_for(""))
         except Exception:
             pass
+        self._navigate("event_setup")
+
+    def _on_event_draft_open(self, event_name: str) -> None:
+        """Load an existing event into the flow for editing/continuing."""
+        page = getattr(self._shell, "event_setup_page", None)
+        if page is None:
+            return
+        try:
+            page.set_draft(self._events.draft_for(event_name))
+        except Exception:
+            pass
+
+    def _on_event_draft_saved(self, draft) -> None:
+        """Save + activate through the headless service, then go back to Home."""
+        page = getattr(self._shell, "event_setup_page", None)
+        try:
+            result = self._events.save_and_activate(draft)
+        except Exception as exc:
+            if page is not None:
+                from services.event_setup import DraftIssue
+                page.show_issues([DraftIssue("", f"Could not save the event: {exc}")])
+            return
+        if not result.ok:
+            if page is not None:
+                page.show_issues(result.issues or ())
+            return
+        # The active event changed — every surface must be rebuilt against it.
+        self._review_cache.clear()
+        self._last_guidance_view = None
+        self.refresh()
+        self._navigate("home")
 
     def _on_save_settings(self) -> None:
         """Persist the edited config and apply it to the live services. Never raises."""

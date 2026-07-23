@@ -115,6 +115,16 @@ def wired(qapp):
     return shell, win, bridge
 
 
+def _ok():
+    from services.event_setup import SaveResult
+    return SaveResult(ok=True, event_name="x")
+
+
+def _draft_named(name):
+    from services.event_setup import EventDraft
+    return EventDraft(name=name, car="c", track="t")
+
+
 def _cc_view():
     """A realistic Event Command Centre view dict."""
     return {
@@ -288,22 +298,25 @@ class TestU4HomeSaysSomething:
 
 
 class TestU5EventSelection:
-    def test_switch_activates_through_the_classic_path(self, wired):
-        shell, win, _bridge = wired
+    def test_switch_activates_through_the_headless_service(self, wired):
+        """Switching events no longer drives the classic planner's QListWidget — it
+        goes through EventSetupService, so it works without the old UI existing."""
+        shell, win, bridge = wired
+        calls = []
+        bridge._events.save_and_activate = lambda draft: calls.append(draft) or _ok()
+        bridge._events.draft_for = lambda name: _draft_named(name)
         shell.set_guidance_view(_cc_view())
         shell.home_page._event_combo.setCurrentIndex(0)
         shell.home_page._btn_switch.click()
-        assert win._event_list.current == 0          # picked "GR Enduro Rd1"
-        assert win.activated == 1                    # via _on_event_set_active
-        assert win.persisted == 1
+        assert [d.name for d in calls] == ["GR Enduro Rd1"]
 
-    def test_manage_opens_the_event_planner(self, wired):
+    def test_manage_opens_the_native_event_setup_not_the_old_window(self, wired):
         shell, win, _bridge = wired
         classic = []
         shell.classic_ui_requested.connect(lambda: classic.append(True))
         shell.home_page._btn_manage.click()
-        assert classic == [True]
-        assert win.selected_tab == "event_planner"
+        assert classic == []
+        assert shell.current_destination() == "event_setup"
 
     def test_no_candidates_hides_the_switcher(self, wired):
         shell, _win, _bridge = wired

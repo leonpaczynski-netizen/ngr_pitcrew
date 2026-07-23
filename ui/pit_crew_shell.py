@@ -215,6 +215,15 @@ class PitCrewShell(QMainWindow):
         self.settings_page = self._build_settings_page()
         self.home_page = HomePage()
         self.home_page.navigate_requested.connect(self._on_guidance_surface)
+        # Event setup is native: creating or switching an event never opens the old UI.
+        from ui.components.event_setup import EventSetupPage
+        from ui.gt7_data import GT7_CARS, GT7_TRACKS
+        self.event_setup_page = EventSetupPage(tracks=GT7_TRACKS, cars=GT7_CARS)
+        self.event_setup_page.cancelled.connect(lambda: self._navigate("home"))
+        self.home_page.manage_events_requested.connect(
+            lambda: self._navigate("event_setup"))
+        self._page_by_dest["event_setup"] = self.event_setup_page
+        self.pages.addWidget(self.event_setup_page)
         for dest in NAV_DESTINATIONS:
             if dest == "home":
                 page = self.home_page

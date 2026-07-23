@@ -23,7 +23,10 @@ def shell(qapp):
 
 class TestConstruction:
     def test_builds_all_pages_and_opens_on_home(self, shell):
-        assert set(shell._page_by_dest.keys()) == set(NAV_DESTINATIONS)
+        # Every nav destination has a page, plus the flows reached FROM a page rather
+        # than from the rail (event setup is entered from Home, not navigated to).
+        assert set(NAV_DESTINATIONS) <= set(shell._page_by_dest)
+        assert set(shell._page_by_dest) - set(NAV_DESTINATIONS) == {"event_setup"}
         assert shell.current_destination() == "home"
         assert shell.nav._buttons["home"].isChecked() is True
 

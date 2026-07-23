@@ -45,7 +45,8 @@ complete list, and it is the definition of "done".
 | `_generate_baseline_setup`, `_generate_baseline_setup_both` | Logic in a mixin | Stage 2 |
 | `_on_changes_applied_in_game` | Logic in a mixin | Stage 2 |
 | `_revert_last_change_for_form`, `_autosave_applied_setup` | Logic in a mixin | Stage 2 |
-| `_event_list`, `_on_event_set_active`, `_persist_config` | Event CRUD in a QListWidget | Stage 3 |
+| ~~`_event_list`, `_on_event_set_active`~~ | Event CRUD in a QListWidget | ✅ **severed (Stage 3)** |
+| `_persist_config` | Config write — a service, injected | Stage 5 |
 | `_tabs`, `get_tab_index`, `select_tab` | Library panel borrowing | Stage 4 |
 | `_record_driver_feedback` | Logic in a mixin | Stage 2 |
 | `_build_event_context`, `_build_session_context` | Thin adapters over pure builders | Stage 5 (trivial) |
@@ -126,14 +127,38 @@ onto it, and `_setup_result_text` replaced by a real result object instead of th
 text-box scraping currently used to detect that an analysis finished.
 *Largest single stage; its own session.*
 
-### Stage 3 — native event setup (redesigned, not ported)
+### Stage 3 — native event setup ✅ DONE (redesigned, not ported)
 The classic Event Planner puts 18 fields in one form. Most have sane defaults and only
 matter for some events, so the native version is a short guided setup — identity (name,
 car, track, layout), then format (race type, laps/duration), with regulations
 (tyre wear, fuel multiplier, mandatory stops, BOP, tuning, ABS, weather, damage, refuel
 rate, allowed compounds) behind progressive disclosure and pre-filled. Writes through
 `SessionDB` directly, replacing `_event_list`/`_on_event_set_active`.
-Removes the last "opens the classic window" route.
+
+**Delivered as four steps — identity → format → rules → confirm.** What makes it not the
+old form:
+
+* **Three fields can block you**, and only because nothing can guess them: name, car,
+  track. Every regulation has a standard default and *cannot* stop you creating an event.
+* **Format is a choice, not a form.** Pick "set number of laps" or "fixed length of
+  time"; the field you do not need disappears. One number, not two.
+* **Rules are folded away** behind one line — "Standard rules — nothing unusual about
+  this event" — and open only if this event actually differs. An event that does differ
+  opens them automatically and states what differs.
+* **Confirm reads it back as a sentence:** *"A 120-minute race at Watkins Glen
+  International in the Porsche Cayman GT4. Tyres wear at 4x. 1 mandatory pit stop."*
+  That is the "did I get this right" check eighteen widgets could never give.
+* **Switching to an event you already made is the same screen**, on step 1 — it is the
+  same job, so it is not a different place.
+
+`services/event_setup.py` performs it headlessly: validate → save → fan out the working
+config → ensure exactly one preparation cycle (an event without one is invisible to the
+Command Centre) → activate → persist. A completed or abandoned cycle is never silently
+reopened, and rules are deliberately NOT duplicated into the config — every consumer
+reads them DB-first, and a second copy is a second thing to go stale.
+
+`_event_list`, `_on_event_set_active` and the Event Planner route are no longer used by
+the shell. **The last "opens the classic window" route is gone.**
 
 ### Stage 4 — native engineering panels
 The Library currently *borrows* the classic Development History tab widget. The panels
