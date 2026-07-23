@@ -163,33 +163,28 @@ The Library currently *borrows* the classic Development History tab widget. The 
 are already self-contained `QWidget`s fed by view models, so they can be constructed
 directly by the shell and fed from the DB.
 
-### Stage 4b — native Track Modelling — **CONFIRMED PORT, NOT RETIRE**
-Decided by the user (2026-07-23): *"needs to be brought across, as not all tracks are
-modelled yet."* It stays, so the new shell needs a real modelling surface.
+### Stage 4b — native Track Modelling ✅ DONE
+Six steps, one live at a time: **Pick the track → Drive it → Build the model → Check the
+corners → Validate → Use it**, driven by the coordinator's own state machine rather than
+the classic tab's fourteen simultaneous sections.
 
-**The raw 3,463 lines badly overstate this job.** Measured, the modelling stack is
-already almost entirely extracted:
+`data/track_modelling_guide.py` turns the coordinator's output into that view and invents
+nothing — a test asserts the guide can never offer an action the coordinator has not
+allowed. `services/track_modelling.py` performs it headlessly and re-checks legality
+itself, because a service that trusts its caller can be driven into an impossible state.
+`ui/components/track_modelling.py` renders it; "Track Model" is a nav destination.
 
-| Layer | Lines | State |
-|---|---:|---|
-| `data/track_*.py` (calibration, detection, review, resolver, truth, intelligence) | 7,738 | pure domain ✅ |
-| `data/track_modelling_coordinator.py` | 315 | pure state machine (`derive_state`, 10 states, legal-action table) ✅ |
-| `ui/track_modelling_vm.py` | 1,398 | **explicitly Qt-free** — every label, badge, button-state and error string ✅ |
-| `data/track_modelling_session.py` | *new* | working state, headless ✅ **DONE** |
-| `ui/track_modelling_ui.py` | 3,463 | ~890 widget construction + ~2,450 handlers gluing the above to widgets ❌ |
+The whole modelling domain is reused untouched. 83 tests.
 
-So the port is **rebuilding one view over a spine that already exists**, not
-reimplementing track modelling. The only genuine logic in the mixin was
-`_tm_build_coordinator_inputs`, which assembled coordinator inputs out of combo-box
-reads and mixin attributes — now replaced by `TrackModellingSession.to_inputs()`.
+Two decisions worth keeping: **RESET is offered only in ERROR**, where it is the primary
+("Start again" beside a finished model reads as a threat); and **recalibrating discards
+the derived work**, because validating new laps against a model built from the old ones
+would report agreement that was never tested.
 
-Remaining for 4b: a `TrackModelling` page in the new shell, built as **one guided flow —
-pick track → drive calibration laps → build → review corners → accept** — driven by the
-coordinator's own state machine, not as a rebuild of the classic tab's fourteen
-simultaneously-visible sections. Every string, badge and button state already comes from
-the existing Qt-free VM, and the underlying calls (capture start/stop, build path,
-detect segments, review actions, alignment, accept, refine, lap offset) are unchanged.
-This is view work over a finished spine, not engineering work.
+⚠ **Found while building this:** an unmodelled layout silently loads a *different*
+layout's reference path, and reports as approved — see
+`docs/FINDING_reference_path_layout_collision.md`. Not fixed, not worked around; it would
+make this surface claim "This track is modelled" for a track that never was.
 
 ### Stage 5 — direct service injection
 `launch_new_shell(services)` instead of `launch_new_shell(window)`. Mechanical once
