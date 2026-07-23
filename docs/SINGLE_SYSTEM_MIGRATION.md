@@ -117,7 +117,27 @@ station map can never be carried onto the wrong layout. 27 tests.
 
 **No behaviour change yet — these are the keystones the rest stands on.**
 
-### Stage 2 — a headless setup service (the big one)
+### Stage 2a — the setup engine, headless ✅ DONE
+`services/setup_store.py` answers "who owns the setup values" with a file instead of a
+`QDoubleSpinBox`: one working sheet per discipline per scope (car + track + **layout**),
+atomic writes, corrupt file degrades to empty, both sheets persisted in one write.
+Not a second source of truth for what is *applied* — `ActiveSetupAuthority` owns that.
+
+`services/setup_service.py` is the same engine with the widgets removed, reusing the
+baseline generator, the advisor, `analysis_inputs` and the authority unchanged. Every
+operation returns a **result object**, which is the real fix for the reported hang:
+`analyse` distinguishes ok-with-changes, ok-with-**no** changes (a success that says so),
+unreadable reply, and failure — four states the scraped text box collapsed into one.
+`build_initial_setup` reports each sheet individually, so a Qualifying sheet that did not
+build is never implied to have built. 46 tests.
+
+### Stage 2b — switch the bridge onto the service (next)
+Replace the remaining `_race_form` / `_qual_form` / `_setup_result_text` /
+`_setup_analyse_ai` / `_generate_baseline_setup_both` / `_on_changes_applied_in_game` /
+`_revert_last_change_for_form` / `_autosave_applied_setup` reads with service calls, and
+seed the store from the classic sheets once so no in-progress setup is lost.
+
+### Stage 2 — reference: what is being extracted
 Move the setup ENGINE out of `SetupBuilderMixin` into a service with no Qt import:
 analyse, baseline build, apply, revert, autosave, applied-in-game. The classic Setup
 Builder *view* is not reproduced — the new Garage already replaced it.
