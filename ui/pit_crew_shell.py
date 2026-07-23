@@ -243,7 +243,9 @@ class PitCrewShell(QMainWindow):
             self.pages.addWidget(page)
 
     def _build_practice_page(self) -> QWidget:
-        from PyQt6.QtWidgets import QStackedWidget, QToolButton, QButtonGroup
+        from PyQt6.QtWidgets import (
+            QStackedWidget, QToolButton, QButtonGroup, QScrollArea, QFrame,
+        )
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
@@ -275,10 +277,27 @@ class PitCrewShell(QMainWindow):
         lay.addLayout(top)
 
         self.run_card = RunCard()
+        # Review = what the run MEASURED, then how it felt. The feedback form on its own
+        # asked the driver to rate a run they had no record of.
+        from ui.components.run_laps import RunLapsPanel
+        review_page = QWidget()
+        rp = QVBoxLayout(review_page)
+        rp.setContentsMargins(0, 0, 0, 0)
+        rp.setSpacing(_t.SPACE_LG)
+        self.run_laps = RunLapsPanel()
+        rp.addWidget(self.run_laps)
         self.feedback_form = StructuredFeedbackForm()
+        rp.addWidget(self.feedback_form)
+        rp.addStretch(1)
+        review_scroll = QScrollArea()
+        review_scroll.setWidgetResizable(True)
+        review_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        review_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        review_scroll.setWidget(review_page)
+
         self.practice_outcome = PracticeOutcome()
         self._practice_stack.addWidget(self.run_card)
-        self._practice_stack.addWidget(self.feedback_form)
+        self._practice_stack.addWidget(review_scroll)
         self._practice_stack.addWidget(self.practice_outcome)
         lay.addWidget(self._practice_stack, 1)
         # After submitting feedback, surface the Outcome view.

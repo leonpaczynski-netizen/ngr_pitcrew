@@ -372,3 +372,123 @@ class TestV11GarageExplainsValidation:
         pill = shell.garage_page._pill_valid
         assert pill.text().strip().endswith("No run recorded yet")
         assert "recording the run" in pill.toolTip()
+
+
+class TestV12ReviewShowsTheRun:
+    """UAT-4: 'I recorded practice — nothing shows me my lap times or fuel per lap',
+    and 'submitting feedback takes me to a blank outcome screen'."""
+
+    @staticmethod
+    def _laps(*times, fuel=3.0):
+        return [{"lap_num": i, "lap_time_ms": t, "fuel_used": fuel, "compound": "RM"}
+                for i, t in enumerate(times, 1)]
+
+    def _with_laps(self, wired, *times):
+        shell, _win, db, bridge = wired
+        db.get_session_laps = lambda sid: self._laps(*times)
+        bridge._review_cache.clear()
+        return shell, db, bridge
+
+    def test_the_review_tab_lists_the_recorded_laps(self, wired):
+        shell, _db, bridge = self._with_laps(wired, 92500, 92100, 92800)
+        bridge.refresh()
+        table = shell.run_laps._table
+        assert table.rowCount() == 3
+        assert table.item(1, 1).text() == "1:32.100"          # best lap
+        assert table.item(0, 3).text() == "3.00 L"            # fuel per lap
+        assert shell.run_laps._empty.isVisibleTo(shell.run_laps) is False
+
+    def test_the_summary_gives_pace_and_fuel(self, wired):
+        shell, _db, bridge = self._with_laps(wired, 92500, 92100, 92800)
+        bridge.refresh()
+        summary = shell.run_laps._summary.text()
+        assert "Best 1:32.100" in summary
+        assert "3.00 L/lap" in summary
+        assert "per tank" in summary
+
+    def test_with_no_run_it_explains_how_to_get_one(self, wired):
+        shell, _win, db, bridge = wired
+        db.get_session_laps = lambda sid: []
+        bridge._review_cache.clear()
+        bridge.refresh()
+        assert shell.run_laps._table.isVisibleTo(shell.run_laps) is False
+        assert "End run & record" in shell.run_laps._empty.text()
+
+    def test_submitting_feedback_produces_a_real_outcome(self, wired):
+        shell, _db, _bridge = self._with_laps(wired, 92500, 92100, 92800)
+        shell.feedback_form.submitted.emit({"overall": "better", "traction": "Excellent"})
+        out = shell.practice_outcome
+        assert out._vm.has_outcome is True
+        assert out._empty.isVisibleTo(out) is False
+        assert "first recorded run" in out._vm.verdict_summary
+        assert any("Best lap" in f for f in out._vm.telemetry_findings)
+        assert "traction: Excellent" in out._vm.feedback_summary
+
+    def test_the_outcome_compares_against_the_previous_recorded_run(self, wired):
+        shell, _win, db, bridge = wired
+        fast, slow = self._laps(92500, 92100, 92800), self._laps(93500, 93600, 93400)
+        db.get_session_laps = lambda sid: fast if sid == 7 else slow
+        bridge._review_cache.clear()
+        bridge._previous_recorded_session_id = 4
+        shell.feedback_form.submitted.emit({"overall": "better"})
+        assert shell.practice_outcome._vm.verdict == "improved"
+        assert shell.practice_outcome._vm.primary_action_key == "keep"
+        assert shell.practice_outcome._vm.agreements
+
+    def test_recording_a_run_points_the_driver_at_the_review(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view()
+        shell.run_card.start_requested.emit()
+        shell.run_card.record_requested.emit()
+        assert "Open Review" in shell.run_card._status.text()
+        assert bridge._last_recorded_session_id == 7
+
+
+class TestV13TyreCompoundControl:
+    """UAT-4: 'still can't see a way to change my tyres from medium to hard for the
+    2 hour endurance race.' The Garage had no tyre control at all."""
+
+    def test_the_garage_offers_the_events_allowed_compounds(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        combo = shell.garage_page._tyre
+        assert combo.count() >= 2
+        assert shell.garage_page._tyre_codes  # populated from the event regulations
+
+    def test_the_current_compound_is_preselected(self, wired):
+        shell, win, _db, bridge = wired
+        win._race_form.values.update({"tyre_front": "Racing Medium",
+                                      "tyre_rear": "Racing Medium"})
+        bridge.refresh()
+        idx = shell.garage_page._tyre.currentIndex()
+        assert shell.garage_page._tyre_codes[idx] == "RM"
+
+    def test_choosing_hard_writes_both_axles_to_the_sheet(self, wired):
+        shell, win, _db, bridge = wired
+        bridge.refresh()
+        codes = list(shell.garage_page._tyre_codes)
+        shell.garage_page._tyre.setCurrentIndex(codes.index("RH"))
+        shell.garage_page._tyre.activated.emit(codes.index("RH"))
+        assert win._race_form.values["tyre_front"] == "Racing Hard"
+        assert win._race_form.values["tyre_rear"] == "Racing Hard"
+        assert "Racing Hard" in shell.garage_page._status.text()
+        assert "entered this in GT7" in shell.garage_page._status.text()
+
+    def test_the_qualifying_sheet_is_the_one_changed_on_that_tab(self, wired):
+        shell, win, _db, bridge = wired
+        shell.garage_page._selector._buttons["qualifying"].click()
+        codes = list(shell.garage_page._tyre_codes)
+        shell.garage_page._tyre.activated.emit(codes.index("RS"))
+        assert win._qual_form.values["tyre_front"] == "Racing Soft"
+        assert "tyre_front" not in win._race_form.values
+
+    def test_qualifying_names_the_softest_allowed(self, wired):
+        shell, _win, _db, bridge = wired
+        shell.garage_page._selector._buttons["qualifying"].click()
+        note = shell.garage_page._tyre_note.text()
+        assert "Racing Soft" in note
+
+    def test_race_explains_that_compounds_must_be_compared(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        assert "recorded runs settle" in shell.garage_page._tyre_note.text()

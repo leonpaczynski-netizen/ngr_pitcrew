@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QButtonGroup,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QStackedWidget, QScrollArea, QFrame,
+    QStackedWidget, QScrollArea, QFrame, QComboBox,
 )
 
 from ui import ngr_theme as _t
@@ -117,6 +117,7 @@ class SetupWorkspace(QWidget):
     analyse_requested = pyqtSignal()       # run the setup brain on the current setup
     baseline_requested = pyqtSignal(str)   # build the base tune for this discipline
     applied_in_game_confirmed = pyqtSignal(str)  # driver entered this sheet into GT7
+    tyre_change_requested = pyqtSignal(str)      # compound code to put on the car
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -138,6 +139,29 @@ class SetupWorkspace(QWidget):
         self._active.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         top.addWidget(self._active)
         lay.addLayout(top)
+
+        # Tyre compound — the one setup field GT7 exposes that the Garage had no control
+        # for at all, so a two-hour race could not be moved off Medium onto Hard.
+        tyre_row = QHBoxLayout()
+        tyre_row.setSpacing(_t.SPACE_SM)
+        tyre_cap = QLabel("Tyre compound")
+        tyre_cap.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        tyre_row.addWidget(tyre_cap)
+        self._tyre = QComboBox()
+        self._tyre.setMinimumWidth(260)
+        self._tyre.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._tyre.setStyleSheet(
+            f"QComboBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 10px; font-size: {_t.FS_LABEL}pt; }}")
+        self._tyre.activated.connect(self._on_tyre_picked)
+        tyre_row.addWidget(self._tyre)
+        self._tyre_note = QLabel("")
+        self._tyre_note.setWordWrap(True)
+        self._tyre_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        tyre_row.addWidget(self._tyre_note, 1)
+        lay.addLayout(tyre_row)
+        self._tyre_codes: tuple = ()
 
         # Status pills
         status_row = QHBoxLayout()
@@ -385,6 +409,39 @@ class SetupWorkspace(QWidget):
         if not setup_values:
             self._btn_changed.setChecked(True)
             self._stack.setCurrentIndex(0)
+
+    def set_tyre_choice(self, choice, current_code: str = "") -> None:
+        """Render the compounds this event allows, with the current one selected.
+
+        Selecting is a real setup change, so it is written through the same apply path
+        as everything else — the combo only reports the driver's choice.
+        """
+        try:
+            options = tuple(getattr(choice, "options", ()) or ())
+            self._tyre_codes = tuple(o.code for o in options)
+            self._tyre.blockSignals(True)
+            self._tyre.clear()
+            for o in options:
+                self._tyre.addItem(o.label)
+            if current_code in self._tyre_codes:
+                self._tyre.setCurrentIndex(self._tyre_codes.index(current_code))
+            self._tyre.blockSignals(False)
+            self._tyre.setVisible(bool(options))
+
+            note = str(getattr(choice, "guidance", "") or "")
+            rec = str(getattr(choice, "recommended_code", "") or "")
+            if rec and rec != current_code:
+                reason = str(getattr(choice, "recommendation_reason", "") or "")
+                note = f"→ {choice.name_for(rec)}. {reason}" if reason else note
+            if not getattr(choice, "restricted", False) and options:
+                note += "  (no compound restriction on this event)"
+            self._tyre_note.setText(note)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _on_tyre_picked(self, index: int) -> None:
+        if 0 <= index < len(self._tyre_codes):
+            self.tyre_change_requested.emit(self._tyre_codes[index])
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") a transient status line — e.g. "Analysing setup…".

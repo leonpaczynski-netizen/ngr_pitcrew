@@ -74,6 +74,13 @@ class LiveShellBridge(QObject):
         self._last_guidance_view = None
         #: (key, index, label, widget) of a classic tab page currently hosted natively.
         self._borrowed = None
+        #: session_id -> RunReview, so the 750ms feed does not re-summarise every tick.
+        self._review_cache = {}
+        #: The session bound by the most recent "End run & record" — what Review shows
+        #: once the live session has moved on.
+        self._last_recorded_session_id = 0
+        #: The previous recorded run's session id, for the outcome comparison.
+        self._previous_recorded_session_id = 0
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -108,6 +115,8 @@ class LiveShellBridge(QObject):
                     gp.discipline_changed.connect(self._on_discipline)
                 if hasattr(gp, "baseline_requested"):
                     gp.baseline_requested.connect(self._on_build_baseline)
+                if hasattr(gp, "tyre_change_requested"):
+                    gp.tyre_change_requested.connect(self._on_tyre_change)
         except Exception:
             pass
         try:
@@ -210,6 +219,45 @@ class LiveShellBridge(QObject):
                 rc.set_recording("")
         except Exception:
             pass
+        self._feed_run_review()
+
+    def _feed_run_review(self) -> None:
+        """Show the laps of the run being reviewed — measured truth, not memory."""
+        try:
+            panel = getattr(self._shell, "run_laps", None)
+            if panel is None:
+                return
+            panel.set_review(self._review_for(self._review_session_id()))
+        except Exception:
+            pass
+
+    def _review_session_id(self):
+        """The session the Review tab is about: the live one, else the last recorded."""
+        sid = self._live_session_id()
+        if sid:
+            return sid
+        return self._last_recorded_session_id
+
+    def _review_for(self, session_id):
+        """Build a RunReview for a session id (cached per id so the 750ms feed is cheap)."""
+        from strategy.practice_run_review import RunReview, build_run_review
+        sid = int(session_id or 0)
+        if not sid or self._db is None or not hasattr(self._db, "get_session_laps"):
+            return RunReview()
+        cached = self._review_cache.get(sid)
+        laps = None
+        try:
+            laps = self._db.get_session_laps(sid)
+        except Exception:
+            laps = None
+        if laps is None:
+            return cached or RunReview()
+        if cached is not None and len(cached.laps) == len([
+                r for r in laps if int((r or {}).get("lap_time_ms") or 0) > 0]):
+            return cached
+        review = build_run_review(laps)
+        self._review_cache[sid] = review
+        return review
 
     def _live_session_id(self):
         """The telemetry session currently being recorded (0 when none)."""
@@ -263,10 +311,18 @@ class LiveShellBridge(QObject):
         if not decision.ok:
             self._run_status(decision.reason or "Could not record the run.")
             return
-        msg = f"Run recorded — {decision.reason}"
+        # Keep the recorded run reviewable after the live session moves on, and keep the
+        # one before it so the next outcome has something to compare against.
+        if self._last_recorded_session_id != int(decision.session_id or 0):
+            self._previous_recorded_session_id = self._last_recorded_session_id
+        self._last_recorded_session_id = int(decision.session_id or 0)
+        msg = (f"Run recorded — {decision.reason} "
+               f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
             msg += f"  ⚠ {decision.warning}"
         self._run_status(msg)
+        self._feed_run_review()
+        self._feed_outcome()
         self.refresh()
 
     def _on_discard_run(self) -> None:
@@ -410,8 +466,58 @@ class LiveShellBridge(QObject):
                 discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
             )
+            self._feed_tyres(gp, setup)
         except Exception:
             pass
+
+    def _feed_tyres(self, garage, setup) -> None:
+        """Offer the compounds this event's regulations allow for this discipline."""
+        try:
+            if not hasattr(garage, "set_tyre_choice"):
+                return
+            from strategy.tyre_selection import build_tyre_choice, current_code
+            ev = None
+            try:
+                ev = self._window._build_event_context()
+            except Exception:
+                ev = None
+            garage.set_tyre_choice(
+                build_tyre_choice(
+                    discipline=self._discipline,
+                    available=getattr(ev, "available_tyres", ()) or (),
+                    required=getattr(ev, "required_tyres", ()) or (),
+                    race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
+                current_code(setup))
+        except Exception:
+            pass
+
+    def _on_tyre_change(self, code: str) -> None:
+        """Put a different compound on the car via the canonical apply path."""
+        from strategy.tyre_selection import setup_fields_for
+        fields = setup_fields_for(code)
+        if not fields:
+            self._garage_status("That compound is not recognised.")
+            return
+        form = self._form_for_discipline()
+        if form is None or not hasattr(form, "apply_ai_fields"):
+            self._garage_status("Cannot change the tyres — the setup form is unavailable.")
+            return
+        try:
+            form.apply_ai_fields(dict(fields))
+            # Persist like any other sheet edit, via the window's own autosave.
+            saver = getattr(self._window, "_autosave_applied_setup", None)
+            if callable(saver):
+                try:
+                    saver(form)
+                except Exception:
+                    pass
+        except Exception as exc:
+            self._garage_status(f"Could not change the tyres: {exc}")
+            return
+        self._garage_status(
+            f"{fields['tyre_front']} on the {self._discipline} sheet — "
+            f"set it in GT7, then press “I've entered this in GT7”.")
+        self.refresh()
 
     def _feed_live(self) -> None:
         """Feed the Live Pit Wall from the canonical live race state. Never raises."""
@@ -615,7 +721,13 @@ class LiveShellBridge(QObject):
 
     # ---- practice / qualifying / strategy / debrief / library actions -----
     def _on_feedback(self, feedback: dict) -> None:
-        """Persist structured practice feedback via the window/DB if it supports it."""
+        """Persist the feedback, then BUILD the outcome it is half of.
+
+        Submitting feedback used to navigate to an empty Outcome screen: nothing ever
+        reconciled the driver's answers against what the run measured, so the page had
+        nothing to show. The outcome is now built from the recorded laps plus the
+        feedback, compared against the previous recorded run.
+        """
         try:
             window = self._window
             for name in ("record_driver_feedback", "_record_driver_feedback", "save_driver_feedback"):
@@ -623,7 +735,33 @@ class LiveShellBridge(QObject):
                 if callable(fn):
                     fn(dict(feedback or {}))
                     break
-            self.refresh()
+        except Exception:
+            pass
+        self._feed_outcome(feedback)
+        self.refresh()
+
+    def _feed_outcome(self, feedback=None) -> None:
+        """Reconcile the reviewed run with the driver's feedback onto the Outcome page."""
+        try:
+            page = getattr(self._shell, "practice_outcome", None)
+            if page is None:
+                return
+            from strategy.practice_run_review import build_run_outcome
+            from ui.components.practice_outcome import PracticeOutcomeVM
+            review = self._review_for(self._review_session_id())
+            previous = self._review_for(self._previous_recorded_session_id)
+            outcome = build_run_outcome(review, feedback=feedback, previous=previous)
+            page.set_outcome(PracticeOutcomeVM(
+                verdict=outcome.verdict, verdict_summary=outcome.summary,
+                telemetry_findings=outcome.telemetry_findings,
+                feedback_summary=outcome.feedback_summary,
+                agreements=outcome.agreements, contradictions=outcome.contradictions,
+                changed_vs_previous=outcome.changed_vs_previous,
+                confidence=outcome.confidence,
+                primary_action_label=outcome.primary_action_label,
+                primary_action_key=outcome.primary_action_key,
+                secondary_action_label=outcome.secondary_action_label,
+                secondary_action_key=outcome.secondary_action_key))
         except Exception:
             pass
 
