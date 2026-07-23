@@ -29,6 +29,8 @@ class PrimaryActionButton(QPushButton):
         """Set the CTA label + enabled state. A blank label disables the button."""
         label = label or ""
         self.setText(label)
+        # A narrow column can still clip a long CTA — keep the full wording reachable.
+        self.setToolTip(label)
         self.setEnabled(bool(enabled) and bool(label))
         self.setVisible(bool(label))
 
@@ -48,5 +50,7 @@ class SecondaryActionButton(QPushButton):
     def set_action(self, label: str, enabled: bool = True) -> None:
         label = label or ""
         self.setText(label)
+        # A narrow column can still clip a long CTA — keep the full wording reachable.
+        self.setToolTip(label)
         self.setEnabled(bool(enabled) and bool(label))
         self.setVisible(bool(label))

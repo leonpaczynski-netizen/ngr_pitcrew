@@ -34,6 +34,7 @@ from ui.components.strategy_plan import StrategyPlanView
 from ui.components.live_pit_wall import LivePitWall
 from ui.components.debrief_view import DebriefView
 from ui.components.engineering_library import EngineeringLibrary
+from ui.components.home_page import HomePage
 from ui.components.setup_workspace import SetupDisciplineSelector as _Seg
 from ui.components.nav_rail import NAV_LABELS
 
@@ -212,8 +213,12 @@ class PitCrewShell(QMainWindow):
         self.debrief_page = DebriefView()
         self.library_page = EngineeringLibrary()
         self.settings_page = self._build_settings_page()
+        self.home_page = HomePage()
+        self.home_page.navigate_requested.connect(self._on_guidance_surface)
         for dest in NAV_DESTINATIONS:
-            if dest == "active_event":
+            if dest == "home":
+                page = self.home_page
+            elif dest == "active_event":
                 page = self.active_event_page
             elif dest == "garage":
                 page = self.garage_page
@@ -314,6 +319,7 @@ class PitCrewShell(QMainWindow):
         self.header.bind(app_state)
         self.rail.set_state(app_state)
         self.active_event_page.render(app_state, self._last_view)
+        self.home_page.render(app_state, self._last_view)
 
     _last_view: Optional[Mapping] = None
 
@@ -322,3 +328,4 @@ class PitCrewShell(QMainWindow):
         self._last_view = view
         self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(view))
         self.active_event_page.render(self._controller.state(), view)
+        self.home_page.render(self._controller.state(), view)

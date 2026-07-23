@@ -96,11 +96,25 @@ class SetupDisciplineSelector(QWidget):
         )
 
 
+#: What each discipline IS, in the driver's words — shown under the selector so the
+#: three tabs are never three identical-looking sheets with no explanation.
+DISCIPLINE_NOTE = {
+    "base": ("Base is the starting tune for this car and track. Build it first — it "
+             "fills BOTH the Race and Qualifying sheets, and everything after this is "
+             "measured against it."),
+    "qualifying": ("Qualifying is the one-lap tune: peak grip for a single hot lap, "
+                   "tyre life and fuel are not the priority."),
+    "race": ("Race is the stint tune: consistent pace over a full stint, tyre life and "
+             "fuel efficiency matter more than a single hot lap."),
+}
+
+
 class SetupWorkspace(QWidget):
     apply_requested = pyqtSignal(dict)     # {field: value} from applied_field_values()
     discipline_changed = pyqtSignal(str)
     revert_requested = pyqtSignal(str)     # lineage node_id to revert to
     analyse_requested = pyqtSignal()       # run the setup brain on the current setup
+    baseline_requested = pyqtSignal(str)   # build the base tune for this discipline
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -133,6 +147,18 @@ class SetupWorkspace(QWidget):
             status_row.addWidget(p)
         status_row.addStretch(1)
         lay.addLayout(status_row)
+
+        # What this discipline is, plus any transient status ("Analysing setup…").
+        self._note = QLabel("")
+        self._note.setWordWrap(True)
+        self._note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        lay.addWidget(self._note)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(
+            f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 600;")
+        self._status.setVisible(False)
+        lay.addWidget(self._status)
 
         # Changed-fields table
         self._primary_issue = QLabel("")
@@ -224,6 +250,11 @@ class SetupWorkspace(QWidget):
 
         # Actions
         act = QHBoxLayout()
+        self._baseline = PrimaryActionButton("Build baseline (Race + Qualifying)")
+        self._baseline.clicked.connect(
+            lambda: self.baseline_requested.emit(self._selector.current()))
+        self._baseline.setVisible(False)
+        act.addWidget(self._baseline)
         self._analyse = SecondaryActionButton("Analyse setup")
         self._analyse.clicked.connect(lambda: self.analyse_requested.emit())
         act.addWidget(self._analyse)
@@ -267,7 +298,14 @@ class SetupWorkspace(QWidget):
         self._vm = vm
         self._lineage.set_nodes(lineage_nodes or ())
         self._compare.set_comparisons(comparisons or ())
+        discipline = (discipline or "race").lower()
+        if discipline not in {k for k, _ in DISCIPLINES}:
+            discipline = "race"
         self._selector.set_discipline(discipline)
+        self._note.setText(DISCIPLINE_NOTE.get(discipline, ""))
+        # "Build baseline" is the dominant action on Base — that IS how a base tune
+        # is created; on Race/Qualifying the dominant action is Apply.
+        self._baseline.setVisible(discipline == "base")
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
 
         self._pill_saved.set_status("Saved" if saved else "Not saved",
@@ -293,6 +331,10 @@ class SetupWorkspace(QWidget):
             self._table.setItem(i, 3, QTableWidgetItem(r.delta))
             self._table.setItem(i, 4, QTableWidgetItem(r.confidence or "—"))
         self._table.setVisible(bool(rows))
+        self._empty.setText(
+            "No baseline recommendation yet — press “Build baseline (Race + Qualifying)”."
+            if discipline == "base" else
+            "No recommendation yet. Press “Analyse setup” to get setup guidance.")
         self._empty.setVisible(not rows)
 
         self._apply.set_action("Apply recommendation", enabled=bool(rows))
@@ -323,6 +365,19 @@ class SetupWorkspace(QWidget):
         if not setup_values:
             self._btn_changed.setChecked(True)
             self._stack.setCurrentIndex(0)
+
+    def set_status(self, text: str) -> None:
+        """Show (or clear, with "") a transient status line — e.g. "Analysing setup…".
+
+        The workspace performs no engineering; the caller that actually starts the
+        work reports its progress here so a pressed button is never silent.
+        """
+        text = str(text or "")
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
+
+    def current_discipline(self) -> str:
+        return self._selector.current()
 
     # ---- signals ----------------------------------------------------------
     def _on_apply(self):

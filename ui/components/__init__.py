@@ -32,6 +32,7 @@ from ui.components.live_pit_wall import LivePitWall, LivePitWallVM
 from ui.components.debrief_view import DebriefView, DebriefVM
 from ui.components.engineering_library import EngineeringLibrary, LIBRARY_AREAS
 from ui.components.settings_page import SettingsPage
+from ui.components.home_page import HomePage
 
 __all__ = [
     "StatusPill", "ConfidenceMeter", "TONE_BASE_COLOR",
@@ -52,4 +53,5 @@ __all__ = [
     "DebriefView", "DebriefVM",
     "EngineeringLibrary", "LIBRARY_AREAS",
     "SettingsPage",
+    "HomePage",
 ]

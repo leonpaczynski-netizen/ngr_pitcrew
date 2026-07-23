@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QLabel, QHBoxLayout, QVBoxLayout, QToolButton, QWidget,
+    QLabel, QHBoxLayout, QVBoxLayout, QToolButton, QWidget, QSizePolicy,
 )
 
 from ui import ngr_theme as _t
@@ -83,17 +83,20 @@ class EngineerGuidanceCard(Card):
         self._warnings.setVisible(False)
         self.body.addWidget(self._warnings)
 
-        # Actions
-        act_row = QHBoxLayout()
-        act_row.setContentsMargins(0, _t.SPACE_XS, 0, 0)
+        # Actions. Stacked full-width, NOT side by side: the guidance column is a
+        # fixed 360px and a real CTA label ("Build setup_base evidence") was being
+        # centre-clipped to "ld setup_base evide" when the two shared one row.
+        act_col = QVBoxLayout()
+        act_col.setContentsMargins(0, _t.SPACE_XS, 0, 0)
+        act_col.setSpacing(_t.SPACE_XS)
         self._primary = PrimaryActionButton()
         self._primary.clicked.connect(self._on_primary)
         self._secondary = SecondaryActionButton()
         self._secondary.clicked.connect(self._on_secondary)
-        act_row.addWidget(self._primary)
-        act_row.addWidget(self._secondary)
-        act_row.addStretch(1)
-        self.body.addLayout(act_row)
+        for b in (self._primary, self._secondary):
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            act_col.addWidget(b)
+        self.body.addLayout(act_col)
 
         # Expandable explanation
         self._expander = QToolButton()
@@ -107,6 +110,13 @@ class EngineerGuidanceCard(Card):
             f"QToolButton:focus {{ {_t.focus_ring_qss()} }}"
         )
         self._expander.toggled.connect(self._on_expand)
+
+        # Transient status from the caller (e.g. why Read aloud stayed silent).
+        self._status = QLabel()
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt;")
+        self._status.setVisible(False)
+        self.body.addWidget(self._status)
         self._explanation = QLabel()
         self._explanation.setWordWrap(True)
         self._explanation.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
@@ -147,6 +157,12 @@ class EngineerGuidanceCard(Card):
             self._expander.setChecked(False)
             self._explanation.setVisible(False)
         self._explanation.setText(vm.explanation)
+
+    def set_status(self, text: str) -> None:
+        """Show (or clear, with "") a caller-supplied status line under the card."""
+        text = str(text or "")
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
 
     # ---- signal plumbing --------------------------------------------------
     def _on_primary(self):

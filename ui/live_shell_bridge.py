@@ -33,6 +33,19 @@ class LiveShellBridge(QObject):
         self._window = window
         self._config = config or {}
         self._db = db
+        #: The Garage discipline the driver selected. Owned HERE, not re-derived on
+        #: every refresh — the 750ms feed used to force it back to "race", which made
+        #: the Base and Qualifying tabs un-selectable.
+        self._discipline = "race"
+        #: "" or a short description of the long-running Garage job in flight, so a
+        #: pressed Analyse/Baseline button is never silent.
+        self._pending_work = ""
+        #: Which discipline the window's single ``current_recommendation_vm()`` was
+        #: produced for. The classic window keeps ONE recommendation VM (whichever
+        #: analysis finished last), so the Garage must not show a Race recommendation
+        #: under the Qualifying tab — Apply would then write Race deltas into the
+        #: Qualifying sheet. "race" is the classic default until we start a run.
+        self._rec_discipline = "race"
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -63,6 +76,10 @@ class LiveShellBridge(QObject):
                 gp.revert_requested.connect(self._on_revert)
                 if hasattr(gp, "analyse_requested"):
                     gp.analyse_requested.connect(self._on_analyse)
+                if hasattr(gp, "discipline_changed"):
+                    gp.discipline_changed.connect(self._on_discipline)
+                if hasattr(gp, "baseline_requested"):
+                    gp.baseline_requested.connect(self._on_build_baseline)
         except Exception:
             pass
         try:
@@ -85,6 +102,9 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
+        home = getattr(shell, "home_page", None)
+        _c(home, "event_activate_requested", self._on_activate_event)
+        _c(home, "manage_events_requested", self._on_manage_events)
 
     @staticmethod
     def _safe_connect(obj, signal_name, slot) -> None:
@@ -200,20 +220,62 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
-    def _feed_garage(self) -> None:
-        """Show the driver's REAL current setup in the Garage GT7 sheet."""
+    def _form_for_discipline(self, discipline: str = ""):
+        """The classic setup form that owns this discipline's values.
+
+        The domain has two editable sheets — Race and Qualifying. "Base" is not a
+        third sheet: the baseline build FILLS both, so the Base tab reads the Race
+        sheet (where the baseline lands) and offers the build action.
+        """
+        d = (discipline or self._discipline or "race").lower()
+        attr = "_qual_form" if d == "qualifying" else "_race_form"
+        return getattr(self._window, attr, None)
+
+    def _recommendation_applies_here(self) -> bool:
+        """Whether the window's current recommendation belongs to the shown discipline.
+
+        Base and Race share the Race sheet, so a recommendation for one applies to the
+        other; Qualifying is a different sheet and never shares.
+        """
+        pair = {self._rec_discipline, self._discipline}
+        return len(pair) == 1 or pair <= {"base", "race"}
+
+    def _on_discipline(self, discipline: str) -> None:
+        """Remember the selected discipline and re-feed the Garage for it."""
+        d = str(discipline or "").lower()
+        if d not in ("base", "qualifying", "race"):
+            d = "race"
+        self._discipline = d
         try:
             gp = getattr(self._shell, "garage_page", None)
-            form = getattr(self._window, "_race_form", None)
+            if gp is not None and hasattr(gp, "set_status"):
+                gp.set_status("")
+        except Exception:
+            pass
+        self._feed_garage()
+
+    def _feed_garage(self) -> None:
+        """Show the driver's REAL current setup for the SELECTED discipline."""
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            form = self._form_for_discipline()
             if gp is None or form is None or not hasattr(form, "current_setup_dict"):
                 return
             setup = form.current_setup_dict()
             label, applied = _active_setup(self._window)
             from ui.setup_recommendation_vm import build_recommendation_vm
             vm = _current_recommendation_vm(self._window)
+            if not self._recommendation_applies_here():
+                vm = None
+            # A pending Analyse/Baseline stops being "in progress" the moment a
+            # recommendation actually lands — clear the status line then, not before.
+            if self._pending_work and vm is not None and vm.proposed_rows():
+                self._pending_work = ""
+                if hasattr(gp, "set_status"):
+                    gp.set_status("")
             gp.set_recommendation(
                 vm if vm is not None else build_recommendation_vm({}),
-                discipline="race", active_setup=label, applied=applied,
+                discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
             )
         except Exception:
@@ -250,7 +312,7 @@ class LiveShellBridge(QObject):
         """
         try:
             window = self._window
-            form = getattr(window, "_race_form", None)
+            form = self._form_for_discipline()
             if not field_values or form is None or not hasattr(form, "apply_ai_fields"):
                 return
             form.apply_ai_fields(dict(field_values))
@@ -270,22 +332,123 @@ class LiveShellBridge(QObject):
         try:
             window = self._window
             reverter = getattr(window, "_revert_last_change_for_form", None)
-            form = getattr(window, "_race_form", None)
+            form = self._form_for_discipline()
             if callable(reverter) and form is not None:
                 reverter(form)
             self.refresh()
         except Exception:
             pass
 
-    def _on_analyse(self) -> None:
-        """Run the setup brain on the current setup via the window's analyse path."""
+    def _garage_status(self, text: str) -> None:
         try:
-            window = self._window
-            analyse = getattr(window, "_setup_analyse_ai", None)
-            if callable(analyse):
-                analyse()
-                # the recommendation appears asynchronously; refresh picks it up.
-                self.refresh()
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is not None and hasattr(gp, "set_status"):
+                gp.set_status(text)
+        except Exception:
+            pass
+
+    def _on_analyse(self) -> None:
+        """Run the setup brain on the current setup via the window's analyse path.
+
+        The analysis runs on a worker thread in the classic window and lands
+        asynchronously; the button used to be completely silent while that happened
+        (and silent forever when the advisor was unavailable). Report both.
+        """
+        window = self._window
+        # Only report "unavailable" when the window HAS an advisor slot and it is
+        # empty — an absent attribute just means an alternate/duck-typed host.
+        if hasattr(window, "_driving_advisor") and window._driving_advisor is None:
+            self._garage_status(
+                "Setup analysis is unavailable — the driving advisor did not load.")
+            return
+        try:
+            if self._discipline == "qualifying":
+                fn = getattr(window, "_setup_analyse_ai_for_form", None)
+                form = getattr(window, "_qual_form", None)
+                started = bool(callable(fn) and form is not None)
+                if started:
+                    fn(form)
+            else:
+                fn = getattr(window, "_setup_analyse_ai", None)
+                started = callable(fn)
+                if started:
+                    fn()
+        except Exception:
+            started = False
+        if started:
+            self._rec_discipline = self._discipline
+            self._pending_work = "analyse"
+            self._garage_status(
+                "Analysing the current setup… the recommendation appears here when it is ready.")
+            self.refresh()
+        else:
+            self._garage_status("Setup analysis is not available in this build.")
+
+    def _on_build_baseline(self, discipline: str = "") -> None:
+        """Build the BASE tune for this event via the classic baseline builder.
+
+        This is the missing "how do I get a base setup" route: it fires the same
+        deterministic baseline build the classic Setup Builder uses, which fills BOTH
+        the Race and Qualifying sheets from the car ranges + driving profile.
+        """
+        window = self._window
+        fn = getattr(window, "_generate_baseline_setup_both", None)
+        if not callable(fn):
+            fn = getattr(window, "_generate_baseline_setup", None)
+        if not callable(fn):
+            self._garage_status("Baseline builder is not available in this build.")
+            return
+        try:
+            fn()
+        except Exception:
+            self._garage_status("Baseline build could not be started.")
+            return
+        self._rec_discipline = self._discipline
+        self._pending_work = "baseline"
+        self._garage_status(
+            "Building the baseline setup for the Race and Qualifying sheets…")
+        self.refresh()
+
+    # ---- event selection / creation --------------------------------------
+    def _on_activate_event(self, event_name: str) -> None:
+        """Make a different event the active one, through the classic activation path.
+
+        Reuses ``_on_event_set_active`` so the preparation cycle, strategy fan-out,
+        tracker race config and advisor context all follow exactly as they do from the
+        Event Planner — this bridge never writes the active event itself.
+        """
+        name = str(event_name or "").strip()
+        window = self._window
+        try:
+            lst = getattr(window, "_event_list", None)
+            if name and lst is not None:
+                for row in range(lst.count()):
+                    item = lst.item(row)
+                    if item is not None and item.text().strip() == name:
+                        lst.setCurrentRow(row)
+                        break
+            fn = getattr(window, "_on_event_set_active", None)
+            if callable(fn):
+                fn()
+            persist = getattr(window, "_persist_config", None)
+            if callable(persist):
+                persist()
+        except Exception:
+            pass
+        self.refresh()
+
+    def _on_manage_events(self) -> None:
+        """Open the classic Event Planner — the full create/edit/delete event editor."""
+        try:
+            shell = self._shell
+            if hasattr(shell, "classic_ui_requested"):
+                shell.classic_ui_requested.emit()
+            sel = getattr(self._window, "select_tab", None)
+            if callable(sel):
+                sel("event_planner")
+            raise_ = getattr(self._window, "raise_", None)
+            if callable(raise_):
+                raise_()
         except Exception:
             pass
 
@@ -384,19 +547,57 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
-    def _on_read_aloud(self, text: str) -> None:
-        """Speak the engineer's message via the existing announcer (opt-in, never forced)."""
+    def _guidance_status(self, text: str) -> None:
         try:
-            announcer = getattr(self._window, "_announcer", None)
-            if announcer is None or not text:
-                return
-            for name in ("speak", "announce", "say", "enqueue"):
-                fn = getattr(announcer, name, None)
-                if callable(fn):
-                    fn(str(text))
-                    break
+            g = getattr(self._shell, "guidance", None)
+            if g is not None and hasattr(g, "set_status"):
+                g.set_status(text)
         except Exception:
             pass
+
+    def _voice_enabled(self) -> bool:
+        """Whether voice output is switched on. Unknown config reads as enabled."""
+        try:
+            return bool((self._config.get("voice") or {}).get("enabled", True))
+        except Exception:
+            return True
+
+    def _on_read_aloud(self, text: str) -> None:
+        """Speak the engineer's message via the existing announcer (opt-in, never forced).
+
+        ``VoiceAnnouncer.announce`` takes (text, priority, cooldown_key) — the previous
+        one-argument call raised TypeError into a bare except, so Read aloud was silent.
+        A version_key means pressing it twice replaces the queued line instead of
+        stacking duplicates.
+        """
+        text = str(text or "").strip()
+        if not text:
+            return
+        announcer = getattr(self._window, "_announcer", None)
+        if announcer is None:
+            self._guidance_status("Voice output is not available in this build.")
+            return
+        if not self._voice_enabled():
+            self._guidance_status("Voice is switched off — enable it in Settings to hear this.")
+            return
+        self._guidance_status("")
+        try:
+            from telemetry.state import Priority
+            announcer.announce(text, Priority.LOW, "shell_read_aloud",
+                               cooldown_secs=0.0, interrupt=False,
+                               version_key="shell_read_aloud")
+            return
+        except Exception:
+            pass
+        # Fallback for a duck-typed/simple announcer (tests, alternate backends).
+        for name in ("speak", "say", "enqueue"):
+            try:
+                fn = getattr(announcer, name, None)
+                if callable(fn):
+                    fn(text)
+                    return
+            except Exception:
+                continue
 
 
 def _active_setup(window):
