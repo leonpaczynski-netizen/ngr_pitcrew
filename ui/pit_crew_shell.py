@@ -316,16 +316,32 @@ class PitCrewShell(QMainWindow):
     def _on_state(self, app_state: AppState) -> None:
         if not isinstance(app_state, AppState):
             app_state = AppState.empty()
-        self.header.bind(app_state)
-        self.rail.set_state(app_state)
-        self.active_event_page.render(app_state, self._last_view)
-        self.home_page.render(app_state, self._last_view)
+        # PyQt6 ABORTS the process on an unhandled exception inside a slot, so a single
+        # bad field in a context would take the whole app down mid-session. Each chrome
+        # render is isolated: one failing surface must never kill the others or the app.
+        for render in (
+            lambda: self.header.bind(app_state),
+            lambda: self.rail.set_state(app_state),
+            lambda: self.active_event_page.render(app_state, self._last_view),
+            lambda: self.home_page.render(app_state, self._last_view),
+        ):
+            try:
+                render()
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[PitCrewShell] chrome render failed: {exc}")
 
     _last_view: Optional[Mapping] = None
 
     def set_guidance_view(self, view: Optional[Mapping]) -> None:
         """Feed the Event Command Centre view dict; updates guidance + active-event."""
         self._last_view = view
-        self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(view))
-        self.active_event_page.render(self._controller.state(), view)
-        self.home_page.render(self._controller.state(), view)
+        state = self._controller.state()
+        for render in (
+            lambda: self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(view)),
+            lambda: self.active_event_page.render(state, view),
+            lambda: self.home_page.render(state, view),
+        ):
+            try:
+                render()
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[PitCrewShell] guidance render failed: {exc}")

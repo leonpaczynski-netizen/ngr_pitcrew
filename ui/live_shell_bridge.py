@@ -24,6 +24,25 @@ from ui.app_state import build_app_state
 from ui.new_shell_launch import build_initial_app_state, fetch_guidance_view
 
 
+#: Garage discipline -> the setup-authority purpose that scopes the active setup.
+#: Base shares the Race sheet, so it shares the Race purpose.
+_PURPOSE = {"base": "Race", "race": "Race", "qualifying": "Qualifying"}
+
+#: Library area -> (classic tab key to host natively, detail title, note when absent).
+#: Every engineering area lives in the Development History tab's sub-tabs today, so
+#: they all resolve there; History and Telemetry have their own pages.
+_LIBRARY_TAB = {
+    "development_history": ("development_history", "Development History", ""),
+    "evidence_provenance": ("development_history", "Evidence & Provenance", ""),
+    "rule_traces": ("development_history", "Rule Traces", ""),
+    "knowledge_graph": ("development_history", "Knowledge Graph", ""),
+    "readiness_assurance": ("development_history", "Readiness & Assurance", ""),
+    "certification": ("development_history", "Certification", ""),
+    "uat": ("development_history", "Bench & Manual UAT", ""),
+    "season_knowledge": ("development_history", "Season & Knowledge", ""),
+}
+
+
 class LiveShellBridge(QObject):
     def __init__(self, shell, controller, window=None, config=None, db=None,
                  *, refresh_ms: int = 750, parent=None):
@@ -46,6 +65,15 @@ class LiveShellBridge(QObject):
         #: under the Qualifying tab — Apply would then write Race deltas into the
         #: Qualifying sheet. "race" is the classic default until we start a run.
         self._rec_discipline = "race"
+        #: The write side of the guided practice loop. Without it, nothing the driver
+        #: does in a run ever reaches the event programme, so the engineer never moves.
+        from ui.practice_run_recorder import PracticeRunRecorder
+        self._runs = PracticeRunRecorder(db=db, config=self._config)
+        #: Last Event Command Centre view — the run planner reads the current objective
+        #: from it so a started run carries the purpose the engineer actually asked for.
+        self._last_guidance_view = None
+        #: (key, index, label, widget) of a classic tab page currently hosted natively.
+        self._borrowed = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -92,8 +120,12 @@ class LiveShellBridge(QObject):
         # Route every remaining surface action to real behaviour.
         shell = self._shell
         _c = self._safe_connect
-        _c(getattr(shell, "run_card", None), "start_requested",
-           lambda: self._navigate("live_pit_wall"))
+        rc = getattr(shell, "run_card", None)
+        _c(rc, "start_requested", self._on_start_run)
+        _c(rc, "record_requested", self._on_record_run)
+        _c(rc, "discard_requested", self._on_discard_run)
+        _c(getattr(shell, "garage_page", None), "applied_in_game_confirmed",
+           self._on_applied_in_game)
         _c(getattr(shell, "feedback_form", None), "submitted", self._on_feedback)
         _c(getattr(shell, "practice_outcome", None), "action_requested", self._on_outcome_action)
         _c(getattr(shell, "qualifying_page", None), "begin_requested",
@@ -101,6 +133,7 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
+        _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
         _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
@@ -144,6 +177,7 @@ class LiveShellBridge(QObject):
             view = fetch_guidance_view(self._db, self._config)
         except Exception:
             view = None
+        self._last_guidance_view = view
         try:
             if hasattr(self._shell, "set_guidance_view"):
                 self._shell.set_guidance_view(view)
@@ -157,7 +191,7 @@ class LiveShellBridge(QObject):
         self._feed_debrief()
 
     def _feed_practice(self) -> None:
-        """Feed the Practice run card from the current recommendation (what's being tested)."""
+        """Feed the Practice run card from the current recommendation + the open run."""
         try:
             rc = getattr(self._shell, "run_card", None)
             if rc is None:
@@ -166,8 +200,106 @@ class LiveShellBridge(QObject):
             vm = _current_recommendation_vm(self._window)
             label, _applied = _active_setup(self._window)
             rc.set_run(run_card_vm_from_recommendation(vm, active_setup_label=label))
+            # Show the OPEN run (if any) with its live lap count, so the driver can see
+            # the run is being captured and knows it still has to be ended to count.
+            run = self._runs.open_run()
+            if run:
+                rc.set_recording(str(run.get("title") or "Practice run"),
+                                 self._live_lap_count(), connected=self._connected())
+            else:
+                rc.set_recording("")
         except Exception:
             pass
+
+    def _live_session_id(self):
+        """The telemetry session currently being recorded (0 when none)."""
+        try:
+            return int(getattr(getattr(self._window, "_dispatcher", None), "_session_id", 0) or 0)
+        except Exception:
+            return 0
+
+    def _live_lap_count(self) -> int:
+        try:
+            meta = self._db.get_session_meta(self._live_session_id()) if self._db else None
+            return int((meta or {}).get("total_laps") or 0)
+        except Exception:
+            return 0
+
+    # ---- guided practice loop (the write side) ---------------------------
+    def _run_status(self, text: str) -> None:
+        try:
+            rc = getattr(self._shell, "run_card", None)
+            if rc is not None and hasattr(rc, "set_status"):
+                rc.set_status(text)
+        except Exception:
+            pass
+
+    def _on_start_run(self) -> None:
+        """Open a preparation activity for this run, then go to the pit wall.
+
+        The run's PURPOSE comes from the engineer's current objective — that is what
+        decides which evidence domains the run can contribute to once it is recorded.
+        """
+        from strategy.practice_run_recording import domain_from_objective_headline
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+        na = view.get("next_action") or {}
+        headline = str(na.get("headline") or "")
+        plan = self._runs.start_run(
+            objective_domain=domain_from_objective_headline(headline),
+            objective_headline=headline)
+        if not plan.ok:
+            self._run_status(plan.reason or "Could not start the run.")
+            return
+        self._run_status("Run open — drive it, then come back and press “End run & record”."
+                         if not plan.reused else "That run is already open.")
+        self.refresh()
+        self._navigate("live_pit_wall")
+
+    def _on_record_run(self) -> None:
+        """Bind the completed telemetry session to the open run — the ONE explicit
+        action that turns laps into event evidence."""
+        sid = self._live_session_id()
+        decision = self._runs.record_run(sid)
+        if not decision.ok:
+            self._run_status(decision.reason or "Could not record the run.")
+            return
+        msg = f"Run recorded — {decision.reason}"
+        if decision.warning:
+            msg += f"  ⚠ {decision.warning}"
+        self._run_status(msg)
+        self.refresh()
+
+    def _on_discard_run(self) -> None:
+        ok = self._runs.discard_run()
+        self._run_status("Run discarded — nothing was recorded against the event."
+                         if ok else "There was no open run to discard.")
+        self.refresh()
+
+    def _on_applied_in_game(self, discipline: str = "") -> None:
+        """Register that the driver typed this sheet into GT7.
+
+        Applying a recommendation only writes the SHEET; GT7 can only be updated by the
+        driver. This routes the confirmation through the classic, already-gated
+        "applied in game" path, which is what marks the active setup, links the applied
+        checkpoint to the awaiting experiment and persists the snapshot.
+        """
+        window = self._window
+        form = self._form_for_discipline(discipline)
+        fn = getattr(window, "_on_changes_applied_in_game", None)
+        if not callable(fn) or form is None:
+            self._garage_status("Cannot confirm the setup — the setup services are unavailable.")
+            return
+        try:
+            fn(form)
+        except Exception as exc:
+            self._garage_status(f"Could not confirm the setup: {exc}")
+            return
+        label, applied = _active_setup(window, _PURPOSE.get(
+            (discipline or self._discipline).lower(), "Race"))
+        self._garage_status(
+            f"Registered as the active setup: {label}" if applied and label
+            else "Confirmed — but no complete setup was captured; check the sheet has values.")
+        self.refresh()
 
     def _connected(self) -> bool:
         try:
@@ -262,7 +394,7 @@ class LiveShellBridge(QObject):
             if gp is None or form is None or not hasattr(form, "current_setup_dict"):
                 return
             setup = form.current_setup_dict()
-            label, applied = _active_setup(self._window)
+            label, applied = _active_setup(self._window, _PURPOSE.get(self._discipline, "Race"))
             from ui.setup_recommendation_vm import build_recommendation_vm
             vm = _current_recommendation_vm(self._window)
             if not self._recommendation_applies_here():
@@ -535,15 +667,56 @@ class LiveShellBridge(QObject):
             pass
 
     def _on_library_open(self, area: str) -> None:
-        """Open the classic engineering panels for the requested Library area."""
+        """Host the real engineering panel INSIDE the new shell.
+
+        This used to raise the classic dashboard window, throwing the driver back into
+        the old UI to read evidence. The panel is instead borrowed from the (hidden)
+        classic tab widget and re-parented into the Library, then handed back on Back —
+        so the fully-wired, already-fed panel is reused without a second window and the
+        classic tab set is left exactly as it was found.
+        """
+        lib = getattr(self._shell, "library_page", None)
+        if lib is None:
+            return
+        key, title, note = _LIBRARY_TAB.get(
+            str(area or ""), ("development_history", "Development History", ""))
+        widget = self._borrow_classic_tab(key)
+        lib.show_panel(widget, title=title, note=note if widget is None else "")
+
+    def _borrow_classic_tab(self, key: str):
+        """Detach a classic tab page so it can be hosted natively. None if absent."""
         try:
-            shell = self._shell
-            if hasattr(shell, "classic_ui_requested"):
-                shell.classic_ui_requested.emit()
             window = self._window
-            sel = getattr(window, "select_tab", None)
-            if callable(sel):
-                sel("development_history")
+            tabs = getattr(window, "_tabs", None)
+            get_index = getattr(window, "get_tab_index", None)
+            if tabs is None or not callable(get_index):
+                return None
+            idx = int(get_index(key))
+            if idx < 0:
+                return None
+            widget = tabs.widget(idx)
+            if widget is None:
+                return None
+            self._borrowed = (key, idx, tabs.tabText(idx), widget)
+            tabs.removeTab(idx)
+            return widget
+        except Exception:
+            return None
+
+    def _return_classic_tab(self) -> None:
+        """Put a borrowed classic tab page back where it came from."""
+        borrowed = getattr(self, "_borrowed", None)
+        if not borrowed:
+            return
+        _key, idx, label, widget = borrowed
+        self._borrowed = None
+        try:
+            lib = getattr(self._shell, "library_page", None)
+            if lib is not None and hasattr(lib, "release_panel"):
+                lib.release_panel()
+            tabs = getattr(self._window, "_tabs", None)
+            if tabs is not None and widget is not None:
+                tabs.insertTab(int(idx), widget, label)
         except Exception:
             pass
 
@@ -600,16 +773,30 @@ class LiveShellBridge(QObject):
                 continue
 
 
-def _active_setup(window):
+def _active_setup(window, purpose: str = "Race"):
+    """(label, applied) for the setup currently on the car. Never raises.
+
+    ``ActiveSetupAuthority.active_setup`` takes (identity, purpose) and ``ActiveSetup``
+    exposes ``label()`` and ``is_active_on_car`` — the previous no-argument call raised
+    TypeError into a bare except, so the shell could never show an active setup and the
+    header sat on "Setup: —" no matter what the driver applied.
+    """
     try:
         auth = getattr(window, "_setup_authority", None)
-        if auth is None:
+        if auth is None or not hasattr(auth, "active_setup"):
             return "", False
-        active = auth.active_setup() if hasattr(auth, "active_setup") else None
+        from data.setup_state_authority import SetupIdentity
+        ev = window._build_event_context() if hasattr(window, "_build_event_context") else None
+        ident = SetupIdentity(
+            car=str(getattr(ev, "car", "") or ""),
+            track=str(getattr(ev, "track", "") or ""),
+            layout_id=str(getattr(ev, "layout_id", "") or ""),
+        )
+        active = auth.active_setup(ident, purpose)
         if active is None:
             return "", False
-        label = getattr(active, "label", "") or getattr(active, "name", "") or ""
-        return str(label), bool(getattr(active, "applied", False))
+        label = active.label() if callable(getattr(active, "label", None)) else ""
+        return str(label or getattr(active, "name", "") or ""), bool(active.is_active_on_car)
     except Exception:
         return "", False
 

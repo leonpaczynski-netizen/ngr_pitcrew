@@ -22,11 +22,23 @@ def qapp():
 
 
 class _Auth:
+    """Mirrors the REAL ActiveSetupAuthority contract.
+
+    The previous fake took no arguments and exposed ``label``/``applied`` attributes —
+    none of which ``ActiveSetupAuthority``/``ActiveSetup`` actually have, so this test
+    passed while the shipped shell could never read an active setup (UAT-2 V-9).
+    """
+
     class _Active:
-        label = "Race v2"
-        applied = True
-    def active_setup(self):
-        return self._Active()
+        def label(self):
+            return "Race v2"
+
+        @property
+        def is_active_on_car(self):
+            return True
+
+    def active_setup(self, identity, purpose="Race"):
+        return self._Active() if purpose == "Race" else None
 
 
 class _Form:

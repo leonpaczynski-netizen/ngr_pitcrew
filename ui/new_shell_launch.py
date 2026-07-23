@@ -44,18 +44,15 @@ def _safe_ctx(window, method: str):
         return None
 
 
-def _active_setup(window):
-    """Best-effort (label, applied) from the window's setup authority. Never raises."""
+def _active_setup(window, purpose: str = "Race"):
+    """(label, applied) from the window's setup authority. Never raises.
+
+    Delegates to the bridge's single implementation so the header and the Garage can
+    never disagree about what is on the car.
+    """
     try:
-        auth = getattr(window, "_setup_authority", None)
-        if auth is None:
-            return "", False
-        active = auth.active_setup() if hasattr(auth, "active_setup") else None
-        if active is None:
-            return "", False
-        label = getattr(active, "label", "") or getattr(active, "name", "") or ""
-        applied = bool(getattr(active, "applied", False))
-        return str(label), applied
+        from ui.live_shell_bridge import _active_setup as _impl
+        return _impl(window, purpose)
     except Exception:
         return "", False
 

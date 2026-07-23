@@ -9,10 +9,12 @@ here at cutover). Selecting an area emits ``open_requested(area_key)``.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QGridLayout, QWidget
+from PyQt6.QtWidgets import (
+    QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QStackedWidget,
+)
 
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading, Card
@@ -41,11 +43,20 @@ LIBRARY_AREAS: Tuple[Tuple[str, str, str], ...] = (
 
 class EngineeringLibrary(QWidget):
     open_requested = pyqtSignal(str)
+    #: The driver left a detail panel — the host must take its widget back.
+    back_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ngrEngLibrary")
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._stack = QStackedWidget()
+        outer.addWidget(self._stack)
+
+        index_page = QWidget()
+        lay = QVBoxLayout(index_page)
         lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
         lay.setSpacing(_t.SPACE_MD)
         lay.addWidget(SectionHeading("ENGINEERING LIBRARY", level=1))
@@ -74,3 +85,66 @@ class EngineeringLibrary(QWidget):
             grid.addWidget(card, i // 2, i % 2)
         lay.addLayout(grid)
         lay.addStretch(1)
+        self._stack.addWidget(index_page)
+
+        # Detail page — an engineering panel is hosted HERE, inside the new shell.
+        # Opening one used to raise the classic dashboard window; the driver should
+        # never be thrown back into the old UI to read evidence.
+        detail = QWidget()
+        dlay = QVBoxLayout(detail)
+        dlay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
+        dlay.setSpacing(_t.SPACE_SM)
+        top = QHBoxLayout()
+        self._back = SecondaryActionButton("‹ Back to Library")
+        self._back.clicked.connect(self._on_back)
+        top.addWidget(self._back)
+        self._detail_title = SectionHeading("", level=2)
+        top.addWidget(self._detail_title)
+        top.addStretch(1)
+        dlay.addLayout(top)
+        self._detail_host = QVBoxLayout()
+        dlay.addLayout(self._detail_host, 1)
+        self._detail_note = QLabel("")
+        self._detail_note.setWordWrap(True)
+        self._detail_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        dlay.addWidget(self._detail_note)
+        self._stack.addWidget(detail)
+        self._hosted = None
+
+    # ---- detail hosting ---------------------------------------------------
+    def show_panel(self, widget: Optional[QWidget], title: str = "", note: str = "") -> bool:
+        """Host ``widget`` inside the Library. False when there is nothing to host."""
+        self.release_panel()
+        if widget is None:
+            self._detail_title.set_text(title or "")
+            self._detail_note.setText(
+                note or "This area is not available in this build.")
+            self._stack.setCurrentIndex(1)
+            return False
+        self._hosted = widget
+        widget.setParent(None)
+        self._detail_host.addWidget(widget)
+        widget.setVisible(True)
+        self._detail_title.set_text(title or "")
+        self._detail_note.setText(note or "")
+        self._stack.setCurrentIndex(1)
+        return True
+
+    def release_panel(self) -> Optional[QWidget]:
+        """Detach the hosted widget (so its owner can take it back) and return it."""
+        w = self._hosted
+        self._hosted = None
+        if w is not None:
+            self._detail_host.removeWidget(w)
+            w.setParent(None)
+        return w
+
+    def showing_detail(self) -> bool:
+        return self._stack.currentIndex() == 1
+
+    def show_index(self) -> None:
+        self._stack.setCurrentIndex(0)
+
+    def _on_back(self) -> None:
+        self.back_requested.emit()
+        self.show_index()

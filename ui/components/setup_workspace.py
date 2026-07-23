@@ -29,6 +29,7 @@ from ui.components.gt7_settings_sheet import GT7SettingsSheet
 from ui.components.setup_lineage import SetupLineageTree, LineageNode
 from ui.components.setup_comparison import SetupComparison
 from ui.setup_recommendation_vm import SetupRecommendationVM, build_recommendation_vm
+from ui.setup_transcribe_view import gt7_field_rank
 
 try:
     from strategy.gearbox_objectives import gearbox_headline, gearbox_objectives
@@ -115,6 +116,7 @@ class SetupWorkspace(QWidget):
     revert_requested = pyqtSignal(str)     # lineage node_id to revert to
     analyse_requested = pyqtSignal()       # run the setup brain on the current setup
     baseline_requested = pyqtSignal(str)   # build the base tune for this discipline
+    applied_in_game_confirmed = pyqtSignal(str)  # driver entered this sheet into GT7
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -260,6 +262,12 @@ class SetupWorkspace(QWidget):
         act.addWidget(self._analyse)
         self._apply = PrimaryActionButton()
         self._apply.clicked.connect(self._on_apply)
+        # Applying writes the values onto the sheet; GT7 itself can only be updated by
+        # the driver typing them in. This is the explicit confirmation that they did —
+        # it is what registers an ACTIVE setup for the event (nothing else can know).
+        self._applied_in_game = SecondaryActionButton("I've entered this in GT7")
+        self._applied_in_game.clicked.connect(
+            lambda: self.applied_in_game_confirmed.emit(self._selector.current()))
         self._explain = SecondaryActionButton("Why these changes")
         self._explain.setCheckable(True)
         self._explain.toggled.connect(self._on_explain)
@@ -267,6 +275,7 @@ class SetupWorkspace(QWidget):
         self._gearbox_btn.setCheckable(True)
         self._gearbox_btn.toggled.connect(self._on_gearbox)
         act.addWidget(self._apply)
+        act.addWidget(self._applied_in_game)
         act.addWidget(self._explain)
         act.addWidget(self._gearbox_btn)
         act.addStretch(1)
@@ -322,7 +331,10 @@ class SetupWorkspace(QWidget):
             f"Primary issue: {vm.header.primary_issue}" if vm.header.primary_issue else "")
         self._primary_issue.setVisible(bool(vm.header.primary_issue))
 
-        rows = vm.proposed_rows()
+        # GT7 tuning-menu order: the driver transcribes these into GT7 top-to-bottom,
+        # so the table must read in the same order as the in-game menu.
+        rows = sorted(vm.proposed_rows(), key=lambda r: gt7_field_rank(r.field))
+        self._displayed_fields = tuple(r.field for r in rows)
         self._table.setRowCount(len(rows))
         for i, r in enumerate(rows):
             self._table.setItem(i, 0, QTableWidgetItem(r.setting))
@@ -378,6 +390,10 @@ class SetupWorkspace(QWidget):
 
     def current_discipline(self) -> str:
         return self._selector.current()
+
+    def displayed_fields(self) -> tuple:
+        """The changed-field keys in the order the table shows them (GT7 menu order)."""
+        return getattr(self, "_displayed_fields", ())
 
     # ---- signals ----------------------------------------------------------
     def _on_apply(self):

@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QWidg
 
 from ui import ngr_theme as _t
 from ui.components.cards import Card, SectionHeading
-from ui.components.buttons import PrimaryActionButton
+from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 
 
 def _norm(v) -> str:
@@ -86,6 +86,10 @@ class RunCardVM:
 
 class RunCard(Card):
     start_requested = pyqtSignal()
+    #: The driver finished the run and wants it recorded against the event programme.
+    record_requested = pyqtSignal()
+    #: The driver abandoned the run — nothing is bound to the programme.
+    discard_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -141,12 +145,38 @@ class RunCard(Card):
         self._start = PrimaryActionButton()
         self._start.clicked.connect(lambda: self.start_requested.emit())
         act.addWidget(self._start)
+        # A started run has to be explicitly ENDED for it to become evidence — nothing
+        # is ever auto-bound, so without this control a completed run is invisible to
+        # the event programme (which is exactly what UAT saw: 9 laps, engineer unchanged).
+        self._record = PrimaryActionButton()
+        self._record.clicked.connect(lambda: self.record_requested.emit())
+        self._record.setVisible(False)
+        act.addWidget(self._record)
+        self._discard = SecondaryActionButton()
+        self._discard.clicked.connect(lambda: self.discard_requested.emit())
+        self._discard.setVisible(False)
+        act.addWidget(self._discard)
         act.addStretch(1)
         self.body.addLayout(act)
+
+        # Live recording state ("Recording: Baseline practice run 1 · 9 laps so far").
+        self._recording = QLabel()
+        self._recording.setWordWrap(True)
+        self._recording.setStyleSheet(
+            f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
+        self._recording.setVisible(False)
+        self.body.addWidget(self._recording)
+
+        self._status = QLabel()
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt;")
+        self._status.setVisible(False)
+        self.body.addWidget(self._status)
 
         self._empty = _dim_label()
         self.body.addWidget(self._empty)
 
+        self._recording_on = False
         self.set_run(RunCardVM())
 
     def set_run(self, vm: RunCardVM) -> None:
@@ -177,6 +207,41 @@ class RunCard(Card):
         for w in (self._setup, self._changes, self._expected, self._monitor):
             if not vm.has_plan:
                 w.setVisible(False)
+        self._apply_recording_state()
+
+    # ---- recording state --------------------------------------------------
+    def set_recording(self, title: str = "", laps: int = 0, *, connected: bool = True) -> None:
+        """Show that a run is open (blank title ends the recording state).
+
+        ``laps`` is what the live session has actually recorded so far, so the driver
+        can see the run is being captured before committing it to the programme.
+        """
+        title = _norm(title)
+        self._recording_on = bool(title)
+        if title:
+            lap_text = f"{laps} lap{'s' if laps != 1 else ''} so far" if laps else "no laps yet"
+            live = "" if connected else "  ·  GAME NOT CONNECTED"
+            self._recording.setText(f"● RECORDING:  {title}  ·  {lap_text}{live}")
+            self._record.set_action("End run & record", enabled=True)
+            self._discard.set_action("Discard run", enabled=True)
+        self._apply_recording_state()
+
+    def set_status(self, text: str) -> None:
+        """Show (or clear, with "") the outcome of the last record/discard attempt."""
+        text = _norm(text)
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
+
+    def is_recording(self) -> bool:
+        return bool(self._recording_on)
+
+    def _apply_recording_state(self) -> None:
+        on = self._recording_on
+        self._recording.setVisible(on)
+        self._record.setVisible(on)
+        self._discard.setVisible(on)
+        # One primary action at a time: Start is replaced by End-run while recording.
+        self._start.setVisible(not on and bool(self._vm.has_plan))
 
     @staticmethod
     def _set(label: QLabel, caption: str, value: str) -> None:
