@@ -178,7 +178,10 @@ class _Advisor:
 def _cfg():
     return {"active_cycle_id": "c1", "voice": {"enabled": True},
             "strategy": {"car": "Porsche Cayman GT4",
-                         "track": "Watkins Glen International"}}
+                         "track": "Watkins Glen International",
+                         # A real event has a length; without one the plan is
+                         # legitimately refused.
+                         "race_type": "lap", "laps": 25}}
 
 
 @pytest.fixture
@@ -740,3 +743,60 @@ class TestV17CoachingRunIsStartable:
         assert shell.run_card._vm.has_plan is False
         assert shell.run_card._empty.isVisibleTo(shell.run_card) is True
 
+
+
+class TestV18RaceStrategyCanBuildItsOwnPlan:
+    """The strategy page could only DISPLAY a plan the classic tab had built, so in the
+    new shell it stayed empty forever with no way to fill it."""
+
+    def test_the_page_offers_building_before_approving(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        page = shell.strategy_page
+        assert page._build.text() == "Build the race plan"
+        # Approving a plan that does not exist is meaningless — one primary at a time.
+        assert page._approve.isVisibleTo(page) is False
+
+    def test_building_with_no_recorded_run_says_how_to_get_one(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.strategy_page.build_requested.emit()
+        assert "End run & record" in shell.strategy_page._status.text()
+
+    def test_a_built_plan_reaches_the_page_and_enables_approving(self, wired, monkeypatch):
+        shell, _win, db, bridge = wired
+        db.get_practice_sessions_for_cycle = lambda cid: [
+            {"session_id": "7", "total_laps": 9}]
+        monkeypatch.setattr(
+            "strategy.race_strategy_pipeline.recommend_strategy_from_session",
+            lambda _db, **kw: {"raw": True})
+        monkeypatch.setattr(
+            "ui.race_strategy_vm.build_race_plan_view_model",
+            lambda r: _PlanVM())
+        shell.strategy_page.build_requested.emit()
+        assert "Race plan built from session 7" in shell.strategy_page._status.text()
+        assert bridge._plans.last_plan.ok is True
+        bridge.refresh()
+        assert shell.strategy_page._approve.isVisibleTo(shell.strategy_page) is True
+
+    def test_the_plan_is_built_from_the_recorded_run(self, wired, monkeypatch):
+        shell, _win, db, bridge = wired
+        db.get_practice_sessions_for_cycle = lambda cid: [
+            {"session_id": "4", "total_laps": 9}, {"session_id": "7", "total_laps": 9}]
+        seen = {}
+        monkeypatch.setattr(
+            "strategy.race_strategy_pipeline.recommend_strategy_from_session",
+            lambda _db, **kw: seen.update(kw) or {"raw": True})
+        monkeypatch.setattr("ui.race_strategy_vm.build_race_plan_view_model",
+                            lambda r: _PlanVM())
+        shell.strategy_page.build_requested.emit()
+        assert seen["session_id"] == 7          # most recently recorded
+
+
+class _PlanVM:
+    """Minimal stand-in for the race-plan view model the adapter reads."""
+    has_recommendation = True
+    stint_plan_rows = [{"laps": 12, "compound": "RM"}]
+    candidate_comparison_rows = []
+    risks = ()
+    replan_triggers = ()
+    inputs_rows = []

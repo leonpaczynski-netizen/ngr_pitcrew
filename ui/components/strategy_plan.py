@@ -66,6 +66,8 @@ class StrategyPlanVM:
 
 class StrategyPlanView(QWidget):
     approve_requested = pyqtSignal()
+    #: Build the plan from the runs recorded against this event.
+    build_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,10 +93,22 @@ class StrategyPlanView(QWidget):
         self._root.addLayout(self._body)
 
         self._empty = QLabel("No race plan yet — gather practice evidence, then build the plan.")
+        self._empty.setWordWrap(True)
         self._empty.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
         self._root.addWidget(self._empty)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(
+            f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 600;")
+        self._status.setVisible(False)
+        self._root.addWidget(self._status)
 
         act = QHBoxLayout()
+        # With no plan yet, BUILDING one is the job — approving is meaningless. With a
+        # plan, approving is. One primary action either way, never both.
+        self._build = PrimaryActionButton("Build the race plan")
+        self._build.clicked.connect(lambda: self.build_requested.emit())
+        act.addWidget(self._build)
         self._approve = PrimaryActionButton()
         self._approve.clicked.connect(lambda: self.approve_requested.emit())
         act.addWidget(self._approve)
@@ -103,6 +117,12 @@ class StrategyPlanView(QWidget):
         self._root.addStretch(1)
 
         self.set_plan(StrategyPlanVM())
+
+    def set_status(self, text: str) -> None:
+        """Show (or clear, with "") what the last build attempt did."""
+        text = str(text or "")
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
 
     def set_plan(self, vm: StrategyPlanVM) -> None:
         if not isinstance(vm, StrategyPlanVM):
@@ -121,7 +141,10 @@ class StrategyPlanView(QWidget):
         if vm.replan_triggers:
             self._body.addWidget(self._triggers_card(vm.replan_triggers))
 
-        self._approve.set_action("Approve Race Plan", enabled=vm.has_plan)
+        self._approve.set_action("Approve Race Plan" if vm.has_plan else "",
+                                 enabled=vm.has_plan)
+        self._build.set_action("Rebuild the race plan" if vm.has_plan
+                               else "Build the race plan", enabled=True)
 
     # ---- cards ------------------------------------------------------------
     def _option_card(self, opt: StrategyOption) -> QWidget:

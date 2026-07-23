@@ -49,6 +49,7 @@ class LiveShellBridge(QObject):
     #: a worker must never touch a widget.
     _analysis_done = pyqtSignal(object)
     _baseline_done = pyqtSignal(object)
+    _plan_done = pyqtSignal(object)
 
     def __init__(self, shell, controller, window=None, config=None, db=None,
                  *, refresh_ms: int = 750, parent=None, spawn=None):
@@ -93,6 +94,11 @@ class LiveShellBridge(QObject):
             inputs_provider=lambda: build_setup_inputs(db, self._config))
         # Track modelling, headless and guided. Reuses the domain untouched; the
         # coordinator decides which actions are legal at each point.
+        # Race plan, headless — the strategy page could previously only DISPLAY a plan
+        # the classic tab had built, so in the new shell it stayed empty forever.
+        from services.race_plan import RacePlanService
+        self._plans = RacePlanService(db=db, config=self._config)
+        self._plan_done.connect(self._on_plan_done)
         from services.track_modelling import TrackModellingService
         self._tracks = TrackModellingService(
             capture_controller=getattr(window, "_tm_controller", None))
@@ -175,6 +181,7 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "qualifying_page", None), "begin_requested",
            lambda: self._navigate("live_pit_wall"))
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
+        _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
@@ -455,14 +462,18 @@ class LiveShellBridge(QObject):
             if sp is None:
                 return
             from ui.shell_feed_adapters import strategy_plan_vm_from_rpvm
-            result = getattr(self._window, "_last_race_plan_result", None)
-            rpvm = None
-            if result is not None:
-                try:
-                    from ui.race_strategy_vm import build_race_plan_view_model
-                    rpvm = build_race_plan_view_model(result)
-                except Exception:
-                    rpvm = None
+            plan = self._plans.last_plan
+            rpvm = plan.view_model if (plan is not None and plan.ok) else None
+            if rpvm is None:
+                # Fall back to a plan the classic tab built, so an existing one is not
+                # lost while both surfaces exist. Removed with the classic UI.
+                result = getattr(self._window, "_last_race_plan_result", None)
+                if result is not None:
+                    try:
+                        from ui.race_strategy_vm import build_race_plan_view_model
+                        rpvm = build_race_plan_view_model(result)
+                    except Exception:
+                        rpvm = None
             sp.set_plan(strategy_plan_vm_from_rpvm(rpvm))
         except Exception:
             pass
@@ -936,6 +947,23 @@ class LiveShellBridge(QObject):
                 self._navigate("practice")
             else:
                 self._navigate("garage")
+        except Exception:
+            pass
+
+    def _on_build_plan(self) -> None:
+        """Build the race plan from the runs recorded against this event."""
+        self._plan_status("Building the race plan from your recorded runs…")
+        self._spawn(lambda: self._plan_done.emit(self._plans.build_plan()))
+
+    def _on_plan_done(self, plan) -> None:
+        self._plan_status(plan.headline)
+        self.refresh()
+
+    def _plan_status(self, text: str) -> None:
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            if sp is not None and hasattr(sp, "set_status"):
+                sp.set_status(text)
         except Exception:
             pass
 
