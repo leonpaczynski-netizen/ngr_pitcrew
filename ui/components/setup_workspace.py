@@ -40,7 +40,10 @@ except Exception:  # pragma: no cover - defensive
         return ()
 
 
-DISCIPLINES = (("base", "Base"), ("qualifying", "Qualifying"), ("race", "Race"))
+#: The two sheets the domain actually has. There is no third "Base" sheet — the
+#: baseline build FILLS these two, so a Base tab could only ever mirror the Race one.
+#: It is an ACTION ("Build initial setup"), not a discipline.
+DISCIPLINES = (("race", "Race"), ("qualifying", "Qualifying"))
 
 
 class SetupDisciplineSelector(QWidget):
@@ -100,14 +103,17 @@ class SetupDisciplineSelector(QWidget):
 #: What each discipline IS, in the driver's words — shown under the selector so the
 #: three tabs are never three identical-looking sheets with no explanation.
 DISCIPLINE_NOTE = {
-    "base": ("Base is the starting tune for this car and track. Build it first — it "
-             "fills BOTH the Race and Qualifying sheets, and everything after this is "
-             "measured against it."),
     "qualifying": ("Qualifying is the one-lap tune: peak grip for a single hot lap, "
                    "tyre life and fuel are not the priority."),
     "race": ("Race is the stint tune: consistent pace over a full stint, tyre life and "
              "fuel efficiency matter more than a single hot lap."),
 }
+
+#: Why Analyse is unavailable, in the driver's terms. Analysing a setup nobody has
+#: driven has nothing to analyse — the run comes first, then the analysis of it.
+ANALYSE_BLOCKED_NOTE = (
+    "Analyse becomes available once you have driven and recorded a practice run on this "
+    "setup — it analyses how the setup actually behaved, so it needs a run first.")
 
 
 class SetupWorkspace(QWidget):
@@ -115,7 +121,7 @@ class SetupWorkspace(QWidget):
     discipline_changed = pyqtSignal(str)
     revert_requested = pyqtSignal(str)     # lineage node_id to revert to
     analyse_requested = pyqtSignal()       # run the setup brain on the current setup
-    baseline_requested = pyqtSignal(str)   # build the base tune for this discipline
+    baseline_requested = pyqtSignal(str)   # author the initial setup for BOTH sheets
     applied_in_game_confirmed = pyqtSignal(str)  # driver entered this sheet into GT7
     tyre_change_requested = pyqtSignal(str)      # compound code to put on the car
 
@@ -276,10 +282,11 @@ class SetupWorkspace(QWidget):
 
         # Actions
         act = QHBoxLayout()
-        self._baseline = PrimaryActionButton("Build baseline (Race + Qualifying)")
+        # The first thing a new event needs: a setup to drive. One press authors BOTH
+        # sheets from the car ranges + driving profile.
+        self._baseline = PrimaryActionButton("Build initial setup")
         self._baseline.clicked.connect(
             lambda: self.baseline_requested.emit(self._selector.current()))
-        self._baseline.setVisible(False)
         act.addWidget(self._baseline)
         self._analyse = SecondaryActionButton("Analyse setup")
         self._analyse.clicked.connect(lambda: self.analyse_requested.emit())
@@ -324,7 +331,7 @@ class SetupWorkspace(QWidget):
         self, vm: SetupRecommendationVM, *, discipline: str = "race",
         active_setup: str = "", saved: bool = False, applied: bool = False,
         validated: bool = False, setup_values: Optional[dict] = None,
-        lineage_nodes=None, comparisons=None,
+        lineage_nodes=None, comparisons=None, has_recorded_run: bool = True,
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
@@ -336,9 +343,6 @@ class SetupWorkspace(QWidget):
             discipline = "race"
         self._selector.set_discipline(discipline)
         self._note.setText(DISCIPLINE_NOTE.get(discipline, ""))
-        # "Build baseline" is the dominant action on Base — that IS how a base tune
-        # is created; on Race/Qualifying the dominant action is Apply.
-        self._baseline.setVisible(discipline == "base")
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
 
         self._pill_saved.set_status("Saved" if saved else "Not saved",
@@ -375,14 +379,32 @@ class SetupWorkspace(QWidget):
             self._table.setItem(i, 3, QTableWidgetItem(r.delta))
             self._table.setItem(i, 4, QTableWidgetItem(r.confidence or "—"))
         self._table.setVisible(bool(rows))
-        self._empty.setText(
-            "No baseline recommendation yet — press “Build baseline (Race + Qualifying)”."
-            if discipline == "base" else
-            "No recommendation yet. Press “Analyse setup” to get setup guidance.")
         self._empty.setVisible(not rows)
 
         self._apply.set_action("Apply recommendation", enabled=bool(rows))
         self._explain.setVisible(bool(vm.why_cards))
+
+        # Analyse comes AFTER a run: it analyses how the setup behaved, so with no
+        # recorded run there is nothing for it to read. Build initial setup leads until
+        # a setup exists; then the driver runs it; then Analyse is the next step.
+        self._analyse.setEnabled(bool(has_recorded_run))
+        self._analyse.setToolTip("" if has_recorded_run else ANALYSE_BLOCKED_NOTE)
+        has_setup = bool(setup_values)
+        self._baseline.setText("Rebuild initial setup" if has_setup else "Build initial setup")
+        self._baseline.setToolTip(
+            "Authors a complete setup for BOTH the Race and Qualifying sheets from the "
+            "car's ranges and your driving profile.")
+        if not rows:
+            if not has_setup:
+                self._empty.setText(
+                    "No setup yet — press “Build initial setup” to author the Race and "
+                    "Qualifying sheets, then drive a practice run.")
+            elif not has_recorded_run:
+                self._empty.setText("No recommendation yet. " + ANALYSE_BLOCKED_NOTE)
+            else:
+                self._empty.setText(
+                    "No recommendation yet. Press “Analyse setup” to read the run you "
+                    "recorded and get the next change.")
 
         # Compose the engineering explanation (progressive disclosure).
         if vm.why_cards:

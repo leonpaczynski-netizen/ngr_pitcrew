@@ -75,10 +75,11 @@ class TestDisciplineRules:
                               race_duration_minutes=20)
         assert "minutes a harder compound" not in c.guidance
 
-    def test_base_points_at_the_race_compound(self):
-        c = build_tyre_choice(discipline="base", available=["RM", "RH"])
+    def test_an_unknown_discipline_falls_back_to_the_race_rules(self):
+        """Race is the safe default: it recommends nothing rather than guessing."""
+        c = build_tyre_choice(discipline="whatever", available=["RM", "RH"])
         assert c.recommended_code == ""
-        assert "compound you will race" in c.guidance
+        assert "only recorded runs settle" in c.guidance
 
 
 class TestApplying:

@@ -144,13 +144,6 @@ def _build(*, discipline, available, required, race_duration_minutes) -> TyreCho
             guidance="Qualifying always runs the softest allowed compound.",
             restricted=restricted)
 
-    if d == "base":
-        return TyreChoice(
-            options=tuple(options), recommended_code="",
-            guidance=("The baseline is built on the compound you will race. Pick that one "
-                      "here; qualifying gets the softest allowed automatically."),
-            restricted=restricted)
-
     # Race. Which compound is fastest over a stint depends on wear, fuel and stop count —
     # that is measured, not assumed, so no compound is recommended here.
     long_race = float(race_duration_minutes or 0) >= 60.0

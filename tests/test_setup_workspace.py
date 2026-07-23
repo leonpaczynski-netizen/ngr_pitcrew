@@ -44,8 +44,8 @@ class TestDisciplineSelector:
         s = SetupDisciplineSelector()
         seen = []
         s.discipline_changed.connect(lambda d: seen.append(d))
-        s.set_discipline("base")
-        assert s.current() == "base"
+        s.set_discipline("qualifying")
+        assert s.current() == "qualifying"
         assert seen == []
 
 

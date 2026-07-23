@@ -53,6 +53,16 @@ class _Authority:
         return self.per_purpose.get(purpose)
 
 
+class _ResultBox:
+    """Stands in for the classic Setup Builder's result box."""
+
+    def __init__(self, text=""):
+        self.text = text
+
+    def toPlainText(self):
+        return self.text
+
+
 class _Form:
     def __init__(self, values=None):
         self.values = dict(values or {"body_height_front": 80})
@@ -104,7 +114,11 @@ class _Win:
         self._qual_form = _Form({"body_height_front": 60})
         self._dispatcher = _Dispatcher()
         self._setup_authority = _Authority({"Race": _ActiveSetup()})
+        self._driving_advisor = object()
+        self._setup_result_text = _ResultBox()
         self.confirmed = []
+        self.analysed = []
+        self.baseline_built = 0
         # A stand-in classic tab widget so the Library can borrow a real page.
         self._tabs = QTabWidget()
         self._dev_page = QWidget()
@@ -119,6 +133,15 @@ class _Win:
 
     def _on_changes_applied_in_game(self, form):
         self.confirmed.append(form)
+
+    def _setup_analyse_ai(self):
+        self.analysed.append("race")
+
+    def _setup_analyse_ai_for_form(self, form):
+        self.analysed.append("qualifying" if form is self._qual_form else "other")
+
+    def _generate_baseline_setup_both(self):
+        self.baseline_built += 1
 
 
 def _cfg():
@@ -492,3 +515,158 @@ class TestV13TyreCompoundControl:
         shell, _win, _db, bridge = wired
         bridge.refresh()
         assert "recorded runs settle" in shell.garage_page._tyre_note.text()
+
+
+class TestV14GarageFlowOrder:
+    """UAT-5: drop the Base tab (there is no third sheet); the bottom-left action is
+    "Build initial setup"; Analyse is the NEXT step, once a run has been recorded."""
+
+    def test_only_the_two_real_sheets_are_offered(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert [k for k, _ in
+                __import__("ui.components.setup_workspace", fromlist=["x"]).DISCIPLINES] \
+            == ["race", "qualifying"]
+        assert set(shell.garage_page._selector._buttons) == {"race", "qualifying"}
+
+    def test_analyse_is_locked_until_a_run_is_recorded(self, wired):
+        shell, _win, db, bridge = wired
+        db.get_practice_sessions_for_cycle = lambda cid: []
+        bridge.refresh()
+        assert shell.garage_page._analyse.isEnabled() is False
+        assert "recorded a practice run" in shell.garage_page._analyse.toolTip()
+
+    def test_analyse_unlocks_once_a_run_exists(self, wired):
+        shell, _win, db, bridge = wired
+        db.get_practice_sessions_for_cycle = lambda cid: [{"session_id": "7"}]
+        bridge.refresh()
+        assert shell.garage_page._analyse.isEnabled() is True
+        assert shell.garage_page._analyse.toolTip() == ""
+
+    def test_with_no_setup_the_empty_state_points_at_build(self, wired):
+        shell, win, db, bridge = wired
+        db.get_practice_sessions_for_cycle = lambda cid: []
+        win._race_form.values = {}
+        bridge.refresh()
+        assert "Build initial setup" in shell.garage_page._empty.text()
+
+    def test_the_build_button_reflects_whether_a_setup_exists(self, wired):
+        shell, win, db, bridge = wired
+        win._race_form.values = {}
+        bridge.refresh()
+        assert shell.garage_page._baseline.text() == "Build initial setup"
+        win._race_form.values = {"body_height_front": 80}
+        bridge.refresh()
+        assert shell.garage_page._baseline.text() == "Rebuild initial setup"
+
+
+class TestV15AnalyseAlwaysSettles:
+    """UAT-5: 'clicking analyse setup just sits on this, nothing is returned.' The
+    analysis runs in the classic window; the shell had no way to learn it had finished
+    without proposing changes (or failed), so it said "Analysing..." forever."""
+
+    def test_a_finished_analysis_with_no_changes_is_reported(self, wired):
+        shell, win, _db, bridge = wired
+        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
+        shell.garage_page.analyse_requested.emit()
+        assert "Analysing" in shell.garage_page._status.text()
+        bridge.refresh()
+        assert "Analysing" in shell.garage_page._status.text()   # still running
+        win._setup_result_text.text = "No change recommended — the setup is inside its window."
+        bridge.refresh()
+        status = shell.garage_page._status.text()
+        assert "Analysis finished" in status
+        assert "No change recommended" in status
+        assert bridge._pending_work == ""
+
+    def test_a_failed_analysis_surfaces_its_error(self, wired):
+        shell, win, _db, bridge = wired
+        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
+        shell.garage_page.analyse_requested.emit()
+        win._setup_result_text.text = "Analysis failed: no telemetry baseline"
+        bridge.refresh()
+        assert "no telemetry baseline" in shell.garage_page._status.text()
+
+    def test_a_real_recommendation_clears_the_status(self, wired):
+        shell, win, _db, bridge = wired
+        from ui.setup_recommendation_vm import build_recommendation_vm
+        win._setup_result_text = _ResultBox("Analysing setup… please wait.")
+        shell.garage_page.analyse_requested.emit()
+        win._setup_result_text.text = "done"
+        win.current_recommendation_vm = lambda: build_recommendation_vm({
+            "status": "approved",
+            "changes": [{"field": "arb_front", "from": 5, "to": 4, "reason": "r"}]})
+        bridge.refresh()
+        assert shell.garage_page._status.text() == ""
+        assert bridge._pending_work == ""
+
+
+class TestV16InitialSetupConfirmsBothSheets:
+    """UAT-5: 'not convinced qualifying is getting a setup when clicking build baseline.'
+    Both sheets are authored on separate worker threads — each is now confirmed."""
+
+    def test_each_sheet_is_confirmed_as_it_lands(self, wired):
+        shell, win, _db, bridge = wired
+        shell.garage_page._baseline.click()
+        assert "Building the initial setup" in shell.garage_page._status.text()
+
+        win._race_form.values.update({"arb_front": 4})       # race sheet lands first
+        bridge.refresh()
+        status = shell.garage_page._status.text()
+        assert "Race sheet ✓" in status and "still building the Qualifying" in status
+
+        win._qual_form.values.update({"arb_front": 3})       # then qualifying
+        bridge.refresh()
+        status = shell.garage_page._status.text()
+        assert "Race sheet ✓" in status and "Qualifying sheet ✓" in status
+        assert bridge._pending_work == ""
+
+    def test_a_qualifying_sheet_that_never_lands_is_not_claimed(self, wired):
+        shell, win, _db, bridge = wired
+        shell.garage_page._baseline.click()
+        win._race_form.values.update({"arb_front": 4})
+        bridge.refresh()
+        assert "Qualifying sheet ✓" not in shell.garage_page._status.text()
+        assert bridge._pending_work == "baseline"
+
+
+class TestV17CoachingRunIsStartable:
+    """UAT-5: 'clicking start a coaching run takes me to an empty practice page.' With
+    no setup recommendation to validate the run card was blank, so nothing could be
+    started — but the engineer's objective IS a run plan."""
+
+    def _coaching_view(self):
+        v = _view("Build driver_coaching evidence")
+        v["next_action"]["detail"] = "driver_coaching is the weakest domain."
+        return v
+
+    def test_the_objective_becomes_the_run_plan(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = self._coaching_view()
+        bridge.refresh()
+        vm = shell.run_card._vm
+        assert vm.has_plan is True
+        assert "driver coaching" in vm.objective
+        assert vm.purpose == "coaching"
+        assert shell.run_card._start.isVisibleTo(shell.run_card) is True
+
+    def test_a_long_run_objective_asks_for_more_laps(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view("Build setup_race evidence")
+        bridge.refresh()
+        assert shell.run_card._vm.target_laps == "8–12"
+
+    def test_that_run_can_actually_be_started(self, wired):
+        shell, _win, db, bridge = wired
+        bridge._last_guidance_view = self._coaching_view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        assert len(db.activities) == 1
+        assert db.activities[0]["activity_type"] == "coaching_run"
+
+    def test_no_objective_still_says_so_rather_than_showing_a_fake_plan(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {"ok": True, "next_action": {}}
+        bridge.refresh()
+        assert shell.run_card._vm.has_plan is False
+        assert shell.run_card._empty.isVisibleTo(shell.run_card) is True
+

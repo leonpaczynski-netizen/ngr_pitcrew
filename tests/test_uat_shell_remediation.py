@@ -142,13 +142,13 @@ def _cc_view():
 
 
 class TestU1GarageDisciplineIsSticky:
-    def test_selecting_base_survives_a_refresh(self, wired):
+    def test_selecting_qualifying_survives_a_refresh(self, wired):
         shell, win, bridge = wired
-        shell.garage_page._selector._buttons["base"].click()
-        assert bridge._discipline == "base"
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert bridge._discipline == "qualifying"
         bridge.refresh()
         bridge.refresh()
-        assert shell.garage_page.current_discipline() == "base"
+        assert shell.garage_page.current_discipline() == "qualifying"
 
     def test_qualifying_shows_the_qualifying_sheet(self, wired):
         shell, win, bridge = wired
@@ -158,18 +158,19 @@ class TestU1GarageDisciplineIsSticky:
         # The values fed to the sheet came from the QUALIFYING form, not the Race one.
         assert bridge._form_for_discipline() is win._qual_form
 
-    def test_base_offers_the_baseline_build(self, wired):
+    def test_building_the_initial_setup_is_always_available(self, wired):
+        """UAT-5: the Base TAB is gone (there is no third sheet); authoring both sheets
+        is an action, always reachable from either discipline."""
         shell, win, bridge = wired
-        shell.garage_page._selector._buttons["base"].click()
         bridge.refresh()
         assert shell.garage_page._baseline.isVisibleTo(shell.garage_page) is True
+        assert "initial setup" in shell.garage_page._baseline.text().lower()
         shell.garage_page._baseline.click()
         assert win.baseline_built == 1
 
-    def test_baseline_button_hidden_off_base(self, wired):
-        shell, win, bridge = wired
-        bridge.refresh()
-        assert shell.garage_page._baseline.isVisibleTo(shell.garage_page) is False
+    def test_there_is_no_base_discipline(self, wired):
+        shell, _win, _bridge = wired
+        assert set(shell.garage_page._selector._buttons) == {"race", "qualifying"}
 
     def test_a_race_recommendation_is_not_shown_under_qualifying(self, wired):
         """The window keeps ONE recommendation VM; showing the Race one on the
@@ -186,8 +187,8 @@ class TestU1GarageDisciplineIsSticky:
         assert shell.garage_page._vm.proposed_rows()          # Race: shown
         shell.garage_page._selector._buttons["qualifying"].click()
         assert shell.garage_page._vm.proposed_rows() == ()    # Qualifying: withheld
-        shell.garage_page._selector._buttons["base"].click()
-        assert shell.garage_page._vm.proposed_rows()          # Base shares the Race sheet
+        shell.garage_page._selector._buttons["race"].click()
+        assert shell.garage_page._vm.proposed_rows()          # back on its own sheet
 
     def test_apply_targets_the_selected_discipline_form(self, wired):
         shell, win, bridge = wired
@@ -340,5 +341,5 @@ class TestU6AnalyseFeedback:
         shell, _win, _bridge = wired
         shell.garage_page.analyse_requested.emit()
         assert shell.garage_page._status.text() != ""
-        shell.garage_page._selector._buttons["base"].click()
+        shell.garage_page._selector._buttons["qualifying"].click()
         assert shell.garage_page._status.text() == ""
