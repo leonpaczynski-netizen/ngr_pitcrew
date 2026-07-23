@@ -131,77 +131,30 @@ unreadable reply, and failure — four states the scraped text box collapsed int
 `build_initial_setup` reports each sheet individually, so a Qualifying sheet that did not
 build is never implied to have built. 46 tests.
 
-### Stage 2b — headless inputs ✅ / bridge switch ⏳
-`services/setup_inputs.py` is **done**: it rebuilds the generators' input snapshot from
-the DB and config, replacing `_build_setup_inputs`, `_load_car_specs_for_current` and
-`_build_track_tune_profile_for_current`. The drivetrain and gear-count combo reads now
-come from the car's own specs — where the classic form's autofill got them anyway.
-Unresolvable inputs stay *unknown* rather than guessed; an unrated historical setup is
-carried without a rating rather than assumed good. 12 tests.
+### Stage 2b — the Garage runs on the headless engine ✅ DONE
+`services/setup_inputs.py` rebuilds the generators' input snapshot from the DB and
+config, and the bridge no longer reads the classic setup forms at all. Store owns the
+sheets; service performs build/analyse/apply/revert/confirm.
 
-**The bridge switch itself is not done.** It was prototyped and reverted rather than
-half-landed. What it needs, in order:
+Four things worth remembering from doing it:
 
-1. `_feed_garage` reads the store, not `form.current_setup_dict()`; a defaults-only
-   sheet must render as *no setup*, never as numbers nobody authored.
-2. `_on_analyse` / `_on_build_baseline` call the service on a worker and report the
-   returned result object. Spawning must be **injectable** — a real thread emitting a
-   signal into a QObject the tests are tearing down segfaults, and the engine is
-   synchronous precisely so the caller can choose.
-3. `_on_apply` / `_on_revert` / `_on_applied_in_game` / `_on_tyre_change` → service.
-4. **Seed the store from the classic sheets once per scope**, only where the store has
-   nothing authored, so an in-progress setup is not lost on the switch.
-5. A transitional write-through to the classic form while that window still exists, so
-   it can never display numbers that disagree with the real sheet. Deleted in stage 6.
-6. Realign the shell tests that currently assert the classic routing
-   (`test_apply_routes_to_form_apply`, `test_revert_routes_to_window`, the V15 analyse
-   settling tests, and the `_Win` fakes' `_setup_result_text`).
+* A sheet is always *complete*, so **truthiness is not a test for "has a setup"** —
+  `is_authored` is. Passing a defaults-only sheet would show numbers nobody authored.
+* A real worker thread emitting a `pyqtSignal` into a `QObject` under teardown **aborts
+  the process**. Spawning is injectable; tests run inline.
+* **Seeding**: an in-progress classic setup is copied into the store once per scope, and
+  only where the store holds nothing authored — so nothing is lost on the switch and a
+  stale form can never overwrite a real sheet.
+* **Mirroring** (transitional, deleted in stage 6): while the classic window can still
+  be opened it is kept in step with the store, so it can never disagree with it.
 
-Item 6 is the bulk of it and is why this is its own pass: those tests encode the old
-contract, and rewriting them carelessly would lose the regressions they protect.
+Realigning the 20 tests that encoded the classic routing was the bulk of the work. Each
+was rewritten against the new contract rather than deleted, so the regressions they
+protect survive.
 
-### Stage 2 — reference: what is being extracted
-Move the setup ENGINE out of `SetupBuilderMixin` into a service with no Qt import:
-analyse, baseline build, apply, revert, autosave, applied-in-game. The classic Setup
-Builder *view* is not reproduced — the new Garage already replaced it.
-The inputs the service needs (car specs, ranges, event context, advisor) are already
-pure or already injected. Deliverables: `services/setup_service.py`, the bridge switched
-onto it, and `_setup_result_text` replaced by a real result object instead of the
-text-box scraping currently used to detect that an analysis finished.
-*Largest single stage; its own session.*
-
-### Stage 3 — native event setup ✅ DONE (redesigned, not ported)
-The classic Event Planner puts 18 fields in one form. Most have sane defaults and only
-matter for some events, so the native version is a short guided setup — identity (name,
-car, track, layout), then format (race type, laps/duration), with regulations
-(tyre wear, fuel multiplier, mandatory stops, BOP, tuning, ABS, weather, damage, refuel
-rate, allowed compounds) behind progressive disclosure and pre-filled. Writes through
-`SessionDB` directly, replacing `_event_list`/`_on_event_set_active`.
-
-**Delivered as four steps — identity → format → rules → confirm.** What makes it not the
-old form:
-
-* **Three fields can block you**, and only because nothing can guess them: name, car,
-  track. Every regulation has a standard default and *cannot* stop you creating an event.
-* **Format is a choice, not a form.** Pick "set number of laps" or "fixed length of
-  time"; the field you do not need disappears. One number, not two.
-* **Rules are folded away** behind one line — "Standard rules — nothing unusual about
-  this event" — and open only if this event actually differs. An event that does differ
-  opens them automatically and states what differs.
-* **Confirm reads it back as a sentence:** *"A 120-minute race at Watkins Glen
-  International in the Porsche Cayman GT4. Tyres wear at 4x. 1 mandatory pit stop."*
-  That is the "did I get this right" check eighteen widgets could never give.
-* **Switching to an event you already made is the same screen**, on step 1 — it is the
-  same job, so it is not a different place.
-
-`services/event_setup.py` performs it headlessly: validate → save → fan out the working
-config → ensure exactly one preparation cycle (an event without one is invisible to the
-Command Centre) → activate → persist. A completed or abandoned cycle is never silently
-reopened, and rules are deliberately NOT duplicated into the config — every consumer
-reads them DB-first, and a second copy is a second thing to go stale.
-
-`_event_list`, `_on_event_set_active` and the Event Planner route are no longer used by
-the shell. **The last "opens the classic window" route is gone.**
+**The bridge's remaining window reads are now SERVICES, not UI** — announcer,
+dispatcher, advisor, authority, corner telemetry, tracker, config path — plus `_tabs`
+for hosting engineering panels (stage 4) and the transitional form mirror (stage 6).
 
 ### Stage 4 — native engineering panels
 The Library currently *borrows* the classic Development History tab widget. The panels
