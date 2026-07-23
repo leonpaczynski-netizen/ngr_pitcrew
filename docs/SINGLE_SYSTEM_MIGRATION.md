@@ -131,11 +131,34 @@ unreadable reply, and failure — four states the scraped text box collapsed int
 `build_initial_setup` reports each sheet individually, so a Qualifying sheet that did not
 build is never implied to have built. 46 tests.
 
-### Stage 2b — switch the bridge onto the service (next)
-Replace the remaining `_race_form` / `_qual_form` / `_setup_result_text` /
-`_setup_analyse_ai` / `_generate_baseline_setup_both` / `_on_changes_applied_in_game` /
-`_revert_last_change_for_form` / `_autosave_applied_setup` reads with service calls, and
-seed the store from the classic sheets once so no in-progress setup is lost.
+### Stage 2b — headless inputs ✅ / bridge switch ⏳
+`services/setup_inputs.py` is **done**: it rebuilds the generators' input snapshot from
+the DB and config, replacing `_build_setup_inputs`, `_load_car_specs_for_current` and
+`_build_track_tune_profile_for_current`. The drivetrain and gear-count combo reads now
+come from the car's own specs — where the classic form's autofill got them anyway.
+Unresolvable inputs stay *unknown* rather than guessed; an unrated historical setup is
+carried without a rating rather than assumed good. 12 tests.
+
+**The bridge switch itself is not done.** It was prototyped and reverted rather than
+half-landed. What it needs, in order:
+
+1. `_feed_garage` reads the store, not `form.current_setup_dict()`; a defaults-only
+   sheet must render as *no setup*, never as numbers nobody authored.
+2. `_on_analyse` / `_on_build_baseline` call the service on a worker and report the
+   returned result object. Spawning must be **injectable** — a real thread emitting a
+   signal into a QObject the tests are tearing down segfaults, and the engine is
+   synchronous precisely so the caller can choose.
+3. `_on_apply` / `_on_revert` / `_on_applied_in_game` / `_on_tyre_change` → service.
+4. **Seed the store from the classic sheets once per scope**, only where the store has
+   nothing authored, so an in-progress setup is not lost on the switch.
+5. A transitional write-through to the classic form while that window still exists, so
+   it can never display numbers that disagree with the real sheet. Deleted in stage 6.
+6. Realign the shell tests that currently assert the classic routing
+   (`test_apply_routes_to_form_apply`, `test_revert_routes_to_window`, the V15 analyse
+   settling tests, and the `_Win` fakes' `_setup_result_text`).
+
+Item 6 is the bulk of it and is why this is its own pass: those tests encode the old
+contract, and rewriting them carelessly would lose the regressions they protect.
 
 ### Stage 2 — reference: what is being extracted
 Move the setup ENGINE out of `SetupBuilderMixin` into a service with no Qt import:
