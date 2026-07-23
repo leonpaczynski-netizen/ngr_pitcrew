@@ -196,17 +196,27 @@ def run_card_vm_from_recommendation(rec_vm, *, active_setup_label: str = ""):
         if getattr(c, "rationale", ""):
             expected = c.rationale
             break
+    # Validating a recommendation IS a setup experiment, so it is driven by the
+    # working-window brief: same fuel, same compound, same commitment as the baseline,
+    # one change at a time. Only the parts the recommendation actually knows about —
+    # the changes, the issue and the symptoms to watch — override the brief.
+    from strategy.run_brief import brief_for_domain
+    brief = brief_for_domain("working_window")
     return RunCardVM(
         objective=(f"Validate the recommended changes for {issue}" if issue
                    else "Validate the recommended setup changes"),
         setup_label=active_setup_label,
         changes=changes,
         expected_effect=expected,
-        monitor=monitor,
+        how_to_drive=brief.how_to_drive,
+        monitor=monitor or brief.monitor,
+        reports=brief.reports,
+        fuel=brief.fuel,
+        tyre=brief.tyre,
         purpose="diagnosis",
-        target_laps="3–5",
-        push_level="Representative pace",
-        invalidation=("A lock-up or off-track that skews the lap",),
+        target_laps=brief.target_laps,
+        push_level=brief.push_level,
+        invalidation=brief.invalidation,
     )
 
 

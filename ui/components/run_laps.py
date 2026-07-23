@@ -52,6 +52,15 @@ class RunLapsPanel(QWidget):
         head.addWidget(self._headline)
         lay.addLayout(head)
 
+        # WHICH run this was. Every run reviewed identically is what made a coaching
+        # run indistinguishable from a tyre test after the fact.
+        self._kind = QLabel("")
+        self._kind.setWordWrap(True)
+        self._kind.setStyleSheet(
+            f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
+        self._kind.setVisible(False)
+        lay.addWidget(self._kind)
+
         self._summary = QLabel("")
         self._summary.setWordWrap(True)
         self._summary.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_LABEL}pt;")
@@ -84,6 +93,20 @@ class RunLapsPanel(QWidget):
 
         self.set_review(RunReview())
 
+    def set_run_kind(self, run_name: str = "", reports: tuple = ()) -> None:
+        """Name the kind of run this was, and what it can therefore tell the driver."""
+        name = str(run_name or "").strip()
+        items = tuple(str(r).strip() for r in (reports or ()) if str(r).strip())
+        if not name:
+            self._kind.setVisible(False)
+            self._kind.setText("")
+            return
+        text = f"Reviewing your {name}"
+        if items:
+            text += " — it can tell you: " + "; ".join(items).lower()
+        self._kind.setText(text)
+        self._kind.setVisible(True)
+
     def set_review(self, review: Optional[RunReview]) -> None:
         """Render a run review. Defensive against None/garbage."""
         if not isinstance(review, RunReview):
@@ -96,6 +119,7 @@ class RunLapsPanel(QWidget):
         self._empty.setVisible(not has)
         if not has:
             self._table.setRowCount(0)
+            self._kind.setVisible(False)
             return
 
         self._headline.setText(

@@ -47,6 +47,13 @@ class _DB:
     def get_session_meta(self, session_id):
         return self.sessions.get(int(session_id or 0))
 
+    def get_practice_sessions_for_cycle(self, cycle_id):
+        """Mirrors the real query: session ids come back as TEXT, ordered as text."""
+        rows = [{"session_id": sid, "activity_id": aid, "activity_type": "free_practice",
+                 "total_laps": 9, "track": "", "car_name": ""}
+                for aid, sid, cid in self.bindings if cid == cycle_id]
+        return sorted(rows, key=lambda r: r["session_id"])
+
 
 def _meta(laps=9, car="Porsche Cayman GT4", track="Watkins Glen International"):
     return {"id": 7, "total_laps": laps, "car_name": car, "track": track}
@@ -210,6 +217,44 @@ class TestRecorderWrites:
         assert db.bindings == []
         assert db.activities[0]["state"] == "cancelled"
         assert r.open_run() is None
+
+
+class TestRecordedRuns:
+    """UAT-6: after a restart every run reported itself as "the first recorded run for
+    this setup" — the run-to-run comparison lived in two process-lifetime integers."""
+
+    def _recorder_with(self, *session_ids):
+        db = _DB(sessions={sid: _meta() for sid in session_ids})
+        r = PracticeRunRecorder(db=db, config={"active_cycle_id": "c1"})
+        for sid in session_ids:
+            r.start_run(objective_domain="consistency")
+            assert r.record_run(sid).ok
+        return r, db
+
+    def test_recorded_runs_come_from_the_programme_not_from_memory(self):
+        r, db = self._recorder_with(4, 5)
+        # A brand-new recorder — as after a restart — still sees both runs.
+        fresh = PracticeRunRecorder(db=db, config={"active_cycle_id": "c1"})
+        assert [x["session_id"] for x in fresh.recorded_runs()] == [4, 5]
+
+    def test_session_ids_are_ordered_numerically_not_as_text(self):
+        """The binding table stores ids as TEXT, so "10" sorts before "9" there."""
+        r, db = self._recorder_with(9, 10)
+        assert [x["session_id"] for x in r.recorded_runs()] == [9, 10]
+
+    def test_no_active_event_reports_no_runs(self):
+        _r, db = self._recorder_with(4)
+        assert PracticeRunRecorder(db=db, config={}).recorded_runs() == []
+
+    def test_a_db_without_the_query_never_raises(self):
+        class _Bare:
+            pass
+        assert PracticeRunRecorder(db=_Bare(),
+                                   config={"active_cycle_id": "c1"}).recorded_runs() == []
+
+    def test_the_activity_type_survives_so_the_review_knows_what_the_run_was(self):
+        r, _db = self._recorder_with(4)
+        assert r.recorded_runs()[0]["activity_type"] == "free_practice"
 
 
 class TestRowTransitions:

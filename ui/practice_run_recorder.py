@@ -66,6 +66,43 @@ class PracticeRunRecorder:
                 return row
         return None
 
+    def recorded_runs(self) -> list:
+        """Every run already bound to the active cycle, oldest first.
+
+        The Practice Outcome compares this run against the one before it. That pair used
+        to be held in two process-lifetime integers, so after every restart the newest
+        run reported itself as "the first recorded run for this setup" and no comparison
+        was ever possible across sessions. The programme already knows which runs are
+        bound to the event — read them from there instead.
+
+        Rows are ``{session_id: int, activity_id, activity_type, total_laps}``. Sorted
+        NUMERICALLY: the binding table stores session ids as text, so its own ORDER BY
+        puts session 10 before session 9.
+        """
+        cid = self.active_cycle_id()
+        if not cid or self._db is None or not hasattr(self._db, "get_practice_sessions_for_cycle"):
+            return []
+        try:
+            rows = list(self._db.get_practice_sessions_for_cycle(cid) or [])
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            if not isinstance(r, Mapping):
+                continue
+            try:
+                sid = int(str(r.get("session_id") or "0").strip() or 0)
+            except (TypeError, ValueError):
+                continue
+            if sid <= 0:
+                continue
+            out.append({"session_id": sid,
+                        "activity_id": _norm(r.get("activity_id")),
+                        "activity_type": _norm(r.get("activity_type")),
+                        "total_laps": int(r.get("total_laps") or 0)})
+        out.sort(key=lambda x: x["session_id"])
+        return out
+
     def _cycle(self, cycle_id: str) -> dict:
         try:
             if self._db is None or not hasattr(self._db, "get_preparation_cycle"):

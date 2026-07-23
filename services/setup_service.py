@@ -344,11 +344,18 @@ class SetupService:
             from data.setup_state_authority import SetupIdentity
             identity = SetupIdentity(car=inp.car, track=inp.track, layout_id=inp.layout)
             label = _norm(sheet.get("setup_label")) or "Setup"
+            purpose = PURPOSE.get(d, "Race")
+            before = self._authority.active_setup(identity, purpose)
             active = self._authority.mark_applied(
                 identity, setup_id=label, name=label, fields=sheet.as_dict(),
-                purpose=PURPOSE.get(d, "Race"), applied_at=_norm(applied_at))
+                purpose=purpose, applied_at=_norm(applied_at))
         except Exception as exc:
             return SetupOutcome(discipline=d, reason=f"Could not confirm the setup: {exc}")
+        # Re-confirming an unchanged sheet is not a new setup, and saying so stops the
+        # driver believing they have created one every time they switch discipline back.
+        if before is not None and before.revision == active.revision:
+            return SetupOutcome(ok=True, discipline=d,
+                                reason=f"Already on the car — {active.label()} is unchanged.")
         return SetupOutcome(ok=True, discipline=d,
                             reason=f"Registered as the active setup: {active.label()}")
 

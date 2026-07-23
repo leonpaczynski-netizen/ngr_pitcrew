@@ -15,6 +15,7 @@ import pytest
 
 from PyQt6.QtWidgets import QApplication, QTabWidget, QWidget
 
+from strategy.run_brief import brief_for_domain as _brief
 from ui.live_shell_bridge import LiveShellBridge, _active_setup
 from ui.pit_crew_controller import PitCrewController
 from ui.pit_crew_shell import PitCrewShell
@@ -108,6 +109,13 @@ class _DB:
             return None
         return {"id": session_id, "total_laps": 9, "car_name": "Porsche Cayman GT4",
                 "track": "Watkins Glen International"}
+
+    def get_practice_sessions_for_cycle(self, cycle_id):
+        by_id = {a["activity_id"]: a for a in self.activities}
+        return [{"session_id": sid, "activity_id": aid,
+                 "activity_type": (by_id.get(aid) or {}).get("activity_type", ""),
+                 "total_laps": 9, "track": "", "car_name": ""}
+                for aid, sid in self.bindings]
 
 
 class _Win:
@@ -261,7 +269,12 @@ class TestV9ActiveSetupRegisters:
         shell.garage_page._baseline.click()          # author a sheet to confirm
         shell.garage_page.applied_in_game_confirmed.emit("race")
         assert recorded == ["Race"]
-        assert "active setup" in shell.garage_page._status.text().lower()
+        # The driver is told which setup is now on the car. Whether that reads as
+        # "registered as the active setup" or "already on the car" depends on whether
+        # the sheet actually changed — see TestV20 for that distinction.
+        status = shell.garage_page._status.text().lower()
+        assert "race baseline · rev 2" in status
+        assert "active setup" in status or "on the car" in status
 
     def test_confirming_on_qualifying_is_a_separate_scope(self, wired):
         shell, win, _db, _bridge = wired
@@ -718,15 +731,23 @@ class TestV17CoachingRunIsStartable:
         bridge.refresh()
         vm = shell.run_card._vm
         assert vm.has_plan is True
-        assert "driver coaching" in vm.objective
+        # The card is now written from the coaching BRIEF rather than the domain's
+        # machine name, so it reads as a run the driver can actually go and do.
+        assert "coaching run" in vm.objective.lower()
         assert vm.purpose == "coaching"
+        assert vm.how_to_drive and vm.reports
         assert shell.run_card._start.isVisibleTo(shell.run_card) is True
 
     def test_a_long_run_objective_asks_for_more_laps(self, wired):
         shell, _win, _db, bridge = wired
         bridge._last_guidance_view = _view("Build setup_race evidence")
         bridge.refresh()
-        assert shell.run_card._vm.target_laps == "8–12"
+        # A race run is a full stint on race fuel — not a fixed lap count, and
+        # emphatically not the same short run a coaching lap-set asks for.
+        assert shell.run_card._vm.target_laps == "A full stint"
+        assert "full" in shell.run_card._vm.fuel.lower()
+        assert (shell.run_card._vm.target_laps
+                != _brief("driver_coaching").target_laps)
 
     def test_that_run_can_actually_be_started(self, wired):
         shell, _win, db, bridge = wired
@@ -790,6 +811,122 @@ class TestV18RaceStrategyCanBuildItsOwnPlan:
                             lambda r: _PlanVM())
         shell.strategy_page.build_requested.emit()
         assert seen["session_id"] == 7          # most recently recorded
+
+
+class TestV20ReconfirmingAnUnchangedSetup:
+    """UAT-6: "even when setup isn't changed if I click I have entered this in GT7 to
+    activate current setup it saves it as a new setup"."""
+
+    def test_the_driver_is_told_it_is_unchanged_rather_than_newly_saved(self, wired):
+        shell, _win, _db, bridge = wired
+        seen = []
+
+        class _Auth:
+            def active_setup(self, _i, _p="Race"):
+                return _ActiveSetup(revision=4) if seen else None
+
+            def mark_applied(self, _i, **kw):
+                seen.append(kw["purpose"])
+                return _ActiveSetup(revision=4)
+
+        bridge._setups._authority = _Auth()
+        shell.garage_page._baseline.click()
+        shell.garage_page.applied_in_game_confirmed.emit("race")   # first: new
+        assert "active setup" in shell.garage_page._status.text().lower()
+        shell.garage_page.applied_in_game_confirmed.emit("race")   # again: unchanged
+        status = shell.garage_page._status.text().lower()
+        assert "already on the car" in status
+        assert "rev 4" in status and "rev 5" not in status
+
+
+class TestV21GatherMoreDataDoesSomething:
+    """UAT-6: "practice outcome what does gather more data do? - not much on this page".
+
+    It navigated to Practice — the page the driver was already standing on.
+    """
+
+    def _after_a_coaching_run(self, shell, bridge):
+        v = _view("Build driver_coaching evidence")
+        bridge._last_guidance_view = v
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        shell.run_card.record_requested.emit()
+        bridge.refresh()
+
+    def test_it_opens_another_run_of_the_same_kind(self, wired):
+        shell, _win, db, bridge = wired
+        self._after_a_coaching_run(shell, bridge)
+        assert [a["activity_type"] for a in db.activities] == ["coaching_run"]
+
+        shell.practice_outcome.action_requested.emit("gather")
+        # A SECOND coaching run is open — the repeat the inconclusive verdict asked for.
+        assert [a["activity_type"] for a in db.activities] == ["coaching_run", "coaching_run"]
+        assert db.activities[-1]["state"] == "in_progress"
+
+    def test_it_puts_the_driver_on_the_run_card(self, wired):
+        shell, _win, _db, bridge = wired
+        self._after_a_coaching_run(shell, bridge)
+        shell._practice_stack.setCurrentIndex(2)
+        shell.practice_outcome.action_requested.emit("gather")
+        assert shell.current_destination() == "practice"
+        assert shell._practice_stack.currentIndex() == 0
+        assert "coaching run" in shell.run_card._status.text().lower()
+
+    def test_it_never_opens_a_second_run_on_top_of_an_open_one(self, wired):
+        shell, _win, db, bridge = wired
+        v = _view("Build driver_coaching evidence")
+        bridge._last_guidance_view = v
+        bridge.refresh()
+        shell.run_card.start_requested.emit()          # a run is already open
+        shell.practice_outcome.action_requested.emit("gather")
+        assert len(db.activities) == 1
+        assert "already open" in shell.run_card._status.text().lower()
+
+
+class TestV22TheComparisonSurvivesARestart:
+    """UAT-6 (seen in the outcome screenshot): every launch reported the newest run as
+    "the first recorded run for this setup" — the pair lived in two in-memory ints."""
+
+    def test_the_recorded_pair_comes_from_the_programme(self, wired):
+        shell, win, db, bridge = wired
+        bridge._last_guidance_view = _view("Build consistency evidence")
+        bridge.refresh()
+        for sid in (4, 7):
+            win._dispatcher._session_id = sid
+            shell.run_card.start_requested.emit()
+            shell.run_card.record_requested.emit()
+        win._dispatcher._session_id = 0
+        bridge.refresh()
+        assert bridge._recorded_pair() == (7, 4)
+
+    def test_a_fresh_bridge_still_finds_both_runs(self, wired, qapp):
+        shell, win, db, bridge = wired
+        bridge._last_guidance_view = _view("Build consistency evidence")
+        bridge.refresh()
+        for sid in (4, 7):
+            win._dispatcher._session_id = sid
+            shell.run_card.start_requested.emit()
+            shell.run_card.record_requested.emit()
+        win._dispatcher._session_id = 0
+
+        # A brand-new bridge over the same DB — the restart case. Nothing is carried
+        # over in memory, so this is the pair the programme itself knows about.
+        ctrl2 = PitCrewController()
+        shell2 = PitCrewShell(ctrl2)
+        fresh = LiveShellBridge(shell2, ctrl2, window=win, config=_cfg(), db=db,
+                                spawn=lambda fn: fn())
+        fresh.refresh()
+        assert fresh._recorded_pair() == (7, 4)
+
+    def test_the_review_names_the_kind_of_run_it_is_showing(self, wired):
+        shell, win, _db, bridge = wired
+        bridge._last_guidance_view = _view("Build tyre_model evidence")
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        shell.run_card.record_requested.emit()
+        win._dispatcher._session_id = 0
+        bridge.refresh()
+        assert "tyre test" in shell.run_laps._kind.text().lower()
 
 
 class _PlanVM:

@@ -48,7 +48,11 @@ class RunCardVM:
     setup_label: str = ""
     changes: Tuple[str, ...] = field(default_factory=tuple)
     expected_effect: str = ""
+    #: How this run must be DRIVEN — what makes it a coaching run and not a tyre test.
+    how_to_drive: Tuple[str, ...] = field(default_factory=tuple)
     monitor: Tuple[str, ...] = field(default_factory=tuple)
+    #: What the Review will report once the run is recorded.
+    reports: Tuple[str, ...] = field(default_factory=tuple)
     fuel: str = ""
     tyre: str = ""
     target_laps: str = ""
@@ -71,7 +75,10 @@ class RunCardVM:
                 setup_label=_norm(_first(plan, "setup_label", "setup", "setup_name")),
                 changes=_tuple(_first(plan, "changes", "changes_tested", "changes_under_test", default=())),
                 expected_effect=_norm(_first(plan, "expected_effect", "expected", "hypothesis")),
+                how_to_drive=_tuple(_first(plan, "how_to_drive", "driving", "instructions",
+                                           default=())),
                 monitor=_tuple(_first(plan, "monitor", "monitor_corners", "watch", default=())),
+                reports=_tuple(_first(plan, "reports", "will_report", default=())),
                 fuel=_norm(_first(plan, "fuel", "fuel_load", "fuel_liters")),
                 tyre=_norm(_first(plan, "tyre", "tyre_compound", "compound")),
                 target_laps=_norm(_first(plan, "target_laps", "laps", "lap_count")),
@@ -114,8 +121,15 @@ class RunCard(Card):
         self._expected.setWordWrap(True)
         self.body.addWidget(self._expected)
 
-        self._monitor = _dim_label()
-        self._monitor.setWordWrap(True)
+        # HOW TO DRIVE IT is the part that makes one run type different from another.
+        # Without it every objective produced an identical card and the driver had no
+        # way to tell a coaching run from a tyre test.
+        self._how_cap, self._how = _bullet_block("HOW TO DRIVE IT", _t.NGR_GREEN)
+        self.body.addWidget(self._how_cap)
+        self.body.addWidget(self._how)
+
+        self._monitor_cap, self._monitor = _bullet_block("WATCH FOR", _t.TEXT_HI)
+        self.body.addWidget(self._monitor_cap)
         self.body.addWidget(self._monitor)
 
         # Parameter grid: fuel / tyre / laps / push / purpose
@@ -140,6 +154,13 @@ class RunCard(Card):
         self._invalidation.setWordWrap(True)
         self._invalidation.setStyleSheet(f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt;")
         self.body.addWidget(self._invalidation)
+
+        # What the run BUYS. Naming the payoff up front is what stops a programme of
+        # runs reading as the same screen over and over.
+        self._reports_cap, self._reports = _bullet_block(
+            "WHAT THIS RUN WILL TELL YOU", _t.INFO)
+        self.body.addWidget(self._reports_cap)
+        self.body.addWidget(self._reports)
 
         act = QHBoxLayout()
         self._start = PrimaryActionButton()
@@ -189,7 +210,9 @@ class RunCard(Card):
         self._set(self._setup, "Setup under test", vm.setup_label)
         self._set(self._changes, "Testing", "  ·  ".join(vm.changes))
         self._set(self._expected, "Expected effect", vm.expected_effect)
-        self._set(self._monitor, "Monitor", "  ·  ".join(vm.monitor))
+        _set_bullets(self._how_cap, self._how, vm.how_to_drive)
+        _set_bullets(self._monitor_cap, self._monitor, vm.monitor)
+        _set_bullets(self._reports_cap, self._reports, vm.reports)
 
         for key, lbl in self._params.items():
             lbl.setText(getattr(vm, key) or "—")
@@ -204,8 +227,10 @@ class RunCard(Card):
         self._empty.setText("" if vm.has_plan else "No run planned yet — the engineer will set the next run.")
         self._empty.setVisible(not vm.has_plan)
         # Hide the parameter/section chrome entirely when there's no plan.
-        for w in (self._setup, self._changes, self._expected, self._monitor):
-            if not vm.has_plan:
+        if not vm.has_plan:
+            for w in (self._setup, self._changes, self._expected,
+                      self._how_cap, self._how, self._monitor_cap, self._monitor,
+                      self._reports_cap, self._reports):
                 w.setVisible(False)
         self._apply_recording_state()
 
@@ -256,3 +281,23 @@ def _dim_label() -> QLabel:
     lbl = QLabel("")
     lbl.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_BODY}pt;")
     return lbl
+
+
+def _bullet_block(caption: str, colour: str) -> Tuple[QLabel, QLabel]:
+    """A captioned bullet list: (caption label, body label). Both start hidden."""
+    cap = QLabel(caption)
+    cap.setStyleSheet(
+        f"color: {colour}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
+    cap.setVisible(False)
+    body = QLabel("")
+    body.setWordWrap(True)
+    body.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_LABEL}pt;")
+    body.setVisible(False)
+    return cap, body
+
+
+def _set_bullets(cap: QLabel, body: QLabel, items: Tuple[str, ...]) -> None:
+    items = tuple(str(i).strip() for i in (items or ()) if str(i).strip())
+    cap.setVisible(bool(items))
+    body.setVisible(bool(items))
+    body.setText("•  " + "\n•  ".join(items) if items else "")

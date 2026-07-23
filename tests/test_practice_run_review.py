@@ -56,6 +56,41 @@ class TestRunReview:
         assert out.excluded_reason == "in/out lap"
         assert len(r.laps) == 3          # nothing is hidden from the driver
 
+    def test_an_out_lap_never_becomes_the_best_lap(self):
+        """UAT-6: "in practice review it's counting out lap as the best lap".
+
+        A flying out lap (GT7's rolling start gives one) set ``best``, so the run
+        reported a time the driver never raced and every honest lap read seconds slow
+        against it.
+        """
+        rows = _laps(118072, 118517, 117926, 117695)
+        rows.insert(0, {"lap_num": 0, "lap_time_ms": 112791, "is_out_lap": 1,
+                        "fuel_used": 3.63})
+        r = build_run_review(rows)
+        assert r.best_ms == 117695                     # the best CLEAN lap
+        assert "1:57.695" in r.summary_line
+        out = [l for l in r.laps if not l.clean][0]
+        assert out.excluded_reason == "in/out lap"
+        assert out.delta_to_best_ms < 0                # shown honestly, still excluded
+        # The clean laps are measured against a lap that was actually raced.
+        assert [l.delta_to_best_ms for l in r.laps if l.clean] == [377, 822, 231, 0]
+
+    def test_the_out_lap_does_not_decide_which_laps_are_off_the_pace(self):
+        """A slow in-lap must not raise the tolerance and let a bad lap count as clean."""
+        rows = _laps(92100, 92300)
+        rows.append({"lap_num": 3, "lap_time_ms": 130000, "is_pit_lap": 1, "fuel_used": 3.0})
+        rows.append({"lap_num": 4, "lap_time_ms": int(92100 * CLEAN_LAP_TOLERANCE) + 3000,
+                     "fuel_used": 3.0})
+        r = build_run_review(rows)
+        assert r.clean_laps == 2
+        reasons = sorted(l.excluded_reason for l in r.laps if not l.clean)
+        assert reasons == ["in/out lap", "off the pace"]
+
+    def test_a_run_of_only_in_out_laps_still_reports_something(self):
+        rows = [{"lap_num": 1, "lap_time_ms": 98000, "is_out_lap": 1, "fuel_used": 3.0}]
+        r = build_run_review(rows)
+        assert r.has_laps and r.best_ms == 98000 and r.clean_laps == 0
+
     def test_a_lap_far_off_the_pace_does_not_pollute_the_average(self):
         slow = int(92100 * CLEAN_LAP_TOLERANCE) + 5000
         r = build_run_review(_laps(92100, 92300, slow))

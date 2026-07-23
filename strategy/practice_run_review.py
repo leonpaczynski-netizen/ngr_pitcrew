@@ -138,28 +138,49 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
     if not rows:
         return RunReview()
 
-    best = min(_i(r.get("lap_time_ms")) for r in rows)
-    laps: List[LapRow] = []
+    ordered = sorted(rows, key=lambda x: _i(x.get("lap_num")))
+
+    def _in_or_out(r: Mapping) -> bool:
+        return bool(r.get("is_pit_lap")) or bool(r.get("is_out_lap"))
+
+    # The reference pace can only come from laps that were actually RACED. An in/out
+    # lap is fast or slow for reasons that have nothing to do with the car, so letting
+    # one set "best" both reports a lap the driver never really drove as the result and
+    # measures every honest lap against it. Fall back to the raw minimum only when the
+    # whole run is in/out laps, so a one-lap run still shows something.
+    raced = [_i(r.get("lap_time_ms")) for r in ordered if not _in_or_out(r)]
+    reference = min(raced) if raced else min(_i(r.get("lap_time_ms")) for r in ordered)
+
+    # Pass 1: classify. "Off the pace" is judged against the raced reference.
+    classified: List[Tuple[Mapping, int, bool, str]] = []
     clean_times: List[int] = []
+    for r in ordered:
+        t = _i(r.get("lap_time_ms"))
+        pit_or_out = _in_or_out(r)
+        slow = (not pit_or_out) and t > reference * CLEAN_LAP_TOLERANCE
+        reason = "in/out lap" if pit_or_out else ("off the pace" if slow else "")
+        clean = not (pit_or_out or slow)
+        if clean:
+            clean_times.append(t)
+        classified.append((r, t, clean, reason))
+
+    # The run's best is the best CLEAN lap; deltas are measured against it.
+    best = min(clean_times) if clean_times else reference
+
+    # Pass 2: build the rows now that the real best is known.
+    laps: List[LapRow] = []
     fuels: List[float] = []
     compounds: List[str] = []
     lock_ups = wheelspin = 0
 
-    for r in sorted(rows, key=lambda x: _i(x.get("lap_num"))):
-        t = _i(r.get("lap_time_ms"))
-        pit, out = bool(r.get("is_pit_lap")), bool(r.get("is_out_lap"))
-        slow = t > best * CLEAN_LAP_TOLERANCE
-        reason = "in/out lap" if (pit or out) else ("off the pace" if slow else "")
-        clean = not (pit or out or slow)
+    for r, t, clean, reason in classified:
         fuel = _f(r.get("fuel_used"))
         comp = str(r.get("compound") or "").strip()
         lu, ws = _i(r.get("lock_up_count")), _i(r.get("wheelspin_count"))
         lock_ups += lu
         wheelspin += ws
-        if clean:
-            clean_times.append(t)
-            if fuel > 0:
-                fuels.append(fuel)
+        if clean and fuel > 0:
+            fuels.append(fuel)
         if comp and comp not in compounds:
             compounds.append(comp)
         laps.append(LapRow(

@@ -79,3 +79,51 @@ class TestRunCard:
         c = RunCard()
         c.set_run("not a vm")
         assert c._start.isEnabled() is False
+
+
+class TestRunCardShowsHowToDriveIt:
+    """UAT-6: the card never said what made THIS run different from the last one."""
+
+    def test_driving_instructions_and_payoff_are_rendered(self, qapp):
+        from strategy.run_brief import brief_for_domain
+        b = brief_for_domain("driver_coaching")
+        c = RunCard()
+        c.set_run(RunCardVM(objective=b.objective, how_to_drive=b.how_to_drive,
+                            monitor=b.monitor, reports=b.reports))
+        assert c._how.isHidden() is False and c._how_cap.isHidden() is False
+        assert c._reports.isHidden() is False
+        assert b.how_to_drive[0] in c._how.text()
+        assert b.monitor[0] in c._monitor.text()
+        assert b.reports[0] in c._reports.text()
+
+    def test_a_plan_without_them_hides_the_blocks_rather_than_showing_empty_headings(self, qapp):
+        c = RunCard()
+        c.set_run(RunCardVM(objective="Just drive"))
+        assert c._how.isHidden() is True and c._how_cap.isHidden() is True
+        assert c._monitor.isHidden() is True
+        assert c._reports.isHidden() is True
+
+    def test_two_domains_render_different_cards(self, qapp):
+        from strategy.run_brief import brief_for_domain
+        texts = []
+        for domain in ("driver_coaching", "tyre_model"):
+            b = brief_for_domain(domain)
+            c = RunCard()
+            c.set_run(RunCardVM(objective=b.objective, how_to_drive=b.how_to_drive,
+                                monitor=b.monitor, reports=b.reports,
+                                fuel=b.fuel, tyre=b.tyre, target_laps=b.target_laps,
+                                push_level=b.push_level, purpose=b.purpose))
+            texts.append((c._objective.text(), c._how.text(), c._monitor.text(),
+                          c._params["fuel"].text(), c._params["push_level"].text()))
+        assert texts[0] != texts[1]
+        assert all(a != b for a, b in zip(*texts))
+
+    def test_the_old_placeholder_can_no_longer_appear(self, qapp):
+        """The bug the driver actually saw: "Monitor: whatever the coaching run is
+        meant to show"."""
+        from strategy.run_brief import brief_for_domain
+        for domain in ("driver_coaching", "tyre_model", "fuel_model", "working_window"):
+            b = brief_for_domain(domain)
+            c = RunCard()
+            c.set_run(RunCardVM(objective=b.objective, monitor=b.monitor))
+            assert "whatever" not in c._monitor.text().lower()

@@ -115,11 +115,15 @@ class LiveShellBridge(QObject):
         self._borrowed = None
         #: session_id -> RunReview, so the 750ms feed does not re-summarise every tick.
         self._review_cache = {}
-        #: The session bound by the most recent "End run & record" — what Review shows
-        #: once the live session has moved on.
+        #: The session bound by the most recent "End run & record". A FALLBACK only —
+        #: which runs count is resolved from the programme (see ``_recorded_pair``), so
+        #: the run-to-run comparison survives a restart instead of resetting to "this is
+        #: the first recorded run for this setup" every launch.
         self._last_recorded_session_id = 0
         #: The previous recorded run's session id, for the outcome comparison.
         self._previous_recorded_session_id = 0
+        #: Runs bound to the active cycle, resolved once per refresh tick.
+        self._runs_cache = None
         #: Track pickers are filled once — the circuit list does not change at runtime.
         self._track_choices_loaded = False
 
@@ -224,6 +228,10 @@ class LiveShellBridge(QObject):
     # ---- read side (show real data) --------------------------------------
     def refresh(self) -> None:
         """Rebuild the shell's view-models from real services. Never raises."""
+        # The recorded-run list is read several times per tick (which run to review,
+        # what kind it was, what to compare it against). Resolve it ONCE per refresh so
+        # the 750 ms feed stays at one bounded query rather than three.
+        self._runs_cache = None
         try:
             state = build_initial_app_state(self._window, self._config)
             self._controller.set_state(state)
@@ -287,6 +295,13 @@ class LiveShellBridge(QObject):
             if panel is None:
                 return
             panel.set_review(self._review_for(self._review_session_id()))
+            from strategy.run_brief import brief_for_run_type
+            run_type = self._recorded_run_domain()
+            if run_type:
+                brief = brief_for_run_type(run_type)
+                panel.set_run_kind(brief.run_name, brief.reports)
+            else:
+                panel.set_run_kind("")
         except Exception:
             pass
 
@@ -295,7 +310,50 @@ class LiveShellBridge(QObject):
         sid = self._live_session_id()
         if sid:
             return sid
-        return self._last_recorded_session_id
+        last, _prev = self._recorded_pair()
+        return last
+
+    def _recorded_runs(self) -> list:
+        """The runs bound to this event, cached for the duration of one refresh tick."""
+        if self._runs_cache is None:
+            try:
+                self._runs_cache = list(self._runs.recorded_runs())
+            except Exception:
+                self._runs_cache = []
+        return self._runs_cache
+
+    def _recorded_pair(self):
+        """(last recorded session, the one before it) for this event — 0 when absent.
+
+        Resolved from the runs actually BOUND to the active preparation cycle, so the
+        comparison survives a restart. The in-memory ids are kept only as a fallback for
+        the moment between binding a run and the programme read catching up.
+        """
+        runs = self._recorded_runs()
+        ids = [int(r.get("session_id") or 0) for r in runs if int(r.get("session_id") or 0) > 0]
+        if len(ids) >= 2:
+            return ids[-1], ids[-2]
+        if len(ids) == 1:
+            return ids[0], self._previous_recorded_session_id
+        return self._last_recorded_session_id, self._previous_recorded_session_id
+
+    def _recorded_run_domain(self) -> str:
+        """The activity type of the run being reviewed, as a domain-ish key ("" unknown).
+
+        Lets the Review report against what the run was actually FOR instead of
+        rendering the same generic summary whatever the driver was sent out to do.
+        """
+        sid = int(self._review_session_id() or 0)
+        if sid:
+            for r in self._recorded_runs():
+                if int(r.get("session_id") or 0) == sid:
+                    return str(r.get("activity_type") or "")
+        # A run still open (being driven now) is described by the activity itself.
+        try:
+            run = self._runs.open_run() or {}
+            return str(run.get("activity_type") or "")
+        except Exception:
+            return ""
 
     def _review_for(self, session_id):
         """Build a RunReview for a session id (cached per id so the 750ms feed is cheap)."""
@@ -324,10 +382,17 @@ class LiveShellBridge(QObject):
         Most objectives are not "validate this setup change" — they are "go and gather
         <domain> evidence", and that is a perfectly good run plan. The card describes the
         run the objective asks for so it can actually be started.
+
+        The content comes from ``strategy.run_brief``: each domain is served by a
+        genuinely different kind of run, and the card now says how to drive THIS one,
+        what to watch, and what the review will report. It previously emitted the same
+        template for every domain — including the placeholder monitor line "whatever the
+        coaching run is meant to show" — so a coaching run was indistinguishable from
+        every other run the programme asked for.
         """
         from ui.components.run_card import RunCardVM
         from strategy.practice_run_recording import domain_from_objective_headline
-        from ui.components.guidance_vm import _EVIDENCE_RUN
+        from strategy.run_brief import brief_for_domain
         view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
         na = view.get("next_action") or {}
         headline = str(na.get("headline") or "")
@@ -335,21 +400,20 @@ class LiveShellBridge(QObject):
         domain = domain_from_objective_headline(headline)
         if not domain:
             return RunCardVM()
-        run_name, _cta = _EVIDENCE_RUN[domain]
-        purpose = {"driver_coaching": "coaching", "tyre_model": "tyre wear",
-                   "fuel_model": "fuel", "consistency": "consistency",
-                   "race_pace": "race pace", "strategy": "strategy"}.get(domain, "diagnosis")
-        laps = "8–12" if domain in ("setup_race", "race_pace", "tyre_model",
-                                    "fuel_model", "strategy") else "3–5"
+        brief = brief_for_domain(domain)
         return RunCardVM(
-            objective=f"{run_name.capitalize()} — build {domain.replace('_', ' ')} evidence",
+            objective=brief.objective,
             setup_label=setup_label,
             expected_effect=detail,
-            monitor=(f"whatever the {run_name} is meant to show",),
-            purpose=purpose,
-            target_laps=laps,
-            push_level="Representative pace",
-            invalidation=("A lock-up or off-track that skews the lap",),
+            how_to_drive=brief.how_to_drive,
+            monitor=brief.monitor,
+            reports=brief.reports,
+            fuel=brief.fuel,
+            tyre=brief.tyre,
+            purpose=brief.purpose,
+            target_laps=brief.target_laps,
+            push_level=brief.push_level,
+            invalidation=brief.invalidation,
         )
 
     def _live_session_id(self):
@@ -916,8 +980,9 @@ class LiveShellBridge(QObject):
                 return
             from strategy.practice_run_review import build_run_outcome
             from ui.components.practice_outcome import PracticeOutcomeVM
+            _last, prev_id = self._recorded_pair()
             review = self._review_for(self._review_session_id())
-            previous = self._review_for(self._previous_recorded_session_id)
+            previous = self._review_for(prev_id)
             outcome = build_run_outcome(review, feedback=feedback, previous=previous)
             page.set_outcome(PracticeOutcomeVM(
                 verdict=outcome.verdict, verdict_summary=outcome.summary,
@@ -944,9 +1009,50 @@ class LiveShellBridge(QObject):
             elif k == "to_qualifying":
                 self._navigate("qualifying")
             elif k == "gather":
-                self._navigate("practice")
+                self._gather_more_data()
             else:
                 self._navigate("garage")
+        except Exception:
+            pass
+
+    def _gather_more_data(self) -> None:
+        """"Gather more data" = do ANOTHER run of the same kind, now.
+
+        This used to navigate to Practice — the page the driver was already standing on
+        — so the button appeared to do nothing. The verdict was inconclusive because the
+        run needs repeating, so the action opens that repeat run and puts the driver on
+        the run card with it already recording.
+        """
+        run_type = self._recorded_run_domain()
+        from strategy.run_brief import brief_for_run_type
+        brief = brief_for_run_type(run_type)
+        # An open run already covers this; don't try to start a second one.
+        if self._runs.open_run() is not None:
+            self._show_run_card()
+            self._run_status("A run is already open — drive it, then press “End run & record”.")
+            return
+        plan = self._runs.start_run(objective_domain=brief.domain,
+                                    objective_headline=brief.objective)
+        self._show_run_card()
+        if not plan.ok:
+            self._run_status(plan.reason or "Could not start another run.")
+            return
+        self._run_status(
+            f"Another {brief.run_name} is open — drive it the same way, then press "
+            f"“End run & record”. Two matching runs is what turns one result into evidence.")
+        self.refresh()
+
+    def _show_run_card(self) -> None:
+        """Put Practice on screen with the Run card tab selected."""
+        self._navigate("practice")
+        try:
+            shell = self._shell
+            btn = getattr(shell, "_btn_runcard", None)
+            stack = getattr(shell, "_practice_stack", None)
+            if btn is not None:
+                btn.setChecked(True)
+            if stack is not None:
+                stack.setCurrentIndex(0)
         except Exception:
             pass
 
