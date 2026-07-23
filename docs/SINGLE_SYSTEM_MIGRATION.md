@@ -77,7 +77,7 @@ look. Each classic tab has to justify itself against the guided race-weekend flo
 | 3 | Garage (car browser) | **FOLD** | Browsing cars/specs/BOP is part of choosing the event's car, not a destination |
 | 4 | Setup Builder | **ENGINE KEPT, VIEW SCRAPPED** | The engine becomes the Stage-2 service; the new Garage is already the better surface |
 | 5 | Practice Review | **SCRAP** | Native Practice → Review is live and confirmed working |
-| 6 | Strategy Builder | **REDESIGN** | Race Strategy exists but still needs a native "build the plan" trigger |
+| 6 | Strategy Builder | ✅ **DONE** | Race Strategy builds its own plan from recorded runs (`services/race_plan.py`) |
 | 7 | Telemetry | **SCRAP** | Developer diagnostic; the driver never needs a packet view |
 | 8 | Diagnostics | **SCRAP** | Same |
 | 9 | Settings | **SCRAP** | Native Settings exists |
@@ -185,6 +185,13 @@ would report agreement that was never tested.
 silently loaded a *different* layout's reference path and reported as approved. It would
 have made this surface claim "This track is modelled" for a track that never was. See
 `docs/FINDING_reference_path_layout_collision.md`.
+
+### Slice 1 — the shell builds its own race plan ✅ DONE
+`services/race_plan.py`. The last genuine *functional* gap: the strategy page could only
+display a plan the classic tab had built. It now builds one from the runs **recorded
+against the event's preparation cycle** — a plan built from an unrecorded run is built on
+evidence the programme does not have. No recorded run is refused with the way out, not an
+empty page. Approve is hidden until a plan exists.
 
 ### Stage 5 — direct service injection
 `launch_new_shell(services)` instead of `launch_new_shell(window)`. Mechanical once
