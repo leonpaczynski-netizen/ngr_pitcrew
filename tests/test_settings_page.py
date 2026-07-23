@@ -38,12 +38,25 @@ class TestSettingsPage:
         p.set_config(cfg)
         p._host.setText("127.0.0.1")
         p._voice_enabled.setChecked(True)
-        p._race_rpm.setValue(8000)
+        p._beep_enabled.setChecked(True)
         out = p.apply_to_config()
         assert out is cfg                       # mutates the shared dict in place
         assert cfg["connection"]["host"] == "127.0.0.1"
         assert cfg["voice"]["enabled"] is True
-        assert cfg["shift_beep"]["race_rpm"] == 8000
+        assert cfg["shift_beep"]["enabled"] is True
+
+    def test_the_rpm_is_read_only_and_owned_by_the_garage(self, qapp):
+        """The shift RPM now travels with each setup — Settings shows it but must not
+        write it back, or a stale display copy would clobber a sheet-set value."""
+        cfg = _config()
+        p = SettingsPage()
+        p.set_config(cfg)
+        assert p._qual_rpm.isReadOnly() and p._race_rpm.isReadOnly()
+        # Even if a value is forced into the (read-only) spin, apply leaves config's RPM.
+        p._race_rpm.setValue(9999)
+        p.apply_to_config()
+        assert cfg["shift_beep"]["race_rpm"] == 7800     # unchanged — Garage owns it
+        assert cfg["shift_beep"]["qual_rpm"] == 8200
 
     def test_save_emits(self, qapp):
         p = SettingsPage()

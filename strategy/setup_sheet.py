@@ -42,6 +42,10 @@ NUMERIC_FIELDS: Tuple[Tuple[str, float, int], ...] = (
     ("nitrous_output", 0.0, 0),
     ("final_drive", 0.0, 3),
     ("transmission_max_speed_kmh", 0.0, 0),
+    # The shift-beep upshift point for THIS discipline's setup. A race tune may
+    # short-shift (fuel/ECU restriction) where qualifying runs to the indicator, so it
+    # belongs to the sheet, not to one global setting. 0 = not set (never beeps).
+    ("shift_rpm", 0.0, 0),
 )
 
 #: Free-text / choice fields, with their defaults.

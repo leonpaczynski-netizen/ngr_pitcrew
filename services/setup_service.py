@@ -184,6 +184,39 @@ class SetupService:
         inp = self.inputs()
         return self._store.has_setup(inp.scope, discipline)
 
+    # ---- shift beep -------------------------------------------------------
+    def shift_rpm(self, discipline: str = "race") -> int:
+        """The upshift point stored on this discipline's sheet (0 = not set)."""
+        try:
+            return int(self.sheet(discipline).get("shift_rpm", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def set_shift_rpm(self, discipline: str, rpm) -> SetupOutcome:
+        """Store the upshift point for one discipline's sheet.
+
+        The shift point travels WITH the setup — a race tune may short-shift where
+        qualifying runs to the indicator — so it is written onto the sheet rather than a
+        global setting. Writing it does NOT go through ``apply``/undo: it is a beep
+        preference on the sheet, not a tuning change the setup brain reasons about.
+        """
+        d = normalise_discipline(discipline)
+        try:
+            value = max(0, int(round(float(rpm))))
+        except (TypeError, ValueError):
+            return SetupOutcome(discipline=d, reason="That is not a valid RPM.")
+        if value > 20000:
+            return SetupOutcome(discipline=d, reason="That RPM is out of range.")
+        inp = self.inputs()
+        if not inp.is_known:
+            return SetupOutcome(discipline=d, reason="Pick the car and track first.")
+        self._store.merge(inp.scope, d, {"shift_rpm": value})
+        if value <= 0:
+            return SetupOutcome(ok=True, discipline=d, changed_fields=("shift_rpm",),
+                                reason="Shift beep turned off for this setup.")
+        return SetupOutcome(ok=True, discipline=d, changed_fields=("shift_rpm",),
+                            reason=f"Shift beep set to {value} RPM for this setup.")
+
     # ---- author -----------------------------------------------------------
     def build_initial_setup(self) -> BaselineResult:
         """Author a complete setup for BOTH sheets from car ranges + driving profile.

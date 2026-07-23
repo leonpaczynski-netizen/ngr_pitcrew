@@ -287,6 +287,55 @@ class TestConfirmAppliedInGame:
         assert "authority is not available" in svc.confirm_applied_in_game("race").reason
 
 
+class TestShiftRpm:
+    """UAT-6: the shift beep RPM belongs to the setup (a race tune may short-shift where
+    qualifying runs to the indicator), not to one global setting."""
+
+    def test_a_new_sheet_has_no_shift_point(self, tmp_path):
+        svc, _s = _svc(tmp_path)
+        assert svc.shift_rpm("race") == 0 and svc.shift_rpm("qualifying") == 0
+
+    def test_setting_it_stores_per_discipline(self, tmp_path):
+        svc, _s = _svc(tmp_path)
+        assert svc.set_shift_rpm("race", 7000).ok
+        assert svc.set_shift_rpm("qualifying", 7600).ok
+        assert svc.shift_rpm("race") == 7000
+        assert svc.shift_rpm("qualifying") == 7600      # the two do not share a value
+
+    def test_it_persists_across_a_reload(self, tmp_path):
+        svc, _s = _svc(tmp_path)
+        svc.set_shift_rpm("race", 7100)
+        svc2, _s2 = _svc(tmp_path)                       # new store over the same file
+        assert svc2.shift_rpm("race") == 7100
+
+    def test_zero_turns_the_beep_off_for_that_setup(self, tmp_path):
+        svc, _s = _svc(tmp_path)
+        svc.set_shift_rpm("race", 7000)
+        out = svc.set_shift_rpm("race", 0)
+        assert out.ok and "off" in out.reason.lower()
+        assert svc.shift_rpm("race") == 0
+
+    def test_junk_and_out_of_range_are_rejected(self, tmp_path):
+        svc, _s = _svc(tmp_path)
+        assert svc.set_shift_rpm("race", "fast").ok is False
+        assert svc.set_shift_rpm("race", 99999).ok is False
+        assert svc.shift_rpm("race") == 0               # nothing was written
+
+    def test_unknown_car_track_is_reported_not_written(self, tmp_path):
+        svc, _s = _svc(tmp_path, inputs=SetupInputs())
+        assert svc.set_shift_rpm("race", 7000).ok is False
+
+    def test_it_does_not_disturb_the_rest_of_the_sheet(self, tmp_path):
+        svc, store = _svc(tmp_path, _Advisor(baseline=_BASELINE_OK))
+        svc.build_initial_setup()
+        before = svc.sheet("race").as_dict()
+        svc.set_shift_rpm("race", 7000)
+        after = svc.sheet("race").as_dict()
+        for k, v in before.items():
+            if k != "shift_rpm":
+                assert after[k] == v
+
+
 class TestNeverRaises:
     def test_a_broken_inputs_provider_degrades_to_unknown(self, tmp_path):
         store = SetupSheetStore(str(tmp_path / "s.json"))

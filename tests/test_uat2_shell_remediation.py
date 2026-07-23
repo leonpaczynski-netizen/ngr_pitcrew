@@ -929,6 +929,81 @@ class TestV22TheComparisonSurvivesARestart:
         assert "tyre test" in shell.run_laps._kind.text().lower()
 
 
+class TestV23ShiftBeepLivesWithTheSetup:
+    """UAT-6: "shift beep is in settings but should be in garage as part of the car
+    setup … depending on which setup is loaded and what session I am doing that beep
+    indicator should be active." The RPM now travels with each discipline's sheet and
+    projects into the config the beep loop already reads."""
+
+    def test_editing_the_garage_rpm_writes_the_sheet_and_projects_to_config(self, wired):
+        shell, win, _db, bridge = wired
+        win.config_path = ""                      # keep _persist_config a no-op in tests
+        bridge.refresh()
+        shell.garage_page._shift_rpm.setValue(7000)
+        shell.garage_page._on_shift_rpm_edited()
+        assert bridge._setups.shift_rpm("race") == 7000
+        # resolve_threshold reads race_rpm/qual_rpm from config; the beep follows the sheet.
+        assert int(bridge._config["shift_beep"]["race_rpm"]) == 7000
+
+    def test_race_and_qualifying_keep_separate_points(self, wired):
+        shell, win, _db, bridge = wired
+        win.config_path = ""
+        bridge.refresh()
+        shell.garage_page._shift_rpm.setValue(7000)
+        shell.garage_page._on_shift_rpm_edited()
+        shell.garage_page._selector._buttons["qualifying"].click()
+        shell.garage_page._shift_rpm.setValue(7600)
+        shell.garage_page._on_shift_rpm_edited()
+        assert bridge._setups.shift_rpm("race") == 7000
+        assert bridge._setups.shift_rpm("qualifying") == 7600
+        assert int(bridge._config["shift_beep"]["race_rpm"]) == 7000
+        assert int(bridge._config["shift_beep"]["qual_rpm"]) == 7600
+
+    def test_the_beep_threshold_follows_the_session(self, wired):
+        """The end-to-end contract: which sheet's RPM the live beep uses is decided by
+        the session, via the unchanged resolve_threshold."""
+        from main import resolve_threshold
+        shell, win, _db, bridge = wired
+        win.config_path = ""
+        bridge.refresh()
+        shell.garage_page._shift_rpm.setValue(7000)
+        shell.garage_page._on_shift_rpm_edited()
+        shell.garage_page._selector._buttons["qualifying"].click()
+        shell.garage_page._shift_rpm.setValue(7600)
+        shell.garage_page._on_shift_rpm_edited()
+        sb = bridge._config["shift_beep"]
+        _k, race = resolve_threshold("Race", True, False, sb)
+        _k, qual = resolve_threshold("Qualifying", False, False, sb)
+        assert race == 7000 and qual == 7600
+
+    def test_the_garage_shows_the_saved_config_value_until_a_sheet_has_one(self, wired):
+        shell, win, _db, bridge = wired
+        bridge._config.setdefault("shift_beep", {})["race_rpm"] = 6800
+        win.config_path = ""
+        bridge.refresh()
+        # No sheet value yet → the driver's existing saved RPM is shown, not blank.
+        assert shell.garage_page._shift_rpm.value() == 6800
+
+    def test_recommend_fills_both_sheets_from_the_car(self, wired):
+        shell, win, _db, bridge = wired
+        win.config_path = ""
+        win._last_packet = type("P", (), {"rpm_alert_max": 7500})()
+        bridge.refresh()
+        shell.garage_page.shift_rpm_recommend_requested.emit()
+        assert bridge._setups.shift_rpm("qualifying") == 7500
+        # Race is a touch below the qualifying point for engine/fuel margin.
+        assert 0 < bridge._setups.shift_rpm("race") <= 7500
+
+    def test_recommend_with_no_car_data_asks_the_driver_to_drive(self, wired):
+        shell, win, _db, bridge = wired
+        win.config_path = ""
+        win._last_packet = None
+        bridge.refresh()
+        shell.garage_page.shift_rpm_recommend_requested.emit()
+        assert bridge._setups.shift_rpm("race") == 0     # nothing fabricated
+        assert "no usable car data" in shell.garage_page._status.text().lower()
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

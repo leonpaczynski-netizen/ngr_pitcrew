@@ -67,15 +67,27 @@ class SettingsPage(QWidget):
         voice.body.addLayout(vf)
         lay.addWidget(voice)
 
-        # Shift beep
+        # Shift beep. The RPM now lives WITH each setup in the Garage (a race tune may
+        # short-shift where qualifying runs to the indicator), so here we own only the
+        # global on/off and show the current per-discipline points read-only.
         beep = Card()
-        beep.add(_cap("Shift beep (RPM)"))
+        beep.add(_cap("Shift beep"))
         bf = QFormLayout()
+        self._beep_enabled = QCheckBox()
         self._qual_rpm = QSpinBox(); self._qual_rpm.setRange(0, 20000)
         self._race_rpm = QSpinBox(); self._race_rpm.setRange(0, 20000)
+        self._qual_rpm.setSpecialValueText("Not set")
+        self._race_rpm.setSpecialValueText("Not set")
+        for s in (self._qual_rpm, self._race_rpm):
+            s.setReadOnly(True)
+            s.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            s.setFocusPolicy(_focus_none())
+        bf.addRow("Enabled", self._beep_enabled)
         bf.addRow("Qualifying RPM", self._qual_rpm)
         bf.addRow("Race RPM", self._race_rpm)
         beep.body.addLayout(bf)
+        beep.add(_hint("Set the RPM per setup in the Garage — it travels with the "
+                       "setup and the beep uses whichever matches your session."))
         lay.addWidget(beep)
 
         self._status = QLabel("")
@@ -109,6 +121,7 @@ class SettingsPage(QWidget):
         self._lap_alerts.setChecked(bool(vc.get("lap_alerts", True)))
         self._fuel_alerts.setChecked(bool(vc.get("fuel_alerts", True)))
         sb = c.get("shift_beep", {}) if isinstance(c.get("shift_beep"), dict) else {}
+        self._beep_enabled.setChecked(bool(sb.get("enabled", True)))
         self._qual_rpm.setValue(int(sb.get("qual_rpm", 0) or 0))
         self._race_rpm.setValue(int(sb.get("race_rpm", 0) or 0))
         self._status.setText("")
@@ -127,8 +140,10 @@ class SettingsPage(QWidget):
         c["voice"]["lap_alerts"] = bool(self._lap_alerts.isChecked())
         c["voice"]["fuel_alerts"] = bool(self._fuel_alerts.isChecked())
         c.setdefault("shift_beep", {})
-        c["shift_beep"]["qual_rpm"] = int(self._qual_rpm.value())
-        c["shift_beep"]["race_rpm"] = int(self._race_rpm.value())
+        c["shift_beep"]["enabled"] = bool(self._beep_enabled.isChecked())
+        # The RPM values are owned by the Garage sheets; Settings shows them read-only
+        # and must not write them back (which would clobber a sheet-set value with a
+        # stale display copy). Only the on/off is written here.
         return c
 
     def _on_save(self) -> None:
@@ -145,3 +160,15 @@ def _cap(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(f"color: {_t.NGR_GREEN}; font-weight: 700; font-size: {_t.FS_CAPTION}pt;")
     return lbl
+
+
+def _hint(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+    return lbl
+
+
+def _focus_none():
+    from PyQt6.QtCore import Qt
+    return Qt.FocusPolicy.NoFocus

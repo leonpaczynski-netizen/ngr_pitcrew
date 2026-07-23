@@ -162,6 +162,10 @@ class LiveShellBridge(QObject):
                     gp.baseline_requested.connect(self._on_build_baseline)
                 if hasattr(gp, "tyre_change_requested"):
                     gp.tyre_change_requested.connect(self._on_tyre_change)
+                if hasattr(gp, "shift_rpm_changed"):
+                    gp.shift_rpm_changed.connect(self._on_shift_rpm_changed)
+                if hasattr(gp, "shift_rpm_recommend_requested"):
+                    gp.shift_rpm_recommend_requested.connect(self._on_shift_rpm_recommend)
         except Exception:
             pass
         try:
@@ -689,6 +693,32 @@ class LiveShellBridge(QObject):
                 has_recorded_run=self._has_recorded_run(),
             )
             self._feed_tyres(gp, setup or {})
+            self._feed_shift_rpm(gp)
+        except Exception:
+            pass
+
+    def _feed_shift_rpm(self, garage) -> None:
+        """Show the upshift point for the selected discipline.
+
+        The sheet is authoritative; when it has none yet, the driver's existing global
+        config value for this discipline is shown so nothing they already set disappears.
+        """
+        try:
+            if not hasattr(garage, "set_shift_rpm"):
+                return
+            rpm = self._setups.shift_rpm(self._discipline)
+            source = "this setup"
+            if rpm <= 0:
+                rpm = self._config_shift_rpm(self._discipline)
+                source = "your saved setting" if rpm > 0 else ""
+            if rpm > 0:
+                note = (f"The beep fires at {rpm} RPM in a "
+                        f"{'race' if self._discipline == 'race' else 'qualifying'} "
+                        f"session (from {source}).")
+            else:
+                note = ("No shift point yet — set one, or press “Recommend from car” "
+                        "after driving so GT7 has broadcast its indicator.")
+            garage.set_shift_rpm(rpm, note)
         except Exception:
             pass
 
@@ -779,6 +809,100 @@ class LiveShellBridge(QObject):
             f"{fields['tyre_front']} on the {self._discipline} sheet — "
             f"set it in GT7, then press “I've entered this in GT7”.")
         self.refresh()
+
+    # ---- shift beep -------------------------------------------------------
+    def _config_shift_rpm(self, discipline: str) -> int:
+        """The saved global RPM for a discipline (the fallback before a sheet has one)."""
+        try:
+            sb = self._config.get("shift_beep", {}) if isinstance(self._config, dict) else {}
+            key = "race_rpm" if str(discipline).lower() == "race" else "qual_rpm"
+            return int(sb.get(key) or sb.get("rpm", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _project_shift_rpm_to_config(self) -> None:
+        """Mirror each sheet's shift point into config so the live beep uses it.
+
+        The beep loop in main.py already picks race_rpm vs qual_rpm by the session being
+        driven; making config a projection of the sheets means the beep follows the setup
+        loaded for that discipline with NO change to the beep loop. A sheet with no shift
+        point (0) never clears an existing saved value.
+        """
+        try:
+            if not isinstance(self._config, dict):
+                return
+            sb = self._config.setdefault("shift_beep", {})
+            changed = False
+            for discipline, key in (("race", "race_rpm"), ("qualifying", "qual_rpm")):
+                rpm = self._setups.shift_rpm(discipline)
+                if rpm > 0 and int(sb.get(key, 0) or 0) != rpm:
+                    sb[key] = rpm
+                    changed = True
+            if changed:
+                self._persist_config()
+        except Exception:
+            pass
+
+    def _persist_config(self) -> None:
+        try:
+            import config_paths
+            path = getattr(self._window, "config_path", None) or config_paths.resolve_config_path()
+            config_paths.save_config(self._config, path)
+        except Exception:
+            pass
+
+    def _on_shift_rpm_changed(self, rpm: int) -> None:
+        """The driver set the upshift point for the selected discipline's sheet."""
+        outcome = self._setups.set_shift_rpm(self._discipline, rpm)
+        if not outcome.ok:
+            self._garage_status(outcome.reason or "Could not set the shift beep.")
+            return
+        self._project_shift_rpm_to_config()
+        self._garage_status(outcome.reason)
+        self.refresh()
+
+    def _on_shift_rpm_recommend(self) -> None:
+        """Derive the upshift point from the car and write it to BOTH sheets.
+
+        One recommendation yields both the qualifying and race points (race is a touch
+        below for engine/fuel margin), so it fills each discipline's sheet at once.
+        Nothing is fabricated: with no live rpm-alert and no car data the driver is told
+        to drive the car first rather than given a guessed number.
+        """
+        from strategy.shift_rpm_recommendation import recommend_shift_rpm
+        rec = recommend_shift_rpm(
+            rpm_alert_max=self._last_rpm_alert_max(), power_rpm=self._car_power_rpm())
+        if rec.qualifying_rpm is None:
+            self._garage_status(rec.rationale)
+            return
+        self._setups.set_shift_rpm("race", rec.race_rpm)
+        self._setups.set_shift_rpm("qualifying", rec.qualifying_rpm)
+        self._project_shift_rpm_to_config()
+        self._garage_status(
+            f"Shift beep set from the car — qualifying {rec.qualifying_rpm} RPM, "
+            f"race {rec.race_rpm} RPM. {rec.rationale}")
+        self.refresh()
+
+    def _last_rpm_alert_max(self):
+        """GT7's own per-car upshift indicator from the latest packet, if any."""
+        for attr in ("_last_packet", "last_packet"):
+            p = getattr(self._window, attr, None)
+            if p is not None:
+                v = getattr(p, "rpm_alert_max", None)
+                if v:
+                    return v
+        return None
+
+    def _car_power_rpm(self):
+        """The car's peak-power RPM from its specs, if the window can supply them."""
+        try:
+            fn = getattr(self._window, "_load_car_specs_for_current", None)
+            if callable(fn):
+                _name, specs = fn()
+                return (specs or {}).get("power_rpm")
+        except Exception:
+            pass
+        return None
 
     def _on_apply(self, field_values: dict) -> None:
         """Write the shown recommendation onto the sheet (shown == applied).

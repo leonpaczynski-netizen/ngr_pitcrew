@@ -132,6 +132,9 @@ def main() -> int:
               "tyre_front": "Racing: Soft", "tyre_rear": "Racing: Soft"}),
         ],
     )
+    # Shift beep — part of the car setup, per discipline.
+    shell.garage_page.set_shift_rpm(
+        7600, "The beep fires at 7600 RPM in a qualifying session (from this setup).")
 
     # Populate the Practice run card + corner options so 'Practice' shows a live example.
     from ui.components.run_card import RunCardVM

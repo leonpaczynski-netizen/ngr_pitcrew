@@ -124,6 +124,8 @@ class SetupWorkspace(QWidget):
     baseline_requested = pyqtSignal(str)   # author the initial setup for BOTH sheets
     applied_in_game_confirmed = pyqtSignal(str)  # driver entered this sheet into GT7
     tyre_change_requested = pyqtSignal(str)      # compound code to put on the car
+    shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
+    shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,6 +170,41 @@ class SetupWorkspace(QWidget):
         tyre_row.addWidget(self._tyre_note, 1)
         lay.addLayout(tyre_row)
         self._tyre_codes: tuple = ()
+
+        # Shift beep (RPM) — part of the CAR SETUP, per discipline, not a global setting.
+        # The race sheet may short-shift where qualifying runs to the indicator, and the
+        # live beep uses whichever discipline's setup matches the session being driven.
+        from PyQt6.QtWidgets import QSpinBox
+        shift_row = QHBoxLayout()
+        shift_row.setSpacing(_t.SPACE_SM)
+        shift_cap = QLabel("Shift beep (RPM)")
+        shift_cap.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        shift_row.addWidget(shift_cap)
+        self._shift_rpm = QSpinBox()
+        self._shift_rpm.setRange(0, 20000)
+        self._shift_rpm.setSingleStep(100)
+        self._shift_rpm.setSuffix(" RPM")
+        self._shift_rpm.setSpecialValueText("Not set")   # value 0
+        self._shift_rpm.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._shift_rpm.setMaximumWidth(150)
+        self._shift_rpm.setStyleSheet(
+            f"QSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+        # editingFinished (not valueChanged) so we emit once the driver settles on a
+        # value, not on every spin tick.
+        self._shift_rpm.editingFinished.connect(self._on_shift_rpm_edited)
+        shift_row.addWidget(self._shift_rpm)
+        self._shift_recommend = SecondaryActionButton("Recommend from car")
+        self._shift_recommend.clicked.connect(
+            lambda: self.shift_rpm_recommend_requested.emit())
+        shift_row.addWidget(self._shift_recommend)
+        self._shift_note = QLabel("")
+        self._shift_note.setWordWrap(True)
+        self._shift_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        shift_row.addWidget(self._shift_note, 1)
+        lay.addLayout(shift_row)
+        self._shift_rpm_value = 0
 
         # Status pills
         status_row = QHBoxLayout()
@@ -464,6 +501,30 @@ class SetupWorkspace(QWidget):
     def _on_tyre_picked(self, index: int) -> None:
         if 0 <= index < len(self._tyre_codes):
             self.tyre_change_requested.emit(self._tyre_codes[index])
+
+    def set_shift_rpm(self, value: int = 0, note: str = "") -> None:
+        """Show the upshift point for the current discipline's sheet.
+
+        Setting the spin box must not re-emit ``shift_rpm_changed`` — that would echo a
+        value the caller just fed back as though the driver had typed it.
+        """
+        try:
+            v = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            v = 0
+        self._shift_rpm_value = v
+        self._shift_rpm.blockSignals(True)
+        self._shift_rpm.setValue(v)
+        self._shift_rpm.blockSignals(False)
+        self._shift_note.setText(str(note or ""))
+        self._shift_note.setVisible(bool(note))
+
+    def _on_shift_rpm_edited(self) -> None:
+        v = int(self._shift_rpm.value())
+        if v == self._shift_rpm_value:
+            return                      # editingFinished fires even when nothing changed
+        self._shift_rpm_value = v
+        self.shift_rpm_changed.emit(v)
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") a transient status line — e.g. "Analysing setup…".
