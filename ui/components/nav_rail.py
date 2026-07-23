@@ -27,6 +27,7 @@ NAV_LABELS: dict[str, str] = {
     "race_strategy": "Race Strategy",
     "live_pit_wall": "Live Pit Wall",
     "debrief": "Debrief",
+    "track_model": "Track Model",
     "engineering_library": "Engineering Library",
     "settings": "Settings",
 }

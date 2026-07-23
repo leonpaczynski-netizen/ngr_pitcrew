@@ -91,6 +91,11 @@ class LiveShellBridge(QObject):
             store=self._sheets, advisor=getattr(window, "_driving_advisor", None),
             authority=getattr(window, "_setup_authority", None), db=db,
             inputs_provider=lambda: build_setup_inputs(db, self._config))
+        # Track modelling, headless and guided. Reuses the domain untouched; the
+        # coordinator decides which actions are legal at each point.
+        from services.track_modelling import TrackModellingService
+        self._tracks = TrackModellingService(
+            capture_controller=getattr(window, "_tm_controller", None))
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
         #: The last AnalysisResult (it carries the discipline it belongs to).
@@ -109,6 +114,8 @@ class LiveShellBridge(QObject):
         self._last_recorded_session_id = 0
         #: The previous recorded run's session id, for the outcome comparison.
         self._previous_recorded_session_id = 0
+        #: Track pickers are filled once — the circuit list does not change at runtime.
+        self._track_choices_loaded = False
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -171,6 +178,9 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
+        tmp = getattr(shell, "track_model_page", None)
+        _c(tmp, "track_selected", self._on_track_selected)
+        _c(tmp, "action_requested", self._on_track_action)
         _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
@@ -232,6 +242,7 @@ class LiveShellBridge(QObject):
         self._feed_strategy()
         self._feed_live()
         self._feed_debrief()
+        self._feed_track_model()
 
     def _feed_practice(self) -> None:
         """Feed the Practice run card from the current recommendation + the open run."""
@@ -453,6 +464,40 @@ class LiveShellBridge(QObject):
                 except Exception:
                     rpvm = None
             sp.set_plan(strategy_plan_vm_from_rpvm(rpvm))
+        except Exception:
+            pass
+
+    def _feed_track_model(self) -> None:
+        """Render the guided modelling flow from the live session."""
+        try:
+            page = getattr(self._shell, "track_model_page", None)
+            if page is None:
+                return
+            if not self._track_choices_loaded:
+                self._track_choices_loaded = True
+                page.set_tracks(*_track_choices())
+            page.set_session(self._tracks.refresh())
+        except Exception:
+            pass
+
+    def _on_track_selected(self, location_id: str, layout_id: str) -> None:
+        result = self._tracks.select_track(location_id, layout_id)
+        self._feed_track_model()
+        if not result.ok:
+            self._track_status(result.reason)
+
+    def _on_track_action(self, action: str) -> None:
+        result = self._tracks.perform(action)
+        self._feed_track_model()
+        if not result.ok and result.reason:
+            self._track_status(result.reason)
+
+    def _track_status(self, text: str) -> None:
+        try:
+            page = getattr(self._shell, "track_model_page", None)
+            if page is not None:
+                page._detail.setText(text)
+                page._detail.setVisible(bool(text))
         except Exception:
             pass
 
@@ -1049,3 +1094,25 @@ def _active_setup(window, purpose: str = "Race"):
         return str(label or getattr(active, "name", "") or ""), bool(active.is_active_on_car)
     except Exception:
         return "", False
+
+
+def _track_choices():
+    """(locations, layouts) for the track pickers, as (id, label) pairs. Never raises.
+
+    Uses the same view-model helpers the classic tab uses, so the lists read identically.
+    """
+    try:
+        from data.track_intelligence import load_track_seed
+        from ui.track_modelling_vm import (
+            build_layout_display_items, build_location_display_items,
+        )
+        seed = load_track_seed()
+        locations = [(loc_id, display)
+                     for display, loc_id in build_location_display_items(seed)]
+        layouts = []
+        for _display, loc_id in build_location_display_items(seed):
+            for lay_display, lay_id in build_layout_display_items(seed, loc_id):
+                layouts.append((lay_id, lay_display))
+        return locations, layouts
+    except Exception:
+        return (), ()

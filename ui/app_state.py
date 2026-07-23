@@ -40,7 +40,8 @@ PROGRAMME_STAGES: Tuple[str, ...] = (
 # Canonical left-nav destinations (a superset of the rail: adds standing areas).
 NAV_DESTINATIONS: Tuple[str, ...] = (
     "home", "active_event", "garage", "practice", "qualifying",
-    "race_strategy", "live_pit_wall", "debrief", "engineering_library", "settings",
+    "race_strategy", "live_pit_wall", "debrief", "track_model",
+    "engineering_library", "settings",
 )
 
 # Valid stage-state keys come straight from the design-system tokens.

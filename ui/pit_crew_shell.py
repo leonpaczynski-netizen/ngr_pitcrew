@@ -61,6 +61,7 @@ SURFACE_TO_NAV: dict[str, str] = {
     "active_event": "active_event", "home": "home",
     "qualifying": "qualifying", "settings": "settings",
     "engineering_library": "engineering_library",
+    "track_model": "track_model", "track_modelling": "track_model",
 }
 
 
@@ -202,6 +203,7 @@ class PitCrewShell(QMainWindow):
             "race_strategy": ("RACE STRATEGY", "What is the plan?"),
             "live_pit_wall": ("LIVE PIT WALL", "What do I need to do now?"),
             "debrief": ("DEBRIEF", "What did we learn?"),
+            "track_model": ("TRACK MODEL", "Teach the app a circuit."),
             "engineering_library": ("ENGINEERING LIBRARY", "Evidence, rules and advanced detail."),
             "settings": ("SETTINGS", "Configuration."),
         }
@@ -211,6 +213,8 @@ class PitCrewShell(QMainWindow):
         self.strategy_page = StrategyPlanView()
         self.live_page = LivePitWall()
         self.debrief_page = DebriefView()
+        from ui.components.track_modelling import TrackModellingPage
+        self.track_model_page = TrackModellingPage()
         self.library_page = EngineeringLibrary()
         self.settings_page = self._build_settings_page()
         self.home_page = HomePage()
@@ -241,6 +245,8 @@ class PitCrewShell(QMainWindow):
                 page = self.live_page
             elif dest == "debrief":
                 page = self.debrief_page
+            elif dest == "track_model":
+                page = self.track_model_page
             elif dest == "engineering_library":
                 page = self.library_page
             elif dest == "settings":
