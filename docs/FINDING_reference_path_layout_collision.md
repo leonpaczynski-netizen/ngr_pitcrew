@@ -1,9 +1,8 @@
 # Finding: a layout with no model silently loads a *different* layout's reference path
 
 **Found:** 2026-07-23, while building the guided Track Model surface (stage 4b).
-**Status:** NOT fixed — reported for a decision. It is in a load-bearing live-data path,
-and the tolerant matching it comes from looks deliberate, so tightening it blind could
-break legitimate lookups.
+**Status:** ✅ **FIXED** 2026-07-23 (`c47b4c3`) — option 1, the recommendation below.
+Kept as the record of what went wrong and why the fix is shaped the way it is.
 
 ## What happens
 
@@ -72,3 +71,47 @@ wrong lap length rather than prevent it.
 
 Option 1 is the recommendation. The regression test to write first is the reproduction
 above: `short_course` must report unavailable while `long_course` reports available.
+
+---
+
+## What was done
+
+Option 1, as recommended. `_ids_match` was doing two different jobs with one rule, so it
+was split into the two it was actually doing:
+
+* `_track_ids_match` — tolerant, unchanged. The tolerance is *required*: `ui/dashboard.py`
+  and `ui/live_ui.py` both pass `track_hint = track_location_id or event.track`, so a
+  display name has to resolve a canonical id.
+* `_layout_ids_match` — normalised equality. An empty request stays a wildcard for the
+  track-only lookup; an asset recording no layout can never satisfy a request for one.
+
+Both call sites were updated, including `validate_reference_path_identity`, which gates
+whether live pit confidence may be lifted and could previously verify an asset belonging
+to a different layout.
+
+**Strict turned out not to mean brittle.** `_norm_id` already absorbs case and
+separators, so `"Watkins Glen International__Long Course"` still matches its canonical
+id. Only a genuinely different layout fails.
+
+### Verified against the reference paths on disk
+
+| Layout | Available | Lap length | Approved |
+|---|---|---:|---|
+| `watkins_glen…__long_course` | yes | 5379 m | yes |
+| `watkins_glen…__short_course` | **no** | — | **no** |
+| `fuji…__full_course` | yes | 4441 m | yes |
+| `fuji…__full_course_reverse` | **no** | — | **no** |
+| `daytona…__road_course` | yes | 5420 m | yes |
+| `daytona…__oval` | **no** | — | **no** |
+
+Track-hint tolerance confirmed intact: `resolve_trusted_lap_length("Watkins Glen", …)`
+still returns 5378.5 m.
+
+27 tests written before the fix; 2,415 pass across the track and live-progress domains.
+
+### Expect this to look like a regression
+
+Layouts that reported `READY_APPROVED` off a neighbour's data now report
+`MISSING_ASSET`. Tracks that appeared modelled will appear unmodelled — because they
+always were. The app was answering with another layout's racing line, and a wrong lap
+length silently corrupts fuel and stint maths.

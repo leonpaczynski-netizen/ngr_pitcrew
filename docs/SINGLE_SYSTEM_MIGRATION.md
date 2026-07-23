@@ -181,10 +181,10 @@ Two decisions worth keeping: **RESET is offered only in ERROR**, where it is the
 the derived work**, because validating new laps against a model built from the old ones
 would report agreement that was never tested.
 
-⚠ **Found while building this:** an unmodelled layout silently loads a *different*
-layout's reference path, and reports as approved — see
-`docs/FINDING_reference_path_layout_collision.md`. Not fixed, not worked around; it would
-make this surface claim "This track is modelled" for a track that never was.
+✅ **Found while building this, and now fixed** (`c47b4c3`): an unmodelled layout
+silently loaded a *different* layout's reference path and reported as approved. It would
+have made this surface claim "This track is modelled" for a track that never was. See
+`docs/FINDING_reference_path_layout_collision.md`.
 
 ### Stage 5 — direct service injection
 `launch_new_shell(services)` instead of `launch_new_shell(window)`. Mechanical once
