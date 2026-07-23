@@ -62,12 +62,25 @@ The app is in active race-preparation use. Deleting the classic window before it
 is extracted would not "simplify" anything, it would remove the setup engine. Each stage
 below leaves the app fully working, and only the final stage deletes anything.
 
-### Stage 1 — the setup sheet becomes data ✅ DONE
+### Stage 1 — state out of the widget tree ✅ DONE (both keystones)
+
+The same defect appears twice: the working state of a job lives in Qt widgets, so the
+job cannot run without the old UI. Both are now plain data.
+
+**1a — the setup sheet**
 `strategy/setup_sheet.py`: a pure, typed, normalising `SetupSheet` value object whose
 fields mirror `_current_setup_dict` exactly, with `merge`/`diff`/`is_authored`. Context
 fields (car, track, `captured_at`) are excluded from `diff`, so re-reading a sheet is
-correctly *no change*. 24 tests. **No behaviour change yet — this is the keystone the
-rest stands on.**
+correctly *no change*. 24 tests.
+
+**1b — the track modelling session**
+`data/track_modelling_session.py`: the modelling job's working state as a value —
+selection, capture flags, artefacts, error — deriving `TrackModellingInputs` for the
+existing pure coordinator. Replaces `_tm_build_coordinator_inputs`, which read combo
+boxes and mixin attributes. Changing track clears the previous job's artefacts, so a
+station map can never be carried onto the wrong layout. 27 tests.
+
+**No behaviour change yet — these are the keystones the rest stands on.**
 
 ### Stage 2 — a headless setup service (the big one)
 Move out of `SetupBuilderMixin`, into a service with no Qt import:
@@ -86,6 +99,32 @@ The Library currently *borrows* the classic Development History tab widget. The 
 are already self-contained `QWidget`s fed by view models, so they can be constructed
 directly by the shell and fed from the DB.
 
+### Stage 4b — native Track Modelling — **CONFIRMED PORT, NOT RETIRE**
+Decided by the user (2026-07-23): *"needs to be brought across, as not all tracks are
+modelled yet."* It stays, so the new shell needs a real modelling surface.
+
+**The raw 3,463 lines badly overstate this job.** Measured, the modelling stack is
+already almost entirely extracted:
+
+| Layer | Lines | State |
+|---|---:|---|
+| `data/track_*.py` (calibration, detection, review, resolver, truth, intelligence) | 7,738 | pure domain ✅ |
+| `data/track_modelling_coordinator.py` | 315 | pure state machine (`derive_state`, 10 states, legal-action table) ✅ |
+| `ui/track_modelling_vm.py` | 1,398 | **explicitly Qt-free** — every label, badge, button-state and error string ✅ |
+| `data/track_modelling_session.py` | *new* | working state, headless ✅ **DONE** |
+| `ui/track_modelling_ui.py` | 3,463 | ~890 widget construction + ~2,450 handlers gluing the above to widgets ❌ |
+
+So the port is **rebuilding one view over a spine that already exists**, not
+reimplementing track modelling. The only genuine logic in the mixin was
+`_tm_build_coordinator_inputs`, which assembled coordinator inputs out of combo-box
+reads and mixin attributes — now replaced by `TrackModellingSession.to_inputs()`.
+
+Remaining for 4b: a `TrackModelling` page in the new shell rendering the coordinator's
+step chips + the VM's panels, wired to the same domain calls the mixin makes today
+(capture start/stop, build path, detect segments, review actions, alignment, accept,
+refine, lap offset). The workflow, and every string in it, comes from the existing VM —
+so this is view work, not engineering work.
+
 ### Stage 5 — direct service injection
 `launch_new_shell(services)` instead of `launch_new_shell(window)`. Mechanical once
 1–4 are done.
@@ -93,9 +132,9 @@ directly by the shell and fed from the DB.
 ### Stage 6 — delete
 Remove `ui/dashboard.py`, `ui/setup_builder_ui.py`, `ui/setup_form_widget.py`,
 `ui/event_planner_ui.py`, `ui/live_ui.py`, `ui/settings_ui.py`, `ui/race_plan_ui.py`,
-`ui/tab_registry.py`, the `NGR_CLASSIC_UI` escape hatch and `classic_ui_requested`.
-Track modelling is the one open question — it has no new-shell equivalent yet and is
-3,463 lines; either it gets a native surface in Stage 4 or it is deliberately retired.
+`ui/tab_registry.py`, `ui/track_modelling_ui.py`, the `NGR_CLASSIC_UI` escape hatch and
+`classic_ui_requested`. Everything the classic modules own must have a native equivalent
+first — Stage 6 deletes nothing that is still the only way to do a job.
 
 ## 4. Honest position
 
