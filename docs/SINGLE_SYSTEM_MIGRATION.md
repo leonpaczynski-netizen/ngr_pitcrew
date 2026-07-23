@@ -39,12 +39,12 @@ complete list, and it is the definition of "done".
 
 | Symbol | Category | Severed by |
 |---|---|---|
-| `_race_form`, `_qual_form` | **State in widgets** | Stage 1–2 |
-| `_setup_result_text` | **A QTextEdit used as an IPC channel** | Stage 2 |
-| `_setup_analyse_ai`, `_setup_analyse_ai_for_form` | Logic in a mixin | Stage 2 |
-| `_generate_baseline_setup`, `_generate_baseline_setup_both` | Logic in a mixin | Stage 2 |
-| `_on_changes_applied_in_game` | Logic in a mixin | Stage 2 |
-| `_revert_last_change_for_form`, `_autosave_applied_setup` | Logic in a mixin | Stage 2 |
+| ~~`_race_form`, `_qual_form`~~ | **State in widgets** | ✅ **severed (2b)** — transitional mirror only |
+| ~~`_setup_result_text`~~ | **A QTextEdit used as an IPC channel** | ✅ **deleted (2b)** |
+| ~~`_setup_analyse_ai`, `_setup_analyse_ai_for_form`~~ | Logic in a mixin | ✅ **severed (2b)** |
+| ~~`_generate_baseline_setup`, `_generate_baseline_setup_both`~~ | Logic in a mixin | ✅ **severed (2b)** |
+| ~~`_on_changes_applied_in_game`~~ | Logic in a mixin | ✅ **severed (2b)** |
+| ~~`_revert_last_change_for_form`, `_autosave_applied_setup`~~ | Logic in a mixin | ✅ **severed (2b)** |
 | ~~`_event_list`, `_on_event_set_active`~~ | Event CRUD in a QListWidget | ✅ **severed (Stage 3)** |
 | `_persist_config` | Config write — a service, injected | Stage 5 |
 | `_tabs`, `get_tab_index`, `select_tab` | Library panel borrowing | Stage 4 |
@@ -55,7 +55,9 @@ complete list, and it is the definition of "done".
 | `_last_race_plan_result`, `approve_race_plan` | Strategy result cache | Stage 5 |
 | `config_path`, `bridge` | Already plumbing | Stage 5 |
 
-Nothing on that list is unbounded. It is ~15 real extractions.
+Nothing on that list is unbounded. It was ~15 real extractions; **9 are done.**
+What remains is the Library's `_tabs` borrowing (stage 4) and a set of *services*
+that merely happen to hang off the window (stage 5) — no UI logic is left in the list.
 
 ## 2b. What earns its place — keep / redesign / scrap
 
