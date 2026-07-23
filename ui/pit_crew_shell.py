@@ -59,6 +59,7 @@ SURFACE_TO_NAV: dict[str, str] = {
     "live": "live_pit_wall",
     "debrief": "debrief",
     "active_event": "active_event", "home": "home",
+    "programme": "programme",
     "qualifying": "qualifying", "settings": "settings",
     "engineering_library": "engineering_library",
     "track_model": "track_model", "track_modelling": "track_model",
@@ -207,6 +208,8 @@ class PitCrewShell(QMainWindow):
             "engineering_library": ("ENGINEERING LIBRARY", "Evidence, rules and advanced detail."),
             "settings": ("SETTINGS", "Configuration."),
         }
+        from ui.components.programme_map import ProgrammeMapPage
+        self.programme_page = ProgrammeMapPage()
         self.garage_page = SetupWorkspace()
         self.practice_page = self._build_practice_page()
         self.qualifying_page = QualifyingReadiness()
@@ -231,6 +234,8 @@ class PitCrewShell(QMainWindow):
         for dest in NAV_DESTINATIONS:
             if dest == "home":
                 page = self.home_page
+            elif dest == "programme":
+                page = self.programme_page
             elif dest == "active_event":
                 page = self.active_event_page
             elif dest == "garage":

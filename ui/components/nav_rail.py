@@ -20,6 +20,7 @@ from ui.app_state import NAV_DESTINATIONS
 
 NAV_LABELS: dict[str, str] = {
     "home": "Home",
+    "programme": "Programme",
     "active_event": "Active Event",
     "garage": "Garage",
     "practice": "Practice",

@@ -1004,6 +1004,48 @@ class TestV23ShiftBeepLivesWithTheSetup:
         assert "no usable car data" in shell.garage_page._status.text().lower()
 
 
+class TestV24ProgrammeMapShowsWhereYouAre:
+    """UAT-6: "I feel like we are going in circles now." Nothing showed how many runs
+    each evidence area needs or how many remain, so every screen looked identical after
+    every run. The Programme page turns the readiness the CC already produces into a map."""
+
+    def _view_with_readiness(self):
+        v = _view("Build driver_coaching evidence")
+        v["readiness"] = [
+            ["base_setup", "developing", "2 exact / 0 labelled sample(s)"],
+            ["driver_coaching", "developing", "2 exact / 0 labelled sample(s)"],
+            ["race_pace", "adequate", "3 exact / 0 labelled sample(s)"],
+            ["consistency", "strong", "5 exact / 0 labelled sample(s)"],
+        ]
+        v["next_action"]["domain"] = "driver_coaching"
+        return v
+
+    def test_the_programme_page_is_fed_from_command_centre_readiness(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = self._view_with_readiness()
+        bridge.refresh()
+        page = shell.programme_page
+        assert page._map.has_programme
+        assert page._map.domains_total == 4
+        assert page._map.domains_ready == 2               # race_pace + consistency
+        # The engineer's current objective is flagged on the map.
+        coaching = next(d for d in page._map.domains if d.key == "driver_coaching")
+        assert coaching.is_next is True
+
+    def test_home_links_to_the_programme_page(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.home_page._see_programme.click()
+        assert shell.current_destination() == "programme"
+
+    def test_starting_the_next_run_from_the_map_opens_that_run(self, wired):
+        shell, _win, db, bridge = wired
+        bridge._last_guidance_view = self._view_with_readiness()
+        bridge.refresh()
+        shell.programme_page.start_next_requested.emit("driver_coaching")
+        assert [a["activity_type"] for a in db.activities] == ["coaching_run"]
+        assert shell.current_destination() == "practice"
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

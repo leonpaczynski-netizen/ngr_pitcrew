@@ -136,6 +136,20 @@ def main() -> int:
     shell.garage_page.set_shift_rpm(
         7600, "The beep fires at 7600 RPM in a qualifying session (from this setup).")
 
+    # Programme map — where the driver is across the whole event programme.
+    from strategy.programme_map import build_programme_map
+    shell.programme_page.set_map(build_programme_map([
+        ["base_setup", "developing", "2 exact / 0 labelled sample(s)"],
+        ["race_setup", "developing", "2 exact / 0 labelled sample(s)"],
+        ["driver_coaching", "adequate", "3 exact / 0 labelled sample(s)"],
+        ["consistency", "strong", "5 exact / 0 labelled sample(s)"],
+        ["tyre_evidence", "missing", "0 exact / 0 labelled sample(s)"],
+        ["fuel_evidence", "developing", "1 exact / 0 labelled sample(s)"],
+        ["race_pace", "adequate", "3 exact / 0 labelled sample(s)"],
+        ["qualifying_setup", "developing", "2 exact / 0 labelled sample(s)"],
+        ["strategy_evidence", "missing", "0 exact / 0 labelled sample(s)"],
+    ], next_domain="setup_base"))
+
     # Populate the Practice run card + corner options so 'Practice' shows a live example.
     from ui.components.run_card import RunCardVM
     from strategy.run_brief import brief_for_domain

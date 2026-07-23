@@ -16,7 +16,7 @@ live-rig verification.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping, Optional
 
 import threading
 
@@ -196,6 +196,8 @@ class LiveShellBridge(QObject):
         tmp = getattr(shell, "track_model_page", None)
         _c(tmp, "track_selected", self._on_track_selected)
         _c(tmp, "action_requested", self._on_track_action)
+        _c(getattr(shell, "programme_page", None), "start_next_requested",
+           self._on_programme_start_next)
         _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
@@ -262,6 +264,7 @@ class LiveShellBridge(QObject):
         self._feed_live()
         self._feed_debrief()
         self._feed_track_model()
+        self._feed_programme(view)
 
     def _feed_practice(self) -> None:
         """Feed the Practice run card from the current recommendation + the open run."""
@@ -579,6 +582,54 @@ class LiveShellBridge(QObject):
                 page._detail.setVisible(bool(text))
         except Exception:
             pass
+
+    def _feed_programme(self, view) -> None:
+        """Show where the driver is in the WHOLE event programme.
+
+        Reads the readiness the Command Centre already produced — how many qualifying
+        runs each evidence area has and needs — and the current objective's domain, so
+        the map can flag which area is live. Adds no new authority; it only makes the
+        progress the domain already computed visible, which is what "going in circles"
+        was really missing.
+        """
+        try:
+            page = getattr(self._shell, "programme_page", None)
+            if page is None:
+                return
+            from strategy.programme_map import build_programme_map
+            from strategy.practice_run_recording import domain_from_objective_headline
+            # Prefer whichever view actually carries readiness — the freshly-fetched one
+            # normally, but the last good view when this tick's fetch was thin (the run
+            # planner reads _last_guidance_view for the same reason).
+            v = view if (isinstance(view, Mapping) and view.get("readiness")) else None
+            if v is None:
+                v = self._last_guidance_view if isinstance(self._last_guidance_view, Mapping) else {}
+            readiness = v.get("readiness") or []
+            na = v.get("next_action") or {}
+            next_domain = str(na.get("domain") or "").strip().lower() \
+                or domain_from_objective_headline(str(na.get("headline") or ""))
+            page.set_map(build_programme_map(readiness, next_domain=next_domain))
+        except Exception:
+            pass
+
+    def _on_programme_start_next(self, domain: str) -> None:
+        """Start the run the programme map points at — the weakest area's run type."""
+        from strategy.run_brief import brief_for_domain
+        brief = brief_for_domain(domain)
+        if self._runs.open_run() is not None:
+            self._show_run_card()
+            self._run_status("A run is already open — drive it, then press “End run & record”.")
+            return
+        plan = self._runs.start_run(objective_domain=brief.domain,
+                                    objective_headline=brief.objective)
+        self._show_run_card()
+        if not plan.ok:
+            self._run_status(plan.reason or "Could not start the run.")
+            return
+        self._run_status(
+            f"A {brief.run_name} is open — drive it, then press “End run & record”. "
+            f"That is the run this area of the programme needs.")
+        self.refresh()
 
     def _feed_debrief(self) -> None:
         try:

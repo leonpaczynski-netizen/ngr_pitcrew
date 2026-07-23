@@ -157,7 +157,17 @@ class HomePage(QWidget):
 
         # ---- readiness -------------------------------------------------------
         self._readiness_card = Card()
-        self._readiness_card.add(SectionHeading("READINESS", level=3))
+        _rhead = QHBoxLayout()
+        _rhead.addWidget(SectionHeading("READINESS", level=3))
+        _rhead.addStretch(1)
+        # The single-line readiness list says WHERE each area is, not how far it has to
+        # go; the programme page is the "how many runs, how many left" answer to the
+        # driver's "going in circles". Offer the jump right where they read readiness.
+        self._see_programme = SecondaryActionButton("See the full programme →")
+        self._see_programme.clicked.connect(
+            lambda: self.navigate_requested.emit("programme"))
+        _rhead.addWidget(self._see_programme)
+        self._readiness_card.body.addLayout(_rhead)
         self._readiness_box = QVBoxLayout()
         self._readiness_box.setSpacing(_t.SPACE_XS)
         self._readiness_card.body.addLayout(self._readiness_box)

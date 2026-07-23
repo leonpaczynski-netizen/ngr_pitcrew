@@ -39,7 +39,7 @@ PROGRAMME_STAGES: Tuple[str, ...] = (
 
 # Canonical left-nav destinations (a superset of the rail: adds standing areas).
 NAV_DESTINATIONS: Tuple[str, ...] = (
-    "home", "active_event", "garage", "practice", "qualifying",
+    "home", "programme", "active_event", "garage", "practice", "qualifying",
     "race_strategy", "live_pit_wall", "debrief", "track_model",
     "engineering_library", "settings",
 )
