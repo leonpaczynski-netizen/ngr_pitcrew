@@ -56,6 +56,40 @@ complete list, and it is the definition of "done".
 
 Nothing on that list is unbounded. It is ~15 real extractions.
 
+## 2b. What earns its place — keep / redesign / scrap
+
+**Direction (user, 2026-07-23):** *"I don't want you to replicate the old program. I want
+the new program to be the clean, user-friendly version it should be. We can scrap what's
+no longer needed."*
+
+So this is **not a port**. The domain layer is the asset and is reused wholesale; the
+classic *views* are evidence of what the app does, not a specification of how it should
+look. Each classic tab has to justify itself against the guided race-weekend flow.
+
+| # | Classic tab | Verdict | Why |
+|---|---|---|---|
+| 0 | Home | **SCRAP** | The new Home is the Command Centre; the old one is a weaker duplicate |
+| 1 | Live Race Engineer | **SCRAP** | Live Pit Wall replaces it |
+| 2 | Event Planner | **REDESIGN** | Capability needed (create/edit/activate). 18 fields dumped in one form becomes a short guided event setup — most fields have sane defaults and only matter for some events |
+| 3 | Garage (car browser) | **FOLD** | Browsing cars/specs/BOP is part of choosing the event's car, not a destination |
+| 4 | Setup Builder | **ENGINE KEPT, VIEW SCRAPPED** | The engine becomes the Stage-2 service; the new Garage is already the better surface |
+| 5 | Practice Review | **SCRAP** | Native Practice → Review is live and confirmed working |
+| 6 | Strategy Builder | **REDESIGN** | Race Strategy exists but still needs a native "build the plan" trigger |
+| 7 | Telemetry | **SCRAP** | Developer diagnostic; the driver never needs a packet view |
+| 8 | Diagnostics | **SCRAP** | Same |
+| 9 | Settings | **SCRAP** | Native Settings exists |
+| 10 | History | **FOLD** | Past sessions belong in Debrief / Engineering Library, not a filtered table |
+| 12 | Track Modelling | **REDESIGN** | Capability needed — see Stage 4b. Rebuilt as a guided flow over the existing coordinator, NOT as the 14-section tab |
+| 13 | Development History | **FOLD** | Already reached through the Engineering Library |
+
+Net: of thirteen classic tabs, **two capabilities need a new native surface** (event
+setup, track modelling), one needs a trigger (build plan), one engine moves behind a
+service, and the rest are duplicates or developer tooling that go.
+
+**The test for "no longer needed" is not "unused code" — it is "no longer part of the
+job".** Nothing that is still the only way to do something gets scrapped; the fold rows
+above mean the capability survives somewhere better, not that it disappears.
+
 ## 3. Order — and why deletion is LAST
 
 The app is in active race-preparation use. Deleting the classic window before its logic
@@ -83,16 +117,23 @@ station map can never be carried onto the wrong layout. 27 tests.
 **No behaviour change yet — these are the keystones the rest stands on.**
 
 ### Stage 2 — a headless setup service (the big one)
-Move out of `SetupBuilderMixin`, into a service with no Qt import:
-analyse, baseline build, apply, revert, autosave, applied-in-game.
-The inputs it needs (car specs, ranges, event context, advisor) are already pure or
-already injected. Deliverables: `services/setup_service.py`, the bridge switched onto
-it, `_setup_result_text` replaced by a real result object instead of scraping a text box.
-*This is the largest single stage and should be its own session.*
+Move the setup ENGINE out of `SetupBuilderMixin` into a service with no Qt import:
+analyse, baseline build, apply, revert, autosave, applied-in-game. The classic Setup
+Builder *view* is not reproduced — the new Garage already replaced it.
+The inputs the service needs (car specs, ranges, event context, advisor) are already
+pure or already injected. Deliverables: `services/setup_service.py`, the bridge switched
+onto it, and `_setup_result_text` replaced by a real result object instead of the
+text-box scraping currently used to detect that an analysis finished.
+*Largest single stage; its own session.*
 
-### Stage 3 — native event management
-An event editor + activation in the new shell over `SessionDB` directly, replacing
-`_event_list`/`_on_event_set_active`. Removes the last "opens the classic window" route.
+### Stage 3 — native event setup (redesigned, not ported)
+The classic Event Planner puts 18 fields in one form. Most have sane defaults and only
+matter for some events, so the native version is a short guided setup — identity (name,
+car, track, layout), then format (race type, laps/duration), with regulations
+(tyre wear, fuel multiplier, mandatory stops, BOP, tuning, ABS, weather, damage, refuel
+rate, allowed compounds) behind progressive disclosure and pre-filled. Writes through
+`SessionDB` directly, replacing `_event_list`/`_on_event_set_active`.
+Removes the last "opens the classic window" route.
 
 ### Stage 4 — native engineering panels
 The Library currently *borrows* the classic Development History tab widget. The panels
@@ -119,11 +160,13 @@ reimplementing track modelling. The only genuine logic in the mixin was
 `_tm_build_coordinator_inputs`, which assembled coordinator inputs out of combo-box
 reads and mixin attributes — now replaced by `TrackModellingSession.to_inputs()`.
 
-Remaining for 4b: a `TrackModelling` page in the new shell rendering the coordinator's
-step chips + the VM's panels, wired to the same domain calls the mixin makes today
-(capture start/stop, build path, detect segments, review actions, alignment, accept,
-refine, lap offset). The workflow, and every string in it, comes from the existing VM —
-so this is view work, not engineering work.
+Remaining for 4b: a `TrackModelling` page in the new shell, built as **one guided flow —
+pick track → drive calibration laps → build → review corners → accept** — driven by the
+coordinator's own state machine, not as a rebuild of the classic tab's fourteen
+simultaneously-visible sections. Every string, badge and button state already comes from
+the existing Qt-free VM, and the underlying calls (capture start/stop, build path,
+detect segments, review actions, alignment, accept, refine, lap offset) are unchanged.
+This is view work over a finished spine, not engineering work.
 
 ### Stage 5 — direct service injection
 `launch_new_shell(services)` instead of `launch_new_shell(window)`. Mechanical once
@@ -136,7 +179,19 @@ Remove `ui/dashboard.py`, `ui/setup_builder_ui.py`, `ui/setup_form_widget.py`,
 `classic_ui_requested`. Everything the classic modules own must have a native equivalent
 first — Stage 6 deletes nothing that is still the only way to do a job.
 
-## 4. Honest position
+## 4. What "clean" means here, concretely
+
+Rules this migration is held to, so "user-friendly" is a standard rather than a hope:
+
+1. **One surface per job.** No screen exists because the old app had a tab for it.
+2. **Progressive disclosure over field dumps.** An 18-field event form becomes identity +
+   format, with regulations pre-filled and folded away.
+3. **No developer tooling in the driver's product.** Telemetry and Diagnostics go.
+4. **Every state says what to do next.** An empty or blocked surface explains the cause
+   and the next action — the rule the UAT rounds kept proving.
+5. **Nothing is deleted while it is the only way to do a job.**
+
+## 5. Honest position
 
 - Stages 1–6 are a **multi-session programme**, not one change. Stage 2 alone is a
   substantial piece of work.
@@ -144,3 +199,6 @@ first — Stage 6 deletes nothing that is still the only way to do a job.
   operations. That is not a design choice to be argued with — it is where the code is.
 - Nothing has been deleted. Deleting before extracting would break race preparation
   that is happening now.
+- This is a **redesign that reuses a domain layer**, not a port. The two surfaces being
+  rebuilt (event setup, track modelling) are being designed for the guided flow, and the
+  classic versions are reference material for *what the app does*, not for how it looks.
