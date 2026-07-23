@@ -110,11 +110,16 @@ class TestCanonicalConstants:
             "qualifying", "strategy", "race", "debrief",
         )
 
-    def test_nav_has_ten_destinations_including_library_and_settings(self):
-        assert len(NAV_DESTINATIONS) == 10
-        assert "engineering_library" in NAV_DESTINATIONS
-        assert "settings" in NAV_DESTINATIONS
+    def test_nav_covers_every_destination_and_leads_with_home(self):
         assert NAV_DESTINATIONS[0] == "home"
+        for dest in ("engineering_library", "settings", "track_model"):
+            assert dest in NAV_DESTINATIONS
+        assert len(set(NAV_DESTINATIONS)) == len(NAV_DESTINATIONS)
+
+    def test_every_destination_has_a_nav_label(self):
+        """A destination with no label renders as a raw key in the rail."""
+        from ui.components.nav_rail import NAV_LABELS
+        assert set(NAV_DESTINATIONS) <= set(NAV_LABELS)
 
 
 class TestQtFree:
