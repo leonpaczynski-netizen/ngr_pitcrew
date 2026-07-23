@@ -41,6 +41,49 @@ def _tone_key(raw: str) -> str:
     return s if s in _t.STATUS_TONES else "info"
 
 
+#: An evidence objective names a DOMAIN ("Build setup_base evidence"). The domain routes
+#: it to the surface where that domain's work STARTS — the Garage for setup domains. Once a
+#: setup is actually applied that becomes a dead end: the driver is standing in the Garage
+#: being told to go to the Garage. Evidence for a setup domain is only ever produced by
+#: DRIVING the setup and recording the run, so the presentation layer re-routes to Practice
+#: and says so in words. The domain's payload is untouched (its shape is fingerprinted).
+_EVIDENCE_RUN: dict[str, tuple[str, str]] = {
+    "setup_base": ("baseline run", "Start a baseline run"),
+    "setup_race": ("long race run", "Start a race run"),
+    "setup_qualifying": ("qualifying simulation", "Start a qualifying run"),
+    "working_window": ("setup experiment", "Start a setup experiment"),
+    "driver_coaching": ("coaching run", "Start a coaching run"),
+    "tyre_model": ("tyre test", "Start a tyre test"),
+    "fuel_model": ("fuel test", "Start a fuel test"),
+    "race_pace": ("long race run", "Start a race run"),
+    "consistency": ("practice run", "Start a practice run"),
+    "strategy": ("strategy validation run", "Start a strategy run"),
+}
+
+
+def evidence_domain_in(headline: str) -> str:
+    """The evidence domain named by an objective headline, or "" if it isn't one."""
+    h = (headline or "").strip().lower()
+    if "evidence" not in h:
+        return ""
+    for domain in sorted(_EVIDENCE_RUN, key=len, reverse=True):
+        if domain in h:
+            return domain
+    return ""
+
+
+def _plain_attention(message: str) -> str:
+    """Restate a domain attention line in the driver's terms.
+
+    "Base Setup has no evidence yet" reads as "the app hasn't accepted my base setup",
+    which is not what it means — it means no RUN has been recorded for that domain.
+    """
+    m = (message or "").strip()
+    if m.endswith("has no evidence yet."):
+        return m[: -len("has no evidence yet.")].strip() + " — no recorded runs yet."
+    return m
+
+
 def _evidence_summary(progress: Mapping) -> str:
     """One-line evidence summary from the progress payload (non-zero parts only)."""
     if not isinstance(progress, Mapping):
@@ -78,6 +121,7 @@ class EngineerGuidanceVM:
     warnings: Tuple[str, ...] = field(default_factory=tuple)
     explanation: str = ""             # expandable detail
     read_aloud_text: str = ""
+    active_setup: str = ""            # what is on the car right now (or "")
 
     @classmethod
     def empty(cls) -> "EngineerGuidanceVM":
@@ -90,8 +134,16 @@ class EngineerGuidanceVM:
         )
 
     @classmethod
-    def from_command_centre(cls, view: Optional[Mapping]) -> "EngineerGuidanceVM":
-        """Build from the Event Command Centre view dict. Never raises."""
+    def from_command_centre(cls, view: Optional[Mapping], *,
+                            active_setup_label: str = "",
+                            active_setup_applied: bool = False) -> "EngineerGuidanceVM":
+        """Build from the Event Command Centre view dict. Never raises.
+
+        ``active_setup_*`` describe what is actually on the car. They change nothing the
+        domain decided — they let the card acknowledge the driver's applied setup and
+        route an evidence objective to the run that would produce the evidence, instead
+        of back to the surface the driver is already standing on.
+        """
         try:
             if not view or not isinstance(view, Mapping) or not view.get("ok", True):
                 return cls.empty()
@@ -111,7 +163,7 @@ class EngineerGuidanceVM:
                 if not isinstance(item, Mapping):
                     continue
                 if _norm(item.get("tone")).lower() in ("warn", "danger"):
-                    msg = _norm(item.get("message"))
+                    msg = _plain_attention(_norm(item.get("message")))
                     if msg:
                         warnings.append(msg)
 
@@ -130,12 +182,32 @@ class EngineerGuidanceVM:
             message = detail or headline
             explanation = detail if detail and detail != message else ""
 
+            # An evidence objective is only ever satisfied by DRIVING and recording a run.
+            # Say that plainly, and send the driver to the run card rather than back to the
+            # surface the domain nominates for starting that domain's work.
+            setup_label = _norm(active_setup_label)
+            domain = evidence_domain_in(headline)
+            primary_label, primary_surface = headline, surface
+            if domain:
+                run_name, cta = _EVIDENCE_RUN[domain]
+                primary_label, primary_surface = cta, "practice"
+                if setup_label and active_setup_applied:
+                    message = (f"{setup_label} is on the car, but no {run_name} has been "
+                               f"recorded for it yet. Drive one and press “End run & record” — "
+                               f"that is what builds the evidence.")
+                else:
+                    message = (f"No {run_name} has been recorded yet. Apply a setup, drive a "
+                               f"{run_name}, then record it — that is what builds the evidence.")
+                explanation = detail or explanation
+
             return cls(
                 message=message,
                 objective=objective,
                 tone=tone,
-                primary_action_label=headline,
-                primary_action_surface=surface,
+                primary_action_label=primary_label,
+                primary_action_surface=primary_surface,
+                active_setup=f"{setup_label}{' (applied)' if active_setup_applied else ''}"
+                             if setup_label else "",
                 secondary_action_label=secondary_label,
                 secondary_action_surface=secondary_surface,
                 evidence_summary=evidence,

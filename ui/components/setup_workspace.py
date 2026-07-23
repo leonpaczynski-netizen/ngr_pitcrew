@@ -323,9 +323,17 @@ class SetupWorkspace(QWidget):
         self._pill_applied.set_status("Applied in GT7" if applied else "Not applied",
                                       tone="success" if applied else "neutral",
                                       glyph="✓" if applied else "")
-        self._pill_valid.set_status("Validated" if validated else "Not validated",
-                                    tone="success" if validated else "neutral",
-                                    glyph="✓" if validated else "")
+        # "Not validated" is the single most misread state in the Garage: applying a setup
+        # is not evidence for it. Validation only ever comes from a RECORDED run, so the
+        # pill says which one instead of leaving the driver to guess what is missing.
+        self._pill_valid.set_status(
+            "Validated by a run" if validated else "No run recorded yet",
+            tone="success" if validated else "neutral",
+            glyph="✓" if validated else "")
+        self._pill_valid.setToolTip(
+            "" if validated else
+            "A setup is validated by driving it and recording the run in Practice — "
+            "applying it to the car is not evidence on its own.")
 
         self._primary_issue.setText(
             f"Primary issue: {vm.header.primary_issue}" if vm.header.primary_issue else "")

@@ -337,7 +337,9 @@ class PitCrewShell(QMainWindow):
         self._last_view = view
         state = self._controller.state()
         for render in (
-            lambda: self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(view)),
+            lambda: self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(
+                view, active_setup_label=state.active_setup_label,
+                active_setup_applied=state.active_setup_applied)),
             lambda: self.active_event_page.render(state, view),
             lambda: self.home_page.render(state, view),
         ):

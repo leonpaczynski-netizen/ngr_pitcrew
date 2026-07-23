@@ -238,11 +238,14 @@ class TestU3GuidanceCtaFits:
 
     def test_long_label_is_not_lost(self, wired):
         shell, _win, _bridge = wired
-        shell.set_guidance_view(_cc_view())
+        view = _cc_view()
+        # A long non-evidence CTA (evidence objectives are relabelled to a run action).
+        view["next_action"]["headline"] = "Confirm and protect the current best-known setup"
+        shell.set_guidance_view(view)
         card = shell.guidance
-        assert card._primary.text() == "Build setup_base evidence"
+        assert card._primary.text() == "Confirm and protect the current best-known setup"
         # Even if the pixel width clipped it, the full wording stays reachable.
-        assert card._primary.toolTip() == "Build setup_base evidence"
+        assert card._primary.toolTip() == card._primary.text()
 
 
 class TestU4HomeSaysSomething:
@@ -252,8 +255,9 @@ class TestU4HomeSaysSomething:
         home = shell.home_page
         assert home._event_title.text() == "GR Enduro Rd2"
         assert "3 days to race" in home._event_state.text()
-        assert home._next_headline.text() == "Build setup_base evidence"
-        assert "no evidence yet" in home._attention.text()
+        # An evidence objective is restated as the run that actually produces it.
+        assert home._next_headline.text() == "Start a baseline run"
+        assert "no recorded runs yet" in home._attention.text()
         assert home._readiness_box.count() == 2
         assert "14 valid laps" in home._evidence.text()
         assert "rear ARB" in home._learning.text()
@@ -265,10 +269,13 @@ class TestU4HomeSaysSomething:
         assert shell.home_page._btn_next.text() == ""
 
     def test_next_action_navigates(self, wired):
+        """An evidence objective routes to Practice — the run card is the only place
+        that can produce the evidence. It used to send the driver back to the Garage
+        they were already standing in (UAT-3)."""
         shell, _win, _bridge = wired
         shell.set_guidance_view(_cc_view())
         shell.home_page._btn_next.click()
-        assert shell.current_destination() == "garage"
+        assert shell.current_destination() == "practice"
 
     def test_repeat_render_is_a_no_op(self, wired):
         """The 750ms feed must not rebuild the event combo under the cursor."""

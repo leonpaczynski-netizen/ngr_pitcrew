@@ -32,7 +32,7 @@ _LEVEL_TONE = {
     "ready": (_t.SUCCESS, "Ready"),
     "developing": (_t.WARN, "Developing"),
     "thin": (_t.WARN, "Thin"),
-    "missing": (_t.DANGER, "Missing"),
+    "missing": (_t.DANGER, "No runs yet"),
     "blocked": (_t.DANGER, "Blocked"),
     "unknown": (_t.TEXT_DIM, "Unknown"),
 }
@@ -262,6 +262,17 @@ class HomePage(QWidget):
         headline = _norm(na.get("headline"))
         detail = _norm(na.get("detail"))
         self._primary_surface = _norm(na.get("target_surface"))
+        # An evidence objective is satisfied by driving and recording a run, so it routes
+        # to Practice — matching the guidance card, never back to the surface the driver
+        # is already on. See ui.components.guidance_vm for the full reasoning.
+        from ui.components.guidance_vm import evidence_domain_in, _EVIDENCE_RUN
+        domain = evidence_domain_in(headline)
+        if domain:
+            run_name, cta = _EVIDENCE_RUN[domain]
+            self._primary_surface = "practice"
+            detail = (detail + "  " if detail else "") + \
+                f"Evidence for this comes from a recorded {run_name} — nothing else builds it."
+            headline = cta
         if not headline:
             headline = ("Activate an event to get a plan."
                         if not app_state.has_active_event else "Nothing outstanding.")
@@ -275,10 +286,11 @@ class HomePage(QWidget):
             self._btn_next.set_action("", enabled=False)
 
         # -- attention
+        from ui.components.guidance_vm import _plain_attention
         msgs = []
         for item in (view.get("attention") or []) if has_view else []:
             if isinstance(item, Mapping):
-                m = _norm(item.get("message"))
+                m = _plain_attention(_norm(item.get("message")))
                 if m:
                     msgs.append(m)
         self._attention.setText("\n".join(f"⚠  {m}" for m in msgs))
@@ -305,7 +317,11 @@ class HomePage(QWidget):
             lvl = QLabel(label)
             lvl.setStyleSheet(f"color: {colour}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
             lvl.setMinimumWidth(90)
-            nt = QLabel(_norm(note))
+            # "no evidence collected" reads as a rejection; it means no run was recorded.
+            note_text = _norm(note)
+            if note_text == "no evidence collected":
+                note_text = "no runs recorded for this yet"
+            nt = QLabel(note_text)
             nt.setWordWrap(True)
             nt.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
             row.addWidget(n)

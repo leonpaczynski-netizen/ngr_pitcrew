@@ -287,3 +287,88 @@ class TestV10LibraryIsNative:
         assert shell.library_page.showing_detail() is True
         assert shell.library_page._hosted is None
         assert "not available" in shell.library_page._detail_note.text()
+
+
+class TestV11EvidenceIsExplained:
+    """UAT-3: 'I clicked I entered this in GT7 and it still won't accept my base setup.'
+
+    It DID accept it — the header read "Setup 1 · rev 6 (applied)". But a setup being on
+    the car is not evidence FOR it: base_setup readiness comes only from a recorded run.
+    The card said "Base Setup has no evidence yet" and its CTA sent the driver back to
+    the Garage they were already standing in, so there was no way out of the loop.
+    """
+
+    def _evidence_view(self):
+        return {"ok": True, "resolution_state": "one_active_event",
+                "event": {"event_name": "GR Enduro Rd2"},
+                "next_action": {"headline": "Build setup_base evidence",
+                                "detail": "setup_base is the weakest domain (confidence: none).",
+                                "target_surface": "setup", "tone": "warn"},
+                "attention": [{"message": "Base Setup has no evidence yet.", "tone": "warn"}],
+                "readiness": [["base_setup", "missing", "no evidence collected"]],
+                "progress": {}, "candidates": [], "recent_learning": [], "fingerprint": "fp-ev"}
+
+    def test_the_applied_setup_is_acknowledged(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        shell.set_guidance_view(self._evidence_view())
+        assert "Setup 1" not in shell.guidance._active_setup.text()  # fake is "Race baseline"
+        assert shell.guidance._active_setup.text() == "✓ On the car: Race baseline · rev 2 (applied)"
+        assert shell.guidance._active_setup.isVisibleTo(shell.guidance) is True
+
+    def test_the_card_says_what_actually_builds_the_evidence(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        shell.set_guidance_view(self._evidence_view())
+        msg = shell.guidance._message.text()
+        assert "is on the car" in msg
+        assert "baseline run" in msg
+        assert "End run & record" in msg
+
+    def test_the_cta_leads_to_the_run_not_back_to_the_garage(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        shell.set_guidance_view(self._evidence_view())
+        assert shell.guidance._primary.text() == "Start a baseline run"
+        shell.guidance._primary.click()
+        assert shell.current_destination() == "practice"
+
+    def test_warning_is_restated_in_the_drivers_terms(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.set_guidance_view(self._evidence_view())
+        assert "no recorded runs yet" in shell.guidance._warnings.text()
+        assert "no evidence yet" not in shell.guidance._warnings.text()
+
+    def test_without_a_setup_it_says_apply_one_first(self, qapp):
+        from ui.components.guidance_vm import EngineerGuidanceVM
+        vm = EngineerGuidanceVM.from_command_centre(self._evidence_view())
+        assert "Apply a setup" in vm.message
+        assert vm.active_setup == ""
+
+    def test_readiness_note_no_longer_reads_as_a_rejection(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.set_guidance_view(self._evidence_view())
+        row = shell.home_page._readiness_box.itemAt(0).widget()
+        texts = [row.layout().itemAt(i).widget().text() for i in range(row.layout().count())]
+        assert "No runs yet" in texts
+        assert "no runs recorded for this yet" in texts
+
+    def test_a_non_evidence_objective_keeps_its_own_routing(self, wired):
+        shell, _win, _db, _bridge = wired
+        view = self._evidence_view()
+        view["next_action"] = {"headline": "Approve the race strategy", "detail": "d",
+                               "target_surface": "strategy", "tone": "info"}
+        view["fingerprint"] = "fp-other"
+        shell.set_guidance_view(view)
+        assert shell.guidance._primary.text() == "Approve the race strategy"
+        shell.guidance._primary.click()
+        assert shell.current_destination() == "race_strategy"
+
+
+class TestV11GarageExplainsValidation:
+    def test_the_validation_pill_names_what_is_missing(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge.refresh()
+        pill = shell.garage_page._pill_valid
+        assert pill.text().strip().endswith("No run recorded yet")
+        assert "recording the run" in pill.toolTip()

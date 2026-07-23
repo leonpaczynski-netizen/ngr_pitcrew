@@ -60,6 +60,15 @@ class EngineerGuidanceCard(Card):
         self._message.setStyleSheet(f"color: {_t.TEXT_HI}; font-size: {_t.FS_H3}pt;")
         self.body.addWidget(self._message)
 
+        # What is actually on the car — so the driver's applied setup is acknowledged
+        # rather than the card reading as if nothing had been done.
+        self._active_setup = QLabel()
+        self._active_setup.setWordWrap(True)
+        self._active_setup.setStyleSheet(
+            f"color: {_t.SUCCESS}; font-size: {_t.FS_CAPTION}pt; font-weight: 600;")
+        self._active_setup.setVisible(False)
+        self.body.addWidget(self._active_setup)
+
         # Objective
         self._objective = QLabel()
         self._objective.setWordWrap(True)
@@ -134,6 +143,8 @@ class EngineerGuidanceCard(Card):
         self._vm = vm
 
         self._message.setText(vm.message)
+        self._active_setup.setText(f"✓ On the car: {vm.active_setup}" if vm.active_setup else "")
+        self._active_setup.setVisible(bool(vm.active_setup))
         self._objective.setText(f"Objective: {vm.objective}" if vm.objective else "")
         self._objective.setVisible(bool(vm.objective))
 
