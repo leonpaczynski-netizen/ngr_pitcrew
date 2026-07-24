@@ -50,6 +50,9 @@ class LiveShellBridge(QObject):
     _analysis_done = pyqtSignal(object)
     _baseline_done = pyqtSignal(object)
     _plan_done = pyqtSignal(object)
+    #: PTT strategy acknowledgement — emitted by the voice listener thread and
+    #: dispatched on the Qt thread so the slot can safely call refresh().
+    _voice_strategy_ack = pyqtSignal(str)
 
     def __init__(self, shell, controller, window=None, config=None, db=None,
                  *, refresh_ms: int = 750, parent=None, spawn=None):
@@ -136,6 +139,21 @@ class LiveShellBridge(QObject):
         self._lock_report = None
         #: Track pickers are filled once — the circuit list does not change at runtime.
         self._track_choices_loaded = False
+        #: The last StrategyReplanDecision dict from build_live_audio_strategy_view.
+        self._live_decision = None
+        #: True when the last decision recommends REPLAN_RECOMMENDED or REPLAN_URGENT,
+        #: i.e. an PTT "accept plan" / "keep plan" command is actionable.
+        self._live_pending = False
+        #: The plan the driver accepted via PTT. Shown on the pit wall until a new
+        #: event cycle clears it. Overrides the DB-persisted approved strategy only in
+        #: the CURRENT session — the persisted row is never mutated here.
+        self._live_accepted_plan = None
+        #: The strategy decision is recomputed ONCE PER LAP ("at the end of every lap"),
+        #: not on every 750ms display tick — this is the driver's own model and it stops
+        #: the replan warning flickering as live figures wobble mid-lap. The last audio
+        #: view is cached and the lap it was computed for is remembered.
+        self._live_audio_view = None
+        self._live_decision_lap = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -143,12 +161,19 @@ class LiveShellBridge(QObject):
 
         self._wire_signals()
         self._wire_actions()
+        self._voice_strategy_ack.connect(self._on_voice_strategy_ack)
+        self._wire_voice()
 
     # ---- wiring -----------------------------------------------------------
     def _wire_signals(self) -> None:
-        """Refresh when the app reports connection / lap / race-state changes."""
+        """Refresh when the app reports connection / lap / race-state changes.
+
+        MainWindow stores the signal bridge as ``self._bridge`` (not ``self.bridge``);
+        the original lookup used ``"bridge"`` so lap_completed was never connected and
+        the shell did not update on each completed lap.
+        """
         try:
-            bridge = getattr(self._window, "bridge", None)
+            bridge = getattr(self._window, "_bridge", None)
             for sig_name in ("connection_changed", "lap_completed", "race_state_changed",
                              "car_detected", "strategy_status_changed"):
                 sig = getattr(bridge, sig_name, None)
@@ -218,6 +243,55 @@ class LiveShellBridge(QObject):
         esp = getattr(shell, "event_setup_page", None)
         _c(esp, "save_requested", self._on_event_draft_saved)
         _c(esp, "edit_requested", self._on_event_draft_open)
+
+    def _wire_voice(self) -> None:
+        """Register the strategy-ack callback with the PTT query listener.
+
+        The query listener runs on its own thread; it calls the handler which emits the
+        ``_voice_strategy_ack`` signal, delivering the action to the Qt thread where the
+        slot can safely call refresh() and update widgets.
+        """
+        try:
+            ql = getattr(self._window, "_query_listener", None)
+            if ql is not None and hasattr(ql, "set_strategy_ack_handler"):
+                ql.set_strategy_ack_handler(
+                    lambda action: self._voice_strategy_ack.emit(str(action or "")))
+        except Exception:
+            pass
+
+    def _on_voice_strategy_ack(self, action: str) -> None:
+        """Handle a PTT strategy acknowledgement on the Qt thread.
+
+        "accept" — if a replan is pending and a best candidate exists, record the
+        acknowledgement (advisory only, executes nothing) and store the candidate as the
+        shown plan for this session.
+
+        "keep" — record the acknowledgement and leave the shown plan unchanged.
+
+        Any other action or nothing pending → safe no-op. Never raises.
+        """
+        try:
+            from strategy.adaptive_live_strategy import acknowledge_strategy
+            from ui.shell_feed_adapters import live_plan_dict_from_candidate
+            if action == "accept":
+                if not self._live_pending:
+                    return  # nothing to accept — safe no-op
+                candidate = (self._live_decision or {}).get("best_candidate")
+                if not candidate:
+                    return
+                ack = acknowledge_strategy(record_preference=True)
+                # The domain contract: executes_anything is ALWAYS False.
+                # This is asserted in tests; here we trust the domain.
+                _ = ack.executes_anything   # noqa — referenced for documentation only
+                plan = live_plan_dict_from_candidate(candidate)
+                if plan:
+                    self._live_accepted_plan = plan
+                self.refresh()
+            elif action == "keep":
+                acknowledge_strategy(record_preference=False)
+                # leave _live_accepted_plan unchanged
+        except Exception:
+            pass
 
     @staticmethod
     def _safe_connect(obj, signal_name, slot) -> None:
@@ -1077,7 +1151,12 @@ class LiveShellBridge(QObject):
             pass
 
     def _feed_live(self) -> None:
-        """Feed the Live Pit Wall from the canonical live race state. Never raises."""
+        """Feed the Live Pit Wall from the canonical live race state. Never raises.
+
+        Sourcing plan attrs from the window mirrors exactly what the classic
+        ``_refresh_audio_engineer`` does (Phase 66 activation).  When they are absent
+        the fields remain unknown — never fabricated.
+        """
         try:
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
@@ -1085,19 +1164,53 @@ class LiveShellBridge(QObject):
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             connected = self._connected()
             state = None
+            audio_view = None
             try:
                 tracker = getattr(self._window, "_tracker", None)
                 if tracker is not None and getattr(tracker, "race_type", None) is not None:
                     from strategy.canonical_live_race_state import build_canonical_live_race_state
-                    canon = build_canonical_live_race_state(tracker, telemetry_fresh=connected)
+                    canon = build_canonical_live_race_state(
+                        tracker,
+                        elapsed_s=getattr(self._window, "_live_race_elapsed_s", None),
+                        telemetry_fresh=connected,
+                        fuel_per_lap_plan=getattr(self._window, "_live_fuel_plan", None),
+                        lap_time_plan_s=getattr(self._window, "_live_pace_plan_s", None),
+                        recent_fuel_burn_samples=getattr(self._window, "_live_fuel_samples", None),
+                        recent_clean_lap_times_s=getattr(self._window, "_live_clean_lap_times", None),
+                        pit_loss_s=getattr(self._window, "_live_pit_loss_s", None),
+                        driver_reports=getattr(self._window, "_live_driver_reports", None))
                     state = canon.to_live_strategy_state()
             except Exception:
                 state = None
-            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected))
-            # Show the approved plan on the pit wall — it looked empty because nothing
+            # Build the audio-first + adaptive-strategy view ONCE PER LAP, not on every
+            # 750ms display tick: the driver's model is "at the end of every lap, are we
+            # still optimal?", and recomputing every tick made the replan warning flicker
+            # as live figures wobbled AND re-ran the strategy view twice on a lap-signal +
+            # timer double-fire. The lap gate reuses the cached decision between laps; KPI
+            # (fuel/tyre/lap) still refresh every tick from the fresh state.
+            if state is not None:
+                cur_lap = getattr(state, "current_lap", None)
+                stale = (self._live_audio_view is None
+                         or cur_lap != self._live_decision_lap
+                         or not getattr(state, "telemetry_fresh", True))
+                if stale:
+                    try:
+                        from strategy.live_audio_strategy_build import build_live_audio_strategy_view
+                        self._live_audio_view = build_live_audio_strategy_view(state)
+                        decision = (self._live_audio_view or {}).get("strategy_decision") or {}
+                        self._live_decision = decision
+                        rec = str(decision.get("recommendation") or "")
+                        self._live_pending = rec in ("REPLAN_RECOMMENDED", "REPLAN_URGENT")
+                        self._live_decision_lap = cur_lap
+                    except Exception:
+                        self._live_audio_view = None
+                audio_view = self._live_audio_view
+            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected,
+                                                     audio_view=audio_view))
+            # Show the approved/accepted plan — the wall looked empty because nothing
             # about the strategy was ever fed here.
             if hasattr(lp, "show_plan"):
-                lp.show_plan(self._approved_strategy())
+                lp.show_plan(self._live_accepted_plan or self._approved_strategy())
         except Exception:
             pass
 
@@ -1331,6 +1444,11 @@ class LiveShellBridge(QObject):
         if result is not None and not result.ok:
             self._guidance_status(result.message or "Could not switch to that event.")
         self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
         self._last_guidance_view = None
         self.refresh()
 
@@ -1378,6 +1496,11 @@ class LiveShellBridge(QObject):
             return
         # The active event changed — every surface must be rebuilt against it.
         self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
         self._last_guidance_view = None
         self.refresh()
         self._navigate("home")

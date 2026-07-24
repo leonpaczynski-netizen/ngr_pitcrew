@@ -60,6 +60,11 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("coaching",     ["improve", "go faster", "coaching", "tips", "technique", "sector"]),
     ("setup_advice", ["setup", "car setup", "setup advice", "tuning", "tune",
                       "what should i change"]),
+    # Strategy acknowledgement — accept or keep the live replan recommendation.
+    # These must sit AFTER the existing "strategy" intent so the specificity scorer
+    # promotes the multi-word command over the single "plan" keyword.
+    ("accept_plan", ["accept plan", "accept the plan", "accept"]),
+    ("keep_plan",   ["keep plan", "keep the plan", "stay out"]),
 ]
 
 
@@ -368,6 +373,7 @@ class QueryListener(threading.Thread):
         self._pynput_listener = None
         self._car_specs_ref: dict = {}
         self._active_setup_getter = None
+        self._strategy_ack_handler = None
         self._last_live_position = None
 
     def update_car_specs(self, specs: dict) -> None:
@@ -377,6 +383,16 @@ class QueryListener(threading.Thread):
     def set_active_setup_getter(self, getter) -> None:
         """Pass a callable that returns the current live setup dict."""
         self._active_setup_getter = getter
+
+    def set_strategy_ack_handler(self, handler) -> None:
+        """Register a callable that receives 'accept' or 'keep' on a PTT ack.
+
+        Mirroring ``set_active_setup_getter`` — setter injection so the constructor
+        signature is untouched and the main.py call site needs no change.
+        The handler is called from the PTT thread inside a try/except so a failing
+        handler never silences the radio response to the driver.
+        """
+        self._strategy_ack_handler = handler
 
     def update_live_position(self, pos) -> None:
         self._last_live_position = pos
@@ -606,6 +622,20 @@ class QueryListener(threading.Thread):
                 allowed_tuning=_allowed, tuning_locked=_locked,
                 car_name=_car_name_ql, car_specs=_car_specs_ql,
                 compound=_compound_ql)
+        elif intent == "accept_plan":
+            if self._strategy_ack_handler is not None:
+                try:
+                    self._strategy_ack_handler("accept")
+                except Exception:
+                    pass
+            response = "Understood — accepting the recommended plan if one is open."
+        elif intent == "keep_plan":
+            if self._strategy_ack_handler is not None:
+                try:
+                    self._strategy_ack_handler("keep")
+                except Exception:
+                    pass
+            response = "Understood — keeping the current plan."
         else:
             response = _build_response(intent, self._tracker)
         self._announcer.announce(response, Priority.HIGH, "query", 0.0, interrupt=True)

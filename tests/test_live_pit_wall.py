@@ -77,6 +77,78 @@ class TestLiveSafety:
             assert tok not in src
 
 
+class TestLiveRaceEngineerDisplay:
+    """Asserts that set_state surfaces engineer_instruction, next_decision, and warning,
+    and that show_plan renders a recommended replan candidate built via
+    live_plan_dict_from_candidate.  These cover the live race engineer end-to-end
+    display path without adding any command controls."""
+
+    def test_engineer_instruction_rendered_prominently(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(
+            engineer_instruction="Fuel is 0.3 L/lap over plan — lift and coast into the hairpin.",
+            next_decision="Pit call on lap 22 — weather closing in",
+            warning=(
+                "Weather closing in — an extra stop for wets may be faster. "
+                "Say 'accept plan' to switch, or 'keep plan' to stay out."),
+            freshness="live", confidence="medium",
+        ))
+        # Text content is the authoritative check; isVisible() is unreliable in
+        # headless test mode (parent window not shown) — use isHidden() for
+        # explicit show/hide toggling, consistent with existing test conventions.
+        assert "Fuel is 0.3 L/lap over plan" in w._instruction.text()
+        assert w._instruction.text() != ""
+
+    def test_next_decision_shown_when_present(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(next_decision="Pit call on lap 22 — weather closing in"))
+        # setVisible(True) was called — use isHidden() (not isVisible()) in headless mode.
+        assert not w._next.isHidden()
+        assert "Pit call on lap 22" in w._next.text()
+
+    def test_next_decision_hidden_when_blank(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(next_decision=""))
+        assert not w._next.isVisible()
+
+    def test_warning_visible_with_replan_cta(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(
+            warning=(
+                "Weather closing in — an extra stop for wets may be faster. "
+                "Say 'accept plan' to switch, or 'keep plan' to stay out."),
+        ))
+        assert not w._warning.isHidden()
+        assert "accept plan" in w._warning.text()
+        assert "keep plan" in w._warning.text()
+
+    def test_warning_hidden_when_blank(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(warning=""))
+        assert w._warning.isHidden()
+
+    def test_gap_to_plan_shows_pace_and_fuel_delta(self, qapp):
+        w = LivePitWall()
+        w.set_state(LivePitWallVM(gap_to_plan="+1.2s / +0.3 L per lap"))
+        assert "+1.2s / +0.3 L per lap" in w._tiles["gap_to_plan"].text()
+
+    def test_show_plan_from_candidate(self, qapp):
+        from ui.shell_feed_adapters import live_plan_dict_from_candidate
+        plan = live_plan_dict_from_candidate({
+            "label": "3-stop (Soft-Soft-Wet-Wet)",
+            "stop_count_delta": 1,
+            "expected_completed_laps": 34,
+            "fuel_target_note": "Reduce to 28 L per stop — wets burn less",
+            "tyre_note": "Switch to Wets from stop 2 once rain is confirmed",
+            "expected_gain_detail": "Est. +18 s advantage on a wet track vs staying on Softs",
+        })
+        w = LivePitWall()
+        w.show_plan(plan)
+        assert not w._plan_card.isHidden()
+        assert "3-stop" in w._plan_head.text()
+        assert "Wets" in w._plan_stops.text()
+
+
 class TestApprovedPlanDisplay:
     """UAT-8: "I approved race strategy and it took me to pit wall but nothing seems to
     be on it about the strategy." The approved plan is now shown (read-only)."""

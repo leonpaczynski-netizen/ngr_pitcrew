@@ -15,7 +15,17 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Live Pit Wall  <-  adaptive_live_strategy.LiveStrategyState
 # ---------------------------------------------------------------------------
-def live_pit_wall_vm_from_state(state, *, connected: bool = True):
+def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=None):
+    """Build the LivePitWallVM from a LiveStrategyState + optional audio view.
+
+    When ``audio_view`` is supplied (from ``build_live_audio_strategy_view``), the
+    engineer_instruction, next_decision, confidence, and warning fields are populated
+    from the adaptive strategy decision and message; the gap_to_plan field is also
+    extended with the fuel-per-lap delta when both plan and actual are present.
+
+    When ``audio_view`` is None the function behaves exactly as before (backward
+    compatible, no behaviour change for existing callers).  Never raises.
+    """
     from ui.components.live_pit_wall import LivePitWallVM
     if state is None:
         return LivePitWallVM(freshness="live" if connected else "none",
@@ -56,6 +66,27 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True):
         d = la - lp
         gap = "on plan" if abs(d) < 0.05 else f"{d:+.1f}s"
 
+    # When the audio view is present, extend gap_to_plan with the fuel-per-lap delta
+    # so the driver can see both pace and fuel-burn divergence at a glance.
+    if audio_view is not None:
+        try:
+            fa, fp = g("fuel_per_lap_actual"), g("fuel_per_lap_plan")
+            if fa is not None and fp is not None:
+                df = float(fa) - float(fp)
+                fuel_delta_str = f"{df:+.1f} L per lap"
+                if gap == "—":
+                    gap = fuel_delta_str
+                elif gap == "on plan" and abs(df) < 0.05:
+                    pass  # both pace and fuel on plan — leave "on plan"
+                elif gap == "on plan":
+                    # Pace is on plan but fuel is not — keep the pace context so the
+                    # driver sees it isn't a pace problem, only fuel.
+                    gap = f"pace on plan / {fuel_delta_str}"
+                else:
+                    gap = f"{gap} / {fuel_delta_str}"
+        except Exception:
+            pass
+
     fresh = "live" if g("telemetry_fresh") else "stale"
     if not connected:
         fresh = "none"
@@ -63,12 +94,105 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True):
     stops = g("required_stops")
     pit_window = f"{stops} stop(s) required" if stops is not None else "—"
 
+    # Defaults when no audio view is provided — behaviour exactly as before.
+    engineer_instruction = ""
+    next_decision = ""
+    confidence = "unknown"
+    warning = ""
+
+    if audio_view is not None:
+        try:
+            msg = audio_view.get("strategy_message") or {}
+            dec = audio_view.get("strategy_decision") or {}
+            engineer_instruction = str(msg.get("headline") or "")
+            next_decision = str(msg.get("next_review") or "")
+            confidence = str(dec.get("confidence") or "unknown")
+            rec = str(dec.get("recommendation") or "")
+            if rec in ("REPLAN_RECOMMENDED", "REPLAN_URGENT"):
+                hl = engineer_instruction or rec
+                warning = f"{hl} Say 'accept plan' to switch, or 'keep plan' to stay out."
+        except Exception:
+            pass
+
     return LivePitWallVM(
         lap=lap, position="—", stint=stint, fuel=fuel, tyre=tyre,
         pit_window=pit_window, gap_to_plan=gap,
-        engineer_instruction="", next_decision="",
-        freshness=fresh, confidence="unknown", map_trust="none",
+        engineer_instruction=engineer_instruction, next_decision=next_decision,
+        warning=warning, freshness=fresh, confidence=confidence, map_trust="none",
     )
+
+
+# ---------------------------------------------------------------------------
+# Live replan candidate  ->  show_plan dict (pit wall plan card)
+# ---------------------------------------------------------------------------
+def live_plan_dict_from_candidate(candidate: dict) -> dict:
+    """Reshape a replan candidate's fields onto the show_plan shape.
+
+    Input:  ``StrategyReplanCandidate.to_dict()`` result (keys: label,
+            stop_count_delta, projected_total_time_s, expected_completed_laps,
+            fuel_target_note, tyre_note, expected_gain_detail, assumptions, …).
+    Output: {name, expected_laps, total_time, pit_windows, pit_stops} for
+            ``LivePitWall.show_plan()``.  An empty/no-label candidate returns {}
+            (which hides the card).  Pure reshaping — no invented data, never raises.
+    """
+    try:
+        if not isinstance(candidate, dict):
+            return {}
+        name = str(candidate.get("label") or "").strip()
+        if not name:
+            return {}
+
+        # expected_laps (time-certain races: maximise completed laps)
+        laps = candidate.get("expected_completed_laps")
+        expected_laps = f"{int(laps)} laps" if laps is not None else ""
+
+        # total_time (lap-count races: minimise total race time)
+        total_time = ""
+        total_s = candidate.get("projected_total_time_s")
+        if total_s is not None:
+            try:
+                secs = float(total_s)
+                h = int(secs // 3600)
+                m = int((secs % 3600) // 60)
+                s = int(secs % 60)
+                total_time = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+            except Exception:
+                pass
+
+        # pit_windows: how many extra stops this candidate proposes
+        delta = 0
+        try:
+            delta = int(candidate.get("stop_count_delta", 0))
+        except (TypeError, ValueError):
+            delta = 0
+        if delta > 0:
+            pit_windows = f"+{delta} extra stop(s)"
+        elif delta < 0:
+            pit_windows = f"{delta} stop(s) fewer"
+        else:
+            pit_windows = "Keep current plan"
+
+        # pit_stops: concise notes from the candidate's intent fields
+        notes = []
+        fuel_note = str(candidate.get("fuel_target_note") or "").strip()
+        tyre_note = str(candidate.get("tyre_note") or "").strip()
+        gain = str(candidate.get("expected_gain_detail") or "").strip()
+        if fuel_note:
+            notes.append(f"Fuel: {fuel_note}")
+        if tyre_note:
+            notes.append(f"Tyres: {tyre_note}")
+        if gain:
+            notes.append(gain)
+
+        return {
+            "name": name,
+            "expected_laps": expected_laps,
+            "total_time": total_time,
+            "pit_windows": pit_windows,
+            "pit_stops": notes,
+        }
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,10 @@ EXTRA_PHRASES: Tuple[str, ...] = (
     "how was my last lap", "review my last lap",
     "how do i go faster", "coaching tips",
     "setup advice", "what should i change",
+    # Strategy acknowledgement — accept or decline the live replan recommendation.
+    # All words here are US-English and in the CMU pronunciation dictionary.
+    "accept the plan", "accept plan",
+    "keep the plan", "keep plan", "stay out",
 )
 
 #: Phrases below this many characters are too acoustically thin to spot reliably —
