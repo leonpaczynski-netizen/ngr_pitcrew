@@ -6203,6 +6203,42 @@ class SessionDB:
         self._conn.commit()
         return cid
 
+    def lock_setup(self, cycle_id: str, discipline: str, *, locked: bool = True,
+                   locked_at: str = "") -> bool:
+        """Explicitly lock (or reopen) a discipline's setup on a cycle — the sole focused
+        writer of setup_lock_json. The Command Centre computes WHEN a lock is permitted;
+        this records the driver's explicit confirmation of it. Merges one discipline into
+        the existing lock map so locking Race never clears a locked Qualifying. Never
+        raises; returns False when the cycle or discipline is missing."""
+        import json as _json
+        cid = str(cycle_id or "").strip()
+        d = str(discipline or "").strip().lower()
+        if not cid or not d:
+            return False
+        cyc = self.get_preparation_cycle(cid)
+        if not cyc:
+            return False
+        try:
+            lk = _json.loads(cyc.get("setup_lock_json") or "{}")
+            if not isinstance(lk, dict):
+                lk = {}
+        except Exception:
+            lk = {}
+        if locked:
+            lk[d] = {"locked": True, "locked_at": str(locked_at or "")}
+        else:
+            lk.pop(d, None)
+        self._conn.execute(
+            "UPDATE event_preparation_cycles SET setup_lock_json=?, updated_at=? WHERE cycle_id=?",
+            (_json.dumps(lk), str(locked_at or ""), cid))
+        self._conn.commit()
+        return True
+
+    def setup_locks(self, cycle_id: str) -> tuple:
+        """The disciplines whose setup is currently locked on a cycle (read-only)."""
+        locked, _finalised = self._persisted_lock_strategy(str(cycle_id or ""))
+        return locked
+
     def upsert_preparation_activity(self, activity: dict) -> str:
         """Explicit activity creation/update — the sole writer of event_preparation_activities.
         Idempotent by activity_id."""

@@ -126,6 +126,7 @@ class SetupWorkspace(QWidget):
     tyre_change_requested = pyqtSignal(str)      # compound code to put on the car
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
+    lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -215,7 +216,24 @@ class SetupWorkspace(QWidget):
         for p in (self._pill_saved, self._pill_applied, self._pill_valid):
             status_row.addWidget(p)
         status_row.addStretch(1)
+        # Lock — the explicit "this setup is final for the event" confirmation. It only
+        # appears once the setup has converged (the engineer says lock-ready); the
+        # guidance CTA "Lock the base setup" pointed here but there was nothing to click.
+        self._pill_locked = StatusPill("", tone="neutral")
+        self._pill_locked.setVisible(False)
+        status_row.addWidget(self._pill_locked)
+        self._lock_btn = SecondaryActionButton("Lock this setup")
+        self._lock_btn.clicked.connect(self._on_lock_clicked)
+        self._lock_btn.setVisible(False)
+        status_row.addWidget(self._lock_btn)
         lay.addLayout(status_row)
+        self._lock_state = (False, False)   # (lockable, locked) for the current discipline
+
+        self._lock_hint = QLabel("")
+        self._lock_hint.setWordWrap(True)
+        self._lock_hint.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._lock_hint.setVisible(False)
+        lay.addWidget(self._lock_hint)
 
         # What this discipline is, plus any transient status ("Analysing setup…").
         self._note = QLabel("")
@@ -532,6 +550,28 @@ class SetupWorkspace(QWidget):
             return                      # editingFinished fires even when nothing changed
         self._shift_rpm_value = v
         self.shift_rpm_changed.emit(v)
+
+    def set_lock_state(self, lockable: bool = False, locked: bool = False,
+                       hint: str = "") -> None:
+        """Show the lock control for the current discipline.
+
+        ``lockable`` is whether the setup has converged enough for the engineer to permit
+        a lock; ``locked`` is whether the driver has already confirmed it. Locking is
+        never inferred — the button is the explicit confirmation the doctrine requires.
+        """
+        self._lock_state = (bool(lockable), bool(locked))
+        self._pill_locked.setVisible(bool(locked))
+        if locked:
+            self._pill_locked.set_status("Locked", tone="success", glyph="🔒")
+        self._lock_btn.setVisible(bool(lockable) or bool(locked))
+        self._lock_btn.setText("Reopen setup" if locked else "Lock this setup")
+        self._lock_hint.setText(str(hint or ""))
+        self._lock_hint.setVisible(bool(hint) and (bool(lockable) or bool(locked)))
+
+    def _on_lock_clicked(self) -> None:
+        _lockable, locked = self._lock_state
+        # Clicking toggles: lock when open, reopen when locked.
+        self.lock_requested.emit(self._selector.current(), not locked)
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") a transient status line — e.g. "Analysing setup…".

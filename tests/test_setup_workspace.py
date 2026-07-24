@@ -129,3 +129,38 @@ class TestShiftRpmField:
         assert seen == [7000]
         w._on_shift_rpm_edited()                    # no change → no repeat emit
         assert seen == [7000]
+
+
+class TestLockControl:
+    """UAT-7: "how do I 'lock the base setup'?" The guidance CTA pointed at the Garage
+    but there was nothing to click."""
+
+    def test_hidden_until_the_setup_is_lockable(self, qapp):
+        w = SetupWorkspace()
+        w.set_lock_state(lockable=False, locked=False)
+        assert w._lock_btn.isHidden() is True and w._pill_locked.isHidden() is True
+
+    def test_lockable_shows_the_lock_button(self, qapp):
+        w = SetupWorkspace()
+        w.set_lock_state(lockable=True, locked=False, hint="converged")
+        assert w._lock_btn.isHidden() is False
+        assert w._lock_btn.text() == "Lock this setup"
+
+    def test_locking_emits_the_current_discipline(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w._selector.set_discipline("qualifying")
+        w.set_lock_state(lockable=True, locked=False)
+        w._lock_btn.click()
+        assert seen == [("qualifying", True)]
+
+    def test_a_locked_setup_shows_the_pill_and_offers_reopen(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w.set_lock_state(lockable=True, locked=True)
+        assert w._pill_locked.isHidden() is False
+        assert w._lock_btn.text() == "Reopen setup"
+        w._lock_btn.click()
+        assert seen == [("race", False)]            # reopen, not re-lock

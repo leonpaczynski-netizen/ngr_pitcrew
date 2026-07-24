@@ -1101,6 +1101,53 @@ class TestV25SetupRevisionLineage:
         assert bridge._setups.sheet("race").get("arb_front") == 5.0
 
 
+class TestV26LockTheBaseSetup:
+    """UAT-7: "how do I 'lock the base setup'?" The guidance CTA "Lock the base setup"
+    routed to the Garage but nothing there locked — the write path never existed."""
+
+    def _bridge_with_real_db(self, qapp):
+        from data.session_db import SessionDB
+        db = SessionDB(":memory:")
+        db.upsert_preparation_cycle({
+            "cycle_id": "c1", "event_name": "E", "car": "Porsche Cayman GT4",
+            "track": "Watkins Glen International", "layout": "long",
+            "disciplines": ["race", "qualifying"]})
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _Win()
+        bridge = LiveShellBridge(shell, ctrl, window=win, config={"active_cycle_id": "c1"},
+                                 db=db, spawn=lambda fn: fn())
+        return shell, db, bridge
+
+    def test_the_garage_lock_button_locks_the_active_cycle(self, qapp):
+        shell, db, _bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        assert db.setup_locks("c1") == ("race",)
+        assert "locked" in shell.garage_page._status.text().lower()
+
+    def test_the_locked_state_is_fed_back_to_the_garage(self, qapp):
+        shell, _db, bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        bridge._feed_lock(shell.garage_page)
+        assert shell.garage_page._pill_locked.isHidden() is False
+        assert shell.garage_page._lock_btn.text() == "Reopen setup"
+
+    def test_reopening_unlocks_it(self, qapp):
+        shell, db, _bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        shell.garage_page.lock_requested.emit("race", False)
+        assert db.setup_locks("c1") == ()
+
+    def test_locking_needs_an_active_event(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        from data.session_db import SessionDB
+        bridge = LiveShellBridge(shell, ctrl, window=_Win(), config={}, db=SessionDB(":memory:"),
+                                 spawn=lambda fn: fn())
+        shell.garage_page.lock_requested.emit("race", True)
+        assert "activate an event" in shell.garage_page._status.text().lower()
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

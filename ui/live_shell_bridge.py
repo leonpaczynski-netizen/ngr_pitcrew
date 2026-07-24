@@ -129,6 +129,8 @@ class LiveShellBridge(QObject):
         self._previous_recorded_session_id = 0
         #: Runs bound to the active cycle, resolved once per refresh tick.
         self._runs_cache = None
+        #: The active cycle's preparation report, resolved once per refresh (lock state).
+        self._lock_report = None
         #: Track pickers are filled once — the circuit list does not change at runtime.
         self._track_choices_loaded = False
 
@@ -171,6 +173,8 @@ class LiveShellBridge(QObject):
                     gp.shift_rpm_changed.connect(self._on_shift_rpm_changed)
                 if hasattr(gp, "shift_rpm_recommend_requested"):
                     gp.shift_rpm_recommend_requested.connect(self._on_shift_rpm_recommend)
+                if hasattr(gp, "lock_requested"):
+                    gp.lock_requested.connect(self._on_lock_setup)
         except Exception:
             pass
         try:
@@ -243,6 +247,7 @@ class LiveShellBridge(QObject):
         # what kind it was, what to compare it against). Resolve it ONCE per refresh so
         # the 750 ms feed stays at one bounded query rather than three.
         self._runs_cache = None
+        self._lock_report = None
         try:
             state = build_initial_app_state(self._window, self._config)
             self._controller.set_state(state)
@@ -514,6 +519,31 @@ class LiveShellBridge(QObject):
         self._garage_status(outcome.reason)
         self.refresh()
 
+    def _on_lock_setup(self, discipline: str, lock: bool) -> None:
+        """Lock (or reopen) a discipline's setup on the active cycle — the explicit
+        confirmation the "Lock the base setup" guidance asked for."""
+        import time
+        d = str(discipline or self._discipline or "race").lower()
+        cid = self._runs.active_cycle_id()
+        if not cid:
+            self._garage_status("Activate an event before locking a setup.")
+            return
+        if self._db is None or not hasattr(self._db, "lock_setup"):
+            self._garage_status("Locking is not available.")
+            return
+        ok = False
+        try:
+            ok = bool(self._db.lock_setup(
+                cid, d, locked=bool(lock), locked_at=time.strftime("%Y-%m-%d %H:%M")))
+        except Exception as exc:
+            self._garage_status(f"Could not lock the setup: {exc}")
+            return
+        if ok:
+            self._garage_status(
+                f"{d.title()} setup locked for the event." if lock
+                else f"{d.title()} setup reopened — you can keep developing it.")
+        self.refresh()
+
     def _connected(self) -> bool:
         try:
             se = self._window._build_session_context() if self._window else None
@@ -751,8 +781,62 @@ class LiveShellBridge(QObject):
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
+            self._feed_lock(gp)
         except Exception:
             pass
+
+    def _lock_report_cache(self):
+        """The active cycle's preparation report, resolved once per refresh (for lock state)."""
+        if self._lock_report is None:
+            self._lock_report = {}
+            try:
+                cid = self._runs.active_cycle_id()
+                if cid and self._db is not None and hasattr(self._db, "build_event_preparation_report"):
+                    self._lock_report = self._db.build_event_preparation_report(cid) or {}
+            except Exception:
+                self._lock_report = {}
+        return self._lock_report
+
+    def _lock_state(self, discipline: str):
+        """(lockable, locked, hint) for a discipline on the active cycle.
+
+        Lockable = the setup has converged enough for a lock to be permitted (the
+        engineer's call); locked = the driver has confirmed it. Both come from canonical
+        state, never inferred.
+        """
+        try:
+            from strategy.setup_lock import lock_permitted
+            from strategy.setup_convergence import SetupConvergenceState
+            report = self._lock_report_cache()
+            state = str((report.get("setup") or {}).get(discipline) or "")
+            lockable = False
+            try:
+                lockable = lock_permitted(SetupConvergenceState(state)) if state else False
+            except Exception:
+                lockable = False
+            locked = False
+            try:
+                cid = self._runs.active_cycle_id()
+                if cid and hasattr(self._db, "setup_locks"):
+                    locked = discipline in (self._db.setup_locks(cid) or ())
+            except Exception:
+                locked = False
+            if locked:
+                hint = "This setup is locked for the event. Reopen only if you need to change it."
+            elif lockable:
+                hint = ("The setup has converged — lock it to mark it final for the event, "
+                        "or keep developing.")
+            else:
+                hint = ""
+            return lockable, locked, hint
+        except Exception:
+            return False, False, ""
+
+    def _feed_lock(self, garage) -> None:
+        if not hasattr(garage, "set_lock_state"):
+            return
+        lockable, locked, hint = self._lock_state(self._discipline)
+        garage.set_lock_state(lockable=lockable, locked=locked, hint=hint)
 
     def _lineage_nodes(self, active_label: str = ""):
         """Build the Garage lineage from the recorded applied revisions (newest first).

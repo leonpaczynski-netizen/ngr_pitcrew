@@ -74,6 +74,42 @@ def _seed_cycle(db, cycle_id="cyc-1", track="Fuji", car="Porsche 911 RSR"):
         "disciplines": ["race", "qualifying"]})
 
 
+def test_lock_setup_writes_and_reads_per_discipline(tmp_path):
+    """UAT-7: "how do I 'lock the base setup'?" The lock domain existed but nothing
+    wrote setup_lock_json — the CTA had no effect. lock_setup is the focused writer."""
+    db = SessionDB(str(tmp_path / "lock.db"))
+    _seed_cycle(db)
+    assert db.setup_locks("cyc-1") == ()
+    assert db.lock_setup("cyc-1", "race", locked=True, locked_at="2026-06-20 10:00") is True
+    assert db.setup_locks("cyc-1") == ("race",)
+
+
+def test_locking_one_discipline_never_clears_another(tmp_path):
+    db = SessionDB(str(tmp_path / "lock2.db"))
+    _seed_cycle(db)
+    db.lock_setup("cyc-1", "race", locked=True)
+    db.lock_setup("cyc-1", "qualifying", locked=True)
+    assert set(db.setup_locks("cyc-1")) == {"race", "qualifying"}
+    db.lock_setup("cyc-1", "race", locked=False)          # reopen only race
+    assert db.setup_locks("cyc-1") == ("qualifying",)
+
+
+def test_lock_setup_leaves_the_rest_of_the_cycle_untouched(tmp_path):
+    db = SessionDB(str(tmp_path / "lock3.db"))
+    _seed_cycle(db)
+    db.lock_setup("cyc-1", "race", locked=True)
+    cyc = db.get_preparation_cycle("cyc-1")
+    assert cyc["event_name"] == "Porsche Cup R3"           # a focused UPDATE, not a rebuild
+    assert cyc["disciplines"] == ("race", "qualifying")
+
+
+def test_lock_setup_on_a_missing_cycle_or_blank_discipline_is_false(tmp_path):
+    db = SessionDB(str(tmp_path / "lock4.db"))
+    _seed_cycle(db)
+    assert db.lock_setup("nope", "race") is False
+    assert db.lock_setup("cyc-1", "") is False
+
+
 def test_upsert_and_read_cycle_is_idempotent(tmp_path):
     db = SessionDB(str(tmp_path / "c.db"))
     _seed_cycle(db)

@@ -135,6 +135,10 @@ def main() -> int:
     # Shift beep — part of the car setup, per discipline.
     shell.garage_page.set_shift_rpm(
         7600, "The beep fires at 7600 RPM in a qualifying session (from this setup).")
+    # A converged setup that can be locked for the event.
+    shell.garage_page.set_lock_state(
+        lockable=True, locked=False,
+        hint="The setup has converged — lock it to mark it final for the event.")
 
     # Programme map — where the driver is across the whole event programme.
     from strategy.programme_map import build_programme_map
