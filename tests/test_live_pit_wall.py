@@ -75,3 +75,26 @@ class TestLiveSafety:
         src = inspect.getsource(live_mod).lower()
         for tok in ("set_plan(", "apply(", "make_pit", "execute_pit", "strategy_engine"):
             assert tok not in src
+
+
+class TestApprovedPlanDisplay:
+    """UAT-8: "I approved race strategy and it took me to pit wall but nothing seems to
+    be on it about the strategy." The approved plan is now shown (read-only)."""
+
+    def test_show_plan_renders_the_approved_plan(self, qapp):
+        from ui.components.live_pit_wall import LivePitWall
+        w = LivePitWall()
+        w.show_plan({"name": "Three-stop", "expected_laps": "62 laps",
+                     "total_time": "2:08:24", "pit_windows": "3 stop(s)",
+                     "pit_stops": ["Stop 1 (lap 16): leave with 55 L · ~35s · fit RH"]})
+        assert w._plan_card.isHidden() is False
+        assert "Three-stop" in w._plan_head.text() and "62 laps" in w._plan_head.text()
+        assert "Stop 1" in w._plan_stops.text()
+
+    def test_no_plan_hides_the_card(self, qapp):
+        from ui.components.live_pit_wall import LivePitWall
+        w = LivePitWall()
+        w.show_plan({})
+        assert w._plan_card.isHidden() is True
+        w.show_plan("garbage")             # must not raise
+        assert w._plan_card.isHidden() is True

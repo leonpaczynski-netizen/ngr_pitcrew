@@ -214,7 +214,9 @@ def main() -> int:
                                 stints=("18 laps Medium", "16 laps Hard"),
                                 confidence="medium",
                                 summary=("vs 2-stop: 1 fewer stop, 22s less in the pits, "
-                                         "57s more tyre degradation — 35s slower overall."))),
+                                         "57s more tyre degradation — 35s slower overall."),
+                                pit_stops=("Stop 1 (lap 12): leave with 28 L · ~30s · fit Racing Soft",
+                                           "Stop 2 (lap 24): leave with 24 L · ~28s · fit Racing Medium"))),
         risks=(("Tyre deg", "medium"), ("Traffic", "low")),
         inputs=(StrategyInput("Tyre deg", "0.06 s/lap", "measured"),
                 StrategyInput("Pit loss", "22 s", "manual"),
@@ -230,6 +232,11 @@ def main() -> int:
         engineer_instruction="Hold this pace — box in 4 laps for Mediums.",
         next_decision="Pit call on lap 22", freshness="live", confidence="high",
         map_trust="approved", ptt_status="RADIO READY"))
+    shell.live_page.show_plan({
+        "name": "2-stop (Soft-Soft-Medium)", "expected_laps": "34 laps",
+        "total_time": "1:02:14", "pit_windows": "2 stop(s)",
+        "pit_stops": ["Stop 1 (lap 12): leave with 28 L · ~30s · fit Racing Soft",
+                      "Stop 2 (lap 24): leave with 24 L · ~28s · fit Racing Medium"]})
 
     # Debrief
     from ui.components.debrief_view import DebriefVM

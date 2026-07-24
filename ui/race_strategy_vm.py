@@ -142,6 +142,9 @@ def format_stint_plan(result) -> list[dict]:
         return []
     ev = getattr(result, "evidence", None)
     lap_s = ev.representative_lap_s() if ev is not None else 0.0
+    fuel_per_lap = ev.mean_fuel_per_lap() if ev is not None else 0.0
+    refuel_rate = float(getattr(ev, "refuel_rate_lps", 0.0) or 0.0) if ev is not None else 0.0
+    pit_loss = float(getattr(ev, "pit_loss_seconds", 0.0) or 0.0) if ev is not None else 0.0
 
     rows: list[dict] = []
     laps_per = list(getattr(cand, "estimated_laps_per_stint", []) or [])
@@ -149,6 +152,7 @@ def format_stint_plan(result) -> list[dict]:
     fuel_maps = list(getattr(cand, "fuel_map_plan", []) or [])
     n = len(laps_per)
     cumulative = 0
+    prev_comp = None
     for i in range(n):
         laps = int(laps_per[i])
         cumulative += laps
@@ -159,6 +163,19 @@ def format_stint_plan(result) -> list[dict]:
             pit_note = f"pit around lap {cumulative}"
         else:
             pit_note = "finish"
+        # Fuel to LEAVE the pits with for this stint: enough for its laps plus a one-lap
+        # reserve, capped at the tank. This is the number the driver sets on the fuel
+        # screen before the stint.
+        fuel_to_leave = 0.0
+        if fuel_per_lap > 0:
+            fuel_to_leave = min(100.0, round((laps + 1) * fuel_per_lap, 1))
+        # Estimated time for the STOP that starts this stint (none before the first):
+        # pit loss + refuel time (fuel added / refuel rate), noting a tyre change.
+        pit_seconds = 0.0
+        tyre_change = bool(i > 0 and comp and comp != prev_comp)
+        if i > 0:
+            refuel_time = (fuel_to_leave / refuel_rate) if refuel_rate > 0 else 0.0
+            pit_seconds = round(pit_loss + refuel_time, 0)
         rows.append({
             "stint": i + 1,
             "compound": compound_name(comp),
@@ -167,7 +184,11 @@ def format_stint_plan(result) -> list[dict]:
             "minutes": minutes,
             "fuel_map": fuel_map_label(fmap),
             "pit_note": pit_note,
+            "fuel_to_leave_l": fuel_to_leave,
+            "stop_seconds": pit_seconds,
+            "tyre_change": tyre_change,
         })
+        prev_comp = comp
     return rows
 
 

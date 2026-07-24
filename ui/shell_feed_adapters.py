@@ -85,6 +85,46 @@ def _conf_key(label: str) -> str:
     return "unknown"
 
 
+def _pit_stop_lines(stint_rows) -> tuple:
+    """One line per pit stop: what to leave the pits with and how long it takes.
+
+    Built from the detailed stint rows (each stint after the first begins with a stop).
+    Answers "how much fuel to leave the pits with at each stop and how long estimated pit
+    time will be … changing tyres or not and refuel." Parts with no data are omitted
+    rather than shown as zero.
+    """
+    def _num(v, default=0.0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    lines = []
+    rows = [r for r in (stint_rows or []) if isinstance(r, dict)]
+    cumulative = 0
+    for i, r in enumerate(rows):
+        laps = int(_num(r.get("laps")))
+        if i > 0:
+            stop_no = i
+            lap_at = cumulative
+            bits = []
+            fuel = _num(r.get("fuel_to_leave_l"))
+            if fuel > 0:
+                bits.append(f"leave with {fuel:.0f} L")
+            secs = _num(r.get("stop_seconds"))
+            if secs > 0:
+                bits.append(f"~{secs:.0f}s in the pits")
+            comp = str(r.get("compound") or "").strip()
+            if r.get("tyre_change") and comp:
+                bits.append(f"fit {comp}")
+            elif comp:
+                bits.append(f"stay on {comp}")
+            head = f"Stop {stop_no}" + (f" (lap {lap_at})" if lap_at else "")
+            lines.append(head + ": " + " · ".join(bits) if bits else head)
+        cumulative += laps
+    return tuple(lines)
+
+
 def strategy_plan_vm_from_rpvm(rpvm):
     from ui.components.strategy_plan import StrategyPlanVM, StrategyOption, StrategyInput
     if rpvm is None or not getattr(rpvm, "has_recommendation", False):
@@ -94,6 +134,9 @@ def strategy_plan_vm_from_rpvm(rpvm):
         f"{r.get('laps', '?')} {r.get('compound', '')}".strip()
         for r in (getattr(rpvm, "stint_plan_rows", None) or [])
     )
+    # The detailed per-stop plan (fuel to leave with, estimated stop time, tyre change)
+    # is computed for the recommended plan only — the driver asked for exactly this.
+    pit_stops = _pit_stop_lines(getattr(rpvm, "stint_plan_rows", None) or [])
     options = []
     cand_rows = getattr(rpvm, "candidate_comparison_rows", None) or []
     if cand_rows:
@@ -120,12 +163,14 @@ def strategy_plan_vm_from_rpvm(rpvm):
                 summary=summary,
                 gap=str(r.get("gap_to_best", "") or ""),
                 stints=own_stints,
+                pit_stops=(pit_stops if recommended else ()),
                 recommended=recommended,
             ))
     else:
         options.append(StrategyOption(
             name=str(getattr(rpvm, "recommended_strategy_title", "Recommended")),
             total_time=str(getattr(rpvm, "estimated_total_time", "")),
+            pit_stops=pit_stops,
             confidence=_conf_key(str(getattr(rpvm, "confidence_label", ""))),
             summary=str(getattr(rpvm, "driver_explanation", "")),
             stints=stints, recommended=True,

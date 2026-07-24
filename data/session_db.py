@@ -6239,6 +6239,43 @@ class SessionDB:
         locked, _finalised = self._persisted_lock_strategy(str(cycle_id or ""))
         return locked
 
+    def save_approved_strategy(self, cycle_id: str, plan: dict) -> bool:
+        """Persist the driver's approved race plan on the cycle — the sole focused writer
+        of strategy_final_json's plan payload.
+
+        The plan was previously held only in memory, so it was gone on restart and the
+        driver had to rebuild it every session. It is stored under the cycle's
+        strategy_final_json as {"finalised": True, "plan": {...}, "approved_at": …} so it
+        reloads next time the app opens. Never raises; False when the cycle is missing."""
+        import json as _json
+        cid = str(cycle_id or "").strip()
+        if not cid:
+            return False
+        cyc = self.get_preparation_cycle(cid)
+        if not cyc:
+            return False
+        try:
+            payload = {"finalised": True, "plan": dict(plan or {})}
+        except Exception:
+            payload = {"finalised": True, "plan": {}}
+        self._conn.execute(
+            "UPDATE event_preparation_cycles SET strategy_final_json=?, updated_at=? WHERE cycle_id=?",
+            (_json.dumps(payload), str((plan or {}).get("approved_at") or ""), cid))
+        self._conn.commit()
+        return True
+
+    def get_approved_strategy(self, cycle_id: str) -> dict:
+        """The approved race plan persisted on a cycle, or {} when none. Read-only."""
+        import json as _json
+        cyc = self.get_preparation_cycle(str(cycle_id or "")) or {}
+        try:
+            sf = _json.loads(cyc.get("strategy_final_json") or "{}")
+            if isinstance(sf, dict) and isinstance(sf.get("plan"), dict):
+                return dict(sf["plan"])
+        except Exception:
+            pass
+        return {}
+
     def upsert_preparation_activity(self, activity: dict) -> str:
         """Explicit activity creation/update — the sole writer of event_preparation_activities.
         Idempotent by activity_id."""

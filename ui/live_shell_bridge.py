@@ -595,8 +595,25 @@ class LiveShellBridge(QObject):
                     except Exception:
                         rpvm = None
             sp.set_plan(strategy_plan_vm_from_rpvm(rpvm))
+            # Restore the plan the driver approved LAST TIME, so it survives a restart.
+            saved = self._approved_strategy()
+            if saved.get("candidate_id"):
+                if hasattr(sp, "set_selected_plan"):
+                    sp.set_selected_plan(str(saved["candidate_id"]))
+                if hasattr(sp, "set_status") and not sp._status.text():
+                    sp.set_status(f"Your approved plan ({saved.get('name', 'saved plan')}) "
+                                  f"is loaded and will be used for the race.")
         except Exception:
             pass
+
+    def _approved_strategy(self) -> dict:
+        try:
+            cid = self._runs.active_cycle_id()
+            if cid and self._db is not None and hasattr(self._db, "get_approved_strategy"):
+                return dict(self._db.get_approved_strategy(cid) or {})
+        except Exception:
+            pass
+        return {}
 
     def _feed_track_model(self) -> None:
         """Render the guided modelling flow from the live session."""
@@ -1039,6 +1056,10 @@ class LiveShellBridge(QObject):
             except Exception:
                 state = None
             lp.set_state(live_pit_wall_vm_from_state(state, connected=connected))
+            # Show the approved plan on the pit wall — it looked empty because nothing
+            # about the strategy was ever fed here.
+            if hasattr(lp, "show_plan"):
+                lp.show_plan(self._approved_strategy())
         except Exception:
             pass
 
@@ -1500,6 +1521,8 @@ class LiveShellBridge(QObject):
             chosen = sp.selected_plan() if sp is not None else ""
         except Exception:
             chosen = ""
+        # Persist the chosen plan on the cycle so it is still the plan next launch.
+        self._persist_approved_strategy(chosen)
         try:
             window = self._window
             fn = getattr(window, "approve_race_plan", None)
@@ -1510,7 +1533,33 @@ class LiveShellBridge(QObject):
                     fn()
         except Exception:
             pass
+        self.refresh()
         self._navigate("live_pit_wall")
+
+    def _persist_approved_strategy(self, candidate_id: str) -> None:
+        """Save the approved plan's essentials on the cycle so it reloads next launch."""
+        import time
+        try:
+            cid = self._runs.active_cycle_id()
+            if not cid or self._db is None or not hasattr(self._db, "save_approved_strategy"):
+                return
+            sp = getattr(self._shell, "strategy_page", None)
+            opt = None
+            for o in (getattr(sp, "_vm", None).options if sp is not None else ()):
+                if o.key == candidate_id or (not candidate_id and o.recommended):
+                    opt = o
+                    break
+            plan = {"approved_at": time.strftime("%Y-%m-%d %H:%M")}
+            if opt is not None:
+                plan.update({
+                    "candidate_id": opt.key, "name": opt.name,
+                    "total_time": opt.total_time, "expected_laps": opt.expected_laps,
+                    "pit_windows": opt.pit_windows, "tyres": opt.tyre_sequence,
+                    "stints": list(opt.stints), "pit_stops": list(opt.pit_stops),
+                })
+            self._db.save_approved_strategy(cid, plan)
+        except Exception:
+            pass
 
     def _on_debrief_action(self, key: str) -> None:
         try:

@@ -222,5 +222,45 @@ class TestExplainCandidate:
         assert explain_candidate({}, {}) is not None
 
 
+class TestPitStopLines:
+    """UAT-8: "the race strategy isn't telling me how much fuel to leave the pits with
+    at each stop and how long estimated pit time will be … changing tyres or not."""
+
+    def test_a_line_per_stop_with_fuel_time_and_tyre(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        rows = [
+            {"stint": 1, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 55.0, "stop_seconds": 0, "tyre_change": False},
+            {"stint": 2, "laps": 16, "compound": "Racing Medium",
+             "fuel_to_leave_l": 52.0, "stop_seconds": 35, "tyre_change": True},
+        ]
+        lines = _pit_stop_lines(rows)
+        assert len(lines) == 1                      # one STOP (before stint 2)
+        assert "Stop 1 (lap 16)" in lines[0]
+        assert "leave with 52 L" in lines[0]
+        assert "~35s in the pits" in lines[0]
+        assert "fit Racing Medium" in lines[0]
+
+    def test_no_tyre_change_says_stay_on(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        rows = [
+            {"stint": 1, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 55.0, "stop_seconds": 0, "tyre_change": False},
+            {"stint": 2, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 52.0, "stop_seconds": 34, "tyre_change": False},
+        ]
+        assert "stay on Racing Hard" in _pit_stop_lines(rows)[0]
+
+    def test_a_no_stop_plan_has_no_lines(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        assert _pit_stop_lines([{"stint": 1, "laps": 30, "compound": "RH"}]) == ()
+        assert _pit_stop_lines([]) == ()
+
+    def test_it_never_raises_on_junk(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        assert _pit_stop_lines(None) == ()
+        assert _pit_stop_lines([None, {"laps": "x"}]) is not None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

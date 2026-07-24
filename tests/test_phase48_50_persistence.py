@@ -110,6 +110,32 @@ def test_lock_setup_on_a_missing_cycle_or_blank_discipline_is_false(tmp_path):
     assert db.lock_setup("cyc-1", "") is False
 
 
+def test_approved_strategy_persists_and_reloads(tmp_path):
+    """UAT-8: "does a saved/loaded strategy stay for next time I open the app?" — it
+    did NOT (memory only). It is now persisted on the cycle."""
+    p = str(tmp_path / "strat.db")
+    db = SessionDB(p)
+    _seed_cycle(db)
+    assert db.get_approved_strategy("cyc-1") == {}
+    plan = {"candidate_id": "c3", "name": "Three-stop", "total_time": "2:08:24",
+            "pit_stops": ["Stop 1 (lap 16): leave with 55 L · ~35s · fit RH"]}
+    assert db.save_approved_strategy("cyc-1", plan) is True
+    db.close()
+    # Reopen the database — the restart case.
+    db2 = SessionDB(p)
+    got = db2.get_approved_strategy("cyc-1")
+    assert got["candidate_id"] == "c3" and got["name"] == "Three-stop"
+    assert got["pit_stops"][0].startswith("Stop 1")
+    db2.close()
+
+
+def test_saving_a_strategy_on_a_missing_cycle_is_false(tmp_path):
+    db = SessionDB(str(tmp_path / "strat2.db"))
+    _seed_cycle(db)
+    assert db.save_approved_strategy("nope", {"name": "x"}) is False
+    assert db.get_approved_strategy("nope") == {}
+
+
 def test_upsert_and_read_cycle_is_idempotent(tmp_path):
     db = SessionDB(str(tmp_path / "c.db"))
     _seed_cycle(db)

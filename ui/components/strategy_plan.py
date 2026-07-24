@@ -46,6 +46,8 @@ class StrategyOption:
     summary: str = ""
     #: "best" or "+12.4s" — how this plan compares with the fastest.
     gap: str = ""
+    #: Per-stop plan: "Stop 1 (lap 16): leave with 58 L · ~35s · fresh RH".
+    pit_stops: Tuple[str, ...] = field(default_factory=tuple)
     recommended: bool = False
 
 
@@ -225,6 +227,16 @@ class StrategyPlanView(QWidget):
             st.setWordWrap(True)
             st.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
             card.body.addWidget(st)
+        # Per-stop plan — the fuel to leave the pits with and the estimated stop time,
+        # which the driver asked for explicitly.
+        if opt.pit_stops:
+            cap = QLabel("Pit stops")
+            cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
+            card.body.addWidget(cap)
+            body = QLabel("•  " + "\n•  ".join(opt.pit_stops))
+            body.setWordWrap(True)
+            body.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+            card.body.addWidget(body)
         if opt.summary:
             s = QLabel(opt.summary)
             s.setWordWrap(True)

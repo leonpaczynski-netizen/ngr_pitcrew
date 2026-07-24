@@ -111,9 +111,45 @@ class LivePitWall(QWidget):
             f"color: {_t.DANGER}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
         self._warning.setVisible(False)
         lay.addWidget(self._warning)
+
+        # The APPROVED PLAN — the pit wall showed live telemetry but nothing about the
+        # plan the driver approved, so it looked empty. This is what they are racing to.
+        self._plan_card = Card()
+        self._plan_card.add(_caption("YOUR RACE PLAN"))
+        self._plan_head = QLabel("")
+        self._plan_head.setWordWrap(True)
+        self._plan_head.setStyleSheet(
+            f"color: {_t.TEXT_HI}; font-size: {_t.FS_H3}pt; font-weight: 700;")
+        self._plan_card.add(self._plan_head)
+        self._plan_stops = QLabel("")
+        self._plan_stops.setWordWrap(True)
+        self._plan_stops.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._plan_card.add(self._plan_stops)
+        self._plan_card.setVisible(False)
+        lay.addWidget(self._plan_card)
         lay.addStretch(1)
 
         self.set_state(LivePitWallVM())
+
+    def show_plan(self, plan: dict) -> None:
+        """Show the approved race plan the driver is racing to (empty dict hides it)."""
+        plan = plan if isinstance(plan, dict) else {}
+        name = str(plan.get("name") or "")
+        if not name:
+            self._plan_card.setVisible(False)
+            return
+        bits = [name]
+        if plan.get("expected_laps"):
+            bits.append(str(plan["expected_laps"]))
+        if plan.get("total_time"):
+            bits.append(str(plan["total_time"]))
+        if plan.get("pit_windows"):
+            bits.append(str(plan["pit_windows"]))
+        self._plan_head.setText("  ·  ".join(bits))
+        stops = tuple(plan.get("pit_stops") or ())
+        self._plan_stops.setText("•  " + "\n•  ".join(str(s) for s in stops) if stops
+                                 else "No stops planned.")
+        self._plan_card.setVisible(True)
 
     def set_state(self, vm: LivePitWallVM) -> None:
         """Update the live surface. Cheap enough to call per telemetry frame."""
@@ -141,6 +177,12 @@ class LivePitWall(QWidget):
             self._warning.setVisible(True)
         else:
             self._warning.setVisible(False)
+
+
+def _caption(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(f"color: {_t.NGR_GREEN}; font-weight: 700; font-size: {_t.FS_CAPTION}pt;")
+    return lbl
 
 
 def _tile(caption: str):
