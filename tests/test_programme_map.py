@@ -58,6 +58,17 @@ class TestItShowsProgressNotJustALevel:
         assert names["tyre_evidence"] == "tyre test"
         assert names["qualifying_setup"] == "qualifying simulation"
 
+    def test_each_area_says_how_long_a_run_is_and_how_to_earn_it(self):
+        """UAT-7: "a bit more information how many laps each one is or how to achieve
+        that area of evidence"."""
+        m = build_programme_map(_UAT_STATE)
+        by_key = {d.key: d for d in m.domains}
+        assert by_key["driver_coaching"].target_laps        # a lap target per area
+        assert by_key["tyre_evidence"].target_laps
+        # And the one line that says how to actually earn it, from the run brief.
+        assert "fresh set" in by_key["tyre_evidence"].how.lower()
+        assert by_key["base_setup"].how
+
 
 class TestTheOverallPicture:
     def test_it_counts_covered_areas_and_a_completion_figure(self):

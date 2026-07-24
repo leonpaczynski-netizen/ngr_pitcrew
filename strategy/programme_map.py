@@ -103,6 +103,11 @@ class DomainProgress:
     run_name: str = "practice run"
     run_type: str = ""       # evidence-domain key the run card/objective uses
     is_next: bool = False    # the engineer's current objective
+    #: How long one qualifying run is ("8–12", "A full stint") — the driver asked how
+    #: many laps each area actually costs.
+    target_laps: str = ""
+    #: The one line that says how to earn this evidence, from the run brief.
+    how: str = ""
 
     @property
     def is_ready(self) -> bool:
@@ -191,6 +196,8 @@ def _build(readiness, *, next_domain: str, next_count: int) -> ProgrammeMap:
             run_name=(brief.run_name if brief else "practice run"),
             run_type=domain_key,
             is_next=bool(next_domain) and domain_key == next_domain,
+            target_laps=(brief.target_laps if brief else ""),
+            how=(brief.how_to_drive[0] if (brief and brief.how_to_drive) else ""),
         ))
 
     rows.sort(key=lambda d: (_order_index(d.key), d.key))

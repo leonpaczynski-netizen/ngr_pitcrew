@@ -209,10 +209,24 @@ class ProgrammeMapPage(QWidget):
         bar.set_progress(d.done, d.target, colour)
         grid.addWidget(bar, 1, 0, 1, 2)
 
-        detail = QLabel(f"{d.progress_text}   ·   fills from a {d.run_name}")
+        fills = f"fills from a {d.run_name}"
+        if d.target_laps:
+            # A bare range ("8–12", "3") reads as laps; anything with words in it
+            # ("A full stint", "12–20, or until the tyre is done") already says so.
+            bare_range = all(c.isdigit() or c in "-–— " for c in d.target_laps)
+            laps = (f"{d.target_laps} laps" if bare_range else d.target_laps.lower())
+            fills += f" ({laps})"
+        detail = QLabel(f"{d.progress_text}   ·   {fills}")
         detail.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         detail.setWordWrap(True)
         grid.addWidget(detail, 2, 0, 1, 2)
+
+        # How to actually earn this evidence — the driver asked what each area takes.
+        if d.how and not d.is_ready:
+            how = QLabel(f"How:  {d.how}")
+            how.setWordWrap(True)
+            how.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+            grid.addWidget(how, 3, 0, 1, 2)
 
         grid.setColumnStretch(0, 1)
         return box
