@@ -93,15 +93,23 @@ class RunLapsPanel(QWidget):
 
         self.set_review(RunReview())
 
-    def set_run_kind(self, run_name: str = "", reports: tuple = ()) -> None:
-        """Name the kind of run this was, and what it can therefore tell the driver."""
+    def set_run_kind(self, run_name: str = "", reports: tuple = "", on: str = "") -> None:
+        """Name the kind of run this was, which setup it was on, and what it can tell.
+
+        ``on`` is the discipline's setup ("Qualifying setup"), so a race run and a
+        qualifying run read as distinct even when they are the same kind of run — the
+        driver asked for race and qualifying practice to be told apart.
+        """
         name = str(run_name or "").strip()
+        on = str(on or "").strip()
         items = tuple(str(r).strip() for r in (reports or ()) if str(r).strip())
-        if not name:
+        if not name and not on:
             self._kind.setVisible(False)
             self._kind.setText("")
             return
-        text = f"Reviewing your {name}"
+        text = f"Reviewing your {name}" if name else "Reviewing this run"
+        if on:
+            text += f" on the {on}"
         if items:
             text += " — it can tell you: " + "; ".join(items).lower()
         self._kind.setText(text)

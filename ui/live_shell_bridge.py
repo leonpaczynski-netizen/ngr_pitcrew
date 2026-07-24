@@ -129,6 +129,9 @@ class LiveShellBridge(QObject):
         self._previous_recorded_session_id = 0
         #: Runs bound to the active cycle, resolved once per refresh tick.
         self._runs_cache = None
+        #: session_id -> discipline it was practised on, so Review tells race and
+        #: qualifying runs apart (a review is otherwise blind to which setup was on).
+        self._run_discipline: dict[int, str] = {}
         #: The active cycle's preparation report, resolved once per refresh (lock state).
         self._lock_report = None
         #: Track pickers are filled once — the circuit list does not change at runtime.
@@ -318,11 +321,15 @@ class LiveShellBridge(QObject):
             panel.set_review(self._review_for(self._review_session_id()))
             from strategy.run_brief import brief_for_run_type
             run_type = self._recorded_run_domain()
+            sid = int(self._review_session_id() or 0)
+            disc = self._run_discipline.get(sid, "")
+            disc_label = ("Qualifying setup" if disc == "qualifying"
+                          else "Race setup" if disc == "race" else "")
             if run_type:
                 brief = brief_for_run_type(run_type)
-                panel.set_run_kind(brief.run_name, brief.reports)
+                panel.set_run_kind(brief.run_name, brief.reports, on=disc_label)
             else:
-                panel.set_run_kind("")
+                panel.set_run_kind("", on=disc_label)
         except Exception:
             pass
 
@@ -494,6 +501,9 @@ class LiveShellBridge(QObject):
         if self._last_recorded_session_id != int(decision.session_id or 0):
             self._previous_recorded_session_id = self._last_recorded_session_id
         self._last_recorded_session_id = int(decision.session_id or 0)
+        # Remember which discipline the driver was practising, so a race run and a
+        # qualifying run are told apart in Review rather than lumped together.
+        self._run_discipline[int(decision.session_id or 0)] = self._discipline
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -963,6 +973,30 @@ class LiveShellBridge(QObject):
             mode = getattr(self._window, "_live_mode_ref", None)
             if isinstance(mode, list) and mode:
                 mode[0] = "Practice"      # a practice session, race vs qual set by the flag
+        except Exception:
+            pass
+        self._push_active_compound(discipline)
+
+    def _push_active_compound(self, discipline: str) -> None:
+        """Tell the telemetry tracker which compound is on the car for this discipline.
+
+        GT7 does NOT broadcast the tyre compound, so recorded laps take it from
+        tracker.set_compound(). Only the classic dashboard's compound dropdown ever
+        called it, so a run driven from the new shell recorded a stale/default compound —
+        a qualifying run on soft tyres was logged as the race hard the classic default
+        still held. The selected discipline's setup compound is now pushed each refresh.
+        """
+        try:
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is None or not hasattr(tracker, "set_compound"):
+                return
+            from strategy.tyre_selection import current_code
+            # The compound is a sheet value in its own right — do NOT gate on is_authored
+            # (which only looks at numeric fields), or a sheet whose only change is the
+            # tyre would never push its compound.
+            code = current_code(self._setups.sheet(discipline).as_dict())
+            if code:
+                tracker.set_compound(code)
         except Exception:
             pass
 

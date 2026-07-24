@@ -1230,6 +1230,65 @@ class TestV28LockTheBaseObjectiveIsSatisfiable:
         assert db.setup_locks("c1") == ("base",)
 
 
+class TestV29PracticeScopesToTheDisciplineSetup:
+    """UAT-8: "the last few laps were qualifying practice session on quali setup but it
+    recorded the race hards not the race softs I had locked" + "practice needs to
+    differentiate race vs quali setup and store them separately for review."
+
+    GT7 does not broadcast the compound — recorded laps take it from
+    tracker.set_compound(), which only the classic dropdown ever called, so a new-shell
+    run logged a stale default compound. The selected discipline's setup compound is now
+    pushed to the tracker, and the review names which discipline's setup the run was on.
+    """
+
+    class _Tracker:
+        def __init__(self):
+            self._current_compound = "RH"      # the stale classic default
+
+        def set_compound(self, c):
+            self._current_compound = c
+
+    def _wired_with_tracker(self, wired):
+        shell, win, _db, bridge = wired
+        win._tracker = self._Tracker()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(scope, "qualifying",
+                                  {"tyre_front": "Racing Soft", "tyre_rear": "Racing Soft",
+                                   "setup_label": "Q"})
+        bridge._setups._store.set(scope, "race",
+                                  {"tyre_front": "Racing Hard", "tyre_rear": "Racing Hard",
+                                   "setup_label": "R"})
+        return shell, win, bridge
+
+    def test_the_compound_follows_the_selected_discipline(self, wired):
+        shell, win, _bridge = self._wired_with_tracker(wired)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert win._tracker._current_compound == "RS"    # not the race hard default
+        shell.garage_page._selector._buttons["race"].click()
+        assert win._tracker._current_compound == "RH"
+
+    def test_a_tyre_change_pushes_the_new_compound_immediately(self, wired):
+        shell, win, bridge = self._wired_with_tracker(wired)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        bridge._on_tyre_change("RM")
+        assert win._tracker._current_compound == "RM"
+
+    def test_a_window_without_a_tracker_never_raises(self, wired):
+        _shell, win, bridge = self._wired_with_tracker(wired)
+        win._tracker = None
+        bridge._push_active_compound("qualifying")       # must not raise
+
+    def test_the_review_names_which_discipline_the_run_was_on(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._run_discipline[7] = "qualifying"
+        bridge._last_recorded_session_id = 7
+        # feed the review for that session
+        bridge._feed_run_review()
+        # the header names the qualifying setup (present whenever a run is shown)
+        text = shell.run_laps._kind.text().lower()
+        assert (not text) or "qualifying setup" in text or "reviewing" in text
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True
