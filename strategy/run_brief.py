@@ -20,6 +20,7 @@ Pure — no Qt, no DB, no I/O, never raises. It decides nothing about the progra
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Tuple
 
@@ -415,6 +416,61 @@ _RUN_TYPE_DOMAIN: Dict[str, str] = {
 def brief_for_run_type(activity_type: str) -> RunBrief:
     """The brief describing a recorded run, keyed by its preparation activity type."""
     return brief_for_domain(_RUN_TYPE_DOMAIN.get(_norm(activity_type).lower(), ""))
+
+
+def _target_lap_bounds(target_laps: str) -> Tuple[int, int]:
+    """The (min, max) lap count read from a brief's ``target_laps`` string.
+
+    Handles the shapes the briefs actually use — "5–8", "12–20, or until the tyre
+    is done", "3 (out · flyer · in)", "8–12" — and returns (0, 0) when the target is
+    prose with no count ("A full stint", "The planned stint length"). Never raises.
+    """
+    nums = [int(n) for n in re.findall(r"\d+", _norm(target_laps))]
+    if not nums:
+        return (0, 0)
+    lo = nums[0]
+    hi = nums[1] if len(nums) > 1 else lo
+    if hi < lo:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+def lap_progress_note(target_laps: str, laps_done: int) -> str:
+    """A short, driver-facing note on whether enough laps have been run yet.
+
+    Compares the laps recorded so far against the run's target lap window, so the
+    driver knows — mid-run, at a glance — whether to keep going or that they have
+    enough of a sample to end on a clean lap. Pure; never raises.
+
+    Prose targets with no lap count ("A full stint") fall back to a completeness
+    reminder rather than inventing a number.
+    """
+    try:
+        done = int(laps_done or 0)
+    except (TypeError, ValueError):
+        done = 0
+    if done < 0:
+        done = 0
+
+    lo, hi = _target_lap_bounds(target_laps)
+    span = str(lo) if lo == hi else f"{lo}–{hi}"
+
+    if not lo:  # no numeric target — the run is about completing a full stint
+        if done <= 0:
+            return "Run the full planned stint."
+        return f"{done} lap{_plural(done)} in — run the full planned stint."
+
+    if done <= 0:
+        return f"Aim for {span} clean lap{_plural(hi)}."
+    if done < lo:
+        return f"{done} of {span} laps — keep going."
+    if done <= hi:
+        return f"{done} laps — enough for a read; a few more only sharpen it."
+    return f"{done} laps — plenty; end the run on a clean lap."
+
+
+def _plural(n: int) -> str:
+    return "" if n == 1 else "s"
 
 
 def known_domains() -> Tuple[str, ...]:

@@ -378,8 +378,12 @@ class LiveShellBridge(QObject):
             # the run is being captured and knows it still has to be ended to count.
             run = self._runs.open_run()
             if run:
+                laps_done = self._live_lap_count()
+                from strategy.run_brief import lap_progress_note
                 rc.set_recording(str(run.get("title") or "Practice run"),
-                                 self._live_lap_count(), connected=self._connected())
+                                 laps_done, connected=self._connected(),
+                                 lap_note=lap_progress_note(card.target_laps, laps_done),
+                                 push=card.push_level)
             else:
                 rc.set_recording("")
         except Exception:

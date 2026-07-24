@@ -188,6 +188,15 @@ class RunCard(Card):
         self._recording.setVisible(False)
         self.body.addWidget(self._recording)
 
+        # Live session guidance while the run is open: how many laps are enough and how
+        # hard to push. Static "Target laps / Push" tell the plan; this tells the driver
+        # where they are IN it, so they know when to end the run rather than guessing.
+        self._run_guidance = QLabel()
+        self._run_guidance.setWordWrap(True)
+        self._run_guidance.setStyleSheet(f"color: {_t.TEXT_HI}; font-size: {_t.FS_LABEL}pt;")
+        self._run_guidance.setVisible(False)
+        self.body.addWidget(self._run_guidance)
+
         self._status = QLabel()
         self._status.setWordWrap(True)
         self._status.setStyleSheet(f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt;")
@@ -235,11 +244,14 @@ class RunCard(Card):
         self._apply_recording_state()
 
     # ---- recording state --------------------------------------------------
-    def set_recording(self, title: str = "", laps: int = 0, *, connected: bool = True) -> None:
+    def set_recording(self, title: str = "", laps: int = 0, *, connected: bool = True,
+                      lap_note: str = "", push: str = "") -> None:
         """Show that a run is open (blank title ends the recording state).
 
         ``laps`` is what the live session has actually recorded so far, so the driver
         can see the run is being captured before committing it to the programme.
+        ``lap_note`` is the live "enough laps yet?" guidance and ``push`` the pace to
+        hold — shown together so the driver knows, mid-run, whether to keep going.
         """
         title = _norm(title)
         self._recording_on = bool(title)
@@ -249,6 +261,12 @@ class RunCard(Card):
             self._recording.setText(f"● RECORDING:  {title}  ·  {lap_text}{live}")
             self._record.set_action("End run & record", enabled=True)
             self._discard.set_action("Discard run", enabled=True)
+            bits = []
+            if _norm(lap_note):
+                bits.append(_norm(lap_note))
+            if _norm(push):
+                bits.append(f"Push: {_norm(push)}")
+            self._run_guidance.setText("   ·   ".join(bits))
         self._apply_recording_state()
 
     def set_status(self, text: str) -> None:
@@ -263,6 +281,7 @@ class RunCard(Card):
     def _apply_recording_state(self) -> None:
         on = self._recording_on
         self._recording.setVisible(on)
+        self._run_guidance.setVisible(on and bool(self._run_guidance.text()))
         self._record.setVisible(on)
         self._discard.setVisible(on)
         # One primary action at a time: Start is replaced by End-run while recording.

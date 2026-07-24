@@ -311,6 +311,17 @@ class TestV5RunRecording:
         assert "RECORDING" in shell.run_card._recording.text()
         assert "9 laps so far" in shell.run_card._recording.text()
 
+    def test_recording_shows_live_lap_and_push_guidance(self, wired):
+        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard
+        # to push. setup_base targets "5–8" laps; the fake session reports 9 → "plenty".
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view()
+        shell.run_card.start_requested.emit()
+        guidance = shell.run_card._run_guidance.text()
+        assert shell.run_card._run_guidance.isHidden() is False
+        assert "end the run on a clean lap" in guidance.lower()
+        assert "Push:" in guidance
+
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
         bridge._last_guidance_view = _view()
