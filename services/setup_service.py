@@ -355,6 +355,20 @@ class SetupService:
                             changed_fields=tuple(sorted(current.diff(previous))),
                             reason="Reverted to the previous values.")
 
+    #: Fields on the sheet that are NOT part of the setup's applied identity. The shift
+    #: beep RPM is a beep preference that travels with the sheet, not a tuning value —
+    #: including it in the applied snapshot made this path's hash disagree with the
+    #: classic path's (which never carries it), so every confirmation flipped the hash
+    #: and bumped the revision. It also meant editing the beep RPM looked like a new
+    #: setup. Excluded here so the applied identity is the tune alone.
+    _BEEP_ONLY_FIELDS = ("shift_rpm",)
+
+    def _applied_fields(self, sheet: SetupSheet) -> Dict[str, Any]:
+        d = sheet.as_dict()
+        for k in self._BEEP_ONLY_FIELDS:
+            d.pop(k, None)
+        return d
+
     # ---- confirm ----------------------------------------------------------
     def confirm_applied_in_game(self, discipline: str = "race",
                                 *, applied_at: str = "") -> SetupOutcome:
@@ -380,7 +394,7 @@ class SetupService:
             purpose = PURPOSE.get(d, "Race")
             before = self._authority.active_setup(identity, purpose)
             active = self._authority.mark_applied(
-                identity, setup_id=label, name=label, fields=sheet.as_dict(),
+                identity, setup_id=label, name=label, fields=self._applied_fields(sheet),
                 purpose=purpose, applied_at=_norm(applied_at))
         except Exception as exc:
             return SetupOutcome(discipline=d, reason=f"Could not confirm the setup: {exc}")

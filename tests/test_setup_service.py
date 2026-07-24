@@ -335,6 +335,30 @@ class TestShiftRpm:
             if k != "shift_rpm":
                 assert after[k] == v
 
+    def test_changing_the_beep_rpm_never_bumps_the_setup_revision(self, tmp_path):
+        """UAT-7: "everytime I click entered in GT7 it increments the setup number."
+        The beep RPM lives on the sheet but is NOT part of the setup's applied identity —
+        including it made this path's hash disagree with the classic path's (which never
+        carries it), so every confirmation flipped the hash and bumped the revision."""
+        from data.setup_state_authority import ActiveSetupAuthority, SetupIdentity
+        from data.active_setup_store import InMemoryActiveSetupStore
+        auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+        store = SetupSheetStore(str(tmp_path / "s.json"))
+        svc = SetupService(store=store, authority=auth, inputs_provider=lambda: _inputs())
+        store.set(_inputs().scope, "race",
+                  {"arb_front": 5, "setup_label": "Setup 1", "ride_height_front": 70})
+        assert "rev 1" in svc.confirm_applied_in_game("race").reason
+        svc.set_shift_rpm("race", 7840)
+        # Confirming after only a beep change reports "unchanged", still rev 1.
+        assert "unchanged" in svc.confirm_applied_in_game("race").reason.lower()
+        svc.set_shift_rpm("race", 7000)
+        assert "unchanged" in svc.confirm_applied_in_game("race").reason.lower()
+        active = auth.active_setup(
+            SetupIdentity(car=_inputs().car, track=_inputs().track,
+                          layout_id=_inputs().layout), "Race")
+        assert active.revision == 1
+        assert "shift_rpm" not in active.fields   # the tune, not the beep preference
+
 
 class TestNeverRaises:
     def test_a_broken_inputs_provider_degrades_to_unknown(self, tmp_path):

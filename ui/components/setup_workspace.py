@@ -506,12 +506,19 @@ class SetupWorkspace(QWidget):
         """Show the upshift point for the current discipline's sheet.
 
         Setting the spin box must not re-emit ``shift_rpm_changed`` — that would echo a
-        value the caller just fed back as though the driver had typed it.
+        value the caller just fed back as though the driver had typed it. And while the
+        driver is actually EDITING the field, the periodic 750 ms feed must not overwrite
+        it — that clobbered the value mid-type and it "changed straight back".
         """
         try:
             v = max(0, int(value or 0))
         except (TypeError, ValueError):
             v = 0
+        if self._shift_rpm.hasFocus():
+            # Keep the note fresh but leave the value the driver is typing alone.
+            self._shift_note.setText(str(note or ""))
+            self._shift_note.setVisible(bool(note))
+            return
         self._shift_rpm_value = v
         self._shift_rpm.blockSignals(True)
         self._shift_rpm.setValue(v)

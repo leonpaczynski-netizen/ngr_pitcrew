@@ -229,8 +229,8 @@ class PitCrewShell(QMainWindow):
         self.event_setup_page.cancelled.connect(lambda: self._navigate("home"))
         self.home_page.manage_events_requested.connect(
             lambda: self._navigate("event_setup"))
-        self._page_by_dest["event_setup"] = self.event_setup_page
-        self.pages.addWidget(self.event_setup_page)
+        self._page_by_dest["event_setup"] = self._scrollable(self.event_setup_page)
+        self.pages.addWidget(self._page_by_dest["event_setup"])
         for dest in NAV_DESTINATIONS:
             if dest == "home":
                 page = self.home_page
@@ -259,8 +259,27 @@ class PitCrewShell(QMainWindow):
             else:
                 t, sub = titles.get(dest, (NAV_LABELS.get(dest, dest), ""))
                 page = _SimplePage(t, sub)
-            self._page_by_dest[dest] = page
-            self.pages.addWidget(page)
+            wrapper = self._scrollable(page)
+            self._page_by_dest[dest] = wrapper
+            self.pages.addWidget(wrapper)
+
+    def _scrollable(self, page: QWidget) -> QWidget:
+        """Wrap a page so its content scrolls when it is taller than the viewport.
+
+        Without this the QStackedWidget sized to the tallest page and the window opened
+        taller than the screen — everything "fit", so nothing scrolled and the bottom of
+        long pages (Garage sheet, Strategy, Programme) was simply off-screen. Every page
+        is wrapped uniformly; a page that already scrolls internally just nests harmlessly
+        (the inner area handles the wheel).
+        """
+        from PyQt6.QtWidgets import QScrollArea, QFrame
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        area.setWidget(page)
+        return area
 
     def _build_practice_page(self) -> QWidget:
         from PyQt6.QtWidgets import (

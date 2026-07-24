@@ -240,7 +240,7 @@ def main() -> int:
         "shift_beep": {"qual_rpm": 8200, "race_rpm": 7800},
     })
 
-    shell.show()
+    shell.showMaximized()
     return app.exec()
 
 

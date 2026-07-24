@@ -35,6 +35,26 @@ class TestConstruction:
         assert shell.rail is not None
         assert shell.guidance is not None
 
+    def test_every_page_scrolls_when_taller_than_the_viewport(self, shell):
+        """UAT-7: "can't scroll on any page that has data below the visible window."
+        Pages weren't wrapped, so the window opened taller than the screen and nothing
+        scrolled. Every stack entry is now a vertical scroll area around the real page."""
+        from PyQt6.QtWidgets import QScrollArea
+        from PyQt6.QtCore import Qt
+        for dest in NAV_DESTINATIONS:
+            wrapper = shell._page_by_dest[dest]
+            assert isinstance(wrapper, QScrollArea), dest
+            assert wrapper.widgetResizable() is True
+            assert (wrapper.verticalScrollBarPolicy()
+                    == Qt.ScrollBarPolicy.ScrollBarAsNeeded), dest
+            # The real page is reachable inside the wrapper (feeding still works).
+            assert wrapper.widget() is not None
+
+    def test_the_inner_page_is_still_reachable_for_feeding(self, shell):
+        # The bridge feeds shell.garage_page etc.; wrapping must not hide them.
+        assert shell._page_by_dest["garage"].widget() is shell.garage_page
+        assert shell._page_by_dest["programme"].widget() is shell.programme_page
+
 
 class TestNavigation:
     def test_nav_click_switches_page(self, shell):

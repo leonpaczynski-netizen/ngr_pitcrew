@@ -94,3 +94,38 @@ class TestSetupWorkspace:
         w = SetupWorkspace()
         w.set_recommendation("not a vm")   # must not raise
         assert w._table.rowCount() == 0
+
+
+class TestShiftRpmField:
+    def test_setting_the_value_does_not_re_emit(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.shift_rpm_changed.connect(seen.append)
+        w.set_shift_rpm(7840, "note")
+        assert w._shift_rpm.value() == 7840 and seen == []
+
+    def test_a_periodic_feed_does_not_clobber_a_focused_edit(self, qapp):
+        """UAT-7: "the rpm shift when I change it it changes straight back to default."
+        The 750ms feed called set_shift_rpm mid-edit and reset the box the driver was
+        typing in. While the field has focus its value is left alone."""
+        w = SetupWorkspace()
+        w.show()                                    # a shown widget can take focus
+        w.set_shift_rpm(7840)
+        w._shift_rpm.setFocus()
+        if w._shift_rpm.hasFocus():                 # offscreen platforms may not focus
+            w._shift_rpm.setValue(7000)             # the driver is mid-edit
+            w.set_shift_rpm(7840, "feed note")      # a periodic feed lands
+            assert w._shift_rpm.value() == 7000     # the edit is preserved
+            assert w._shift_note.text() == "feed note"   # but the note still refreshes
+        w.close()
+
+    def test_an_edit_emits_the_new_value_once(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.shift_rpm_changed.connect(seen.append)
+        w.set_shift_rpm(7840)
+        w._shift_rpm.setValue(7000)
+        w._on_shift_rpm_edited()
+        assert seen == [7000]
+        w._on_shift_rpm_edited()                    # no change → no repeat emit
+        assert seen == [7000]
