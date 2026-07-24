@@ -388,3 +388,80 @@ def _build_run_outcome(review, *, feedback, previous) -> RunOutcome:
         changed_vs_previous=tuple(changed), confidence=confidence,
         primary_action_label=action[0], primary_action_key=action[1],
         secondary_action_label="Gather more data", secondary_action_key="gather")
+
+
+# --------------------------------------------------------------------------- coaching
+#: A coaching run is about the DRIVER, not the setup. Its review reads the same lap data
+#: as any run, but asks a different question: where is the driver leaving time, and is
+#: the limit the car or the lap being driven? Built purely from the RunReview so no new
+#: telemetry pipeline is needed.
+
+@dataclass(frozen=True)
+class CoachingReview:
+    """Driver-focused read of a run: pace left on the table, consistency, mistakes."""
+    headline: str = ""
+    lines: Tuple[str, ...] = field(default_factory=tuple)
+    limited_by: str = ""          # "the lap you are driving" | "the car" | ""
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.headline or self.lines)
+
+
+def build_coaching_review(review: Optional["RunReview"]) -> CoachingReview:
+    """Coach a driver from a recorded run. Never raises."""
+    try:
+        return _build_coaching_review(review)
+    except Exception:  # pragma: no cover - defensive
+        return CoachingReview()
+
+
+def _build_coaching_review(review: Optional["RunReview"]) -> CoachingReview:
+    if not isinstance(review, RunReview) or not review.has_laps:
+        return CoachingReview()
+    if review.clean_laps < MIN_LAPS_FOR_VERDICT:
+        return CoachingReview(
+            headline="Not enough clean laps to coach yet — put in a few repeatable laps.")
+
+    lines: List[str] = []
+    gap_ms = max(0, review.average_clean_ms - review.best_ms)
+    gap_s = gap_ms / 1000.0
+    # How much the driver leaves per lap by not repeating their best.
+    if gap_ms > 0:
+        lines.append(
+            f"Your best clean lap is {format_lap_time(review.best_ms)}, but your average "
+            f"is {format_lap_time(review.average_clean_ms)} — you are leaving about "
+            f"{gap_s:.1f}s a lap by not repeating your best.")
+    else:
+        lines.append(
+            f"Your laps are right on your best of {format_lap_time(review.best_ms)} — "
+            f"very little left in the driving.")
+
+    # Consistency read.
+    cons_s = review.consistency_ms / 1000.0
+    if review.consistency_ms:
+        band = ("tight — you repeat the lap well" if cons_s <= 0.3
+                else "loose — the lap is not repeating" if cons_s >= 0.7
+                else "workable, with room to tighten")
+        lines.append(f"Consistency ±{cons_s:.3f}s: {band}.")
+
+    # Mistakes.
+    if review.lock_ups or review.wheelspin:
+        bits = []
+        if review.lock_ups:
+            bits.append(f"{review.lock_ups} lock-up{'s' if review.lock_ups != 1 else ''}")
+        if review.wheelspin:
+            bits.append(f"{review.wheelspin} wheelspin event{'s' if review.wheelspin != 1 else ''}")
+        lines.append(" and ".join(bits) + " — smoothing these out is free lap time.")
+    else:
+        lines.append("Clean run — no lock-ups or wheelspin flagged.")
+
+    # The coaching verdict: is the driver or the car the limit?
+    # A tight, repeatable run near its own best is car-limited; a loose or off-best run
+    # has time in the driving.
+    driver_limited = gap_s >= 0.5 or cons_s >= 0.7 or review.lock_ups or review.wheelspin
+    limited_by = "the lap you are driving" if driver_limited else "the car"
+    headline = ("There is time in your driving to find."
+                if driver_limited else
+                "You are getting the most out of this car — look to the setup for more.")
+    return CoachingReview(headline=headline, lines=tuple(lines), limited_by=limited_by)

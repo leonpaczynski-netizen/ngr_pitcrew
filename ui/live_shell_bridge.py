@@ -330,6 +330,15 @@ class LiveShellBridge(QObject):
                 panel.set_run_kind(brief.run_name, brief.reports, on=disc_label)
             else:
                 panel.set_run_kind("", on=disc_label)
+            # A coaching run's review is about the DRIVER — surface the coaching read so
+            # it is not indistinguishable from a normal practice run.
+            if hasattr(panel, "set_coaching"):
+                if str(run_type).lower() == "coaching_run":
+                    from strategy.practice_run_review import build_coaching_review
+                    panel.set_coaching(build_coaching_review(
+                        self._review_for(self._review_session_id())))
+                else:
+                    panel.set_coaching(None)
         except Exception:
             pass
 

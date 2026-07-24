@@ -8,8 +8,8 @@ blank outcome screen". Nothing ever turned the stored lap rows into either surfa
 import pytest
 
 from strategy.practice_run_review import (
-    CLEAN_LAP_TOLERANCE, MIN_LAPS_FOR_VERDICT, RunReview, build_run_outcome,
-    build_run_review, format_delta, format_lap_time,
+    CLEAN_LAP_TOLERANCE, MIN_LAPS_FOR_VERDICT, RunReview, build_coaching_review,
+    build_run_outcome, build_run_review, format_delta, format_lap_time,
 )
 
 
@@ -209,3 +209,46 @@ class TestRunOutcome:
         assert "traction: Excellent" in o.feedback_summary
         assert "Neutral" not in o.feedback_summary
         assert "felt planted" in o.feedback_summary
+
+
+class TestCoachingReview:
+    """UAT-8: "still not sure what coaching sessions do as see no difference from normal
+    practice." A coaching run's review is about the DRIVER, built from the run data."""
+
+    def _review(self, best, avg, cons_ms, lock=0, spin=0, clean=4):
+        return RunReview(laps=tuple(range(clean)), clean_laps=clean, best_ms=best,
+                         average_clean_ms=avg, consistency_ms=cons_ms,
+                         lock_ups=lock, wheelspin=spin)
+
+    def test_it_reports_time_left_on_the_table(self):
+        cr = build_coaching_review(self._review(117000, 118500, 300))
+        assert cr.has_content
+        assert "leaving about 1.5s a lap" in " ".join(cr.lines)
+
+    def test_a_loose_run_is_driver_limited(self):
+        cr = build_coaching_review(self._review(117000, 118500, 800, lock=2))
+        assert cr.limited_by == "the lap you are driving"
+        assert "time in your driving" in cr.headline.lower()
+
+    def test_a_tight_run_near_its_best_is_car_limited(self):
+        cr = build_coaching_review(self._review(117000, 117050, 150))
+        assert cr.limited_by == "the car"
+        assert "setup" in cr.headline.lower()
+
+    def test_mistakes_are_called_out(self):
+        cr = build_coaching_review(self._review(117000, 117200, 200, lock=3, spin=1))
+        joined = " ".join(cr.lines)
+        assert "3 lock-ups" in joined and "1 wheelspin event" in joined
+
+    def test_a_clean_run_says_so(self):
+        cr = build_coaching_review(self._review(117000, 117100, 150))
+        assert any("no lock-ups or wheelspin" in l.lower() for l in cr.lines)
+
+    def test_too_few_clean_laps_declines_to_coach(self):
+        cr = build_coaching_review(self._review(117000, 117000, 0, clean=1))
+        assert "not enough clean laps" in cr.headline.lower()
+
+    def test_no_run_is_empty_and_never_raises(self):
+        assert build_coaching_review(RunReview()).has_content is False
+        assert build_coaching_review(None).has_content is False
+        assert build_coaching_review("garbage").has_content is False
