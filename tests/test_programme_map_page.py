@@ -57,6 +57,47 @@ class TestRendering:
         assert p._start.isEnabled() is False
 
 
+class TestClickableAreas:
+    """UAT-8: "would like to see more information if I click on evidence areas on
+    programme page." Clicking an area toggles its full detail."""
+
+    def _labels(self, p, qapp=None):
+        from PyQt6.QtWidgets import QLabel
+        from PyQt6.QtCore import QEvent
+        app = QApplication.instance()
+        app.processEvents()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)   # flush deleteLater
+        app.processEvents()
+        return [l.text() for l in p.findChildren(QLabel)]
+
+    def test_detail_is_hidden_until_an_area_is_opened(self, qapp):
+        p = ProgrammeMapPage()
+        p.set_map(build_programme_map(_STATE))
+        assert not any("How to drive it" in t for t in self._labels(p))
+
+    def test_opening_an_area_shows_how_and_reports(self, qapp):
+        p = ProgrammeMapPage()
+        p.set_map(build_programme_map(_STATE))
+        p._toggle_area("base_setup")
+        labels = self._labels(p)
+        assert any("How to drive it" in t for t in labels)
+        assert any("What it will tell you" in t for t in labels)
+
+    def test_opening_the_tyre_area_lists_missing_compounds(self, qapp):
+        p = ProgrammeMapPage()
+        p.set_map(build_programme_map(_STATE, tyre_required=["RS", "RM", "RH"],
+                                      tyre_sampled=["RS"]))
+        p._toggle_area("tyre_evidence")
+        assert any("Compounds still to run" in t for t in self._labels(p))
+
+    def test_toggling_again_collapses_it(self, qapp):
+        p = ProgrammeMapPage()
+        p.set_map(build_programme_map(_STATE))
+        p._toggle_area("base_setup")
+        p._toggle_area("base_setup")
+        assert not any("How to drive it" in t for t in self._labels(p))
+
+
 class TestEmptyAndDefensive:
     def test_no_programme_shows_the_placeholder(self, qapp):
         p = ProgrammeMapPage()

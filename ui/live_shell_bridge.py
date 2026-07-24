@@ -674,9 +674,38 @@ class LiveShellBridge(QObject):
             na = v.get("next_action") or {}
             next_domain = str(na.get("domain") or "").strip().lower() \
                 or domain_from_objective_headline(str(na.get("headline") or ""))
-            page.set_map(build_programme_map(readiness, next_domain=next_domain))
+            required, sampled = self._tyre_compound_coverage()
+            page.set_map(build_programme_map(
+                readiness, next_domain=next_domain,
+                tyre_required=required, tyre_sampled=sampled))
         except Exception:
             pass
+
+    def _tyre_compound_coverage(self):
+        """(allowed compounds, compounds already sampled) for the tyre-wear area.
+
+        Practice is not complete until every allowed compound has been run — a race can
+        force a switch mid-race. Allowed comes from the event; sampled from the dominant
+        compound of each run recorded against this event.
+        """
+        required, sampled = (), set()
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            required = tuple(getattr(ev, "available_tyres", ()) or ())
+        except Exception:
+            required = ()
+        if not required:
+            return (), ()          # no restriction → no per-compound requirement
+        try:
+            for r in self._recorded_runs():
+                sid = int(r.get("session_id") or 0)
+                if sid and hasattr(self._db, "_dominant_compound"):
+                    c = str(self._db._dominant_compound(sid) or "").strip()
+                    if c:
+                        sampled.add(c.upper())
+        except Exception:
+            pass
+        return required, tuple(sorted(sampled))
 
     def _on_programme_start_next(self, domain: str) -> None:
         """Start the run the programme map points at — the weakest area's run type."""
