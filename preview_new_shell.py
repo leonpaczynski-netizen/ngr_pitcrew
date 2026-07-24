@@ -201,12 +201,20 @@ def main() -> int:
     # Race strategy
     from ui.components.strategy_plan import StrategyPlanVM, StrategyOption, StrategyInput
     shell.strategy_page.set_plan(StrategyPlanVM(
-        options=(StrategyOption("2-stop (Soft-Soft-Medium)", total_time="1:02:14", expected_laps="34",
-                                stints=("12 Soft", "12 Soft", "10 Medium"), tyre_sequence="S→S→M",
-                                fuel_target="Full each stint", pit_windows="L12, L24", confidence="high",
-                                summary="Fastest total time on measured degradation.", recommended=True),
-                 StrategyOption("1-stop (Medium-Hard)", total_time="1:02:49", expected_laps="34",
-                                confidence="medium", summary="Safer on a safety car, ~35s slower.")),
+        options=(StrategyOption("2-stop (Soft-Soft-Medium)", key="c2", total_time="1:02:14",
+                                expected_laps="34 laps", gap="best",
+                                stints=("12 laps Soft", "12 laps Soft", "10 laps Medium"),
+                                tyre_sequence="S→S→M",
+                                fuel_target="Full each stint", pit_windows="2 stop(s)", confidence="high",
+                                summary=("vs 1-stop: 1 more stop, 22s more in the pits, "
+                                         "57s less tyre degradation — 35s faster overall."),
+                                recommended=True),
+                 StrategyOption("1-stop (Medium-Hard)", key="c1", total_time="1:02:49",
+                                expected_laps="34 laps", gap="+35.0s", pit_windows="1 stop(s)",
+                                stints=("18 laps Medium", "16 laps Hard"),
+                                confidence="medium",
+                                summary=("vs 2-stop: 1 fewer stop, 22s less in the pits, "
+                                         "57s more tyre degradation — 35s slower overall."))),
         risks=(("Tyre deg", "medium"), ("Traffic", "low")),
         inputs=(StrategyInput("Tyre deg", "0.06 s/lap", "measured"),
                 StrategyInput("Pit loss", "22 s", "manual"),

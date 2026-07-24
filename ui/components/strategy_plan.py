@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayo
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading, Card
 from ui.components.status import StatusPill, ConfidenceMeter, TONE_BASE_COLOR
-from ui.components.buttons import PrimaryActionButton
+from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 
 
 # input source -> semantic tone (measured is trustworthy; missing is a red flag)
@@ -34,6 +34,8 @@ _SOURCE_TONE = {
 @dataclass(frozen=True)
 class StrategyOption:
     name: str
+    #: Stable candidate id — what selecting this plan reports back.
+    key: str = ""
     total_time: str = ""
     expected_laps: str = ""
     stints: Tuple[str, ...] = field(default_factory=tuple)
@@ -42,6 +44,8 @@ class StrategyOption:
     pit_windows: str = ""
     confidence: str = "unknown"
     summary: str = ""
+    #: "best" or "+12.4s" — how this plan compares with the fastest.
+    gap: str = ""
     recommended: bool = False
 
 
@@ -68,11 +72,14 @@ class StrategyPlanView(QWidget):
     approve_requested = pyqtSignal()
     #: Build the plan from the runs recorded against this event.
     build_requested = pyqtSignal()
+    #: The driver chose a plan (candidate id) — the recommendation is advice, not a rule.
+    plan_selected = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ngrStrategyPlan")
         self._vm = StrategyPlanVM()
+        self._selected_key = ""
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
         self._root.setSpacing(_t.SPACE_MD)
@@ -124,12 +131,29 @@ class StrategyPlanView(QWidget):
         self._status.setText(text)
         self._status.setVisible(bool(text))
 
+    def set_selected_plan(self, key: str) -> None:
+        """Mark which plan the driver has chosen, and re-render."""
+        self._selected_key = str(key or "")
+        self.set_plan(self._vm)
+
+    def selected_plan(self) -> str:
+        """The chosen plan, defaulting to the recommended one until the driver picks."""
+        if self._selected_key:
+            return self._selected_key
+        for opt in self._vm.options:
+            if opt.recommended and opt.key:
+                return opt.key
+        return ""
+
     def set_plan(self, vm: StrategyPlanVM) -> None:
         if not isinstance(vm, StrategyPlanVM):
             vm = StrategyPlanVM()
         self._vm = vm
         _clear_layout(self._body)
         self._empty.setVisible(not vm.has_plan)
+        # A selection that is no longer among the options must not linger.
+        if self._selected_key and self._selected_key not in {o.key for o in vm.options}:
+            self._selected_key = ""
 
         for opt in vm.options:
             self._body.addWidget(self._option_card(opt))
@@ -160,7 +184,20 @@ class StrategyPlanView(QWidget):
             f"color: {_t.TEXT_HI if opt.recommended else _t.TEXT}; font-weight: 700; "
             f"font-size: {_t.FS_H3}pt;")
         head.addWidget(name)
+        if opt.key and opt.key == self._selected_key:
+            chosen = QLabel("✓ your plan")
+            chosen.setStyleSheet(
+                f"color: {_t.NGR_GREEN}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
+            head.addWidget(chosen)
         head.addStretch(1)
+        # The gap says plainly how this plan compares with the fastest — the missing
+        # answer to "how would a 3 stop be quicker than a 2 stop".
+        if opt.gap:
+            gap = QLabel("fastest" if opt.gap == "best" else opt.gap)
+            gap.setStyleSheet(
+                f"color: {_t.NGR_GREEN if opt.gap == 'best' else _t.TEXT_DIM}; "
+                f"font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
+            head.addWidget(gap)
         head.addWidget(ConfidenceMeter(opt.confidence))
         card.body.addLayout(head)
 
@@ -193,6 +230,16 @@ class StrategyPlanView(QWidget):
             s.setWordWrap(True)
             s.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
             card.body.addWidget(s)
+        # Any plan can be chosen — the recommendation is advice, not the only option.
+        if opt.key:
+            row = QHBoxLayout()
+            row.addStretch(1)
+            if opt.key != self._selected_key:
+                btn = SecondaryActionButton("Use this plan")
+                btn.clicked.connect(
+                    lambda _=False, k=opt.key: self.plan_selected.emit(k))
+                row.addWidget(btn)
+            card.body.addLayout(row)
         return card
 
     def _risks_row(self, risks) -> QWidget:

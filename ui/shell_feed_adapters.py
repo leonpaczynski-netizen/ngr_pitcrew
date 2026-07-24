@@ -99,15 +99,27 @@ def strategy_plan_vm_from_rpvm(rpvm):
     if cand_rows:
         for r in cand_rows:
             recommended = str(r.get("status", "")).lower().startswith("recomm")
+            # Every plan carries its OWN stint lengths and lap count — only the
+            # recommended one used to, so the alternatives were unreadable. The lap
+            # count matters in a time-certain race: it is what the driver races to.
+            own_stints = tuple(r.get("stints") or ()) or (stints if recommended else ())
+            laps = r.get("total_laps")
+            risk = str(r.get("risk", "—"))
+            why = str(r.get("why", "") or "")
+            summary = "  ".join(
+                p for p in (why, ("" if risk in ("—", "") else f"Risk: {risk}")) if p)
             options.append(StrategyOption(
+                key=str(r.get("candidate_id", "") or ""),
                 name=str(r.get("strategy", "Strategy")),
                 total_time=str(r.get("total_time", "")),
+                expected_laps=(f"{int(laps)} laps" if laps else ""),
                 tyre_sequence=str(r.get("compounds", "")),
                 pit_windows=(f"{r.get('pit_stops', '')} stop(s)"
                              if r.get("pit_stops") is not None else ""),
                 confidence=_conf_key(str(r.get("confidence", ""))),
-                summary=("" if str(r.get("risk", "—")) in ("—", "") else f"Risk: {r.get('risk')}"),
-                stints=stints if recommended else (),
+                summary=summary,
+                gap=str(r.get("gap_to_best", "") or ""),
+                stints=own_stints,
                 recommended=recommended,
             ))
     else:

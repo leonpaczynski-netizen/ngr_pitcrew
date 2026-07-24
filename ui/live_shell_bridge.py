@@ -199,6 +199,7 @@ class LiveShellBridge(QObject):
            lambda: self._navigate("live_pit_wall"))
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
+        _c(getattr(shell, "strategy_page", None), "plan_selected", self._on_select_plan)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
@@ -1390,14 +1391,40 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _on_select_plan(self, key: str) -> None:
+        """The driver chose a plan other than the recommended one. The recommendation is
+        advice; the choice is theirs, and it is what Approve then commits."""
+        sp = getattr(self._shell, "strategy_page", None)
+        if sp is None:
+            return
+        try:
+            sp.set_selected_plan(str(key or ""))
+            name = next((o.name for o in sp._vm.options if o.key == key), "")
+            sp.set_status(f"{name} is your plan — approve it to take it to the pit wall."
+                          if name else "")
+        except Exception:
+            pass
+
     def _on_approve_strategy(self) -> None:
-        """Approve the (read-only) race plan and move to the live wall. Records approval
-        if the window supports it; never mutates a setup."""
+        """Approve the race plan the driver has chosen and move to the live wall.
+
+        Records approval if the window supports it; never mutates a setup. The chosen
+        plan defaults to the recommended one until the driver picks a different card.
+        """
+        chosen = ""
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            chosen = sp.selected_plan() if sp is not None else ""
+        except Exception:
+            chosen = ""
         try:
             window = self._window
             fn = getattr(window, "approve_race_plan", None)
             if callable(fn):
-                fn()
+                try:
+                    fn(chosen) if chosen else fn()
+                except TypeError:      # older signature takes no argument
+                    fn()
         except Exception:
             pass
         self._navigate("live_pit_wall")
