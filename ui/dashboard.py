@@ -59,72 +59,14 @@ from ui.tab_registry import (
 # ---------------------------------------------------------------------------
 # Group 47 — Outcome verification helpers (pure, best-effort, never raise)
 # ---------------------------------------------------------------------------
-
-# Structured driver_feedback columns whose text feeds outcome classification.
-_FEEDBACK_TEXT_FIELDS = (
-    "corner_entry", "mid_corner", "exit_stability", "rear_braking",
-    "tyre_condition", "notes",
+# Canonical home is strategy/setup_feedback_evidence.py (extracted in the UI
+# rebuild, F0.1).  Imported here under their historical private names so the
+# scoring-pass call sites and existing structural tests stay unchanged.
+from strategy.setup_feedback_evidence import (
+    FEEDBACK_TEXT_FIELDS as _FEEDBACK_TEXT_FIELDS,
+    combine_driver_feedback_text as _combine_driver_feedback_text,
+    verify_change_outcome as _verify_change_outcome,
 )
-
-
-def _combine_driver_feedback_text(feedback_row: dict) -> str:
-    """Join a driver_feedback row's free-text/structured fields into one string.
-
-    Used only as evidence for deterministic outcome classification.  Never raises.
-    """
-    try:
-        parts = []
-        for f in _FEEDBACK_TEXT_FIELDS:
-            v = (feedback_row.get(f) or "").strip()
-            if v:
-                parts.append(v)
-        return "; ".join(parts)
-    except Exception:
-        return ""
-
-
-def _verify_change_outcome(
-    rule_id: str,
-    field: str,
-    car_id: int,
-    track: str,
-    layout_id: str,
-    before_window,
-    after_window,
-    feedback_text: str,
-) -> dict:
-    """Run the Group 47 outcome-verification model for one applied change.
-
-    Returns a small dict {target_issue, evidence_summary, safety_notes,
-    outcome_kind} used to enrich the learning_outcomes record additively.  Any
-    failure returns empty strings so the caller's persistence is never disrupted.
-    """
-    try:
-        from strategy.setup_outcome_verification import (
-            MetricSnapshot, verify_outcome, infer_target_issue_from_fields,
-        )
-        target_issue = infer_target_issue_from_fields([field])
-        result = verify_outcome(
-            rule_id=rule_id,
-            car_id=car_id,
-            track=track,
-            layout_id=layout_id,
-            target_issue=target_issue,
-            before=MetricSnapshot.from_window(before_window),
-            after=MetricSnapshot.from_window(after_window),
-            driver_feedback=feedback_text,
-        )
-        return {
-            "target_issue": result.target_issue,
-            "evidence_summary": result.evidence_summary,
-            "safety_notes": result.safety_notes,
-            "outcome_kind": result.outcome.value,
-        }
-    except Exception:
-        return {
-            "target_issue": "", "evidence_summary": "",
-            "safety_notes": "", "outcome_kind": "",
-        }
 
 
 # ---------------------------------------------------------------------------

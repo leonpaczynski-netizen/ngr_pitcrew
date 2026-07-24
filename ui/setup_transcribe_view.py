@@ -136,6 +136,49 @@ def build_transcribe_sections(d: dict) -> list[dict]:
     return sections
 
 
+#: The canonical GT7 tuning-menu order of every setup FIELD KEY, matching the row
+#: order of ``build_transcribe_sections`` above. Any surface that lists setup fields
+#: for transcription into GT7 sorts by this so the driver reads top-to-bottom in the
+#: same order as the in-game menu instead of hunting for each row.
+GT7_FIELD_ORDER: tuple[str, ...] = (
+    # 1 — Tyres
+    "tyre_front", "tyre_rear",
+    # 2 — Suspension
+    "ride_height_front", "ride_height_rear",
+    "arb_front", "arb_rear",
+    "dampers_front_comp", "dampers_rear_comp",
+    "dampers_front_ext", "dampers_rear_ext",
+    "springs_front", "springs_rear",
+    "camber_front", "camber_rear",
+    "toe_front", "toe_rear",
+    # 3 — Differential & Brakes
+    "lsd_initial", "lsd_accel", "lsd_decel",
+    "lsd_front_initial", "lsd_front_accel", "lsd_front_decel",
+    "torque_distribution_rear", "brake_bias_front",
+    # 4 — Aerodynamics
+    "aero_front", "aero_rear",
+    # 5 — Transmission
+    "final_drive", "transmission_max_speed_kmh", "gear_ratios", "transmission_type",
+    # 6 — Performance Adjustment
+    "ballast_kg", "ballast_position", "power_restrictor",
+    # 7 — Engine / ECU
+    "ecu_ingame", "ecu_ingame_output",
+    # 8 — Nitrous
+    "nitrous_type", "nitrous_output",
+)
+
+_GT7_FIELD_INDEX = {k: i for i, k in enumerate(GT7_FIELD_ORDER)}
+
+
+def gt7_field_rank(field: str) -> int:
+    """Sort key for a setup field key in GT7 tuning-menu order.
+
+    Unknown fields sort after every known one (stable within themselves), so a new
+    or unrecognised field is never silently dropped or hoisted to the top.
+    """
+    return _GT7_FIELD_INDEX.get(str(field or ""), len(GT7_FIELD_ORDER))
+
+
 def _tabular_font(bold: bool = False) -> QFont:
     f = QFont("Consolas")
     f.setStyleHint(QFont.StyleHint.Monospace)

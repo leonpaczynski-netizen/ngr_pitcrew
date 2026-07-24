@@ -47,26 +47,68 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("laps",       ["laps", "how many"]),
     ("time",       ["time", "remaining", "how long", "minutes", "clock"]),
     ("best",       ["best", "fastest", "record"]),
-    ("pit",        ["pit window", "when pit", "when should i pit", "pit now", "when do i pit", "pit stop"]),
+    ("pit",        ["pit window", "when pit", "when should i pit", "should i pit",
+                    "pit now", "when do i pit", "pit stop"]),
     ("strategy",   ["strategy", "plan", "next stop", "stint"]),
     ("pace",       ["how am i", "pace", "going", "performance", "consistent", "falling"]),
     ("tyre_state", ["tyre", "tire", "rubber", "tires", "tyres"]),
     ("rain",       ["rain", "raining", "wet", "weather", "slippery", "damp"]),
-    ("damage",     ["crash", "damage", "accident", "hit the wall", "bent", "spin",
+    ("damage",     ["crash", "damage", "accident", "hit the wall", "bent", "spin", "spun",
                     "minor", "major incident"]),
     ("fuel_check",   ["fuel check", "fuel target", "fuel strategy", "burning", "spare fuel"]),
     ("lap_analysis", ["last lap", "how was", "analyze", "analyse", "lap review"]),
     ("coaching",     ["improve", "go faster", "coaching", "tips", "technique", "sector"]),
-    ("setup_advice", ["setup", "car setup", "setup advice", "tuning", "tune"]),
+    ("setup_advice", ["setup", "car setup", "setup advice", "tuning", "tune",
+                      "what should i change"]),
 ]
 
 
+#: Weak, ambiguous filler words. On their own they name no topic — "how am i going"
+#: could be about pace, tyres, fuel or position — so a specific topic word anywhere in
+#: the phrase must win over them. Matching these by LIST ORDER is exactly why "how are
+#: the tyre temps going" was answered with "Not enough laps yet to assess pace": the
+#: pace intent sits above tyre_state and its filler word "going" matched first.
+_GENERIC_KEYWORDS = frozenset({
+    "going", "how am i", "performance", "consistent", "falling", "how",
+    "how many", "how long", "where", "time", "remaining", "clock", "minutes",
+    "place", "standing", "rank", "record",
+})
+
+
+def _keyword_weight(kw: str) -> int:
+    """How strong a signal a matched keyword is. Higher = more specific.
+
+    A multi-word phrase ("fuel check", "should i pit") is a deliberate command and the
+    strongest signal; a specific single topic word ("tyre", "fuel") is next; a generic
+    filler word only counts when nothing more specific matched.
+    """
+    # Generic first: "how many"/"how long"/"how am i" are multi-word but still filler,
+    # so they must NOT collect the command bonus below.
+    if kw in _GENERIC_KEYWORDS:
+        return 1
+    if " " in kw:
+        return 100 + len(kw)
+    return 10 + len(kw)
+
+
 def _match_intent(text: str) -> str:
+    """Pick the intent whose STRONGEST matched keyword is the most specific.
+
+    Ties break by list order, so the existing priorities still decide between two
+    equally-specific matches — but a specific topic word now beats a generic filler word
+    regardless of which intent happens to be listed first.
+    """
     lower = text.lower()
-    for intent, keywords in _INTENT_KEYWORDS:
-        if any(kw in lower for kw in keywords):
-            return intent
-    return ""
+    best_intent, best_key = "", (0, 0)
+    for order, (intent, keywords) in enumerate(_INTENT_KEYWORDS):
+        matched = [kw for kw in keywords if kw in lower]
+        if not matched:
+            continue
+        strength = max(_keyword_weight(kw) for kw in matched)
+        key = (strength, -order)          # stronger wins; earlier list order breaks ties
+        if key > best_key:
+            best_key, best_intent = key, intent
+    return best_intent
 
 
 def _build_response(intent: str, tracker: "RaceStateTracker") -> str:
@@ -234,21 +276,59 @@ def _record_audio(duration_secs: float,
 _recogniser: Optional["_sr.Recognizer"] = _sr.Recognizer() if _SR_OK else None  # type: ignore[assignment]
 
 
+_KEYWORDS_CACHE: Optional[list] = None
+
+
+def _keyword_entries() -> list:
+    """The constrained command phrase list (built once). Empty = spotting unavailable."""
+    global _KEYWORDS_CACHE
+    if _KEYWORDS_CACHE is None:
+        try:
+            from voice.command_vocabulary import keyword_entries
+            _KEYWORDS_CACHE = keyword_entries(_INTENT_KEYWORDS)
+            print(f"[QueryListener] command vocabulary: {len(_KEYWORDS_CACHE)} phrases")
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[QueryListener] command vocabulary unavailable — {exc}")
+            _KEYWORDS_CACHE = []
+    return _KEYWORDS_CACHE
+
+
 def _recognise(audio_bytes: bytes, sample_rate: int, backend: str = "sphinx") -> Optional[str]:
     """Transcribe locally only (Sprint 11 — Pit Crew is fully local & private).
 
-    Uses CMU PocketSphinx via SpeechRecognition. The cloud ``recognize_google``
-    path was removed: speech never leaves the machine, and no network is
-    required. The ``backend`` argument is retained for signature compatibility
-    but is ignored — recognition is always local.
+    Uses CMU PocketSphinx via SpeechRecognition. The cloud ``recognize_google`` path
+    was removed: speech never leaves the machine, and no network is required. The
+    ``backend`` argument is retained for signature compatibility but is ignored.
+
+    Recognition is CONSTRAINED to the pit-radio command vocabulary first (PocketSphinx
+    keyword spotting). The app only needs to tell a dozen fixed commands apart, and
+    asking a general language model to transcribe free-form speech instead — which is
+    what this did — reliably produced text that matched no keyword at all. Free-form is
+    kept as a fallback so an unusual phrasing still has a chance.
     """
     if not _SR_OK or _recogniser is None:
         print("[QueryListener] SpeechRecognition not installed")
         return None
     audio = _sr.AudioData(audio_bytes, sample_rate=sample_rate, sample_width=2)
+
+    entries = _keyword_entries()
+    if entries:
+        try:
+            spotted = (_recogniser.recognize_sphinx(  # type: ignore[attr-defined]
+                audio, keyword_entries=entries) or "").strip().lower()
+            if spotted:
+                print(f"[QueryListener] heard (command): {spotted!r}")
+                return spotted
+            print("[QueryListener] no command phrase spotted — trying free-form")
+        except _sr.UnknownValueError:
+            print("[QueryListener] no command phrase spotted — trying free-form")
+        except Exception as e:
+            # A bad phrase list must never disable recognition altogether.
+            print(f"[QueryListener] command spotting unavailable — {e}")
+
     try:
         result = _recogniser.recognize_sphinx(audio).lower()  # type: ignore[attr-defined]
-        print(f"[QueryListener] recognised text (local): {result!r}")
+        print(f"[QueryListener] heard (free-form): {result!r}")
         return result
     except _sr.UnknownValueError:
         print("[QueryListener] local recognition could not understand audio "

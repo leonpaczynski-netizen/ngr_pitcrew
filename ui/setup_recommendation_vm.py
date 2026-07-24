@@ -96,6 +96,23 @@ class SetupRecommendationVM:
         new_header = replace(self.header, status="Applied in game")
         return replace(self, field_rows=new_rows, header=new_header)
 
+    def applied_field_values(self) -> dict:
+        """The exact ``{field: value}`` that Apply will write — derived from the
+        SAME changed rows the driver sees, so *shown == applied* by construction.
+
+        This is the single source of truth for applying a recommendation (UI
+        rebuild F2.2). It replaces the old split where the table rendered from
+        ``data["changes"]`` while Apply wrote from a separate ``data["setup_fields"]``
+        (a renderer-vs-plan divergence risk). Only changed, non-rejected rows with a
+        resolved canonical ``field`` are included; each value is the *clamped*
+        recommended value exactly as displayed. Rejected/unresolved rows are excluded.
+        """
+        out: dict = {}
+        for r in self.field_rows:
+            if r.changed and r.field and r.status in (PROPOSED, APPLIED):
+                out[r.field] = _coerce_value(r.recommended_value)
+        return out
+
 
 def _to_str(v) -> str:
     if v is None:
@@ -103,6 +120,25 @@ def _to_str(v) -> str:
     if isinstance(v, float):
         return f"{v:g}"
     return str(v)
+
+
+def _coerce_value(s):
+    """Coerce a displayed value string back to int/float where possible, else the
+    original string (for enum-like fields e.g. transmission type). Never raises."""
+    if s is None:
+        return ""
+    t = str(s).strip()
+    if t == "":
+        return ""
+    try:
+        if any(c in t for c in (".", "e", "E")):
+            return float(t)
+        return int(t)
+    except ValueError:
+        try:
+            return float(t)
+        except ValueError:
+            return t
 
 
 def _delta(frm, to) -> str:

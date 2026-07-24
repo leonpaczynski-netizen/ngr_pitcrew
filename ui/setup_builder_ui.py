@@ -4377,6 +4377,15 @@ class SetupBuilderMixin:
         v.reject_recommendation.connect(lambda: self._rec_view_reject())
         v.accept_and_lock.connect(lambda: self._rec_view_accept_and_lock())
 
+    def current_recommendation_vm(self):
+        """The most recently displayed setup recommendation VM (or None).
+
+        Consumed by the new PitCrewShell (LiveShellBridge) so the rebuilt Garage
+        renders the same recommendation the classic Setup Builder shows — shown ==
+        applied is preserved because both derive from this one VM.
+        """
+        return getattr(self, "_current_setup_rec_vm", None)
+
     def _populate_setup_recommendation_view(self, data: dict, status_approved: bool) -> None:
         """Build the structured VM from the recommendation payload and render it.
 
@@ -4408,6 +4417,9 @@ class SetupBuilderMixin:
         vm = build_recommendation_vm(data, header=header,
                                      status_approved=status_approved)
         view.set_vm(vm)
+        # Expose the current recommendation VM so the new PitCrewShell (via
+        # LiveShellBridge) can render the same recommendation the classic UI shows.
+        self._current_setup_rec_vm = vm
         view.setVisible(vm.has_recommendation)
         # DEF-UAT-073-007/017: give the recommendation generous, readable height when it appears (the user
         # can still drag the splitter); collapse it back so the setup form reclaims the space when there is

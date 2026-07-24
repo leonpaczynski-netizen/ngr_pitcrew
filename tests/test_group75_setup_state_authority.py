@@ -185,6 +185,58 @@ def test_attach_target_tracks_revision():
 
 
 # --------------------------------------------------------------------------- #
+# UAT-6 — re-confirming an UNCHANGED setup is not a new setup
+# --------------------------------------------------------------------------- #
+
+def test_reconfirming_an_unchanged_setup_keeps_the_revision():
+    """UAT-6: "even when setup isn't changed if I click I have entered this in GT7 to
+    activate current setup it saves it as a new setup".
+
+    The driver presses this whenever they re-enter the sheet in GT7 — after switching
+    discipline, after a restart, or just to be sure. Every press minted a revision, so a
+    setup that had never been edited reached "rev 13".
+    """
+    auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+    first = auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=COMPLETE)
+    assert first.revision == 1
+
+    for _ in range(5):
+        again = auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=COMPLETE)
+        assert again.revision == 1
+    assert auth.active_setup(FUJI).revision == 1
+    assert auth.attach_target(FUJI, "Race") == ("R1", 1)
+
+    # A real change still advances the revision — this must not freeze the lineage.
+    changed = dict(COMPLETE)
+    changed["rear_wing"] = 8
+    assert auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=changed).revision == 2
+    # ...and re-confirming THAT one holds at 2.
+    assert auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=changed).revision == 2
+
+
+def test_reconfirming_still_refreshes_the_confirmation():
+    """Holding the revision must not lose WHEN the driver confirmed it, or its state."""
+    auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+    auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=COMPLETE,
+                      applied_at="2026-07-24 10:00")
+    auth.start_validation(FUJI)
+    again = auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=COMPLETE,
+                              applied_at="2026-07-24 11:30")
+    assert again.revision == 1
+    assert again.applied_at == "2026-07-24 11:30"
+    assert again.state is SetupState.APPLIED
+    assert again.setup_hash == compute_setup_hash(COMPLETE)
+
+
+def test_a_different_setup_id_at_the_same_values_is_still_a_new_revision():
+    """Same numbers under a different name is a different setup being confirmed."""
+    auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+    auth.mark_applied(FUJI, setup_id="R1", name="Base", fields=COMPLETE)
+    other = auth.mark_applied(FUJI, setup_id="R2", name="Copy", fields=COMPLETE)
+    assert other.revision == 2 and other.setup_id == "R2"
+
+
+# --------------------------------------------------------------------------- #
 # Test 7 — applied status changes without altering the recommendation snapshot
 # --------------------------------------------------------------------------- #
 

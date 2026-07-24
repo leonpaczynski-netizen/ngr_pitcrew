@@ -119,11 +119,17 @@ def _sig_tokens(norm: str) -> set:
     return {t for t in norm.split("_") if t and t not in _GENERIC_TOKENS}
 
 
-def _ids_match(requested: str, candidate: str) -> bool:
-    """True when a requested id matches a candidate id (tolerant, never fuzzy-wrong).
+def _track_ids_match(requested: str, candidate: str) -> bool:
+    """True when a requested TRACK id matches a candidate track id (tolerant).
+
+    Tolerance is required here: callers legitimately pass a display name when no
+    canonical id is known (``track_hint = track_location_id or event.track`` in both
+    ui/dashboard.py and ui/live_ui.py), so "Watkins Glen" must resolve
+    ``watkins_glen_international``. Dropping generic words like "international" and
+    "speedway" is exactly what makes that work.
 
     Match if: requested empty, exact equal, one contains the other, or their
-    significant (non-generic) tokens overlap. Handles display-name vs canonical-id.
+    significant (non-generic) tokens overlap.
     """
     r = _norm_id(requested)
     c = _norm_id(candidate)
@@ -137,6 +143,30 @@ def _ids_match(requested: str, candidate: str) -> bool:
     if not rt or not ct:
         return False
     return bool(rt & ct) and (rt <= ct or ct <= rt or len(rt & ct) >= 1 and len(rt) == 1)
+
+
+def _layout_ids_match(requested: str, candidate: str) -> bool:
+    """True when a requested LAYOUT id is the SAME layout as the candidate.
+
+    Deliberately strict, and the asymmetry with :func:`_track_ids_match` is the point.
+    A layout id is distinguished from its siblings precisely by the words the generic
+    token set discards — "full", "short", "long", "course", "reverse", "gp",
+    "national" — so token matching made every layout of one circuit identical:
+    ``…__short_course`` resolved to ``…__long_course``, ``…__oval`` to
+    ``…__road_course``, and ``…__full_course_reverse`` to the forwards path. Live
+    progress, station mapping and the trusted lap length all read that silently.
+
+    Strict is not brittle: ``_norm_id`` still absorbs case and separators, so
+    "Watkins Glen International__Long Course" matches its canonical id. Only a
+    genuinely different layout fails.
+
+    An empty request is a wildcard (the track-only lookup); an asset that records no
+    layout can never satisfy a request for a specific one.
+    """
+    r = _norm_id(requested)
+    if not r:
+        return True
+    return r == _norm_id(candidate)
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +366,8 @@ def find_reference_path_candidates(
                 if not res.has_stations:
                     continue
                 a = res.asset
-                t_ok = _ids_match(track_id, a.track_id)
-                l_ok = _ids_match(layout_id, a.layout_id)
+                t_ok = _track_ids_match(track_id, a.track_id)
+                l_ok = _layout_ids_match(layout_id, a.layout_id)
                 if not t_ok:
                     continue
                 # Score: prefer exact matches, then layout match, then track-only.
@@ -426,8 +456,8 @@ def validate_reference_path_identity(
     try:
         if asset is None:
             return False, "reference path track/layout mismatch"
-        t_ok = _ids_match(expected_track_id, getattr(asset, "track_id", ""))
-        l_ok = _ids_match(expected_layout_id, getattr(asset, "layout_id", ""))
+        t_ok = _track_ids_match(expected_track_id, getattr(asset, "track_id", ""))
+        l_ok = _layout_ids_match(expected_layout_id, getattr(asset, "layout_id", ""))
         if t_ok and l_ok:
             return True, "reference path identity verified"
         return False, "reference path track/layout mismatch"

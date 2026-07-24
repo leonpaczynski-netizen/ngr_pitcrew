@@ -100,8 +100,100 @@ STATUS_TONES: dict[str, tuple[str, str, str]] = {
 
 
 # ---------------------------------------------------------------------------
+# UI-rebuild design tokens (additive — F0.4)
+# ---------------------------------------------------------------------------
+# Every state below is expressed as {tone, glyph?, label} so the "bouncing ball"
+# surfaces convey meaning by colour + icon + text together, never colour alone
+# (accessibility rule color-not-only). `tone` indexes STATUS_TONES; glyphs are
+# plain typographic marks (no emoji) that Segoe UI renders crisply.
+
+# Programme progress-rail stage states.
+STAGE_COMPLETE     = "complete"
+STAGE_CURRENT      = "current"
+STAGE_AVAILABLE    = "available"
+STAGE_BLOCKED      = "blocked"
+STAGE_NOT_REQUIRED = "not_required"
+
+STAGE_STATES: dict[str, dict[str, str]] = {
+    STAGE_COMPLETE:     {"tone": "success", "glyph": "✓", "label": "Complete"},      # ✓
+    STAGE_CURRENT:      {"tone": "info",    "glyph": "▶", "label": "Current"},        # ▶ (rail applies NGR_GREEN accent)
+    STAGE_AVAILABLE:    {"tone": "neutral", "glyph": "○", "label": "Available"},      # ○
+    STAGE_BLOCKED:      {"tone": "warn",    "glyph": "✕", "label": "Blocked"},        # ✕
+    STAGE_NOT_REQUIRED: {"tone": "neutral", "glyph": "–", "label": "Not required"},   # –
+}
+# The rail draws the current stage with the brand accent; kept explicit so the
+# widget never hard-codes a hex.
+STAGE_CURRENT_ACCENT = NGR_GREEN
+
+# Confidence ladder — colour + label + a 0..1 fill for a bar (never colour alone).
+CONFIDENCE_LEVELS: dict[str, dict] = {
+    "high":    {"tone": "success", "label": "High",        "fill": 1.0},
+    "medium":  {"tone": "info",    "label": "Medium",      "fill": 0.66},
+    "low":     {"tone": "warn",    "label": "Low",         "fill": 0.33},
+    "unknown": {"tone": "neutral", "label": "No evidence", "fill": 0.0},
+}
+
+# Setup-experiment / change outcome. "Worse" is DANGER and prominent by design —
+# negative feedback must be authoritative, never softened.
+OUTCOME_TONES: dict[str, dict[str, str]] = {
+    "improved":     {"tone": "success", "glyph": "▲", "label": "Improved"},      # ▲
+    "worse":        {"tone": "danger",  "glyph": "▼", "label": "Worse"},         # ▼
+    "unchanged":    {"tone": "neutral", "glyph": "–", "label": "Unchanged"},     # –
+    "inconclusive": {"tone": "warn",    "glyph": "?",       "label": "Inconclusive"},
+}
+
+# Live telemetry data-freshness.
+FRESHNESS_TONES: dict[str, dict[str, str]] = {
+    "live":   {"tone": "success", "label": "LIVE"},
+    "recent": {"tone": "info",    "label": "RECENT"},
+    "stale":  {"tone": "warn",    "label": "STALE"},
+    "none":   {"tone": "neutral", "label": "NO SIGNAL"},
+}
+
+# Live track-map position trust tiers — each MUST look distinct so a low-confidence
+# fallback can never be mistaken for a high-confidence reference-path match.
+MATCH_TRUST: dict[str, dict[str, str]] = {
+    "approved": {"tone": "success", "label": "Reference path"},
+    "fallback": {"tone": "warn",    "label": "Road-distance estimate"},
+    "low":      {"tone": "neutral", "label": "Low confidence"},
+    "none":     {"tone": "neutral", "label": "Position unavailable"},
+}
+
+
+def stage_state(key: str) -> dict[str, str]:
+    """Resolve a stage-state descriptor, defaulting to 'available'. Never raises."""
+    return STAGE_STATES.get(key, STAGE_STATES[STAGE_AVAILABLE])
+
+
+def confidence_level(key: str) -> dict:
+    """Resolve a confidence descriptor, defaulting to 'unknown'. Never raises."""
+    return CONFIDENCE_LEVELS.get((key or "").lower(), CONFIDENCE_LEVELS["unknown"])
+
+
+def outcome_tone(key: str) -> dict[str, str]:
+    """Resolve an outcome descriptor, defaulting to 'unchanged'. Never raises."""
+    return OUTCOME_TONES.get((key or "").lower(), OUTCOME_TONES["unchanged"])
+
+
+def freshness_tone(key: str) -> dict[str, str]:
+    """Resolve a freshness descriptor, defaulting to 'none'. Never raises."""
+    return FRESHNESS_TONES.get((key or "").lower(), FRESHNESS_TONES["none"])
+
+
+def match_trust(key: str) -> dict[str, str]:
+    """Resolve a map-match trust descriptor, defaulting to 'none'. Never raises."""
+    return MATCH_TRUST.get((key or "").lower(), MATCH_TRUST["none"])
+
+
+# ---------------------------------------------------------------------------
 # Pure QSS builders (no Qt import — unit-testable)
 # ---------------------------------------------------------------------------
+
+def focus_ring_qss(color: str = NGR_GREEN, width: int = 2) -> str:
+    """QSS fragment for a visible keyboard-focus ring (never removed without a
+    replacement — accessibility rule focus-states). Intended for a ``:focus``
+    selector, e.g. ``f"QPushButton:focus {{ {focus_ring_qss()} }}"``."""
+    return f"outline: none; border: {width}px solid {color};"
 
 def badge_qss(tone: str = "neutral") -> str:
     """Return QSS for a small status pill in the given semantic *tone*."""

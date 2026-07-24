@@ -320,9 +320,23 @@ class ActiveSetupAuthority:
         Increments the revision, persists the complete snapshot, and marks it
         active for the exact car/track/layout+purpose. This is what
         "Applied in Game" calls.
+
+        Re-confirming a setup that has not changed is NOT a new revision. The driver
+        presses this whenever they re-enter the sheet in GT7 — after switching
+        discipline, after a restart, or just to be sure — and bumping the revision
+        every time invented a lineage of identical setups ("Setup 1 · rev 13") that
+        never existed. When the snapshot is byte-identical to what is already on the
+        car, the revision is kept and only the confirmation is refreshed.
         """
-        rev = self.revision_for(identity, purpose)
         snap = dict(fields or {})
+        cur = self.active_setup(identity, purpose)
+        snap_hash = compute_setup_hash(snap)
+        unchanged = (
+            cur is not None
+            and cur.setup_hash == snap_hash
+            and str(cur.setup_id or "") == str(setup_id or "")
+        )
+        rev = cur.revision if unchanged else self.revision_for(identity, purpose)
         active = ActiveSetup(
             identity=identity,
             setup_id=str(setup_id or ""),
@@ -330,7 +344,7 @@ class ActiveSetupAuthority:
             revision=rev,
             state=SetupState.APPLIED,
             fields=snap,
-            setup_hash=compute_setup_hash(snap),
+            setup_hash=snap_hash,
             applied_at=str(applied_at or ""),
             purpose=str(purpose or "Race"),
             source=source,
