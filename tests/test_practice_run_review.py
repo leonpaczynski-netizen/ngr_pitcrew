@@ -75,6 +75,34 @@ class TestRunReview:
         # The clean laps are measured against a lap that was actually raced.
         assert [l.delta_to_best_ms for l in r.laps if l.clean] == [377, 822, 231, 0]
 
+    def test_an_unflagged_flying_first_lap_is_still_excluded(self):
+        """UAT-7: "the old best lap data that was capturing the outlap as best lap is
+        contaminating the advice now." Old runs (and some telemetry) never flagged the
+        rolling-start out lap, so it kept winning best. The first lap is treated as a
+        flying out lap when it is implausibly quicker than the rest — no flag needed."""
+        rows = _laps(112791, 118072, 118517, 117926, 117695)  # lap 1 unflagged, ~4% fast
+        r = build_run_review(rows)
+        assert r.best_ms == 117695
+        assert [l.excluded_reason for l in r.laps if not l.clean] == ["in/out lap"]
+        assert r.clean_laps == 4
+
+    def test_a_genuinely_fast_later_lap_is_not_mistaken_for_an_out_lap(self):
+        # A driver warming into the run and improving each lap: every lap is clean, and
+        # the guard (first-lap-only) never touches the fast final lap.
+        r = build_run_review(_laps(118500, 118000, 117500, 117000))
+        assert r.clean_laps == 4 and r.best_ms == 117000
+
+    def test_a_normal_first_lap_within_the_field_is_kept(self):
+        # First lap merely fastest by a normal margin (<3%) stays a clean lap.
+        r = build_run_review(_laps(117000, 117800, 118100))
+        assert r.clean_laps == 3 and r.best_ms == 117000
+
+    def test_the_guard_needs_at_least_two_other_laps(self):
+        # With one comparison lap there is no field to judge an anomaly against; the
+        # explicit flag still works, but an unflagged short first lap is left alone.
+        r = build_run_review(_laps(112000, 118000))
+        assert r.has_laps  # never raises; too little data to call an anomaly
+
     def test_the_out_lap_does_not_decide_which_laps_are_off_the_pace(self):
         """A slow in-lap must not raise the tolerance and let a bad lap count as clean."""
         rows = _laps(92100, 92300)

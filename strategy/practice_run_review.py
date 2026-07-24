@@ -27,6 +27,12 @@ from typing import List, Mapping, Optional, Sequence, Tuple
 #: excluded from the clean-lap summary. Generous enough to keep honest slow laps.
 CLEAN_LAP_TOLERANCE = 1.07
 
+#: The FIRST lap is treated as an unflagged flying out lap when it is faster than this
+#: fraction of the NEXT-FASTEST real lap. 0.97 = more than 3% quicker than every other
+#: lap — a gap no consistent driver opens up within a single run, but exactly what a
+#: rolling-start out lap (which covers less than a full lap) looks like.
+FLYING_OUTLAP_FLOOR = 0.97
+
 #: Below this many clean laps nothing can be said about consistency or pace with
 #: any confidence — the outcome reports "gather more" rather than a verdict.
 MIN_LAPS_FOR_VERDICT = 3
@@ -140,8 +146,32 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
 
     ordered = sorted(rows, key=lambda x: _i(x.get("lap_num")))
 
-    def _in_or_out(r: Mapping) -> bool:
+    def _flagged_in_or_out(r: Mapping) -> bool:
         return bool(r.get("is_pit_lap")) or bool(r.get("is_out_lap"))
+
+    # A rolling-start out lap covers less than a full lap, so it is anomalously FAST.
+    # GT7's telemetry does not always flag it, and older recorded runs pre-date the
+    # flag entirely — so a run whose only "best" was that short first lap kept
+    # contaminating the advice (best lap 1:52 against honest 1:57s). The FIRST lap is
+    # treated as an out lap when it is implausibly faster than the rest of the field —
+    # a margin no consistent driver improves by within one run — even without a flag.
+    first_id = _i(ordered[0].get("lap_num")) if ordered else None
+    rest_times = [_i(r.get("lap_time_ms")) for r in ordered[1:]
+                  if not _flagged_in_or_out(r) and _i(r.get("lap_time_ms")) > 0]
+    # Judge the first lap against the NEXT-FASTEST real lap, not the average: an out lap
+    # is quicker than EVERY honest lap, whereas a merely-good first lap is only a hair
+    # under the next one. Using the field minimum keeps a single slow lap from dragging
+    # the reference up and falsely condemning a normal first lap.
+    flying_outlap_ceiling = (min(rest_times) * FLYING_OUTLAP_FLOOR) if len(rest_times) >= 2 else 0
+
+    def _in_or_out(r: Mapping) -> bool:
+        if _flagged_in_or_out(r):
+            return True
+        # Unflagged flying out lap: the first lap, quicker than the next-fastest by a
+        # margin no consistent driver opens up within one run.
+        return (flying_outlap_ceiling > 0
+                and _i(r.get("lap_num")) == first_id
+                and _i(r.get("lap_time_ms")) < flying_outlap_ceiling)
 
     # The reference pace can only come from laps that were actually RACED. An in/out
     # lap is fast or slow for reasons that have nothing to do with the car, so letting
@@ -158,7 +188,8 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
         t = _i(r.get("lap_time_ms"))
         pit_or_out = _in_or_out(r)
         slow = (not pit_or_out) and t > reference * CLEAN_LAP_TOLERANCE
-        reason = "in/out lap" if pit_or_out else ("off the pace" if slow else "")
+        reason = ("in/out lap" if pit_or_out
+                  else ("off the pace" if slow else ""))
         clean = not (pit_or_out or slow)
         if clean:
             clean_times.append(t)
