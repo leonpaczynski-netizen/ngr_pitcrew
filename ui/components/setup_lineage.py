@@ -129,7 +129,9 @@ class SetupLineageTree(QWidget):
             act = QHBoxLayout()
             act.setContentsMargins(0, 0, 0, 0)
             act.addStretch(1)
-            btn = SecondaryActionButton("Revert to this")
+            # Loads this revision's values back onto the sheet so the driver can re-enter
+            # them in GT7 — "the settings I'm running" — not a silent undo.
+            btn = SecondaryActionButton("Load this setup")
             btn.clicked.connect(lambda _=False, nid=node.node_id: self.revert_requested.emit(nid))
             act.addWidget(btn)
             cv.addLayout(act)

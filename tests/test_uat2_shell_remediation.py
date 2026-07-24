@@ -1046,6 +1046,61 @@ class TestV24ProgrammeMapShowsWhereYouAre:
         assert shell.current_destination() == "practice"
 
 
+class TestV25SetupRevisionLineage:
+    """UAT-7: blank Lineage tab + "no way to load previous settings to activate that's
+    the settings I'm running in GT7." The bridge never fed lineage_nodes and there was
+    no revision history. Both are now driven by the recorded applied revisions."""
+
+    def _with_real_authority(self, bridge):
+        """Swap the service onto a real authority + history so revisions are minted."""
+        from data.setup_state_authority import ActiveSetupAuthority
+        from data.active_setup_store import InMemoryActiveSetupStore
+        from services.setup_history_store import SetupHistoryStore
+        bridge._setups._authority = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+        bridge._setups._history = SetupHistoryStore()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(scope, "race",
+                                  {"arb_front": 5, "setup_label": "Setup 1",
+                                   "ride_height_front": 70})
+
+    def test_confirmations_build_the_lineage(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")            # rev 1
+        bridge._setups.apply("race", {"arb_front": 4})
+        bridge._setups.confirm_applied_in_game("race")            # rev 2
+        nodes = bridge._lineage_nodes("Setup 1 · rev 2")
+        assert [n.node_id for n in nodes] == ["rev2", "rev1"]     # newest first
+        assert nodes[0].is_current is True and nodes[1].is_current is False
+        assert "Changed" in nodes[0].summary                       # what changed vs rev1
+
+    def test_the_lineage_tab_is_no_longer_blank(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")
+        bridge._feed_garage()
+        assert shell.garage_page._lineage._body.count() >= 1
+        assert shell.garage_page._lineage._empty.isHidden() is True
+
+    def test_loading_a_past_revision_restores_its_values(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")            # rev 1: arb_front 5
+        bridge._setups.apply("race", {"arb_front": 4})
+        bridge._setups.confirm_applied_in_game("race")            # rev 2: arb_front 4
+        shell.garage_page._lineage.revert_requested.emit("rev1")
+        assert bridge._setups.sheet("race").get("arb_front") == 5.0
+        assert "Loaded rev 1" in shell.garage_page._status.text()
+
+    def test_an_empty_node_id_is_still_the_one_step_undo(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")
+        bridge._setups.apply("race", {"arb_front": 4})           # a change to undo
+        bridge._on_revert("")                                     # Outcome-page revert
+        assert bridge._setups.sheet("race").get("arb_front") == 5.0
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

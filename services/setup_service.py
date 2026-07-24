@@ -158,12 +158,15 @@ class SetupService:
     """Authors, analyses and applies setups. Owns no widgets."""
 
     def __init__(self, *, store: SetupSheetStore, advisor=None, authority=None,
-                 inputs_provider=None, db=None):
+                 inputs_provider=None, db=None, history=None):
         self._store = store
         self._advisor = advisor
         self._authority = authority
         self._inputs_provider = inputs_provider    # callable() -> SetupInputs
         self._db = db
+        #: Persisted applied-revision history (SetupHistoryStore), for the lineage and
+        #: loading a past setup. Optional — the engine works without it.
+        self._history = history
         #: (scope, discipline) -> the sheet before the last apply, for a one-step undo.
         #: Per-instance: a shared dict would let one event's revert restore another's.
         self._undo: Dict[Tuple[str, str], SetupSheet] = {}
@@ -398,6 +401,10 @@ class SetupService:
                 purpose=purpose, applied_at=_norm(applied_at))
         except Exception as exc:
             return SetupOutcome(discipline=d, reason=f"Could not confirm the setup: {exc}")
+        # Record this revision so the lineage can show it and it can be loaded later.
+        # Idempotent by revision number, so re-confirming an unchanged setup never grows
+        # the history — it stores the TUNE the authority made active, not the beep pref.
+        self._record_revision(inp.scope, d, active)
         # Re-confirming an unchanged sheet is not a new setup, and saying so stops the
         # driver believing they have created one every time they switch discipline back.
         if before is not None and before.revision == active.revision:
@@ -405,6 +412,60 @@ class SetupService:
                                 reason=f"Already on the car — {active.label()} is unchanged.")
         return SetupOutcome(ok=True, discipline=d,
                             reason=f"Registered as the active setup: {active.label()}")
+
+    def _record_revision(self, scope: str, discipline: str, active) -> None:
+        if self._history is None or active is None:
+            return
+        try:
+            self._history.record(
+                scope, discipline, revision=int(getattr(active, "revision", 0) or 0),
+                label=str(active.label()), fields=dict(getattr(active, "fields", {}) or {}),
+                applied_at=str(getattr(active, "applied_at", "") or ""))
+        except Exception:
+            pass
+
+    # ---- lineage / load a past revision ----------------------------------
+    def revisions(self, discipline: str = "race") -> list:
+        """The recorded applied revisions for this discipline, oldest first.
+
+        Each is ``{revision, label, fields, applied_at}``; the newest that matches the
+        current active revision is the one on the car.
+        """
+        if self._history is None:
+            return []
+        try:
+            return list(self._history.revisions(self.inputs().scope, discipline))
+        except Exception:
+            return []
+
+    def load_revision(self, discipline: str, revision) -> SetupOutcome:
+        """Put a past revision's tune back on the working sheet.
+
+        This is "load the setup I ran before" — it writes the stored values onto the
+        sheet so the Garage shows them; the driver then enters them in GT7 and confirms.
+        It does NOT itself mark the setup applied (only the driver's GT7 confirmation
+        can), so a loaded setup is not silently claimed to be on the car.
+        """
+        d = normalise_discipline(discipline)
+        if self._history is None:
+            return SetupOutcome(discipline=d, reason="No setup history is available.")
+        inp = self.inputs()
+        if not inp.is_known:
+            return SetupOutcome(discipline=d, reason="Pick the car and track first.")
+        try:
+            rev = int(revision or 0)
+        except (TypeError, ValueError):
+            rev = 0
+        snap = self._history.snapshot(inp.scope, d, rev) if rev > 0 else None
+        if not snap:
+            return SetupOutcome(discipline=d, reason="That setup revision was not found.")
+        # Keep the current beep preference (it is not part of a stored tune).
+        current = self.sheet(d, inp)
+        merged = current.merge(snap)
+        self._store.set(inp.scope, d, merged)
+        return SetupOutcome(
+            ok=True, discipline=d, changed_fields=tuple(sorted(current.diff(merged))),
+            reason=f"Loaded rev {rev} onto the {d} sheet — enter it in GT7, then confirm.")
 
     def active_setup(self, discipline: str = "race") -> Tuple[str, bool]:
         """(label, on the car) for this discipline. ("", False) when unknown."""

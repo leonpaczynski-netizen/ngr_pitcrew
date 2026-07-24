@@ -86,11 +86,16 @@ class LiveShellBridge(QObject):
         from services.setup_inputs import build_setup_inputs
         from services.setup_service import SetupService
         from services.setup_store import SetupSheetStore, default_store_path
-        self._sheets = SetupSheetStore(default_store_path(
-            str(getattr(window, "config_path", "") or "")))
+        from services.setup_history_store import SetupHistoryStore, default_history_path
+        _cfg_path = str(getattr(window, "config_path", "") or "")
+        self._sheets = SetupSheetStore(default_store_path(_cfg_path))
+        # Persisted applied-revision history: fills the Garage Lineage tab and lets a
+        # past setup be loaded back ("the settings I'm running in GT7").
+        self._setup_history = SetupHistoryStore(default_history_path(_cfg_path))
         self._setups = SetupService(
             store=self._sheets, advisor=getattr(window, "_driving_advisor", None),
             authority=getattr(window, "_setup_authority", None), db=db,
+            history=self._setup_history,
             inputs_provider=lambda: build_setup_inputs(db, self._config))
         # Track modelling, headless and guided. Reuses the domain untouched; the
         # coordinator decides which actions are legal at each point.
@@ -741,12 +746,52 @@ class LiveShellBridge(QObject):
                 vm if vm is not None else build_recommendation_vm({}),
                 discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
+                lineage_nodes=self._lineage_nodes(label),
                 has_recorded_run=self._has_recorded_run(),
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
         except Exception:
             pass
+
+    def _lineage_nodes(self, active_label: str = ""):
+        """Build the Garage lineage from the recorded applied revisions (newest first).
+
+        Each confirmed revision is a node; the summary is what changed from the previous
+        revision, so the driver can see how the setup evolved. The newest revision is the
+        current one; older ones offer "Load this setup". The tab was blank because nothing
+        ever fed it — the history now does.
+        """
+        from ui.components.setup_lineage import LineageNode
+        from strategy.setup_sheet import sheet_from_dict
+        revs = self._setups.revisions(self._discipline)
+        if not revs:
+            return ()
+        nodes = []
+        newest_rev = max(int(r.get("revision") or 0) for r in revs)
+        prev_sheet = None
+        ordered = sorted(revs, key=lambda r: int(r.get("revision") or 0))
+        summaries = {}
+        for r in ordered:
+            cur_sheet = sheet_from_dict(r.get("fields") or {})
+            if prev_sheet is not None:
+                changed = tuple(sorted(prev_sheet.diff(cur_sheet)))
+                summaries[int(r.get("revision") or 0)] = (
+                    "Changed " + ", ".join(changed[:4]) + ("…" if len(changed) > 4 else "")
+                    if changed else "No tuning change")
+            else:
+                summaries[int(r.get("revision") or 0)] = "Baseline"
+            prev_sheet = cur_sheet
+        for r in sorted(revs, key=lambda r: int(r.get("revision") or 0), reverse=True):
+            rev = int(r.get("revision") or 0)
+            nodes.append(LineageNode(
+                node_id=f"rev{rev}",
+                label=str(r.get("label") or f"Setup · rev {rev}"),
+                is_current=(rev == newest_rev),
+                summary=summaries.get(rev, ""),
+                discipline=self._discipline,
+                revertable=True))
+        return tuple(nodes)
 
     def _feed_shift_rpm(self, garage) -> None:
         """Show the upshift point for the selected discipline.
@@ -968,8 +1013,21 @@ class LiveShellBridge(QObject):
         self.refresh()
 
     def _on_revert(self, node_id: str) -> None:
-        """Undo the last apply on the shown sheet."""
-        outcome = self._setups.revert(self._discipline)
+        """Load a lineage revision, or (no id) undo the last apply.
+
+        The lineage's "Load this setup" passes a "rev{n}" node id — that loads a past
+        revision's tune back onto the sheet so the driver can re-enter it in GT7. The
+        Outcome page's revert passes no id — that is the one-step undo of the last change.
+        """
+        nid = str(node_id or "")
+        if nid.startswith("rev"):
+            try:
+                revision = int(nid[3:])
+            except (TypeError, ValueError):
+                revision = 0
+            outcome = self._setups.load_revision(self._discipline, revision)
+        else:
+            outcome = self._setups.revert(self._discipline)
         self._garage_status(outcome.reason)
         if outcome.ok:
             self._mirror_to_classic(self._discipline)
