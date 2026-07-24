@@ -836,11 +836,37 @@ class LiveShellBridge(QObject):
         except Exception:
             return False, False, ""
 
+    def _lock_objective_discipline(self) -> str:
+        """The discipline the engineer's current objective asks to lock, or "".
+
+        The Command Centre can nominate "Lock the base setup" — and "base" has no Garage
+        tab of its own, so locking the selected tab never satisfied it and the objective
+        was stuck forever. Parsing the objective lets the lock control target exactly what
+        the guidance is asking for.
+        """
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+        na = view.get("next_action") or {}
+        if str(na.get("category") or "").lower() != "lock_setup":
+            return ""
+        head = str(na.get("headline") or "").lower()
+        for d in ("base", "qualifying", "race"):
+            if f"the {d} setup" in head:
+                return d
+        return ""
+
     def _feed_lock(self, garage) -> None:
         if not hasattr(garage, "set_lock_state"):
             return
-        lockable, locked, hint = self._lock_state(self._discipline)
-        garage.set_lock_state(lockable=lockable, locked=locked, hint=hint)
+        # Target what the engineer is asking to lock (may be "base", which has no tab),
+        # falling back to the selected discipline.
+        target = self._lock_objective_discipline() or self._discipline
+        lockable, locked, hint = self._lock_state(target)
+        if target == "base" and not locked:
+            hint = ("The base setup is the foundation both sheets build on. Lock it to "
+                    "settle the baseline for the event.")
+        garage.set_lock_state(lockable=lockable, locked=locked, hint=hint,
+                              discipline=target,
+                              lock_label=f"Lock the {target} setup")
 
     def _lineage_nodes(self, active_label: str = ""):
         """Build the Garage lineage from the recorded applied revisions (newest first).

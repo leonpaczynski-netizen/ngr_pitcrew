@@ -164,3 +164,16 @@ class TestLockControl:
         assert w._lock_btn.text() == "Reopen setup"
         w._lock_btn.click()
         assert seen == [("race", False)]            # reopen, not re-lock
+
+    def test_it_can_target_a_discipline_other_than_the_selected_tab(self, qapp):
+        """UAT-8: "Lock the base setup" was stuck — base has no tab, so locking the
+        selected tab never satisfied it. The button targets the nominated discipline."""
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w._selector.set_discipline("race")           # on the Race tab
+        w.set_lock_state(lockable=True, locked=False,
+                         discipline="base", lock_label="Lock the base setup")
+        assert w._lock_btn.text() == "Lock the base setup"
+        w._lock_btn.click()
+        assert seen == [("base", True)]              # locks base, not race

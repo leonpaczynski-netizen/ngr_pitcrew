@@ -1193,6 +1193,43 @@ class TestV27QualiPracticeUsesQualiBeep:
         bridge._push_practice_mode("qualifying")   # must not raise
 
 
+class TestV28LockTheBaseObjectiveIsSatisfiable:
+    """UAT-8: "do next on home screen seems to be stuck on lacking setup even though
+    everything is complete." The objective was "Lock the base setup", but base has no
+    Garage tab, so locking the selected tab never cleared it. The lock control now
+    targets the discipline the objective names."""
+
+    def test_the_lock_objective_discipline_is_parsed(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"category": "lock_setup", "headline": "Lock the base setup"}}
+        assert bridge._lock_objective_discipline() == "base"
+        bridge._last_guidance_view = {
+            "next_action": {"category": "lock_setup", "headline": "Lock the qualifying setup"}}
+        assert bridge._lock_objective_discipline() == "qualifying"
+
+    def test_a_non_lock_objective_targets_nothing_special(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"category": "next_activity", "headline": "Build setup_base evidence"}}
+        assert bridge._lock_objective_discipline() == ""
+
+    def test_locking_base_from_the_garage_writes_base(self, qapp):
+        from data.session_db import SessionDB
+        db = SessionDB(":memory:")
+        db.upsert_preparation_cycle({
+            "cycle_id": "c1", "event_name": "E", "car": "Porsche Cayman GT4",
+            "track": "Watkins Glen International", "layout": "long",
+            "disciplines": ["race", "qualifying"]})
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        bridge = LiveShellBridge(shell, ctrl, window=_Win(),
+                                 config={"active_cycle_id": "c1"}, db=db, spawn=lambda fn: fn())
+        # The engineer nominates base; the Garage button emits base, and base gets locked.
+        shell.garage_page.lock_requested.emit("base", True)
+        assert db.setup_locks("c1") == ("base",)
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

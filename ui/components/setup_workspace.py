@@ -552,26 +552,32 @@ class SetupWorkspace(QWidget):
         self.shift_rpm_changed.emit(v)
 
     def set_lock_state(self, lockable: bool = False, locked: bool = False,
-                       hint: str = "") -> None:
-        """Show the lock control for the current discipline.
+                       hint: str = "", discipline: str = "", lock_label: str = "") -> None:
+        """Show the lock control for a discipline.
 
         ``lockable`` is whether the setup has converged enough for the engineer to permit
-        a lock; ``locked`` is whether the driver has already confirmed it. Locking is
-        never inferred — the button is the explicit confirmation the doctrine requires.
+        a lock; ``locked`` is whether the driver has already confirmed it. ``discipline``
+        is what gets locked — it may differ from the selected tab (the engineer can
+        nominate "base", which underlies both sheets and has no tab of its own), so the
+        button carries an explicit label. Locking is never inferred.
         """
         self._lock_state = (bool(lockable), bool(locked))
+        self._lock_target = str(discipline or self._selector.current())
         self._pill_locked.setVisible(bool(locked))
         if locked:
             self._pill_locked.set_status("Locked", tone="success", glyph="🔒")
         self._lock_btn.setVisible(bool(lockable) or bool(locked))
-        self._lock_btn.setText("Reopen setup" if locked else "Lock this setup")
+        self._lock_btn.setText("Reopen setup" if locked
+                               else (lock_label or "Lock this setup"))
         self._lock_hint.setText(str(hint or ""))
         self._lock_hint.setVisible(bool(hint) and (bool(lockable) or bool(locked)))
 
     def _on_lock_clicked(self) -> None:
         _lockable, locked = self._lock_state
-        # Clicking toggles: lock when open, reopen when locked.
-        self.lock_requested.emit(self._selector.current(), not locked)
+        # Clicking toggles: lock when open, reopen when locked. The target is what the
+        # feed nominated, not necessarily the selected tab.
+        target = getattr(self, "_lock_target", "") or self._selector.current()
+        self.lock_requested.emit(target, not locked)
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") a transient status line — e.g. "Analysing setup…".
