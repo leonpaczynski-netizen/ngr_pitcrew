@@ -1148,6 +1148,51 @@ class TestV26LockTheBaseSetup:
         assert "activate an event" in shell.garage_page._status.text().lower()
 
 
+class TestV27QualiPracticeUsesQualiBeep:
+    """UAT-8: "running quali practice it was giving me race RPM beep not quali." The new
+    shell never told the live runtime which discipline was being practised, so the beep
+    loop used the race RPM. The Garage discipline now drives the runtime refs the beep
+    reads."""
+
+    def _with_refs(self, win):
+        win._practice_is_qual_ref = [False]
+        win._live_mode_ref = ["Race"]
+        return win
+
+    def test_selecting_qualifying_flips_the_runtime_to_qual(self, wired):
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert win._practice_is_qual_ref[0] is True
+        assert win._live_mode_ref[0] == "Practice"
+
+    def test_selecting_race_flips_it_back(self, wired):
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        shell.garage_page._selector._buttons["race"].click()
+        assert win._practice_is_qual_ref[0] is False
+
+    def test_the_beep_threshold_follows_the_selected_discipline(self, wired):
+        from main import resolve_threshold
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        sb = {"qual_rpm": 8000, "race_rpm": 7760, "enabled": True}
+        shell.garage_page._selector._buttons["qualifying"].click()
+        _k, qual = resolve_threshold(win._live_mode_ref[0], False,
+                                     win._practice_is_qual_ref[0], sb)
+        shell.garage_page._selector._buttons["race"].click()
+        _k, race = resolve_threshold(win._live_mode_ref[0], False,
+                                     win._practice_is_qual_ref[0], sb)
+        assert qual == 8000 and race == 7760
+
+    def test_a_window_without_the_refs_never_raises(self, wired):
+        # The bridge must tolerate a window that doesn't expose the beep refs.
+        _shell, _win, _db, bridge = wired
+        bridge._window._practice_is_qual_ref = None
+        bridge._push_practice_mode("qualifying")   # must not raise
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True

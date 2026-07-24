@@ -268,6 +268,9 @@ class LiveShellBridge(QObject):
                 self._shell.set_guidance_view(view)
         except Exception:
             pass
+        # Keep the live runtime's practice mode in step with the selected discipline, so
+        # the shift beep uses the right (qualifying vs race) RPM for the session.
+        self._push_practice_mode(self._discipline)
         self._feed_garage()
         self._feed_practice()
         self._feed_qualifying(view)
@@ -909,6 +912,7 @@ class LiveShellBridge(QObject):
         if d not in ("qualifying", "race"):
             d = "race"
         self._discipline = d
+        self._push_practice_mode(d)
         try:
             gp = getattr(self._shell, "garage_page", None)
             if gp is not None and hasattr(gp, "set_status"):
@@ -916,6 +920,25 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         self._feed_garage()
+
+    def _push_practice_mode(self, discipline: str) -> None:
+        """Tell the live runtime which discipline is being practised.
+
+        The shift-beep loop in main.py reads window._practice_is_qual_ref /
+        _live_mode_ref to pick the qualifying vs race upshift RPM. The new shell never
+        wrote them, so a qualifying practice session still beeped at the RACE RPM. The
+        selected Garage discipline is now pushed to those refs.
+        """
+        try:
+            is_qual = str(discipline).lower() == "qualifying"
+            ref = getattr(self._window, "_practice_is_qual_ref", None)
+            if isinstance(ref, list) and ref:
+                ref[0] = is_qual
+            mode = getattr(self._window, "_live_mode_ref", None)
+            if isinstance(mode, list) and mode:
+                mode[0] = "Practice"      # a practice session, race vs qual set by the flag
+        except Exception:
+            pass
 
     def _feed_tyres(self, garage, setup) -> None:
         """Offer the compounds this event's regulations allow for this discipline."""
