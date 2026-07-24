@@ -81,9 +81,10 @@ class TestGuidanceVM:
             assert EngineerGuidanceVM.from_command_centre(v).confidence_level == expected, state
 
     def test_empty_or_bad_view_falls_back(self):
-        assert EngineerGuidanceVM.from_command_centre(None).primary_action_surface == "active_event"
+        # Active Event was folded into Home, so the empty-state CTA routes to Home.
+        assert EngineerGuidanceVM.from_command_centre(None).primary_action_surface == "home"
         assert EngineerGuidanceVM.from_command_centre({"ok": False}).objective.startswith("Create or select")
-        assert EngineerGuidanceVM.from_command_centre("garbage").primary_action_surface == "active_event"
+        assert EngineerGuidanceVM.from_command_centre("garbage").primary_action_surface == "home"
 
 
 class TestGuidanceCard:

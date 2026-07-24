@@ -317,7 +317,9 @@ def app_stylesheet() -> str:
     QPushButton:hover {{ border-color: {NGR_GREEN_DIM}; background: #30353B; }}
     QPushButton:pressed {{ background: #22262B; }}
     QPushButton:disabled {{ color: {TEXT_MUTE}; background: {CARBON_RAISED}; border-color: {HAIRLINE_SOFT}; }}
-    QPushButton:focus {{ outline: none; border-color: {NGR_GREEN}; }}
+    /* Keyboard focus must be unmistakable when tabbing (a11y focus-states) — a
+       full 2px neon ring, matching the primary/secondary CTA and nav-rail rings. */
+    QPushButton:focus {{ outline: none; border: 2px solid {NGR_GREEN}; }}
 
     /* ---- Inputs ---- */
     QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{

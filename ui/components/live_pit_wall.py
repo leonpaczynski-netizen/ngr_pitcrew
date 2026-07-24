@@ -66,7 +66,10 @@ class LivePitWall(QWidget):
         strip.addWidget(StatusPill("ADVISORY · driver in control", tone="advisory", glyph="●"))
         lay.addLayout(strip)
 
-        # KPI tiles
+        # KPI tiles — built here, but added to the layout BELOW the engineer instruction
+        # (see below). In PSVR2 the driver glances for a fraction of a second, so the
+        # engineer's call and the next decision must be the first thing read, not the
+        # telemetry grid.
         grid = QGridLayout()
         grid.setHorizontalSpacing(_t.SPACE_MD)
         grid.setVerticalSpacing(_t.SPACE_MD)
@@ -78,9 +81,8 @@ class LivePitWall(QWidget):
             tile, value = _tile(cap)
             self._tiles[key] = value
             grid.addWidget(tile, i // 4, i % 4)
-        lay.addLayout(grid)
 
-        # Engineer instruction (prominent)
+        # Engineer instruction (prominent) — added to the layout FIRST, above the tiles.
         self._instr_card = Card()
         self._instr_card.setStyleSheet(
             f"#ngrCard {{ background: {_t.CARBON_RAISED}; "
@@ -111,6 +113,9 @@ class LivePitWall(QWidget):
             f"color: {_t.DANGER}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
         self._warning.setVisible(False)
         lay.addWidget(self._warning)
+
+        # Telemetry tiles come after the engineer's call — glanceable, not the headline.
+        lay.addLayout(grid)
 
         # The APPROVED PLAN — the pit wall showed live telemetry but nothing about the
         # plan the driver approved, so it looked empty. This is what they are racing to.

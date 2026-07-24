@@ -98,7 +98,7 @@ class SettingsPage(QWidget):
         act = QHBoxLayout()
         self._save = PrimaryActionButton("Save settings")
         self._save.clicked.connect(self._on_save)
-        self._classic = SecondaryActionButton("Advanced classic tools")
+        self._classic = SecondaryActionButton("Open advanced classic tools")
         self._classic.clicked.connect(lambda: self.open_classic_requested.emit())
         act.addWidget(self._save)
         act.addWidget(self._classic)

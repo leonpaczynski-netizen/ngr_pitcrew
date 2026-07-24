@@ -91,7 +91,7 @@ class TestStateRendering:
         # progress rail reflects the current stage
         assert "Current" in shell.rail._nodes["garage"].toolTip()
 
-    def test_set_guidance_view_updates_card_and_active_event(self, shell):
+    def test_set_guidance_view_updates_card_and_home(self, shell):
         view = {
             "ok": True,
             "next_action": {"headline": "Bind the latest Practice session",
@@ -104,8 +104,8 @@ class TestStateRendering:
         }
         shell.set_guidance_view(view)
         assert shell.guidance._primary.text() == "Bind the latest Practice session"
-        # active-event page picks up the progress detail
-        assert "Valid laps: 18" in shell.active_event_page._detail.text()
+        # Active Event was folded into Home — Home now carries the progress detail.
+        assert "18 valid laps" in shell.home_page._evidence.text()
 
     def test_construct_with_default_controller(self, qapp):
         s = PitCrewShell()

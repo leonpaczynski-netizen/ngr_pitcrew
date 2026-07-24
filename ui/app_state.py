@@ -38,8 +38,10 @@ PROGRAMME_STAGES: Tuple[str, ...] = (
 )
 
 # Canonical left-nav destinations (a superset of the rail: adds standing areas).
+# Home IS the event command centre — a separate "Active Event" destination showed the
+# same event identity + progress and muddied the single-home model, so it was folded in.
 NAV_DESTINATIONS: Tuple[str, ...] = (
-    "home", "programme", "active_event", "garage", "practice", "qualifying",
+    "home", "programme", "garage", "practice", "qualifying",
     "race_strategy", "live_pit_wall", "debrief", "track_model",
     "engineering_library", "settings",
 )

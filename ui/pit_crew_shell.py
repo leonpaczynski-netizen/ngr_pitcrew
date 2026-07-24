@@ -41,7 +41,7 @@ from ui.components.nav_rail import NAV_LABELS
 
 # A programme stage → the nav destination that hosts it.
 STAGE_TO_NAV: dict[str, str] = {
-    "briefing": "active_event",
+    "briefing": "home",          # the briefing IS the Home command centre
     "garage": "garage",
     "practice": "practice",
     "review": "practice",
@@ -58,7 +58,8 @@ SURFACE_TO_NAV: dict[str, str] = {
     "strategy": "race_strategy",
     "live": "live_pit_wall",
     "debrief": "debrief",
-    "active_event": "active_event", "home": "home",
+    # Active Event was folded into Home — both route there now.
+    "active_event": "home", "briefing": "home", "home": "home",
     "programme": "programme",
     "qualifying": "qualifying", "settings": "settings",
     "engineering_library": "engineering_library",
@@ -84,41 +85,6 @@ class _SimplePage(QWidget):
 
     def set_subtitle(self, text: str) -> None:
         self._subtitle.setText(text or "")
-
-
-class ActiveEventPage(_SimplePage):
-    """Event Arrival / Briefing — shows the active event identity + progress."""
-
-    def __init__(self, parent=None):
-        super().__init__("ACTIVE EVENT", "No active event.", parent)
-        self._detail = QLabel("")
-        self._detail.setWordWrap(True)
-        self._detail.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_BODY}pt;")
-        # Insert detail above the trailing stretch.
-        self.body.insertWidget(self.body.count() - 1, self._detail)
-
-    def render(self, app_state: AppState, view: Optional[Mapping]) -> None:
-        if not isinstance(app_state, AppState):
-            app_state = AppState.empty()
-        if app_state.has_active_event:
-            self.set_subtitle(
-                f"{app_state.event_name} — {app_state.car} at {app_state.track}"
-            )
-        else:
-            self.set_subtitle("No active event. Create or select an NGR event to begin.")
-        # Progress summary (defensive) from the command-centre view.
-        if isinstance(view, Mapping):
-            prog = view.get("progress") or {}
-            try:
-                self._detail.setText(
-                    f"Practice sessions: {int(prog.get('practice_sessions', 0) or 0)}   ·   "
-                    f"Valid laps: {int(prog.get('valid_laps', 0) or 0)}   ·   "
-                    f"Setup experiments: {int(prog.get('setup_experiments', 0) or 0)}"
-                )
-            except Exception:
-                self._detail.setText("")
-        else:
-            self._detail.setText("")
 
 
 class PitCrewShell(QMainWindow):
@@ -195,7 +161,6 @@ class PitCrewShell(QMainWindow):
 
     # ---- page construction -----------------------------------------------
     def _build_pages(self) -> None:
-        self.active_event_page = ActiveEventPage()
         titles = {
             "home": ("HOME", "What should I do next?"),
             "garage": ("GARAGE", "Which setup should I run?"),
@@ -236,8 +201,6 @@ class PitCrewShell(QMainWindow):
                 page = self.home_page
             elif dest == "programme":
                 page = self.programme_page
-            elif dest == "active_event":
-                page = self.active_event_page
             elif dest == "garage":
                 page = self.garage_page
             elif dest == "practice":
@@ -363,7 +326,7 @@ class PitCrewShell(QMainWindow):
         return self._current_dest
 
     def _on_stage_selected(self, stage_key: str) -> None:
-        self._navigate(STAGE_TO_NAV.get(stage_key, "active_event"))
+        self._navigate(STAGE_TO_NAV.get(stage_key, "home"))
 
     def _on_guidance_surface(self, surface: str) -> None:
         if not surface:
@@ -380,7 +343,6 @@ class PitCrewShell(QMainWindow):
         for render in (
             lambda: self.header.bind(app_state),
             lambda: self.rail.set_state(app_state),
-            lambda: self.active_event_page.render(app_state, self._last_view),
             lambda: self.home_page.render(app_state, self._last_view),
         ):
             try:
@@ -391,14 +353,13 @@ class PitCrewShell(QMainWindow):
     _last_view: Optional[Mapping] = None
 
     def set_guidance_view(self, view: Optional[Mapping]) -> None:
-        """Feed the Event Command Centre view dict; updates guidance + active-event."""
+        """Feed the Event Command Centre view dict; updates guidance + Home."""
         self._last_view = view
         state = self._controller.state()
         for render in (
             lambda: self.guidance.set_vm(EngineerGuidanceVM.from_command_centre(
                 view, active_setup_label=state.active_setup_label,
                 active_setup_applied=state.active_setup_applied)),
-            lambda: self.active_event_page.render(state, view),
             lambda: self.home_page.render(state, view),
         ):
             try:

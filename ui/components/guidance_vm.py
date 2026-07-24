@@ -143,8 +143,8 @@ class EngineerGuidanceVM:
             message="No active event yet.",
             objective="Create or select an NGR event to begin.",
             tone="info",
-            primary_action_label="Go to Active Event",
-            primary_action_surface="active_event",
+            primary_action_label="Go to Home",
+            primary_action_surface="home",
         )
 
     @classmethod
