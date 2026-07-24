@@ -50,6 +50,9 @@ class LiveShellBridge(QObject):
     _analysis_done = pyqtSignal(object)
     _baseline_done = pyqtSignal(object)
     _plan_done = pyqtSignal(object)
+    #: PTT strategy acknowledgement — emitted by the voice listener thread and
+    #: dispatched on the Qt thread so the slot can safely call refresh().
+    _voice_strategy_ack = pyqtSignal(str)
 
     def __init__(self, shell, controller, window=None, config=None, db=None,
                  *, refresh_ms: int = 750, parent=None, spawn=None):
@@ -86,11 +89,16 @@ class LiveShellBridge(QObject):
         from services.setup_inputs import build_setup_inputs
         from services.setup_service import SetupService
         from services.setup_store import SetupSheetStore, default_store_path
-        self._sheets = SetupSheetStore(default_store_path(
-            str(getattr(window, "config_path", "") or "")))
+        from services.setup_history_store import SetupHistoryStore, default_history_path
+        _cfg_path = str(getattr(window, "config_path", "") or "")
+        self._sheets = SetupSheetStore(default_store_path(_cfg_path))
+        # Persisted applied-revision history: fills the Garage Lineage tab and lets a
+        # past setup be loaded back ("the settings I'm running in GT7").
+        self._setup_history = SetupHistoryStore(default_history_path(_cfg_path))
         self._setups = SetupService(
             store=self._sheets, advisor=getattr(window, "_driving_advisor", None),
             authority=getattr(window, "_setup_authority", None), db=db,
+            history=self._setup_history,
             inputs_provider=lambda: build_setup_inputs(db, self._config))
         # Track modelling, headless and guided. Reuses the domain untouched; the
         # coordinator decides which actions are legal at each point.
@@ -124,8 +132,28 @@ class LiveShellBridge(QObject):
         self._previous_recorded_session_id = 0
         #: Runs bound to the active cycle, resolved once per refresh tick.
         self._runs_cache = None
+        #: session_id -> discipline it was practised on, so Review tells race and
+        #: qualifying runs apart (a review is otherwise blind to which setup was on).
+        self._run_discipline: dict[int, str] = {}
+        #: The active cycle's preparation report, resolved once per refresh (lock state).
+        self._lock_report = None
         #: Track pickers are filled once — the circuit list does not change at runtime.
         self._track_choices_loaded = False
+        #: The last StrategyReplanDecision dict from build_live_audio_strategy_view.
+        self._live_decision = None
+        #: True when the last decision recommends REPLAN_RECOMMENDED or REPLAN_URGENT,
+        #: i.e. an PTT "accept plan" / "keep plan" command is actionable.
+        self._live_pending = False
+        #: The plan the driver accepted via PTT. Shown on the pit wall until a new
+        #: event cycle clears it. Overrides the DB-persisted approved strategy only in
+        #: the CURRENT session — the persisted row is never mutated here.
+        self._live_accepted_plan = None
+        #: The strategy decision is recomputed ONCE PER LAP ("at the end of every lap"),
+        #: not on every 750ms display tick — this is the driver's own model and it stops
+        #: the replan warning flickering as live figures wobble mid-lap. The last audio
+        #: view is cached and the lap it was computed for is remembered.
+        self._live_audio_view = None
+        self._live_decision_lap = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -133,12 +161,19 @@ class LiveShellBridge(QObject):
 
         self._wire_signals()
         self._wire_actions()
+        self._voice_strategy_ack.connect(self._on_voice_strategy_ack)
+        self._wire_voice()
 
     # ---- wiring -----------------------------------------------------------
     def _wire_signals(self) -> None:
-        """Refresh when the app reports connection / lap / race-state changes."""
+        """Refresh when the app reports connection / lap / race-state changes.
+
+        MainWindow stores the signal bridge as ``self._bridge`` (not ``self.bridge``);
+        the original lookup used ``"bridge"`` so lap_completed was never connected and
+        the shell did not update on each completed lap.
+        """
         try:
-            bridge = getattr(self._window, "bridge", None)
+            bridge = getattr(self._window, "_bridge", None)
             for sig_name in ("connection_changed", "lap_completed", "race_state_changed",
                              "car_detected", "strategy_status_changed"):
                 sig = getattr(bridge, sig_name, None)
@@ -166,6 +201,8 @@ class LiveShellBridge(QObject):
                     gp.shift_rpm_changed.connect(self._on_shift_rpm_changed)
                 if hasattr(gp, "shift_rpm_recommend_requested"):
                     gp.shift_rpm_recommend_requested.connect(self._on_shift_rpm_recommend)
+                if hasattr(gp, "lock_requested"):
+                    gp.lock_requested.connect(self._on_lock_setup)
         except Exception:
             pass
         try:
@@ -190,6 +227,7 @@ class LiveShellBridge(QObject):
            lambda: self._navigate("live_pit_wall"))
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
+        _c(getattr(shell, "strategy_page", None), "plan_selected", self._on_select_plan)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
@@ -205,6 +243,55 @@ class LiveShellBridge(QObject):
         esp = getattr(shell, "event_setup_page", None)
         _c(esp, "save_requested", self._on_event_draft_saved)
         _c(esp, "edit_requested", self._on_event_draft_open)
+
+    def _wire_voice(self) -> None:
+        """Register the strategy-ack callback with the PTT query listener.
+
+        The query listener runs on its own thread; it calls the handler which emits the
+        ``_voice_strategy_ack`` signal, delivering the action to the Qt thread where the
+        slot can safely call refresh() and update widgets.
+        """
+        try:
+            ql = getattr(self._window, "_query_listener", None)
+            if ql is not None and hasattr(ql, "set_strategy_ack_handler"):
+                ql.set_strategy_ack_handler(
+                    lambda action: self._voice_strategy_ack.emit(str(action or "")))
+        except Exception:
+            pass
+
+    def _on_voice_strategy_ack(self, action: str) -> None:
+        """Handle a PTT strategy acknowledgement on the Qt thread.
+
+        "accept" — if a replan is pending and a best candidate exists, record the
+        acknowledgement (advisory only, executes nothing) and store the candidate as the
+        shown plan for this session.
+
+        "keep" — record the acknowledgement and leave the shown plan unchanged.
+
+        Any other action or nothing pending → safe no-op. Never raises.
+        """
+        try:
+            from strategy.adaptive_live_strategy import acknowledge_strategy
+            from ui.shell_feed_adapters import live_plan_dict_from_candidate
+            if action == "accept":
+                if not self._live_pending:
+                    return  # nothing to accept — safe no-op
+                candidate = (self._live_decision or {}).get("best_candidate")
+                if not candidate:
+                    return
+                ack = acknowledge_strategy(record_preference=True)
+                # The domain contract: executes_anything is ALWAYS False.
+                # This is asserted in tests; here we trust the domain.
+                _ = ack.executes_anything   # noqa — referenced for documentation only
+                plan = live_plan_dict_from_candidate(candidate)
+                if plan:
+                    self._live_accepted_plan = plan
+                self.refresh()
+            elif action == "keep":
+                acknowledge_strategy(record_preference=False)
+                # leave _live_accepted_plan unchanged
+        except Exception:
+            pass
 
     @staticmethod
     def _safe_connect(obj, signal_name, slot) -> None:
@@ -238,6 +325,7 @@ class LiveShellBridge(QObject):
         # what kind it was, what to compare it against). Resolve it ONCE per refresh so
         # the 750 ms feed stays at one bounded query rather than three.
         self._runs_cache = None
+        self._lock_report = None
         try:
             state = build_initial_app_state(self._window, self._config)
             self._controller.set_state(state)
@@ -257,6 +345,9 @@ class LiveShellBridge(QObject):
                 self._shell.set_guidance_view(view)
         except Exception:
             pass
+        # Keep the live runtime's practice mode in step with the selected discipline, so
+        # the shift beep uses the right (qualifying vs race) RPM for the session.
+        self._push_practice_mode(self._discipline)
         self._feed_garage()
         self._feed_practice()
         self._feed_qualifying(view)
@@ -304,11 +395,24 @@ class LiveShellBridge(QObject):
             panel.set_review(self._review_for(self._review_session_id()))
             from strategy.run_brief import brief_for_run_type
             run_type = self._recorded_run_domain()
+            sid = int(self._review_session_id() or 0)
+            disc = self._run_discipline.get(sid, "")
+            disc_label = ("Qualifying setup" if disc == "qualifying"
+                          else "Race setup" if disc == "race" else "")
             if run_type:
                 brief = brief_for_run_type(run_type)
-                panel.set_run_kind(brief.run_name, brief.reports)
+                panel.set_run_kind(brief.run_name, brief.reports, on=disc_label)
             else:
-                panel.set_run_kind("")
+                panel.set_run_kind("", on=disc_label)
+            # A coaching run's review is about the DRIVER — surface the coaching read so
+            # it is not indistinguishable from a normal practice run.
+            if hasattr(panel, "set_coaching"):
+                if str(run_type).lower() == "coaching_run":
+                    from strategy.practice_run_review import build_coaching_review
+                    panel.set_coaching(build_coaching_review(
+                        self._review_for(self._review_session_id())))
+                else:
+                    panel.set_coaching(None)
         except Exception:
             pass
 
@@ -480,6 +584,9 @@ class LiveShellBridge(QObject):
         if self._last_recorded_session_id != int(decision.session_id or 0):
             self._previous_recorded_session_id = self._last_recorded_session_id
         self._last_recorded_session_id = int(decision.session_id or 0)
+        # Remember which discipline the driver was practising, so a race run and a
+        # qualifying run are told apart in Review rather than lumped together.
+        self._run_discipline[int(decision.session_id or 0)] = self._discipline
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -507,6 +614,31 @@ class LiveShellBridge(QObject):
             discipline or self._discipline,
             applied_at=time.strftime("%Y-%m-%d %H:%M"))
         self._garage_status(outcome.reason)
+        self.refresh()
+
+    def _on_lock_setup(self, discipline: str, lock: bool) -> None:
+        """Lock (or reopen) a discipline's setup on the active cycle — the explicit
+        confirmation the "Lock the base setup" guidance asked for."""
+        import time
+        d = str(discipline or self._discipline or "race").lower()
+        cid = self._runs.active_cycle_id()
+        if not cid:
+            self._garage_status("Activate an event before locking a setup.")
+            return
+        if self._db is None or not hasattr(self._db, "lock_setup"):
+            self._garage_status("Locking is not available.")
+            return
+        ok = False
+        try:
+            ok = bool(self._db.lock_setup(
+                cid, d, locked=bool(lock), locked_at=time.strftime("%Y-%m-%d %H:%M")))
+        except Exception as exc:
+            self._garage_status(f"Could not lock the setup: {exc}")
+            return
+        if ok:
+            self._garage_status(
+                f"{d.title()} setup locked for the event." if lock
+                else f"{d.title()} setup reopened — you can keep developing it.")
         self.refresh()
 
     def _connected(self) -> bool:
@@ -546,8 +678,25 @@ class LiveShellBridge(QObject):
                     except Exception:
                         rpvm = None
             sp.set_plan(strategy_plan_vm_from_rpvm(rpvm))
+            # Restore the plan the driver approved LAST TIME, so it survives a restart.
+            saved = self._approved_strategy()
+            if saved.get("candidate_id"):
+                if hasattr(sp, "set_selected_plan"):
+                    sp.set_selected_plan(str(saved["candidate_id"]))
+                if hasattr(sp, "set_status") and not sp._status.text():
+                    sp.set_status(f"Your approved plan ({saved.get('name', 'saved plan')}) "
+                                  f"is loaded and will be used for the race.")
         except Exception:
             pass
+
+    def _approved_strategy(self) -> dict:
+        try:
+            cid = self._runs.active_cycle_id()
+            if cid and self._db is not None and hasattr(self._db, "get_approved_strategy"):
+                return dict(self._db.get_approved_strategy(cid) or {})
+        except Exception:
+            pass
+        return {}
 
     def _feed_track_model(self) -> None:
         """Render the guided modelling flow from the live session."""
@@ -608,9 +757,38 @@ class LiveShellBridge(QObject):
             na = v.get("next_action") or {}
             next_domain = str(na.get("domain") or "").strip().lower() \
                 or domain_from_objective_headline(str(na.get("headline") or ""))
-            page.set_map(build_programme_map(readiness, next_domain=next_domain))
+            required, sampled = self._tyre_compound_coverage()
+            page.set_map(build_programme_map(
+                readiness, next_domain=next_domain,
+                tyre_required=required, tyre_sampled=sampled))
         except Exception:
             pass
+
+    def _tyre_compound_coverage(self):
+        """(allowed compounds, compounds already sampled) for the tyre-wear area.
+
+        Practice is not complete until every allowed compound has been run — a race can
+        force a switch mid-race. Allowed comes from the event; sampled from the dominant
+        compound of each run recorded against this event.
+        """
+        required, sampled = (), set()
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            required = tuple(getattr(ev, "available_tyres", ()) or ())
+        except Exception:
+            required = ()
+        if not required:
+            return (), ()          # no restriction → no per-compound requirement
+        try:
+            for r in self._recorded_runs():
+                sid = int(r.get("session_id") or 0)
+                if sid and hasattr(self._db, "_dominant_compound"):
+                    c = str(self._db._dominant_compound(sid) or "").strip()
+                    if c:
+                        sampled.add(c.upper())
+        except Exception:
+            pass
+        return required, tuple(sorted(sampled))
 
     def _on_programme_start_next(self, domain: str) -> None:
         """Start the run the programme map points at — the weakest area's run type."""
@@ -741,12 +919,132 @@ class LiveShellBridge(QObject):
                 vm if vm is not None else build_recommendation_vm({}),
                 discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
+                lineage_nodes=self._lineage_nodes(label),
                 has_recorded_run=self._has_recorded_run(),
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
+            self._feed_lock(gp)
         except Exception:
             pass
+
+    def _lock_report_cache(self):
+        """The active cycle's preparation report, resolved once per refresh (for lock state)."""
+        if self._lock_report is None:
+            self._lock_report = {}
+            try:
+                cid = self._runs.active_cycle_id()
+                if cid and self._db is not None and hasattr(self._db, "build_event_preparation_report"):
+                    self._lock_report = self._db.build_event_preparation_report(cid) or {}
+            except Exception:
+                self._lock_report = {}
+        return self._lock_report
+
+    def _lock_state(self, discipline: str):
+        """(lockable, locked, hint) for a discipline on the active cycle.
+
+        Lockable = the setup has converged enough for a lock to be permitted (the
+        engineer's call); locked = the driver has confirmed it. Both come from canonical
+        state, never inferred.
+        """
+        try:
+            from strategy.setup_lock import lock_permitted
+            from strategy.setup_convergence import SetupConvergenceState
+            report = self._lock_report_cache()
+            state = str((report.get("setup") or {}).get(discipline) or "")
+            lockable = False
+            try:
+                lockable = lock_permitted(SetupConvergenceState(state)) if state else False
+            except Exception:
+                lockable = False
+            locked = False
+            try:
+                cid = self._runs.active_cycle_id()
+                if cid and hasattr(self._db, "setup_locks"):
+                    locked = discipline in (self._db.setup_locks(cid) or ())
+            except Exception:
+                locked = False
+            if locked:
+                hint = "This setup is locked for the event. Reopen only if you need to change it."
+            elif lockable:
+                hint = ("The setup has converged — lock it to mark it final for the event, "
+                        "or keep developing.")
+            else:
+                hint = ""
+            return lockable, locked, hint
+        except Exception:
+            return False, False, ""
+
+    def _lock_objective_discipline(self) -> str:
+        """The discipline the engineer's current objective asks to lock, or "".
+
+        The Command Centre can nominate "Lock the base setup" — and "base" has no Garage
+        tab of its own, so locking the selected tab never satisfied it and the objective
+        was stuck forever. Parsing the objective lets the lock control target exactly what
+        the guidance is asking for.
+        """
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+        na = view.get("next_action") or {}
+        if str(na.get("category") or "").lower() != "lock_setup":
+            return ""
+        head = str(na.get("headline") or "").lower()
+        for d in ("base", "qualifying", "race"):
+            if f"the {d} setup" in head:
+                return d
+        return ""
+
+    def _feed_lock(self, garage) -> None:
+        if not hasattr(garage, "set_lock_state"):
+            return
+        # Target what the engineer is asking to lock (may be "base", which has no tab),
+        # falling back to the selected discipline.
+        target = self._lock_objective_discipline() or self._discipline
+        lockable, locked, hint = self._lock_state(target)
+        if target == "base" and not locked:
+            hint = ("The base setup is the foundation both sheets build on. Lock it to "
+                    "settle the baseline for the event.")
+        garage.set_lock_state(lockable=lockable, locked=locked, hint=hint,
+                              discipline=target,
+                              lock_label=f"Lock the {target} setup")
+
+    def _lineage_nodes(self, active_label: str = ""):
+        """Build the Garage lineage from the recorded applied revisions (newest first).
+
+        Each confirmed revision is a node; the summary is what changed from the previous
+        revision, so the driver can see how the setup evolved. The newest revision is the
+        current one; older ones offer "Load this setup". The tab was blank because nothing
+        ever fed it — the history now does.
+        """
+        from ui.components.setup_lineage import LineageNode
+        from strategy.setup_sheet import sheet_from_dict
+        revs = self._setups.revisions(self._discipline)
+        if not revs:
+            return ()
+        nodes = []
+        newest_rev = max(int(r.get("revision") or 0) for r in revs)
+        prev_sheet = None
+        ordered = sorted(revs, key=lambda r: int(r.get("revision") or 0))
+        summaries = {}
+        for r in ordered:
+            cur_sheet = sheet_from_dict(r.get("fields") or {})
+            if prev_sheet is not None:
+                changed = tuple(sorted(prev_sheet.diff(cur_sheet)))
+                summaries[int(r.get("revision") or 0)] = (
+                    "Changed " + ", ".join(changed[:4]) + ("…" if len(changed) > 4 else "")
+                    if changed else "No tuning change")
+            else:
+                summaries[int(r.get("revision") or 0)] = "Baseline"
+            prev_sheet = cur_sheet
+        for r in sorted(revs, key=lambda r: int(r.get("revision") or 0), reverse=True):
+            rev = int(r.get("revision") or 0)
+            nodes.append(LineageNode(
+                node_id=f"rev{rev}",
+                label=str(r.get("label") or f"Setup · rev {rev}"),
+                is_current=(rev == newest_rev),
+                summary=summaries.get(rev, ""),
+                discipline=self._discipline,
+                revertable=True))
+        return tuple(nodes)
 
     def _feed_shift_rpm(self, garage) -> None:
         """Show the upshift point for the selected discipline.
@@ -779,6 +1077,7 @@ class LiveShellBridge(QObject):
         if d not in ("qualifying", "race"):
             d = "race"
         self._discipline = d
+        self._push_practice_mode(d)
         try:
             gp = getattr(self._shell, "garage_page", None)
             if gp is not None and hasattr(gp, "set_status"):
@@ -786,6 +1085,49 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         self._feed_garage()
+
+    def _push_practice_mode(self, discipline: str) -> None:
+        """Tell the live runtime which discipline is being practised.
+
+        The shift-beep loop in main.py reads window._practice_is_qual_ref /
+        _live_mode_ref to pick the qualifying vs race upshift RPM. The new shell never
+        wrote them, so a qualifying practice session still beeped at the RACE RPM. The
+        selected Garage discipline is now pushed to those refs.
+        """
+        try:
+            is_qual = str(discipline).lower() == "qualifying"
+            ref = getattr(self._window, "_practice_is_qual_ref", None)
+            if isinstance(ref, list) and ref:
+                ref[0] = is_qual
+            mode = getattr(self._window, "_live_mode_ref", None)
+            if isinstance(mode, list) and mode:
+                mode[0] = "Practice"      # a practice session, race vs qual set by the flag
+        except Exception:
+            pass
+        self._push_active_compound(discipline)
+
+    def _push_active_compound(self, discipline: str) -> None:
+        """Tell the telemetry tracker which compound is on the car for this discipline.
+
+        GT7 does NOT broadcast the tyre compound, so recorded laps take it from
+        tracker.set_compound(). Only the classic dashboard's compound dropdown ever
+        called it, so a run driven from the new shell recorded a stale/default compound —
+        a qualifying run on soft tyres was logged as the race hard the classic default
+        still held. The selected discipline's setup compound is now pushed each refresh.
+        """
+        try:
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is None or not hasattr(tracker, "set_compound"):
+                return
+            from strategy.tyre_selection import current_code
+            # The compound is a sheet value in its own right — do NOT gate on is_authored
+            # (which only looks at numeric fields), or a sheet whose only change is the
+            # tyre would never push its compound.
+            code = current_code(self._setups.sheet(discipline).as_dict())
+            if code:
+                tracker.set_compound(code)
+        except Exception:
+            pass
 
     def _feed_tyres(self, garage, setup) -> None:
         """Offer the compounds this event's regulations allow for this discipline."""
@@ -809,7 +1151,12 @@ class LiveShellBridge(QObject):
             pass
 
     def _feed_live(self) -> None:
-        """Feed the Live Pit Wall from the canonical live race state. Never raises."""
+        """Feed the Live Pit Wall from the canonical live race state. Never raises.
+
+        Sourcing plan attrs from the window mirrors exactly what the classic
+        ``_refresh_audio_engineer`` does (Phase 66 activation).  When they are absent
+        the fields remain unknown — never fabricated.
+        """
         try:
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
@@ -817,15 +1164,53 @@ class LiveShellBridge(QObject):
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             connected = self._connected()
             state = None
+            audio_view = None
             try:
                 tracker = getattr(self._window, "_tracker", None)
                 if tracker is not None and getattr(tracker, "race_type", None) is not None:
                     from strategy.canonical_live_race_state import build_canonical_live_race_state
-                    canon = build_canonical_live_race_state(tracker, telemetry_fresh=connected)
+                    canon = build_canonical_live_race_state(
+                        tracker,
+                        elapsed_s=getattr(self._window, "_live_race_elapsed_s", None),
+                        telemetry_fresh=connected,
+                        fuel_per_lap_plan=getattr(self._window, "_live_fuel_plan", None),
+                        lap_time_plan_s=getattr(self._window, "_live_pace_plan_s", None),
+                        recent_fuel_burn_samples=getattr(self._window, "_live_fuel_samples", None),
+                        recent_clean_lap_times_s=getattr(self._window, "_live_clean_lap_times", None),
+                        pit_loss_s=getattr(self._window, "_live_pit_loss_s", None),
+                        driver_reports=getattr(self._window, "_live_driver_reports", None))
                     state = canon.to_live_strategy_state()
             except Exception:
                 state = None
-            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected))
+            # Build the audio-first + adaptive-strategy view ONCE PER LAP, not on every
+            # 750ms display tick: the driver's model is "at the end of every lap, are we
+            # still optimal?", and recomputing every tick made the replan warning flicker
+            # as live figures wobbled AND re-ran the strategy view twice on a lap-signal +
+            # timer double-fire. The lap gate reuses the cached decision between laps; KPI
+            # (fuel/tyre/lap) still refresh every tick from the fresh state.
+            if state is not None:
+                cur_lap = getattr(state, "current_lap", None)
+                stale = (self._live_audio_view is None
+                         or cur_lap != self._live_decision_lap
+                         or not getattr(state, "telemetry_fresh", True))
+                if stale:
+                    try:
+                        from strategy.live_audio_strategy_build import build_live_audio_strategy_view
+                        self._live_audio_view = build_live_audio_strategy_view(state)
+                        decision = (self._live_audio_view or {}).get("strategy_decision") or {}
+                        self._live_decision = decision
+                        rec = str(decision.get("recommendation") or "")
+                        self._live_pending = rec in ("REPLAN_RECOMMENDED", "REPLAN_URGENT")
+                        self._live_decision_lap = cur_lap
+                    except Exception:
+                        self._live_audio_view = None
+                audio_view = self._live_audio_view
+            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected,
+                                                     audio_view=audio_view))
+            # Show the approved/accepted plan — the wall looked empty because nothing
+            # about the strategy was ever fed here.
+            if hasattr(lp, "show_plan"):
+                lp.show_plan(self._live_accepted_plan or self._approved_strategy())
         except Exception:
             pass
 
@@ -968,8 +1353,21 @@ class LiveShellBridge(QObject):
         self.refresh()
 
     def _on_revert(self, node_id: str) -> None:
-        """Undo the last apply on the shown sheet."""
-        outcome = self._setups.revert(self._discipline)
+        """Load a lineage revision, or (no id) undo the last apply.
+
+        The lineage's "Load this setup" passes a "rev{n}" node id — that loads a past
+        revision's tune back onto the sheet so the driver can re-enter it in GT7. The
+        Outcome page's revert passes no id — that is the one-step undo of the last change.
+        """
+        nid = str(node_id or "")
+        if nid.startswith("rev"):
+            try:
+                revision = int(nid[3:])
+            except (TypeError, ValueError):
+                revision = 0
+            outcome = self._setups.load_revision(self._discipline, revision)
+        else:
+            outcome = self._setups.revert(self._discipline)
         self._garage_status(outcome.reason)
         if outcome.ok:
             self._mirror_to_classic(self._discipline)
@@ -1046,6 +1444,11 @@ class LiveShellBridge(QObject):
         if result is not None and not result.ok:
             self._guidance_status(result.message or "Could not switch to that event.")
         self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
         self._last_guidance_view = None
         self.refresh()
 
@@ -1093,6 +1496,11 @@ class LiveShellBridge(QObject):
             return
         # The active event changed — every surface must be rebuilt against it.
         self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
         self._last_guidance_view = None
         self.refresh()
         self._navigate("home")
@@ -1248,17 +1656,71 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _on_select_plan(self, key: str) -> None:
+        """The driver chose a plan other than the recommended one. The recommendation is
+        advice; the choice is theirs, and it is what Approve then commits."""
+        sp = getattr(self._shell, "strategy_page", None)
+        if sp is None:
+            return
+        try:
+            sp.set_selected_plan(str(key or ""))
+            name = next((o.name for o in sp._vm.options if o.key == key), "")
+            sp.set_status(f"{name} is your plan — approve it to take it to the pit wall."
+                          if name else "")
+        except Exception:
+            pass
+
     def _on_approve_strategy(self) -> None:
-        """Approve the (read-only) race plan and move to the live wall. Records approval
-        if the window supports it; never mutates a setup."""
+        """Approve the race plan the driver has chosen and move to the live wall.
+
+        Records approval if the window supports it; never mutates a setup. The chosen
+        plan defaults to the recommended one until the driver picks a different card.
+        """
+        chosen = ""
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            chosen = sp.selected_plan() if sp is not None else ""
+        except Exception:
+            chosen = ""
+        # Persist the chosen plan on the cycle so it is still the plan next launch.
+        self._persist_approved_strategy(chosen)
         try:
             window = self._window
             fn = getattr(window, "approve_race_plan", None)
             if callable(fn):
-                fn()
+                try:
+                    fn(chosen) if chosen else fn()
+                except TypeError:      # older signature takes no argument
+                    fn()
         except Exception:
             pass
+        self.refresh()
         self._navigate("live_pit_wall")
+
+    def _persist_approved_strategy(self, candidate_id: str) -> None:
+        """Save the approved plan's essentials on the cycle so it reloads next launch."""
+        import time
+        try:
+            cid = self._runs.active_cycle_id()
+            if not cid or self._db is None or not hasattr(self._db, "save_approved_strategy"):
+                return
+            sp = getattr(self._shell, "strategy_page", None)
+            opt = None
+            for o in (getattr(sp, "_vm", None).options if sp is not None else ()):
+                if o.key == candidate_id or (not candidate_id and o.recommended):
+                    opt = o
+                    break
+            plan = {"approved_at": time.strftime("%Y-%m-%d %H:%M")}
+            if opt is not None:
+                plan.update({
+                    "candidate_id": opt.key, "name": opt.name,
+                    "total_time": opt.total_time, "expected_laps": opt.expected_laps,
+                    "pit_windows": opt.pit_windows, "tyres": opt.tyre_sequence,
+                    "stints": list(opt.stints), "pit_stops": list(opt.pit_stops),
+                })
+            self._db.save_approved_strategy(cid, plan)
+        except Exception:
+            pass
 
     def _on_debrief_action(self, key: str) -> None:
         try:

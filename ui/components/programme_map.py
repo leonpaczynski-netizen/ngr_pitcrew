@@ -83,6 +83,8 @@ class ProgrammeMapPage(QWidget):
         super().__init__(parent)
         self.setObjectName("ngrProgrammeMap")
         self._map = ProgrammeMap()
+        #: keys of areas the driver has expanded for more detail.
+        self._expanded: set = set()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -209,13 +211,69 @@ class ProgrammeMapPage(QWidget):
         bar.set_progress(d.done, d.target, colour)
         grid.addWidget(bar, 1, 0, 1, 2)
 
-        detail = QLabel(f"{d.progress_text}   ·   fills from a {d.run_name}")
+        fills = f"fills from a {d.run_name}"
+        if d.target_laps:
+            # A bare range ("8–12", "3") reads as laps; anything with words in it
+            # ("A full stint", "12–20, or until the tyre is done") already says so.
+            bare_range = all(c.isdigit() or c in "-–— " for c in d.target_laps)
+            laps = (f"{d.target_laps} laps" if bare_range else d.target_laps.lower())
+            fills += f" ({laps})"
+        detail = QLabel(f"{d.progress_text}   ·   {fills}")
         detail.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         detail.setWordWrap(True)
         grid.addWidget(detail, 2, 0, 1, 2)
 
+        # How to actually earn this evidence — the driver asked what each area takes.
+        if d.how and not d.is_ready:
+            how = QLabel(f"How:  {d.how}")
+            how.setWordWrap(True)
+            how.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+            grid.addWidget(how, 3, 0, 1, 2)
+
+        # Expandable detail — the driver asked for more if they click an area. Clicking
+        # the row toggles the full "how to drive it" and "what it will tell you".
+        prompt = QLabel("▸ more" if d.key not in self._expanded else "▾ less")
+        prompt.setStyleSheet(f"color: {_t.NGR_GREEN}; font-size: {_t.FS_CAPTION}pt;")
+        grid.addWidget(prompt, 4, 0, 1, 2)
+        if d.key in self._expanded:
+            grid.addWidget(self._area_detail(d), 5, 0, 1, 2)
+
+        box.setCursor(Qt.CursorShape.PointingHandCursor)
+        box.mousePressEvent = lambda _e, k=d.key: self._toggle_area(k)
+
         grid.setColumnStretch(0, 1)
         return box
+
+    def _area_detail(self, d: DomainProgress) -> QWidget:
+        wrap = QFrame()
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(0, _t.SPACE_XS, 0, 0)
+        v.setSpacing(2)
+
+        def _block(cap: str, items):
+            items = tuple(str(i).strip() for i in (items or ()) if str(i).strip())
+            if not items:
+                return
+            c = QLabel(cap)
+            c.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
+            v.addWidget(c)
+            b = QLabel("•  " + "\n•  ".join(items))
+            b.setWordWrap(True)
+            b.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+            v.addWidget(b)
+
+        _block("How to drive it", d.how_all)
+        _block("What it will tell you", d.reports)
+        if d.compounds_missing:
+            _block("Compounds still to run", d.compounds_missing)
+        return wrap
+
+    def _toggle_area(self, key: str) -> None:
+        if key in self._expanded:
+            self._expanded.discard(key)
+        else:
+            self._expanded.add(key)
+        self.set_map(self._map)      # re-render with the new expanded state
 
     def _on_start(self) -> None:
         self.start_next_requested.emit(self._next_domain)

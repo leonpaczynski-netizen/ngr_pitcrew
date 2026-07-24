@@ -94,3 +94,86 @@ class TestSetupWorkspace:
         w = SetupWorkspace()
         w.set_recommendation("not a vm")   # must not raise
         assert w._table.rowCount() == 0
+
+
+class TestShiftRpmField:
+    def test_setting_the_value_does_not_re_emit(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.shift_rpm_changed.connect(seen.append)
+        w.set_shift_rpm(7840, "note")
+        assert w._shift_rpm.value() == 7840 and seen == []
+
+    def test_a_periodic_feed_does_not_clobber_a_focused_edit(self, qapp):
+        """UAT-7: "the rpm shift when I change it it changes straight back to default."
+        The 750ms feed called set_shift_rpm mid-edit and reset the box the driver was
+        typing in. While the field has focus its value is left alone."""
+        w = SetupWorkspace()
+        w.show()                                    # a shown widget can take focus
+        w.set_shift_rpm(7840)
+        w._shift_rpm.setFocus()
+        if w._shift_rpm.hasFocus():                 # offscreen platforms may not focus
+            w._shift_rpm.setValue(7000)             # the driver is mid-edit
+            w.set_shift_rpm(7840, "feed note")      # a periodic feed lands
+            assert w._shift_rpm.value() == 7000     # the edit is preserved
+            assert w._shift_note.text() == "feed note"   # but the note still refreshes
+        w.close()
+
+    def test_an_edit_emits_the_new_value_once(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.shift_rpm_changed.connect(seen.append)
+        w.set_shift_rpm(7840)
+        w._shift_rpm.setValue(7000)
+        w._on_shift_rpm_edited()
+        assert seen == [7000]
+        w._on_shift_rpm_edited()                    # no change → no repeat emit
+        assert seen == [7000]
+
+
+class TestLockControl:
+    """UAT-7: "how do I 'lock the base setup'?" The guidance CTA pointed at the Garage
+    but there was nothing to click."""
+
+    def test_hidden_until_the_setup_is_lockable(self, qapp):
+        w = SetupWorkspace()
+        w.set_lock_state(lockable=False, locked=False)
+        assert w._lock_btn.isHidden() is True and w._pill_locked.isHidden() is True
+
+    def test_lockable_shows_the_lock_button(self, qapp):
+        w = SetupWorkspace()
+        w.set_lock_state(lockable=True, locked=False, hint="converged")
+        assert w._lock_btn.isHidden() is False
+        assert w._lock_btn.text() == "Lock this setup"
+
+    def test_locking_emits_the_current_discipline(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w._selector.set_discipline("qualifying")
+        w.set_lock_state(lockable=True, locked=False)
+        w._lock_btn.click()
+        assert seen == [("qualifying", True)]
+
+    def test_a_locked_setup_shows_the_pill_and_offers_reopen(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w.set_lock_state(lockable=True, locked=True)
+        assert w._pill_locked.isHidden() is False
+        assert w._lock_btn.text() == "Reopen setup"
+        w._lock_btn.click()
+        assert seen == [("race", False)]            # reopen, not re-lock
+
+    def test_it_can_target_a_discipline_other_than_the_selected_tab(self, qapp):
+        """UAT-8: "Lock the base setup" was stuck — base has no tab, so locking the
+        selected tab never satisfied it. The button targets the nominated discipline."""
+        w = SetupWorkspace()
+        seen = []
+        w.lock_requested.connect(lambda d, lk: seen.append((d, lk)))
+        w._selector.set_discipline("race")           # on the Race tab
+        w.set_lock_state(lockable=True, locked=False,
+                         discipline="base", lock_label="Lock the base setup")
+        assert w._lock_btn.text() == "Lock the base setup"
+        w._lock_btn.click()
+        assert seen == [("base", True)]              # locks base, not race

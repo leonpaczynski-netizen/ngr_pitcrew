@@ -58,6 +58,17 @@ class TestItShowsProgressNotJustALevel:
         assert names["tyre_evidence"] == "tyre test"
         assert names["qualifying_setup"] == "qualifying simulation"
 
+    def test_each_area_says_how_long_a_run_is_and_how_to_earn_it(self):
+        """UAT-7: "a bit more information how many laps each one is or how to achieve
+        that area of evidence"."""
+        m = build_programme_map(_UAT_STATE)
+        by_key = {d.key: d for d in m.domains}
+        assert by_key["driver_coaching"].target_laps        # a lap target per area
+        assert by_key["tyre_evidence"].target_laps
+        # And the one line that says how to actually earn it, from the run brief.
+        assert "fresh set" in by_key["tyre_evidence"].how.lower()
+        assert by_key["base_setup"].how
+
 
 class TestTheOverallPicture:
     def test_it_counts_covered_areas_and_a_completion_figure(self):
@@ -110,6 +121,51 @@ class TestCapAndOrdering:
         keys = [d.key for d in m.domains]
         assert keys.index("base_setup") < keys.index("qualifying_setup")
         assert keys.index("base_setup") < keys.index("strategy_evidence")
+
+
+class TestAllCompoundsRequired:
+    """UAT-8: "for practice to be complete I should have to run all tyre compounds RS,
+    RM, RH in case something changes mid race." The tyre area is not covered until every
+    allowed compound has a sample."""
+
+    _TYRE_STRONG = _readiness(tyre_evidence=("strong", 5), base_setup=("adequate", 3))
+
+    def test_tyre_area_is_not_covered_with_a_compound_unsampled(self):
+        m = build_programme_map(self._TYRE_STRONG,
+                                tyre_required=["RS", "RM", "RH"], tyre_sampled=["RS", "RM"])
+        tyre = next(d for d in m.domains if d.key == "tyre_evidence")
+        assert tyre.is_ready is False
+        assert tyre.compounds_missing == ("RH",)
+        assert "still need a run on RH" in tyre.progress_text
+        assert tyre.runs_remaining == 1
+
+    def test_tyre_area_is_covered_once_every_compound_is_sampled(self):
+        m = build_programme_map(self._TYRE_STRONG,
+                                tyre_required=["RS", "RM", "RH"],
+                                tyre_sampled=["RS", "RM", "RH"])
+        tyre = next(d for d in m.domains if d.key == "tyre_evidence")
+        assert tyre.is_ready is True and tyre.compounds_missing == ()
+
+    def test_no_compound_restriction_means_no_per_compound_requirement(self):
+        m = build_programme_map(self._TYRE_STRONG)     # no tyre_required
+        tyre = next(d for d in m.domains if d.key == "tyre_evidence")
+        assert tyre.is_ready is True and tyre.compounds_missing == ()
+
+    def test_missing_compounds_lower_the_overall_completion(self):
+        covered = build_programme_map(self._TYRE_STRONG,
+                                      tyre_required=["RS"], tyre_sampled=["RS"])
+        blocked = build_programme_map(self._TYRE_STRONG,
+                                      tyre_required=["RS", "RH"], tyre_sampled=["RS"])
+        assert blocked.domains_ready < covered.domains_ready
+
+
+class TestAreaDetail:
+    def test_each_area_carries_the_full_how_and_reports_for_expansion(self):
+        m = build_programme_map(_UAT_STATE)
+        tyre = next(d for d in m.domains if d.key == "tyre_evidence")
+        assert len(tyre.how_all) >= 1 and len(tyre.reports) >= 1
+        # More than the single collapsed "how" line.
+        assert len(tyre.how_all) >= 1 and tyre.how in (tyre.how_all[0], "")
 
 
 class TestNeverRaises:

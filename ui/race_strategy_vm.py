@@ -142,6 +142,9 @@ def format_stint_plan(result) -> list[dict]:
         return []
     ev = getattr(result, "evidence", None)
     lap_s = ev.representative_lap_s() if ev is not None else 0.0
+    fuel_per_lap = ev.mean_fuel_per_lap() if ev is not None else 0.0
+    refuel_rate = float(getattr(ev, "refuel_rate_lps", 0.0) or 0.0) if ev is not None else 0.0
+    pit_loss = float(getattr(ev, "pit_loss_seconds", 0.0) or 0.0) if ev is not None else 0.0
 
     rows: list[dict] = []
     laps_per = list(getattr(cand, "estimated_laps_per_stint", []) or [])
@@ -149,6 +152,7 @@ def format_stint_plan(result) -> list[dict]:
     fuel_maps = list(getattr(cand, "fuel_map_plan", []) or [])
     n = len(laps_per)
     cumulative = 0
+    prev_comp = None
     for i in range(n):
         laps = int(laps_per[i])
         cumulative += laps
@@ -159,6 +163,19 @@ def format_stint_plan(result) -> list[dict]:
             pit_note = f"pit around lap {cumulative}"
         else:
             pit_note = "finish"
+        # Fuel to LEAVE the pits with for this stint: enough for its laps plus a one-lap
+        # reserve, capped at the tank. This is the number the driver sets on the fuel
+        # screen before the stint.
+        fuel_to_leave = 0.0
+        if fuel_per_lap > 0:
+            fuel_to_leave = min(100.0, round((laps + 1) * fuel_per_lap, 1))
+        # Estimated time for the STOP that starts this stint (none before the first):
+        # pit loss + refuel time (fuel added / refuel rate), noting a tyre change.
+        pit_seconds = 0.0
+        tyre_change = bool(i > 0 and comp and comp != prev_comp)
+        if i > 0:
+            refuel_time = (fuel_to_leave / refuel_rate) if refuel_rate > 0 else 0.0
+            pit_seconds = round(pit_loss + refuel_time, 0)
         rows.append({
             "stint": i + 1,
             "compound": compound_name(comp),
@@ -167,8 +184,55 @@ def format_stint_plan(result) -> list[dict]:
             "minutes": minutes,
             "fuel_map": fuel_map_label(fmap),
             "pit_note": pit_note,
+            "fuel_to_leave_l": fuel_to_leave,
+            "stop_seconds": pit_seconds,
+            "tyre_change": tyre_change,
         })
+        prev_comp = comp
     return rows
+
+
+def _secs(row: dict, key: str) -> float:
+    try:
+        return float(row.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def explain_candidate(row: dict, reference: dict) -> str:
+    """One honest line for why a plan lands where it does versus a reference plan.
+
+    UAT-7: "how would a 3 stop on hards be quicker than a 2 stop on hards? not enough
+    information in race strat explanation." The engine already scores the trade-off —
+    time lost in the pits versus time saved on fresher tyres — it was simply never
+    shown. This states it in the driver's terms. Deltas under a second are noise and are
+    left out; with no material difference it says so rather than inventing a reason.
+    """
+    if not isinstance(row, dict) or not isinstance(reference, dict) or row is reference:
+        return ""
+    d_stops = int(row.get("pit_stops") or 0) - int(reference.get("pit_stops") or 0)
+    d_pit = _secs(row, "pit_time_seconds") - _secs(reference, "pit_time_seconds")
+    d_deg = _secs(row, "degradation_cost_seconds") - _secs(reference, "degradation_cost_seconds")
+    d_fuel = _secs(row, "fuel_saving_cost_seconds") - _secs(reference, "fuel_saving_cost_seconds")
+    d_total = _secs(row, "gap_to_best_seconds") - _secs(reference, "gap_to_best_seconds")
+
+    bits: list[str] = []
+    if d_stops:
+        n = abs(d_stops)
+        bits.append(f"{n} {'more' if d_stops > 0 else 'fewer'} stop{'s' if n != 1 else ''}")
+    if abs(d_pit) >= 1.0:
+        bits.append(f"{abs(d_pit):.0f}s {'more' if d_pit > 0 else 'less'} in the pits")
+    if abs(d_deg) >= 1.0:
+        bits.append(f"{abs(d_deg):.0f}s {'more' if d_deg > 0 else 'less'} tyre degradation")
+    if abs(d_fuel) >= 1.0:
+        bits.append(f"{abs(d_fuel):.0f}s {'more' if d_fuel > 0 else 'less'} fuel saving")
+    if not bits:
+        return "Within noise of the reference plan on every measured factor."
+
+    ref_name = str(reference.get("strategy") or "the best plan")
+    verdict = (f"{abs(d_total):.0f}s {'slower' if d_total > 0 else 'faster'} overall"
+               if abs(d_total) >= 1.0 else "level on total time")
+    return f"vs {ref_name}: " + ", ".join(bits) + f" — {verdict}."
 
 
 def format_candidate_comparison_rows(result) -> list[dict]:
@@ -181,11 +245,26 @@ def format_candidate_comparison_rows(result) -> list[dict]:
         pit_stops = getattr(cand, "pit_count", 0) if cand else 0
         compounds = _compound_summary(cand)
         gap = score.estimated_gap_to_best_seconds
+        # Per-candidate stint shape, so EVERY plan can show its own stint lengths and
+        # total laps — not just the recommended one. In a time-certain race the lap
+        # count is what the driver actually races to, so it is reported alongside time.
+        laps_per = [int(x) for x in (getattr(cand, "estimated_laps_per_stint", []) or [])]
+        comp_plan = list(getattr(cand, "compound_plan", []) or [])
+        stints = tuple(
+            f"{laps_per[i]} laps {compound_name(comp_plan[i]) if i < len(comp_plan) else ''}".strip()
+            for i in range(len(laps_per))
+        )
         rows.append({
             "strategy": plan_name(score.candidate_id),
             "candidate_id": score.candidate_id,
             "pit_stops": pit_stops,
             "compounds": compounds,
+            "total_laps": sum(laps_per),
+            "stints": stints,
+            "pit_time_seconds": float(getattr(score, "pit_time_total_seconds", 0.0) or 0.0),
+            "degradation_cost_seconds": float(getattr(score, "degradation_cost_seconds", 0.0) or 0.0),
+            "fuel_saving_cost_seconds": float(getattr(score, "fuel_saving_cost_seconds", 0.0) or 0.0),
+            "gap_to_best_seconds": float(gap or 0.0),
             "total_time": format_race_time(score.estimated_total_time_seconds),
             "gap_to_best": "best" if gap <= 0 else f"+{gap:.1f}s",
             "pit_refuel_time": (
@@ -198,6 +277,14 @@ def format_candidate_comparison_rows(result) -> list[dict]:
             "confidence": _CONFIDENCE_LABELS.get(score.confidence, str(getattr(score.confidence, "value", ""))),
             "status": "Recommended" if score.candidate_id == rec_id else "Alternative",
         })
+    # Explain each plan against a reference: alternatives against the best, and the best
+    # against the closest alternative — so the winner says what it actually won on.
+    if rows:
+        best = rows[0]
+        runner_up = rows[1] if len(rows) > 1 else None
+        for r in rows:
+            reference = runner_up if r is best else best
+            r["why"] = explain_candidate(r, reference) if reference is not None else ""
     return rows
 
 

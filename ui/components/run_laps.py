@@ -84,6 +84,23 @@ class RunLapsPanel(QWidget):
         hh.setSectionResizeMode(len(_COLUMNS) - 1, QHeaderView.ResizeMode.Stretch)
         lay.addWidget(self._table)
 
+        # Coaching insight — shown for a coaching run, where the point is the DRIVER, not
+        # the setup. This is what makes a coaching run's review different from any other.
+        from ui.components.cards import Card
+        self._coach_card = Card()
+        self._coach_card.add(SectionHeading("DRIVER COACHING", level=3))
+        self._coach_head = QLabel("")
+        self._coach_head.setWordWrap(True)
+        self._coach_head.setStyleSheet(
+            f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
+        self._coach_card.add(self._coach_head)
+        self._coach_lines = QLabel("")
+        self._coach_lines.setWordWrap(True)
+        self._coach_lines.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_LABEL}pt;")
+        self._coach_card.add(self._coach_lines)
+        self._coach_card.setVisible(False)
+        lay.addWidget(self._coach_card)
+
         self._empty = QLabel(
             "No recorded run yet — start a run from the Run card, drive it, then press "
             "“End run & record”. The laps you drove will appear here.")
@@ -93,15 +110,37 @@ class RunLapsPanel(QWidget):
 
         self.set_review(RunReview())
 
-    def set_run_kind(self, run_name: str = "", reports: tuple = ()) -> None:
-        """Name the kind of run this was, and what it can therefore tell the driver."""
+    def set_coaching(self, coaching=None) -> None:
+        """Show driver-coaching insight (a CoachingReview), or hide it. Only a coaching
+        run produces one — this is what differentiates a coaching run's review."""
+        head = str(getattr(coaching, "headline", "") or "")
+        lines = tuple(getattr(coaching, "lines", ()) or ())
+        if not head and not lines:
+            self._coach_card.setVisible(False)
+            return
+        self._coach_head.setText(head)
+        self._coach_head.setVisible(bool(head))
+        self._coach_lines.setText("•  " + "\n•  ".join(str(l) for l in lines) if lines else "")
+        self._coach_lines.setVisible(bool(lines))
+        self._coach_card.setVisible(True)
+
+    def set_run_kind(self, run_name: str = "", reports: tuple = "", on: str = "") -> None:
+        """Name the kind of run this was, which setup it was on, and what it can tell.
+
+        ``on`` is the discipline's setup ("Qualifying setup"), so a race run and a
+        qualifying run read as distinct even when they are the same kind of run — the
+        driver asked for race and qualifying practice to be told apart.
+        """
         name = str(run_name or "").strip()
+        on = str(on or "").strip()
         items = tuple(str(r).strip() for r in (reports or ()) if str(r).strip())
-        if not name:
+        if not name and not on:
             self._kind.setVisible(False)
             self._kind.setText("")
             return
-        text = f"Reviewing your {name}"
+        text = f"Reviewing your {name}" if name else "Reviewing this run"
+        if on:
+            text += f" on the {on}"
         if items:
             text += " — it can tell you: " + "; ".join(items).lower()
         self._kind.setText(text)
@@ -120,6 +159,7 @@ class RunLapsPanel(QWidget):
         if not has:
             self._table.setRowCount(0)
             self._kind.setVisible(False)
+            self._coach_card.setVisible(False)
             return
 
         self._headline.setText(

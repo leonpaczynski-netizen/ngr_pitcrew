@@ -183,5 +183,84 @@ class TestPurity:
         assert "PyQt6" not in sys.modules or True  # VM never imports it directly
 
 
+class TestExplainCandidate:
+    """UAT-7: "how would a 3 stop on hards be quicker than a 2 stop on hards? not enough
+    information in race strat explanation." The engine already scored the trade-off —
+    pit time lost versus degradation saved — it was just never shown."""
+
+    THREE = {"strategy": "Three-stop", "pit_stops": 3, "pit_time_seconds": 105.0,
+             "degradation_cost_seconds": 40.0, "fuel_saving_cost_seconds": 0.0,
+             "gap_to_best_seconds": 0.0}
+    TWO = {"strategy": "Two-stop", "pit_stops": 2, "pit_time_seconds": 70.0,
+           "degradation_cost_seconds": 135.0, "fuel_saving_cost_seconds": 0.0,
+           "gap_to_best_seconds": 60.0}
+
+    def test_it_explains_why_more_stops_can_be_faster(self):
+        from ui.race_strategy_vm import explain_candidate
+        why = explain_candidate(self.THREE, self.TWO)
+        assert "1 more stop" in why
+        assert "35s more in the pits" in why
+        assert "95s less tyre degradation" in why
+        assert "60s faster overall" in why
+
+    def test_the_reverse_comparison_reads_the_other_way(self):
+        from ui.race_strategy_vm import explain_candidate
+        why = explain_candidate(self.TWO, self.THREE)
+        assert "1 fewer stop" in why and "95s more tyre degradation" in why
+        assert "60s slower overall" in why
+
+    def test_sub_second_differences_are_noise_not_reasons(self):
+        from ui.race_strategy_vm import explain_candidate
+        a = dict(self.TWO, strategy="A")
+        b = dict(self.TWO, strategy="B", pit_time_seconds=70.4)
+        assert "noise" in explain_candidate(a, b).lower()
+
+    def test_it_never_raises_on_junk(self):
+        from ui.race_strategy_vm import explain_candidate
+        assert explain_candidate(None, self.TWO) == ""
+        assert explain_candidate(self.TWO, None) == ""
+        assert explain_candidate({}, {}) is not None
+
+
+class TestPitStopLines:
+    """UAT-8: "the race strategy isn't telling me how much fuel to leave the pits with
+    at each stop and how long estimated pit time will be … changing tyres or not."""
+
+    def test_a_line_per_stop_with_fuel_time_and_tyre(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        rows = [
+            {"stint": 1, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 55.0, "stop_seconds": 0, "tyre_change": False},
+            {"stint": 2, "laps": 16, "compound": "Racing Medium",
+             "fuel_to_leave_l": 52.0, "stop_seconds": 35, "tyre_change": True},
+        ]
+        lines = _pit_stop_lines(rows)
+        assert len(lines) == 1                      # one STOP (before stint 2)
+        assert "Stop 1 (lap 16)" in lines[0]
+        assert "leave with 52 L" in lines[0]
+        assert "~35s in the pits" in lines[0]
+        assert "fit Racing Medium" in lines[0]
+
+    def test_no_tyre_change_says_stay_on(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        rows = [
+            {"stint": 1, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 55.0, "stop_seconds": 0, "tyre_change": False},
+            {"stint": 2, "laps": 16, "compound": "Racing Hard",
+             "fuel_to_leave_l": 52.0, "stop_seconds": 34, "tyre_change": False},
+        ]
+        assert "stay on Racing Hard" in _pit_stop_lines(rows)[0]
+
+    def test_a_no_stop_plan_has_no_lines(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        assert _pit_stop_lines([{"stint": 1, "laps": 30, "compound": "RH"}]) == ()
+        assert _pit_stop_lines([]) == ()
+
+    def test_it_never_raises_on_junk(self):
+        from ui.shell_feed_adapters import _pit_stop_lines
+        assert _pit_stop_lines(None) == ()
+        assert _pit_stop_lines([None, {"laps": "x"}]) is not None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -135,6 +135,10 @@ def main() -> int:
     # Shift beep — part of the car setup, per discipline.
     shell.garage_page.set_shift_rpm(
         7600, "The beep fires at 7600 RPM in a qualifying session (from this setup).")
+    # A converged setup that can be locked for the event.
+    shell.garage_page.set_lock_state(
+        lockable=True, locked=False,
+        hint="The setup has converged — lock it to mark it final for the event.")
 
     # Programme map — where the driver is across the whole event programme.
     from strategy.programme_map import build_programme_map
@@ -197,12 +201,22 @@ def main() -> int:
     # Race strategy
     from ui.components.strategy_plan import StrategyPlanVM, StrategyOption, StrategyInput
     shell.strategy_page.set_plan(StrategyPlanVM(
-        options=(StrategyOption("2-stop (Soft-Soft-Medium)", total_time="1:02:14", expected_laps="34",
-                                stints=("12 Soft", "12 Soft", "10 Medium"), tyre_sequence="S→S→M",
-                                fuel_target="Full each stint", pit_windows="L12, L24", confidence="high",
-                                summary="Fastest total time on measured degradation.", recommended=True),
-                 StrategyOption("1-stop (Medium-Hard)", total_time="1:02:49", expected_laps="34",
-                                confidence="medium", summary="Safer on a safety car, ~35s slower.")),
+        options=(StrategyOption("2-stop (Soft-Soft-Medium)", key="c2", total_time="1:02:14",
+                                expected_laps="34 laps", gap="best",
+                                stints=("12 laps Soft", "12 laps Soft", "10 laps Medium"),
+                                tyre_sequence="S→S→M",
+                                fuel_target="Full each stint", pit_windows="2 stop(s)", confidence="high",
+                                summary=("vs 1-stop: 1 more stop, 22s more in the pits, "
+                                         "57s less tyre degradation — 35s faster overall."),
+                                recommended=True),
+                 StrategyOption("1-stop (Medium-Hard)", key="c1", total_time="1:02:49",
+                                expected_laps="34 laps", gap="+35.0s", pit_windows="1 stop(s)",
+                                stints=("18 laps Medium", "16 laps Hard"),
+                                confidence="medium",
+                                summary=("vs 2-stop: 1 fewer stop, 22s less in the pits, "
+                                         "57s more tyre degradation — 35s slower overall."),
+                                pit_stops=("Stop 1 (lap 12): leave with 28 L · ~30s · fit Racing Soft",
+                                           "Stop 2 (lap 24): leave with 24 L · ~28s · fit Racing Medium"))),
         risks=(("Tyre deg", "medium"), ("Traffic", "low")),
         inputs=(StrategyInput("Tyre deg", "0.06 s/lap", "measured"),
                 StrategyInput("Pit loss", "22 s", "manual"),
@@ -210,14 +224,37 @@ def main() -> int:
                 StrategyInput("Safety car", "unknown", "missing")),
         replan_triggers=("Degradation exceeds 0.10 s/lap", "A safety car inside the first 10 laps")))
 
-    # Live pit wall
+    # Live pit wall — live race engineer end-to-end demo.
+    # State mirrors a mid-race moment: fuel is 0.3 L/lap over plan AND a wet-weather
+    # replan candidate is available.  The engineer instruction, gap-to-plan with both
+    # pace and fuel deltas, and the red replan warning (with PTT call-to-action) are
+    # all populated, and the recommended candidate plan card is shown so the reviewer
+    # can see what the driver would accept by saying "accept plan".
     from ui.components.live_pit_wall import LivePitWallVM
+    from ui.shell_feed_adapters import live_plan_dict_from_candidate
     shell.live_page.set_state(LivePitWallVM(
-        lap="18 / 34", position="P4", stint="Stint 2 · L6", fuel="34 L (12 laps)",
-        tyre="Soft · 62%", pit_window="L22–L25", gap_to_plan="+1.2s",
-        engineer_instruction="Hold this pace — box in 4 laps for Mediums.",
-        next_decision="Pit call on lap 22", freshness="live", confidence="high",
-        map_trust="approved", ptt_status="RADIO READY"))
+        lap="18 / 34", position="P4", stint="Stint 2 · L6", fuel="34 L (11 laps)",
+        tyre="Soft · 62%", pit_window="L22–L25",
+        gap_to_plan="+1.2s / +0.3 L per lap",
+        engineer_instruction=(
+            "Fuel is 0.3 L/lap over plan — lift and coast into the hairpin."),
+        next_decision="Pit call on lap 22 — weather closing in",
+        warning=(
+            "Weather closing in — an extra stop for wets may be faster. "
+            "Say 'accept plan' to switch, or 'keep plan' to stay out."),
+        freshness="live", confidence="medium", map_trust="approved",
+        ptt_status="RADIO READY"))
+    # Recommended replan candidate — the plan the driver would accept by voice.
+    # Built via live_plan_dict_from_candidate so the reviewer can trace the full path
+    # from candidate dict -> show_plan shape -> rendered card.
+    shell.live_page.show_plan(live_plan_dict_from_candidate({
+        "label": "3-stop (Soft-Soft-Wet-Wet)",
+        "stop_count_delta": 1,
+        "expected_completed_laps": 34,
+        "fuel_target_note": "Reduce to 28 L per stop — wets burn less",
+        "tyre_note": "Switch to Wets from stop 2 once rain is confirmed",
+        "expected_gain_detail": "Est. +18 s advantage on a wet track vs staying on Softs",
+    }))
 
     # Debrief
     from ui.components.debrief_view import DebriefVM
@@ -240,7 +277,7 @@ def main() -> int:
         "shift_beep": {"qual_rpm": 8200, "race_rpm": 7800},
     })
 
-    shell.show()
+    shell.showMaximized()
     return app.exec()
 
 

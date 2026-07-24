@@ -27,6 +27,12 @@ from typing import List, Mapping, Optional, Sequence, Tuple
 #: excluded from the clean-lap summary. Generous enough to keep honest slow laps.
 CLEAN_LAP_TOLERANCE = 1.07
 
+#: The FIRST lap is treated as an unflagged flying out lap when it is faster than this
+#: fraction of the NEXT-FASTEST real lap. 0.97 = more than 3% quicker than every other
+#: lap — a gap no consistent driver opens up within a single run, but exactly what a
+#: rolling-start out lap (which covers less than a full lap) looks like.
+FLYING_OUTLAP_FLOOR = 0.97
+
 #: Below this many clean laps nothing can be said about consistency or pace with
 #: any confidence — the outcome reports "gather more" rather than a verdict.
 MIN_LAPS_FOR_VERDICT = 3
@@ -140,8 +146,32 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
 
     ordered = sorted(rows, key=lambda x: _i(x.get("lap_num")))
 
-    def _in_or_out(r: Mapping) -> bool:
+    def _flagged_in_or_out(r: Mapping) -> bool:
         return bool(r.get("is_pit_lap")) or bool(r.get("is_out_lap"))
+
+    # A rolling-start out lap covers less than a full lap, so it is anomalously FAST.
+    # GT7's telemetry does not always flag it, and older recorded runs pre-date the
+    # flag entirely — so a run whose only "best" was that short first lap kept
+    # contaminating the advice (best lap 1:52 against honest 1:57s). The FIRST lap is
+    # treated as an out lap when it is implausibly faster than the rest of the field —
+    # a margin no consistent driver improves by within one run — even without a flag.
+    first_id = _i(ordered[0].get("lap_num")) if ordered else None
+    rest_times = [_i(r.get("lap_time_ms")) for r in ordered[1:]
+                  if not _flagged_in_or_out(r) and _i(r.get("lap_time_ms")) > 0]
+    # Judge the first lap against the NEXT-FASTEST real lap, not the average: an out lap
+    # is quicker than EVERY honest lap, whereas a merely-good first lap is only a hair
+    # under the next one. Using the field minimum keeps a single slow lap from dragging
+    # the reference up and falsely condemning a normal first lap.
+    flying_outlap_ceiling = (min(rest_times) * FLYING_OUTLAP_FLOOR) if len(rest_times) >= 2 else 0
+
+    def _in_or_out(r: Mapping) -> bool:
+        if _flagged_in_or_out(r):
+            return True
+        # Unflagged flying out lap: the first lap, quicker than the next-fastest by a
+        # margin no consistent driver opens up within one run.
+        return (flying_outlap_ceiling > 0
+                and _i(r.get("lap_num")) == first_id
+                and _i(r.get("lap_time_ms")) < flying_outlap_ceiling)
 
     # The reference pace can only come from laps that were actually RACED. An in/out
     # lap is fast or slow for reasons that have nothing to do with the car, so letting
@@ -158,7 +188,8 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
         t = _i(r.get("lap_time_ms"))
         pit_or_out = _in_or_out(r)
         slow = (not pit_or_out) and t > reference * CLEAN_LAP_TOLERANCE
-        reason = "in/out lap" if pit_or_out else ("off the pace" if slow else "")
+        reason = ("in/out lap" if pit_or_out
+                  else ("off the pace" if slow else ""))
         clean = not (pit_or_out or slow)
         if clean:
             clean_times.append(t)
@@ -357,3 +388,80 @@ def _build_run_outcome(review, *, feedback, previous) -> RunOutcome:
         changed_vs_previous=tuple(changed), confidence=confidence,
         primary_action_label=action[0], primary_action_key=action[1],
         secondary_action_label="Gather more data", secondary_action_key="gather")
+
+
+# --------------------------------------------------------------------------- coaching
+#: A coaching run is about the DRIVER, not the setup. Its review reads the same lap data
+#: as any run, but asks a different question: where is the driver leaving time, and is
+#: the limit the car or the lap being driven? Built purely from the RunReview so no new
+#: telemetry pipeline is needed.
+
+@dataclass(frozen=True)
+class CoachingReview:
+    """Driver-focused read of a run: pace left on the table, consistency, mistakes."""
+    headline: str = ""
+    lines: Tuple[str, ...] = field(default_factory=tuple)
+    limited_by: str = ""          # "the lap you are driving" | "the car" | ""
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.headline or self.lines)
+
+
+def build_coaching_review(review: Optional["RunReview"]) -> CoachingReview:
+    """Coach a driver from a recorded run. Never raises."""
+    try:
+        return _build_coaching_review(review)
+    except Exception:  # pragma: no cover - defensive
+        return CoachingReview()
+
+
+def _build_coaching_review(review: Optional["RunReview"]) -> CoachingReview:
+    if not isinstance(review, RunReview) or not review.has_laps:
+        return CoachingReview()
+    if review.clean_laps < MIN_LAPS_FOR_VERDICT:
+        return CoachingReview(
+            headline="Not enough clean laps to coach yet — put in a few repeatable laps.")
+
+    lines: List[str] = []
+    gap_ms = max(0, review.average_clean_ms - review.best_ms)
+    gap_s = gap_ms / 1000.0
+    # How much the driver leaves per lap by not repeating their best.
+    if gap_ms > 0:
+        lines.append(
+            f"Your best clean lap is {format_lap_time(review.best_ms)}, but your average "
+            f"is {format_lap_time(review.average_clean_ms)} — you are leaving about "
+            f"{gap_s:.1f}s a lap by not repeating your best.")
+    else:
+        lines.append(
+            f"Your laps are right on your best of {format_lap_time(review.best_ms)} — "
+            f"very little left in the driving.")
+
+    # Consistency read.
+    cons_s = review.consistency_ms / 1000.0
+    if review.consistency_ms:
+        band = ("tight — you repeat the lap well" if cons_s <= 0.3
+                else "loose — the lap is not repeating" if cons_s >= 0.7
+                else "workable, with room to tighten")
+        lines.append(f"Consistency ±{cons_s:.3f}s: {band}.")
+
+    # Mistakes.
+    if review.lock_ups or review.wheelspin:
+        bits = []
+        if review.lock_ups:
+            bits.append(f"{review.lock_ups} lock-up{'s' if review.lock_ups != 1 else ''}")
+        if review.wheelspin:
+            bits.append(f"{review.wheelspin} wheelspin event{'s' if review.wheelspin != 1 else ''}")
+        lines.append(" and ".join(bits) + " — smoothing these out is free lap time.")
+    else:
+        lines.append("Clean run — no lock-ups or wheelspin flagged.")
+
+    # The coaching verdict: is the driver or the car the limit?
+    # A tight, repeatable run near its own best is car-limited; a loose or off-best run
+    # has time in the driving.
+    driver_limited = gap_s >= 0.5 or cons_s >= 0.7 or review.lock_ups or review.wheelspin
+    limited_by = "the lap you are driving" if driver_limited else "the car"
+    headline = ("There is time in your driving to find."
+                if driver_limited else
+                "You are getting the most out of this car — look to the setup for more.")
+    return CoachingReview(headline=headline, lines=tuple(lines), limited_by=limited_by)

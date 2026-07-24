@@ -35,6 +35,26 @@ class TestConstruction:
         assert shell.rail is not None
         assert shell.guidance is not None
 
+    def test_every_page_scrolls_when_taller_than_the_viewport(self, shell):
+        """UAT-7: "can't scroll on any page that has data below the visible window."
+        Pages weren't wrapped, so the window opened taller than the screen and nothing
+        scrolled. Every stack entry is now a vertical scroll area around the real page."""
+        from PyQt6.QtWidgets import QScrollArea
+        from PyQt6.QtCore import Qt
+        for dest in NAV_DESTINATIONS:
+            wrapper = shell._page_by_dest[dest]
+            assert isinstance(wrapper, QScrollArea), dest
+            assert wrapper.widgetResizable() is True
+            assert (wrapper.verticalScrollBarPolicy()
+                    == Qt.ScrollBarPolicy.ScrollBarAsNeeded), dest
+            # The real page is reachable inside the wrapper (feeding still works).
+            assert wrapper.widget() is not None
+
+    def test_the_inner_page_is_still_reachable_for_feeding(self, shell):
+        # The bridge feeds shell.garage_page etc.; wrapping must not hide them.
+        assert shell._page_by_dest["garage"].widget() is shell.garage_page
+        assert shell._page_by_dest["programme"].widget() is shell.programme_page
+
 
 class TestNavigation:
     def test_nav_click_switches_page(self, shell):
@@ -71,7 +91,7 @@ class TestStateRendering:
         # progress rail reflects the current stage
         assert "Current" in shell.rail._nodes["garage"].toolTip()
 
-    def test_set_guidance_view_updates_card_and_active_event(self, shell):
+    def test_set_guidance_view_updates_card_and_home(self, shell):
         view = {
             "ok": True,
             "next_action": {"headline": "Bind the latest Practice session",
@@ -84,8 +104,8 @@ class TestStateRendering:
         }
         shell.set_guidance_view(view)
         assert shell.guidance._primary.text() == "Bind the latest Practice session"
-        # active-event page picks up the progress detail
-        assert "Valid laps: 18" in shell.active_event_page._detail.text()
+        # Active Event was folded into Home — Home now carries the progress detail.
+        assert "18 valid laps" in shell.home_page._evidence.text()
 
     def test_construct_with_default_controller(self, qapp):
         s = PitCrewShell()

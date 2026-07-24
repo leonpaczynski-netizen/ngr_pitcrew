@@ -342,19 +342,22 @@ class EventSetupPage(QWidget):
         self._tyre_boxes: dict = {}
         try:
             from data.tyres import ALL_COMPOUNDS
-            racing = [c for c in ALL_COMPOUNDS if c.category == "Racing"]
+            # Racing slicks AND the wets — a random-weather race needs Intermediate and
+            # Heavy Wet available too, which the Racing-only list left out.
+            compounds = [c for c in ALL_COMPOUNDS if c.category in ("Racing", "Wet")]
         except Exception:  # pragma: no cover - defensive
-            racing = []
+            compounds = []
         tyres_row = QHBoxLayout()
-        for comp in racing:
+        for comp in compounds:
             cb = QCheckBox(comp.name)
             cb.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_LABEL}pt;")
             self._tyre_boxes[comp.code] = cb
             tyres_row.addWidget(cb)
         tyres_row.addStretch(1)
         grid.addLayout(tyres_row, r, 0, 1, 2); r += 1
-        grid.addWidget(_hint("Leave all unticked when the event does not restrict "
-                             "compounds."), r, 0, 1, 2)
+        grid.addWidget(_hint("Slicks and wets — tick every compound this event allows. "
+                             "Leave all unticked when it does not restrict compounds."),
+                       r, 0, 1, 2)
         grid.setColumnStretch(1, 1)
         self._rules_body.body.addLayout(grid)
         self._rules_body.setVisible(False)

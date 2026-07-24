@@ -699,7 +699,11 @@ def main() -> None:
             _new_shell.classic_ui_requested.connect(window.show)
         except Exception:
             pass
-        _new_shell.show()
+        # Maximised so the window is bounded by the screen: an unbounded window opened
+        # taller than the display, so long pages ran off the bottom with nothing to
+        # scroll (the content all "fit" the oversized window). Screen-bounded, each
+        # page's scroll area engages as intended.
+        _new_shell.showMaximized()
     else:
         window.show()
     exit_code = app.exec()

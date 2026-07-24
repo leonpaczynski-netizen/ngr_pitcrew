@@ -22,11 +22,25 @@ def _norm(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+#: Setup-convergence states (what the command centre actually puts in setup_confidence)
+#: mapped to the confidence ladder. Without this a lock-ready setup showed "No
+#: evidence" on the guidance card because none of these words is "high"/"developing".
+_CONVERGENCE_CONFIDENCE = {
+    "locked": "high", "lock_ready": "high", "ready_for_confirmation": "high",
+    "accepted": "high",
+    "provisional": "medium", "improving": "medium", "stable_with_uncertainty": "medium",
+    "exploring": "low", "diverging": "low", "insufficient_evidence": "low",
+    "rollback_recommended": "low", "reopened": "low",
+}
+
+
 def _confidence_key(raw: str) -> str:
-    """Map a free-text confidence/maturity string to a ladder key. Never raises."""
+    """Map a free-text confidence/maturity/convergence string to a ladder key. Never raises."""
     s = (raw or "").strip().lower()
     if not s:
         return "unknown"
+    if s in _CONVERGENCE_CONFIDENCE:
+        return _CONVERGENCE_CONFIDENCE[s]
     if "high" in s or "strong" in s or "mature" in s:
         return "high"
     if "med" in s or "moderate" in s or "developing" in s:
@@ -129,8 +143,8 @@ class EngineerGuidanceVM:
             message="No active event yet.",
             objective="Create or select an NGR event to begin.",
             tone="info",
-            primary_action_label="Go to Active Event",
-            primary_action_surface="active_event",
+            primary_action_label="Go to Home",
+            primary_action_surface="home",
         )
 
     @classmethod

@@ -335,6 +335,99 @@ class TestShiftRpm:
             if k != "shift_rpm":
                 assert after[k] == v
 
+    def test_changing_the_beep_rpm_never_bumps_the_setup_revision(self, tmp_path):
+        """UAT-7: "everytime I click entered in GT7 it increments the setup number."
+        The beep RPM lives on the sheet but is NOT part of the setup's applied identity —
+        including it made this path's hash disagree with the classic path's (which never
+        carries it), so every confirmation flipped the hash and bumped the revision."""
+        from data.setup_state_authority import ActiveSetupAuthority, SetupIdentity
+        from data.active_setup_store import InMemoryActiveSetupStore
+        auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+        store = SetupSheetStore(str(tmp_path / "s.json"))
+        svc = SetupService(store=store, authority=auth, inputs_provider=lambda: _inputs())
+        store.set(_inputs().scope, "race",
+                  {"arb_front": 5, "setup_label": "Setup 1", "ride_height_front": 70})
+        assert "rev 1" in svc.confirm_applied_in_game("race").reason
+        svc.set_shift_rpm("race", 7840)
+        # Confirming after only a beep change reports "unchanged", still rev 1.
+        assert "unchanged" in svc.confirm_applied_in_game("race").reason.lower()
+        svc.set_shift_rpm("race", 7000)
+        assert "unchanged" in svc.confirm_applied_in_game("race").reason.lower()
+        active = auth.active_setup(
+            SetupIdentity(car=_inputs().car, track=_inputs().track,
+                          layout_id=_inputs().layout), "Race")
+        assert active.revision == 1
+        assert "shift_rpm" not in active.fields   # the tune, not the beep preference
+
+
+class TestRevisionHistory:
+    """UAT-7: "no way to load previous settings to activate" + a blank Lineage tab. The
+    service records each applied revision and can load a past one back onto the sheet."""
+
+    def _svc_with_history(self, tmp_path):
+        from data.setup_state_authority import ActiveSetupAuthority
+        from data.active_setup_store import InMemoryActiveSetupStore
+        from services.setup_history_store import SetupHistoryStore
+        store = SetupSheetStore(str(tmp_path / "s.json"))
+        hist = SetupHistoryStore(str(tmp_path / "revs.json"))
+        auth = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+        svc = SetupService(store=store, authority=auth, history=hist,
+                           inputs_provider=lambda: _inputs())
+        store.set(_inputs().scope, "race",
+                  {"arb_front": 5, "arb_rear": 4, "setup_label": "Setup 1",
+                   "ride_height_front": 70})
+        return svc
+
+    def test_each_confirmation_records_a_revision(self, tmp_path):
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")               # rev 1
+        svc.apply("race", {"arb_rear": 3}); svc.confirm_applied_in_game("race")   # rev 2
+        assert [r["revision"] for r in svc.revisions("race")] == [1, 2]
+
+    def test_re_confirming_an_unchanged_setup_adds_no_revision(self, tmp_path):
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")
+        svc.confirm_applied_in_game("race")
+        svc.confirm_applied_in_game("race")
+        assert len(svc.revisions("race")) == 1
+
+    def test_loading_a_past_revision_restores_its_values_on_the_sheet(self, tmp_path):
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")               # rev 1: arb_rear 4, rh 70
+        svc.apply("race", {"arb_rear": 3, "ride_height_front": 74})
+        svc.confirm_applied_in_game("race")               # rev 2
+        out = svc.load_revision("race", 1)
+        assert out.ok and "rev 1" in out.reason
+        assert svc.sheet("race").get("arb_rear") == 4.0
+        assert svc.sheet("race").get("ride_height_front") == 70.0
+
+    def test_loading_does_not_itself_mark_the_setup_applied(self, tmp_path):
+        # Only the driver's GT7 confirmation activates a setup — loading just shows it.
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")
+        svc.apply("race", {"arb_rear": 3}); svc.confirm_applied_in_game("race")
+        before = len(svc.revisions("race"))
+        svc.load_revision("race", 1)
+        assert len(svc.revisions("race")) == before       # no new revision from loading
+
+    def test_loading_keeps_the_current_beep_rpm(self, tmp_path):
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")
+        svc.apply("race", {"arb_rear": 3}); svc.confirm_applied_in_game("race")
+        svc.set_shift_rpm("race", 7500)
+        svc.load_revision("race", 1)
+        assert svc.shift_rpm("race") == 7500               # beep pref is not part of a tune
+
+    def test_loading_an_unknown_revision_is_reported(self, tmp_path):
+        svc = self._svc_with_history(tmp_path)
+        svc.confirm_applied_in_game("race")
+        assert svc.load_revision("race", 99).ok is False
+
+    def test_no_history_store_degrades_gracefully(self, tmp_path):
+        svc, _s = _svc(tmp_path)                            # built without a history store
+        assert svc.revisions("race") == []
+        assert svc.load_revision("race", 1).ok is False
+
 
 class TestNeverRaises:
     def test_a_broken_inputs_provider_degrades_to_unknown(self, tmp_path):

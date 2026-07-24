@@ -8,8 +8,8 @@ blank outcome screen". Nothing ever turned the stored lap rows into either surfa
 import pytest
 
 from strategy.practice_run_review import (
-    CLEAN_LAP_TOLERANCE, MIN_LAPS_FOR_VERDICT, RunReview, build_run_outcome,
-    build_run_review, format_delta, format_lap_time,
+    CLEAN_LAP_TOLERANCE, MIN_LAPS_FOR_VERDICT, RunReview, build_coaching_review,
+    build_run_outcome, build_run_review, format_delta, format_lap_time,
 )
 
 
@@ -74,6 +74,34 @@ class TestRunReview:
         assert out.delta_to_best_ms < 0                # shown honestly, still excluded
         # The clean laps are measured against a lap that was actually raced.
         assert [l.delta_to_best_ms for l in r.laps if l.clean] == [377, 822, 231, 0]
+
+    def test_an_unflagged_flying_first_lap_is_still_excluded(self):
+        """UAT-7: "the old best lap data that was capturing the outlap as best lap is
+        contaminating the advice now." Old runs (and some telemetry) never flagged the
+        rolling-start out lap, so it kept winning best. The first lap is treated as a
+        flying out lap when it is implausibly quicker than the rest — no flag needed."""
+        rows = _laps(112791, 118072, 118517, 117926, 117695)  # lap 1 unflagged, ~4% fast
+        r = build_run_review(rows)
+        assert r.best_ms == 117695
+        assert [l.excluded_reason for l in r.laps if not l.clean] == ["in/out lap"]
+        assert r.clean_laps == 4
+
+    def test_a_genuinely_fast_later_lap_is_not_mistaken_for_an_out_lap(self):
+        # A driver warming into the run and improving each lap: every lap is clean, and
+        # the guard (first-lap-only) never touches the fast final lap.
+        r = build_run_review(_laps(118500, 118000, 117500, 117000))
+        assert r.clean_laps == 4 and r.best_ms == 117000
+
+    def test_a_normal_first_lap_within_the_field_is_kept(self):
+        # First lap merely fastest by a normal margin (<3%) stays a clean lap.
+        r = build_run_review(_laps(117000, 117800, 118100))
+        assert r.clean_laps == 3 and r.best_ms == 117000
+
+    def test_the_guard_needs_at_least_two_other_laps(self):
+        # With one comparison lap there is no field to judge an anomaly against; the
+        # explicit flag still works, but an unflagged short first lap is left alone.
+        r = build_run_review(_laps(112000, 118000))
+        assert r.has_laps  # never raises; too little data to call an anomaly
 
     def test_the_out_lap_does_not_decide_which_laps_are_off_the_pace(self):
         """A slow in-lap must not raise the tolerance and let a bad lap count as clean."""
@@ -181,3 +209,46 @@ class TestRunOutcome:
         assert "traction: Excellent" in o.feedback_summary
         assert "Neutral" not in o.feedback_summary
         assert "felt planted" in o.feedback_summary
+
+
+class TestCoachingReview:
+    """UAT-8: "still not sure what coaching sessions do as see no difference from normal
+    practice." A coaching run's review is about the DRIVER, built from the run data."""
+
+    def _review(self, best, avg, cons_ms, lock=0, spin=0, clean=4):
+        return RunReview(laps=tuple(range(clean)), clean_laps=clean, best_ms=best,
+                         average_clean_ms=avg, consistency_ms=cons_ms,
+                         lock_ups=lock, wheelspin=spin)
+
+    def test_it_reports_time_left_on_the_table(self):
+        cr = build_coaching_review(self._review(117000, 118500, 300))
+        assert cr.has_content
+        assert "leaving about 1.5s a lap" in " ".join(cr.lines)
+
+    def test_a_loose_run_is_driver_limited(self):
+        cr = build_coaching_review(self._review(117000, 118500, 800, lock=2))
+        assert cr.limited_by == "the lap you are driving"
+        assert "time in your driving" in cr.headline.lower()
+
+    def test_a_tight_run_near_its_best_is_car_limited(self):
+        cr = build_coaching_review(self._review(117000, 117050, 150))
+        assert cr.limited_by == "the car"
+        assert "setup" in cr.headline.lower()
+
+    def test_mistakes_are_called_out(self):
+        cr = build_coaching_review(self._review(117000, 117200, 200, lock=3, spin=1))
+        joined = " ".join(cr.lines)
+        assert "3 lock-ups" in joined and "1 wheelspin event" in joined
+
+    def test_a_clean_run_says_so(self):
+        cr = build_coaching_review(self._review(117000, 117100, 150))
+        assert any("no lock-ups or wheelspin" in l.lower() for l in cr.lines)
+
+    def test_too_few_clean_laps_declines_to_coach(self):
+        cr = build_coaching_review(self._review(117000, 117000, 0, clean=1))
+        assert "not enough clean laps" in cr.headline.lower()
+
+    def test_no_run_is_empty_and_never_raises(self):
+        assert build_coaching_review(RunReview()).has_content is False
+        assert build_coaching_review(None).has_content is False
+        assert build_coaching_review("garbage").has_content is False

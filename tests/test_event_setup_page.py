@@ -222,3 +222,13 @@ class TestRoundTrip:
     def test_no_compounds_ticked_means_no_restriction(self, page):
         _fill_identity(page)
         assert page.current_draft().rule("avail_tyres") == []
+
+    def test_wet_compounds_are_offered_too(self, page):
+        """UAT-8: "in event setup not all tyre compounds are available for selection."
+        A random-weather race needs Intermediate and Heavy Wet, which were missing."""
+        assert "IM" in page._tyre_boxes and "HW" in page._tyre_boxes
+        _fill_identity(page)
+        page._tyre_boxes["RS"].setChecked(True)
+        page._tyre_boxes["IM"].setChecked(True)
+        page._tyre_boxes["HW"].setChecked(True)
+        assert sorted(page.current_draft().rule("avail_tyres")) == ["HW", "IM", "RS"]

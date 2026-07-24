@@ -68,10 +68,23 @@ class TestGuidanceVM:
         vm = EngineerGuidanceVM.from_command_centre(v)
         assert vm.confidence_level == "unknown"
 
+    def test_convergence_states_map_to_confidence(self):
+        """UAT-8: "right menu isn't updating properly." setup_confidence carries the
+        setup CONVERGENCE state ("lock_ready", "improving", …); none of those words is
+        "high"/"developing", so a lock-ready setup showed "No evidence"."""
+        cases = {"lock_ready": "high", "locked": "high", "ready_for_confirmation": "high",
+                 "improving": "medium", "provisional": "medium",
+                 "exploring": "low", "insufficient_evidence": "low"}
+        for state, expected in cases.items():
+            v = _cc_view()
+            v["progress"]["setup_confidence"] = state
+            assert EngineerGuidanceVM.from_command_centre(v).confidence_level == expected, state
+
     def test_empty_or_bad_view_falls_back(self):
-        assert EngineerGuidanceVM.from_command_centre(None).primary_action_surface == "active_event"
+        # Active Event was folded into Home, so the empty-state CTA routes to Home.
+        assert EngineerGuidanceVM.from_command_centre(None).primary_action_surface == "home"
         assert EngineerGuidanceVM.from_command_centre({"ok": False}).objective.startswith("Create or select")
-        assert EngineerGuidanceVM.from_command_centre("garbage").primary_action_surface == "active_event"
+        assert EngineerGuidanceVM.from_command_centre("garbage").primary_action_surface == "home"
 
 
 class TestGuidanceCard:

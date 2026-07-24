@@ -6203,6 +6203,79 @@ class SessionDB:
         self._conn.commit()
         return cid
 
+    def lock_setup(self, cycle_id: str, discipline: str, *, locked: bool = True,
+                   locked_at: str = "") -> bool:
+        """Explicitly lock (or reopen) a discipline's setup on a cycle — the sole focused
+        writer of setup_lock_json. The Command Centre computes WHEN a lock is permitted;
+        this records the driver's explicit confirmation of it. Merges one discipline into
+        the existing lock map so locking Race never clears a locked Qualifying. Never
+        raises; returns False when the cycle or discipline is missing."""
+        import json as _json
+        cid = str(cycle_id or "").strip()
+        d = str(discipline or "").strip().lower()
+        if not cid or not d:
+            return False
+        cyc = self.get_preparation_cycle(cid)
+        if not cyc:
+            return False
+        try:
+            lk = _json.loads(cyc.get("setup_lock_json") or "{}")
+            if not isinstance(lk, dict):
+                lk = {}
+        except Exception:
+            lk = {}
+        if locked:
+            lk[d] = {"locked": True, "locked_at": str(locked_at or "")}
+        else:
+            lk.pop(d, None)
+        self._conn.execute(
+            "UPDATE event_preparation_cycles SET setup_lock_json=?, updated_at=? WHERE cycle_id=?",
+            (_json.dumps(lk), str(locked_at or ""), cid))
+        self._conn.commit()
+        return True
+
+    def setup_locks(self, cycle_id: str) -> tuple:
+        """The disciplines whose setup is currently locked on a cycle (read-only)."""
+        locked, _finalised = self._persisted_lock_strategy(str(cycle_id or ""))
+        return locked
+
+    def save_approved_strategy(self, cycle_id: str, plan: dict) -> bool:
+        """Persist the driver's approved race plan on the cycle — the sole focused writer
+        of strategy_final_json's plan payload.
+
+        The plan was previously held only in memory, so it was gone on restart and the
+        driver had to rebuild it every session. It is stored under the cycle's
+        strategy_final_json as {"finalised": True, "plan": {...}, "approved_at": …} so it
+        reloads next time the app opens. Never raises; False when the cycle is missing."""
+        import json as _json
+        cid = str(cycle_id or "").strip()
+        if not cid:
+            return False
+        cyc = self.get_preparation_cycle(cid)
+        if not cyc:
+            return False
+        try:
+            payload = {"finalised": True, "plan": dict(plan or {})}
+        except Exception:
+            payload = {"finalised": True, "plan": {}}
+        self._conn.execute(
+            "UPDATE event_preparation_cycles SET strategy_final_json=?, updated_at=? WHERE cycle_id=?",
+            (_json.dumps(payload), str((plan or {}).get("approved_at") or ""), cid))
+        self._conn.commit()
+        return True
+
+    def get_approved_strategy(self, cycle_id: str) -> dict:
+        """The approved race plan persisted on a cycle, or {} when none. Read-only."""
+        import json as _json
+        cyc = self.get_preparation_cycle(str(cycle_id or "")) or {}
+        try:
+            sf = _json.loads(cyc.get("strategy_final_json") or "{}")
+            if isinstance(sf, dict) and isinstance(sf.get("plan"), dict):
+                return dict(sf["plan"])
+        except Exception:
+            pass
+        return {}
+
     def upsert_preparation_activity(self, activity: dict) -> str:
         """Explicit activity creation/update — the sole writer of event_preparation_activities.
         Idempotent by activity_id."""

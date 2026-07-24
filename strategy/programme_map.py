@@ -103,18 +103,41 @@ class DomainProgress:
     run_name: str = "practice run"
     run_type: str = ""       # evidence-domain key the run card/objective uses
     is_next: bool = False    # the engineer's current objective
+    #: How long one qualifying run is ("8–12", "A full stint") — the driver asked how
+    #: many laps each area actually costs.
+    target_laps: str = ""
+    #: The one line that says how to earn this evidence, from the run brief.
+    how: str = ""
+    #: The full "how to drive it" and "what it will tell you", shown when the driver
+    #: opens the area for more detail.
+    how_all: Tuple[str, ...] = field(default_factory=tuple)
+    reports: Tuple[str, ...] = field(default_factory=tuple)
+    #: Compound coverage for the tyre area: which of the event's allowed compounds still
+    #: need a sample. A race can force a different compound mid-race, so tyre wear is not
+    #: "covered" until every allowed compound has been run. Empty for non-tyre areas.
+    compounds_missing: Tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_ready(self) -> bool:
+        # A tyre area with an unsampled allowed compound is never "covered", however
+        # many runs it has — the missing compound is a real gap in the strategy.
+        if self.compounds_missing:
+            return False
         return self.level in _READY_LEVELS
 
     @property
     def runs_remaining(self) -> int:
-        """Qualifying runs still needed to reach 'adequate'. 0 once there."""
+        """Qualifying runs still needed to cover this area. 0 once covered."""
+        if self.compounds_missing:
+            # One run per allowed compound still to be sampled.
+            return len(self.compounds_missing)
         return max(0, self.target - self.done)
 
     @property
     def progress_text(self) -> str:
+        if self.compounds_missing:
+            need = ", ".join(self.compounds_missing)
+            return f"{self.done} of {self.target} runs — still need a run on {need}"
         if self.is_ready:
             extra = "" if self.done < self.stretch else " (strong)"
             return f"{self.done} of {self.target} runs — covered{extra}"
@@ -152,6 +175,8 @@ def build_programme_map(
     *,
     next_domain: str = "",
     next_count: int = 3,
+    tyre_required: Sequence = (),
+    tyre_sampled: Sequence = (),
 ) -> ProgrammeMap:
     """Build the map from readiness dimensions. Never raises.
 
@@ -159,15 +184,32 @@ def build_programme_map(
     the Command Centre view both expose (a tuple or a 3-item sequence per row). The exact
     count is read from the note. ``next_domain`` is the run-brief domain the engineer is
     currently pointing at (from the next-action), so the map can flag which row is live;
-    ``next_count`` caps how many upcoming runs are listed.
+    ``next_count`` caps how many upcoming runs are listed. ``tyre_required`` /
+    ``tyre_sampled`` are the event's allowed compounds and the ones already run — the
+    tyre area is not "covered" until every allowed compound has a sample.
     """
     try:
-        return _build(readiness, next_domain=next_domain, next_count=next_count)
+        return _build(readiness, next_domain=next_domain, next_count=next_count,
+                      tyre_required=tyre_required, tyre_sampled=tyre_sampled)
     except Exception:  # pragma: no cover - defensive
         return ProgrammeMap()
 
 
-def _build(readiness, *, next_domain: str, next_count: int) -> ProgrammeMap:
+def _compounds_missing(required, sampled) -> Tuple[str, ...]:
+    req = [str(c).strip().upper() for c in (required or ()) if str(c).strip()]
+    samp = {str(c).strip().upper() for c in (sampled or ()) if str(c).strip()}
+    # Preserve the required order, de-duplicated.
+    seen, out = set(), []
+    for c in req:
+        if c not in samp and c not in seen:
+            out.append(c)
+            seen.add(c)
+    return tuple(out)
+
+
+def _build(readiness, *, next_domain: str, next_count: int,
+           tyre_required=(), tyre_sampled=()) -> ProgrammeMap:
+    tyre_missing = _compounds_missing(tyre_required, tyre_sampled)
     rows = []
     for entry in (readiness or ()):
         name, level, note = _row(entry)
@@ -191,6 +233,11 @@ def _build(readiness, *, next_domain: str, next_count: int) -> ProgrammeMap:
             run_name=(brief.run_name if brief else "practice run"),
             run_type=domain_key,
             is_next=bool(next_domain) and domain_key == next_domain,
+            compounds_missing=(tyre_missing if name == "tyre_evidence" else ()),
+            target_laps=(brief.target_laps if brief else ""),
+            how=(brief.how_to_drive[0] if (brief and brief.how_to_drive) else ""),
+            how_all=(tuple(brief.how_to_drive) if brief else ()),
+            reports=(tuple(brief.reports) if brief else ()),
         ))
 
     rows.sort(key=lambda d: (_order_index(d.key), d.key))

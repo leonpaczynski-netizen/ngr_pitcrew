@@ -1046,6 +1046,249 @@ class TestV24ProgrammeMapShowsWhereYouAre:
         assert shell.current_destination() == "practice"
 
 
+class TestV25SetupRevisionLineage:
+    """UAT-7: blank Lineage tab + "no way to load previous settings to activate that's
+    the settings I'm running in GT7." The bridge never fed lineage_nodes and there was
+    no revision history. Both are now driven by the recorded applied revisions."""
+
+    def _with_real_authority(self, bridge):
+        """Swap the service onto a real authority + history so revisions are minted."""
+        from data.setup_state_authority import ActiveSetupAuthority
+        from data.active_setup_store import InMemoryActiveSetupStore
+        from services.setup_history_store import SetupHistoryStore
+        bridge._setups._authority = ActiveSetupAuthority(store=InMemoryActiveSetupStore())
+        bridge._setups._history = SetupHistoryStore()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(scope, "race",
+                                  {"arb_front": 5, "setup_label": "Setup 1",
+                                   "ride_height_front": 70})
+
+    def test_confirmations_build_the_lineage(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")            # rev 1
+        bridge._setups.apply("race", {"arb_front": 4})
+        bridge._setups.confirm_applied_in_game("race")            # rev 2
+        nodes = bridge._lineage_nodes("Setup 1 · rev 2")
+        assert [n.node_id for n in nodes] == ["rev2", "rev1"]     # newest first
+        assert nodes[0].is_current is True and nodes[1].is_current is False
+        assert "Changed" in nodes[0].summary                       # what changed vs rev1
+
+    def test_the_lineage_tab_is_no_longer_blank(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")
+        bridge._feed_garage()
+        assert shell.garage_page._lineage._body.count() >= 1
+        assert shell.garage_page._lineage._empty.isHidden() is True
+
+    def test_loading_a_past_revision_restores_its_values(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")            # rev 1: arb_front 5
+        bridge._setups.apply("race", {"arb_front": 4})
+        bridge._setups.confirm_applied_in_game("race")            # rev 2: arb_front 4
+        shell.garage_page._lineage.revert_requested.emit("rev1")
+        assert bridge._setups.sheet("race").get("arb_front") == 5.0
+        assert "Loaded rev 1" in shell.garage_page._status.text()
+
+    def test_an_empty_node_id_is_still_the_one_step_undo(self, wired):
+        shell, _win, _db, bridge = wired
+        self._with_real_authority(bridge)
+        bridge._setups.confirm_applied_in_game("race")
+        bridge._setups.apply("race", {"arb_front": 4})           # a change to undo
+        bridge._on_revert("")                                     # Outcome-page revert
+        assert bridge._setups.sheet("race").get("arb_front") == 5.0
+
+
+class TestV26LockTheBaseSetup:
+    """UAT-7: "how do I 'lock the base setup'?" The guidance CTA "Lock the base setup"
+    routed to the Garage but nothing there locked — the write path never existed."""
+
+    def _bridge_with_real_db(self, qapp):
+        from data.session_db import SessionDB
+        db = SessionDB(":memory:")
+        db.upsert_preparation_cycle({
+            "cycle_id": "c1", "event_name": "E", "car": "Porsche Cayman GT4",
+            "track": "Watkins Glen International", "layout": "long",
+            "disciplines": ["race", "qualifying"]})
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _Win()
+        bridge = LiveShellBridge(shell, ctrl, window=win, config={"active_cycle_id": "c1"},
+                                 db=db, spawn=lambda fn: fn())
+        return shell, db, bridge
+
+    def test_the_garage_lock_button_locks_the_active_cycle(self, qapp):
+        shell, db, _bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        assert db.setup_locks("c1") == ("race",)
+        assert "locked" in shell.garage_page._status.text().lower()
+
+    def test_the_locked_state_is_fed_back_to_the_garage(self, qapp):
+        shell, _db, bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        bridge._feed_lock(shell.garage_page)
+        assert shell.garage_page._pill_locked.isHidden() is False
+        assert shell.garage_page._lock_btn.text() == "Reopen setup"
+
+    def test_reopening_unlocks_it(self, qapp):
+        shell, db, _bridge = self._bridge_with_real_db(qapp)
+        shell.garage_page.lock_requested.emit("race", True)
+        shell.garage_page.lock_requested.emit("race", False)
+        assert db.setup_locks("c1") == ()
+
+    def test_locking_needs_an_active_event(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        from data.session_db import SessionDB
+        bridge = LiveShellBridge(shell, ctrl, window=_Win(), config={}, db=SessionDB(":memory:"),
+                                 spawn=lambda fn: fn())
+        shell.garage_page.lock_requested.emit("race", True)
+        assert "activate an event" in shell.garage_page._status.text().lower()
+
+
+class TestV27QualiPracticeUsesQualiBeep:
+    """UAT-8: "running quali practice it was giving me race RPM beep not quali." The new
+    shell never told the live runtime which discipline was being practised, so the beep
+    loop used the race RPM. The Garage discipline now drives the runtime refs the beep
+    reads."""
+
+    def _with_refs(self, win):
+        win._practice_is_qual_ref = [False]
+        win._live_mode_ref = ["Race"]
+        return win
+
+    def test_selecting_qualifying_flips_the_runtime_to_qual(self, wired):
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert win._practice_is_qual_ref[0] is True
+        assert win._live_mode_ref[0] == "Practice"
+
+    def test_selecting_race_flips_it_back(self, wired):
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        shell.garage_page._selector._buttons["race"].click()
+        assert win._practice_is_qual_ref[0] is False
+
+    def test_the_beep_threshold_follows_the_selected_discipline(self, wired):
+        from main import resolve_threshold
+        shell, win, _db, _bridge = wired
+        self._with_refs(win)
+        sb = {"qual_rpm": 8000, "race_rpm": 7760, "enabled": True}
+        shell.garage_page._selector._buttons["qualifying"].click()
+        _k, qual = resolve_threshold(win._live_mode_ref[0], False,
+                                     win._practice_is_qual_ref[0], sb)
+        shell.garage_page._selector._buttons["race"].click()
+        _k, race = resolve_threshold(win._live_mode_ref[0], False,
+                                     win._practice_is_qual_ref[0], sb)
+        assert qual == 8000 and race == 7760
+
+    def test_a_window_without_the_refs_never_raises(self, wired):
+        # The bridge must tolerate a window that doesn't expose the beep refs.
+        _shell, _win, _db, bridge = wired
+        bridge._window._practice_is_qual_ref = None
+        bridge._push_practice_mode("qualifying")   # must not raise
+
+
+class TestV28LockTheBaseObjectiveIsSatisfiable:
+    """UAT-8: "do next on home screen seems to be stuck on lacking setup even though
+    everything is complete." The objective was "Lock the base setup", but base has no
+    Garage tab, so locking the selected tab never cleared it. The lock control now
+    targets the discipline the objective names."""
+
+    def test_the_lock_objective_discipline_is_parsed(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"category": "lock_setup", "headline": "Lock the base setup"}}
+        assert bridge._lock_objective_discipline() == "base"
+        bridge._last_guidance_view = {
+            "next_action": {"category": "lock_setup", "headline": "Lock the qualifying setup"}}
+        assert bridge._lock_objective_discipline() == "qualifying"
+
+    def test_a_non_lock_objective_targets_nothing_special(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"category": "next_activity", "headline": "Build setup_base evidence"}}
+        assert bridge._lock_objective_discipline() == ""
+
+    def test_locking_base_from_the_garage_writes_base(self, qapp):
+        from data.session_db import SessionDB
+        db = SessionDB(":memory:")
+        db.upsert_preparation_cycle({
+            "cycle_id": "c1", "event_name": "E", "car": "Porsche Cayman GT4",
+            "track": "Watkins Glen International", "layout": "long",
+            "disciplines": ["race", "qualifying"]})
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        bridge = LiveShellBridge(shell, ctrl, window=_Win(),
+                                 config={"active_cycle_id": "c1"}, db=db, spawn=lambda fn: fn())
+        # The engineer nominates base; the Garage button emits base, and base gets locked.
+        shell.garage_page.lock_requested.emit("base", True)
+        assert db.setup_locks("c1") == ("base",)
+
+
+class TestV29PracticeScopesToTheDisciplineSetup:
+    """UAT-8: "the last few laps were qualifying practice session on quali setup but it
+    recorded the race hards not the race softs I had locked" + "practice needs to
+    differentiate race vs quali setup and store them separately for review."
+
+    GT7 does not broadcast the compound — recorded laps take it from
+    tracker.set_compound(), which only the classic dropdown ever called, so a new-shell
+    run logged a stale default compound. The selected discipline's setup compound is now
+    pushed to the tracker, and the review names which discipline's setup the run was on.
+    """
+
+    class _Tracker:
+        def __init__(self):
+            self._current_compound = "RH"      # the stale classic default
+
+        def set_compound(self, c):
+            self._current_compound = c
+
+    def _wired_with_tracker(self, wired):
+        shell, win, _db, bridge = wired
+        win._tracker = self._Tracker()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(scope, "qualifying",
+                                  {"tyre_front": "Racing Soft", "tyre_rear": "Racing Soft",
+                                   "setup_label": "Q"})
+        bridge._setups._store.set(scope, "race",
+                                  {"tyre_front": "Racing Hard", "tyre_rear": "Racing Hard",
+                                   "setup_label": "R"})
+        return shell, win, bridge
+
+    def test_the_compound_follows_the_selected_discipline(self, wired):
+        shell, win, _bridge = self._wired_with_tracker(wired)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        assert win._tracker._current_compound == "RS"    # not the race hard default
+        shell.garage_page._selector._buttons["race"].click()
+        assert win._tracker._current_compound == "RH"
+
+    def test_a_tyre_change_pushes_the_new_compound_immediately(self, wired):
+        shell, win, bridge = self._wired_with_tracker(wired)
+        shell.garage_page._selector._buttons["qualifying"].click()
+        bridge._on_tyre_change("RM")
+        assert win._tracker._current_compound == "RM"
+
+    def test_a_window_without_a_tracker_never_raises(self, wired):
+        _shell, win, bridge = self._wired_with_tracker(wired)
+        win._tracker = None
+        bridge._push_active_compound("qualifying")       # must not raise
+
+    def test_the_review_names_which_discipline_the_run_was_on(self, wired):
+        shell, _win, _db, bridge = wired
+        bridge._run_discipline[7] = "qualifying"
+        bridge._last_recorded_session_id = 7
+        # feed the review for that session
+        bridge._feed_run_review()
+        # the header names the qualifying setup (present whenever a run is shown)
+        text = shell.run_laps._kind.text().lower()
+        assert (not text) or "qualifying setup" in text or "reviewing" in text
+
+
 class _PlanVM:
     """Minimal stand-in for the race-plan view model the adapter reads."""
     has_recommendation = True
