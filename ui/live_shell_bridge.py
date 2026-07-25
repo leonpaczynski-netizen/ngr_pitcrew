@@ -1022,8 +1022,11 @@ class LiveShellBridge(QObject):
             gp = getattr(self._shell, "garage_page", None)
             if gp is None:
                 return
-            self._seed_sheets()
+            # Order matters: seed the last-applied revision FIRST so it wins. Both seeds
+            # are per-scope idempotent and only fill an empty sheet, so if the classic base
+            # form seeded first it would shadow the driver's last-applied setup on reopen.
             self._seed_from_last_applied()
+            self._seed_sheets()
             sheet = self._setups.sheet(self._discipline)
             # A defaults-only sheet is NOT a setup. Passing it would present numbers
             # nobody authored as though they were the driver's own.
@@ -1286,7 +1289,17 @@ class LiveShellBridge(QObject):
                 hint = ("The setup has converged — lock it to mark it final for the event, "
                         "or keep developing.")
             else:
-                hint = ""
+                # NOT lockable yet: say WHY and what unlocks it, so the "Confirm and protect"
+                # objective isn't a dead end pointing at a Lock button that isn't shown.
+                reason = {
+                    "insufficient_evidence": "there aren't enough recorded runs on it yet",
+                    "exploring": "it's still being explored — the changes haven't settled",
+                    "improving": "it's still improving run to run — not stable yet",
+                    "regressed": "the last change made it worse — recover a stable version first",
+                }.get(state.lower(), "it hasn't converged yet")
+                hint = (f"Not ready to lock: {reason}. Apply this setup, drive and record a few "
+                        "consistent runs on it, then confirm in GT7 — the Lock button appears "
+                        "once it has converged.")
             return lockable, locked, hint
         except Exception:
             return False, False, ""

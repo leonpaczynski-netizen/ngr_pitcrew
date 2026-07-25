@@ -580,7 +580,10 @@ class SetupWorkspace(QWidget):
         self._lock_btn.setText("Reopen setup" if locked
                                else (lock_label or "Lock this setup"))
         self._lock_hint.setText(str(hint or ""))
-        self._lock_hint.setVisible(bool(hint) and (bool(lockable) or bool(locked)))
+        # Show the hint whenever there is one — including when the setup is NOT yet lockable,
+        # so the driver is told why the Lock button isn't there and how to reach it, instead
+        # of the "Confirm and protect" objective pointing at a control that's hidden.
+        self._lock_hint.setVisible(bool(hint))
 
     def _on_lock_clicked(self) -> None:
         _lockable, locked = self._lock_state
