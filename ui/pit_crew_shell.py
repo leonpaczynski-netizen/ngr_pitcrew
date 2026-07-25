@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional, Mapping
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QLabel,
 )
@@ -233,7 +233,22 @@ class PitCrewShell(QMainWindow):
         taller than the screen — everything "fit", so nothing scrolled and the bottom of
         long pages (Garage sheet, Strategy, Programme) was simply off-screen. Every page
         is wrapped uniformly; a page that already scrolls internally just nests harmlessly
-        (the inner area handles the wheel).
+        (the inner area handles the wheel, and the outer max stays 0 so our restore
+        logic never fires).
+
+        Scroll-position preservation: the 750ms bridge refresh rebuilds page content,
+        which momentarily collapses the content height and clamps the scrollbar to 0
+        before the layout re-expands.  The recipe here is:
+
+        1. ``_pos`` tracks the user's intended scroll position.
+        2. ``valueChanged`` updates ``_pos`` only when we are NOT mid-restore (i.e. the
+           change is a genuine user scroll, not a layout-driven clamp).
+        3. ``rangeChanged`` fires whenever content height changes.  We set ``_busy =
+           True`` (to suppress false user-scroll detection) and schedule a restore via
+           ``QTimer.singleShot(0, ...)`` so the layout finishes before we setValue.
+           After the restore we clear ``_busy``.
+        4. ``_navigate`` resets ``_pos`` to 0 so a freshly-visited page always opens at
+           the top, even when the QScrollArea remembered the old position.
         """
         from PyQt6.QtWidgets import QScrollArea, QFrame
         area = QScrollArea()
@@ -242,6 +257,35 @@ class PitCrewShell(QMainWindow):
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         area.setWidget(page)
+
+        bar = area.verticalScrollBar()
+        # Mutable state stored on the area so _navigate can reset it.
+        state: dict = {"pos": 0, "busy": False}
+        area._scroll_state = state  # type: ignore[attr-defined]
+
+        def _on_range_changed(_min: int, max_val: int) -> None:  # noqa: N802
+            try:
+                state["busy"] = True
+                want = min(state["pos"], max_val)
+
+                def _restore() -> None:
+                    try:
+                        bar.setValue(want)
+                    except Exception:
+                        pass
+                    finally:
+                        state["busy"] = False
+
+                QTimer.singleShot(0, _restore)
+            except Exception:
+                state["busy"] = False
+
+        def _on_value_changed(val: int) -> None:
+            if not state["busy"]:
+                state["pos"] = val
+
+        bar.rangeChanged.connect(_on_range_changed)
+        bar.valueChanged.connect(_on_value_changed)
         return area
 
     def _build_practice_page(self) -> QWidget:
@@ -319,8 +363,24 @@ class PitCrewShell(QMainWindow):
         if dest not in self._page_by_dest:
             dest = "home"
         self._current_dest = dest
-        self.pages.setCurrentWidget(self._page_by_dest[dest])
+        wrapper = self._page_by_dest[dest]
+        self.pages.setCurrentWidget(wrapper)
         self.nav.set_active(dest)
+        # Fresh navigation always starts at the top.  Reset the wrapper's remembered
+        # scroll position so the rangeChanged restore does not snap back to a previous
+        # read position.  QTimer defers the setValue until after Qt has laid out the
+        # newly-visible page.
+        try:
+            state = getattr(wrapper, "_scroll_state", None)
+            if state is not None:
+                state["pos"] = 0
+                state["busy"] = False
+            bar_fn = getattr(wrapper, "verticalScrollBar", None)
+            if callable(bar_fn):
+                bar = bar_fn()
+                QTimer.singleShot(0, lambda: bar.setValue(0))
+        except Exception:
+            pass
 
     def current_destination(self) -> str:
         return self._current_dest

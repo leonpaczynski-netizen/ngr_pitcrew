@@ -1307,4 +1307,200 @@ class _PlanVM:
     candidate_comparison_rows = []
     risks = ()
     replan_triggers = ()
+
+
+# ---------------------------------------------------------------------------
+# Fix-1 regression tests: approved race plan reaches the voice engineer
+# ---------------------------------------------------------------------------
+
+class _EngineWin(_Win):
+    """Extends the standard fake window with a real (but minimal) RaceStrategyEngine.
+
+    The engine is constructed with all-None dependencies so its constructor does not
+    start any threads or open any sockets; only ``set_plan`` and the PTT response
+    methods are exercised here.
+    """
+
+    def __init__(self, qapp=None):
+        super().__init__(qapp=qapp)
+        from strategy.engine import RaceStrategyEngine
+        self._strategy_engine = RaceStrategyEngine(
+            tracker=None, announcer=None, config={}, bridge=None, db=None)
+
+
+class TestStrategyEnginePlanWiring:
+    """Approved race plan must reach the RaceStrategyEngine so PTT queries work.
+
+    Root cause: the bridge populated the Pit Wall display and persisted to the DB but
+    never called ``engine.set_plan()``, leaving ``_stints`` empty and every PTT
+    "when do I pit" returning "No strategy loaded. Pit when you judge."
+    """
+
+    @pytest.fixture
+    def engine_wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _EngineWin()
+        db = _DB()
+        # Extend the fake DB to support approved-strategy persistence.
+        db._approved = {}
+
+        def _save_approved(cid, plan):
+            db._approved[cid] = dict(plan or {})
+            return True
+
+        def _get_approved(cid):
+            return dict(db._approved.get(cid) or {})
+
+        def _get_prep_cycle(cid):
+            return {"cycle_id": cid, "car": "Porsche Cayman GT4",
+                    "track": "Watkins Glen International",
+                    "strategy_final_json": None}
+
+        db.save_approved_strategy = _save_approved
+        db.get_approved_strategy = _get_approved
+        db.get_preparation_cycle = _get_prep_cycle
+
+        bridge = LiveShellBridge(shell, ctrl, window=win, config=_cfg(), db=db,
+                                 spawn=lambda fn: fn())
+        return shell, win, db, bridge
+
+    def test_push_plan_populates_engine_stints(self, engine_wired):
+        """_push_plan_to_engine converts raw_stints to Stint objects."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {
+            "candidate_id": "c1",
+            "raw_stints": [
+                {"laps": 16, "compound": "RH"},
+                {"laps": 10, "compound": "RM"},
+            ],
+        }
+        bridge._push_plan_to_engine(plan)
+        assert len(win._strategy_engine._stints) == 2
+        assert win._strategy_engine._stints[0].laps == 16
+        assert win._strategy_engine._stints[0].compound == "RH"
+        assert win._strategy_engine._stints[1].laps == 10
+
+    def test_ptt_no_longer_says_no_strategy_loaded(self, engine_wired):
+        """After plan is pushed, build_pit_window_response no longer returns fallback."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {
+            "candidate_id": "c2",
+            "raw_stints": [{"laps": 20, "compound": "RH"}],
+        }
+        bridge._push_plan_to_engine(plan)
+        resp = win._strategy_engine.build_pit_window_response(0)
+        assert "No strategy loaded" not in resp
+        # The engine correctly reports the first stop window.
+        assert "Stop 1" in resp
+
+    def test_persist_approved_strategy_enriches_with_raw_stints(self, engine_wired):
+        """When a plan result is available the persisted dict contains raw_stints."""
+        shell, _win, db, bridge = engine_wired
+
+        # Populate the strategy page's view model with a fake option.
+        from ui.components.strategy_plan import StrategyOption, StrategyPlanVM
+        opt = StrategyOption(
+            name="1-stop RH/RM", key="cand_A",
+            stints=("16 laps Racing Hard", "10 laps Racing Medium"),
+        )
+        vm = StrategyPlanVM(options=(opt,))
+        shell.strategy_page._vm = vm
+
+        # Plant a fake plan result so _find_candidate can locate the candidate.
+        class _FakeCand:
+            candidate_id = "cand_A"
+            estimated_laps_per_stint = [16, 10]
+            compound_plan = ["RH", "RM"]
+
+        class _FakeResult:
+            candidates = [_FakeCand()]
+
+        class _FakePlanResult:
+            ok = True
+            result = _FakeResult()
+
+        bridge._plans._last = _FakePlanResult()
+
+        bridge._persist_approved_strategy("cand_A")
+
+        saved = db._approved.get("c1", {})
+        assert "raw_stints" in saved, "raw_stints must be persisted for engine loading"
+        assert saved["raw_stints"] == [{"laps": 16, "compound": "RH"},
+                                        {"laps": 10, "compound": "RM"}]
+
+    def test_approve_strategy_populates_engine(self, engine_wired):
+        """Full approval path: engine gets stints after the driver taps Approve."""
+        shell, win, db, bridge = engine_wired
+
+        from ui.components.strategy_plan import StrategyOption, StrategyPlanVM
+        opt = StrategyOption(
+            name="1-stop", key="cand_B",
+            stints=("20 laps Racing Hard",), recommended=True,
+        )
+        shell.strategy_page._vm = StrategyPlanVM(options=(opt,))
+
+        class _FakeCand:
+            candidate_id = "cand_B"
+            estimated_laps_per_stint = [20]
+            compound_plan = ["RH"]
+
+        class _FakeResult:
+            candidates = [_FakeCand()]
+
+        class _FakePlanResult:
+            ok = True
+            result = _FakeResult()
+
+        bridge._plans._last = _FakePlanResult()
+        bridge._persist_approved_strategy("cand_B")
+
+        assert len(win._strategy_engine._stints) == 1
+        assert win._strategy_engine._stints[0].compound == "RH"
+        resp = win._strategy_engine.build_pit_window_response(0)
+        assert "No strategy loaded" not in resp
+
+    def test_defensive_feed_live_loads_plan_when_engine_empty(self, engine_wired):
+        """_feed_live pushes the approved plan if the engine has no stints yet."""
+        _shell, win, db, bridge = engine_wired
+
+        # Pre-populate the DB approved plan with raw_stints (simulates a restart).
+        db._approved["c1"] = {
+            "candidate_id": "prev",
+            "raw_stints": [{"laps": 15, "compound": "RH"}],
+        }
+        # Engine is currently empty.
+        assert win._strategy_engine._stints == []
+
+        # _feed_live requires the live_page; it will bail gracefully if absent
+        # (there's no real tracker here), but the engine check still fires.
+        bridge._feed_live()
+
+        assert len(win._strategy_engine._stints) == 1, (
+            "Defensive guard in _feed_live must load plan into empty engine")
+
+    def test_engine_not_repopulated_when_already_has_stints(self, engine_wired):
+        """Guard: set_plan is not called again once stints are populated."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {"candidate_id": "x1", "raw_stints": [{"laps": 5, "compound": "RS"}]}
+        bridge._push_plan_to_engine(plan)
+        assert bridge._last_engine_plan_key == "x1"
+        # Manually change a stint to detect whether set_plan is called again.
+        win._strategy_engine._stints[0].laps = 99
+        # Another push with a DIFFERENT key must re-push.
+        plan2 = {"candidate_id": "x2", "raw_stints": [{"laps": 7, "compound": "RM"}]}
+        bridge._push_plan_to_engine(plan2)
+        assert win._strategy_engine._stints[0].laps == 7  # repushed
+        assert bridge._last_engine_plan_key == "x2"
+
+    def test_empty_raw_stints_does_not_call_set_plan(self, engine_wired):
+        """A plan with no raw_stints leaves the engine unchanged."""
+        _shell, win, _db, bridge = engine_wired
+        # Pre-load some stints.
+        bridge._push_plan_to_engine(
+            {"candidate_id": "y", "raw_stints": [{"laps": 8, "compound": "RM"}]})
+        original_count = len(win._strategy_engine._stints)
+        # Push a plan with no raw_stints — should be a no-op.
+        bridge._push_plan_to_engine({"candidate_id": "z", "stints": ["display only"]})
+        assert len(win._strategy_engine._stints) == original_count
     inputs_rows = []

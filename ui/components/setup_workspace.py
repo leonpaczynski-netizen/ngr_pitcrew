@@ -266,7 +266,10 @@ class SetupWorkspace(QWidget):
         self._btn_lineage.setText("Lineage")
         self._btn_compare = QToolButton()
         self._btn_compare.setText("Compare")
-        for b in (self._btn_changed, self._btn_full, self._btn_lineage, self._btn_compare):
+        self._btn_shift_strategy = QToolButton()
+        self._btn_shift_strategy.setText("Shift Strategy")
+        for b in (self._btn_changed, self._btn_full, self._btn_lineage,
+                  self._btn_compare, self._btn_shift_strategy):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(SetupDisciplineSelector._qss())
@@ -278,6 +281,8 @@ class SetupWorkspace(QWidget):
         self._btn_full.clicked.connect(lambda: self._stack.setCurrentIndex(1))
         self._btn_lineage.clicked.connect(lambda: self._stack.setCurrentIndex(2))
         self._btn_compare.clicked.connect(lambda: self._stack.setCurrentIndex(3))
+        self._btn_shift_strategy.clicked.connect(
+            lambda: self._stack.setCurrentIndex(4))
         lay.addLayout(view_row)
 
         self._stack = QStackedWidget()
@@ -332,6 +337,11 @@ class SetupWorkspace(QWidget):
         # Page 3 — setup comparison
         self._compare = SetupComparison()
         self._stack.addWidget(self._compare)
+
+        # Page 4 — per-gear shift strategy (advisory-only, no setup-apply controls)
+        from ui.components.shift_strategy_view import ShiftStrategyView
+        self.shift_strategy_view = ShiftStrategyView()
+        self._stack.addWidget(self.shift_strategy_view)
 
         lay.addWidget(self._stack, 1)
 
@@ -606,3 +616,8 @@ class SetupWorkspace(QWidget):
 
     def _on_gearbox(self, checked: bool):
         self._gearbox.setVisible(bool(checked))
+
+    def show_shift_strategy_tab(self) -> None:
+        """Switch the Garage view to the Shift Strategy sub-tab."""
+        self._btn_shift_strategy.setChecked(True)
+        self._stack.setCurrentIndex(4)
