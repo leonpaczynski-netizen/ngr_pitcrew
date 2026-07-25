@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Mapping, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QComboBox
 
 from ui import ngr_theme as _t
 from ui.components.cards import Card, SectionHeading
@@ -97,6 +97,8 @@ class RunCard(Card):
     record_requested = pyqtSignal()
     #: The driver abandoned the run — nothing is bound to the programme.
     discard_requested = pyqtSignal()
+    #: The driver picked a different compound for THIS run — does NOT modify the saved setup.
+    compound_change_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,6 +152,38 @@ class RunCard(Card):
             self._params[key] = v
         self.body.addLayout(grid)
 
+        # Tyre-test compound selector. GT7 does not broadcast compound, so recorded laps
+        # get their tag from tracker.set_compound(). This selector lets the driver switch
+        # compound for a test run WITHOUT writing it into the saved setup — the sheet
+        # compound stays untouched and only the in-session tracker call changes.
+        # Hidden until the bridge feeds a list of allowed compounds.
+        self._compound_widget = QWidget()
+        _cw_lay = QHBoxLayout(self._compound_widget)
+        _cw_lay.setContentsMargins(0, 0, 0, 0)
+        _cw_lay.setSpacing(_t.SPACE_SM)
+        _cw_cap = QLabel("Test compound")
+        _cw_cap.setStyleSheet(
+            f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        _cw_lay.addWidget(_cw_cap)
+        self._compound_combo = QComboBox()
+        self._compound_combo.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._compound_combo.setMaximumWidth(220)
+        self._compound_combo.setStyleSheet(
+            f"QComboBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 10px; font-size: {_t.FS_LABEL}pt; }}")
+        self._compound_combo.activated.connect(self._on_compound_picked)
+        _cw_lay.addWidget(self._compound_combo)
+        _cw_note = QLabel(
+            "Changes this run's tyre tag — does not modify your saved setup.")
+        _cw_note.setStyleSheet(
+            f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        _cw_note.setWordWrap(True)
+        _cw_lay.addWidget(_cw_note, 1)
+        self._compound_widget.setVisible(False)
+        self.body.addWidget(self._compound_widget)
+        self._compound_codes: tuple = ()
+
         self._invalidation = QLabel()
         self._invalidation.setWordWrap(True)
         self._invalidation.setStyleSheet(f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt;")
@@ -187,6 +221,15 @@ class RunCard(Card):
             f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
         self._recording.setVisible(False)
         self.body.addWidget(self._recording)
+
+        # Live session guidance while the run is open: how many laps are enough and how
+        # hard to push. Static "Target laps / Push" tell the plan; this tells the driver
+        # where they are IN it, so they know when to end the run rather than guessing.
+        self._run_guidance = QLabel()
+        self._run_guidance.setWordWrap(True)
+        self._run_guidance.setStyleSheet(f"color: {_t.TEXT_HI}; font-size: {_t.FS_LABEL}pt;")
+        self._run_guidance.setVisible(False)
+        self.body.addWidget(self._run_guidance)
 
         self._status = QLabel()
         self._status.setWordWrap(True)
@@ -235,11 +278,14 @@ class RunCard(Card):
         self._apply_recording_state()
 
     # ---- recording state --------------------------------------------------
-    def set_recording(self, title: str = "", laps: int = 0, *, connected: bool = True) -> None:
+    def set_recording(self, title: str = "", laps: int = 0, *, connected: bool = True,
+                      lap_note: str = "", push: str = "") -> None:
         """Show that a run is open (blank title ends the recording state).
 
         ``laps`` is what the live session has actually recorded so far, so the driver
         can see the run is being captured before committing it to the programme.
+        ``lap_note`` is the live "enough laps yet?" guidance and ``push`` the pace to
+        hold — shown together so the driver knows, mid-run, whether to keep going.
         """
         title = _norm(title)
         self._recording_on = bool(title)
@@ -249,6 +295,12 @@ class RunCard(Card):
             self._recording.setText(f"● RECORDING:  {title}  ·  {lap_text}{live}")
             self._record.set_action("End run & record", enabled=True)
             self._discard.set_action("Discard run", enabled=True)
+            bits = []
+            if _norm(lap_note):
+                bits.append(_norm(lap_note))
+            if _norm(push):
+                bits.append(f"Push: {_norm(push)}")
+            self._run_guidance.setText("   ·   ".join(bits))
         self._apply_recording_state()
 
     def set_status(self, text: str) -> None:
@@ -260,9 +312,61 @@ class RunCard(Card):
     def is_recording(self) -> bool:
         return bool(self._recording_on)
 
+    def set_compound_options(self, codes: list, preselected: str = "") -> None:
+        """Populate the tyre-test compound selector.
+
+        ``codes`` is the list of compound codes the event allows (e.g. ["RH","RM","RS"]).
+        ``preselected`` is the compound to show first — the bridge sets this to the next
+        un-sampled compound so the driver is nudged to cover all compounds. Shows the
+        selector row only when there are options to choose from; hides it otherwise.
+        """
+        try:
+            from data.tyres import get_by_code, normalise_code
+            new_codes = tuple(str(c or "").upper() for c in (codes or ()))
+            # Called every 750 ms feed tick while a run is open. Don't rebuild the combo
+            # while the driver is choosing a compound — clearing an open popup snaps it
+            # shut and loses the pick. When the option set is unchanged, only move the
+            # index; never clear()/re-add.
+            interacting = (self._compound_combo.hasFocus()
+                           or self._compound_combo.view().isVisible())
+            if new_codes == self._compound_codes:
+                if interacting or not preselected:
+                    return
+                norm = str(preselected or "").upper()
+                if norm in self._compound_codes:
+                    idx = list(self._compound_codes).index(norm)
+                    if self._compound_combo.currentIndex() != idx:
+                        self._compound_combo.blockSignals(True)
+                        self._compound_combo.setCurrentIndex(idx)
+                        self._compound_combo.blockSignals(False)
+                return
+            if interacting:
+                return
+            self._compound_codes = new_codes
+            self._compound_combo.blockSignals(True)
+            self._compound_combo.clear()
+            for code in self._compound_codes:
+                comp = get_by_code(normalise_code(code))
+                label = comp.name if comp else code
+                self._compound_combo.addItem(label)
+            if preselected:
+                norm = str(preselected or "").upper()
+                codes_list = list(self._compound_codes)
+                if norm in codes_list:
+                    self._compound_combo.setCurrentIndex(codes_list.index(norm))
+            self._compound_combo.blockSignals(False)
+            self._compound_widget.setVisible(bool(self._compound_codes))
+        except Exception:
+            pass
+
+    def _on_compound_picked(self, index: int) -> None:
+        if 0 <= index < len(self._compound_codes):
+            self.compound_change_requested.emit(self._compound_codes[index])
+
     def _apply_recording_state(self) -> None:
         on = self._recording_on
         self._recording.setVisible(on)
+        self._run_guidance.setVisible(on and bool(self._run_guidance.text()))
         self._record.setVisible(on)
         self._discard.setVisible(on)
         # One primary action at a time: Start is replaced by End-run while recording.

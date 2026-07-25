@@ -127,6 +127,8 @@ class SetupWorkspace(QWidget):
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
+    car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
+    gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -266,7 +268,10 @@ class SetupWorkspace(QWidget):
         self._btn_lineage.setText("Lineage")
         self._btn_compare = QToolButton()
         self._btn_compare.setText("Compare")
-        for b in (self._btn_changed, self._btn_full, self._btn_lineage, self._btn_compare):
+        self._btn_shift_strategy = QToolButton()
+        self._btn_shift_strategy.setText("Shift Strategy")
+        for b in (self._btn_changed, self._btn_full, self._btn_lineage,
+                  self._btn_compare, self._btn_shift_strategy):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(SetupDisciplineSelector._qss())
@@ -278,6 +283,8 @@ class SetupWorkspace(QWidget):
         self._btn_full.clicked.connect(lambda: self._stack.setCurrentIndex(1))
         self._btn_lineage.clicked.connect(lambda: self._stack.setCurrentIndex(2))
         self._btn_compare.clicked.connect(lambda: self._stack.setCurrentIndex(3))
+        self._btn_shift_strategy.clicked.connect(
+            lambda: self._stack.setCurrentIndex(4))
         lay.addLayout(view_row)
 
         self._stack = QStackedWidget()
@@ -333,6 +340,19 @@ class SetupWorkspace(QWidget):
         self._compare = SetupComparison()
         self._stack.addWidget(self._compare)
 
+        # Page 4 — per-gear shift strategy (advisory-only, no setup-apply controls)
+        from ui.components.shift_strategy_view import ShiftStrategyView
+        self.shift_strategy_view = ShiftStrategyView()
+        self._stack.addWidget(self.shift_strategy_view)
+
+        # NOTE: The Transmission entry (gear ratios, final drive, top speed) is now
+        # embedded in the Full setup sheet (page 1) as an editable section in the right
+        # column of GT7SettingsSheet, so the driver can enter gear values without
+        # switching to a separate tab. show_transmission_group() goes to page 1.
+        # Bubble gearing_changed from the sheet up through the workspace so the bridge
+        # wiring (which connects to garage_page.gearing_changed) still works unchanged.
+        self._sheet.gearing_changed.connect(self.gearing_changed)
+
         lay.addWidget(self._stack, 1)
 
         # Actions
@@ -364,6 +384,9 @@ class SetupWorkspace(QWidget):
         act.addWidget(self._applied_in_game)
         act.addWidget(self._explain)
         act.addWidget(self._gearbox_btn)
+        self._ranges_btn = SecondaryActionButton("Set car min/max ranges…")
+        self._ranges_btn.clicked.connect(lambda: self.car_ranges_requested.emit())
+        act.addWidget(self._ranges_btn)
         act.addStretch(1)
         lay.addLayout(act)
 
@@ -495,14 +518,35 @@ class SetupWorkspace(QWidget):
         """
         try:
             options = tuple(getattr(choice, "options", ()) or ())
-            self._tyre_codes = tuple(o.code for o in options)
-            self._tyre.blockSignals(True)
-            self._tyre.clear()
-            for o in options:
-                self._tyre.addItem(o.label)
-            if current_code in self._tyre_codes:
-                self._tyre.setCurrentIndex(self._tyre_codes.index(current_code))
-            self._tyre.blockSignals(False)
+            new_codes = tuple(o.code for o in options)
+            # The 750 ms feed calls this every tick. Never rebuild the combo while the
+            # driver is interacting with it — clearing an open popup snaps it shut and
+            # resets the selection ("dropdown glitch"). And when the option set is
+            # unchanged, only move the selection index, never clear()/re-add — the churn
+            # is what closed the popup and reset the choice.
+            interacting = self._tyre.hasFocus() or self._tyre.view().isVisible()
+            if new_codes == self._tyre_codes:
+                if interacting:
+                    return
+                if current_code in self._tyre_codes:
+                    idx = self._tyre_codes.index(current_code)
+                    if self._tyre.currentIndex() != idx:
+                        self._tyre.blockSignals(True)
+                        self._tyre.setCurrentIndex(idx)
+                        self._tyre.blockSignals(False)
+            else:
+                if interacting:
+                    # Options genuinely changed but the driver is mid-interaction; defer
+                    # the rebuild to the next feed rather than yanking the popup away.
+                    return
+                self._tyre_codes = new_codes
+                self._tyre.blockSignals(True)
+                self._tyre.clear()
+                for o in options:
+                    self._tyre.addItem(o.label)
+                if current_code in self._tyre_codes:
+                    self._tyre.setCurrentIndex(self._tyre_codes.index(current_code))
+                self._tyre.blockSignals(False)
             self._tyre.setVisible(bool(options))
 
             note = str(getattr(choice, "guidance", "") or "")
@@ -570,7 +614,10 @@ class SetupWorkspace(QWidget):
         self._lock_btn.setText("Reopen setup" if locked
                                else (lock_label or "Lock this setup"))
         self._lock_hint.setText(str(hint or ""))
-        self._lock_hint.setVisible(bool(hint) and (bool(lockable) or bool(locked)))
+        # Show the hint whenever there is one — including when the setup is NOT yet lockable,
+        # so the driver is told why the Lock button isn't there and how to reach it, instead
+        # of the "Confirm and protect" objective pointing at a control that's hidden.
+        self._lock_hint.setVisible(bool(hint))
 
     def _on_lock_clicked(self) -> None:
         _lockable, locked = self._lock_state
@@ -592,6 +639,15 @@ class SetupWorkspace(QWidget):
     def current_discipline(self) -> str:
         return self._selector.current()
 
+    def set_discipline(self, key: str) -> None:
+        """Select a discipline tab programmatically (e.g. when Begin Qualifying is pressed).
+
+        Reflects the choice in the segmented control without re-emitting
+        ``discipline_changed`` — the caller is the one driving the switch, so echoing the
+        signal back would re-enter the same handler.
+        """
+        self._selector.set_discipline(key)
+
     def displayed_fields(self) -> tuple:
         """The changed-field keys in the order the table shows them (GT7 menu order)."""
         return getattr(self, "_displayed_fields", ())
@@ -606,3 +662,35 @@ class SetupWorkspace(QWidget):
 
     def _on_gearbox(self, checked: bool):
         self._gearbox.setVisible(bool(checked))
+
+    def show_shift_strategy_tab(self) -> None:
+        """Switch the Garage view to the Shift Strategy sub-tab."""
+        self._btn_shift_strategy.setChecked(True)
+        self._stack.setCurrentIndex(4)
+
+    def show_transmission_group(self) -> None:
+        """Switch to the Full setup sheet (where Transmission entry is embedded).
+
+        Called by the bridge when the Shift Strategy stepper's "Enter gear ratios" step
+        is pressed — the driver lands on the full setup page where the editable
+        Transmission section is in the right column, instead of the old separate tab.
+        """
+        self._btn_full.setChecked(True)
+        self._stack.setCurrentIndex(1)
+        spins = getattr(self._sheet, "_gear_spins", [])
+        if spins:
+            spins[0].setFocus()
+
+    def set_gearing(self, gear_ratios=(), final_drive: float = 0.0,
+                    transmission_max_speed_kmh: float = 0.0) -> None:
+        """Load the discipline's gearing values into the Transmission spins.
+
+        Delegates to GT7SettingsSheet.set_gearing which owns the spins (FIX 4: gearing
+        entry moved into the full setup page). Focus guard and blockSignals are handled
+        there, matching the same pattern as set_shift_rpm.
+        """
+        if hasattr(self._sheet, "set_gearing"):
+            self._sheet.set_gearing(
+                gear_ratios=gear_ratios,
+                final_drive=final_drive,
+                transmission_max_speed_kmh=transmission_max_speed_kmh)

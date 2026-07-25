@@ -110,3 +110,54 @@ class TestStateRendering:
     def test_construct_with_default_controller(self, qapp):
         s = PitCrewShell()
         assert s.current_destination() == "home"
+
+
+class TestScrollPreservation:
+    """Navigation always opens at the top; 750ms rebuilds preserve scroll position."""
+
+    def test_each_wrapper_has_scroll_state(self, shell):
+        """Every _scrollable wrapper stores a _scroll_state dict for position tracking."""
+        from PyQt6.QtWidgets import QScrollArea
+        for dest in shell._page_by_dest:
+            w = shell._page_by_dest[dest]
+            if isinstance(w, QScrollArea):
+                assert hasattr(w, "_scroll_state"), (
+                    f"{dest}: wrapper missing _scroll_state")
+                st = w._scroll_state
+                assert "pos" in st and "busy" in st
+
+    def test_navigate_resets_scroll_state_to_zero(self, shell, qapp):
+        """After navigating to a page, its remembered position is reset to 0."""
+        from PyQt6.QtWidgets import QScrollArea
+        wrapper = shell._page_by_dest["garage"]
+        assert isinstance(wrapper, QScrollArea)
+        # Manually set a non-zero remembered position.
+        wrapper._scroll_state["pos"] = 400
+        # Navigate to the same dest — should reset the position.
+        shell._navigate("garage")
+        assert wrapper._scroll_state["pos"] == 0
+
+    def test_scroll_state_pos_tracks_user_scroll(self, shell, qapp):
+        """valueChanged while not busy updates _pos."""
+        from PyQt6.QtWidgets import QScrollArea
+        wrapper = shell._page_by_dest["race_strategy"]
+        assert isinstance(wrapper, QScrollArea)
+        state = wrapper._scroll_state
+        state["busy"] = False
+        bar = wrapper.verticalScrollBar()
+        # Simulate a value change (user scroll) by emitting the signal directly.
+        bar.valueChanged.emit(250)
+        assert state["pos"] == 250
+
+    def test_scroll_state_pos_not_updated_while_busy(self, shell, qapp):
+        """valueChanged while busy (mid-restore) does NOT update _pos."""
+        from PyQt6.QtWidgets import QScrollArea
+        wrapper = shell._page_by_dest["practice"]
+        assert isinstance(wrapper, QScrollArea)
+        state = wrapper._scroll_state
+        state["pos"] = 300
+        state["busy"] = True
+        bar = wrapper.verticalScrollBar()
+        bar.valueChanged.emit(0)
+        # _pos must be unchanged — clamping during a rebuild is not a user scroll.
+        assert state["pos"] == 300

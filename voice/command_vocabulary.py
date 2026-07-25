@@ -35,6 +35,8 @@ EXTRA_PHRASES: Tuple[str, ...] = (
     "what is my best lap", "best lap", "fastest lap",
     "when should i pit", "when do i pit", "pit window", "should i pit",
     "what is the strategy", "strategy update", "next stop",
+    "what fuel do i leave with", "fuel to leave with",
+    "am i saving fuel", "fuel per lap", "fuel margin",
     "how am i doing", "how is my pace", "am i consistent",
     "how are my tyres", "tyre temperatures", "how is the rubber",
     "is it raining", "what is the weather",

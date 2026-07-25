@@ -118,6 +118,9 @@ def score_candidate(
     ``rear_traction_fragile`` (typically derived from the structured driver
     profile) adds a risk flag and, for aggressive fuel maps, is what lets the
     recommender demote a snap-happy push plan in favour of a stable one.
+
+    Degradation is capped at the number of measured laps (len(tyre_wear_samples))
+    to avoid fabricating degradation for stints longer than the tested range.
     """
     base_lap_s = evidence.representative_lap_s()
     if base_lap_s <= 0:
@@ -131,10 +134,16 @@ def score_candidate(
 
     # --- degradation cost (measured tyre-wear samples only) ---
     deg_rate = _degradation_rate_s_per_lap(evidence)
+    # Cap at the measured stint length: never extrapolate beyond tested laps.
+    # len(tyre_wear_samples) encodes the number of measured laps (Theil-Sen
+    # implementation returns [slope] × measured_laps per qualifying stint).
+    measured_laps_cap = len(evidence.tyre_wear_samples) if evidence.tyre_wear_samples else 0
     degradation_cost = 0.0
     for laps in candidate.estimated_laps_per_stint:
+        # Apply degradation only up to the measured evidence boundary.
+        effective_laps = min(laps, measured_laps_cap) if measured_laps_cap > 0 else laps
         # Linear accumulation within each stint: lap i (0-indexed) loses i*rate.
-        degradation_cost += deg_rate * (laps * (laps - 1) / 2.0)
+        degradation_cost += deg_rate * (effective_laps * (effective_laps - 1) / 2.0)
 
     # --- fuel-saving cost (only for a fuel-save map) ---
     fuel_saving_cost = 0.0
@@ -145,7 +154,30 @@ def score_candidate(
     compound_cost = _compound_cost(candidate, evidence, base_lap_s)
 
     pit_time = candidate.estimated_pit_time
-    total = green_base + degradation_cost + pit_time + fuel_saving_cost + compound_cost
+
+    # Timed race: total elapsed = duration + the final-lap overrun after the
+    # clock expires.  The car always finishes the lap it is on when the timer
+    # hits zero, so total is always ≥ duration (never less than the race window).
+    # A fuel-save plan runs an effectively longer lap (+ 0.40 s/lap penalty) so
+    # its overrun is larger, which correctly places it ABOVE the normal plan in
+    # total_elapsed — preserving the tie-break order for _safety_aware_pick.
+    is_timed = evidence.race_duration_minutes > 0 and evidence.race_laps == 0
+    if is_timed and base_lap_s > 0:
+        duration_s = evidence.race_duration_minutes * 60.0
+        fuel_save_penalty = (
+            FUEL_SAVE_TIME_PENALTY_S_PER_LAP
+            if FUEL_MAP_SAVE in candidate.fuel_map_plan else 0.0
+        )
+        effective_lap_s = base_lap_s + fuel_save_penalty
+        green_time = max(0.0, duration_s - pit_time)
+        progress_into_final = green_time % effective_lap_s
+        final_overrun = (
+            (effective_lap_s - progress_into_final)
+            if progress_into_final > 1e-9 else 0.0
+        )
+        total = duration_s + final_overrun
+    else:
+        total = green_base + degradation_cost + pit_time + fuel_saving_cost + compound_cost
 
     on_track_time = green_base + degradation_cost + fuel_saving_cost + compound_cost
     avg_lap = on_track_time / race_laps if race_laps else 0.0
@@ -179,31 +211,63 @@ def score_candidates(
     rear_traction_fragile: bool = False,
     legal_only: bool = True,
 ) -> list[StrategyScore]:
-    """Score and rank candidates by estimated total race time (ascending).
+    """Score and rank candidates.
+
+    For LAP races: ranked by total race time ascending (minimize time).
+    For TIMED races: ranked by laps completed descending (maximize laps).
+      Gap-to-best is expressed as lap-equivalent seconds so the caller can
+      display a meaningful comparison.  Within candidates tied on lap count,
+      lower total elapsed time wins (less wasted pit time).
 
     Illegal candidates are dropped when ``legal_only`` (the default) — a legality
     violation is never merely a time penalty.  Ranks are 1-based; ties are broken
     by input order for determinism.
     """
+    is_timed = evidence.race_duration_minutes > 0 and evidence.race_laps == 0
+
     pool = [c for c in candidates if (c.is_legal or not legal_only)]
-    scored = [
-        s for s in (
-            score_candidate(c, evidence, rear_traction_fragile=rear_traction_fragile)
-            for c in pool
-        )
-        if s is not None
-    ]
-    if not scored:
+    # Build (candidate, score) pairs so we can access lap counts for timed ranking.
+    pairs: list[tuple[StrategyCandidate, StrategyScore]] = []
+    for c in pool:
+        s = score_candidate(c, evidence, rear_traction_fragile=rear_traction_fragile)
+        if s is not None:
+            pairs.append((c, s))
+    if not pairs:
         return []
 
-    # Rank by total time (ascending); stable by original order for ties.
-    order = sorted(range(len(scored)), key=lambda i: (scored[i].estimated_total_time_seconds, i))
-    best_time = scored[order[0]].estimated_total_time_seconds
-    for rank_1based, idx in enumerate(order, start=1):
-        scored[idx].rank = rank_1based
-        scored[idx].estimated_gap_to_best_seconds = round(
-            scored[idx].estimated_total_time_seconds - best_time, 2
-        )
+    base_lap_s = evidence.representative_lap_s()
+
+    if is_timed:
+        # Timed race: rank by laps completed DESC; tie-break: lower total_elapsed ASC.
+        def _timed_sort_key(pair: tuple[StrategyCandidate, StrategyScore], idx: int):
+            c, s = pair
+            laps = sum(c.estimated_laps_per_stint)
+            return (-laps, s.estimated_total_time_seconds, idx)
+
+        order = sorted(range(len(pairs)), key=lambda i: _timed_sort_key(pairs[i], i))
+        best_cand, _best_score = pairs[order[0]]
+        best_laps = sum(best_cand.estimated_laps_per_stint)
+        for rank_1based, idx in enumerate(order, start=1):
+            cand, score = pairs[idx]
+            cand_laps = sum(cand.estimated_laps_per_stint)
+            score.rank = rank_1based
+            # Gap expressed in lap-equivalent seconds (positive = fewer laps = worse).
+            lap_gap = best_laps - cand_laps
+            score.estimated_gap_to_best_seconds = round(
+                lap_gap * base_lap_s if base_lap_s > 0 else 0.0, 2
+            )
+    else:
+        # Lap race: rank by total time ascending.
+        order = sorted(range(len(pairs)), key=lambda i: (pairs[i][1].estimated_total_time_seconds, i))
+        best_time = pairs[order[0]][1].estimated_total_time_seconds
+        for rank_1based, idx in enumerate(order, start=1):
+            _cand, score = pairs[idx]
+            score.rank = rank_1based
+            score.estimated_gap_to_best_seconds = round(
+                score.estimated_total_time_seconds - best_time, 2
+            )
+
+    scored = [s for _c, s in pairs]
     scored.sort(key=lambda s: s.rank)
     return scored
 
@@ -273,13 +337,21 @@ def recommend_strategy(
 
 
 def _safety_aware_pick(scored: list[StrategyScore]) -> StrategyScore:
-    """Pick the fastest plan, but prefer a safer one inside the tie tolerance."""
-    best = scored[0]
+    """Pick the best plan, but prefer a safer one inside the tie tolerance.
+
+    For lap races the tie tolerance is in total-time seconds.
+    For timed races ``estimated_gap_to_best_seconds`` is lap-equivalent seconds
+    (best_laps - cand_laps) × base_lap_s, so the same 5-second window selects
+    candidates within ~0 laps of the leader (any candidate more than one lap
+    behind exceeds the tolerance and is excluded from the contenders).
+    """
     contenders = [
         s for s in scored
         if s.estimated_gap_to_best_seconds <= SAFETY_TIE_TOLERANCE_S
     ]
-    # Lower risk wins the tie; total time breaks a risk tie (stable).
+    if not contenders:
+        contenders = scored[:1]
+    # Lower risk wins the tie; total elapsed time breaks a risk tie (stable).
     return min(contenders, key=lambda s: (_risk_ordinal(s), s.estimated_total_time_seconds))
 
 

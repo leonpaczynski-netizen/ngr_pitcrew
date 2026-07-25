@@ -69,11 +69,15 @@ class TestLegalRecommendation:
 
 class TestTotalRaceTimeNotHotLap:
     def test_one_stop_beats_two_stop_on_total_time(self, result):
+        # This is a TIMED race (50 min, race_laps=0).  For timed races, candidates
+        # are ranked by laps completed (more = better), not total elapsed time.
+        # A 1-stop completes more laps than a 2-stop because less time is lost in
+        # the pits.  Verify that 1stop outranks 2stop (lower rank number = better).
         by_id = {s.candidate_id: s for s in result.recommendation.ranked}
         assert "1stop" in by_id and "2stop" in by_id
-        one = by_id["1stop"].estimated_total_time_seconds
-        two = by_id["2stop"].estimated_total_time_seconds
-        assert one < two, "expensive refuel should make the extra stop slower overall"
+        assert by_id["1stop"].rank < by_id["2stop"].rank, (
+            "1-stop should complete more laps (better rank) in a timed race"
+        )
 
     def test_recommended_is_a_one_stop(self, result):
         assert result.recommendation.recommended.candidate_id.startswith("1stop")

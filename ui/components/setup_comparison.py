@@ -114,7 +114,21 @@ class SetupComparison(QWidget):
 
     def set_comparisons(self, modes) -> None:
         """``modes`` = list of (mode_label, a_label, a_dict, b_label, b_dict)."""
-        self._modes = [m for m in (modes or []) if isinstance(m, (list, tuple)) and len(m) == 5]
+        new_modes = [m for m in (modes or []) if isinstance(m, (list, tuple)) and len(m) == 5]
+        new_labels = tuple(m[0] for m in new_modes)
+        # Refreshed every 750 ms tick. The combo only lists the comparison MODES, which
+        # rarely change; rebuilding it every tick closed an open popup and reset the
+        # driver's chosen mode. When the labels are unchanged, refresh the underlying data
+        # and re-render the table but leave the combo alone. When they do change, defer if
+        # the driver is mid-interaction.
+        if new_labels == getattr(self, "_mode_labels", None):
+            self._modes = new_modes
+            self._render()
+            return
+        if self._combo.hasFocus() or self._combo.view().isVisible():
+            return
+        self._modes = new_modes
+        self._mode_labels = new_labels
         self._combo.blockSignals(True)
         self._combo.clear()
         for m in self._modes:

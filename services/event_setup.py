@@ -281,6 +281,46 @@ class EventSetupService:
             ok=True, event_name=name, event_id=event_id, cycle_id=cycle_id,
             message=f"{name} is now the event you are preparing.")
 
+    def complete_active_event(self) -> SaveResult:
+        """Finish the active event: mark its cycle complete and clear the active slot.
+
+        The programme ends at the debrief; until now there was no way to close an event
+        out, so the last one stayed "active" forever. Completing writes ``explicit_state
+        = "complete"`` through the sole sanctioned writer (``upsert_preparation_cycle``),
+        which the active-cycle resolver reads as a terminal state and reports NO ACTIVE
+        EVENT — so the app cleanly returns to "no event loaded" and the finished cycle is
+        never silently reopened.
+        """
+        name = _norm(self._config.get("active_event_id"))
+        cycle_id = _norm(self._config.get("active_cycle_id"))
+        if not cycle_id:
+            return SaveResult(message="No active event to finish.")
+        if self._db is None or not hasattr(self._db, "upsert_preparation_cycle"):
+            return SaveResult(message="No event database available.")
+        try:
+            existing = self._db.get_preparation_cycle(cycle_id) or {}
+        except Exception:
+            existing = {}
+        now = _now_iso()
+        try:
+            row = dict(existing)
+            row.update({
+                "cycle_id": cycle_id,
+                "explicit_state": "complete",
+                "created_at": _norm(existing.get("created_at")) or now,
+                "updated_at": now,
+            })
+            self._db.upsert_preparation_cycle(row)
+        except Exception as exc:
+            return SaveResult(message=f"Could not finish the event: {exc}")
+        # Clear the active slot so the Command Centre shows "no event loaded".
+        self._config.pop("active_event_id", None)
+        self._config.pop("active_cycle_id", None)
+        self._persist_config()
+        return SaveResult(
+            ok=True, event_name=name, cycle_id=cycle_id,
+            message=f"{name} is finished." if name else "Event finished.")
+
     # ---- internals --------------------------------------------------------
     def _fanout(self, draft: EventDraft, event_id: int) -> None:
         """Write the working-config core: track, format and the car.

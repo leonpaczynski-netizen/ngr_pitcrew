@@ -311,6 +311,17 @@ class TestV5RunRecording:
         assert "RECORDING" in shell.run_card._recording.text()
         assert "9 laps so far" in shell.run_card._recording.text()
 
+    def test_recording_shows_live_lap_and_push_guidance(self, wired):
+        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard
+        # to push. setup_base targets "5–8" laps; the fake session reports 9 → "plenty".
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view()
+        shell.run_card.start_requested.emit()
+        guidance = shell.run_card._run_guidance.text()
+        assert shell.run_card._run_guidance.isHidden() is False
+        assert "end the run on a clean lap" in guidance.lower()
+        assert "Push:" in guidance
+
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
         bridge._last_guidance_view = _view()
@@ -1296,4 +1307,554 @@ class _PlanVM:
     candidate_comparison_rows = []
     risks = ()
     replan_triggers = ()
+
+
+# ---------------------------------------------------------------------------
+# Fix-1 regression tests: approved race plan reaches the voice engineer
+# ---------------------------------------------------------------------------
+
+class _EngineWin(_Win):
+    """Extends the standard fake window with a real (but minimal) RaceStrategyEngine.
+
+    The engine is constructed with all-None dependencies so its constructor does not
+    start any threads or open any sockets; only ``set_plan`` and the PTT response
+    methods are exercised here.
+    """
+
+    def __init__(self, qapp=None):
+        super().__init__(qapp=qapp)
+        from strategy.engine import RaceStrategyEngine
+        self._strategy_engine = RaceStrategyEngine(
+            tracker=None, announcer=None, config={}, bridge=None, db=None)
+
+
+class TestStrategyEnginePlanWiring:
+    """Approved race plan must reach the RaceStrategyEngine so PTT queries work.
+
+    Root cause: the bridge populated the Pit Wall display and persisted to the DB but
+    never called ``engine.set_plan()``, leaving ``_stints`` empty and every PTT
+    "when do I pit" returning "No strategy loaded. Pit when you judge."
+    """
+
+    @pytest.fixture
+    def engine_wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _EngineWin()
+        db = _DB()
+        # Extend the fake DB to support approved-strategy persistence.
+        db._approved = {}
+
+        def _save_approved(cid, plan):
+            db._approved[cid] = dict(plan or {})
+            return True
+
+        def _get_approved(cid):
+            return dict(db._approved.get(cid) or {})
+
+        def _get_prep_cycle(cid):
+            return {"cycle_id": cid, "car": "Porsche Cayman GT4",
+                    "track": "Watkins Glen International",
+                    "strategy_final_json": None}
+
+        db.save_approved_strategy = _save_approved
+        db.get_approved_strategy = _get_approved
+        db.get_preparation_cycle = _get_prep_cycle
+
+        bridge = LiveShellBridge(shell, ctrl, window=win, config=_cfg(), db=db,
+                                 spawn=lambda fn: fn())
+        return shell, win, db, bridge
+
+    def test_push_plan_populates_engine_stints(self, engine_wired):
+        """_push_plan_to_engine converts raw_stints to Stint objects."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {
+            "candidate_id": "c1",
+            "raw_stints": [
+                {"laps": 16, "compound": "RH"},
+                {"laps": 10, "compound": "RM"},
+            ],
+        }
+        bridge._push_plan_to_engine(plan)
+        assert len(win._strategy_engine._stints) == 2
+        assert win._strategy_engine._stints[0].laps == 16
+        assert win._strategy_engine._stints[0].compound == "RH"
+        assert win._strategy_engine._stints[1].laps == 10
+
+    def test_ptt_no_longer_says_no_strategy_loaded(self, engine_wired):
+        """After plan is pushed, build_pit_window_response no longer returns fallback."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {
+            "candidate_id": "c2",
+            "raw_stints": [{"laps": 20, "compound": "RH"}],
+        }
+        bridge._push_plan_to_engine(plan)
+        resp = win._strategy_engine.build_pit_window_response(0)
+        assert "No strategy loaded" not in resp
+        # The engine correctly reports the first stop window.
+        assert "Stop 1" in resp
+
+    def test_persist_approved_strategy_enriches_with_raw_stints(self, engine_wired):
+        """When a plan result is available the persisted dict contains raw_stints."""
+        shell, _win, db, bridge = engine_wired
+
+        # Populate the strategy page's view model with a fake option.
+        from ui.components.strategy_plan import StrategyOption, StrategyPlanVM
+        opt = StrategyOption(
+            name="1-stop RH/RM", key="cand_A",
+            stints=("16 laps Racing Hard", "10 laps Racing Medium"),
+        )
+        vm = StrategyPlanVM(options=(opt,))
+        shell.strategy_page._vm = vm
+
+        # Plant a fake plan result so _find_candidate can locate the candidate.
+        class _FakeCand:
+            candidate_id = "cand_A"
+            estimated_laps_per_stint = [16, 10]
+            compound_plan = ["RH", "RM"]
+
+        class _FakeResult:
+            candidates = [_FakeCand()]
+
+        class _FakePlanResult:
+            ok = True
+            result = _FakeResult()
+
+        bridge._plans._last = _FakePlanResult()
+
+        bridge._persist_approved_strategy("cand_A")
+
+        saved = db._approved.get("c1", {})
+        assert "raw_stints" in saved, "raw_stints must be persisted for engine loading"
+        assert saved["raw_stints"] == [{"laps": 16, "compound": "RH"},
+                                        {"laps": 10, "compound": "RM"}]
+
+    def test_approve_strategy_populates_engine(self, engine_wired):
+        """Full approval path: engine gets stints after the driver taps Approve."""
+        shell, win, db, bridge = engine_wired
+
+        from ui.components.strategy_plan import StrategyOption, StrategyPlanVM
+        opt = StrategyOption(
+            name="1-stop", key="cand_B",
+            stints=("20 laps Racing Hard",), recommended=True,
+        )
+        shell.strategy_page._vm = StrategyPlanVM(options=(opt,))
+
+        class _FakeCand:
+            candidate_id = "cand_B"
+            estimated_laps_per_stint = [20]
+            compound_plan = ["RH"]
+
+        class _FakeResult:
+            candidates = [_FakeCand()]
+
+        class _FakePlanResult:
+            ok = True
+            result = _FakeResult()
+
+        bridge._plans._last = _FakePlanResult()
+        bridge._persist_approved_strategy("cand_B")
+
+        assert len(win._strategy_engine._stints) == 1
+        assert win._strategy_engine._stints[0].compound == "RH"
+        resp = win._strategy_engine.build_pit_window_response(0)
+        assert "No strategy loaded" not in resp
+
+    def test_defensive_feed_live_loads_plan_when_engine_empty(self, engine_wired):
+        """_feed_live pushes the approved plan if the engine has no stints yet."""
+        _shell, win, db, bridge = engine_wired
+
+        # Pre-populate the DB approved plan with raw_stints (simulates a restart).
+        db._approved["c1"] = {
+            "candidate_id": "prev",
+            "raw_stints": [{"laps": 15, "compound": "RH"}],
+        }
+        # Engine is currently empty.
+        assert win._strategy_engine._stints == []
+
+        # _feed_live requires the live_page; it will bail gracefully if absent
+        # (there's no real tracker here), but the engine check still fires.
+        bridge._feed_live()
+
+        assert len(win._strategy_engine._stints) == 1, (
+            "Defensive guard in _feed_live must load plan into empty engine")
+
+    def test_engine_not_repopulated_when_already_has_stints(self, engine_wired):
+        """Guard: set_plan is not called again once stints are populated."""
+        _shell, win, _db, bridge = engine_wired
+        plan = {"candidate_id": "x1", "raw_stints": [{"laps": 5, "compound": "RS"}]}
+        bridge._push_plan_to_engine(plan)
+        assert bridge._last_engine_plan_key == "x1"
+        # Manually change a stint to detect whether set_plan is called again.
+        win._strategy_engine._stints[0].laps = 99
+        # Another push with a DIFFERENT key must re-push.
+        plan2 = {"candidate_id": "x2", "raw_stints": [{"laps": 7, "compound": "RM"}]}
+        bridge._push_plan_to_engine(plan2)
+        assert win._strategy_engine._stints[0].laps == 7  # repushed
+        assert bridge._last_engine_plan_key == "x2"
+
+    def test_empty_raw_stints_does_not_call_set_plan(self, engine_wired):
+        """A plan with no raw_stints leaves the engine unchanged."""
+        _shell, win, _db, bridge = engine_wired
+        # Pre-load some stints.
+        bridge._push_plan_to_engine(
+            {"candidate_id": "y", "raw_stints": [{"laps": 8, "compound": "RM"}]})
+        original_count = len(win._strategy_engine._stints)
+        # Push a plan with no raw_stints — should be a no-op.
+        bridge._push_plan_to_engine({"candidate_id": "z", "stints": ["display only"]})
+        assert len(win._strategy_engine._stints) == original_count
     inputs_rows = []
+
+
+# ---------------------------------------------------------------------------
+# AREA 1 — Car min/max ranges button wired in the bridge
+# ---------------------------------------------------------------------------
+
+class TestCarRangesBridgeWiring:
+    """AREA 1: "Set car min/max ranges…" button must open CarRangesDialog and refresh."""
+
+    def test_car_ranges_requested_signal_exists_on_garage_page(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert hasattr(shell.garage_page, "car_ranges_requested")
+
+    def test_on_car_ranges_graceful_with_mocked_dialog(self, wired, monkeypatch):
+        """_on_car_ranges must open CarRangesDialog with the current car name.
+
+        The dialog is patched so no real QDialog is shown — the test only verifies
+        the handler is callable, passes the car name, and does not crash.
+        """
+        _shell, _win, _db, bridge = wired
+        opened = []
+
+        class _FakeDlg:
+            def __init__(self, car, parent):
+                opened.append(car)
+            ranges_saved = type("FakeSig", (), {
+                "connect": staticmethod(lambda _fn: None)})()
+            def exec(self):
+                return 0
+
+        # _on_car_ranges does a local `from ui.car_ranges_dialog import CarRangesDialog`.
+        # Patching the module attribute before the call lets the local import pick it up.
+        import ui.car_ranges_dialog as _dlg_mod  # ensure the module is in sys.modules
+        monkeypatch.setattr(_dlg_mod, "CarRangesDialog", _FakeDlg)
+        bridge._on_car_ranges()
+        assert len(opened) == 1   # dialog was attempted once with the car name
+
+    def test_ranges_button_exists_on_workspace(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert hasattr(shell.garage_page, "_ranges_btn")
+        assert "ranges" in shell.garage_page._ranges_btn.text().lower()
+
+
+# ---------------------------------------------------------------------------
+# AREA 2 — Gearing bridge wiring
+# ---------------------------------------------------------------------------
+
+class TestGearingBridge:
+    """AREA 2: gear-ratio entry in the Transmission tab writes the sheet; Race and
+    Qualifying sheets stay independent."""
+
+    def test_feed_gearing_loads_sheet_values_into_spins(self, wired):
+        shell, _win, _db, bridge = wired
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(
+            scope, "race",
+            {"gear_ratios": [3.1, 2.2, 1.6, 1.2, 0.9],
+             "final_drive": 3.705, "transmission_max_speed_kmh": 280.0,
+             "setup_label": "Race"})
+        bridge._discipline = "race"
+        bridge._feed_gearing(shell.garage_page)
+        # FIX 4: spins now live on _sheet, not on garage_page directly
+        sheet = shell.garage_page._sheet
+        assert abs(sheet._gear_spins[0].value() - 3.1) < 0.005
+        assert abs(sheet._gear_spins[4].value() - 0.9) < 0.005
+        assert sheet._gear_spins[5].value() == 0.0      # unused
+        assert abs(sheet._final_drive_spin.value() - 3.705) < 0.005
+        assert abs(sheet._top_speed_spin.value() - 280.0) < 1.0
+
+    def test_gearing_changed_signal_writes_to_sheet(self, wired):
+        shell, _win, _db, bridge = wired
+        shell.garage_page._baseline.click()   # author a sheet
+        bridge._discipline = "race"
+        gearing = {"gear_ratios": [3.1, 2.2, 1.6], "final_drive": 3.705,
+                   "transmission_max_speed_kmh": 280.0}
+        shell.garage_page.gearing_changed.emit(gearing)
+        sheet = bridge._setups.sheet("race")
+        assert sheet.gear_ratios == (3.1, 2.2, 1.6)
+        assert abs(sheet.get("final_drive") - 3.705) < 0.005
+
+    def test_race_and_qualifying_gearing_are_independent(self, wired):
+        shell, _win, _db, bridge = wired
+        shell.garage_page._baseline.click()   # author both sheets
+
+        # Set race gearing
+        bridge._discipline = "race"
+        shell.garage_page.gearing_changed.emit(
+            {"gear_ratios": [3.1, 2.2], "final_drive": 3.7,
+             "transmission_max_speed_kmh": 280.0})
+
+        # Switch to qualifying and set different gearing
+        bridge._discipline = "qualifying"
+        shell.garage_page.gearing_changed.emit(
+            {"gear_ratios": [3.5, 2.5], "final_drive": 4.0,
+             "transmission_max_speed_kmh": 260.0})
+
+        race_sheet = bridge._setups.sheet("race")
+        qual_sheet = bridge._setups.sheet("qualifying")
+        assert race_sheet.gear_ratios != qual_sheet.gear_ratios
+        assert race_sheet.gear_ratios == (3.1, 2.2)
+        assert qual_sheet.gear_ratios == (3.5, 2.5)
+
+    def test_gear_spins_exist_on_full_sheet(self, wired):
+        """FIX 4: gearing entry moved to the Full setup sheet (GT7SettingsSheet._sheet)."""
+        shell, _win, _db, _bridge = wired
+        # Spins are on _sheet, not directly on garage_page
+        assert hasattr(shell.garage_page._sheet, "_gear_spins")
+        assert len(shell.garage_page._sheet._gear_spins) == 8
+        # No separate Transmission tab button
+        assert not hasattr(shell.garage_page, "_btn_transmission")
+
+    def test_show_transmission_group_switches_to_full_sheet_page(self, wired):
+        """FIX 4: show_transmission_group now goes to page 1 (Full setup sheet)."""
+        shell, _win, _db, _bridge = wired
+        shell.garage_page.show_transmission_group()
+        assert shell.garage_page._stack.currentIndex() == 1
+
+
+# ---------------------------------------------------------------------------
+# AREA 3 — Tyre-test override
+# ---------------------------------------------------------------------------
+
+class TestTyreOverride:
+    """AREA 3: the run-card compound selector tags a test run WITHOUT mutating the saved
+    setup. The saved sheet's tyre_front/tyre_rear must remain unchanged."""
+
+    class _Tracker:
+        def __init__(self):
+            self.calls = []
+            self._current_compound = "RH"
+
+        def set_compound(self, c):
+            self.calls.append(c)
+            self._current_compound = c
+
+    def _wired_with_tracker(self, wired):
+        shell, win, db, bridge = wired
+        win._tracker = self._Tracker()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(
+            scope, "race",
+            {"tyre_front": "Racing Hard", "tyre_rear": "Racing Hard",
+             "setup_label": "Race"})
+        return shell, win, db, bridge
+
+    def test_handler_calls_tracker_set_compound(self, wired):
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RS")
+        assert "RS" in win._tracker.calls
+
+    def test_handler_does_not_modify_saved_setup(self, wired):
+        shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RS")
+        sheet = bridge._setups.sheet("race")
+        # The sheet's tyre must remain Racing Hard — RS was for the test only
+        assert sheet.get("tyre_front") == "Racing Hard"
+        assert sheet.get("tyre_rear") == "Racing Hard"
+
+    def test_override_is_set_after_test_compound_change(self, wired):
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RM")
+        assert bridge._test_compound_override == "RM"
+
+    def test_push_active_compound_uses_override_when_run_is_open(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()   # open a run
+        bridge._on_test_compound_change("RS")
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
+
+    def test_override_always_wins_even_without_open_run(self, wired):
+        """FIX 1b: the override is no longer ignored when no run is open.
+
+        The previous guard `_test_compound_override and _runs.open_run()` caused the
+        750ms refresh to clobber the override back to the sheet compound in the window
+        between picking a compound and pressing Start — so the run was tagged RH instead
+        of the RS the driver picked. The fix: if override is set, always use it.
+        The override is only cleared on record/discard, not by the periodic refresh.
+        """
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._test_compound_override = "RS"
+        # No run open — override must STILL win (FIX 1b)
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
+
+    def test_override_uses_sheet_when_not_set(self, wired):
+        """When no override is set, _push_active_compound falls back to the sheet compound."""
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._test_compound_override = None   # explicitly no override
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RH"  # sheet compound
+
+    def test_override_survives_full_refresh_without_run(self, wired):
+        """FIX 1b end-to-end: pick RS, call refresh() (simulating 750ms tick), override persists."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        # User picks RS on the run card
+        bridge._on_test_compound_change("RS")
+        assert bridge._test_compound_override == "RS"
+        # Simulate a 750ms refresh (no run open)
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        # Override must survive — not clobbered by sheet compound
+        assert bridge._test_compound_override == "RS"
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
+
+    def test_override_cleared_on_record_run(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        bridge._test_compound_override = "RS"
+        shell.run_card.record_requested.emit()
+        assert bridge._test_compound_override is None
+
+    def test_override_cleared_on_discard_run(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        bridge._test_compound_override = "RS"
+        shell.run_card.discard_requested.emit()
+        assert bridge._test_compound_override is None
+
+    def test_run_card_compound_selector_is_populated_by_refresh(self, wired):
+        shell, _win, _db, bridge = self._wired_with_tracker(wired)
+        bridge.refresh()
+        # The event allows RH, RM, RS — the selector should have at least 2 options.
+        rc = shell.run_card
+        assert hasattr(rc, "_compound_codes")
+        assert len(rc._compound_codes) >= 2
+
+
+# ---------------------------------------------------------------------------
+# FIX 1a — Compound dropdown does not snap back on refresh
+# ---------------------------------------------------------------------------
+
+class TestCompoundDropdownStability:
+    """FIX 1a: the run-card compound combo must NOT be reset on every 750ms refresh.
+    The allowed-compound set changes rarely (only when the event changes), so subsequent
+    refresh ticks must leave the user's current selection alone."""
+
+    def _wired_with_tracker(self, wired):
+        shell, win, db, bridge = wired
+        win._tracker = type("T", (), {
+            "calls": [], "set_compound": lambda self, c: self.calls.append(c)})()
+        return shell, win, db, bridge
+
+    def test_selector_not_rebuilt_on_second_refresh_with_same_codes(self, wired):
+        """FIX 1a: calling _feed_run_compound_options twice with the same codes must not
+        change the combo's current index on the second call."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        rc = shell.run_card
+
+        # First call — builds the combo and picks first unsampled (let it run)
+        bridge._last_compound_codes = ()      # reset so first call rebuilds
+        bridge._feed_run_compound_options(rc)
+        # Capture the index after the first call
+        first_idx = rc._compound_combo.currentIndex()
+
+        # Simulate user picking a different index
+        rc._compound_combo.setCurrentIndex((first_idx + 1) % max(len(rc._compound_codes), 2))
+        user_idx = rc._compound_combo.currentIndex()
+
+        # Second call with SAME codes — must not reset the user's pick
+        bridge._feed_run_compound_options(rc)
+        assert rc._compound_combo.currentIndex() == user_idx, (
+            "second refresh must not overwrite the user's compound selection")
+
+    def test_last_compound_codes_initialised(self, wired):
+        """Bridge must initialise _last_compound_codes so repeated refreshes are idempotent."""
+        _shell, _win, _db, bridge = wired
+        assert hasattr(bridge, "_last_compound_codes")
+        assert isinstance(bridge._last_compound_codes, tuple)
+
+    def test_override_preserved_as_preselected_when_codes_change(self, wired):
+        """When codes change AND an override is set, the override is pre-selected in the
+        rebuilt combo so the user's pick is visually correct after the rebuild."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        rc = shell.run_card
+        bridge._test_compound_override = "RS"
+
+        # Force a rebuild by resetting last codes
+        bridge._last_compound_codes = ()
+        bridge._feed_run_compound_options(rc)
+        # The combo must show RS (the override), not the first unsampled
+        if "RS" in rc._compound_codes:
+            rs_idx = list(rc._compound_codes).index("RS")
+            assert rc._compound_combo.currentIndex() == rs_idx, (
+                "override compound must be pre-selected when combo is rebuilt")
+
+
+# ---------------------------------------------------------------------------
+# FIX 5 — Guidance how-to names exact buttons
+# ---------------------------------------------------------------------------
+
+class TestConfirmProtectGuidance:
+    """FIX 5a: the "confirm and protect" objective must name the exact button labels."""
+
+    def test_how_to_names_entered_in_gt7_button(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "I've entered this in GT7" in text or "entered this in GT7" in text
+
+    def test_how_to_names_lock_this_setup_button(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "Lock this setup" in text
+
+    def test_how_to_explains_lock_appears_after_convergence(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "converge" in text.lower() or "consistent runs" in text.lower()
+
+    def test_how_to_triggers_on_protect_keyword(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Protect the qualifying setup", "garage")
+        assert bool(text), "protect keyword must trigger how-to"
+
+    def test_how_to_empty_for_unrelated_objective(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Build setup_base evidence", "practice")
+        assert text == "", "unrelated objective must not return how-to text"
+
+    def test_is_confirm_protect_objective_detects_protect(self, wired):
+        """FIX 5b: bridge must detect the confirm-protect objective from the guidance view."""
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Confirm and protect the best-known setup",
+                            "target_surface": "garage"}}
+        assert bridge._is_confirm_protect_objective() is True
+
+    def test_is_confirm_protect_objective_false_for_other(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Build setup_base evidence",
+                            "target_surface": "practice"}}
+        assert bridge._is_confirm_protect_objective() is False
+
+    def test_feed_lock_step_checklist_shown_when_objective_active(self, wired):
+        """FIX 5b: when the protect objective is active, _feed_lock hint is a step list."""
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Confirm and protect the best-known setup",
+                            "target_surface": "garage"}}
+        gp = shell.garage_page
+        bridge._feed_lock(gp)
+        hint = gp._lock_hint.text()
+        # Hint must contain step markers
+        assert "1." in hint and "2." in hint

@@ -72,6 +72,14 @@ class LiveShellBridge(QObject):
         #: every refresh — the 750ms feed used to force it back to "race", which made
         #: the Base and Qualifying tabs un-selectable.
         self._discipline = "race"
+        #: The live session the driver has entered: None (plain practice, race-vs-qual
+        #: taken from the selected discipline), "qualifying" (Begin Qualifying pressed),
+        #: or "race" (a live race detected from telemetry). Drives the runtime shift-beep
+        #: RPM mode and the announcer's session mode. See ``_push_practice_mode``.
+        self._live_session_mode: Optional[str] = None
+        #: The last live race phase reported by the telemetry bridge — "IN PIT",
+        #: "RACING", "FINISHED" — used to surface the pit fuel call on the Live Pit Wall.
+        self._live_race_phase: str = ""
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
@@ -90,8 +98,24 @@ class LiveShellBridge(QObject):
         from services.setup_service import SetupService
         from services.setup_store import SetupSheetStore, default_store_path
         from services.setup_history_store import SetupHistoryStore, default_history_path
-        _cfg_path = str(getattr(window, "config_path", "") or "")
+        from services.shift_strategy_store import ShiftStrategyStore, default_shift_strategy_path
+        # The real MainWindow stores its config path as ``_config_path`` (leading
+        # underscore) and always sets it; the original lookup read ``config_path``
+        # (no underscore), which the real window does NOT have, so every store below was
+        # constructed path-less and silently persisted NOTHING — the Garage reopened to
+        # defaults after every restart. Read the real attribute first, then the name test
+        # fakes use. When neither is present the path stays empty and the stores are
+        # in-memory only (which is exactly what tests without a config want — the store
+        # helpers treat "" as "do not persist").
+        _cfg_path = getattr(window, "_config_path", None)
+        if _cfg_path is None:
+            _cfg_path = getattr(window, "config_path", None)
+        _cfg_path = str(_cfg_path or "")
         self._sheets = SetupSheetStore(default_store_path(_cfg_path))
+        self._shift_store = ShiftStrategyStore(default_shift_strategy_path(_cfg_path))
+        #: The profile the driver last selected in the Shift Strategy panel.
+        #: Persisted in-memory; reset to "qualifying" on bridge restart.
+        self._shift_profile = "qualifying"
         # Persisted applied-revision history: fills the Garage Lineage tab and lets a
         # past setup be loaded back ("the settings I'm running in GT7").
         self._setup_history = SetupHistoryStore(default_history_path(_cfg_path))
@@ -112,6 +136,8 @@ class LiveShellBridge(QObject):
             capture_controller=getattr(window, "_tm_controller", None))
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
+        #: Scopes already seeded from applied history — see ``_seed_from_last_applied``.
+        self._seeded_history: set = set()
         #: The last AnalysisResult (it carries the discipline it belongs to).
         self._last_analysis = None
         self._analysis_done.connect(self._on_analysis_done)
@@ -148,12 +174,23 @@ class LiveShellBridge(QObject):
         #: event cycle clears it. Overrides the DB-persisted approved strategy only in
         #: the CURRENT session — the persisted row is never mutated here.
         self._live_accepted_plan = None
+        #: Tyre compound override for the current test run. Set by the run-card compound
+        #: selector; cleared when the run is recorded or discarded. The saved sheet is
+        #: NEVER mutated — only the tracker call and this override change.
+        self._test_compound_override: Optional[str] = None
+        #: The compound codes last fed to the run-card selector. Only update the selector
+        #: when the allowed-compound set changes — NOT on every 750ms tick — so the
+        #: driver's pick isn't clobbered by the periodic refresh (FIX 1a).
+        self._last_compound_codes: tuple = ()
         #: The strategy decision is recomputed ONCE PER LAP ("at the end of every lap"),
         #: not on every 750ms display tick — this is the driver's own model and it stops
         #: the replan warning flickering as live figures wobble mid-lap. The last audio
         #: view is cached and the lap it was computed for is remembered.
         self._live_audio_view = None
         self._live_decision_lap = None
+        #: candidate_id of the last plan pushed to the RaceStrategyEngine via set_plan(),
+        #: so the defensive _feed_live guard does not call set_plan() on every 750ms tick.
+        self._last_engine_plan_key: str = ""
 
         self._timer = QTimer(self)
         self._timer.setInterval(max(200, int(refresh_ms)))
@@ -174,13 +211,34 @@ class LiveShellBridge(QObject):
         """
         try:
             bridge = getattr(self._window, "_bridge", None)
-            for sig_name in ("connection_changed", "lap_completed", "race_state_changed",
+            for sig_name in ("connection_changed", "lap_completed",
                              "car_detected", "strategy_status_changed"):
                 sig = getattr(bridge, sig_name, None)
                 if sig is not None:
                     sig.connect(lambda *_: self.refresh())
+            # race_state_changed carries the phase text ("IN PIT" / "RACING" /
+            # "FINISHED") — capture it so the Live Pit Wall can call the pit stop and
+            # assert race mode, not just blindly refresh.
+            rsc = getattr(bridge, "race_state_changed", None)
+            if rsc is not None:
+                rsc.connect(self._on_race_state)
         except Exception:
             pass
+
+    def _on_race_state(self, phase: str) -> None:
+        """Track the live race phase for the pit-wall display.
+
+        We deliberately do NOT infer "we are racing" from telemetry here — a practice or
+        qualifying session can look like RACING and the app would then apply the race
+        setup/RPM/plan by mistake. Entering race mode is an EXPLICIT driver action (Start
+        Race, see ``_on_start_race``). This only records the phase so the Live Pit Wall can
+        show "IN PIT" and the pit fuel call, and releases race mode when the race is over.
+        """
+        p = str(phase or "").upper()
+        self._live_race_phase = p
+        if p == "FINISHED" and self._live_session_mode == "race":
+            self._live_session_mode = None
+        self.refresh()
 
     def _wire_actions(self) -> None:
         """Route Garage Apply/Revert/Analyse + Settings save through the classic services."""
@@ -203,6 +261,10 @@ class LiveShellBridge(QObject):
                     gp.shift_rpm_recommend_requested.connect(self._on_shift_rpm_recommend)
                 if hasattr(gp, "lock_requested"):
                     gp.lock_requested.connect(self._on_lock_setup)
+                if hasattr(gp, "car_ranges_requested"):
+                    gp.car_ranges_requested.connect(self._on_car_ranges)
+                if hasattr(gp, "gearing_changed"):
+                    gp.gearing_changed.connect(self._on_gearing_changed)
         except Exception:
             pass
         try:
@@ -213,21 +275,38 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         # Route every remaining surface action to real behaviour.
+        # IMPORTANT: _c must be defined BEFORE the shift-strategy sv block so that
+        # the go_to_tab → _on_shift_go_to_tab connection actually fires (the original
+        # ordering left _c undefined in that scope, silently swallowing all sv wires).
         shell = self._shell
         _c = self._safe_connect
+        # Shift strategy signals — the view lives on garage_page.shift_strategy_view.
+        try:
+            sv = getattr(
+                getattr(self._shell, "garage_page", None),
+                "shift_strategy_view", None)
+            if sv is not None:
+                _c(sv, "profile_changed",       self._on_shift_profile_changed)
+                _c(sv, "engine_data_seeded",    self._on_shift_engine_seeded)
+                _c(sv, "recalculate_requested", self._on_shift_recalculate)
+                _c(sv, "go_to_tab",             self._on_shift_go_to_tab)
+        except Exception:
+            pass
         rc = getattr(shell, "run_card", None)
         _c(rc, "start_requested", self._on_start_run)
         _c(rc, "record_requested", self._on_record_run)
         _c(rc, "discard_requested", self._on_discard_run)
+        _c(rc, "compound_change_requested", self._on_test_compound_change)
         _c(getattr(shell, "garage_page", None), "applied_in_game_confirmed",
            self._on_applied_in_game)
         _c(getattr(shell, "feedback_form", None), "submitted", self._on_feedback)
         _c(getattr(shell, "practice_outcome", None), "action_requested", self._on_outcome_action)
         _c(getattr(shell, "qualifying_page", None), "begin_requested",
-           lambda: self._navigate("live_pit_wall"))
+           self._on_begin_qualifying)
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
         _c(getattr(shell, "strategy_page", None), "plan_selected", self._on_select_plan)
+        _c(getattr(shell, "strategy_page", None), "start_race_requested", self._on_start_race)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
@@ -240,6 +319,7 @@ class LiveShellBridge(QObject):
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
         _c(home, "manage_events_requested", self._on_manage_events)
+        _c(home, "event_complete_requested", self._on_finish_event)
         esp = getattr(shell, "event_setup_page", None)
         _c(esp, "save_requested", self._on_event_draft_saved)
         _c(esp, "edit_requested", self._on_event_draft_open)
@@ -286,6 +366,10 @@ class LiveShellBridge(QObject):
                 plan = live_plan_dict_from_candidate(candidate)
                 if plan:
                     self._live_accepted_plan = plan
+                # Ensure the engine has the approved plan's stints so PTT can answer
+                # "when do I pit" — the replan candidate is advisory-only and carries
+                # no Stint-compatible data, so we reinforce the approved plan stints.
+                self._push_plan_to_engine(self._approved_strategy())
                 self.refresh()
             elif action == "keep":
                 acknowledge_strategy(record_preference=False)
@@ -349,6 +433,7 @@ class LiveShellBridge(QObject):
         # the shift beep uses the right (qualifying vs race) RPM for the session.
         self._push_practice_mode(self._discipline)
         self._feed_garage()
+        self._feed_shift_strategy()
         self._feed_practice()
         self._feed_qualifying(view)
         self._feed_strategy()
@@ -378,13 +463,25 @@ class LiveShellBridge(QObject):
             # the run is being captured and knows it still has to be ended to count.
             run = self._runs.open_run()
             if run:
+                laps_done = self._live_lap_count()
+                from strategy.run_brief import lap_progress_note
                 rc.set_recording(str(run.get("title") or "Practice run"),
-                                 self._live_lap_count(), connected=self._connected())
+                                 laps_done, connected=self._connected(),
+                                 lap_note=lap_progress_note(card.target_laps, laps_done),
+                                 push=card.push_level)
             else:
                 rc.set_recording("")
         except Exception:
             pass
         self._feed_run_review()
+        # Compound selector on the run card — separate try block so a failure here does
+        # not blank the run card itself.
+        try:
+            rc = getattr(self._shell, "run_card", None)
+            if rc is not None:
+                self._feed_run_compound_options(rc)
+        except Exception:
+            pass
 
     def _feed_run_review(self) -> None:
         """Show the laps of the run being reviewed — measured truth, not memory."""
@@ -587,6 +684,9 @@ class LiveShellBridge(QObject):
         # Remember which discipline the driver was practising, so a race run and a
         # qualifying run are told apart in Review rather than lumped together.
         self._run_discipline[int(decision.session_id or 0)] = self._discipline
+        # Clear the tyre-test override — the run is now bound and its compound tag is
+        # fixed; subsequent runs start fresh from the sheet compound.
+        self._test_compound_override = None
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -597,6 +697,9 @@ class LiveShellBridge(QObject):
         self.refresh()
 
     def _on_discard_run(self) -> None:
+        # Clear the tyre-test override — the discarded run never reached the programme,
+        # so the next run should start from the sheet compound again.
+        self._test_compound_override = None
         ok = self._runs.discard_run()
         self._run_status("Run discarded — nothing was recorded against the event."
                          if ok else "There was no open run to discard.")
@@ -686,8 +789,38 @@ class LiveShellBridge(QObject):
                 if hasattr(sp, "set_status") and not sp._status.text():
                     sp.set_status(f"Your approved plan ({saved.get('name', 'saved plan')}) "
                                   f"is loaded and will be used for the race.")
+            # Reflect race readiness so the Start Race control shows where the driver
+            # stands before committing to a race.
+            if hasattr(sp, "set_race_readiness"):
+                ready, blockers = self._race_readiness()
+                sp.set_race_readiness(ready, blockers)
         except Exception:
             pass
+
+    def _race_readiness(self) -> tuple:
+        """(ready, blockers): whether every stage is complete to start the race.
+
+        Blockers are plain-language and never hard-stop — Start Race can still commit with
+        a warning. The point is that the driver, not a telemetry guess, declares the race,
+        and does so knowing what (if anything) is still open.
+        """
+        blockers: list = []
+        try:
+            if not self._approved_strategy().get("candidate_id"):
+                blockers.append("race plan not approved")
+        except Exception:
+            pass
+        try:
+            if not self._setups.sheet("race").is_authored:
+                blockers.append("race setup not built")
+        except Exception:
+            pass
+        try:
+            if not self._has_recorded_run():
+                blockers.append("no practice runs recorded")
+        except Exception:
+            pass
+        return (not blockers, tuple(blockers))
 
     def _approved_strategy(self) -> dict:
         try:
@@ -697,6 +830,88 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         return {}
+
+    def _recommended_plan_dict(self) -> dict:
+        """A show_plan-compatible dict for the RECOMMENDED plan, when none was approved.
+
+        The Live Pit Wall hid its plan card entirely unless the driver had explicitly
+        pressed Approve on the Strategy page — so a driver who went straight to the race
+        saw "no race plan at all". This falls back to the current recommendation the
+        Strategy page is already showing, so the wall always presents *a* plan. It carries
+        no ``candidate_id`` (nothing was approved), only the display fields ``show_plan``
+        reads.
+        """
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            vm = getattr(sp, "_vm", None)
+            options = list(getattr(vm, "options", ()) or ())
+            if not options:
+                return {}
+            opt = next((o for o in options if getattr(o, "recommended", False)), options[0])
+            return {
+                "name": getattr(opt, "name", "") or "Recommended plan",
+                "total_time": getattr(opt, "total_time", ""),
+                "expected_laps": getattr(opt, "expected_laps", ""),
+                "pit_windows": getattr(opt, "pit_windows", ""),
+                "pit_stops": list(getattr(opt, "pit_stops", ()) or ()),
+                "recommended_fallback": True,
+            }
+        except Exception:
+            return {}
+
+    # ---- strategy engine wiring -------------------------------------------
+
+    def _stints_for_engine(self, plan_dict: dict) -> list:
+        """Convert an approved plan dict to a list of Stint objects for the engine.
+
+        Reads ``raw_stints`` (persisted by ``_persist_approved_strategy`` when a plan
+        result is available in the current session).  Returns [] when the plan lacks
+        structured data — callers must guard against an empty list.
+
+        ``ref_lap_ms=0`` is explicitly documented in Stint as "use session best", so
+        it is a valid default when no reference lap was recorded.  ``pace_threshold_ms``
+        defaults to 2 000 ms (2 s above reference before the tyre-deg alert fires).
+        """
+        try:
+            from strategy.engine import Stint as _Stint
+            raw = list(plan_dict.get("raw_stints") or [])
+            if not raw:
+                return []
+            return [
+                _Stint(
+                    stint_num=i + 1,
+                    laps=int((s or {}).get("laps") or 10),
+                    compound=str((s or {}).get("compound") or ""),
+                    ref_lap_ms=0,
+                    pace_threshold_ms=2000,
+                )
+                for i, s in enumerate(raw)
+                if s
+            ]
+        except Exception:
+            return []
+
+    def _push_plan_to_engine(self, plan_dict: dict) -> None:
+        """Load an approved plan's stints into the singleton RaceStrategyEngine.
+
+        The engine's ``build_pit_window_response`` / ``build_strategy_response`` etc.
+        return "No strategy loaded." until ``set_plan`` is called.  The bridge calls
+        this at approval time, on voice acceptance, and defensively in ``_feed_live``.
+
+        Only ``ui/live_shell_bridge.py`` calls ``set_plan`` — ``live_pit_wall.py``
+        must never do so (its advisory-only safety test scans that file).
+        """
+        try:
+            eng = getattr(self._window, "_strategy_engine", None)
+            if eng is None or not hasattr(eng, "set_plan"):
+                return
+            stints = self._stints_for_engine(plan_dict)
+            if not stints:
+                return
+            eng.set_plan(stints)
+            self._last_engine_plan_key = str(plan_dict.get("candidate_id") or "")
+        except Exception:
+            pass
 
     def _feed_track_model(self) -> None:
         """Render the guided modelling flow from the live session."""
@@ -887,6 +1102,36 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _seed_from_last_applied(self) -> None:
+        """Load the last-applied Race and Qualifying tunes onto the sheets ONCE, per scope.
+
+        On open the Garage showed a defaults-only ("standard") sheet even when the driver
+        had applied and recorded a setup for this car/track before — the working sheet is
+        the only thing startup read, and if it was empty the applied history was ignored.
+        Here we mirror ``_seed_sheets``: where the store holds nothing authored for a
+        discipline but a past applied revision exists, put the newest revision back on the
+        sheet. ``load_revision`` writes the values WITHOUT claiming they are on the car, so
+        the driver still re-enters and confirms in GT7 — nothing is silently applied.
+        """
+        try:
+            inputs = self._setups.inputs()
+            scope = inputs.scope
+            if not inputs.is_known or scope in self._seeded_history:
+                return
+            self._seeded_history.add(scope)
+            for discipline in ("race", "qualifying"):
+                if self._sheets.has_setup(scope, discipline):
+                    continue
+                revs = self._setups.revisions(discipline)
+                if not revs:
+                    continue
+                newest = max(revs, key=lambda r: int(r.get("revision", 0) or 0))
+                rev_no = int(newest.get("revision", 0) or 0)
+                if rev_no > 0:
+                    self._setups.load_revision(discipline, rev_no)
+        except Exception:
+            pass
+
     def _mirror_to_classic(self, discipline: str = "") -> None:
         """Keep the classic form showing what the store holds.
 
@@ -907,6 +1152,10 @@ class LiveShellBridge(QObject):
             gp = getattr(self._shell, "garage_page", None)
             if gp is None:
                 return
+            # Order matters: seed the last-applied revision FIRST so it wins. Both seeds
+            # are per-scope idempotent and only fill an empty sheet, so if the classic base
+            # form seeded first it would shadow the driver's last-applied setup on reopen.
+            self._seed_from_last_applied()
             self._seed_sheets()
             sheet = self._setups.sheet(self._discipline)
             # A defaults-only sheet is NOT a setup. Passing it would present numbers
@@ -924,7 +1173,212 @@ class LiveShellBridge(QObject):
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
+            self._feed_gearing(gp)
             self._feed_lock(gp)
+        except Exception:
+            pass
+
+    # ---- per-gear shift strategy -----------------------------------------
+
+    def _feed_shift_strategy(self) -> None:
+        """Compute and display the shift strategy for the active setup. Never raises.
+
+        The computation is fast (pure arithmetic, no I/O or AI) so it runs inline
+        on the Qt thread rather than on self._spawn.  A failure in any step degrades
+        gracefully: the VM builder always returns a safe INSUFFICIENT_EVIDENCE result.
+        """
+        try:
+            sv = getattr(
+                getattr(self._shell, "garage_page", None),
+                "shift_strategy_view", None)
+            if sv is None:
+                return
+            from strategy.shift_strategy_inputs import (
+                resolve_shift_inputs, compute_shift_fingerprint,
+                describe_fingerprint_change)
+            from strategy.shift_strategy_engine import compute_shift_strategy
+            from ui.shift_strategy_vm import build_shift_strategy_vm
+            from strategy.setup_engineering import resolve_car_specs
+            # FIX D: scope comes from inputs_obj.scope — no need for scope_key import.
+
+            # Inputs — always read from the RACE sheet (gearbox is set up for race,
+            # qualifying inherits the same ratios, so strategy uses race as the base).
+            inputs_obj = self._setups.inputs()
+            car = str(inputs_obj.car or "")
+            scope = str(inputs_obj.scope or "")
+            sheet = self._setups.sheet("race")
+            car_specs = resolve_car_specs(car) if car else {}
+
+            # Active-setup revision — from the authority, zero when unknown.
+            active_revision = self._shift_active_revision()
+
+            # Stored data for this scope (manual engine data + fingerprint).
+            stored = self._shift_store.get(scope) if scope else None
+            manual_engine_data = (stored or {}).get("manual_engine_data") or None
+            req_saving = float((stored or {}).get("required_fuel_saving_pct") or 0.0)
+            stored_fp = str((stored or {}).get("fingerprint") or "")
+
+            # Resolve inputs and compute.
+            shift_inputs = resolve_shift_inputs(
+                sheet, car_specs, active_revision, manual_engine_data)
+            result = compute_shift_strategy(
+                shift_inputs, required_fuel_saving_pct=req_saving)
+
+            # FIX A.4: compute specific stale text when the fingerprint changed.
+            specific_stale = ""
+            if stored_fp and stored_fp != result.configuration_fingerprint:
+                snap = (stored or {}).get("inputs_snapshot") or {}
+                specific_stale = describe_fingerprint_change(shift_inputs, snap)
+
+            vm = build_shift_strategy_vm(
+                result,
+                profile=self._shift_profile,
+                stored_fingerprint=stored_fp if stored_fp else None,
+                stale_field_text=specific_stale)
+            sv.set_view(vm)
+        except Exception:
+            pass
+
+    def _shift_active_revision(self) -> int:
+        """The active-setup revision for the Race discipline; 0 when not available."""
+        try:
+            auth = getattr(self._window, "_setup_authority", None)
+            if auth is None:
+                return 0
+            from data.setup_state_authority import SetupIdentity
+            ev = (self._window._build_event_context()
+                  if hasattr(self._window, "_build_event_context") else None)
+            ident = SetupIdentity(
+                car=str(getattr(ev, "car", "") or ""),
+                track=str(getattr(ev, "track", "") or ""),
+                layout_id=str(getattr(ev, "layout_id", "") or ""),
+            )
+            if hasattr(auth, "active_setup"):
+                active = auth.active_setup(ident, "Race")
+                return int(getattr(active, "revision", 0) or 0) if active else 0
+            if hasattr(auth, "revision_for"):
+                return int(auth.revision_for(ident, "Race") or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _on_shift_engine_seeded(self, data: dict) -> None:
+        """Persist manual engine data and recompute the shift strategy.
+
+        The timestamp (computed_at) is injected HERE — the domain and store never
+        generate a timestamp.
+        """
+        try:
+            from datetime import datetime
+            from strategy.shift_strategy_inputs import (
+                resolve_shift_inputs, compute_shift_fingerprint, inputs_snapshot)
+            from strategy.shift_strategy_engine import compute_shift_strategy
+            from strategy.setup_engineering import resolve_car_specs
+
+            inputs_obj = self._setups.inputs()
+            scope = str(inputs_obj.scope or "")
+            if not scope:
+                return
+            car = str(inputs_obj.car or "")
+            sheet = self._setups.sheet("race")
+            car_specs = resolve_car_specs(car) if car else {}
+            active_revision = self._shift_active_revision()
+            stored = self._shift_store.get(scope) or {}
+            req_saving = float(stored.get("required_fuel_saving_pct") or 0.0)
+
+            shift_inputs = resolve_shift_inputs(
+                sheet, car_specs, active_revision, dict(data or {}))
+            result = compute_shift_strategy(
+                shift_inputs, required_fuel_saving_pct=req_saving)
+
+            fingerprint = compute_shift_fingerprint(shift_inputs)
+            payload = {
+                "fingerprint": fingerprint,
+                "computed_at": datetime.utcnow().isoformat() + "Z",
+                "manual_engine_data": dict(data or {}),
+                # FIX A.4: persist snapshot so next load can name the changed field.
+                "inputs_snapshot": inputs_snapshot(shift_inputs),
+                # FIX B: populate profiles from the real computed result.
+                "qualifying_profile_json": result.qualifying_profile.to_dict(),
+                "race_profile_json":       result.race_profile.to_dict(),
+                "required_fuel_saving_pct": req_saving,
+            }
+            self._shift_store.save(scope, payload)
+        except Exception:
+            pass
+        self._feed_shift_strategy()
+
+    def _on_shift_profile_changed(self, profile: str) -> None:
+        """Remember the driver's chosen profile and re-render (no recompute needed)."""
+        p = str(profile or "").lower()
+        self._shift_profile = p if p in ("qualifying", "race") else "qualifying"
+        self._feed_shift_strategy()
+
+    def _on_shift_recalculate(self) -> None:
+        """Recompute the shift strategy and persist the result."""
+        try:
+            from datetime import datetime
+            from strategy.shift_strategy_inputs import resolve_shift_inputs, compute_shift_fingerprint
+            from strategy.shift_strategy_engine import compute_shift_strategy
+            from strategy.setup_engineering import resolve_car_specs
+
+            inputs_obj = self._setups.inputs()
+            scope = str(inputs_obj.scope or "")
+            if not scope:
+                return
+            car = str(inputs_obj.car or "")
+            sheet = self._setups.sheet("race")
+            car_specs = resolve_car_specs(car) if car else {}
+            active_revision = self._shift_active_revision()
+            stored = self._shift_store.get(scope) or {}
+            manual_engine_data = stored.get("manual_engine_data") or None
+            req_saving = float(stored.get("required_fuel_saving_pct") or 0.0)
+
+            shift_inputs = resolve_shift_inputs(
+                sheet, car_specs, active_revision, manual_engine_data)
+            result = compute_shift_strategy(
+                shift_inputs, required_fuel_saving_pct=req_saving)
+
+            fingerprint = compute_shift_fingerprint(shift_inputs)
+            payload = {
+                "fingerprint": fingerprint,
+                "computed_at": datetime.utcnow().isoformat() + "Z",
+                "manual_engine_data": manual_engine_data or {},
+                "qualifying_profile_json": {},
+                "race_profile_json":       {},
+                "required_fuel_saving_pct": req_saving,
+            }
+            self._shift_store.save(scope, payload)
+        except Exception:
+            pass
+        self._feed_shift_strategy()
+
+    def _on_shift_go_to_tab(self, tab: str) -> None:
+        """Navigate to the Garage and switch to the relevant sub-tab.
+
+        "Transmission"  — navigate to Garage + show the full setup sheet
+                          so the driver can enter gear ratios.
+        "Shift Strategy" — navigate to Garage + show the Shift Strategy tab
+                           (already visible if the driver came from it).
+        """
+        self._navigate("garage")
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is None:
+                return
+            if tab == "Shift Strategy":
+                if hasattr(gp, "show_shift_strategy_tab"):
+                    gp.show_shift_strategy_tab()
+            else:
+                # Route to the editable Transmission entry group (AREA 2 fix): the driver
+                # can now type gear ratios directly instead of landing on the read-only
+                # full setup sheet and having nowhere to enter them.
+                if hasattr(gp, "show_transmission_group"):
+                    gp.show_transmission_group()
+                elif hasattr(gp, "_btn_full") and hasattr(gp, "_stack"):
+                    # Fallback for any older garage_page without the new tab.
+                    gp._btn_full.setChecked(True)
+                    gp._stack.setCurrentIndex(1)
         except Exception:
             pass
 
@@ -970,7 +1424,17 @@ class LiveShellBridge(QObject):
                 hint = ("The setup has converged — lock it to mark it final for the event, "
                         "or keep developing.")
             else:
-                hint = ""
+                # NOT lockable yet: say WHY and what unlocks it, so the "Confirm and protect"
+                # objective isn't a dead end pointing at a Lock button that isn't shown.
+                reason = {
+                    "insufficient_evidence": "there aren't enough recorded runs on it yet",
+                    "exploring": "it's still being explored — the changes haven't settled",
+                    "improving": "it's still improving run to run — not stable yet",
+                    "regressed": "the last change made it worse — recover a stable version first",
+                }.get(state.lower(), "it hasn't converged yet")
+                hint = (f"Not ready to lock: {reason}. Apply this setup, drive and record a few "
+                        "consistent runs on it, then confirm in GT7 — the Lock button appears "
+                        "once it has converged.")
             return lockable, locked, hint
         except Exception:
             return False, False, ""
@@ -993,6 +1457,19 @@ class LiveShellBridge(QObject):
                 return d
         return ""
 
+    def _is_confirm_protect_objective(self) -> bool:
+        """True when the current engineer objective is the "confirm and protect" one.
+
+        Detected by keywords in the objective headline — same logic as
+        guidance_vm._objective_how_to so they stay in sync without a shared constant.
+        """
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+        na = view.get("next_action") or {}
+        head = str(na.get("headline") or "").lower()
+        return ("protect" in head
+                or ("confirm" in head and "setup" in head)
+                or "best-known" in head)
+
     def _feed_lock(self, garage) -> None:
         if not hasattr(garage, "set_lock_state"):
             return
@@ -1003,6 +1480,32 @@ class LiveShellBridge(QObject):
         if target == "base" and not locked:
             hint = ("The base setup is the foundation both sheets build on. Lock it to "
                     "settle the baseline for the event.")
+
+        # FIX 5b: when the "confirm and protect" objective is active, replace the generic
+        # hint with a concrete step checklist so the driver always sees EXACTLY what to do —
+        # not a blank space or a vague "keep developing" note.
+        if self._is_confirm_protect_objective():
+            disc_for_applied = target if target != "base" else self._discipline
+            try:
+                _label, applied = self._setups.active_setup(disc_for_applied)
+            except Exception:
+                applied = False
+            step1 = (
+                "1. Confirmed in GT7 ✓" if applied
+                else "1. Press “I’ve entered this in GT7” to confirm this setup is on the car"
+            )
+            if locked:
+                step2 = "2. Setup locked ✓"
+            elif lockable:
+                step2 = "2. Press “Lock this setup” — it’s ready to lock"
+            else:
+                step2 = (
+                    "2. “Lock this setup” is not yet available — "
+                    "drive and record a few consistent runs on this setup first. "
+                    "The button appears once it has converged."
+                )
+            hint = f"{step1}\n{step2}"
+
         garage.set_lock_state(lockable=lockable, locked=locked, hint=hint,
                               discipline=target,
                               lock_label=f"Lock the {target} setup")
@@ -1086,6 +1589,79 @@ class LiveShellBridge(QObject):
             pass
         self._feed_garage()
 
+    def _on_begin_qualifying(self) -> None:
+        """Actually ENTER qualifying — not just show the pit wall.
+
+        Begin Qualifying previously only navigated to the Live Pit Wall, so the app never
+        switched to the qualifying setup, never used the qualifying shift RPM, and never
+        started push-lap coaching. Now it selects the qualifying discipline (its sheet
+        values + qual upshift RPM), asserts an explicit qualifying live mode so the
+        runtime beep and the announcer's push-lap coaching use it, re-feeds the Garage,
+        then shows the live surface. The setup is not force-applied to GT7 — the driver
+        still confirms it in-game — but everything the app controls now reflects
+        qualifying.
+        """
+        self._live_session_mode = "qualifying"
+        self._discipline = "qualifying"
+        # Reflect the switch in the Garage's own selector so the two never disagree.
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is not None and hasattr(gp, "set_discipline"):
+                gp.set_discipline("qualifying")
+        except Exception:
+            pass
+        # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
+        # and the qualifying compound to the tracker, then re-feed the Garage for it.
+        self._push_practice_mode("qualifying")
+        self._feed_garage()
+        self._navigate("live_pit_wall")
+
+    def _on_start_race(self) -> None:
+        """Explicitly START THE RACE — the driver's own signal that this is a race.
+
+        Preferred over guessing from telemetry: a practice/qualifying session can look
+        like a race, and inferring it would apply the race setup/RPM/plan by mistake. If
+        any stage is still open the driver is warned and can confirm; then the app KNOWS
+        it is racing and commits the race setup, race shift RPM, and the approved plan.
+        """
+        ready, blockers = self._race_readiness()
+        if not ready and blockers:
+            from PyQt6.QtWidgets import QMessageBox
+            body = ("Some stages are not complete yet:\n\n  •  "
+                    + "\n  •  ".join(blockers)
+                    + "\n\nStart the race anyway?")
+            answer = QMessageBox.warning(
+                self._shell, "Start Race", body,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._enter_race()
+
+    def _enter_race(self) -> None:
+        """Commit to race mode: race discipline setup + race shift RPM + the race plan."""
+        self._live_session_mode = "race"
+        self._discipline = "race"
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is not None and hasattr(gp, "set_discipline"):
+                gp.set_discipline("race")
+        except Exception:
+            pass
+        self._push_practice_mode("race")
+        # Load the plan the app will race to (the approved one, else the recommendation)
+        # so the Live Pit Wall shows it and PTT pit queries answer from it.
+        try:
+            approved = self._approved_strategy() or self._recommended_plan_dict()
+            if approved:
+                self._live_accepted_plan = approved
+                if approved.get("candidate_id"):
+                    self._push_plan_to_engine(approved)
+        except Exception:
+            pass
+        self._feed_garage()
+        self._navigate("live_pit_wall")
+
     def _push_practice_mode(self, discipline: str) -> None:
         """Tell the live runtime which discipline is being practised.
 
@@ -1095,13 +1671,30 @@ class LiveShellBridge(QObject):
         selected Garage discipline is now pushed to those refs.
         """
         try:
-            is_qual = str(discipline).lower() == "qualifying"
+            # An explicit live session (Begin Qualifying, or a detected race) wins over
+            # the plain-practice default; otherwise race-vs-qual follows the selected
+            # Garage discipline. Previously this hard-coded "Practice", so the shell could
+            # never put the runtime into Qualifying — a qualifying session still beeped at
+            # the RACE RPM and the announcer never gave its qualifying push-lap cues.
+            if self._live_session_mode == "qualifying":
+                mode_str, is_qual = "Qualifying", True
+            elif self._live_session_mode == "race":
+                mode_str, is_qual = "Race", False
+            else:
+                mode_str = "Practice"
+                is_qual = str(discipline).lower() == "qualifying"
             ref = getattr(self._window, "_practice_is_qual_ref", None)
             if isinstance(ref, list) and ref:
                 ref[0] = is_qual
             mode = getattr(self._window, "_live_mode_ref", None)
             if isinstance(mode, list) and mode:
-                mode[0] = "Practice"      # a practice session, race vs qual set by the flag
+                mode[0] = mode_str
+            # Keep the announcer's session mode in step so its qualifying push-lap
+            # coaching fires in qualifying and its race pit/fuel calls fire in a race.
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "set_session_mode"):
+                announcer.set_session_mode(
+                    "qualifying" if self._live_session_mode == "qualifying" else "race")
         except Exception:
             pass
         self._push_active_compound(discipline)
@@ -1114,16 +1707,30 @@ class LiveShellBridge(QObject):
         called it, so a run driven from the new shell recorded a stale/default compound —
         a qualifying run on soft tyres was logged as the race hard the classic default
         still held. The selected discipline's setup compound is now pushed each refresh.
+
+        When the driver has picked a test compound via the run-card selector AND a run is
+        open, the test override is used instead of the sheet compound — the saved setup is
+        never mutated in that path (AREA 3 contract).
         """
         try:
             tracker = getattr(self._window, "_tracker", None)
             if tracker is None or not hasattr(tracker, "set_compound"):
                 return
             from strategy.tyre_selection import current_code
-            # The compound is a sheet value in its own right — do NOT gate on is_authored
-            # (which only looks at numeric fields), or a sheet whose only change is the
-            # tyre would never push its compound.
-            code = current_code(self._setups.sheet(discipline).as_dict())
+            # Prefer the tyre-test override whenever it is set, regardless of whether
+            # a run is open. The previous guard `and self._runs.open_run()` caused the
+            # 750ms refresh to clobber the override back to the sheet compound in the
+            # window between the driver picking a compound and pressing Start — so the
+            # recorded run was tagged with the wrong (sheet) compound (FIX 1b).
+            # The override is cleared on record/discard, so subsequent runs always start
+            # from the sheet compound unless the driver explicitly picks again.
+            if self._test_compound_override:
+                code = self._test_compound_override
+            else:
+                # The compound is a sheet value in its own right — do NOT gate on
+                # is_authored (which only looks at numeric fields), or a sheet whose only
+                # change is the tyre would never push its compound.
+                code = current_code(self._setups.sheet(discipline).as_dict())
             if code:
                 tracker.set_compound(code)
         except Exception:
@@ -1147,6 +1754,131 @@ class LiveShellBridge(QObject):
                     required=getattr(ev, "required_tyres", ()) or (),
                     race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
                 current_code(setup))
+        except Exception:
+            pass
+
+    def _feed_gearing(self, garage) -> None:
+        """Load the selected discipline's gear ratios into the Transmission entry group.
+
+        Called from _feed_garage next to _feed_tyres/_feed_shift_rpm. Per-discipline
+        separation is automatic: the sheet is keyed by discipline, so Race and Qualifying
+        hold independent gearing and the 750ms feed always loads the selected one.
+        """
+        try:
+            if not hasattr(garage, "set_gearing"):
+                return
+            sheet = self._setups.sheet(self._discipline)
+            garage.set_gearing(
+                gear_ratios=sheet.gear_ratios,
+                final_drive=float(sheet.get("final_drive") or 0.0),
+                transmission_max_speed_kmh=float(
+                    sheet.get("transmission_max_speed_kmh") or 0.0))
+        except Exception:
+            pass
+
+    def _on_gearing_changed(self, gearing: dict) -> None:
+        """Write the driver's gear-ratio entry onto the selected discipline's sheet.
+
+        Calls ``self._setups.apply`` so the change goes through the canonical clamp +
+        authority + persistence path — the same write path as every other setup change.
+        Per-discipline separation is automatic: apply is keyed on self._discipline, so
+        Race and Qualifying never share gear values.
+        """
+        if not gearing:
+            return
+        outcome = self._setups.apply(self._discipline, gearing)
+        if outcome.ok:
+            self._mirror_to_classic(self._discipline)
+        self._garage_status(outcome.reason or "Gearing updated.")
+        self.refresh()
+
+    def _on_car_ranges(self) -> None:
+        """Open the per-car min/max ranges editor from the new Garage.
+
+        Classic UI surfaced this via the Setup Builder tab; the new shell had no path
+        to it. The dialog itself is unchanged — this just opens it with the current
+        car name, and re-runs refresh() when ranges are saved so the next baseline or
+        analyse picks them up.
+        """
+        try:
+            from ui.car_ranges_dialog import CarRangesDialog
+            car = str(self._setups.inputs().car or "")
+            dlg = CarRangesDialog(car, self._shell)
+            dlg.ranges_saved.connect(lambda _cn: self.refresh())
+            dlg.exec()
+        except Exception:
+            pass
+
+    def _on_test_compound_change(self, code: str) -> None:
+        """Tag the current test run with a different compound WITHOUT modifying the saved setup.
+
+        This is a tyre TEST: the driver wants to lap on a different compound and have the
+        laps tagged correctly, but the setup itself (which owns the compound field) must not
+        change. So this handler:
+          1. calls tracker.set_compound(code) directly — same as _push_active_compound —
+             so the telemetry recorder picks up the new compound immediately.
+          2. stores _test_compound_override so _push_active_compound prefers it on every
+             750ms tick while the run is open.
+        It deliberately does NOT call self._setups.apply — the sheet's tyre_front /
+        tyre_rear are untouched.
+        """
+        try:
+            code = str(code or "").strip().upper()
+            if not code:
+                return
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is not None and hasattr(tracker, "set_compound"):
+                tracker.set_compound(code)
+            self._test_compound_override = code
+        except Exception:
+            pass
+
+    def _feed_run_compound_options(self, rc) -> None:
+        """Populate the run-card compound selector with event-allowed compounds.
+
+        Pre-selects the first un-sampled compound (a nudge toward covering all compounds)
+        but ONLY on the first call or when the allowed-compound set changes. On every
+        subsequent 750ms refresh the selector is left untouched so the driver's pick
+        is never overwritten (FIX 1a). The driver can always change their pick — the
+        pre-selection is a one-time default, not a lock.
+        """
+        try:
+            if not hasattr(rc, "set_compound_options"):
+                return
+            from strategy.tyre_selection import build_tyre_choice
+            ev = None
+            try:
+                ev = self._window._build_event_context()
+            except Exception:
+                ev = None
+            choice = build_tyre_choice(
+                discipline=self._discipline,
+                available=getattr(ev, "available_tyres", ()) or (),
+                required=getattr(ev, "required_tyres", ()) or (),
+                race_duration_minutes=float(
+                    getattr(ev, "race_duration_minutes", 0) or 0))
+            codes = [o.code for o in (choice.options or ())]
+            new_codes = tuple(codes)
+
+            # Only rebuild the combo when the allowed-compound set changes.
+            # On a stable event, codes are constant across refreshes — do nothing so the
+            # driver's current selection stays put.
+            if new_codes == self._last_compound_codes:
+                return
+            self._last_compound_codes = new_codes
+
+            # Codes changed (e.g. event just loaded / tyre regulations changed).
+            # Pre-select: use the existing override if the driver already picked, otherwise
+            # nudge toward the first un-sampled compound; only apply when no run is open
+            # (once a run is recording, the override is authoritative).
+            if self._test_compound_override and self._test_compound_override in new_codes:
+                preselected = self._test_compound_override
+            else:
+                required, sampled = self._tyre_compound_coverage()
+                sampled_up = {s.upper() for s in sampled}
+                unsampled = [c for c in codes if c.upper() not in sampled_up]
+                preselected = unsampled[0] if unsampled else ""
+            rc.set_compound_options(codes, preselected=preselected)
         except Exception:
             pass
 
@@ -1205,12 +1937,30 @@ class LiveShellBridge(QObject):
                     except Exception:
                         self._live_audio_view = None
                 audio_view = self._live_audio_view
-            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected,
-                                                     audio_view=audio_view))
+            lp.set_state(live_pit_wall_vm_from_state(
+                state, connected=connected, audio_view=audio_view,
+                race_phase=self._live_race_phase))
             # Show the approved/accepted plan — the wall looked empty because nothing
-            # about the strategy was ever fed here.
+            # about the strategy was ever fed here. When nothing was formally approved,
+            # fall back to the current recommendation so the wall always shows A plan
+            # rather than looking like the strategy was never built.
             if hasattr(lp, "show_plan"):
-                lp.show_plan(self._live_accepted_plan or self._approved_strategy())
+                lp.show_plan(self._live_accepted_plan
+                             or self._approved_strategy()
+                             or self._recommended_plan_dict())
+            # Defensive: if the singleton RaceStrategyEngine has no stints yet (e.g.
+            # the app restarted after a plan was approved last session), push the
+            # approved plan now so PTT "when do I pit" answers correctly.
+            # Guard: only when engine._stints is empty to avoid set_plan() every 750ms.
+            try:
+                eng = getattr(self._window, "_strategy_engine", None)
+                if eng is not None and not getattr(eng, "_stints", True):
+                    approved = self._live_accepted_plan or self._approved_strategy()
+                    plan_key = str(approved.get("candidate_id") or "")
+                    if plan_key and plan_key != self._last_engine_plan_key:
+                        self._push_plan_to_engine(approved)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1282,8 +2032,17 @@ class LiveShellBridge(QObject):
     def _persist_config(self) -> None:
         try:
             import config_paths
-            path = getattr(self._window, "config_path", None) or config_paths.resolve_config_path()
-            config_paths.save_config(self._config, path)
+            # Read the real window attribute (``_config_path``) first; fall back to the
+            # test-fake name. An empty/absent path means "do not persist" (tests), so skip
+            # rather than resolving a real path and polluting. NOTE the arg order:
+            # save_config(path, config) — the previous call had them swapped, so the
+            # write silently failed even when a path was present.
+            path = getattr(self._window, "_config_path", None)
+            if path is None:
+                path = getattr(self._window, "config_path", None)
+            if not path:
+                return
+            config_paths.save_config(str(path), self._config)
         except Exception:
             pass
 
@@ -1698,8 +2457,16 @@ class LiveShellBridge(QObject):
         self._navigate("live_pit_wall")
 
     def _persist_approved_strategy(self, candidate_id: str) -> None:
-        """Save the approved plan's essentials on the cycle so it reloads next launch."""
+        """Save the approved plan's essentials on the cycle so it reloads next launch.
+
+        Also enriches the persisted dict with ``raw_stints`` (list of
+        ``{laps, compound}`` dicts) when the plan result from the current session is
+        available.  ``_stints_for_engine`` reads ``raw_stints`` to build Stint objects;
+        without it the engine stays empty and PTT "when do I pit" returns the fallback
+        message.
+        """
         import time
+        plan = {}
         try:
             cid = self._runs.active_cycle_id()
             if not cid or self._db is None or not hasattr(self._db, "save_approved_strategy"):
@@ -1718,19 +2485,76 @@ class LiveShellBridge(QObject):
                     "pit_windows": opt.pit_windows, "tyres": opt.tyre_sequence,
                     "stints": list(opt.stints), "pit_stops": list(opt.pit_stops),
                 })
+            # Enrich with raw, engine-compatible stint data (laps + compound code) from
+            # the live plan result so PTT can answer "when do I pit" via
+            # RaceStrategyEngine.  Only available in the current session; a reloaded
+            # plan from DB carries its raw_stints from the previous persist call.
+            try:
+                result = getattr(getattr(self._plans, "last_plan", None), "result", None)
+                if result is not None and opt is not None:
+                    from ui.race_strategy_vm import _find_candidate
+                    cand = _find_candidate(result, opt.key)
+                    if cand is not None:
+                        laps_per = list(getattr(cand, "estimated_laps_per_stint", []) or [])
+                        comp_plan = list(getattr(cand, "compound_plan", []) or [])
+                        raw = [
+                            {"laps": int(laps_per[i]),
+                             "compound": comp_plan[i] if i < len(comp_plan) else ""}
+                            for i in range(len(laps_per))
+                        ]
+                        if raw:
+                            plan["raw_stints"] = raw
+            except Exception:
+                pass
             self._db.save_approved_strategy(cid, plan)
         except Exception:
             pass
+        # Push the plan into the singleton engine so PTT pit-window queries work.
+        # (Defensive: guard the engine push outside the DB block so a DB failure
+        # does not prevent the engine from being primed for this session.)
+        if plan:
+            self._push_plan_to_engine(plan)
 
     def _on_debrief_action(self, key: str) -> None:
         try:
+            k = (key or "").lower()
+            # The debrief is the terminal programme stage; closing it FINISHES the event.
+            if k == "close":
+                self._finish_active_event()
+                return
             dest = {"to_qualifying": "qualifying", "to_race": "race_strategy",
                     "prepare_qualifying": "qualifying", "prepare_race": "race_strategy",
-                    "continue": "garage", "close": "home", "post_review": "engineering_library"}.get(
-                (key or "").lower(), "home")
+                    "continue": "garage", "post_review": "engineering_library"}.get(
+                k, "home")
             self._navigate(dest)
         except Exception:
             pass
+
+    def _on_finish_event(self) -> None:
+        """Home 'Finish this event' — mark the active event complete."""
+        self._finish_active_event()
+
+    def _finish_active_event(self) -> None:
+        """Complete the active event through the headless service, then return Home.
+
+        Clears the live/review caches so nothing from the finished event bleeds into the
+        next one, mirroring the reset done on an event switch.
+        """
+        try:
+            result = self._events.complete_active_event()
+        except Exception:
+            result = None
+        if result is not None:
+            self._guidance_status(result.message or "")
+        self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
+        self._last_guidance_view = None
+        self._navigate("home")
+        self.refresh()
 
     def _on_library_open(self, area: str) -> None:
         """Host the real engineering panel INSIDE the new shell.

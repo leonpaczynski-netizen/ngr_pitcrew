@@ -178,6 +178,9 @@ class RaceStrategyEvidence:
     tyre_wear_samples: tuple[float, ...] = ()    # per-lap wear or pace-loss proxy
     compound_samples: dict = field(default_factory=dict)  # {compound: [lap_time_s, ...]}
 
+    # --- per-compound tyre evidence (optional, from session adapter) ----
+    compound_tyre_profiles: dict = field(default_factory=dict)  # {compound: CompoundTyreProfile}
+
     # --- derived / honesty ----------------------------------------------
     driver_consistency: float = 0.0        # coefficient of variation of lap_time_samples (0 == unknown)
     evidence_confidence: StrategyConfidence = StrategyConfidence.INSUFFICIENT_EVIDENCE
@@ -226,6 +229,10 @@ class RaceStrategyEvidence:
         if len(s) % 2 == 1:
             return s[mid]
         return (s[mid - 1] + s[mid]) / 2.0
+
+    def tyre_profile(self, compound: str):
+        """Return the CompoundTyreProfile for a compound, or None if unavailable."""
+        return self.compound_tyre_profiles.get(str(compound or "")) if self.compound_tyre_profiles else None
 
     def missing_evidence_text(self) -> list[str]:
         """Human-readable descriptions for every recorded missing-evidence code."""
@@ -278,6 +285,7 @@ def build_strategy_evidence(
     fuel_use_samples: Sequence[float] = (),
     tyre_wear_samples: Sequence[float] = (),
     compound_samples: dict | None = None,
+    compound_tyre_profiles: dict | None = None,
     no_abs: bool = False,
 ) -> RaceStrategyEvidence:
     """Build a :class:`RaceStrategyEvidence` from available event + session data.
@@ -352,6 +360,8 @@ def build_strategy_evidence(
         if no_abs:
             missing.append(ABS_DISABLED_LOCKUP_RISK)
 
+        tyre_profiles = dict(compound_tyre_profiles) if compound_tyre_profiles else {}
+
         return RaceStrategyEvidence(
             car_id=int(car_id or 0),
             track=str(track or ""),
@@ -372,6 +382,7 @@ def build_strategy_evidence(
             fuel_use_samples=fuel,
             tyre_wear_samples=wear,
             compound_samples=comp_samples,
+            compound_tyre_profiles=tyre_profiles,
             driver_consistency=consistency,
             evidence_confidence=confidence,
             missing_evidence=tuple(missing),

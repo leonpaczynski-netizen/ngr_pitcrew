@@ -1,4 +1,4 @@
-"""GT7SettingsSheet — a read-only setup view mirroring GT7's in-game Settings Sheet (F2).
+"""GT7SettingsSheet — setup view mirroring GT7's in-game Settings Sheet (F2).
 
 Drivers already know GT7's tuning screen, so the "full setup values" view replicates
 its layout: two columns of grouped sections (Tyres / Suspension / Differential on the
@@ -8,16 +8,20 @@ Front/Rear sub-columns and boxed, right-aligned values with tabular figures.
 The section data + GT7 ordering come from the canonical, pure
 ``setup_transcribe_view.build_transcribe_sections`` (no engineering logic here — this
 is presentation only). Optionally highlights fields that changed vs the parent setup.
+
+The right column also hosts an editable Transmission section (gear ratios, final drive,
+top speed) so the driver can enter gear values without leaving the full setup view.
 """
 
 from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
+    QDoubleSpinBox,
 )
 
 from ui import ngr_theme as _t
@@ -54,7 +58,16 @@ def _tabular_font(bold: bool = True) -> QFont:
 
 
 class GT7SettingsSheet(QWidget):
-    """Two-column, GT7-style read-only settings sheet."""
+    """Two-column, GT7-style settings sheet with editable Transmission section.
+
+    The read-only sections mirror GT7's in-game layout; the editable Transmission
+    section sits in the right column (under the read-only right sections) so the
+    driver can enter gear ratios without switching tabs.
+    """
+
+    #: Emitted when the driver finishes editing any gear ratio, final drive, or top speed.
+    #: Payload: {gear_ratios: [float, ...], final_drive: float, transmission_max_speed_kmh: float}
+    gearing_changed = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,15 +89,124 @@ class GT7SettingsSheet(QWidget):
         self._columns.addWidget(lw, 1)
         self._columns.addWidget(rw, 1)
         outer.addLayout(self._columns)
-        outer.addStretch(1)
+        # No addStretch(1) here — removed to fix the large empty gap below the last
+        # section on the full setup page (FIX 3). Content sizes to its natural height;
+        # the enclosing QScrollArea handles overflow without forcing a stretch.
 
         self._empty = QLabel("No setup values yet.")
         self._empty.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
         outer.addWidget(self._empty)
 
+        # Editable Transmission section — placed in the right column by set_setup()
+        # so the driver can enter gear ratios without leaving the Full setup page.
+        # It is a persistent widget (not rebuilt on each set_setup call); set_setup
+        # rescues it before clearing the column and re-adds it after.
+        self._trans_section = self._build_transmission_section()
+
+    def _build_transmission_section(self) -> QFrame:
+        """Build the editable Transmission entry box (gear ratios, final drive, top speed).
+
+        Per-discipline: Race and Qualifying hold independent gearing. The 750ms feed
+        loads whichever discipline is selected; editingFinished emits gearing_changed.
+        Leave unused gears at 0 — they are filtered in gearing_changed (>0 only).
+        """
+        box = QFrame()
+        box.setObjectName("ngrGt7Section")
+        box.setStyleSheet(
+            f"#ngrGt7Section {{ background: {_t.CARBON_RAISED}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_MD}px; }}"
+        )
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(_t.SPACE_MD, _t.SPACE_SM, _t.SPACE_MD, _t.SPACE_SM)
+        outer.setSpacing(_t.SPACE_XS)
+
+        # Section header — same style as the read-only section titles
+        title = QLabel("Transmission (entry)")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_t.TEXT_HI}; font-weight: 700; font-size: {_t.FS_LABEL}pt; "
+            f"letter-spacing: 0.5px; border-bottom: 1px solid {_t.HAIRLINE}; "
+            f"padding-bottom: 3px;"
+        )
+        outer.addWidget(title)
+
+        note = QLabel(
+            "Per-discipline gearing — Race and Qualifying are independent. "
+            "Leave unused gears at 0.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        outer.addWidget(note)
+
+        _gear_qss = (
+            f"QDoubleSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(_t.SPACE_SM)
+        grid.setVerticalSpacing(2)
+
+        self._gear_spins: list = []
+        for i, lbl in enumerate(["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]):
+            cap = QLabel(lbl)
+            cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+            cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            grid.addWidget(cap, 0, i)
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 5.000)
+            spin.setSingleStep(0.001)
+            spin.setDecimals(3)
+            spin.setSpecialValueText("—")   # "—" for unused gear
+            spin.setMinimumHeight(_t.TOUCH_MIN_H)
+            spin.setMaximumWidth(90)
+            spin.setStyleSheet(_gear_qss)
+            spin.editingFinished.connect(self._on_gearing_edited)
+            grid.addWidget(spin, 1, i)
+            self._gear_spins.append(spin)
+
+        # Final drive
+        fd_cap = QLabel("Final")
+        fd_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        fd_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(fd_cap, 0, 8)
+        self._final_drive_spin = QDoubleSpinBox()
+        self._final_drive_spin.setRange(0.0, 9.999)
+        self._final_drive_spin.setSingleStep(0.001)
+        self._final_drive_spin.setDecimals(3)
+        self._final_drive_spin.setSpecialValueText("—")
+        self._final_drive_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._final_drive_spin.setMaximumWidth(90)
+        self._final_drive_spin.setStyleSheet(_gear_qss)
+        self._final_drive_spin.editingFinished.connect(self._on_gearing_edited)
+        grid.addWidget(self._final_drive_spin, 1, 8)
+
+        # Top speed / transmission max speed
+        ts_cap = QLabel("Top speed (km/h)")
+        ts_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        ts_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(ts_cap, 0, 9)
+        self._top_speed_spin = QDoubleSpinBox()
+        self._top_speed_spin.setRange(0.0, 999.0)
+        self._top_speed_spin.setSingleStep(1.0)
+        self._top_speed_spin.setDecimals(0)
+        self._top_speed_spin.setSpecialValueText("—")
+        self._top_speed_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._top_speed_spin.setMaximumWidth(90)
+        self._top_speed_spin.setStyleSheet(_gear_qss)
+        self._top_speed_spin.editingFinished.connect(self._on_gearing_edited)
+        grid.addWidget(self._top_speed_spin, 1, 9)
+
+        outer.addLayout(grid)
+        return box
+
     def set_setup(self, d: Optional[dict], changed_fields: Iterable[str] = ()) -> None:
         """Render a setup dict in GT7 layout. ``changed_fields`` are highlighted."""
         changed = set(changed_fields or ())
+
+        # Rescue the persistent Transmission section before clearing the column so it
+        # isn't scheduled for deletion by _clear_layout.
+        self._right.removeWidget(self._trans_section)
+
         _clear_layout(self._left)
         _clear_layout(self._right)
 
@@ -102,8 +224,50 @@ class GT7SettingsSheet(QWidget):
                 self._left.addWidget(panel)
             else:
                 self._right.addWidget(panel)
+
+        # Always show the editable Transmission section in the right column, whether or
+        # not there are setup values — the driver can enter gear ratios at any time.
+        self._right.addWidget(self._trans_section)
         self._left.addStretch(1)
         self._right.addStretch(1)
+
+    # ---- editable gearing -------------------------------------------------
+
+    def set_gearing(self, gear_ratios=(), final_drive: float = 0.0,
+                    transmission_max_speed_kmh: float = 0.0) -> None:
+        """Load the discipline's gear ratios into the Transmission spins.
+
+        Blocks signals while setting so the programmatic feed does not re-emit
+        ``gearing_changed`` (same pattern as ``SetupWorkspace.set_shift_rpm``).
+        Skips the update while any spin has focus so a driver mid-edit is not
+        overwritten by the 750ms refresh feed.
+        """
+        all_spins = self._gear_spins + [self._final_drive_spin, self._top_speed_spin]
+        if any(s.hasFocus() for s in all_spins):
+            return
+        gears = list(gear_ratios or ())
+        for i, spin in enumerate(self._gear_spins):
+            spin.blockSignals(True)
+            spin.setValue(float(gears[i]) if i < len(gears) else 0.0)
+            spin.blockSignals(False)
+        self._final_drive_spin.blockSignals(True)
+        self._final_drive_spin.setValue(float(final_drive or 0.0))
+        self._final_drive_spin.blockSignals(False)
+        self._top_speed_spin.blockSignals(True)
+        self._top_speed_spin.setValue(float(transmission_max_speed_kmh or 0.0))
+        self._top_speed_spin.blockSignals(False)
+
+    def _on_gearing_edited(self) -> None:
+        """Emit when the driver commits a gear value (editingFinished, not valueChanged).
+
+        Only ratios > 0 are included in gear_ratios — zeros represent unused gears and
+        are dropped, matching ``_gears()`` in ``strategy.setup_sheet``.
+        """
+        self.gearing_changed.emit({
+            "gear_ratios": [s.value() for s in self._gear_spins if s.value() > 0],
+            "final_drive": self._final_drive_spin.value(),
+            "transmission_max_speed_kmh": self._top_speed_spin.value(),
+        })
 
     # ---- rendering --------------------------------------------------------
     def _render_section(self, sec: dict, changed: set) -> QWidget:

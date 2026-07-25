@@ -63,10 +63,13 @@ class TestSessionBacked:
 
 class TestTotalRaceTime:
     def test_one_stop_beats_two_stop(self, bench):
+        # Timed race: ranked by laps completed (descending).  1-stop loses less time
+        # in the pits, so it completes more laps and ranks higher (lower rank number).
         by_id = {s.candidate_id: s for s in bench.result.scored_candidates}
         assert "1stop" in by_id and "2stop" in by_id
-        assert (by_id["1stop"].estimated_total_time_seconds
-                < by_id["2stop"].estimated_total_time_seconds)
+        assert by_id["1stop"].rank < by_id["2stop"].rank, (
+            "1-stop should complete more laps (better rank) in a 50-min timed race"
+        )
 
     def test_recommended_is_one_stop(self, bench):
         assert bench.result.recommendation.recommended.candidate_id.startswith("1stop")

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame, QScrollArea,
 )
@@ -93,6 +93,11 @@ class ProgrammeMapPage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
+        self._scroll = scroll
+        #: last (map, expanded) rendered — the 750ms feed re-pushes an identical map
+        #: most ticks; re-rendering then would clear the layout and snap the scroll
+        #: bar to the top mid-read. Cache it and skip the rebuild when nothing changed.
+        self._rendered_key = None
         inner = QWidget()
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
@@ -157,12 +162,25 @@ class ProgrammeMapPage(QWidget):
         if not isinstance(m, ProgrammeMap):
             m = ProgrammeMap()
         self._map = m
+        # Skip the rebuild when neither the map nor the expanded rows changed — the
+        # bridge re-feeds an identical map every ~750ms, and rebuilding would clear
+        # the layout and yank the scroll bar back to the top while the driver reads.
+        key = (m, frozenset(self._expanded))
+        if key == self._rendered_key:
+            return
+        self._rendered_key = key
+
         has = m.has_programme
         for card in (self._overall_card, self._areas_card, self._next_card):
             card.setVisible(has)
         self._empty.setVisible(not has)
         if not has:
             return
+
+        # Rebuilding the rows collapses the inner content momentarily, which clamps
+        # the scroll bar; capture the position and restore it once layout settles.
+        bar = self._scroll.verticalScrollBar()
+        prev_scroll = bar.value()
 
         self._pct.setText(f"{m.overall_pct}%")
         self._headline.setText(m.headline)
@@ -184,6 +202,10 @@ class ProgrammeMapPage(QWidget):
             self._start.set_action(f"Start a {pending[0].run_name}", enabled=True)
         else:
             self._start.set_action("Everything is covered", enabled=False)
+
+        # Restore the scroll position after the layout re-lays out and the scroll
+        # range is recomputed (deferred to the next event-loop turn).
+        QTimer.singleShot(0, lambda: bar.setValue(prev_scroll))
 
     def _area_row(self, d: DomainProgress) -> QWidget:
         box = QFrame()

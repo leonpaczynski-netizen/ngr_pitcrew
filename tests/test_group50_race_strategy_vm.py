@@ -86,11 +86,18 @@ class TestViewModel:
         assert vm.confidence_reason  # non-empty why
 
     def test_total_time_formats(self, vm):
-        assert vm.estimated_total_time == "51:52.0"
+        # Timed race: total_elapsed = duration + final-lap overrun (≥ 50 min = 3000 s).
+        # 1-stop: pit_time=78s → green=2922s → 29 laps → progress=9.24s into lap 30
+        # overrun=100.44−9.24=91.2s → total=3000+91.2=3091.2s = "51:31.2".
+        # Old value (51:52.0) added pit time on top of a fixed lap count (wrong).
+        # Intermediate value (50:01.3) was below the race duration (also wrong).
+        assert vm.estimated_total_time == "51:31.2"
 
     def test_gap_to_alternatives(self, vm):
+        # Timed race: gap expressed in LAPS (more laps = better).
+        # 2-stop completes 1 fewer lap than 1-stop; gap shown as "−1 lap".
         joined = " ".join(vm.gap_to_alternatives)
-        assert "Two-stop race plan: +36.0s" in joined
+        assert "Two-stop race plan: −1 lap" in joined
 
     def test_stint_rows_format(self, vm):
         assert len(vm.stint_plan_rows) == 2
@@ -106,10 +113,13 @@ class TestViewModel:
         assert "1stop" in by_id and "2stop" in by_id
         one = by_id["1stop"]
         assert one["status"] == "Recommended"
-        assert one["total_time"] == "51:52.0"
-        assert one["gap_to_best"] == "best"
+        # Timed race: total = duration + final-lap overrun (3091.2 s = "51:31.2").
+        assert one["total_time"] == "51:31.2"
+        # Timed race: rank-1 gap chip is "best (most laps)", not "best".
+        assert one["gap_to_best"] == "best (most laps)"
         assert "refuel" in one["pit_refuel_time"]
-        assert by_id["2stop"]["gap_to_best"] == "+36.0s"
+        # 2-stop has 1 fewer lap → "−1 lap".
+        assert by_id["2stop"]["gap_to_best"] == "−1 lap"
 
     def test_evidence_rows_categorised(self, vm):
         cats = {r["label"]: r["category"] for r in vm.evidence_source_rows}

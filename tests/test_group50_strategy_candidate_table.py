@@ -79,8 +79,9 @@ class TestTable:
         vm = _vm(db, _seed(db))
         by_id = {r["candidate_id"]: r for r in vm.candidate_comparison_rows}
         assert by_id["1stop"]["total_time"] != "—"
-        assert by_id["1stop"]["gap_to_best"] == "best"
-        assert by_id["2stop"]["gap_to_best"].startswith("+")
+        # Timed race: rank-1 shows "best (most laps)"; others show "−N lap(s)".
+        assert by_id["1stop"]["gap_to_best"] == "best (most laps)"
+        assert "lap" in by_id["2stop"]["gap_to_best"]
 
     def test_pit_refuel_and_deg_shown(self, db):
         vm = _vm(db, _seed(db))

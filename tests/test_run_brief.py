@@ -16,6 +16,7 @@ import pytest
 from strategy.practice_run_recording import DOMAIN_RUN_TYPE, run_type_for_domain
 from strategy.run_brief import (
     RunBrief, brief_for_domain, brief_for_run_type, known_domains,
+    lap_progress_note,
 )
 
 
@@ -98,3 +99,49 @@ class TestRunTypeLookup:
     def test_an_unknown_run_type_falls_back_rather_than_raising(self):
         assert brief_for_run_type("something_else").run_name == "practice run"
         assert brief_for_run_type(None).run_name == "practice run"
+
+
+class TestLapProgressNote:
+    """The live 'am I done yet?' guidance shown while a practice run is recording."""
+
+    def test_before_any_lap_it_states_the_target_window(self):
+        note = lap_progress_note("5–8", 0)
+        assert "5–8" in note and "aim for" in note.lower()
+
+    def test_below_the_window_says_keep_going(self):
+        note = lap_progress_note("5–8", 3)
+        assert "3 of 5–8" in note and "keep going" in note.lower()
+
+    def test_inside_the_window_says_enough_for_a_read(self):
+        assert "enough for a read" in lap_progress_note("5–8", 6).lower()
+        # Boundaries are inclusive: the minimum counts as enough.
+        assert "enough for a read" in lap_progress_note("5–8", 5).lower()
+        assert "enough for a read" in lap_progress_note("5–8", 8).lower()
+
+    def test_past_the_window_says_end_on_a_clean_lap(self):
+        assert "end the run on a clean lap" in lap_progress_note("5–8", 12).lower()
+
+    def test_a_single_number_target_is_treated_as_the_window(self):
+        assert "aim for 3" in lap_progress_note("3 (out · flyer · in)", 0).lower()
+        assert "1 of 3" in lap_progress_note("3 (out · flyer · in)", 1)
+        assert "enough for a read" in lap_progress_note("3 (out · flyer · in)", 3).lower()
+
+    def test_a_range_buried_in_prose_is_still_read(self):
+        # "12–20, or until the tyre is done" — the tyre test's target.
+        assert "12–20" in lap_progress_note("12–20, or until the tyre is done", 0)
+        assert "keep going" in lap_progress_note("12–20, or until the tyre is done", 8).lower()
+
+    def test_prose_only_target_falls_back_to_a_completeness_reminder(self):
+        assert "full planned stint" in lap_progress_note("A full stint", 0).lower()
+        note = lap_progress_note("The planned stint length", 4)
+        assert "4 lap" in note and "full planned stint" in note.lower()
+
+    @pytest.mark.parametrize("laps", [-3, 0, 5, "bad", None])
+    def test_it_never_raises_on_odd_lap_counts(self, laps):
+        assert isinstance(lap_progress_note("5–8", laps), str)
+
+    def test_every_brief_target_yields_a_note_at_every_stage(self):
+        for d in known_domains():
+            tl = brief_for_domain(d).target_laps
+            for laps in (0, 4, 10, 25):
+                assert lap_progress_note(tl, laps)  # non-empty, never raises

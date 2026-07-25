@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import queue
+import re
 import threading
 import time
 from typing import TYPE_CHECKING, Optional
@@ -55,7 +56,13 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("rain",       ["rain", "raining", "wet", "weather", "slippery", "damp"]),
     ("damage",     ["crash", "damage", "accident", "hit the wall", "bent", "spin", "spun",
                     "minor", "major incident"]),
-    ("fuel_check",   ["fuel check", "fuel target", "fuel strategy", "burning", "spare fuel"]),
+    ("fuel_check",   ["fuel check", "fuel target", "fuel strategy", "burning", "spare fuel",
+                      "fuel to leave", "leave with", "what fuel", "fuel do i leave"]),
+    # Fuel delta — are you over/under the fuel-per-lap the plan needs, and by how much.
+    # Distinct from fuel_check (surplus-to-finish) so a driver can ask specifically about
+    # the per-lap margin. Multi-word phrases keep it above the single-word "fuel" intent.
+    ("fuel_delta",   ["fuel delta", "fuel margin", "fuel per lap", "saving fuel",
+                      "am i saving fuel", "fuel usage"]),
     ("lap_analysis", ["last lap", "how was", "analyze", "analyse", "lap review"]),
     ("coaching",     ["improve", "go faster", "coaching", "tips", "technique", "sector"]),
     ("setup_advice", ["setup", "car setup", "setup advice", "tuning", "tune",
@@ -96,6 +103,42 @@ def _keyword_weight(kw: str) -> int:
     return 10 + len(kw)
 
 
+#: A single specific topic word ("fuel", "pit") or a multi-word command scores at or
+#: above this; a lone generic filler word scores below it. Used to tell a real topic
+#: match from a filler-only match.
+_STRONG_FLOOR = 10
+
+#: When a heard keyword-bag lights up this many DIFFERENT specific topics, the recogniser
+#: has almost certainly returned noise (real PTT logs show bags like "tune time how am i
+#: where weather when pit ... pace pit stop how long"). Firing any one confident answer
+#: from such a bag is worse than asking the driver to say it again.
+_AMBIGUOUS_DISTINCT = 3
+
+#: A filler-only phrase ("how am i going") is a legitimate short question; the same
+#: filler words scattered through a long bag are noise. Above this token count a
+#: generic-only match is treated as unclear rather than answered.
+_WEAK_MAX_TOKENS = 6
+
+_TOKEN_RE = re.compile(r"[a-z']+")
+
+
+def _intent_scores(text: str) -> dict[str, tuple[int, int]]:
+    """Map every matched intent to its (strength, -list_order) key.
+
+    Strength is the weight of the STRONGEST matched keyword for that intent, so a
+    specific topic word beats a generic filler word regardless of list order.
+    """
+    lower = text.lower()
+    scores: dict[str, tuple[int, int]] = {}
+    for order, (intent, keywords) in enumerate(_INTENT_KEYWORDS):
+        matched = [kw for kw in keywords if kw in lower]
+        if not matched:
+            continue
+        strength = max(_keyword_weight(kw) for kw in matched)
+        scores[intent] = (strength, -order)
+    return scores
+
+
 def _match_intent(text: str) -> str:
     """Pick the intent whose STRONGEST matched keyword is the most specific.
 
@@ -103,17 +146,41 @@ def _match_intent(text: str) -> str:
     equally-specific matches — but a specific topic word now beats a generic filler word
     regardless of which intent happens to be listed first.
     """
-    lower = text.lower()
-    best_intent, best_key = "", (0, 0)
-    for order, (intent, keywords) in enumerate(_INTENT_KEYWORDS):
-        matched = [kw for kw in keywords if kw in lower]
-        if not matched:
-            continue
-        strength = max(_keyword_weight(kw) for kw in matched)
-        key = (strength, -order)          # stronger wins; earlier list order breaks ties
-        if key > best_key:
-            best_key, best_intent = key, intent
-    return best_intent
+    scores = _intent_scores(text)
+    if not scores:
+        return ""
+    return max(scores, key=lambda i: scores[i])
+
+
+def match_intent_with_confidence(text: str) -> tuple[str, str]:
+    """Resolve an intent AND how much to trust it against a noisy keyword-bag.
+
+    Returns ``(intent, confidence)`` where confidence is ``"high"`` (answer it) or
+    ``"low"`` (ask the driver to say it again). The offline recogniser routinely returns
+    a bag of many weak keywords; a bag is treated as unclear when either
+
+    * it lights up ``_AMBIGUOUS_DISTINCT`` or more different specific topics (the classic
+      noisy bag — several unrelated race questions at once), or
+    * only generic filler words matched AND the phrase is long (filler scattered through
+      noise, not a genuine short "how am i going").
+
+    De-duped token counting keeps a repeated word from inflating the "long bag" signal.
+    A clean single-topic question ("how much fuel", "should i pit", "what position")
+    always comes back ``"high"``. Better to ask again than to answer the wrong question.
+    """
+    scores = _intent_scores(text)
+    if not scores:
+        return "", "low"
+    best = max(scores, key=lambda i: scores[i])
+    best_strength = scores[best][0]
+    distinct_specific = sum(1 for strength, _ in scores.values() if strength >= _STRONG_FLOOR)
+    n_tokens = len(set(_TOKEN_RE.findall(text.lower())))
+
+    if distinct_specific >= _AMBIGUOUS_DISTINCT:
+        return best, "low"
+    if best_strength < _STRONG_FLOOR and n_tokens > _WEAK_MAX_TOKENS:
+        return best, "low"
+    return best, "high"
 
 
 def _build_response(intent: str, tracker: "RaceStateTracker") -> str:
@@ -311,6 +378,20 @@ def _recognise(audio_bytes: bytes, sample_rate: int, backend: str = "sphinx") ->
     what this did — reliably produced text that matched no keyword at all. Free-form is
     kept as a fallback so an unusual phrasing still has a chance.
     """
+    # PRIMARY: offline SAPI command-grammar recognition. Command-and-control against the
+    # fixed phrase list is far more reliable than PocketSphinx keyword-spotting (which
+    # pins ~72% of the vocabulary to a threshold it can never clear), so it is tried
+    # first. It returns None on a non-Windows box / unavailable SAPI / no match, in which
+    # case we fall through to the PocketSphinx path below — never worse than before.
+    try:
+        from voice.sapi_command_recognizer import recognize_wav_bytes as _sapi_recognise
+        sapi_text = _sapi_recognise(audio_bytes, sample_rate, sample_width=2)
+        if sapi_text:
+            print(f"[QueryListener] heard (SAPI grammar): {sapi_text!r}")
+            return sapi_text
+    except Exception as _e:  # pragma: no cover - defensive
+        print(f"[QueryListener] SAPI grammar unavailable — {_e}")
+
     if not _SR_OK or _recogniser is None:
         print("[QueryListener] SpeechRecognition not installed")
         return None
@@ -562,7 +643,17 @@ class QueryListener(threading.Thread):
         self._announcer.play_beep(wav_path="pit_radio.wav", interrupt=False,
                                   mute_bypass=True, priority=0)
 
-        intent = _match_intent(text)
+        intent, confidence = match_intent_with_confidence(text)
+        if not intent or confidence == "low":
+            # A noisy keyword-bag or a filler-only phrase — better to ask again than to
+            # confidently answer the wrong race question.
+            self._announcer.announce(
+                "Say again — I did not catch a clear request.",
+                Priority.HIGH, "query", 0.0, interrupt=True,
+            )
+            self._emit_ptt_status("RADIO READY")
+            print(f"[QueryListener] unclear request ({confidence}) — asked to repeat")
+            return
         se = self._strategy_engine
         da = self._driving_advisor
         tr = self._tracker
@@ -582,6 +673,10 @@ class QueryListener(threading.Thread):
             response = se.handle_damage_report(text)
         elif intent == "fuel_check" and se is not None:
             response = se.build_fuel_check_response()
+        elif intent == "fuel_delta" and se is not None:
+            response = se.build_fuel_delta_response()
+        elif intent == "fuel_delta" and se is None:
+            response = "No strategy loaded, so I cannot compare fuel to a plan."
         elif intent == "lap_analysis" and da is not None:
             response = da.build_last_lap_response()
         elif intent == "coaching" and da is not None:

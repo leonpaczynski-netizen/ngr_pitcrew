@@ -116,6 +116,9 @@ class RaceStrategyEngine:
         self._slow_lap_count = 0
         self._fast_fuel_count = 0
 
+        # Proactive per-lap status cue state (concise pace + fuel-margin update)
+        self._proactive_lap_counter = 0
+
         # Post-damage monitoring state
         self._post_damage_laps = 0
         self._pre_damage_ref_ms = 0
@@ -198,6 +201,7 @@ class RaceStrategyEngine:
             self._last_avg_fuel_ref = 0.0
             self._slow_lap_count = 0
             self._fast_fuel_count = 0
+            self._proactive_lap_counter = 0
             self._post_damage_laps = 0
             self._pre_damage_ref_ms = 0
             self._damage_pit_recommended = False
@@ -296,8 +300,11 @@ class RaceStrategyEngine:
             stint = self._active_stint()
             if stint is not None:
                 ref = stint.ref_lap_ms if stint.ref_lap_ms > 0 else best
-                if ref > 0 and avg_recent > ref + stint.pace_threshold_ms:
-                    msg += " Tyre performance is below reference — consider pitting."
+                if ref > 0:
+                    plan_delta_s = (avg_recent - ref) / 1000.0
+                    msg += f" That is {plan_delta_s:+.1f} seconds against the plan's target lap."
+                    if avg_recent > ref + stint.pace_threshold_ms:
+                        msg += " Tyre performance is below reference — consider pitting."
             return msg
 
     def handle_rain_report(self) -> str:
@@ -359,15 +366,57 @@ class RaceStrategyEngine:
             fuel_needed = avg * laps_remaining * multiplier
             fuel_have = self._tracker.last_fuel
             surplus = fuel_have - fuel_needed
+            # Concrete actionable number for the NEXT stop: what to leave the pits with.
+            active = self._active_stint()
+            leave_str = ""
+            if active is not None:
+                target = self._fuel_target_for_next(active)
+                if target > 0:
+                    leave_str = f" At your next stop, leave with about {math.ceil(target)} litres."
             if surplus > avg:
                 return (f"Fuel check: you have {surplus:.1f} litres spare. "
-                        f"You can push harder or save time in the next pit stop.")
+                        f"You can push harder or save time in the next pit stop.{leave_str}")
             elif surplus < -avg:
                 return (f"Fuel warning: you are {abs(surplus):.1f} litres short of strategy. "
-                        f"Lift and coast, or plan an extra pit stop.")
+                        f"Lift and coast, or plan an extra pit stop.{leave_str}")
             else:
                 return (f"Fuel is on strategy. {fuel_have:.1f} litres remaining, "
-                        f"need approximately {fuel_needed:.1f} to finish.")
+                        f"need approximately {fuel_needed:.1f} to finish.{leave_str}")
+
+    def build_fuel_delta_response(self) -> str:
+        """Answer "am I over/under the fuel the plan needs, and by how much per lap".
+
+        Compares actual burn (``avg_fuel_per_lap``) against the affordable rate — the fuel
+        on board divided by the laps left in the plan — and states the per-lap delta in
+        litres plus roughly how many laps that puts the driver over or short at the flag.
+        Read-only advice: it reports numbers, it changes no plan and applies nothing.
+        """
+        with self._lock:
+            avg = self._tracker.avg_fuel_per_lap
+            if avg <= 0:
+                return "Not enough data yet for a fuel delta."
+            if not self._stints:
+                return "No strategy loaded, so I cannot compare fuel to a plan."
+            laps_remaining = self._laps_remaining_in_plan()
+            fuel_have = self._tracker.last_fuel
+            if laps_remaining <= 0:
+                return f"You are burning {avg:.2f} litres per lap. No laps left in the plan to compare."
+            affordable = fuel_have / laps_remaining
+            delta = avg - affordable  # positive => burning more than the plan can afford
+            if abs(delta) < 0.03:
+                return (f"Fuel delta is flat. Burning {avg:.2f} litres a lap, "
+                        f"the plan allows {affordable:.2f}. You are on the number.")
+            if delta > 0:
+                shortfall = avg * laps_remaining - fuel_have
+                short_laps = shortfall / avg if avg > 0 else 0.0
+                return (f"Fuel is {delta:.2f} litres a lap heavy. Burning {avg:.2f}, "
+                        f"the plan needs {affordable:.2f}. Save {delta:.2f} a lap by lifting "
+                        f"and coasting, or you finish about {short_laps:.0f} lap(s) short.")
+            spare = fuel_have - avg * laps_remaining
+            spare_laps = spare / avg if avg > 0 else 0.0
+            return (f"Fuel is {abs(delta):.2f} litres a lap to the good. Burning {avg:.2f}, "
+                    f"the plan allows {affordable:.2f}. You can push, "
+                    f"roughly {spare_laps:.0f} lap(s) in hand at this pace.")
 
     # ------------------------------------------------------------------
     # Accessors for UI
@@ -394,6 +443,14 @@ class RaceStrategyEngine:
             if not s.completed:
                 return s
         return None
+
+    def _laps_remaining_in_plan(self) -> int:
+        """Laps left from now to the end of the last planned stint (0 if no plan)."""
+        if not self._stints:
+            return 0
+        end = self._stints[-1].end_lap
+        done = self._tracker.laps_recorded
+        return max(0, end - done)
 
     def _next_compound(self, current_stint: Stint) -> str:
         idx = self._stints.index(current_stint)
@@ -480,6 +537,7 @@ class RaceStrategyEngine:
             self._check_pit_window(stint, laps_recorded)
             self._check_tyre_degradation(stint, record, laps_recorded)
             self._check_lap_targets(record, stint)
+            self._check_proactive_cue(record, stint, laps_recorded)
 
         self._check_damage_pace()
         self._check_fuel_drift()
@@ -694,6 +752,53 @@ class RaceStrategyEngine:
                         msg, Priority.HIGH, "strategy_fuel_alert", 45.0)
             else:
                 self._fast_fuel_count = 0
+
+    def _check_proactive_cue(self, record, stint: Stint, laps_recorded: int) -> None:
+        """Speak a concise per-lap status — pace delta and fuel margin — unprompted.
+
+        Deliberately quiet: fires at most every third lap, carries a 60s announcer
+        cooldown, and only on "settled" laps away from a pit window, so it never talks
+        over the box / degradation / fuel-alert calls that own the important moments.
+        Advisory only — it reports the current margins and changes nothing.
+        """
+        self._proactive_lap_counter += 1
+        if self._proactive_lap_counter % 3 != 0:
+            return
+        if len(self._recent_lap_times) < 3:
+            return
+        # Stay silent near a stop — the pit-window calls own those laps.
+        if stint.end_lap - laps_recorded <= 2:
+            return
+
+        parts: list[str] = []
+
+        ref = stint.ref_lap_ms if stint.ref_lap_ms > 0 else self._tracker.best_lap_ms
+        if ref > 0:
+            avg_recent = mean(self._recent_lap_times[-3:])
+            d = (avg_recent - ref) / 1000.0
+            if abs(d) < 0.15:
+                parts.append("pace on target")
+            elif d > 0:
+                parts.append(f"pace {d:.1f} off target")
+            else:
+                parts.append(f"pace {abs(d):.1f} under target")
+
+        avg_fuel = self._tracker.avg_fuel_per_lap
+        laps_remaining = self._laps_remaining_in_plan()
+        if avg_fuel > 0 and laps_remaining > 0:
+            affordable = self._tracker.last_fuel / laps_remaining
+            fd = avg_fuel - affordable
+            if abs(fd) < 0.05:
+                parts.append("fuel on the number")
+            elif fd > 0:
+                parts.append(f"fuel plus {fd:.1f} a lap")
+            else:
+                parts.append(f"fuel minus {abs(fd):.1f} a lap")
+
+        if not parts:
+            return
+        msg = ", ".join(parts).capitalize() + "."
+        self._announcer.announce(msg, Priority.MEDIUM, "strategy_proactive_status", 60.0)
 
     def _check_damage_pace(self) -> None:
         """Monitor pace after a damage report; recommend pit if pace has degraded."""

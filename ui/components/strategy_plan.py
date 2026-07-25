@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayout
+from PyQt6.QtWidgets import (QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayout,
+                             QLayout)
 
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading, Card
@@ -76,6 +77,9 @@ class StrategyPlanView(QWidget):
     build_requested = pyqtSignal()
     #: The driver chose a plan (candidate id) — the recommendation is advice, not a rule.
     plan_selected = pyqtSignal(str)
+    #: Explicitly START THE RACE — the app then KNOWS it is a race (not a mis-detected
+    #: practice session): race setup + race shift RPM, and the approved plan applied.
+    start_race_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,6 +89,11 @@ class StrategyPlanView(QWidget):
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
         self._root.setSpacing(_t.SPACE_MD)
+        # The page lives in a width-resizable QScrollArea, which under-reports the height
+        # of word-wrapped labels and would otherwise squeeze the plan cards below their
+        # real content height — the cards then paint on top of each other. Demand the full
+        # height so overflow scrolls instead of overlapping.
+        self._root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         top = QHBoxLayout()
         top.addWidget(SectionHeading("RACE STRATEGY", level=1))
@@ -121,11 +130,50 @@ class StrategyPlanView(QWidget):
         self._approve = PrimaryActionButton()
         self._approve.clicked.connect(lambda: self.approve_requested.emit())
         act.addWidget(self._approve)
+        # Start Race is the explicit "we are racing now" commit — the driver's own signal
+        # that this is a race, so the app never mistakes a practice session for one. Only
+        # shown once a plan exists; the bridge decides whether prerequisites are met or
+        # warns first.
+        self._start_race = SecondaryActionButton("Start Race")
+        self._start_race.clicked.connect(lambda: self.start_race_requested.emit())
+        act.addWidget(self._start_race)
         act.addStretch(1)
         self._root.addLayout(act)
+
+        # Readiness caption under the actions: green when every stage is done, amber when
+        # something is still open (Start Race then warns before committing).
+        self._race_ready = QLabel("")
+        self._race_ready.setWordWrap(True)
+        self._race_ready.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._race_ready.setVisible(False)
+        self._root.addWidget(self._race_ready)
         self._root.addStretch(1)
 
         self.set_plan(StrategyPlanVM())
+
+    def set_race_readiness(self, ready: bool, blockers: Tuple[str, ...] = ()) -> None:
+        """Reflect whether every stage is complete before the race.
+
+        The Start Race button stays clickable either way (so the driver can still commit
+        with a warning), but the caption tells them where they stand.
+        """
+        blockers = tuple(str(b) for b in (blockers or ()) if str(b))
+        has_plan = self._vm.has_plan
+        self._start_race.setVisible(has_plan)
+        if not has_plan:
+            self._race_ready.setVisible(False)
+            return
+        if ready and not blockers:
+            self._race_ready.setText("✓ Ready to race — every stage is complete.")
+            self._race_ready.setStyleSheet(
+                f"color: {_t.NGR_GREEN}; font-size: {_t.FS_CAPTION}pt; font-weight: 600;")
+        else:
+            self._race_ready.setText(
+                "Not everything is done yet — Start Race will confirm first:  "
+                + "  ·  ".join(blockers))
+            self._race_ready.setStyleSheet(
+                f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt; font-weight: 600;")
+        self._race_ready.setVisible(True)
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") what the last build attempt did."""
@@ -171,10 +219,18 @@ class StrategyPlanView(QWidget):
                                  enabled=vm.has_plan)
         self._build.set_action("Rebuild the race plan" if vm.has_plan
                                else "Build the race plan", enabled=True)
+        # Start Race only makes sense once a plan exists; readiness detail is refreshed
+        # separately via set_race_readiness (which the bridge calls each feed).
+        self._start_race.setVisible(vm.has_plan)
+        if not vm.has_plan:
+            self._race_ready.setVisible(False)
 
     # ---- cards ------------------------------------------------------------
     def _option_card(self, opt: StrategyOption) -> QWidget:
         card = Card()
+        # Grow to fit content rather than let the scroll area compress the rows onto
+        # each other (see the _root note above).
+        card.body.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         card.setStyleSheet(
             f"#ngrCard {{ background: {_t.CARBON_RAISED}; "
             f"border: 1px solid {_t.HAIRLINE}; "
@@ -233,10 +289,13 @@ class StrategyPlanView(QWidget):
             cap = QLabel("Pit stops")
             cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
             card.body.addWidget(cap)
-            body = QLabel("•  " + "\n•  ".join(opt.pit_stops))
-            body.setWordWrap(True)
-            body.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
-            card.body.addWidget(body)
+            # One label per stop — a single \n-joined block is the least predictable
+            # thing to size under word-wrap in the scroll area, so keep the stops discrete.
+            for stop in opt.pit_stops:
+                line = QLabel("•  " + str(stop))
+                line.setWordWrap(True)
+                line.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+                card.body.addWidget(line)
         if opt.summary:
             s = QLabel(opt.summary)
             s.setWordWrap(True)

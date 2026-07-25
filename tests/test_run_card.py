@@ -127,3 +127,32 @@ class TestRunCardShowsHowToDriveIt:
             c = RunCard()
             c.set_run(RunCardVM(objective=b.objective, monitor=b.monitor))
             assert "whatever" not in c._monitor.text().lower()
+
+
+class TestRunCardLiveSessionGuidance:
+    """UAT-8: while a run records, the driver wants to know if they have run enough
+    laps and how hard to push — not just "9 laps so far"."""
+
+    def test_recording_shows_the_lap_note_and_push_reminder(self, qapp):
+        c = RunCard()
+        c.set_run(RunCardVM.from_run_plan(_plan()))
+        c.set_recording("Coaching run 1", laps=3,
+                        lap_note="3 of 5–8 laps — keep going.",
+                        push="Qualifying commitment on each clean lap")
+        assert c._run_guidance.isHidden() is False
+        assert "keep going" in c._run_guidance.text().lower()
+        assert "Push: Qualifying commitment" in c._run_guidance.text()
+
+    def test_ending_the_run_hides_the_guidance(self, qapp):
+        c = RunCard()
+        c.set_run(RunCardVM.from_run_plan(_plan()))
+        c.set_recording("Coaching run 1", laps=3, lap_note="3 of 5–8 laps — keep going.")
+        assert c._run_guidance.isHidden() is False
+        c.set_recording("")   # run ended
+        assert c._run_guidance.isHidden() is True
+
+    def test_guidance_stays_hidden_when_there_is_nothing_to_say(self, qapp):
+        c = RunCard()
+        c.set_run(RunCardVM.from_run_plan(_plan()))
+        c.set_recording("Coaching run 1", laps=3)   # no lap_note / push supplied
+        assert c._run_guidance.isHidden() is True

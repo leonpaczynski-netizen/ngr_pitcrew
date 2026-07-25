@@ -43,8 +43,13 @@ class TestFullScenario:
         assert check.tyre_proxy_found
 
     def test_one_vs_two_stop_comparison(self, check):
-        assert check.one_stop_total_time == "51:52.0"
-        assert check.two_stop_total_time == "52:28.0"
+        # Timed race: total = duration + final-lap overrun (always ≥ race duration).
+        # 1-stop: 3000 + 91.2 s overrun = 3091.2 s = "51:31.2".
+        # 2-stop: 3000 + 28.8 s overrun = 3028.8 s = "50:28.8".
+        # Old buggy values ("51:52.0", "52:28.0") added pit time on top of fixed laps.
+        # Intermediate values ("50:01.3", "48:57.7") were below the duration (wrong).
+        assert check.one_stop_total_time == "51:31.2"
+        assert check.two_stop_total_time == "50:28.8"
         assert check.candidate_count >= 2
 
     def test_recommended_is_one_stop(self, check):

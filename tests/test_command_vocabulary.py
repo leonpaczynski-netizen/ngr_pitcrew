@@ -11,7 +11,9 @@ from voice.command_vocabulary import (
     EXTRA_PHRASES, candidate_phrases, dictionary_words, keyword_entries,
     phrase_is_pronounceable, sensitivity_for,
 )
-from voice.query_listener import _INTENT_KEYWORDS, _match_intent
+from voice.query_listener import (
+    _INTENT_KEYWORDS, _match_intent, match_intent_with_confidence,
+)
 
 
 class TestDictionary:
@@ -120,3 +122,61 @@ class TestIntentSpecificityBeatsListOrder:
 
     def test_nothing_matched_returns_empty(self):
         assert _match_intent("hello there engineer") == ""
+
+    def test_fuel_to_leave_routes_to_the_strategy_fuel_check(self):
+        assert _match_intent("what fuel do i leave with") == "fuel_check"
+        assert _match_intent("fuel to leave with") == "fuel_check"
+
+    def test_fuel_delta_questions_route_to_the_fuel_delta_intent(self):
+        assert _match_intent("what is my fuel delta") == "fuel_delta"
+        assert _match_intent("am i saving fuel") == "fuel_delta"
+        assert _match_intent("fuel per lap") == "fuel_delta"
+
+
+class TestNoisyBagConfidence:
+    """Real PTT logs return big noisy keyword-bags. The recogniser must reliably pull the
+    intended race intent out of a bag, and must ASK AGAIN rather than confidently answer
+    the wrong question when the bag only carries filler or lights up many unrelated topics."""
+
+    def test_clean_single_topic_questions_are_high_confidence(self):
+        for phrase, intent in [
+            ("how much fuel", "fuel"),
+            ("what position am i", "position"),
+            ("when should i pit", "pit"),
+            ("how are the tyre temps going", "tyre_state"),
+            ("what is the weather", "rain"),
+        ]:
+            got, conf = match_intent_with_confidence(phrase)
+            assert got == intent, phrase
+            assert conf == "high", phrase
+
+    def test_a_short_filler_only_pace_question_still_answers(self):
+        # "how am i going" carries only generic words but is a genuine short question.
+        got, conf = match_intent_with_confidence("how am i going")
+        assert got == "pace"
+        assert conf == "high"
+
+    def test_a_noisy_bag_of_many_topics_asks_again(self):
+        # From the user's race log — many unrelated race topics at once.
+        bag = ("tune time how am i where weather when pit minor "
+               "what is the weather spin pace pit stop how long tune")
+        _got, conf = match_intent_with_confidence(bag)
+        assert conf == "low"
+
+    def test_a_bag_the_recogniser_still_resolves_stays_answerable(self):
+        # This one resolved correctly in the field ("what position" -> P2); it must NOT
+        # be thrown away — only two topics (position, setup) are present.
+        got, conf = match_intent_with_confidence(
+            "tune clock what position position what position am i")
+        assert got == "position"
+        assert conf == "high"
+
+    def test_a_long_bag_of_only_filler_words_asks_again(self):
+        _got, conf = match_intent_with_confidence(
+            "how how long where when clock how many how am i remaining time")
+        assert conf == "low"
+
+    def test_nothing_recognised_asks_again(self):
+        got, conf = match_intent_with_confidence("hello there engineer")
+        assert got == ""
+        assert conf == "low"

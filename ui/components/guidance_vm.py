@@ -75,6 +75,54 @@ _EVIDENCE_RUN: dict[str, tuple[str, str]] = {
 }
 
 
+#: A short, glanceable CTA per nav surface. A QPushButton can't word-wrap, so when an
+#: objective's own headline is too long to fit the 360px engineer column (e.g. the
+#: convergence objective "Confirm and protect the current best-known setup"), the button
+#: gets one of these short verbs and the full headline stays in the wrapping objective label.
+_SURFACE_CTA: dict[str, str] = {
+    "setup": "Open the Garage",
+    "garage": "Open the Garage",
+    "practice": "Go to Practice",
+    "strategy": "Open Strategy",
+    "review": "Open Review",
+    "qualifying": "Go to Qualifying",
+    "race": "Go to the Race",
+    "debrief": "Open Debrief",
+    "home": "Go to Home",
+}
+
+#: How-to direction for non-evidence objectives, matched on headline keywords. The domain
+#: rationale explains WHY; the driver asked what to actually DO. Keyed loosely so wording
+#: tweaks upstream don't silently drop the guidance.
+def _objective_how_to(headline: str, surface: str) -> str:
+    h = (headline or "").strip().lower()
+    if "protect" in h or ("confirm" in h and "setup" in h) or "best-known" in h:
+        # Name the EXACT buttons so the driver is never lost in the Garage. The two
+        # real actions are: CONFIRM = “I’ve entered this in GT7”; PROTECT = “Lock this setup”
+        # (only shown once the setup has converged). Step the driver through both.
+        return (
+            "In the Garage: press “I’ve entered this in GT7” to confirm this setup "
+            "is on the car, then press “Lock this setup” to protect it for the event. "
+            "The Lock button appears once the setup has converged — if it isn’t there "
+            "yet, drive and record a few consistent runs on this setup first."
+        )
+    return ""
+
+
+#: Longest headline that fits the 360px engineer column as a button label. Imperative CTAs
+#: ("Lock the qualifying setup", 25) fit; a descriptive sentence ("Confirm and protect the
+#: current best-known setup", 48) does not and gets a short surface verb instead.
+_CTA_FIT_CHARS = 32
+
+
+def _short_cta(label: str, surface: str) -> str:
+    """A button-safe CTA: the label itself if it fits, else a surface verb."""
+    label = (label or "").strip()
+    if label and len(label) <= _CTA_FIT_CHARS:
+        return label
+    return _SURFACE_CTA.get((surface or "").strip().lower(), label or "Continue")
+
+
 def evidence_domain_in(headline: str) -> str:
     """The evidence domain named by an objective headline, or "" if it isn't one."""
     h = (headline or "").strip().lower()
@@ -213,6 +261,15 @@ class EngineerGuidanceVM:
                     message = (f"No {run_name} has been recorded yet. Apply a setup, drive a "
                                f"{run_name}, then record it — that is what builds the evidence.")
                 explanation = detail or explanation
+            else:
+                # Non-evidence objective (e.g. convergence "Confirm and protect…"): keep the
+                # full headline in the wrapping objective label, give the button a short verb
+                # so it never clips, and surface concrete how-to direction where we have it.
+                primary_label = _short_cta(headline, surface)
+                how_to = _objective_how_to(headline, surface)
+                if how_to:
+                    explanation = detail or explanation
+                    message = how_to
 
             return cls(
                 message=message,

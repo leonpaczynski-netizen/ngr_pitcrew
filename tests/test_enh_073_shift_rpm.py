@@ -49,6 +49,22 @@ def test_race_is_not_above_qualifying():
         assert r.race_rpm <= r.qualifying_rpm
 
 
+def test_qualifying_is_the_max_attack_point_and_race_short_shifts():
+    # Quali shifts right at the car's indicator (one-lap attack); race shifts earlier.
+    r = recommend_shift_rpm(rpm_alert_max=7500)
+    assert r.qualifying_rpm == 7500          # max attack, unchanged
+    assert r.race_rpm < r.qualifying_rpm     # race short-shifts for fuel
+    assert "fuel" in r.rationale.lower()
+
+
+def test_race_short_shift_is_anchored_above_peak_power_when_known():
+    # With peak-power data the race point stays inside the power band: above peak
+    # power, below the qualifying point.
+    r = recommend_shift_rpm(rpm_alert_max=8000, power_rpm=6000)
+    assert 6000 < r.race_rpm < r.qualifying_rpm
+    assert r.qualifying_rpm == 8000
+
+
 def test_never_raises_on_garbage():
     r = recommend_shift_rpm(rpm_alert_max="nonsense", power_rpm=None, rev_limit_rpm=-5)
     assert r.confidence == ShiftRpmConfidence.NONE

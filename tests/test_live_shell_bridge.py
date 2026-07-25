@@ -157,3 +157,95 @@ class TestBridgeWriteSide:
         before = b._setups.sheet("race").as_dict()
         b._on_apply({})
         assert b._setups.sheet("race").as_dict() == before
+
+
+class _Announcer:
+    def __init__(self):
+        self.mode = None
+    def set_session_mode(self, mode):
+        self.mode = mode
+
+
+class TestLiveSessionMode:
+    """UAT: 'Begin quali doesn't start quali' and 'the race strat wasn't loaded'. The
+    shell must actually assert the live session mode (Qualifying / Race) that drives the
+    shift-beep RPM and the announcer, instead of always saying Practice."""
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        # The runtime shift-beep refs + announcer the bridge writes into.
+        win._practice_is_qual_ref = [False]
+        win._live_mode_ref = ["Race"]
+        win._announcer = _Announcer()
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()
+        return shell, win, b
+
+    def test_plain_practice_follows_the_selected_discipline(self, qapp):
+        _shell, win, b = self._wired(qapp)
+        b._on_discipline("qualifying")
+        assert win._live_mode_ref[0] == "Practice"
+        assert win._practice_is_qual_ref[0] is True
+        b._on_discipline("race")
+        assert win._practice_is_qual_ref[0] is False
+
+    def test_begin_qualifying_enters_qualifying_mode(self, qapp):
+        shell, win, b = self._wired(qapp)
+        b._on_begin_qualifying()
+        assert b._live_session_mode == "qualifying"
+        assert b._discipline == "qualifying"
+        assert win._live_mode_ref[0] == "Qualifying"
+        assert win._practice_is_qual_ref[0] is True
+        assert win._announcer.mode == "qualifying"
+        # It shows the live surface.
+        assert shell.current_destination() == "live_pit_wall"
+
+    def test_qualifying_mode_survives_a_refresh(self, qapp):
+        """The 750ms refresh used to stomp the mode back to Practice every tick."""
+        _shell, win, b = self._wired(qapp)
+        b._on_begin_qualifying()
+        b.refresh()
+        assert win._live_mode_ref[0] == "Qualifying"
+        assert win._practice_is_qual_ref[0] is True
+
+    def test_telemetry_never_auto_asserts_race_mode(self, qapp):
+        """A RACING phase must NOT flip the app into race mode — a practice/qualifying
+        session can look like RACING, and race start is now an explicit driver action."""
+        _shell, win, b = self._wired(qapp)
+        b._on_race_state("RACING")
+        assert b._live_session_mode is None
+        # But the phase is captured so the pit wall can show IN PIT.
+        b._on_race_state("IN PIT")
+        assert b._live_race_phase == "IN PIT"
+
+    def test_start_race_enters_race_mode_explicitly(self, qapp):
+        shell, win, b = self._wired(qapp)
+        b._enter_race()
+        assert b._live_session_mode == "race"
+        assert b._discipline == "race"
+        assert win._live_mode_ref[0] == "Race"
+        assert win._practice_is_qual_ref[0] is False
+        assert win._announcer.mode == "race"
+        assert shell.current_destination() == "live_pit_wall"
+
+    def test_race_mode_survives_a_refresh(self, qapp):
+        _shell, win, b = self._wired(qapp)
+        b._enter_race()
+        b.refresh()
+        assert win._live_mode_ref[0] == "Race"
+
+    def test_race_finished_releases_race_mode_only(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        b._enter_race()
+        b._on_race_state("FINISHED")
+        assert b._live_session_mode is None
+
+    def test_race_readiness_lists_open_stages(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        ready, blockers = b._race_readiness()
+        # A fresh fake session has no approved plan / recorded run, so it is not ready
+        # but still reports what is open rather than hard-blocking.
+        assert ready is False
+        assert any("plan" in x for x in blockers)

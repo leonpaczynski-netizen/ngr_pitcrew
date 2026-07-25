@@ -72,6 +72,8 @@ class HomePage(QWidget):
     event_activate_requested = pyqtSignal(str)
     #: Open the full event editor (create / edit / delete an event).
     manage_events_requested = pyqtSignal()
+    #: Finish (mark complete) the active event and clear the active slot.
+    event_complete_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -125,6 +127,9 @@ class HomePage(QWidget):
         self._btn_manage = SecondaryActionButton("Create / edit events")
         self._btn_manage.clicked.connect(lambda: self.manage_events_requested.emit())
         ev_row.addWidget(self._btn_manage)
+        self._btn_finish = SecondaryActionButton("Finish this event")
+        self._btn_finish.clicked.connect(lambda: self.event_complete_requested.emit())
+        ev_row.addWidget(self._btn_finish)
         ev_row.addStretch(1)
         self._event_card.body.addLayout(ev_row)
         lay.addWidget(self._event_card)
@@ -238,6 +243,9 @@ class HomePage(QWidget):
             self._event_sub.setText(
                 "Activate an event below, or create one, before preparing a setup.")
 
+        # Finishing an event is only offered when one is actually active.
+        self._btn_finish.setVisible(app_state.has_active_event)
+
         state_bits = []
         if has_view:
             days = view.get("days_until_race")
@@ -257,11 +265,22 @@ class HomePage(QWidget):
         # -- candidates (the event switcher)
         cands = list(view.get("candidates") or []) if has_view else []
         self._candidates = [c for c in cands if isinstance(c, Mapping)]
-        self._event_combo.clear()
+        labels = []
         for c in self._candidates:
             label = _norm(c.get("event_name")) or _norm(c.get("cycle_id"))
             extra = " · ".join(p for p in (_norm(c.get("series")), _norm(c.get("round"))) if p)
-            self._event_combo.addItem(f"{label} — {extra}" if extra else label)
+            labels.append(f"{label} — {extra}" if extra else label)
+        # render() runs on every AppState change (frequent while connected/live). Only
+        # rebuild the switcher when the candidate list actually changed, and never while
+        # the driver has the dropdown open — clearing it mid-interaction shut the popup.
+        if tuple(labels) != getattr(self, "_event_labels", None):
+            if not (self._event_combo.hasFocus() or self._event_combo.view().isVisible()):
+                self._event_labels = tuple(labels)
+                self._event_combo.blockSignals(True)
+                self._event_combo.clear()
+                for text in labels:
+                    self._event_combo.addItem(text)
+                self._event_combo.blockSignals(False)
         have_candidates = bool(self._candidates)
         self._event_combo.setVisible(have_candidates)
         self._btn_switch.setVisible(have_candidates)
