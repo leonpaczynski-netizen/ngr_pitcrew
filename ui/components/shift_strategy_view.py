@@ -114,6 +114,9 @@ class ShiftStrategyView(QWidget):
     engine_data_seeded = pyqtSignal(dict)
     recalculate_requested = pyqtSignal()
     go_to_tab = pyqtSignal(str)
+    #: Phase 2 — calibrate the torque curve from recorded wide-open-throttle telemetry,
+    #: lifting the strategy off manually-entered engine data.
+    calibrate_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -226,11 +229,26 @@ class ShiftStrategyView(QWidget):
         self._lbl_stale.setStyleSheet(
             f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         config_row.addWidget(self._lbl_stale, 1)
+        self._btn_calibrate = SecondaryActionButton("Calibrate from telemetry")
+        self._btn_calibrate.setToolTip(
+            "Estimate the torque curve from your recorded full-throttle laps, so the "
+            "shift strategy rises above the manual-entry PROVISIONAL ceiling.")
+        self._btn_calibrate.clicked.connect(
+            lambda: self.calibrate_requested.emit())
+        config_row.addWidget(self._btn_calibrate)
         self._btn_recalculate = SecondaryActionButton("Recalculate")
         self._btn_recalculate.clicked.connect(
             lambda: self.recalculate_requested.emit())
         config_row.addWidget(self._btn_recalculate)
         sc.addLayout(config_row)
+
+        # Calibration status line — what the last "Calibrate from telemetry" produced.
+        self._lbl_calib = QLabel("")
+        self._lbl_calib.setWordWrap(True)
+        self._lbl_calib.setStyleSheet(
+            f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._lbl_calib.setVisible(False)
+        sc.addWidget(self._lbl_calib)
 
         # Overall confidence — ConfidenceMeter for HIGH/MEDIUM/LOW,
         # StatusPill for PROVISIONAL/STALE/INSUFFICIENT_EVIDENCE.
@@ -426,6 +444,14 @@ class ShiftStrategyView(QWidget):
     # ---------------------------------------------------------------------- #
     # Public API                                                               #
     # ---------------------------------------------------------------------- #
+
+    def set_calibration_status(self, text: str, *, ok: bool = True) -> None:
+        """Show (or clear, with "") the outcome of the last telemetry calibration."""
+        text = str(text or "")
+        self._lbl_calib.setText(text)
+        self._lbl_calib.setStyleSheet(
+            f"color: {_t.NGR_GREEN if ok else _t.WARN}; font-size: {_t.FS_CAPTION}pt;")
+        self._lbl_calib.setVisible(bool(text))
 
     def set_view(self, vm: ShiftStrategyVM) -> None:
         """Feed a new view model. Never raises."""

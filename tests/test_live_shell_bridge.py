@@ -249,3 +249,67 @@ class TestLiveSessionMode:
         # but still reports what is open rather than hard-blocking.
         assert ready is False
         assert any("plan" in x for x in blockers)
+
+
+class TestShiftTelemetryCalibration:
+    """Phase 2: 'Calibrate from telemetry' reads recorded laps, calibrates the torque
+    curve, and stores telemetry engine data that lifts the strategy off manual entry."""
+
+    def _wired(self, qapp, laps):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        win._current_car_id = lambda: 7
+        win._build_event_context = lambda: build_event_context(
+            event={"id": 3, "name": "Round 3"},
+            strategy={"car": "GT-R", "track_location_id": "fuji", "track": "Fuji Speedway"})
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()
+
+        class _DB:
+            def get_laps_with_telemetry(self, car_id, track, **kw):
+                return laps
+        b._db = _DB()
+        return shell, win, b
+
+    def _pull(self):
+        # Reuse the synthetic wide-open-throttle pull from the calibration tests.
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        from test_shift_torque_calibration import _wot_pull, _lap
+        return [_lap(_wot_pull())]
+
+    def test_calibrate_stores_telemetry_engine_data(self, qapp):
+        shell, _win, b = self._wired(qapp, self._pull())
+        b._on_shift_calibrate_requested()
+        scope = str(b._setups.inputs().scope or "")
+        assert scope
+        stored = b._shift_store.get(scope) or {}
+        ed = stored.get("calibrated_engine_data") or {}
+        assert ed.get("source") == "telemetry"
+        assert ed.get("calibration_confidence") == "high"
+        assert ed.get("peak_power_rpm") and ed.get("redline")
+
+    def test_calibrate_reports_success_on_the_view(self, qapp):
+        shell, _win, b = self._wired(qapp, self._pull())
+        b._on_shift_calibrate_requested()
+        status = shell.garage_page.shift_strategy_view._lbl_calib.text()
+        assert "Calibrated from telemetry" in status
+
+    def test_no_telemetry_database_is_reported_not_crashed(self, qapp):
+        shell, _win, b = self._wired(qapp, self._pull())
+        b._db = None
+        b._on_shift_calibrate_requested()          # must not raise
+        status = shell.garage_page.shift_strategy_view._lbl_calib.text()
+        assert "database" in status.lower()
+
+    def test_thin_telemetry_does_not_claim_a_calibration(self, qapp):
+        # No wide-open-throttle frames → no calibration, honest status, nothing stored.
+        thin = [{"frames": [{"throttle": 0.3, "rpm": 4000, "gear": 3,
+                             "speed_kmh": 100, "elapsed_ms": i * 100, "brake": 0.0}
+                            for i in range(20)]}]
+        shell, _win, b = self._wired(qapp, thin)
+        b._on_shift_calibrate_requested()
+        scope = str(b._setups.inputs().scope or "")
+        stored = b._shift_store.get(scope) or {}
+        assert "calibrated_engine_data" not in stored

@@ -290,6 +290,7 @@ class LiveShellBridge(QObject):
                 _c(sv, "engine_data_seeded",    self._on_shift_engine_seeded)
                 _c(sv, "recalculate_requested", self._on_shift_recalculate)
                 _c(sv, "go_to_tab",             self._on_shift_go_to_tab)
+                _c(sv, "calibrate_requested",   self._on_shift_calibrate_requested)
         except Exception:
             pass
         rc = getattr(shell, "run_card", None)
@@ -1212,15 +1213,18 @@ class LiveShellBridge(QObject):
             # Active-setup revision — from the authority, zero when unknown.
             active_revision = self._shift_active_revision()
 
-            # Stored data for this scope (manual engine data + fingerprint).
+            # Stored data for this scope. Prefer telemetry-calibrated engine data over
+            # manually-entered data — a real WOT calibration outranks a hand-typed proxy
+            # and lifts the confidence ceiling (Phase 2).
             stored = self._shift_store.get(scope) if scope else None
-            manual_engine_data = (stored or {}).get("manual_engine_data") or None
+            engine_data = ((stored or {}).get("calibrated_engine_data")
+                           or (stored or {}).get("manual_engine_data") or None)
             req_saving = float((stored or {}).get("required_fuel_saving_pct") or 0.0)
             stored_fp = str((stored or {}).get("fingerprint") or "")
 
             # Resolve inputs and compute.
             shift_inputs = resolve_shift_inputs(
-                sheet, car_specs, active_revision, manual_engine_data)
+                sheet, car_specs, active_revision, engine_data)
             result = compute_shift_strategy(
                 shift_inputs, required_fuel_saving_pct=req_saving)
 
@@ -1306,6 +1310,95 @@ class LiveShellBridge(QObject):
             self._shift_store.save(scope, payload)
         except Exception:
             pass
+        self._feed_shift_strategy()
+
+    def _on_shift_calibrate_requested(self) -> None:
+        """Phase 2 — calibrate the torque curve from recorded WOT telemetry.
+
+        Reads the driver's recorded laps for the current car+track, estimates the engine
+        torque-curve anchors, and — when the evidence is good enough — persists them as
+        ``calibrated_engine_data`` (which ``_feed_shift_strategy`` then prefers over any
+        manual entry, lifting the confidence above PROVISIONAL). Reports the outcome on
+        the view's calibration status line. Never raises.
+        """
+        sv = getattr(getattr(self._shell, "garage_page", None),
+                     "shift_strategy_view", None)
+
+        def _status(text: str, ok: bool = True) -> None:
+            try:
+                if sv is not None and hasattr(sv, "set_calibration_status"):
+                    sv.set_calibration_status(text, ok=ok)
+            except Exception:
+                pass
+
+        try:
+            # Resolve the numeric car id + track the laps were recorded under.
+            car_id = 0
+            track = ""
+            try:
+                if hasattr(self._window, "_current_car_id"):
+                    car_id = int(self._window._current_car_id() or 0)
+                if hasattr(self._window, "_build_event_context"):
+                    track = str(getattr(self._window._build_event_context(), "track", "") or "")
+            except Exception:
+                pass
+            if self._db is None or not hasattr(self._db, "get_laps_with_telemetry"):
+                _status("No telemetry database available to calibrate from.", ok=False)
+                return
+            if not car_id or not track:
+                _status("Drive and record a lap for this car and track first — no "
+                        "recorded telemetry to calibrate from yet.", ok=False)
+                return
+
+            laps = self._db.get_laps_with_telemetry(car_id, track, limit=40) or []
+            from strategy.shift_torque_calibration import calibrate_torque_from_laps
+            cal = calibrate_torque_from_laps(laps)
+            if not cal.ok:
+                reason = (cal.warnings[0] if cal.warnings else
+                          "Not enough clean full-throttle telemetry to calibrate.")
+                _status(reason, ok=False)
+                return
+
+            # Persist the calibrated engine data + recompute/persist the profiles so the
+            # stored fingerprint and lineage reflect the telemetry source.
+            inputs_obj = self._setups.inputs()
+            scope = str(inputs_obj.scope or "")
+            if scope:
+                from datetime import datetime
+                from strategy.shift_strategy_inputs import (
+                    resolve_shift_inputs, compute_shift_fingerprint, inputs_snapshot)
+                from strategy.shift_strategy_engine import compute_shift_strategy
+                from strategy.setup_engineering import resolve_car_specs
+                car = str(inputs_obj.car or "")
+                sheet = self._setups.sheet("race")
+                car_specs = resolve_car_specs(car) if car else {}
+                active_revision = self._shift_active_revision()
+                stored = self._shift_store.get(scope) or {}
+                req_saving = float(stored.get("required_fuel_saving_pct") or 0.0)
+                engine_data = cal.to_engine_data()
+                shift_inputs = resolve_shift_inputs(
+                    sheet, car_specs, active_revision, engine_data)
+                result = compute_shift_strategy(
+                    shift_inputs, required_fuel_saving_pct=req_saving)
+                stored.update({
+                    "fingerprint": compute_shift_fingerprint(shift_inputs),
+                    "computed_at": datetime.utcnow().isoformat() + "Z",
+                    "calibrated_engine_data": engine_data,
+                    "calibration_json": cal.to_dict(),
+                    "inputs_snapshot": inputs_snapshot(shift_inputs),
+                    "qualifying_profile_json": result.qualifying_profile.to_dict(),
+                    "race_profile_json": result.race_profile.to_dict(),
+                    "required_fuel_saving_pct": req_saving,
+                })
+                self._shift_store.save(scope, stored)
+
+            _status(
+                f"Calibrated from telemetry — {cal.confidence.upper()} confidence "
+                f"(peak power {cal.peak_power_rpm} rpm, peak torque {cal.peak_torque_rpm} "
+                f"rpm, redline {cal.redline} rpm; {cal.sample_count} samples in gear "
+                f"{cal.gear_used}).", ok=True)
+        except Exception:
+            _status("Calibration failed — try again after recording a clean lap.", ok=False)
         self._feed_shift_strategy()
 
     def _on_shift_profile_changed(self, profile: str) -> None:
