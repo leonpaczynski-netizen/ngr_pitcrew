@@ -207,16 +207,38 @@ def explain_candidate(row: dict, reference: dict) -> str:
     time lost in the pits versus time saved on fresher tyres — it was simply never
     shown. This states it in the driver's terms. Deltas under a second are noise and are
     left out; with no material difference it says so rather than inventing a reason.
+
+    Timed races: comparison is in LAPS (more laps = better), not seconds.
+    Lap races: comparison is in seconds (lower total time = better), unchanged.
     """
     if not isinstance(row, dict) or not isinstance(reference, dict) or row is reference:
         return ""
+
+    # Timed races: rank by laps completed, so the explanation is in laps.
+    is_timed = bool(row.get("is_timed")) or bool(reference.get("is_timed"))
+    if is_timed:
+        d_stops = int(row.get("pit_stops") or 0) - int(reference.get("pit_stops") or 0)
+        d_laps = int(row.get("total_laps") or 0) - int(reference.get("total_laps") or 0)
+        bits: list[str] = []
+        if d_stops:
+            n = abs(d_stops)
+            bits.append(f"{n} {'more' if d_stops > 0 else 'fewer'} stop{'s' if n != 1 else ''}")
+        if d_laps:
+            n = abs(d_laps)
+            bits.append(f"{n} {'more' if d_laps > 0 else 'fewer'} lap{'s' if n != 1 else ''}")
+        if not bits:
+            return "Within noise of the reference plan on every measured factor."
+        ref_name = str(reference.get("strategy") or "the best plan")
+        return f"vs {ref_name}: " + ", ".join(bits) + "."
+
+    # Lap race: original seconds-based comparison.
     d_stops = int(row.get("pit_stops") or 0) - int(reference.get("pit_stops") or 0)
     d_pit = _secs(row, "pit_time_seconds") - _secs(reference, "pit_time_seconds")
     d_deg = _secs(row, "degradation_cost_seconds") - _secs(reference, "degradation_cost_seconds")
     d_fuel = _secs(row, "fuel_saving_cost_seconds") - _secs(reference, "fuel_saving_cost_seconds")
     d_total = _secs(row, "gap_to_best_seconds") - _secs(reference, "gap_to_best_seconds")
 
-    bits: list[str] = []
+    bits = []
     if d_stops:
         n = abs(d_stops)
         bits.append(f"{n} {'more' if d_stops > 0 else 'fewer'} stop{'s' if n != 1 else ''}")
@@ -239,6 +261,16 @@ def format_candidate_comparison_rows(result) -> list[dict]:
     """One row per scored (legal) candidate, ranked by total race time."""
     rec = getattr(getattr(result, "recommendation", None), "recommended", None)
     rec_id = rec.candidate_id if rec is not None else None
+
+    # Detect timed race so gap chips show laps, not seconds.
+    ev = getattr(result, "evidence", None)
+    is_timed = (
+        ev is not None
+        and float(getattr(ev, "race_duration_minutes", 0) or 0) > 0
+        and int(getattr(ev, "race_laps", 0) or 0) == 0
+    )
+    base_lap_s = ev.representative_lap_s() if (ev is not None and is_timed) else 0.0
+
     rows: list[dict] = []
     for score in getattr(result, "scored_candidates", ()) or ():
         cand = _find_candidate(result, score.candidate_id)
@@ -254,6 +286,15 @@ def format_candidate_comparison_rows(result) -> list[dict]:
             f"{laps_per[i]} laps {compound_name(comp_plan[i]) if i < len(comp_plan) else ''}".strip()
             for i in range(len(laps_per))
         )
+        # Gap chip: laps-based for timed races, seconds for lap races.
+        if is_timed:
+            if gap <= 0:
+                gap_str = "best (most laps)"
+            else:
+                lap_gap = round(gap / base_lap_s) if base_lap_s > 0 else int(gap)
+                gap_str = f"−{lap_gap} lap{'s' if lap_gap != 1 else ''}"
+        else:
+            gap_str = "best" if gap <= 0 else f"+{gap:.1f}s"
         rows.append({
             "strategy": plan_name(score.candidate_id),
             "candidate_id": score.candidate_id,
@@ -261,12 +302,13 @@ def format_candidate_comparison_rows(result) -> list[dict]:
             "compounds": compounds,
             "total_laps": sum(laps_per),
             "stints": stints,
+            "is_timed": is_timed,
             "pit_time_seconds": float(getattr(score, "pit_time_total_seconds", 0.0) or 0.0),
             "degradation_cost_seconds": float(getattr(score, "degradation_cost_seconds", 0.0) or 0.0),
             "fuel_saving_cost_seconds": float(getattr(score, "fuel_saving_cost_seconds", 0.0) or 0.0),
             "gap_to_best_seconds": float(gap or 0.0),
             "total_time": format_race_time(score.estimated_total_time_seconds),
-            "gap_to_best": "best" if gap <= 0 else f"+{gap:.1f}s",
+            "gap_to_best": gap_str,
             "pit_refuel_time": (
                 f"{score.pit_time_total_seconds:.0f}s "
                 f"({score.refuel_time_total_seconds:.0f}s refuel)"
@@ -565,6 +607,14 @@ def _compound_summary(cand) -> str:
 def _gap_lines(result) -> list[str]:
     rec = getattr(getattr(result, "recommendation", None), "recommended", None)
     rec_id = rec.candidate_id if rec is not None else None
+    # Detect timed race so gaps show "−N lap(s)" rather than "+Xs".
+    ev = getattr(result, "evidence", None)
+    is_timed = (
+        ev is not None
+        and float(getattr(ev, "race_duration_minutes", 0) or 0) > 0
+        and int(getattr(ev, "race_laps", 0) or 0) == 0
+    )
+    base_lap_s = ev.representative_lap_s() if (ev is not None and is_timed) else 0.0
     lines: list[str] = []
     seen_names: set[str] = set()
     for score in getattr(result, "scored_candidates", ()) or ():
@@ -577,7 +627,11 @@ def _gap_lines(result) -> list[str]:
         if name in seen_names:
             continue
         seen_names.add(name)
-        lines.append(f"{name}: +{gap:.1f}s")
+        if is_timed:
+            lap_gap = round(gap / base_lap_s) if base_lap_s > 0 else int(gap)
+            lines.append(f"{name}: −{lap_gap} lap{'s' if lap_gap != 1 else ''}")
+        else:
+            lines.append(f"{name}: +{gap:.1f}s")
         if len(lines) >= 4:
             break
     return lines

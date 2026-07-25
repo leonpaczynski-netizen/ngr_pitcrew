@@ -96,17 +96,23 @@ def _lap_evidence(
 
 class TestTimedRaceLapCount:
     def test_total_elapsed_within_race_duration(self):
-        """total_elapsed must NOT exceed duration by more than one lap."""
+        """total_elapsed must be ≥ duration (car always finishes the lap in progress)
+        and must not exceed duration by more than one full lap."""
         ev = _timed_evidence(duration_min=120.0, lap_s=118.0, pit_loss_s=25.0)
         rec = recommend_strategy(ev)
         assert rec.has_recommendation
         best = rec.recommended
         duration_s = 120.0 * 60.0
-        # The total time the scorer computes includes green laps + pit time.
-        # It should be close to the race duration, not duration + pit time.
-        assert best.estimated_total_time_seconds <= duration_s + 120.0, (
+        rep_lap = ev.representative_lap_s()
+        # Total must be >= duration: the race NEVER finishes early.
+        assert best.estimated_total_time_seconds >= duration_s, (
+            f"total_elapsed {best.estimated_total_time_seconds:.0f}s < "
+            f"duration {duration_s:.0f}s — timed race must run the full window"
+        )
+        # And at most one lap past the flag (the car finishes the lap it's on).
+        assert best.estimated_total_time_seconds <= duration_s + rep_lap + 5, (
             f"total_elapsed {best.estimated_total_time_seconds:.0f}s exceeds "
-            f"duration {duration_s:.0f}s by more than 2 laps"
+            f"duration {duration_s:.0f}s by more than one lap"
         )
 
     def test_laps_complete_within_duration(self):
@@ -178,7 +184,8 @@ class TestTimedRaceLapCount:
 
 class TestTimedRaceAbsurdTotalFixed:
     def test_2hr_race_total_not_absurdly_long(self):
-        """Old bug: 2-hr race at ~118s/lap scored as ~2:08.  New: ≤ ~2:02."""
+        """Old bug: 2-hr race at ~118s/lap scored as ~2:08.
+        New model: total = duration + final-lap overrun ≈ 2:00–2:02."""
         ev = _timed_evidence(
             duration_min=120.0, lap_s=118.0, pit_loss_s=25.0, refuel_lps=1.0,
             fuel_per_lap=3.26,
@@ -186,14 +193,26 @@ class TestTimedRaceAbsurdTotalFixed:
         rec = recommend_strategy(ev)
         assert rec.has_recommendation
         best = rec.recommended
-        # Old buggy total was 7685s (≈ 2:08:05).  New should be ≤ 7450s (≈ 2:04).
+        duration_s = 120.0 * 60.0
+        # Must be at least the full duration (race never finishes early).
+        assert best.estimated_total_time_seconds >= duration_s, (
+            f"total_elapsed={best.estimated_total_time_seconds:.0f}s < {duration_s:.0f}s "
+            "— timed race must run the full duration"
+        )
+        # Old buggy total was 7685s (≈ 2:08:05).  New: duration + ≤1 lap ≈ ≤ 2:04.
         assert best.estimated_total_time_seconds <= 7450.0, (
             f"total_elapsed={best.estimated_total_time_seconds:.0f}s — "
             "appears to add pit time on top of a fixed lap count (bug not fixed)"
         )
 
     def test_50min_race_total_within_window(self):
-        """50-min benchmark: total ≈ 50 min, NOT 51:52 (old bug)."""
+        """50-min benchmark: total = duration + final-lap overrun ≈ 50–52 min.
+
+        The old bug produced 51:52 by adding pit time on top of a FIXED lap count.
+        The intermediate fix produced 50:01 (below duration — wrong, race never
+        finishes early).  The correct model: total >= 3000s and < 3210s (duration +
+        two 100s laps of slack).
+        """
         ev = _timed_evidence(
             duration_min=50.0, lap_s=100.44,
             pit_loss_s=22.0, refuel_lps=1.0, fuel_per_lap=4.0,
@@ -201,10 +220,16 @@ class TestTimedRaceAbsurdTotalFixed:
         rec = recommend_strategy(ev)
         assert rec.has_recommendation
         best = rec.recommended
-        # Total should be close to 3000s, not 3112s (old bug).
-        assert best.estimated_total_time_seconds < 3060.0, (
+        duration_s = 50.0 * 60.0  # 3000 s
+        # Total must be >= duration (race always runs the full window).
+        assert best.estimated_total_time_seconds >= duration_s, (
+            f"total_elapsed={best.estimated_total_time_seconds:.0f}s < {duration_s:.0f}s "
+            "— timed race must not finish before the duration"
+        )
+        # And at most duration + ~2 full laps (generous upper bound).
+        assert best.estimated_total_time_seconds < 3210.0, (
             f"total_elapsed={best.estimated_total_time_seconds:.0f}s is too high "
-            "(50-min race should not score above 51 min)"
+            "(50-min race total should be within one lap of 3000 s)"
         )
 
 

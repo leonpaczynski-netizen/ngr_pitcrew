@@ -62,13 +62,16 @@ class TestComparison:
     def test_one_vs_two_stop_visible(self, vm):
         by_id = {r["candidate_id"]: r for r in vm.candidate_comparison_rows}
         assert "1stop" in by_id and "2stop" in by_id
-        assert by_id["1stop"]["gap_to_best"] == "best"
-        assert by_id["2stop"]["gap_to_best"].startswith("+")
+        # Timed race: rank-1 shows "best (most laps)"; alternatives show "−N lap".
+        assert by_id["1stop"]["gap_to_best"] == "best (most laps)"
+        assert "lap" in by_id["2stop"]["gap_to_best"]
 
     def test_total_time_displayed(self, vm):
-        # Timed race: total ≈ 50 min (old value "51:52.0" was a bug — pit time
-        # was added on top of a fixed lap count instead of deducted from green time).
-        assert vm.estimated_total_time == "50:01.3"
+        # Timed race: total = duration + final-lap overrun (always ≥ 3000 s).
+        # 1-stop: 3000 + 91.2 s overrun = 3091.2 s = "51:31.2".
+        # Old value "51:52.0" was wrong (pit time added on top of fixed lap count).
+        # Intermediate value "50:01.3" was below duration (also wrong).
+        assert vm.estimated_total_time == "51:31.2"
 
 
 class TestEvidence:

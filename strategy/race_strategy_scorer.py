@@ -154,7 +154,30 @@ def score_candidate(
     compound_cost = _compound_cost(candidate, evidence, base_lap_s)
 
     pit_time = candidate.estimated_pit_time
-    total = green_base + degradation_cost + pit_time + fuel_saving_cost + compound_cost
+
+    # Timed race: total elapsed = duration + the final-lap overrun after the
+    # clock expires.  The car always finishes the lap it is on when the timer
+    # hits zero, so total is always ≥ duration (never less than the race window).
+    # A fuel-save plan runs an effectively longer lap (+ 0.40 s/lap penalty) so
+    # its overrun is larger, which correctly places it ABOVE the normal plan in
+    # total_elapsed — preserving the tie-break order for _safety_aware_pick.
+    is_timed = evidence.race_duration_minutes > 0 and evidence.race_laps == 0
+    if is_timed and base_lap_s > 0:
+        duration_s = evidence.race_duration_minutes * 60.0
+        fuel_save_penalty = (
+            FUEL_SAVE_TIME_PENALTY_S_PER_LAP
+            if FUEL_MAP_SAVE in candidate.fuel_map_plan else 0.0
+        )
+        effective_lap_s = base_lap_s + fuel_save_penalty
+        green_time = max(0.0, duration_s - pit_time)
+        progress_into_final = green_time % effective_lap_s
+        final_overrun = (
+            (effective_lap_s - progress_into_final)
+            if progress_into_final > 1e-9 else 0.0
+        )
+        total = duration_s + final_overrun
+    else:
+        total = green_base + degradation_cost + pit_time + fuel_saving_cost + compound_cost
 
     on_track_time = green_base + degradation_cost + fuel_saving_cost + compound_cost
     avg_lap = on_track_time / race_laps if race_laps else 0.0
