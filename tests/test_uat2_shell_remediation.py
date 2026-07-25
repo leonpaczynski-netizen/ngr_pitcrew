@@ -1565,12 +1565,13 @@ class TestGearingBridge:
              "setup_label": "Race"})
         bridge._discipline = "race"
         bridge._feed_gearing(shell.garage_page)
-        gp = shell.garage_page
-        assert abs(gp._gear_spins[0].value() - 3.1) < 0.005
-        assert abs(gp._gear_spins[4].value() - 0.9) < 0.005
-        assert gp._gear_spins[5].value() == 0.0      # unused
-        assert abs(gp._final_drive_spin.value() - 3.705) < 0.005
-        assert abs(gp._top_speed_spin.value() - 280.0) < 1.0
+        # FIX 4: spins now live on _sheet, not on garage_page directly
+        sheet = shell.garage_page._sheet
+        assert abs(sheet._gear_spins[0].value() - 3.1) < 0.005
+        assert abs(sheet._gear_spins[4].value() - 0.9) < 0.005
+        assert sheet._gear_spins[5].value() == 0.0      # unused
+        assert abs(sheet._final_drive_spin.value() - 3.705) < 0.005
+        assert abs(sheet._top_speed_spin.value() - 280.0) < 1.0
 
     def test_gearing_changed_signal_writes_to_sheet(self, wired):
         shell, _win, _db, bridge = wired
@@ -1605,16 +1606,20 @@ class TestGearingBridge:
         assert race_sheet.gear_ratios == (3.1, 2.2)
         assert qual_sheet.gear_ratios == (3.5, 2.5)
 
-    def test_transmission_tab_exists_on_garage_page(self, wired):
+    def test_gear_spins_exist_on_full_sheet(self, wired):
+        """FIX 4: gearing entry moved to the Full setup sheet (GT7SettingsSheet._sheet)."""
         shell, _win, _db, _bridge = wired
-        assert hasattr(shell.garage_page, "_btn_transmission")
-        assert hasattr(shell.garage_page, "_gear_spins")
-        assert len(shell.garage_page._gear_spins) == 8
+        # Spins are on _sheet, not directly on garage_page
+        assert hasattr(shell.garage_page._sheet, "_gear_spins")
+        assert len(shell.garage_page._sheet._gear_spins) == 8
+        # No separate Transmission tab button
+        assert not hasattr(shell.garage_page, "_btn_transmission")
 
-    def test_show_transmission_group_switches_stack_to_5(self, wired):
+    def test_show_transmission_group_switches_to_full_sheet_page(self, wired):
+        """FIX 4: show_transmission_group now goes to page 1 (Full setup sheet)."""
         shell, _win, _db, _bridge = wired
         shell.garage_page.show_transmission_group()
-        assert shell.garage_page._stack.currentIndex() == 5
+        assert shell.garage_page._stack.currentIndex() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1672,13 +1677,42 @@ class TestTyreOverride:
         bridge._push_active_compound("race")
         assert win._tracker.calls and win._tracker.calls[-1] == "RS"
 
-    def test_push_active_compound_uses_sheet_when_no_run_open(self, wired):
+    def test_override_always_wins_even_without_open_run(self, wired):
+        """FIX 1b: the override is no longer ignored when no run is open.
+
+        The previous guard `_test_compound_override and _runs.open_run()` caused the
+        750ms refresh to clobber the override back to the sheet compound in the window
+        between picking a compound and pressing Start — so the run was tagged RH instead
+        of the RS the driver picked. The fix: if override is set, always use it.
+        The override is only cleared on record/discard, not by the periodic refresh.
+        """
         _shell, win, _db, bridge = self._wired_with_tracker(wired)
         bridge._test_compound_override = "RS"
-        # No run open — override must be ignored
+        # No run open — override must STILL win (FIX 1b)
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
+
+    def test_override_uses_sheet_when_not_set(self, wired):
+        """When no override is set, _push_active_compound falls back to the sheet compound."""
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._test_compound_override = None   # explicitly no override
         win._tracker.calls.clear()
         bridge._push_active_compound("race")
         assert win._tracker.calls and win._tracker.calls[-1] == "RH"  # sheet compound
+
+    def test_override_survives_full_refresh_without_run(self, wired):
+        """FIX 1b end-to-end: pick RS, call refresh() (simulating 750ms tick), override persists."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        # User picks RS on the run card
+        bridge._on_test_compound_change("RS")
+        assert bridge._test_compound_override == "RS"
+        # Simulate a 750ms refresh (no run open)
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        # Override must survive — not clobbered by sheet compound
+        assert bridge._test_compound_override == "RS"
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
 
     def test_override_cleared_on_record_run(self, wired):
         shell, win, db, bridge = self._wired_with_tracker(wired)
@@ -1705,3 +1739,122 @@ class TestTyreOverride:
         rc = shell.run_card
         assert hasattr(rc, "_compound_codes")
         assert len(rc._compound_codes) >= 2
+
+
+# ---------------------------------------------------------------------------
+# FIX 1a — Compound dropdown does not snap back on refresh
+# ---------------------------------------------------------------------------
+
+class TestCompoundDropdownStability:
+    """FIX 1a: the run-card compound combo must NOT be reset on every 750ms refresh.
+    The allowed-compound set changes rarely (only when the event changes), so subsequent
+    refresh ticks must leave the user's current selection alone."""
+
+    def _wired_with_tracker(self, wired):
+        shell, win, db, bridge = wired
+        win._tracker = type("T", (), {
+            "calls": [], "set_compound": lambda self, c: self.calls.append(c)})()
+        return shell, win, db, bridge
+
+    def test_selector_not_rebuilt_on_second_refresh_with_same_codes(self, wired):
+        """FIX 1a: calling _feed_run_compound_options twice with the same codes must not
+        change the combo's current index on the second call."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        rc = shell.run_card
+
+        # First call — builds the combo and picks first unsampled (let it run)
+        bridge._last_compound_codes = ()      # reset so first call rebuilds
+        bridge._feed_run_compound_options(rc)
+        # Capture the index after the first call
+        first_idx = rc._compound_combo.currentIndex()
+
+        # Simulate user picking a different index
+        rc._compound_combo.setCurrentIndex((first_idx + 1) % max(len(rc._compound_codes), 2))
+        user_idx = rc._compound_combo.currentIndex()
+
+        # Second call with SAME codes — must not reset the user's pick
+        bridge._feed_run_compound_options(rc)
+        assert rc._compound_combo.currentIndex() == user_idx, (
+            "second refresh must not overwrite the user's compound selection")
+
+    def test_last_compound_codes_initialised(self, wired):
+        """Bridge must initialise _last_compound_codes so repeated refreshes are idempotent."""
+        _shell, _win, _db, bridge = wired
+        assert hasattr(bridge, "_last_compound_codes")
+        assert isinstance(bridge._last_compound_codes, tuple)
+
+    def test_override_preserved_as_preselected_when_codes_change(self, wired):
+        """When codes change AND an override is set, the override is pre-selected in the
+        rebuilt combo so the user's pick is visually correct after the rebuild."""
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        rc = shell.run_card
+        bridge._test_compound_override = "RS"
+
+        # Force a rebuild by resetting last codes
+        bridge._last_compound_codes = ()
+        bridge._feed_run_compound_options(rc)
+        # The combo must show RS (the override), not the first unsampled
+        if "RS" in rc._compound_codes:
+            rs_idx = list(rc._compound_codes).index("RS")
+            assert rc._compound_combo.currentIndex() == rs_idx, (
+                "override compound must be pre-selected when combo is rebuilt")
+
+
+# ---------------------------------------------------------------------------
+# FIX 5 — Guidance how-to names exact buttons
+# ---------------------------------------------------------------------------
+
+class TestConfirmProtectGuidance:
+    """FIX 5a: the "confirm and protect" objective must name the exact button labels."""
+
+    def test_how_to_names_entered_in_gt7_button(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "I've entered this in GT7" in text or "entered this in GT7" in text
+
+    def test_how_to_names_lock_this_setup_button(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "Lock this setup" in text
+
+    def test_how_to_explains_lock_appears_after_convergence(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Confirm and protect the current best-known setup", "garage")
+        assert "converge" in text.lower() or "consistent runs" in text.lower()
+
+    def test_how_to_triggers_on_protect_keyword(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Protect the qualifying setup", "garage")
+        assert bool(text), "protect keyword must trigger how-to"
+
+    def test_how_to_empty_for_unrelated_objective(self):
+        from ui.components.guidance_vm import _objective_how_to
+        text = _objective_how_to("Build setup_base evidence", "practice")
+        assert text == "", "unrelated objective must not return how-to text"
+
+    def test_is_confirm_protect_objective_detects_protect(self, wired):
+        """FIX 5b: bridge must detect the confirm-protect objective from the guidance view."""
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Confirm and protect the best-known setup",
+                            "target_surface": "garage"}}
+        assert bridge._is_confirm_protect_objective() is True
+
+    def test_is_confirm_protect_objective_false_for_other(self, wired):
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Build setup_base evidence",
+                            "target_surface": "practice"}}
+        assert bridge._is_confirm_protect_objective() is False
+
+    def test_feed_lock_step_checklist_shown_when_objective_active(self, wired):
+        """FIX 5b: when the protect objective is active, _feed_lock hint is a step list."""
+        shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = {
+            "next_action": {"headline": "Confirm and protect the best-known setup",
+                            "target_surface": "garage"}}
+        gp = shell.garage_page
+        bridge._feed_lock(gp)
+        hint = gp._lock_hint.text()
+        # Hint must contain step markers
+        assert "1." in hint and "2." in hint

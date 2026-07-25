@@ -97,9 +97,15 @@ _SURFACE_CTA: dict[str, str] = {
 def _objective_how_to(headline: str, surface: str) -> str:
     h = (headline or "").strip().lower()
     if "protect" in h or ("confirm" in h and "setup" in h) or "best-known" in h:
-        return ("Open the Garage, review the best-known setup for the Race and Qualifying "
-                "sheets, and press “Lock this setup” to protect it from further changes. "
-                "Reopen only if a run tells you to change something.")
+        # Name the EXACT buttons so the driver is never lost in the Garage. The two
+        # real actions are: CONFIRM = “I’ve entered this in GT7”; PROTECT = “Lock this setup”
+        # (only shown once the setup has converged). Step the driver through both.
+        return (
+            "In the Garage: press “I’ve entered this in GT7” to confirm this setup "
+            "is on the car, then press “Lock this setup” to protect it for the event. "
+            "The Lock button appears once the setup has converged — if it isn’t there "
+            "yet, drive and record a few consistent runs on this setup first."
+        )
     return ""
 
 

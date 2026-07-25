@@ -633,13 +633,14 @@ class TestRunCardCompoundSelector:
 # AREA 2 — show_transmission_group routes from go_to_tab
 # ---------------------------------------------------------------------------
 
-def test_show_transmission_group_switches_stack(qapp):
-    """show_transmission_group must select the Transmission entry page."""
+def test_show_transmission_group_switches_to_full_sheet(qapp):
+    """FIX 4: show_transmission_group now selects the Full setup sheet (page 1)
+    where the editable Transmission section is embedded."""
     from ui.components.setup_workspace import SetupWorkspace
     gp = SetupWorkspace()
     gp.show_transmission_group()
-    assert gp._stack.currentIndex() == 5
-    assert gp._btn_transmission.isChecked() is True
+    assert gp._stack.currentIndex() == 1
+    assert gp._btn_full.isChecked() is True
 
 
 # ---------------------------------------------------------------------------

@@ -159,6 +159,10 @@ class LiveShellBridge(QObject):
         #: selector; cleared when the run is recorded or discarded. The saved sheet is
         #: NEVER mutated — only the tracker call and this override change.
         self._test_compound_override: Optional[str] = None
+        #: The compound codes last fed to the run-card selector. Only update the selector
+        #: when the allowed-compound set changes — NOT on every 750ms tick — so the
+        #: driver's pick isn't clobbered by the periodic refresh (FIX 1a).
+        self._last_compound_codes: tuple = ()
         #: The strategy decision is recomputed ONCE PER LAP ("at the end of every lap"),
         #: not on every 750ms display tick — this is the driver's own model and it stops
         #: the replan warning flickering as live figures wobble mid-lap. The last audio
@@ -1353,6 +1357,19 @@ class LiveShellBridge(QObject):
                 return d
         return ""
 
+    def _is_confirm_protect_objective(self) -> bool:
+        """True when the current engineer objective is the "confirm and protect" one.
+
+        Detected by keywords in the objective headline — same logic as
+        guidance_vm._objective_how_to so they stay in sync without a shared constant.
+        """
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+        na = view.get("next_action") or {}
+        head = str(na.get("headline") or "").lower()
+        return ("protect" in head
+                or ("confirm" in head and "setup" in head)
+                or "best-known" in head)
+
     def _feed_lock(self, garage) -> None:
         if not hasattr(garage, "set_lock_state"):
             return
@@ -1363,6 +1380,32 @@ class LiveShellBridge(QObject):
         if target == "base" and not locked:
             hint = ("The base setup is the foundation both sheets build on. Lock it to "
                     "settle the baseline for the event.")
+
+        # FIX 5b: when the "confirm and protect" objective is active, replace the generic
+        # hint with a concrete step checklist so the driver always sees EXACTLY what to do —
+        # not a blank space or a vague "keep developing" note.
+        if self._is_confirm_protect_objective():
+            disc_for_applied = target if target != "base" else self._discipline
+            try:
+                _label, applied = self._setups.active_setup(disc_for_applied)
+            except Exception:
+                applied = False
+            step1 = (
+                "1. Confirmed in GT7 ✓" if applied
+                else "1. Press “I’ve entered this in GT7” to confirm this setup is on the car"
+            )
+            if locked:
+                step2 = "2. Setup locked ✓"
+            elif lockable:
+                step2 = "2. Press “Lock this setup” — it’s ready to lock"
+            else:
+                step2 = (
+                    "2. “Lock this setup” is not yet available — "
+                    "drive and record a few consistent runs on this setup first. "
+                    "The button appears once it has converged."
+                )
+            hint = f"{step1}\n{step2}"
+
         garage.set_lock_state(lockable=lockable, locked=locked, hint=hint,
                               discipline=target,
                               lock_label=f"Lock the {target} setup")
@@ -1484,10 +1527,14 @@ class LiveShellBridge(QObject):
             if tracker is None or not hasattr(tracker, "set_compound"):
                 return
             from strategy.tyre_selection import current_code
-            # Prefer the tyre-test override while a run is open.  The override is set by
-            # _on_test_compound_change (which explicitly does NOT call _setups.apply) and
-            # cleared in _on_record_run / _on_discard_run.
-            if self._test_compound_override and self._runs.open_run():
+            # Prefer the tyre-test override whenever it is set, regardless of whether
+            # a run is open. The previous guard `and self._runs.open_run()` caused the
+            # 750ms refresh to clobber the override back to the sheet compound in the
+            # window between the driver picking a compound and pressing Start — so the
+            # recorded run was tagged with the wrong (sheet) compound (FIX 1b).
+            # The override is cleared on record/discard, so subsequent runs always start
+            # from the sheet compound unless the driver explicitly picks again.
+            if self._test_compound_override:
                 code = self._test_compound_override
             else:
                 # The compound is a sheet value in its own right — do NOT gate on
@@ -1599,9 +1646,11 @@ class LiveShellBridge(QObject):
     def _feed_run_compound_options(self, rc) -> None:
         """Populate the run-card compound selector with event-allowed compounds.
 
-        Pre-selects the first un-sampled compound so the driver is nudged toward running
-        every allowed compound (the programme requires it). The driver can always override
-        the pre-selection — it is a nudge, not a lock.
+        Pre-selects the first un-sampled compound (a nudge toward covering all compounds)
+        but ONLY on the first call or when the allowed-compound set changes. On every
+        subsequent 750ms refresh the selector is left untouched so the driver's pick
+        is never overwritten (FIX 1a). The driver can always change their pick — the
+        pre-selection is a one-time default, not a lock.
         """
         try:
             if not hasattr(rc, "set_compound_options"):
@@ -1619,11 +1668,26 @@ class LiveShellBridge(QObject):
                 race_duration_minutes=float(
                     getattr(ev, "race_duration_minutes", 0) or 0))
             codes = [o.code for o in (choice.options or ())]
-            # Pre-select the first compound not yet sampled: a nudge toward covering all.
-            required, sampled = self._tyre_compound_coverage()
-            sampled_up = {s.upper() for s in sampled}
-            unsampled = [c for c in codes if c.upper() not in sampled_up]
-            preselected = unsampled[0] if unsampled else ""
+            new_codes = tuple(codes)
+
+            # Only rebuild the combo when the allowed-compound set changes.
+            # On a stable event, codes are constant across refreshes — do nothing so the
+            # driver's current selection stays put.
+            if new_codes == self._last_compound_codes:
+                return
+            self._last_compound_codes = new_codes
+
+            # Codes changed (e.g. event just loaded / tyre regulations changed).
+            # Pre-select: use the existing override if the driver already picked, otherwise
+            # nudge toward the first un-sampled compound; only apply when no run is open
+            # (once a run is recording, the override is authoritative).
+            if self._test_compound_override and self._test_compound_override in new_codes:
+                preselected = self._test_compound_override
+            else:
+                required, sampled = self._tyre_compound_coverage()
+                sampled_up = {s.upper() for s in sampled}
+                unsampled = [c for c in codes if c.upper() not in sampled_up]
+                preselected = unsampled[0] if unsampled else ""
             rc.set_compound_options(codes, preselected=preselected)
         except Exception:
             pass

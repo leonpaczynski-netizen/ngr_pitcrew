@@ -196,21 +196,28 @@ class TestCarRangesButton:
 
 
 class TestGearingControls:
-    """AREA 2 — Transmission tab: 8 gear spins + final drive + top speed."""
+    """AREA 2 — Transmission entry embedded in the Full setup page (FIX 4).
+
+    Gear spins live on _sheet (GT7SettingsSheet) not on SetupWorkspace directly.
+    set_gearing delegates to _sheet.set_gearing; gearing_changed bubbles up through
+    the workspace so the bridge wiring is unchanged.
+    """
 
     def test_eight_gear_spins_exist(self, qapp):
         w = SetupWorkspace()
-        assert len(w._gear_spins) == 8
+        # Spins now live on _sheet (embedded in the Full setup page)
+        assert len(w._sheet._gear_spins) == 8
 
     def test_final_drive_and_top_speed_spins_exist(self, qapp):
         w = SetupWorkspace()
-        assert hasattr(w, "_final_drive_spin")
-        assert hasattr(w, "_top_speed_spin")
+        assert hasattr(w._sheet, "_final_drive_spin")
+        assert hasattr(w._sheet, "_top_speed_spin")
 
-    def test_transmission_tab_button_exists(self, qapp):
+    def test_no_separate_transmission_tab_button(self, qapp):
+        """FIX 4: Transmission entry is in the Full setup page, not a separate tab."""
         w = SetupWorkspace()
-        assert hasattr(w, "_btn_transmission")
-        assert "transmission" in w._btn_transmission.text().lower()
+        assert not hasattr(w, "_btn_transmission"), (
+            "_btn_transmission was removed — gearing entry is in the Full setup page")
 
     def test_set_gearing_populates_spins_without_emitting(self, qapp):
         w = SetupWorkspace()
@@ -218,11 +225,12 @@ class TestGearingControls:
         w.gearing_changed.connect(seen.append)
         w.set_gearing(gear_ratios=[3.1, 2.2, 1.6, 1.2, 0.9],
                       final_drive=3.705, transmission_max_speed_kmh=280.0)
-        assert w._gear_spins[0].value() == pytest.approx(3.1, abs=0.001)
-        assert w._gear_spins[4].value() == pytest.approx(0.9, abs=0.001)
-        assert w._gear_spins[5].value() == pytest.approx(0.0, abs=0.001)  # unused
-        assert w._final_drive_spin.value() == pytest.approx(3.705, abs=0.001)
-        assert w._top_speed_spin.value() == pytest.approx(280.0, abs=0.5)
+        sheet = w._sheet
+        assert sheet._gear_spins[0].value() == pytest.approx(3.1, abs=0.001)
+        assert sheet._gear_spins[4].value() == pytest.approx(0.9, abs=0.001)
+        assert sheet._gear_spins[5].value() == pytest.approx(0.0, abs=0.001)  # unused
+        assert sheet._final_drive_spin.value() == pytest.approx(3.705, abs=0.001)
+        assert sheet._top_speed_spin.value() == pytest.approx(280.0, abs=0.5)
         assert seen == [], "set_gearing must not emit gearing_changed"
 
     def test_on_gearing_edited_emits_only_nonzero_gears(self, qapp):
@@ -231,18 +239,20 @@ class TestGearingControls:
         w.gearing_changed.connect(seen.append)
         w.set_gearing(gear_ratios=[3.1, 2.2, 1.6], final_drive=3.705,
                       transmission_max_speed_kmh=280.0)
-        w._on_gearing_edited()
+        # gearing_changed bubbles up through workspace; trigger via sheet's method
+        w._sheet._on_gearing_edited()
         assert len(seen) == 1
         d = seen[0]
         assert d["gear_ratios"] == pytest.approx([3.1, 2.2, 1.6], abs=0.001)
         assert d["final_drive"] == pytest.approx(3.705, abs=0.001)
         assert d["transmission_max_speed_kmh"] == pytest.approx(280.0, abs=0.5)
 
-    def test_show_transmission_group_selects_tab(self, qapp):
+    def test_show_transmission_group_goes_to_full_sheet_page(self, qapp):
+        """FIX 4: show_transmission_group now switches to page 1 (Full setup sheet)."""
         w = SetupWorkspace()
         w.show_transmission_group()
-        assert w._stack.currentIndex() == 5
-        assert w._btn_transmission.isChecked() is True
+        assert w._stack.currentIndex() == 1
+        assert w._btn_full.isChecked() is True
 
     def test_gearing_signal_declared(self, qapp):
         w = SetupWorkspace()
