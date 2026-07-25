@@ -53,12 +53,20 @@ class ShiftStrategyInputs:
     weight_kg: float                    # base car weight in kg
     aspiration: str                     # 'NA', 'TC', 'SC', 'EV'
 
-    # Optional engine data — supplied manually by the driver; absent until entered.
+    # Optional engine data — supplied manually by the driver OR calibrated from
+    # telemetry (Phase 2); absent until entered/calibrated.
     peak_power_rpm: Optional[int]       # RPM at which engine peak power occurs
     peak_torque_rpm: Optional[int]      # RPM at which engine peak torque occurs
     redline: Optional[int]              # RPM limiter / redline
 
     active_setup_revision: int          # revision counter from ActiveSetupAuthority
+
+    # Phase 2 — provenance of the engine data. "manual" (driver-entered, capped at
+    # PROVISIONAL) or "telemetry" (calibrated from recorded WOT pulls, allowed up to
+    # the calibration's own confidence). Defaulted so every existing construction site
+    # and golden vector is unaffected.
+    engine_data_source: str = "manual"
+    calibration_confidence: str = ""    # "high" | "medium" when telemetry-calibrated
 
 
 def resolve_shift_inputs(
@@ -94,10 +102,15 @@ def resolve_shift_inputs(
         weight_kg = float(specs.get("weight_kg") or 0.0)
         aspiration = _norm_str(specs.get("aspiration") or "NA") or "NA"
 
-        # Manual engine data
+        # Engine data — manual OR telemetry-calibrated (same peak_* keys; the ``source``
+        # key, when present and == "telemetry", lets the engine lift the PROVISIONAL cap).
         peak_power_rpm = _pos_int(med.get("peak_power_rpm"))
         peak_torque_rpm = _pos_int(med.get("peak_torque_rpm"))
         redline = _pos_int(med.get("redline"))
+        source = _norm_str(med.get("source")) or "manual"
+        if source not in ("manual", "telemetry"):
+            source = "manual"
+        calib_conf = _norm_str(med.get("calibration_confidence"))
 
         revision = int(active_revision or 0)
 
@@ -114,6 +127,8 @@ def resolve_shift_inputs(
             peak_torque_rpm=peak_torque_rpm,
             redline=redline,
             active_setup_revision=revision,
+            engine_data_source=source,
+            calibration_confidence=calib_conf,
         )
     except Exception:
         return ShiftStrategyInputs(
@@ -163,6 +178,15 @@ def compute_shift_fingerprint(inputs: ShiftStrategyInputs) -> str:
             f"{inputs.weight_kg:.1f}",
             str(inputs.active_setup_revision),
         ]
+        # Telemetry calibration extends the fingerprint so a re-calibrated curve is a
+        # distinct, cache-invalidating configuration. Appended ONLY for the telemetry
+        # source, so the manual-path hash — and every golden vector — is unchanged.
+        if _norm_str(getattr(inputs, "engine_data_source", "manual")) == "telemetry":
+            parts.append("telemetry")
+            parts.append(_norm_str(getattr(inputs, "calibration_confidence", "")))
+            parts.append(str(inputs.peak_torque_rpm))
+            parts.append(str(inputs.peak_power_rpm))
+            parts.append(str(inputs.redline))
         raw = "\n".join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()[:10]
     except Exception:

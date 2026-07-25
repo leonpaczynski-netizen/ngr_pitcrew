@@ -728,6 +728,57 @@ def _cap_at_provisional(c: ShiftConfidence) -> ShiftConfidence:
     return c
 
 
+def _calibration_confidence(calib_conf: str) -> ShiftConfidence:
+    """Map a telemetry-calibration confidence string to the engine's ShiftConfidence.
+
+    A telemetry-calibrated curve is allowed up to HIGH; anything unrecognised falls
+    back to PROVISIONAL so a malformed value never over-claims.
+    """
+    c = str(calib_conf or "").strip().lower()
+    if c == "high":
+        return ShiftConfidence.HIGH
+    if c == "medium":
+        return ShiftConfidence.MEDIUM
+    return ShiftConfidence.PROVISIONAL
+
+
+def _cap_for_source(c: ShiftConfidence, source: str) -> ShiftConfidence:
+    """Confidence ceiling by engine-data provenance.
+
+    Manual data is capped at PROVISIONAL (Phase 1 behaviour, unchanged). Telemetry-
+    calibrated data carries its own confidence from the calibration and is not capped
+    here (the per-decision lift below has already set it, at most HIGH).
+    """
+    if str(source or "manual") == "telemetry":
+        return c
+    return _cap_at_provisional(c)
+
+
+def _lift_decisions_for_source(decisions, source: str, calib_conf: str):
+    """Raise PROVISIONAL decisions to the telemetry-calibration confidence.
+
+    For the manual source this is a pure pass-through — the manual path (and every
+    golden vector) is byte-identical. For the telemetry source, each decision that the
+    Phase-1 engine tagged PROVISIONAL/``manual_engine_data`` (i.e. a genuine
+    computation, not a below-powerband INSUFFICIENT one) is re-stamped with the
+    calibration's confidence and a ``telemetry_calibrated`` evidence source. The RPM
+    numbers are unchanged — only the provenance and confidence rise, because the anchors
+    feeding them were measured, not guessed.
+    """
+    if str(source or "manual") != "telemetry":
+        return decisions
+    import dataclasses
+    lifted_conf = _calibration_confidence(calib_conf)
+    out = []
+    for d in decisions:
+        if d.confidence == ShiftConfidence.PROVISIONAL:
+            out.append(dataclasses.replace(
+                d, confidence=lifted_conf, evidence_source="telemetry_calibrated"))
+        else:
+            out.append(d)
+    return tuple(out)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -814,22 +865,7 @@ def compute_shift_strategy(
             )
             qual_decisions.append(d)
 
-        # Include ALL decisions (valid and invalid) so one below-powerband pair
-        # drags the overall confidence down to INSUFFICIENT_EVIDENCE as the brief
-        # requires: "overall confidence = weakest across covered pairs".
-        qual_confidences = [d.confidence for d in qual_decisions]
-        if not qual_confidences:
-            qual_confidences = [ShiftConfidence.INSUFFICIENT_EVIDENCE]
-
-        qual_overall = _cap_at_provisional(_weakest(qual_confidences))
-
-        qualifying_profile = ShiftProfile(
-            mode="qualifying",
-            decisions=tuple(qual_decisions),
-            overall_confidence=qual_overall,
-        )
-
-        # --- Race profile ---
+        # --- Race profile (derived from the RAW qualifying decisions) ---
         race_decisions_list, predicted_fuel_pct, predicted_time_cost = _race_decisions(
             qual_decisions, ratio_list,
             peak_torque_rpm=peak_torque_rpm,
@@ -839,11 +875,36 @@ def compute_shift_strategy(
             required_fuel_saving_pct=required_fuel_saving_pct,
         )
 
+        # Phase 2 confidence lift: for telemetry-calibrated engine data, raise each
+        # PROVISIONAL decision to the calibration's confidence and relabel its evidence
+        # source. Pure pass-through for manual data (golden vectors unchanged). The RPM
+        # numbers are identical — only provenance/confidence rise because the anchors
+        # were measured. The manual PROVISIONAL cap still applies via _cap_for_source.
+        src = getattr(inputs, "engine_data_source", "manual")
+        calib = getattr(inputs, "calibration_confidence", "")
+        qual_decisions = list(_lift_decisions_for_source(qual_decisions, src, calib))
+        race_decisions_list = list(_lift_decisions_for_source(race_decisions_list, src, calib))
+
+        # Include ALL decisions (valid and invalid) so one below-powerband pair
+        # drags the overall confidence down to INSUFFICIENT_EVIDENCE as the brief
+        # requires: "overall confidence = weakest across covered pairs".
+        qual_confidences = [d.confidence for d in qual_decisions]
+        if not qual_confidences:
+            qual_confidences = [ShiftConfidence.INSUFFICIENT_EVIDENCE]
+
+        qual_overall = _cap_for_source(_weakest(qual_confidences), src)
+
+        qualifying_profile = ShiftProfile(
+            mode="qualifying",
+            decisions=tuple(qual_decisions),
+            overall_confidence=qual_overall,
+        )
+
         race_confidences = [d.confidence for d in race_decisions_list]
         if not race_confidences:
             race_confidences = [ShiftConfidence.INSUFFICIENT_EVIDENCE]
 
-        race_overall = _cap_at_provisional(_weakest(race_confidences))
+        race_overall = _cap_for_source(_weakest(race_confidences), src)
 
         race_profile = ShiftProfile(
             mode="race",
@@ -852,18 +913,24 @@ def compute_shift_strategy(
         )
 
         # --- Overall ---
-        overall = _cap_at_provisional(
-            _weakest([qual_overall, race_overall])
-        )
+        overall = _cap_for_source(_weakest([qual_overall, race_overall]), src)
 
         # Evidence summary
         valid_pairs = sum(1 for d in qual_decisions if d.valid)
-        evidence_summary = (
-            f"{valid_pairs} of {n_pairs} gear pair(s) computed from manually entered "
-            f"engine data (peak power {peak_power_rpm} rpm, "
-            f"peak torque {peak_torque_rpm} rpm, redline {redline} rpm). "
-            "Confidence capped at PROVISIONAL — Phase 1 uses no telemetry calibration."
-        )
+        if src == "telemetry":
+            evidence_summary = (
+                f"{valid_pairs} of {n_pairs} gear pair(s) computed from telemetry-"
+                f"calibrated engine data (peak power {peak_power_rpm} rpm, peak torque "
+                f"{peak_torque_rpm} rpm, redline {redline} rpm). Calibrated from recorded "
+                f"wide-open-throttle pulls — confidence {overall.value.upper()}."
+            )
+        else:
+            evidence_summary = (
+                f"{valid_pairs} of {n_pairs} gear pair(s) computed from manually entered "
+                f"engine data (peak power {peak_power_rpm} rpm, "
+                f"peak torque {peak_torque_rpm} rpm, redline {redline} rpm). "
+                "Confidence capped at PROVISIONAL — enter telemetry calibration to raise it."
+            )
 
         return ShiftStrategyResult(
             car_id=inputs.car_id,
