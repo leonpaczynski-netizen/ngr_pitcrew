@@ -177,3 +177,77 @@ class TestLockControl:
         assert w._lock_btn.text() == "Lock the base setup"
         w._lock_btn.click()
         assert seen == [("base", True)]              # locks base, not race
+
+
+class TestCarRangesButton:
+    """AREA 1 — "Set car min/max ranges…" button opens the ranges editor."""
+
+    def test_button_exists(self, qapp):
+        w = SetupWorkspace()
+        assert hasattr(w, "_ranges_btn")
+        assert "ranges" in w._ranges_btn.text().lower()
+
+    def test_click_emits_car_ranges_requested(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.car_ranges_requested.connect(lambda: seen.append(True))
+        w._ranges_btn.click()
+        assert seen == [True]
+
+
+class TestGearingControls:
+    """AREA 2 — Transmission tab: 8 gear spins + final drive + top speed."""
+
+    def test_eight_gear_spins_exist(self, qapp):
+        w = SetupWorkspace()
+        assert len(w._gear_spins) == 8
+
+    def test_final_drive_and_top_speed_spins_exist(self, qapp):
+        w = SetupWorkspace()
+        assert hasattr(w, "_final_drive_spin")
+        assert hasattr(w, "_top_speed_spin")
+
+    def test_transmission_tab_button_exists(self, qapp):
+        w = SetupWorkspace()
+        assert hasattr(w, "_btn_transmission")
+        assert "transmission" in w._btn_transmission.text().lower()
+
+    def test_set_gearing_populates_spins_without_emitting(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.gearing_changed.connect(seen.append)
+        w.set_gearing(gear_ratios=[3.1, 2.2, 1.6, 1.2, 0.9],
+                      final_drive=3.705, transmission_max_speed_kmh=280.0)
+        assert w._gear_spins[0].value() == pytest.approx(3.1, abs=0.001)
+        assert w._gear_spins[4].value() == pytest.approx(0.9, abs=0.001)
+        assert w._gear_spins[5].value() == pytest.approx(0.0, abs=0.001)  # unused
+        assert w._final_drive_spin.value() == pytest.approx(3.705, abs=0.001)
+        assert w._top_speed_spin.value() == pytest.approx(280.0, abs=0.5)
+        assert seen == [], "set_gearing must not emit gearing_changed"
+
+    def test_on_gearing_edited_emits_only_nonzero_gears(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.gearing_changed.connect(seen.append)
+        w.set_gearing(gear_ratios=[3.1, 2.2, 1.6], final_drive=3.705,
+                      transmission_max_speed_kmh=280.0)
+        w._on_gearing_edited()
+        assert len(seen) == 1
+        d = seen[0]
+        assert d["gear_ratios"] == pytest.approx([3.1, 2.2, 1.6], abs=0.001)
+        assert d["final_drive"] == pytest.approx(3.705, abs=0.001)
+        assert d["transmission_max_speed_kmh"] == pytest.approx(280.0, abs=0.5)
+
+    def test_show_transmission_group_selects_tab(self, qapp):
+        w = SetupWorkspace()
+        w.show_transmission_group()
+        assert w._stack.currentIndex() == 5
+        assert w._btn_transmission.isChecked() is True
+
+    def test_gearing_signal_declared(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.gearing_changed.connect(seen.append)
+        w.gearing_changed.emit({"gear_ratios": [3.0], "final_drive": 3.5,
+                                "transmission_max_speed_kmh": 260.0})
+        assert len(seen) == 1

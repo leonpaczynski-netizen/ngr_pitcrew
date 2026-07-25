@@ -563,3 +563,110 @@ def test_show_shift_strategy_tab_switches_stack(qapp):
     gp = SetupWorkspace()
     gp.show_shift_strategy_tab()
     assert gp._stack.currentIndex() == 4
+
+
+# ---------------------------------------------------------------------------
+# AREA 3 — RunCard compound selector
+# ---------------------------------------------------------------------------
+
+class TestRunCardCompoundSelector:
+    """The run-card compound selector lets the driver tag a test run with a compound
+    without saving it into the setup (AREA 3)."""
+
+    def test_compound_combo_exists(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        assert hasattr(rc, "_compound_combo")
+
+    def test_compound_widget_hidden_by_default(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        assert rc._compound_widget.isHidden() is True
+
+    def test_set_compound_options_shows_widget(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        rc.set_compound_options(["RH", "RM", "RS"])
+        assert rc._compound_widget.isHidden() is False
+
+    def test_set_compound_options_empty_hides_widget(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        rc.set_compound_options(["RH", "RM"])
+        rc.set_compound_options([])
+        assert rc._compound_widget.isHidden() is True
+
+    def test_picking_emits_compound_change_requested(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        seen = []
+        rc.compound_change_requested.connect(seen.append)
+        rc.set_compound_options(["RH", "RM", "RS"])
+        rc._on_compound_picked(1)   # pick RM
+        assert seen == ["RM"]
+
+    def test_preselected_compound_is_active(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        rc.set_compound_options(["RH", "RM", "RS"], preselected="RM")
+        assert rc._compound_combo.currentIndex() == 1
+
+    def test_set_compound_options_does_not_emit(self, qapp):
+        """set_compound_options must not fire compound_change_requested."""
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        seen = []
+        rc.compound_change_requested.connect(seen.append)
+        rc.set_compound_options(["RH", "RM", "RS"], preselected="RS")
+        assert seen == []
+
+    def test_compound_change_requested_signal_declared(self, qapp):
+        from ui.components.run_card import RunCard
+        rc = RunCard()
+        seen = []
+        rc.compound_change_requested.connect(seen.append)
+        rc.compound_change_requested.emit("RS")
+        assert seen == ["RS"]
+
+
+# ---------------------------------------------------------------------------
+# AREA 2 — show_transmission_group routes from go_to_tab
+# ---------------------------------------------------------------------------
+
+def test_show_transmission_group_switches_stack(qapp):
+    """show_transmission_group must select the Transmission entry page."""
+    from ui.components.setup_workspace import SetupWorkspace
+    gp = SetupWorkspace()
+    gp.show_transmission_group()
+    assert gp._stack.currentIndex() == 5
+    assert gp._btn_transmission.isChecked() is True
+
+
+# ---------------------------------------------------------------------------
+# Render smoke — build PitCrewShell, feed Garage, processEvents, no crash
+# ---------------------------------------------------------------------------
+
+def test_pit_crew_shell_garage_smoke(qapp):
+    """Full shell + bridge construction with sample data — must not crash."""
+    from PyQt6.QtWidgets import QApplication
+    from ui.pit_crew_shell import PitCrewShell
+    from ui.pit_crew_controller import PitCrewController
+
+    ctrl = PitCrewController()
+    shell = PitCrewShell(ctrl)
+
+    # Feed sample data into the Garage
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    vm = build_recommendation_vm({
+        "status": "approved",
+        "changes": [{"field": "arb_front", "from": 5, "to": 4, "reason": "test"}],
+        "setup_fields": {"arb_front": 4},
+    })
+    gp = getattr(shell, "garage_page", None)
+    if gp is not None:
+        gp.set_recommendation(vm, setup_values={"arb_front": 5})
+        gp.set_gearing(gear_ratios=[3.1, 2.2, 1.6], final_drive=3.705,
+                       transmission_max_speed_kmh=280.0)
+
+    QApplication.processEvents()
+    shell.close()

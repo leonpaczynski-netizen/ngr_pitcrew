@@ -127,6 +127,8 @@ class SetupWorkspace(QWidget):
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
+    car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
+    gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -268,8 +270,10 @@ class SetupWorkspace(QWidget):
         self._btn_compare.setText("Compare")
         self._btn_shift_strategy = QToolButton()
         self._btn_shift_strategy.setText("Shift Strategy")
+        self._btn_transmission = QToolButton()
+        self._btn_transmission.setText("Transmission")
         for b in (self._btn_changed, self._btn_full, self._btn_lineage,
-                  self._btn_compare, self._btn_shift_strategy):
+                  self._btn_compare, self._btn_shift_strategy, self._btn_transmission):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(SetupDisciplineSelector._qss())
@@ -283,6 +287,7 @@ class SetupWorkspace(QWidget):
         self._btn_compare.clicked.connect(lambda: self._stack.setCurrentIndex(3))
         self._btn_shift_strategy.clicked.connect(
             lambda: self._stack.setCurrentIndex(4))
+        self._btn_transmission.clicked.connect(lambda: self._stack.setCurrentIndex(5))
         lay.addLayout(view_row)
 
         self._stack = QStackedWidget()
@@ -343,6 +348,84 @@ class SetupWorkspace(QWidget):
         self.shift_strategy_view = ShiftStrategyView()
         self._stack.addWidget(self.shift_strategy_view)
 
+        # Page 5 — editable Transmission entry (gear ratios, final drive, top speed)
+        # Per-discipline: Race and Qualifying hold independent gearing. The 750ms feed
+        # loads whichever discipline is selected; editingFinished emits gearing_changed.
+        from PyQt6.QtWidgets import QDoubleSpinBox, QGridLayout
+        trans_page = QWidget()
+        tp = QVBoxLayout(trans_page)
+        tp.setContentsMargins(0, _t.SPACE_SM, 0, _t.SPACE_SM)
+        tp.setSpacing(_t.SPACE_SM)
+        _trans_note = QLabel(
+            "Enter the gear ratios for this discipline. "
+            "Leave unused gears at 0 — they are omitted from the saved sheet. "
+            "Changes are per-discipline: Race and Qualifying hold independent gearing.")
+        _trans_note.setWordWrap(True)
+        _trans_note.setStyleSheet(
+            f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        tp.addWidget(_trans_note)
+        _gear_grid = QGridLayout()
+        _gear_grid.setHorizontalSpacing(_t.SPACE_MD)
+        _gear_grid.setVerticalSpacing(2)
+        _gear_qss = (
+            f"QDoubleSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+        self._gear_spins: list = []
+        for i, lbl in enumerate(
+                ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]):
+            _gc = QLabel(lbl)
+            _gc.setStyleSheet(
+                f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+            _gc.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            _gear_grid.addWidget(_gc, 0, i)
+            _gs = QDoubleSpinBox()
+            _gs.setRange(0.0, 5.000)
+            _gs.setSingleStep(0.001)
+            _gs.setDecimals(3)
+            _gs.setSpecialValueText("—")   # 0.000 = unused gear
+            _gs.setMinimumHeight(_t.TOUCH_MIN_H)
+            _gs.setMaximumWidth(90)
+            _gs.setStyleSheet(_gear_qss)
+            _gs.editingFinished.connect(self._on_gearing_edited)
+            _gear_grid.addWidget(_gs, 1, i)
+            self._gear_spins.append(_gs)
+        # Final drive
+        _fd_cap = QLabel("Final")
+        _fd_cap.setStyleSheet(
+            f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        _fd_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        _gear_grid.addWidget(_fd_cap, 0, 8)
+        self._final_drive_spin = QDoubleSpinBox()
+        self._final_drive_spin.setRange(0.0, 9.999)
+        self._final_drive_spin.setSingleStep(0.001)
+        self._final_drive_spin.setDecimals(3)
+        self._final_drive_spin.setSpecialValueText("—")
+        self._final_drive_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._final_drive_spin.setMaximumWidth(90)
+        self._final_drive_spin.setStyleSheet(_gear_qss)
+        self._final_drive_spin.editingFinished.connect(self._on_gearing_edited)
+        _gear_grid.addWidget(self._final_drive_spin, 1, 8)
+        # Top speed / transmission max speed
+        _ts_cap = QLabel("Top speed (km/h)")
+        _ts_cap.setStyleSheet(
+            f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        _ts_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        _gear_grid.addWidget(_ts_cap, 0, 9)
+        self._top_speed_spin = QDoubleSpinBox()
+        self._top_speed_spin.setRange(0.0, 999.0)
+        self._top_speed_spin.setSingleStep(1.0)
+        self._top_speed_spin.setDecimals(0)
+        self._top_speed_spin.setSpecialValueText("—")
+        self._top_speed_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._top_speed_spin.setMaximumWidth(90)
+        self._top_speed_spin.setStyleSheet(_gear_qss)
+        self._top_speed_spin.editingFinished.connect(self._on_gearing_edited)
+        _gear_grid.addWidget(self._top_speed_spin, 1, 9)
+        tp.addLayout(_gear_grid)
+        tp.addStretch(1)
+        self._stack.addWidget(trans_page)
+
         lay.addWidget(self._stack, 1)
 
         # Actions
@@ -374,6 +457,9 @@ class SetupWorkspace(QWidget):
         act.addWidget(self._applied_in_game)
         act.addWidget(self._explain)
         act.addWidget(self._gearbox_btn)
+        self._ranges_btn = SecondaryActionButton("Set car min/max ranges…")
+        self._ranges_btn.clicked.connect(lambda: self.car_ranges_requested.emit())
+        act.addWidget(self._ranges_btn)
         act.addStretch(1)
         lay.addLayout(act)
 
@@ -624,3 +710,52 @@ class SetupWorkspace(QWidget):
         """Switch the Garage view to the Shift Strategy sub-tab."""
         self._btn_shift_strategy.setChecked(True)
         self._stack.setCurrentIndex(4)
+
+    def show_transmission_group(self) -> None:
+        """Switch to the editable Transmission sub-tab and focus the first gear spin.
+
+        Called by the bridge when the Shift Strategy stepper's "Enter gear ratios" step
+        is pressed — the driver lands on a tab where they can actually type the values,
+        instead of the read-only full setup sheet that was shown before.
+        """
+        self._btn_transmission.setChecked(True)
+        self._stack.setCurrentIndex(5)
+        if self._gear_spins:
+            self._gear_spins[0].setFocus()
+
+    def set_gearing(self, gear_ratios=(), final_drive: float = 0.0,
+                    transmission_max_speed_kmh: float = 0.0) -> None:
+        """Load the selected discipline's gearing values into the Transmission spins.
+
+        Blocks signals while setting so the programmatic population does not re-emit
+        ``gearing_changed`` (same pattern as ``set_shift_rpm``). Skips the update while
+        a spin has focus so a driver mid-edit is never overwritten by the 750ms feed.
+        """
+        all_spins = self._gear_spins + [self._final_drive_spin, self._top_speed_spin]
+        if any(s.hasFocus() for s in all_spins):
+            return
+        gears = list(gear_ratios or ())
+        for i, spin in enumerate(self._gear_spins):
+            spin.blockSignals(True)
+            spin.setValue(float(gears[i]) if i < len(gears) else 0.0)
+            spin.blockSignals(False)
+        self._final_drive_spin.blockSignals(True)
+        self._final_drive_spin.setValue(float(final_drive or 0.0))
+        self._final_drive_spin.blockSignals(False)
+        self._top_speed_spin.blockSignals(True)
+        self._top_speed_spin.setValue(float(transmission_max_speed_kmh or 0.0))
+        self._top_speed_spin.blockSignals(False)
+
+    def _on_gearing_edited(self) -> None:
+        """Emit the current gear-ratio dict when the driver commits a value.
+
+        Uses ``editingFinished`` (not ``valueChanged``) so the signal fires once when
+        the driver presses Enter or leaves the field, not on every spin tick.
+        Only ratios > 0 are included in gear_ratios — zeros represent unused gears and
+        are dropped, matching ``_gears()`` in ``strategy.setup_sheet``.
+        """
+        self.gearing_changed.emit({
+            "gear_ratios": [s.value() for s in self._gear_spins if s.value() > 0],
+            "final_drive": self._final_drive_spin.value(),
+            "transmission_max_speed_kmh": self._top_speed_spin.value(),
+        })

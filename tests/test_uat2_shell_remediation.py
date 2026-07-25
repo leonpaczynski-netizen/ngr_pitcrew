@@ -1504,3 +1504,204 @@ class TestStrategyEnginePlanWiring:
         bridge._push_plan_to_engine({"candidate_id": "z", "stints": ["display only"]})
         assert len(win._strategy_engine._stints) == original_count
     inputs_rows = []
+
+
+# ---------------------------------------------------------------------------
+# AREA 1 — Car min/max ranges button wired in the bridge
+# ---------------------------------------------------------------------------
+
+class TestCarRangesBridgeWiring:
+    """AREA 1: "Set car min/max ranges…" button must open CarRangesDialog and refresh."""
+
+    def test_car_ranges_requested_signal_exists_on_garage_page(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert hasattr(shell.garage_page, "car_ranges_requested")
+
+    def test_on_car_ranges_graceful_with_mocked_dialog(self, wired, monkeypatch):
+        """_on_car_ranges must open CarRangesDialog with the current car name.
+
+        The dialog is patched so no real QDialog is shown — the test only verifies
+        the handler is callable, passes the car name, and does not crash.
+        """
+        _shell, _win, _db, bridge = wired
+        opened = []
+
+        class _FakeDlg:
+            def __init__(self, car, parent):
+                opened.append(car)
+            ranges_saved = type("FakeSig", (), {
+                "connect": staticmethod(lambda _fn: None)})()
+            def exec(self):
+                return 0
+
+        # _on_car_ranges does a local `from ui.car_ranges_dialog import CarRangesDialog`.
+        # Patching the module attribute before the call lets the local import pick it up.
+        import ui.car_ranges_dialog as _dlg_mod  # ensure the module is in sys.modules
+        monkeypatch.setattr(_dlg_mod, "CarRangesDialog", _FakeDlg)
+        bridge._on_car_ranges()
+        assert len(opened) == 1   # dialog was attempted once with the car name
+
+    def test_ranges_button_exists_on_workspace(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert hasattr(shell.garage_page, "_ranges_btn")
+        assert "ranges" in shell.garage_page._ranges_btn.text().lower()
+
+
+# ---------------------------------------------------------------------------
+# AREA 2 — Gearing bridge wiring
+# ---------------------------------------------------------------------------
+
+class TestGearingBridge:
+    """AREA 2: gear-ratio entry in the Transmission tab writes the sheet; Race and
+    Qualifying sheets stay independent."""
+
+    def test_feed_gearing_loads_sheet_values_into_spins(self, wired):
+        shell, _win, _db, bridge = wired
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(
+            scope, "race",
+            {"gear_ratios": [3.1, 2.2, 1.6, 1.2, 0.9],
+             "final_drive": 3.705, "transmission_max_speed_kmh": 280.0,
+             "setup_label": "Race"})
+        bridge._discipline = "race"
+        bridge._feed_gearing(shell.garage_page)
+        gp = shell.garage_page
+        assert abs(gp._gear_spins[0].value() - 3.1) < 0.005
+        assert abs(gp._gear_spins[4].value() - 0.9) < 0.005
+        assert gp._gear_spins[5].value() == 0.0      # unused
+        assert abs(gp._final_drive_spin.value() - 3.705) < 0.005
+        assert abs(gp._top_speed_spin.value() - 280.0) < 1.0
+
+    def test_gearing_changed_signal_writes_to_sheet(self, wired):
+        shell, _win, _db, bridge = wired
+        shell.garage_page._baseline.click()   # author a sheet
+        bridge._discipline = "race"
+        gearing = {"gear_ratios": [3.1, 2.2, 1.6], "final_drive": 3.705,
+                   "transmission_max_speed_kmh": 280.0}
+        shell.garage_page.gearing_changed.emit(gearing)
+        sheet = bridge._setups.sheet("race")
+        assert sheet.gear_ratios == (3.1, 2.2, 1.6)
+        assert abs(sheet.get("final_drive") - 3.705) < 0.005
+
+    def test_race_and_qualifying_gearing_are_independent(self, wired):
+        shell, _win, _db, bridge = wired
+        shell.garage_page._baseline.click()   # author both sheets
+
+        # Set race gearing
+        bridge._discipline = "race"
+        shell.garage_page.gearing_changed.emit(
+            {"gear_ratios": [3.1, 2.2], "final_drive": 3.7,
+             "transmission_max_speed_kmh": 280.0})
+
+        # Switch to qualifying and set different gearing
+        bridge._discipline = "qualifying"
+        shell.garage_page.gearing_changed.emit(
+            {"gear_ratios": [3.5, 2.5], "final_drive": 4.0,
+             "transmission_max_speed_kmh": 260.0})
+
+        race_sheet = bridge._setups.sheet("race")
+        qual_sheet = bridge._setups.sheet("qualifying")
+        assert race_sheet.gear_ratios != qual_sheet.gear_ratios
+        assert race_sheet.gear_ratios == (3.1, 2.2)
+        assert qual_sheet.gear_ratios == (3.5, 2.5)
+
+    def test_transmission_tab_exists_on_garage_page(self, wired):
+        shell, _win, _db, _bridge = wired
+        assert hasattr(shell.garage_page, "_btn_transmission")
+        assert hasattr(shell.garage_page, "_gear_spins")
+        assert len(shell.garage_page._gear_spins) == 8
+
+    def test_show_transmission_group_switches_stack_to_5(self, wired):
+        shell, _win, _db, _bridge = wired
+        shell.garage_page.show_transmission_group()
+        assert shell.garage_page._stack.currentIndex() == 5
+
+
+# ---------------------------------------------------------------------------
+# AREA 3 — Tyre-test override
+# ---------------------------------------------------------------------------
+
+class TestTyreOverride:
+    """AREA 3: the run-card compound selector tags a test run WITHOUT mutating the saved
+    setup. The saved sheet's tyre_front/tyre_rear must remain unchanged."""
+
+    class _Tracker:
+        def __init__(self):
+            self.calls = []
+            self._current_compound = "RH"
+
+        def set_compound(self, c):
+            self.calls.append(c)
+            self._current_compound = c
+
+    def _wired_with_tracker(self, wired):
+        shell, win, db, bridge = wired
+        win._tracker = self._Tracker()
+        scope = bridge._setups.inputs().scope
+        bridge._setups._store.set(
+            scope, "race",
+            {"tyre_front": "Racing Hard", "tyre_rear": "Racing Hard",
+             "setup_label": "Race"})
+        return shell, win, db, bridge
+
+    def test_handler_calls_tracker_set_compound(self, wired):
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RS")
+        assert "RS" in win._tracker.calls
+
+    def test_handler_does_not_modify_saved_setup(self, wired):
+        shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RS")
+        sheet = bridge._setups.sheet("race")
+        # The sheet's tyre must remain Racing Hard — RS was for the test only
+        assert sheet.get("tyre_front") == "Racing Hard"
+        assert sheet.get("tyre_rear") == "Racing Hard"
+
+    def test_override_is_set_after_test_compound_change(self, wired):
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._on_test_compound_change("RM")
+        assert bridge._test_compound_override == "RM"
+
+    def test_push_active_compound_uses_override_when_run_is_open(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()   # open a run
+        bridge._on_test_compound_change("RS")
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RS"
+
+    def test_push_active_compound_uses_sheet_when_no_run_open(self, wired):
+        _shell, win, _db, bridge = self._wired_with_tracker(wired)
+        bridge._test_compound_override = "RS"
+        # No run open — override must be ignored
+        win._tracker.calls.clear()
+        bridge._push_active_compound("race")
+        assert win._tracker.calls and win._tracker.calls[-1] == "RH"  # sheet compound
+
+    def test_override_cleared_on_record_run(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        bridge._test_compound_override = "RS"
+        shell.run_card.record_requested.emit()
+        assert bridge._test_compound_override is None
+
+    def test_override_cleared_on_discard_run(self, wired):
+        shell, win, db, bridge = self._wired_with_tracker(wired)
+        bridge._last_guidance_view = _view()
+        bridge.refresh()
+        shell.run_card.start_requested.emit()
+        bridge._test_compound_override = "RS"
+        shell.run_card.discard_requested.emit()
+        assert bridge._test_compound_override is None
+
+    def test_run_card_compound_selector_is_populated_by_refresh(self, wired):
+        shell, _win, _db, bridge = self._wired_with_tracker(wired)
+        bridge.refresh()
+        # The event allows RH, RM, RS — the selector should have at least 2 options.
+        rc = shell.run_card
+        assert hasattr(rc, "_compound_codes")
+        assert len(rc._compound_codes) >= 2

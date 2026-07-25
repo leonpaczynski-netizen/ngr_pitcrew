@@ -155,6 +155,10 @@ class LiveShellBridge(QObject):
         #: event cycle clears it. Overrides the DB-persisted approved strategy only in
         #: the CURRENT session — the persisted row is never mutated here.
         self._live_accepted_plan = None
+        #: Tyre compound override for the current test run. Set by the run-card compound
+        #: selector; cleared when the run is recorded or discarded. The saved sheet is
+        #: NEVER mutated — only the tracker call and this override change.
+        self._test_compound_override: Optional[str] = None
         #: The strategy decision is recomputed ONCE PER LAP ("at the end of every lap"),
         #: not on every 750ms display tick — this is the driver's own model and it stops
         #: the replan warning flickering as live figures wobble mid-lap. The last audio
@@ -213,6 +217,10 @@ class LiveShellBridge(QObject):
                     gp.shift_rpm_recommend_requested.connect(self._on_shift_rpm_recommend)
                 if hasattr(gp, "lock_requested"):
                     gp.lock_requested.connect(self._on_lock_setup)
+                if hasattr(gp, "car_ranges_requested"):
+                    gp.car_ranges_requested.connect(self._on_car_ranges)
+                if hasattr(gp, "gearing_changed"):
+                    gp.gearing_changed.connect(self._on_gearing_changed)
         except Exception:
             pass
         try:
@@ -222,6 +230,12 @@ class LiveShellBridge(QObject):
                 sp.save_requested.connect(self._on_save_settings)
         except Exception:
             pass
+        # Route every remaining surface action to real behaviour.
+        # IMPORTANT: _c must be defined BEFORE the shift-strategy sv block so that
+        # the go_to_tab → _on_shift_go_to_tab connection actually fires (the original
+        # ordering left _c undefined in that scope, silently swallowing all sv wires).
+        shell = self._shell
+        _c = self._safe_connect
         # Shift strategy signals — the view lives on garage_page.shift_strategy_view.
         try:
             sv = getattr(
@@ -234,13 +248,11 @@ class LiveShellBridge(QObject):
                 _c(sv, "go_to_tab",             self._on_shift_go_to_tab)
         except Exception:
             pass
-        # Route every remaining surface action to real behaviour.
-        shell = self._shell
-        _c = self._safe_connect
         rc = getattr(shell, "run_card", None)
         _c(rc, "start_requested", self._on_start_run)
         _c(rc, "record_requested", self._on_record_run)
         _c(rc, "discard_requested", self._on_discard_run)
+        _c(rc, "compound_change_requested", self._on_test_compound_change)
         _c(getattr(shell, "garage_page", None), "applied_in_game_confirmed",
            self._on_applied_in_game)
         _c(getattr(shell, "feedback_form", None), "submitted", self._on_feedback)
@@ -416,6 +428,14 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         self._feed_run_review()
+        # Compound selector on the run card — separate try block so a failure here does
+        # not blank the run card itself.
+        try:
+            rc = getattr(self._shell, "run_card", None)
+            if rc is not None:
+                self._feed_run_compound_options(rc)
+        except Exception:
+            pass
 
     def _feed_run_review(self) -> None:
         """Show the laps of the run being reviewed — measured truth, not memory."""
@@ -618,6 +638,9 @@ class LiveShellBridge(QObject):
         # Remember which discipline the driver was practising, so a race run and a
         # qualifying run are told apart in Review rather than lumped together.
         self._run_discipline[int(decision.session_id or 0)] = self._discipline
+        # Clear the tyre-test override — the run is now bound and its compound tag is
+        # fixed; subsequent runs start fresh from the sheet compound.
+        self._test_compound_override = None
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -628,6 +651,9 @@ class LiveShellBridge(QObject):
         self.refresh()
 
     def _on_discard_run(self) -> None:
+        # Clear the tyre-test override — the discarded run never reached the programme,
+        # so the next run should start from the sheet compound again.
+        self._test_compound_override = None
         ok = self._runs.discard_run()
         self._run_status("Run discarded — nothing was recorded against the event."
                          if ok else "There was no open run to discard.")
@@ -1043,6 +1069,7 @@ class LiveShellBridge(QObject):
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
+            self._feed_gearing(gp)
             self._feed_lock(gp)
         except Exception:
             pass
@@ -1239,9 +1266,13 @@ class LiveShellBridge(QObject):
                 if hasattr(gp, "show_shift_strategy_tab"):
                     gp.show_shift_strategy_tab()
             else:
-                # Default: navigate to the full setup sheet (index 1) so the
-                # driver sees the Transmission fields they need to fill in.
-                if hasattr(gp, "_btn_full") and hasattr(gp, "_stack"):
+                # Route to the editable Transmission entry group (AREA 2 fix): the driver
+                # can now type gear ratios directly instead of landing on the read-only
+                # full setup sheet and having nowhere to enter them.
+                if hasattr(gp, "show_transmission_group"):
+                    gp.show_transmission_group()
+                elif hasattr(gp, "_btn_full") and hasattr(gp, "_stack"):
+                    # Fallback for any older garage_page without the new tab.
                     gp._btn_full.setChecked(True)
                     gp._stack.setCurrentIndex(1)
         except Exception:
@@ -1443,16 +1474,26 @@ class LiveShellBridge(QObject):
         called it, so a run driven from the new shell recorded a stale/default compound —
         a qualifying run on soft tyres was logged as the race hard the classic default
         still held. The selected discipline's setup compound is now pushed each refresh.
+
+        When the driver has picked a test compound via the run-card selector AND a run is
+        open, the test override is used instead of the sheet compound — the saved setup is
+        never mutated in that path (AREA 3 contract).
         """
         try:
             tracker = getattr(self._window, "_tracker", None)
             if tracker is None or not hasattr(tracker, "set_compound"):
                 return
             from strategy.tyre_selection import current_code
-            # The compound is a sheet value in its own right — do NOT gate on is_authored
-            # (which only looks at numeric fields), or a sheet whose only change is the
-            # tyre would never push its compound.
-            code = current_code(self._setups.sheet(discipline).as_dict())
+            # Prefer the tyre-test override while a run is open.  The override is set by
+            # _on_test_compound_change (which explicitly does NOT call _setups.apply) and
+            # cleared in _on_record_run / _on_discard_run.
+            if self._test_compound_override and self._runs.open_run():
+                code = self._test_compound_override
+            else:
+                # The compound is a sheet value in its own right — do NOT gate on
+                # is_authored (which only looks at numeric fields), or a sheet whose only
+                # change is the tyre would never push its compound.
+                code = current_code(self._setups.sheet(discipline).as_dict())
             if code:
                 tracker.set_compound(code)
         except Exception:
@@ -1476,6 +1517,114 @@ class LiveShellBridge(QObject):
                     required=getattr(ev, "required_tyres", ()) or (),
                     race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
                 current_code(setup))
+        except Exception:
+            pass
+
+    def _feed_gearing(self, garage) -> None:
+        """Load the selected discipline's gear ratios into the Transmission entry group.
+
+        Called from _feed_garage next to _feed_tyres/_feed_shift_rpm. Per-discipline
+        separation is automatic: the sheet is keyed by discipline, so Race and Qualifying
+        hold independent gearing and the 750ms feed always loads the selected one.
+        """
+        try:
+            if not hasattr(garage, "set_gearing"):
+                return
+            sheet = self._setups.sheet(self._discipline)
+            garage.set_gearing(
+                gear_ratios=sheet.gear_ratios,
+                final_drive=float(sheet.get("final_drive") or 0.0),
+                transmission_max_speed_kmh=float(
+                    sheet.get("transmission_max_speed_kmh") or 0.0))
+        except Exception:
+            pass
+
+    def _on_gearing_changed(self, gearing: dict) -> None:
+        """Write the driver's gear-ratio entry onto the selected discipline's sheet.
+
+        Calls ``self._setups.apply`` so the change goes through the canonical clamp +
+        authority + persistence path — the same write path as every other setup change.
+        Per-discipline separation is automatic: apply is keyed on self._discipline, so
+        Race and Qualifying never share gear values.
+        """
+        if not gearing:
+            return
+        outcome = self._setups.apply(self._discipline, gearing)
+        if outcome.ok:
+            self._mirror_to_classic(self._discipline)
+        self._garage_status(outcome.reason or "Gearing updated.")
+        self.refresh()
+
+    def _on_car_ranges(self) -> None:
+        """Open the per-car min/max ranges editor from the new Garage.
+
+        Classic UI surfaced this via the Setup Builder tab; the new shell had no path
+        to it. The dialog itself is unchanged — this just opens it with the current
+        car name, and re-runs refresh() when ranges are saved so the next baseline or
+        analyse picks them up.
+        """
+        try:
+            from ui.car_ranges_dialog import CarRangesDialog
+            car = str(self._setups.inputs().car or "")
+            dlg = CarRangesDialog(car, self._shell)
+            dlg.ranges_saved.connect(lambda _cn: self.refresh())
+            dlg.exec()
+        except Exception:
+            pass
+
+    def _on_test_compound_change(self, code: str) -> None:
+        """Tag the current test run with a different compound WITHOUT modifying the saved setup.
+
+        This is a tyre TEST: the driver wants to lap on a different compound and have the
+        laps tagged correctly, but the setup itself (which owns the compound field) must not
+        change. So this handler:
+          1. calls tracker.set_compound(code) directly — same as _push_active_compound —
+             so the telemetry recorder picks up the new compound immediately.
+          2. stores _test_compound_override so _push_active_compound prefers it on every
+             750ms tick while the run is open.
+        It deliberately does NOT call self._setups.apply — the sheet's tyre_front /
+        tyre_rear are untouched.
+        """
+        try:
+            code = str(code or "").strip().upper()
+            if not code:
+                return
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is not None and hasattr(tracker, "set_compound"):
+                tracker.set_compound(code)
+            self._test_compound_override = code
+        except Exception:
+            pass
+
+    def _feed_run_compound_options(self, rc) -> None:
+        """Populate the run-card compound selector with event-allowed compounds.
+
+        Pre-selects the first un-sampled compound so the driver is nudged toward running
+        every allowed compound (the programme requires it). The driver can always override
+        the pre-selection — it is a nudge, not a lock.
+        """
+        try:
+            if not hasattr(rc, "set_compound_options"):
+                return
+            from strategy.tyre_selection import build_tyre_choice
+            ev = None
+            try:
+                ev = self._window._build_event_context()
+            except Exception:
+                ev = None
+            choice = build_tyre_choice(
+                discipline=self._discipline,
+                available=getattr(ev, "available_tyres", ()) or (),
+                required=getattr(ev, "required_tyres", ()) or (),
+                race_duration_minutes=float(
+                    getattr(ev, "race_duration_minutes", 0) or 0))
+            codes = [o.code for o in (choice.options or ())]
+            # Pre-select the first compound not yet sampled: a nudge toward covering all.
+            required, sampled = self._tyre_compound_coverage()
+            sampled_up = {s.upper() for s in sampled}
+            unsampled = [c for c in codes if c.upper() not in sampled_up]
+            preselected = unsampled[0] if unsampled else ""
+            rc.set_compound_options(codes, preselected=preselected)
         except Exception:
             pass
 
