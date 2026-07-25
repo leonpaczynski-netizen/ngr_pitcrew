@@ -118,6 +118,7 @@ def build_strategy_evidence_from_session(
             fuel_use_samples=samples.fuel_samples,
             tyre_wear_samples=samples.tyre_samples,
             compound_samples={c: list(v) for c, v in samples.compound_samples.items()},
+            compound_tyre_profiles=dict(samples.compound_tyre_profiles or {}),
             no_abs=no_abs,
         )
 
@@ -237,8 +238,9 @@ def _build_source_summary(
         if samples.fuel_samples else "missing"
     )
     if samples.tyre_samples:
+        n_meas = len(samples.tyre_samples)
         sources["tyre_degradation"] = (
-            f"SessionDB derived from lap-time drift ({len(samples.tyre_samples)} increments)"
+            f"SessionDB derived ({n_meas} laps, Theil-Sen slope per stint)"
         )
     else:
         sources["tyre_degradation"] = "missing"

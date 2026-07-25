@@ -66,7 +66,9 @@ class TestComparison:
         assert by_id["2stop"]["gap_to_best"].startswith("+")
 
     def test_total_time_displayed(self, vm):
-        assert vm.estimated_total_time == "51:52.0"
+        # Timed race: total ≈ 50 min (old value "51:52.0" was a bug — pit time
+        # was added on top of a fixed lap count instead of deducted from green time).
+        assert vm.estimated_total_time == "50:01.3"
 
 
 class TestEvidence:

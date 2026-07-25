@@ -30,8 +30,14 @@ PURITY / SAFETY
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 from typing import Optional, Sequence
+
+from strategy.tyre_evidence import (
+    CompoundTyreProfile,
+    build_compound_profile,
+    _theil_sen_slope,
+)
 
 # Minimum consecutive same-compound clean laps needed to derive a tyre-wear proxy.
 MIN_STINT_LAPS_FOR_WEAR: int = 3
@@ -67,6 +73,7 @@ class SessionStrategySamples:
     pit_samples: tuple[int, ...] = ()            # lap numbers flagged as pit laps
     weather_samples: tuple[str, ...] = ()        # not stored per-lap; usually empty
     consistency_samples: float = 0.0             # coefficient of variation of lap_samples
+    compound_tyre_profiles: dict = field(default_factory=dict)  # {compound: CompoundTyreProfile}
 
     missing_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -185,12 +192,16 @@ def extract_session_strategy_samples(
                 compound_samples.setdefault(comp, []).append(lt / 1000.0)
         compound_samples = {c: tuple(v) for c, v in compound_samples.items()}
 
-        # --- tyre-wear proxy (derived from lap-time drift within a stint) ---
+        # --- tyre-wear proxy (Theil-Sen slope per same-compound stint) ---
         tyre_derived = False
         tyre_samples: tuple[float, ...] = ()
         if derive_tyre_wear:
             tyre_samples = _derive_tyre_wear(clean_rows)
             tyre_derived = bool(tyre_samples)
+
+        # --- per-compound tyre evidence profiles ---
+        mean_fuel = mean(fuel_samples) if fuel_samples else 0.0
+        compound_tyre_profiles = _build_compound_tyre_profiles(compound_samples, mean_fuel)
 
         # --- pit laps ---
         pit_samples = tuple(
@@ -241,6 +252,7 @@ def extract_session_strategy_samples(
             pit_samples=pit_samples,
             weather_samples=(),
             consistency_samples=consistency,
+            compound_tyre_profiles=compound_tyre_profiles,
             missing_fields=tuple(missing),
             warnings=tuple(warnings),
             source_summary=source_summary,
@@ -297,30 +309,37 @@ def _lap_fuel(row: dict) -> float:
 
 
 def _derive_tyre_wear(clean_rows: list[dict]) -> tuple[float, ...]:
-    """Derive per-lap pace-loss increments from within-stint lap-time drift.
+    """Derive per-lap tyre-wear rate from within-stint lap-time drift.
 
-    Walks clean laps grouped into consecutive same-compound runs; within each run
-    of at least MIN_STINT_LAPS_FOR_WEAR laps, records the positive lap-to-lap
-    increases (seconds). Negative deltas (car speeding up on lighter fuel /
-    driver improving) contribute nothing. Returns the concatenated increments, or
-    an empty tuple when no run is long enough.
+    Walks clean laps grouped into consecutive same-compound runs.  For each run of
+    at least MIN_STINT_LAPS_FOR_WEAR laps, computes the Theil-Sen slope (median
+    of all pairwise lap-to-lap slopes in seconds/lap), clamped to ≥ 0.
+
+    Returns the slope value replicated ``measured_laps`` times for each qualifying
+    stint (concatenated across stints).  This preserves the count semantics used by
+    ``RaceStrategyEvidence.has_long_run_data()`` while returning ~0 for flat data
+    (instead of the fabricated positive produced by the old positive-increment method).
+    Returns an empty tuple when no run is long enough.
+
+    BUG FIX vs old implementation:  The previous approach summed only positive
+    lap-to-lap increments, producing spurious wear (~0.46 s/lap) on flat data from
+    random measurement scatter.  Theil-Sen returns ≈ 0 for flat data.
     """
     if not clean_rows:
         return ()
 
-    increments: list[float] = []
-    run: list[tuple[int, float, str]] = []  # (lap_num, lap_time_s, compound)
+    slope_samples: list[float] = []   # replicated slope × measured_laps per stint
+    run: list[tuple[int, float]] = [] # (lap_num, lap_time_s) within current stint
+    prev_lap: Optional[int] = None
+    prev_comp: Optional[str] = None
 
-    def _flush(r):
+    def _flush(r: list[tuple[int, float]]) -> None:
         if len(r) < MIN_STINT_LAPS_FOR_WEAR:
             return
-        for i in range(1, len(r)):
-            d = r[i][1] - r[i - 1][1]
-            if d > 0:
-                increments.append(round(d, 3))
+        slope = _theil_sen_slope(r)
+        slope = max(0.0, slope)  # degradation is never negative
+        slope_samples.extend([round(slope, 4)] * len(r))
 
-    prev_lap = None
-    prev_comp = None
     for row in clean_rows:
         lt = row.get("lap_time_ms")
         if not _pos(lt):
@@ -331,11 +350,39 @@ def _derive_tyre_wear(clean_rows: list[dict]) -> tuple[float, ...]:
         if run and not contiguous:
             _flush(run)
             run = []
-        run.append((lap_num, lt / 1000.0, comp))
+        run.append((lap_num, lt / 1000.0))
         prev_lap, prev_comp = lap_num, comp
     _flush(run)
 
-    return tuple(increments)
+    return tuple(slope_samples)
+
+
+def _build_compound_tyre_profiles(
+    compound_samples: dict,
+    mean_fuel_per_lap: float = 0.0,
+) -> dict:
+    """Build a {compound: CompoundTyreProfile} map from per-compound lap sequences.
+
+    ``compound_samples`` is the {compound: (lap_time_s, ...)} dict produced by
+    ``extract_session_strategy_samples``.  Pit loss and fuel limit are not known
+    at the adapter layer, so optimal_stint_laps is left to the caller (engine)
+    that has event settings.  Returns an empty dict on any error.
+    """
+    try:
+        profiles: dict = {}
+        for compound, times in (compound_samples or {}).items():
+            fuel_limit = (
+                int(100.0 // mean_fuel_per_lap) if mean_fuel_per_lap > 0 else 0
+            )
+            profiles[str(compound)] = build_compound_profile(
+                str(compound),
+                list(times or []),
+                pit_loss_s=0.0,        # event-specific; filled downstream
+                fuel_limit_laps=fuel_limit,
+            )
+        return profiles
+    except Exception:
+        return {}
 
 
 def _consistency(lap_samples: Sequence[float]) -> float:

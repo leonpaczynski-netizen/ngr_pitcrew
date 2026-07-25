@@ -43,8 +43,11 @@ class TestFullScenario:
         assert check.tyre_proxy_found
 
     def test_one_vs_two_stop_comparison(self, check):
-        assert check.one_stop_total_time == "51:52.0"
-        assert check.two_stop_total_time == "52:28.0"
+        # Timed race: totals changed from old buggy values ("51:52.0", "52:28.0")
+        # which added pit time on top of a fixed lap count.  New values reflect
+        # the correct model: green_time = duration - pit_time; total ≈ race window.
+        assert check.one_stop_total_time == "50:01.3"
+        assert check.two_stop_total_time == "48:57.7"
         assert check.candidate_count >= 2
 
     def test_recommended_is_one_stop(self, check):

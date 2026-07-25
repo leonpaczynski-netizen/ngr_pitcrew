@@ -97,9 +97,11 @@ class TestReads:
     def test_derives_tyre_wear_from_lap_drift(self):
         db, sid = _good_db()
         s = extract_session_strategy_samples(db, sid)
-        # 5 rising laps → 4 positive +0.08s increments.
+        # 5 rising laps → Theil-Sen slope = 0.08 s/lap, replicated 5 times (one per
+        # measured lap, not per increment).  Old implementation returned 4 increments;
+        # new Theil-Sen returns [slope] × measured_laps so len = 5.
         assert s.tyre_wear_derived
-        assert len(s.tyre_samples) == 4
+        assert len(s.tyre_samples) == 5
         assert all(x == pytest.approx(0.08, abs=1e-3) for x in s.tyre_samples)
 
     def test_fuel_from_start_minus_end_when_used_absent(self):

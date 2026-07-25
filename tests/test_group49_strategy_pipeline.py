@@ -67,9 +67,27 @@ class TestPipeline:
         assert r.confidence in set(StrategyConfidence)
 
     def test_ranked_by_total_time(self, db):
+        # This is a 50-min TIMED race (race_duration_minutes=50, race_laps=0).
+        # Timed races are ranked by laps completed (descending): a plan that
+        # completes more laps wins.  Total elapsed time is NOT monotonically
+        # increasing in rank order — a plan with more laps also accrues more
+        # green-lap time, so its total can be higher.  Verify that rank 1 has
+        # the most laps (or equal laps with lower elapsed time = tie-break).
         r = _run(db, _seed(db))
-        times = [s.estimated_total_time_seconds for s in r.scored_candidates]
-        assert times == sorted(times)
+        ranked = r.scored_candidates
+        assert len(ranked) >= 2
+        cand_by_id = {c.candidate_id: c for c in r.candidates}
+        laps_by_rank = [
+            sum(cand_by_id[s.candidate_id].estimated_laps_per_stint)
+            for s in ranked
+            if s.candidate_id in cand_by_id
+        ]
+        # Each candidate should have at least as many laps as the next-ranked.
+        for i in range(len(laps_by_rank) - 1):
+            assert laps_by_rank[i] >= laps_by_rank[i + 1], (
+                f"rank {i+1} has {laps_by_rank[i]} laps but rank {i+2} has "
+                f"{laps_by_rank[i+1]} laps — timed race must rank by most laps"
+            )
 
     def test_recommendation_is_legal(self, db):
         r = _run(db, _seed(db))

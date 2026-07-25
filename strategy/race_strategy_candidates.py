@@ -209,7 +209,26 @@ def _build_candidate(
 ) -> StrategyCandidate:
     """Assemble one candidate with its deterministic fuel + pit maths."""
     n_stints = pit_count + 1
-    laps_per_stint = _distribute_laps(race_laps, n_stints)
+
+    # For TIMED races the number of completable laps is per-candidate (it depends
+    # on pit time, which in turn depends on stint length).  We use a two-pass
+    # approach to break the circularity: first estimate laps ignoring refuel time
+    # (using only the pit-lane loss), compute refuel from those stints, then
+    # correct lap count using the actual total pit time.  For LAP races the
+    # authoritative race_laps is used unchanged.
+    is_timed = evidence.race_duration_minutes > 0 and evidence.race_laps == 0
+    duration_s = evidence.race_duration_minutes * 60.0 if is_timed else 0.0
+    mean_lap_s = evidence.representative_lap_s() if is_timed else 0.0
+    pit_loss = evidence.pit_loss_seconds if evidence.pit_loss_seconds > 0 else 0.0
+
+    if is_timed and mean_lap_s > 0:
+        # Pass 1: laps using only pit-lane loss (no refuel yet)
+        green_s1 = max(0.0, duration_s - pit_count * pit_loss)
+        laps_est = max(n_stints, math.floor(green_s1 / mean_lap_s))
+    else:
+        laps_est = race_laps
+
+    laps_per_stint = _distribute_laps(laps_est, n_stints)
 
     # Compound plan: an explicit sequence (compound-switch) or a single compound
     # repeated.  When an event mandates compounds, weave them across the stints.
@@ -223,32 +242,30 @@ def _build_candidate(
     fuel_map_plan = [fuel_map] * n_stints
     consumption_factor = _consumption_factor(fuel_map)
 
+    # --- fuel + refuel maths (only when fuel use is known) ---
+    fuel_known = fuel_per_lap > 0.0
+    refuel_known = evidence.refuel_rate_lps > 0.0
+
+    total_fuel, refuel_total, fuel_infeasible = _compute_fuel(
+        laps_per_stint, fuel_per_lap, consumption_factor, evidence, fuel_known, refuel_known
+    )
+    pit_time = pit_count * pit_loss + refuel_total
+
+    # Pass 2 (timed races only): correct lap count using actual pit_time.
+    if is_timed and mean_lap_s > 0:
+        green_s2 = max(0.0, duration_s - pit_time)
+        laps_final = max(n_stints, math.floor(green_s2 / mean_lap_s))
+        if laps_final != laps_est:
+            laps_per_stint = _distribute_laps(laps_final, n_stints)
+            total_fuel, refuel_total, fuel_infeasible = _compute_fuel(
+                laps_per_stint, fuel_per_lap, consumption_factor, evidence, fuel_known, refuel_known
+            )
+            pit_time = pit_count * pit_loss + refuel_total
+
     stints = [
         {"compound": compound_plan[i], "laps": laps_per_stint[i], "fuel_map": fuel_map}
         for i in range(n_stints)
     ]
-
-    # --- fuel + refuel maths (only when fuel use is known) ---
-    total_fuel = 0.0
-    refuel_total = 0.0
-    fuel_known = fuel_per_lap > 0.0
-    refuel_known = evidence.refuel_rate_lps > 0.0
-    fuel_infeasible = False
-
-    if fuel_known:
-        for i, laps in enumerate(laps_per_stint):
-            stint_fuel = fuel_per_lap * laps * consumption_factor
-            total_fuel += stint_fuel
-            if stint_fuel > GT7_TANK_CAPACITY_L + 1e-6:
-                fuel_infeasible = True
-            # Refuel happens for every stint after the first (i.e. at each stop).
-            if i > 0 and refuel_known:
-                refuel_total += math.ceil(
-                    min(stint_fuel, GT7_TANK_CAPACITY_L) / evidence.refuel_rate_lps
-                )
-
-    pit_loss = evidence.pit_loss_seconds if evidence.pit_loss_seconds > 0 else 0.0
-    pit_time = pit_count * pit_loss + refuel_total
 
     # --- legality ---
     legality, reason = _legality(
@@ -267,6 +284,7 @@ def _build_candidate(
     explanation = _candidate_explanation(
         candidate_id, pit_count, laps_per_stint, compound_plan, fuel_map,
         legality, reason, fuel_known, refuel_known,
+        evidence=evidence,
     )
 
     return StrategyCandidate(
@@ -332,6 +350,31 @@ def _legality(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _compute_fuel(
+    laps_per_stint: list[int],
+    fuel_per_lap: float,
+    consumption_factor: float,
+    evidence: RaceStrategyEvidence,
+    fuel_known: bool,
+    refuel_known: bool,
+) -> tuple[float, float, bool]:
+    """Compute (total_fuel, refuel_total, fuel_infeasible) for a list of stint laps."""
+    total_fuel = 0.0
+    refuel_total = 0.0
+    fuel_infeasible = False
+    if fuel_known:
+        for i, laps in enumerate(laps_per_stint):
+            stint_fuel = fuel_per_lap * laps * consumption_factor
+            total_fuel += stint_fuel
+            if stint_fuel > GT7_TANK_CAPACITY_L + 1e-6:
+                fuel_infeasible = True
+            if i > 0 and refuel_known:
+                refuel_total += math.ceil(
+                    min(stint_fuel, GT7_TANK_CAPACITY_L) / evidence.refuel_rate_lps
+                )
+    return total_fuel, refuel_total, fuel_infeasible
+
 
 def _resolve_race_laps(evidence: RaceStrategyEvidence) -> int:
     """Race laps: authoritative for lap races, estimated for timed races.
@@ -449,6 +492,7 @@ def _candidate_explanation(
     reason: str,
     fuel_known: bool,
     refuel_known: bool,
+    evidence: Optional[RaceStrategyEvidence] = None,
 ) -> str:
     stint_desc = ", ".join(
         f"{laps_per_stint[i]} laps on {compound_plan[i]}" for i in range(len(laps_per_stint))
@@ -464,4 +508,40 @@ def _candidate_explanation(
         parts.append("Refuel rate is unknown, so refuel time is not included.")
     if legality == Legality.ILLEGAL:
         parts.append(f"ILLEGAL — {reason}.")
+
+    # Tyre-evidence caveats: flag stints whose length exceeds the tested lap count.
+    if evidence is not None:
+        caveats = _untested_stint_caveats(laps_per_stint, compound_plan, evidence)
+        parts.extend(caveats)
+
     return " ".join(parts)
+
+
+def _untested_stint_caveats(
+    laps_per_stint: list[int],
+    compound_plan: list[str],
+    evidence: RaceStrategyEvidence,
+) -> list[str]:
+    """Return caveat strings for any stint that exceeds the compound's tested lap count.
+
+    Uses compound_tyre_profiles from the evidence when available; silent when
+    no profiles exist (e.g. pure-evidence scenarios without a SessionDB session).
+    """
+    if not evidence.compound_tyre_profiles:
+        return []
+    seen: set[str] = set()
+    caveats: list[str] = []
+    for i, laps in enumerate(laps_per_stint):
+        comp = compound_plan[i] if i < len(compound_plan) else ""
+        if not comp or comp in seen:
+            continue
+        seen.add(comp)
+        profile = evidence.tyre_profile(comp)
+        if profile is None:
+            continue
+        if profile.tested_laps > 0 and laps > profile.known_good_laps:
+            caveats.append(
+                f"⚠ {comp} tested to {profile.tested_laps} laps — "
+                f"a {laps}-lap stint is UNVERIFIED; run a longer stint to find the cliff."
+            )
+    return caveats

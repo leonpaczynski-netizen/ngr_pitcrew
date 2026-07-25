@@ -86,7 +86,7 @@ class TestBuild:
         ev = build_strategy_evidence_from_session(db, session_id=sid, **_event_kwargs()).evidence
         assert len(ev.lap_time_samples) == 12
         assert ev.representative_lap_s() > 0
-        assert len(ev.tyre_wear_samples) == 11  # derived increments
+        assert len(ev.tyre_wear_samples) == 12  # Theil-Sen: [slope] × measured_laps
 
     def test_source_summary_identifies_sessiondb(self, db):
         sid = _seed(db)
