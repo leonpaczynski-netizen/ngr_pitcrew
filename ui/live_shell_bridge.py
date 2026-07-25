@@ -226,18 +226,17 @@ class LiveShellBridge(QObject):
             pass
 
     def _on_race_state(self, phase: str) -> None:
-        """Track the live race phase and keep the live session mode in step.
+        """Track the live race phase for the pit-wall display.
 
-        A live race ("RACING"/"IN PIT") asserts race mode so the shift beep and the
-        announcer use the race profile; "FINISHED" releases it. An explicit qualifying
-        session (Begin Qualifying) is only overridden once a real race is detected —
-        during qualifying GT7 does not report RACING, so the qualifying mode holds.
+        We deliberately do NOT infer "we are racing" from telemetry here — a practice or
+        qualifying session can look like RACING and the app would then apply the race
+        setup/RPM/plan by mistake. Entering race mode is an EXPLICIT driver action (Start
+        Race, see ``_on_start_race``). This only records the phase so the Live Pit Wall can
+        show "IN PIT" and the pit fuel call, and releases race mode when the race is over.
         """
         p = str(phase or "").upper()
         self._live_race_phase = p
-        if p in ("RACING", "IN PIT"):
-            self._live_session_mode = "race"
-        elif p == "FINISHED":
+        if p == "FINISHED" and self._live_session_mode == "race":
             self._live_session_mode = None
         self.refresh()
 
@@ -307,6 +306,7 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
         _c(getattr(shell, "strategy_page", None), "plan_selected", self._on_select_plan)
+        _c(getattr(shell, "strategy_page", None), "start_race_requested", self._on_start_race)
         _c(getattr(shell, "debrief_page", None), "action_requested", self._on_debrief_action)
         _c(getattr(shell, "library_page", None), "open_requested", self._on_library_open)
         _c(getattr(shell, "library_page", None), "back_requested", self._return_classic_tab)
@@ -789,8 +789,38 @@ class LiveShellBridge(QObject):
                 if hasattr(sp, "set_status") and not sp._status.text():
                     sp.set_status(f"Your approved plan ({saved.get('name', 'saved plan')}) "
                                   f"is loaded and will be used for the race.")
+            # Reflect race readiness so the Start Race control shows where the driver
+            # stands before committing to a race.
+            if hasattr(sp, "set_race_readiness"):
+                ready, blockers = self._race_readiness()
+                sp.set_race_readiness(ready, blockers)
         except Exception:
             pass
+
+    def _race_readiness(self) -> tuple:
+        """(ready, blockers): whether every stage is complete to start the race.
+
+        Blockers are plain-language and never hard-stop — Start Race can still commit with
+        a warning. The point is that the driver, not a telemetry guess, declares the race,
+        and does so knowing what (if anything) is still open.
+        """
+        blockers: list = []
+        try:
+            if not self._approved_strategy().get("candidate_id"):
+                blockers.append("race plan not approved")
+        except Exception:
+            pass
+        try:
+            if not self._setups.sheet("race").is_authored:
+                blockers.append("race setup not built")
+        except Exception:
+            pass
+        try:
+            if not self._has_recorded_run():
+                blockers.append("no practice runs recorded")
+        except Exception:
+            pass
+        return (not blockers, tuple(blockers))
 
     def _approved_strategy(self) -> dict:
         try:
@@ -1583,6 +1613,52 @@ class LiveShellBridge(QObject):
         # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
         # and the qualifying compound to the tracker, then re-feed the Garage for it.
         self._push_practice_mode("qualifying")
+        self._feed_garage()
+        self._navigate("live_pit_wall")
+
+    def _on_start_race(self) -> None:
+        """Explicitly START THE RACE — the driver's own signal that this is a race.
+
+        Preferred over guessing from telemetry: a practice/qualifying session can look
+        like a race, and inferring it would apply the race setup/RPM/plan by mistake. If
+        any stage is still open the driver is warned and can confirm; then the app KNOWS
+        it is racing and commits the race setup, race shift RPM, and the approved plan.
+        """
+        ready, blockers = self._race_readiness()
+        if not ready and blockers:
+            from PyQt6.QtWidgets import QMessageBox
+            body = ("Some stages are not complete yet:\n\n  •  "
+                    + "\n  •  ".join(blockers)
+                    + "\n\nStart the race anyway?")
+            answer = QMessageBox.warning(
+                self._shell, "Start Race", body,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._enter_race()
+
+    def _enter_race(self) -> None:
+        """Commit to race mode: race discipline setup + race shift RPM + the race plan."""
+        self._live_session_mode = "race"
+        self._discipline = "race"
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is not None and hasattr(gp, "set_discipline"):
+                gp.set_discipline("race")
+        except Exception:
+            pass
+        self._push_practice_mode("race")
+        # Load the plan the app will race to (the approved one, else the recommendation)
+        # so the Live Pit Wall shows it and PTT pit queries answer from it.
+        try:
+            approved = self._approved_strategy() or self._recommended_plan_dict()
+            if approved:
+                self._live_accepted_plan = approved
+                if approved.get("candidate_id"):
+                    self._push_plan_to_engine(approved)
+        except Exception:
+            pass
         self._feed_garage()
         self._navigate("live_pit_wall")
 

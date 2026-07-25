@@ -77,6 +77,9 @@ class StrategyPlanView(QWidget):
     build_requested = pyqtSignal()
     #: The driver chose a plan (candidate id) — the recommendation is advice, not a rule.
     plan_selected = pyqtSignal(str)
+    #: Explicitly START THE RACE — the app then KNOWS it is a race (not a mis-detected
+    #: practice session): race setup + race shift RPM, and the approved plan applied.
+    start_race_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,11 +130,50 @@ class StrategyPlanView(QWidget):
         self._approve = PrimaryActionButton()
         self._approve.clicked.connect(lambda: self.approve_requested.emit())
         act.addWidget(self._approve)
+        # Start Race is the explicit "we are racing now" commit — the driver's own signal
+        # that this is a race, so the app never mistakes a practice session for one. Only
+        # shown once a plan exists; the bridge decides whether prerequisites are met or
+        # warns first.
+        self._start_race = SecondaryActionButton("Start Race")
+        self._start_race.clicked.connect(lambda: self.start_race_requested.emit())
+        act.addWidget(self._start_race)
         act.addStretch(1)
         self._root.addLayout(act)
+
+        # Readiness caption under the actions: green when every stage is done, amber when
+        # something is still open (Start Race then warns before committing).
+        self._race_ready = QLabel("")
+        self._race_ready.setWordWrap(True)
+        self._race_ready.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        self._race_ready.setVisible(False)
+        self._root.addWidget(self._race_ready)
         self._root.addStretch(1)
 
         self.set_plan(StrategyPlanVM())
+
+    def set_race_readiness(self, ready: bool, blockers: Tuple[str, ...] = ()) -> None:
+        """Reflect whether every stage is complete before the race.
+
+        The Start Race button stays clickable either way (so the driver can still commit
+        with a warning), but the caption tells them where they stand.
+        """
+        blockers = tuple(str(b) for b in (blockers or ()) if str(b))
+        has_plan = self._vm.has_plan
+        self._start_race.setVisible(has_plan)
+        if not has_plan:
+            self._race_ready.setVisible(False)
+            return
+        if ready and not blockers:
+            self._race_ready.setText("✓ Ready to race — every stage is complete.")
+            self._race_ready.setStyleSheet(
+                f"color: {_t.NGR_GREEN}; font-size: {_t.FS_CAPTION}pt; font-weight: 600;")
+        else:
+            self._race_ready.setText(
+                "Not everything is done yet — Start Race will confirm first:  "
+                + "  ·  ".join(blockers))
+            self._race_ready.setStyleSheet(
+                f"color: {_t.WARN}; font-size: {_t.FS_CAPTION}pt; font-weight: 600;")
+        self._race_ready.setVisible(True)
 
     def set_status(self, text: str) -> None:
         """Show (or clear, with "") what the last build attempt did."""
@@ -177,6 +219,11 @@ class StrategyPlanView(QWidget):
                                  enabled=vm.has_plan)
         self._build.set_action("Rebuild the race plan" if vm.has_plan
                                else "Build the race plan", enabled=True)
+        # Start Race only makes sense once a plan exists; readiness detail is refreshed
+        # separately via set_race_readiness (which the bridge calls each feed).
+        self._start_race.setVisible(vm.has_plan)
+        if not vm.has_plan:
+            self._race_ready.setVisible(False)
 
     # ---- cards ------------------------------------------------------------
     def _option_card(self, opt: StrategyOption) -> QWidget:

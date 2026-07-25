@@ -210,15 +210,42 @@ class TestLiveSessionMode:
         assert win._live_mode_ref[0] == "Qualifying"
         assert win._practice_is_qual_ref[0] is True
 
-    def test_a_live_race_asserts_race_mode(self, qapp):
+    def test_telemetry_never_auto_asserts_race_mode(self, qapp):
+        """A RACING phase must NOT flip the app into race mode — a practice/qualifying
+        session can look like RACING, and race start is now an explicit driver action."""
         _shell, win, b = self._wired(qapp)
         b._on_race_state("RACING")
-        assert b._live_session_mode == "race"
-        assert win._live_mode_ref[0] == "Race"
-        assert win._announcer.mode == "race"
+        assert b._live_session_mode is None
+        # But the phase is captured so the pit wall can show IN PIT.
+        b._on_race_state("IN PIT")
+        assert b._live_race_phase == "IN PIT"
 
-    def test_race_finished_releases_the_mode(self, qapp):
+    def test_start_race_enters_race_mode_explicitly(self, qapp):
+        shell, win, b = self._wired(qapp)
+        b._enter_race()
+        assert b._live_session_mode == "race"
+        assert b._discipline == "race"
+        assert win._live_mode_ref[0] == "Race"
+        assert win._practice_is_qual_ref[0] is False
+        assert win._announcer.mode == "race"
+        assert shell.current_destination() == "live_pit_wall"
+
+    def test_race_mode_survives_a_refresh(self, qapp):
+        _shell, win, b = self._wired(qapp)
+        b._enter_race()
+        b.refresh()
+        assert win._live_mode_ref[0] == "Race"
+
+    def test_race_finished_releases_race_mode_only(self, qapp):
         _shell, _win, b = self._wired(qapp)
-        b._on_race_state("RACING")
+        b._enter_race()
         b._on_race_state("FINISHED")
         assert b._live_session_mode is None
+
+    def test_race_readiness_lists_open_stages(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        ready, blockers = b._race_readiness()
+        # A fresh fake session has no approved plan / recorded run, so it is not ready
+        # but still reports what is open rather than hard-blocking.
+        assert ready is False
+        assert any("plan" in x for x in blockers)

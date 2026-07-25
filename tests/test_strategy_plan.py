@@ -65,6 +65,39 @@ class TestStrategyPlanView:
         assert w._approve.isEnabled() is False
 
 
+class TestStartRace:
+    """The explicit 'Start Race' commit — the driver declares the race so the app never
+    mistakes a practice session for one."""
+
+    def test_start_race_hidden_until_a_plan_exists(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(StrategyPlanVM())
+        assert w._start_race.isHidden() is True
+        w.set_plan(_vm())
+        assert w._start_race.isHidden() is False
+
+    def test_start_race_emits(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(_vm())
+        seen = []
+        w.start_race_requested.connect(lambda: seen.append(True))
+        w._start_race.click()
+        assert seen == [True]
+
+    def test_readiness_caption_flags_open_stages(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(_vm())
+        w.set_race_readiness(False, ("race plan not approved", "no practice runs recorded"))
+        assert w._race_ready.isHidden() is False
+        assert "not approved" in w._race_ready.text()
+
+    def test_ready_caption_when_everything_is_done(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(_vm())
+        w.set_race_readiness(True, ())
+        assert "Ready to race" in w._race_ready.text()
+
+
 class TestPlanSelection:
     """UAT-7: "no way to select a strat. Other than the first plan recommended no other
     stint lengths" — every plan is now choosable and shows its own shape."""
