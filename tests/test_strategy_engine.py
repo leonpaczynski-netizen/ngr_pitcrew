@@ -217,6 +217,115 @@ class TestBuildPaceResponse:
         resp = engine.build_pace_response()
         assert "not enough" in resp.lower()
 
+    def test_states_delta_against_the_plan_target_lap(self):
+        # With a loaded plan the driver's core need is the lap-time delta vs the plan.
+        engine, tracker, *_ = _make_engine()
+        s = _make_stint(stint_num=1, laps=10, ref_lap_ms=90000)
+        engine.set_plan([s])
+        engine._active = True
+        tracker.best_lap_ms = 90000
+        engine._recent_lap_times = [91000, 91000, 91000]  # 1.0s off the 90.0s target
+        resp = engine.build_pace_response()
+        lower = resp.lower()
+        assert "plan" in lower and "target" in lower
+        assert "second" in lower  # the delta is stated in seconds
+
+
+# ---------------------------------------------------------------------------
+# build_fuel_check_response — fuel-to-leave for the next stop
+# ---------------------------------------------------------------------------
+
+class TestFuelCheckLeaveWith:
+    def test_names_the_fuel_to_leave_the_next_stop_with(self):
+        engine, tracker, *_ = _make_engine()
+        s = _make_stint(stint_num=1, laps=10)
+        engine.set_plan([s])
+        engine._active = True
+        tracker.laps_recorded = 1
+        tracker.avg_fuel_per_lap = 3.0
+        tracker.last_fuel = 40.0
+        resp = engine.build_fuel_check_response()
+        assert "leave with" in resp.lower()
+        assert "litre" in resp.lower()
+
+
+# ---------------------------------------------------------------------------
+# build_fuel_delta_response — per-lap over/under the plan's affordable rate
+# ---------------------------------------------------------------------------
+
+class TestBuildFuelDeltaResponse:
+    def test_no_plan_says_so(self):
+        engine, *_ = _make_engine()
+        resp = engine.build_fuel_delta_response()
+        assert "no strategy" in resp.lower()
+
+    def test_burning_too_much_reports_heavy_delta_and_laps_short(self):
+        engine, tracker, *_ = _make_engine()
+        s = _make_stint(stint_num=1, laps=10)  # end_lap = 10
+        engine.set_plan([s])
+        engine._active = True
+        tracker.laps_recorded = 0            # 10 laps remaining in plan
+        tracker.avg_fuel_per_lap = 4.0       # burning 4.0
+        tracker.last_fuel = 30.0             # affordable = 3.0 / lap
+        resp = engine.build_fuel_delta_response()
+        lower = resp.lower()
+        assert "heavy" in lower               # burning more than affordable
+        assert "a lap" in lower               # the delta is per-lap
+        assert "short" in lower               # finishing short at this rate
+
+    def test_saving_fuel_reports_margin_to_the_good(self):
+        engine, tracker, *_ = _make_engine()
+        s = _make_stint(stint_num=1, laps=10)
+        engine.set_plan([s])
+        engine._active = True
+        tracker.laps_recorded = 0
+        tracker.avg_fuel_per_lap = 2.5       # burning less than affordable
+        tracker.last_fuel = 30.0             # affordable = 3.0 / lap
+        resp = engine.build_fuel_delta_response()
+        lower = resp.lower()
+        assert "good" in lower or "in hand" in lower
+        assert "a lap" in lower
+
+
+# ---------------------------------------------------------------------------
+# Proactive per-lap status cue
+# ---------------------------------------------------------------------------
+
+class TestProactiveCue:
+    def test_speaks_a_concise_status_every_third_settled_lap(self):
+        engine, tracker, announcer, _ = _make_engine()
+        s = _make_stint(stint_num=1, laps=20, ref_lap_ms=90000)
+        engine.set_plan([s])
+        engine._active = True
+        tracker.laps_recorded = 5            # far from the lap-20 stop
+        tracker.best_lap_ms = 90000
+        tracker.avg_fuel_per_lap = 3.0
+        tracker.last_fuel = 45.0
+        engine._recent_lap_times = [90200, 90200, 90200]
+        rec = MagicMock()
+
+        with engine._lock:
+            engine._check_proactive_cue(rec, s, 5)  # counter 1 — silent
+            engine._check_proactive_cue(rec, s, 5)  # counter 2 — silent
+            first_calls = announcer.announce.call_count
+            engine._check_proactive_cue(rec, s, 5)  # counter 3 — speaks
+        assert announcer.announce.call_count == first_calls + 1
+        spoken_keys = [c.args[2] for c in announcer.announce.call_args_list]
+        assert "strategy_proactive_status" in spoken_keys
+
+    def test_stays_silent_near_the_pit_window(self):
+        engine, tracker, announcer, _ = _make_engine()
+        s = _make_stint(stint_num=1, laps=20, ref_lap_ms=90000)
+        engine.set_plan([s])
+        engine._active = True
+        engine._recent_lap_times = [90200, 90200, 90200]
+        rec = MagicMock()
+        with engine._lock:
+            for _ in range(6):  # would otherwise fire twice
+                engine._check_proactive_cue(rec, s, 19)  # 1 lap from the stop
+        keys = [c.args[2] for c in announcer.announce.call_args_list]
+        assert "strategy_proactive_status" not in keys
+
 
 # ---------------------------------------------------------------------------
 # _replan_after_overdue
