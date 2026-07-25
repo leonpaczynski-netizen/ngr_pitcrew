@@ -72,6 +72,14 @@ class LiveShellBridge(QObject):
         #: every refresh — the 750ms feed used to force it back to "race", which made
         #: the Base and Qualifying tabs un-selectable.
         self._discipline = "race"
+        #: The live session the driver has entered: None (plain practice, race-vs-qual
+        #: taken from the selected discipline), "qualifying" (Begin Qualifying pressed),
+        #: or "race" (a live race detected from telemetry). Drives the runtime shift-beep
+        #: RPM mode and the announcer's session mode. See ``_push_practice_mode``.
+        self._live_session_mode: Optional[str] = None
+        #: The last live race phase reported by the telemetry bridge — "IN PIT",
+        #: "RACING", "FINISHED" — used to surface the pit fuel call on the Live Pit Wall.
+        self._live_race_phase: str = ""
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
@@ -91,7 +99,18 @@ class LiveShellBridge(QObject):
         from services.setup_store import SetupSheetStore, default_store_path
         from services.setup_history_store import SetupHistoryStore, default_history_path
         from services.shift_strategy_store import ShiftStrategyStore, default_shift_strategy_path
-        _cfg_path = str(getattr(window, "config_path", "") or "")
+        # The real MainWindow stores its config path as ``_config_path`` (leading
+        # underscore) and always sets it; the original lookup read ``config_path``
+        # (no underscore), which the real window does NOT have, so every store below was
+        # constructed path-less and silently persisted NOTHING — the Garage reopened to
+        # defaults after every restart. Read the real attribute first, then the name test
+        # fakes use. When neither is present the path stays empty and the stores are
+        # in-memory only (which is exactly what tests without a config want — the store
+        # helpers treat "" as "do not persist").
+        _cfg_path = getattr(window, "_config_path", None)
+        if _cfg_path is None:
+            _cfg_path = getattr(window, "config_path", None)
+        _cfg_path = str(_cfg_path or "")
         self._sheets = SetupSheetStore(default_store_path(_cfg_path))
         self._shift_store = ShiftStrategyStore(default_shift_strategy_path(_cfg_path))
         #: The profile the driver last selected in the Shift Strategy panel.
@@ -192,13 +211,35 @@ class LiveShellBridge(QObject):
         """
         try:
             bridge = getattr(self._window, "_bridge", None)
-            for sig_name in ("connection_changed", "lap_completed", "race_state_changed",
+            for sig_name in ("connection_changed", "lap_completed",
                              "car_detected", "strategy_status_changed"):
                 sig = getattr(bridge, sig_name, None)
                 if sig is not None:
                     sig.connect(lambda *_: self.refresh())
+            # race_state_changed carries the phase text ("IN PIT" / "RACING" /
+            # "FINISHED") — capture it so the Live Pit Wall can call the pit stop and
+            # assert race mode, not just blindly refresh.
+            rsc = getattr(bridge, "race_state_changed", None)
+            if rsc is not None:
+                rsc.connect(self._on_race_state)
         except Exception:
             pass
+
+    def _on_race_state(self, phase: str) -> None:
+        """Track the live race phase and keep the live session mode in step.
+
+        A live race ("RACING"/"IN PIT") asserts race mode so the shift beep and the
+        announcer use the race profile; "FINISHED" releases it. An explicit qualifying
+        session (Begin Qualifying) is only overridden once a real race is detected —
+        during qualifying GT7 does not report RACING, so the qualifying mode holds.
+        """
+        p = str(phase or "").upper()
+        self._live_race_phase = p
+        if p in ("RACING", "IN PIT"):
+            self._live_session_mode = "race"
+        elif p == "FINISHED":
+            self._live_session_mode = None
+        self.refresh()
 
     def _wire_actions(self) -> None:
         """Route Garage Apply/Revert/Analyse + Settings save through the classic services."""
@@ -262,7 +303,7 @@ class LiveShellBridge(QObject):
         _c(getattr(shell, "feedback_form", None), "submitted", self._on_feedback)
         _c(getattr(shell, "practice_outcome", None), "action_requested", self._on_outcome_action)
         _c(getattr(shell, "qualifying_page", None), "begin_requested",
-           lambda: self._navigate("live_pit_wall"))
+           self._on_begin_qualifying)
         _c(getattr(shell, "strategy_page", None), "approve_requested", self._on_approve_strategy)
         _c(getattr(shell, "strategy_page", None), "build_requested", self._on_build_plan)
         _c(getattr(shell, "strategy_page", None), "plan_selected", self._on_select_plan)
@@ -278,6 +319,7 @@ class LiveShellBridge(QObject):
         home = getattr(shell, "home_page", None)
         _c(home, "event_activate_requested", self._on_activate_event)
         _c(home, "manage_events_requested", self._on_manage_events)
+        _c(home, "event_complete_requested", self._on_finish_event)
         esp = getattr(shell, "event_setup_page", None)
         _c(esp, "save_requested", self._on_event_draft_saved)
         _c(esp, "edit_requested", self._on_event_draft_open)
@@ -758,6 +800,34 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
         return {}
+
+    def _recommended_plan_dict(self) -> dict:
+        """A show_plan-compatible dict for the RECOMMENDED plan, when none was approved.
+
+        The Live Pit Wall hid its plan card entirely unless the driver had explicitly
+        pressed Approve on the Strategy page — so a driver who went straight to the race
+        saw "no race plan at all". This falls back to the current recommendation the
+        Strategy page is already showing, so the wall always presents *a* plan. It carries
+        no ``candidate_id`` (nothing was approved), only the display fields ``show_plan``
+        reads.
+        """
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            vm = getattr(sp, "_vm", None)
+            options = list(getattr(vm, "options", ()) or ())
+            if not options:
+                return {}
+            opt = next((o for o in options if getattr(o, "recommended", False)), options[0])
+            return {
+                "name": getattr(opt, "name", "") or "Recommended plan",
+                "total_time": getattr(opt, "total_time", ""),
+                "expected_laps": getattr(opt, "expected_laps", ""),
+                "pit_windows": getattr(opt, "pit_windows", ""),
+                "pit_stops": list(getattr(opt, "pit_stops", ()) or ()),
+                "recommended_fallback": True,
+            }
+        except Exception:
+            return {}
 
     # ---- strategy engine wiring -------------------------------------------
 
@@ -1489,6 +1559,33 @@ class LiveShellBridge(QObject):
             pass
         self._feed_garage()
 
+    def _on_begin_qualifying(self) -> None:
+        """Actually ENTER qualifying — not just show the pit wall.
+
+        Begin Qualifying previously only navigated to the Live Pit Wall, so the app never
+        switched to the qualifying setup, never used the qualifying shift RPM, and never
+        started push-lap coaching. Now it selects the qualifying discipline (its sheet
+        values + qual upshift RPM), asserts an explicit qualifying live mode so the
+        runtime beep and the announcer's push-lap coaching use it, re-feeds the Garage,
+        then shows the live surface. The setup is not force-applied to GT7 — the driver
+        still confirms it in-game — but everything the app controls now reflects
+        qualifying.
+        """
+        self._live_session_mode = "qualifying"
+        self._discipline = "qualifying"
+        # Reflect the switch in the Garage's own selector so the two never disagree.
+        try:
+            gp = getattr(self._shell, "garage_page", None)
+            if gp is not None and hasattr(gp, "set_discipline"):
+                gp.set_discipline("qualifying")
+        except Exception:
+            pass
+        # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
+        # and the qualifying compound to the tracker, then re-feed the Garage for it.
+        self._push_practice_mode("qualifying")
+        self._feed_garage()
+        self._navigate("live_pit_wall")
+
     def _push_practice_mode(self, discipline: str) -> None:
         """Tell the live runtime which discipline is being practised.
 
@@ -1498,13 +1595,30 @@ class LiveShellBridge(QObject):
         selected Garage discipline is now pushed to those refs.
         """
         try:
-            is_qual = str(discipline).lower() == "qualifying"
+            # An explicit live session (Begin Qualifying, or a detected race) wins over
+            # the plain-practice default; otherwise race-vs-qual follows the selected
+            # Garage discipline. Previously this hard-coded "Practice", so the shell could
+            # never put the runtime into Qualifying — a qualifying session still beeped at
+            # the RACE RPM and the announcer never gave its qualifying push-lap cues.
+            if self._live_session_mode == "qualifying":
+                mode_str, is_qual = "Qualifying", True
+            elif self._live_session_mode == "race":
+                mode_str, is_qual = "Race", False
+            else:
+                mode_str = "Practice"
+                is_qual = str(discipline).lower() == "qualifying"
             ref = getattr(self._window, "_practice_is_qual_ref", None)
             if isinstance(ref, list) and ref:
                 ref[0] = is_qual
             mode = getattr(self._window, "_live_mode_ref", None)
             if isinstance(mode, list) and mode:
-                mode[0] = "Practice"      # a practice session, race vs qual set by the flag
+                mode[0] = mode_str
+            # Keep the announcer's session mode in step so its qualifying push-lap
+            # coaching fires in qualifying and its race pit/fuel calls fire in a race.
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "set_session_mode"):
+                announcer.set_session_mode(
+                    "qualifying" if self._live_session_mode == "qualifying" else "race")
         except Exception:
             pass
         self._push_active_compound(discipline)
@@ -1747,12 +1861,17 @@ class LiveShellBridge(QObject):
                     except Exception:
                         self._live_audio_view = None
                 audio_view = self._live_audio_view
-            lp.set_state(live_pit_wall_vm_from_state(state, connected=connected,
-                                                     audio_view=audio_view))
+            lp.set_state(live_pit_wall_vm_from_state(
+                state, connected=connected, audio_view=audio_view,
+                race_phase=self._live_race_phase))
             # Show the approved/accepted plan — the wall looked empty because nothing
-            # about the strategy was ever fed here.
+            # about the strategy was ever fed here. When nothing was formally approved,
+            # fall back to the current recommendation so the wall always shows A plan
+            # rather than looking like the strategy was never built.
             if hasattr(lp, "show_plan"):
-                lp.show_plan(self._live_accepted_plan or self._approved_strategy())
+                lp.show_plan(self._live_accepted_plan
+                             or self._approved_strategy()
+                             or self._recommended_plan_dict())
             # Defensive: if the singleton RaceStrategyEngine has no stints yet (e.g.
             # the app restarted after a plan was approved last session), push the
             # approved plan now so PTT "when do I pit" answers correctly.
@@ -1837,8 +1956,17 @@ class LiveShellBridge(QObject):
     def _persist_config(self) -> None:
         try:
             import config_paths
-            path = getattr(self._window, "config_path", None) or config_paths.resolve_config_path()
-            config_paths.save_config(self._config, path)
+            # Read the real window attribute (``_config_path``) first; fall back to the
+            # test-fake name. An empty/absent path means "do not persist" (tests), so skip
+            # rather than resolving a real path and polluting. NOTE the arg order:
+            # save_config(path, config) — the previous call had them swapped, so the
+            # write silently failed even when a path was present.
+            path = getattr(self._window, "_config_path", None)
+            if path is None:
+                path = getattr(self._window, "config_path", None)
+            if not path:
+                return
+            config_paths.save_config(str(path), self._config)
         except Exception:
             pass
 
@@ -2313,13 +2441,44 @@ class LiveShellBridge(QObject):
 
     def _on_debrief_action(self, key: str) -> None:
         try:
+            k = (key or "").lower()
+            # The debrief is the terminal programme stage; closing it FINISHES the event.
+            if k == "close":
+                self._finish_active_event()
+                return
             dest = {"to_qualifying": "qualifying", "to_race": "race_strategy",
                     "prepare_qualifying": "qualifying", "prepare_race": "race_strategy",
-                    "continue": "garage", "close": "home", "post_review": "engineering_library"}.get(
-                (key or "").lower(), "home")
+                    "continue": "garage", "post_review": "engineering_library"}.get(
+                k, "home")
             self._navigate(dest)
         except Exception:
             pass
+
+    def _on_finish_event(self) -> None:
+        """Home 'Finish this event' — mark the active event complete."""
+        self._finish_active_event()
+
+    def _finish_active_event(self) -> None:
+        """Complete the active event through the headless service, then return Home.
+
+        Clears the live/review caches so nothing from the finished event bleeds into the
+        next one, mirroring the reset done on an event switch.
+        """
+        try:
+            result = self._events.complete_active_event()
+        except Exception:
+            result = None
+        if result is not None:
+            self._guidance_status(result.message or "")
+        self._review_cache.clear()
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
+        self._last_guidance_view = None
+        self._navigate("home")
+        self.refresh()
 
     def _on_library_open(self, area: str) -> None:
         """Host the real engineering panel INSIDE the new shell.

@@ -322,7 +322,27 @@ class RunCard(Card):
         """
         try:
             from data.tyres import get_by_code, normalise_code
-            self._compound_codes = tuple(str(c or "").upper() for c in (codes or ()))
+            new_codes = tuple(str(c or "").upper() for c in (codes or ()))
+            # Called every 750 ms feed tick while a run is open. Don't rebuild the combo
+            # while the driver is choosing a compound — clearing an open popup snaps it
+            # shut and loses the pick. When the option set is unchanged, only move the
+            # index; never clear()/re-add.
+            interacting = (self._compound_combo.hasFocus()
+                           or self._compound_combo.view().isVisible())
+            if new_codes == self._compound_codes:
+                if interacting or not preselected:
+                    return
+                norm = str(preselected or "").upper()
+                if norm in self._compound_codes:
+                    idx = list(self._compound_codes).index(norm)
+                    if self._compound_combo.currentIndex() != idx:
+                        self._compound_combo.blockSignals(True)
+                        self._compound_combo.setCurrentIndex(idx)
+                        self._compound_combo.blockSignals(False)
+                return
+            if interacting:
+                return
+            self._compound_codes = new_codes
             self._compound_combo.blockSignals(True)
             self._compound_combo.clear()
             for code in self._compound_codes:

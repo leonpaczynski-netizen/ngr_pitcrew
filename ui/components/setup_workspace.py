@@ -518,14 +518,35 @@ class SetupWorkspace(QWidget):
         """
         try:
             options = tuple(getattr(choice, "options", ()) or ())
-            self._tyre_codes = tuple(o.code for o in options)
-            self._tyre.blockSignals(True)
-            self._tyre.clear()
-            for o in options:
-                self._tyre.addItem(o.label)
-            if current_code in self._tyre_codes:
-                self._tyre.setCurrentIndex(self._tyre_codes.index(current_code))
-            self._tyre.blockSignals(False)
+            new_codes = tuple(o.code for o in options)
+            # The 750 ms feed calls this every tick. Never rebuild the combo while the
+            # driver is interacting with it — clearing an open popup snaps it shut and
+            # resets the selection ("dropdown glitch"). And when the option set is
+            # unchanged, only move the selection index, never clear()/re-add — the churn
+            # is what closed the popup and reset the choice.
+            interacting = self._tyre.hasFocus() or self._tyre.view().isVisible()
+            if new_codes == self._tyre_codes:
+                if interacting:
+                    return
+                if current_code in self._tyre_codes:
+                    idx = self._tyre_codes.index(current_code)
+                    if self._tyre.currentIndex() != idx:
+                        self._tyre.blockSignals(True)
+                        self._tyre.setCurrentIndex(idx)
+                        self._tyre.blockSignals(False)
+            else:
+                if interacting:
+                    # Options genuinely changed but the driver is mid-interaction; defer
+                    # the rebuild to the next feed rather than yanking the popup away.
+                    return
+                self._tyre_codes = new_codes
+                self._tyre.blockSignals(True)
+                self._tyre.clear()
+                for o in options:
+                    self._tyre.addItem(o.label)
+                if current_code in self._tyre_codes:
+                    self._tyre.setCurrentIndex(self._tyre_codes.index(current_code))
+                self._tyre.blockSignals(False)
             self._tyre.setVisible(bool(options))
 
             note = str(getattr(choice, "guidance", "") or "")
@@ -617,6 +638,15 @@ class SetupWorkspace(QWidget):
 
     def current_discipline(self) -> str:
         return self._selector.current()
+
+    def set_discipline(self, key: str) -> None:
+        """Select a discipline tab programmatically (e.g. when Begin Qualifying is pressed).
+
+        Reflects the choice in the segmented control without re-emitting
+        ``discipline_changed`` — the caller is the one driving the switch, so echoing the
+        signal back would re-enter the same handler.
+        """
+        self._selector.set_discipline(key)
 
     def displayed_fields(self) -> tuple:
         """The changed-field keys in the order the table shows them (GT7 menu order)."""

@@ -378,6 +378,20 @@ def _recognise(audio_bytes: bytes, sample_rate: int, backend: str = "sphinx") ->
     what this did — reliably produced text that matched no keyword at all. Free-form is
     kept as a fallback so an unusual phrasing still has a chance.
     """
+    # PRIMARY: offline SAPI command-grammar recognition. Command-and-control against the
+    # fixed phrase list is far more reliable than PocketSphinx keyword-spotting (which
+    # pins ~72% of the vocabulary to a threshold it can never clear), so it is tried
+    # first. It returns None on a non-Windows box / unavailable SAPI / no match, in which
+    # case we fall through to the PocketSphinx path below — never worse than before.
+    try:
+        from voice.sapi_command_recognizer import recognize_wav_bytes as _sapi_recognise
+        sapi_text = _sapi_recognise(audio_bytes, sample_rate, sample_width=2)
+        if sapi_text:
+            print(f"[QueryListener] heard (SAPI grammar): {sapi_text!r}")
+            return sapi_text
+    except Exception as _e:  # pragma: no cover - defensive
+        print(f"[QueryListener] SAPI grammar unavailable — {_e}")
+
     if not _SR_OK or _recogniser is None:
         print("[QueryListener] SpeechRecognition not installed")
         return None

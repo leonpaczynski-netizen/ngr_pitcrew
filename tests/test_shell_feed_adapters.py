@@ -33,6 +33,40 @@ class TestLive:
     def test_never_raises(self):
         assert live_pit_wall_vm_from_state(_ns(), connected=True) is not None
 
+    def test_in_pit_shows_the_stop_and_a_fuel_call(self):
+        """UAT: 'it didn't tell me what fuel I needed when I pitted.' In the pit the stint
+        tile reads IN PIT and the engineer line leads with how much fuel to leave with."""
+        st = _ns(current_lap=20, laps_remaining=10, fuel_remaining_l=18.0,
+                 fuel_per_lap_actual=2.0, current_compound="Medium", tyre_age_laps=12,
+                 pit_stops_completed=0, required_stops=1, telemetry_fresh=True)
+        vm = live_pit_wall_vm_from_state(st, connected=True, race_phase="IN PIT")
+        assert vm.stint == "IN PIT"
+        # (10 laps left + 1 reserve) * 2.0 L/lap = 22 L to reach the flag.
+        assert "22 L" in vm.engineer_instruction
+        assert vm.engineer_instruction.lower().startswith("box")
+
+    def test_in_pit_without_burn_data_still_calls_the_box(self):
+        st = _ns(current_lap=20, laps_remaining=None, fuel_remaining_l=None,
+                 pit_stops_completed=0, telemetry_fresh=True)
+        vm = live_pit_wall_vm_from_state(st, connected=True, race_phase="IN PIT")
+        assert vm.stint == "IN PIT"
+        assert "Box" in vm.engineer_instruction
+
+    def test_fuel_call_is_capped_at_tank_capacity(self):
+        st = _ns(current_lap=1, laps_remaining=40, fuel_remaining_l=60.0,
+                 fuel_per_lap_actual=3.0, fuel_capacity_l=65.0,
+                 pit_stops_completed=0, telemetry_fresh=True)
+        vm = live_pit_wall_vm_from_state(st, connected=True, race_phase="IN PIT")
+        # (40+1)*3 = 123 L, capped to the 65 L tank.
+        assert "65 L" in vm.engineer_instruction
+
+    def test_racing_phase_shows_no_pit_call(self):
+        st = _ns(current_lap=20, laps_remaining=10, fuel_remaining_l=18.0,
+                 fuel_per_lap_actual=2.0, pit_stops_completed=0, telemetry_fresh=True)
+        vm = live_pit_wall_vm_from_state(st, connected=True, race_phase="RACING")
+        assert vm.stint != "IN PIT"
+        assert "Box" not in vm.engineer_instruction
+
 
 class TestStrategy:
     def test_maps_rpvm(self):

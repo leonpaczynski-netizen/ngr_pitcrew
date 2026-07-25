@@ -15,13 +15,20 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Live Pit Wall  <-  adaptive_live_strategy.LiveStrategyState
 # ---------------------------------------------------------------------------
-def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=None):
+def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=None,
+                                race_phase: str = ""):
     """Build the LivePitWallVM from a LiveStrategyState + optional audio view.
 
     When ``audio_view`` is supplied (from ``build_live_audio_strategy_view``), the
     engineer_instruction, next_decision, confidence, and warning fields are populated
     from the adaptive strategy decision and message; the gap_to_plan field is also
     extended with the fuel-per-lap delta when both plan and actual are present.
+
+    ``race_phase`` ("IN PIT" / "RACING" / "FINISHED", from the telemetry bridge) drives
+    the pit stop call: while the car is IN PIT the driver is told how much fuel to leave
+    with to reach the flag, and the stint tile reads "IN PIT" so it's obvious the app
+    knows a stop is happening. Previously the on-pit fuel target was only written to a
+    log line and the wall showed nothing, so "it didn't tell me what fuel I needed".
 
     When ``audio_view`` is None the function behaves exactly as before (backward
     compatible, no behaviour change for existing callers).  Never raises.
@@ -31,6 +38,7 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         return LivePitWallVM(freshness="live" if connected else "none",
                              engineer_instruction="" if connected else "Waiting for live telemetry…")
     g = lambda a: getattr(state, a, None)
+    in_pit = str(race_phase or "").upper() == "IN PIT"
 
     cur, rem = g("current_lap"), g("laps_remaining")
     if cur is not None and rem is not None:
@@ -59,6 +67,27 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         stint = f"After {g('pit_stops_completed')} stop(s)"
         if g("laps_since_pit") is not None:
             stint += f" · L{g('laps_since_pit')}"
+    if in_pit:
+        stint = "IN PIT"
+
+    # The pit fuel call: how much fuel to leave the box with to reach the flag, computed
+    # from the actual burn rate and the laps left (plus a small reserve). Shown prominently
+    # while the car is stopped so the driver gets the number at the moment they need it.
+    pit_call = ""
+    if in_pit:
+        rem = g("laps_remaining")
+        fpl = g("fuel_per_lap_actual") or g("fuel_per_lap_plan")
+        cap = g("fuel_capacity_l") or g("tank_capacity_l")
+        if rem is not None and fpl:
+            try:
+                need = float(fpl) * (int(rem) + 1)   # +1 lap of reserve
+                if cap:
+                    need = min(need, float(cap))
+                pit_call = f"Box now — leave with ~{need:.0f} L to reach the flag."
+            except Exception:
+                pit_call = "Box now."
+        else:
+            pit_call = "Box now."
 
     gap = "—"
     la, lp = g("lap_time_actual_s"), g("lap_time_plan_s")
@@ -113,6 +142,12 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
                 warning = f"{hl} Say 'accept plan' to switch, or 'keep plan' to stay out."
         except Exception:
             pass
+
+    # The pit call is the most time-critical thing on screen — while stopped it leads
+    # the engineer line so the fuel number is the first thing read.
+    if pit_call:
+        engineer_instruction = (pit_call + "  " + engineer_instruction).strip() \
+            if engineer_instruction else pit_call
 
     return LivePitWallVM(
         lap=lap, position="—", stint=stint, fuel=fuel, tyre=tyre,

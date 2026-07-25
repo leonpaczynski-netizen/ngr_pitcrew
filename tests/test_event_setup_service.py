@@ -154,6 +154,54 @@ class TestSaveAndActivate:
         assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == "complete"
         assert db.cycles["cycle-gr-enduro-rd2"]["created_at"] == "2026-01-01T00:00:00"
 
+
+class TestFinishEvent:
+    """Finishing an event marks its cycle complete and clears the active slot, so the
+    driver finally has a way to close an event out (UAT: 'no way to finish an event')."""
+
+    def _svc(self, db=None, config=None):
+        cfg = config if config is not None else {}
+        return EventSetupService(db=db or _DB(), config=cfg, persist=None), cfg
+
+    def test_finishing_marks_the_cycle_complete_and_clears_the_active_slot(self):
+        db = _DB()
+        svc, cfg = self._svc(db)
+        svc.save_and_activate(_draft())
+        assert cfg.get("active_cycle_id") == "cycle-gr-enduro-rd2"
+
+        result = svc.complete_active_event()
+        assert result.ok is True
+        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == "complete"
+        # The active slot is cleared → the Command Centre reports no active event.
+        assert "active_event_id" not in cfg
+        assert "active_cycle_id" not in cfg
+
+    def test_finishing_preserves_the_cycle_identity(self):
+        db = _DB()
+        svc, _cfg = self._svc(db)
+        svc.save_and_activate(_draft())
+        svc.complete_active_event()
+        row = db.cycles["cycle-gr-enduro-rd2"]
+        # The existing fields survive — completing does not blank the event's identity.
+        assert row["car"] == "Porsche Cayman GT4"
+        assert row["track"] == "Watkins Glen International"
+
+    def test_finishing_with_no_active_event_is_a_safe_no_op(self):
+        db = _DB()
+        svc, cfg = self._svc(db)
+        result = svc.complete_active_event()
+        assert result.ok is False
+        assert db.cycles == {}
+
+    def test_a_completed_event_resolves_to_no_active_event(self):
+        """The whole point: after finishing, the active-cycle resolver reports no event."""
+        from strategy.active_cycle_resolution import _TERMINAL_CYCLE_STATES
+        db = _DB()
+        svc, _cfg = self._svc(db)
+        svc.save_and_activate(_draft())
+        svc.complete_active_event()
+        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] in _TERMINAL_CYCLE_STATES
+
     def test_the_working_config_core_is_fanned_out(self):
         svc, cfg = self._svc()
         svc.save_and_activate(_draft())
