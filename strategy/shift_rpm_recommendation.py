@@ -21,9 +21,14 @@ from typing import Optional
 
 SHIFT_RPM_RECOMMENDATION_VERSION = "shift_rpm_recommendation_v1"
 
-# race is shifted a touch below the qualifying/optimal point — a strategy choice for engine + fuel, not a
-# different optimum. Kept small and explicit.
-_RACE_CONSERVATISM = 0.02
+# Qualifying shifts at the car's optimal (max) point for one-lap attack. Race short-shifts EARLIER to save
+# fuel over a stint, trading a little straight-line pace for economy — a deliberate strategy choice, not a
+# different optimum. Two ways to place the race point, best first:
+#   1. Anchored to peak power (when the car spec gives ``power_rpm``): sit part-way from peak power up to the
+#      qualifying point, so the engine stays in its power band but you leave the last slice of revs unused.
+#   2. Fallback (no peak-power data): a flat percentage below the qualifying point.
+_RACE_FUEL_SHORT_SHIFT_FRACTION = 0.5   # race point = power_rpm + fraction*(qual - power_rpm)
+_RACE_FALLBACK_REDUCTION = 0.04         # ~4% below qualifying when peak-power RPM is unknown
 
 
 class ShiftRpmConfidence(str, Enum):
@@ -71,20 +76,18 @@ def recommend_shift_rpm(*, rpm_alert_max=None, power_rpm=None, rev_limit_rpm=Non
         if alert is not None:
             qual = alert
             source = "gt7_rpm_alert"
-            rationale = (f"GT7 signals the upshift for this car at {alert} rpm (its own indicator). "
-                         "Qualifying shifts right at it; race is a touch below for engine/fuel margin.")
+            qual_why = f"GT7 signals the upshift for this car at {alert} rpm (its own indicator)."
             conf = ShiftRpmConfidence.HIGH
         elif rev is not None:
             qual = int(round(rev * 0.97))
             source = "rev_limit"
-            rationale = (f"No live rpm-alert yet; shifting just below the ~{rev} rpm limiter "
-                         f"({qual} rpm). Drive the car so GT7 broadcasts its exact indicator to refine this.")
+            qual_why = f"No live rpm-alert yet; qualifying shifts just below the ~{rev} rpm limiter ({qual} rpm)."
             conf = ShiftRpmConfidence.MEDIUM
         elif power is not None:
             qual = int(round(power * 1.05))
             source = "peak_power_proxy"
-            rationale = (f"Estimated from peak power (~{power} rpm) — the optimal upshift sits just past it "
-                         f"(~{qual} rpm). This is a proxy; a live rpm-alert reading will refine it.")
+            qual_why = (f"Estimated from peak power (~{power} rpm) — the optimal upshift sits just past it "
+                        f"(~{qual} rpm). This is a proxy; a live rpm-alert reading will refine it.")
             conf = ShiftRpmConfidence.LOW
         else:
             return ShiftRpmRecommendation(None, None, ShiftRpmConfidence.NONE, "none",
@@ -94,7 +97,22 @@ def recommend_shift_rpm(*, rpm_alert_max=None, power_rpm=None, rev_limit_rpm=Non
         # clamp below the limiter if we know it
         if rev is not None:
             qual = min(qual, rev)
-        race = int(round(qual * (1.0 - _RACE_CONSERVATISM)))
+
+        # Race short-shifts for fuel. Anchor to peak power when we have it so the engine stays in its power
+        # band; otherwise reduce by a flat percentage. Either way the beep fires EARLIER than qualifying.
+        if power is not None and power < qual:
+            race = int(round(power + _RACE_FUEL_SHORT_SHIFT_FRACTION * (qual - power)))
+            race = max(power + 1, min(race, qual - 1))  # strictly between peak power and the qual point
+            race_why = (f"Race short-shifts to ~{race} rpm — earlier than qualifying but still above peak power "
+                        f"(~{power} rpm), saving fuel over a stint for a little less top-end pace.")
+        else:
+            race = int(round(qual * (1.0 - _RACE_FALLBACK_REDUCTION)))
+            race = min(race, qual - 1) if qual > 1 else race
+            saved = qual - race
+            race_why = (f"Race short-shifts ~{saved} rpm earlier ({race} rpm) to save fuel over a stint, "
+                        "trading a little straight-line pace for economy.")
+
+        rationale = f"{qual_why} Qualifying shifts at it for one-lap attack. {race_why}"
         return ShiftRpmRecommendation(qualifying_rpm=qual, race_rpm=race, confidence=conf,
                                       source=source, rationale=rationale)
     except Exception:  # pragma: no cover - defensive

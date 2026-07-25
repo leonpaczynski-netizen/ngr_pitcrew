@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayout
+from PyQt6.QtWidgets import (QLabel, QVBoxLayout, QHBoxLayout, QWidget, QGridLayout,
+                             QLayout)
 
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading, Card
@@ -85,6 +86,11 @@ class StrategyPlanView(QWidget):
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(_t.SPACE_XL, _t.SPACE_LG, _t.SPACE_XL, _t.SPACE_LG)
         self._root.setSpacing(_t.SPACE_MD)
+        # The page lives in a width-resizable QScrollArea, which under-reports the height
+        # of word-wrapped labels and would otherwise squeeze the plan cards below their
+        # real content height — the cards then paint on top of each other. Demand the full
+        # height so overflow scrolls instead of overlapping.
+        self._root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         top = QHBoxLayout()
         top.addWidget(SectionHeading("RACE STRATEGY", level=1))
@@ -175,6 +181,9 @@ class StrategyPlanView(QWidget):
     # ---- cards ------------------------------------------------------------
     def _option_card(self, opt: StrategyOption) -> QWidget:
         card = Card()
+        # Grow to fit content rather than let the scroll area compress the rows onto
+        # each other (see the _root note above).
+        card.body.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         card.setStyleSheet(
             f"#ngrCard {{ background: {_t.CARBON_RAISED}; "
             f"border: 1px solid {_t.HAIRLINE}; "
@@ -233,10 +242,13 @@ class StrategyPlanView(QWidget):
             cap = QLabel("Pit stops")
             cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt; font-weight: 700;")
             card.body.addWidget(cap)
-            body = QLabel("•  " + "\n•  ".join(opt.pit_stops))
-            body.setWordWrap(True)
-            body.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
-            card.body.addWidget(body)
+            # One label per stop — a single \n-joined block is the least predictable
+            # thing to size under word-wrap in the scroll area, so keep the stops discrete.
+            for stop in opt.pit_stops:
+                line = QLabel("•  " + str(stop))
+                line.setWordWrap(True)
+                line.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+                card.body.addWidget(line)
         if opt.summary:
             s = QLabel(opt.summary)
             s.setWordWrap(True)

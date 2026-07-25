@@ -112,6 +112,8 @@ class LiveShellBridge(QObject):
             capture_controller=getattr(window, "_tm_controller", None))
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
+        #: Scopes already seeded from applied history — see ``_seed_from_last_applied``.
+        self._seeded_history: set = set()
         #: The last AnalysisResult (it carries the discipline it belongs to).
         self._last_analysis = None
         self._analysis_done.connect(self._on_analysis_done)
@@ -891,6 +893,36 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _seed_from_last_applied(self) -> None:
+        """Load the last-applied Race and Qualifying tunes onto the sheets ONCE, per scope.
+
+        On open the Garage showed a defaults-only ("standard") sheet even when the driver
+        had applied and recorded a setup for this car/track before — the working sheet is
+        the only thing startup read, and if it was empty the applied history was ignored.
+        Here we mirror ``_seed_sheets``: where the store holds nothing authored for a
+        discipline but a past applied revision exists, put the newest revision back on the
+        sheet. ``load_revision`` writes the values WITHOUT claiming they are on the car, so
+        the driver still re-enters and confirms in GT7 — nothing is silently applied.
+        """
+        try:
+            inputs = self._setups.inputs()
+            scope = inputs.scope
+            if not inputs.is_known or scope in self._seeded_history:
+                return
+            self._seeded_history.add(scope)
+            for discipline in ("race", "qualifying"):
+                if self._sheets.has_setup(scope, discipline):
+                    continue
+                revs = self._setups.revisions(discipline)
+                if not revs:
+                    continue
+                newest = max(revs, key=lambda r: int(r.get("revision", 0) or 0))
+                rev_no = int(newest.get("revision", 0) or 0)
+                if rev_no > 0:
+                    self._setups.load_revision(discipline, rev_no)
+        except Exception:
+            pass
+
     def _mirror_to_classic(self, discipline: str = "") -> None:
         """Keep the classic form showing what the store holds.
 
@@ -912,6 +944,7 @@ class LiveShellBridge(QObject):
             if gp is None:
                 return
             self._seed_sheets()
+            self._seed_from_last_applied()
             sheet = self._setups.sheet(self._discipline)
             # A defaults-only sheet is NOT a setup. Passing it would present numbers
             # nobody authored as though they were the driver's own.

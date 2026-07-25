@@ -269,13 +269,15 @@ class TestU3GuidanceCtaFits:
     def test_long_label_is_not_lost(self, wired):
         shell, _win, _bridge = wired
         view = _cc_view()
-        # A long non-evidence CTA (evidence objectives are relabelled to a run action).
+        # A long descriptive objective (48 chars) would centre-clip on the 360px button.
         view["next_action"]["headline"] = "Confirm and protect the current best-known setup"
         shell.set_guidance_view(view)
         card = shell.guidance
-        assert card._primary.text() == "Confirm and protect the current best-known setup"
-        # Even if the pixel width clipped it, the full wording stays reachable.
-        assert card._primary.toolTip() == card._primary.text()
+        # The button gets a short, glanceable CTA that fits...
+        assert card._primary.text() == "Open the Garage"
+        assert len(card._primary.text()) <= 32
+        # ...and the full wording stays visible in the wrapping objective label.
+        assert "Confirm and protect the current best-known setup" in card._objective.text()
 
 
 class TestU4HomeSaysSomething:
