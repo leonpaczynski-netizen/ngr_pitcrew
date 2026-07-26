@@ -80,6 +80,10 @@ class LiveShellBridge(QObject):
         #: The last live race phase reported by the telemetry bridge — "IN PIT",
         #: "RACING", "FINISHED" — used to surface the pit fuel call on the Live Pit Wall.
         self._live_race_phase: str = ""
+        #: Driver override for track wetness (qualifying tyre rule). None = follow the
+        #: event weather; True/False = the driver has said the track is wet/dry (the only
+        #: signal for Random Weather or a track that changes, since GT7 reports no rain).
+        self._track_wet: Optional[bool] = None
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
@@ -255,6 +259,8 @@ class LiveShellBridge(QObject):
                     gp.baseline_requested.connect(self._on_build_baseline)
                 if hasattr(gp, "tyre_change_requested"):
                     gp.tyre_change_requested.connect(self._on_tyre_change)
+                if hasattr(gp, "track_wet_changed"):
+                    gp.track_wet_changed.connect(self._on_track_wet_toggled)
                 if hasattr(gp, "shift_rpm_changed"):
                     gp.shift_rpm_changed.connect(self._on_shift_rpm_changed)
                 if hasattr(gp, "shift_rpm_recommend_requested"):
@@ -759,58 +765,72 @@ class LiveShellBridge(QObject):
                 return
             from ui.shell_feed_adapters import qualifying_vm_from_cc_view
             label, _applied = self._setups.active_setup("qualifying")
-            # Qualifying always runs the softest allowed compound — surface whether the
-            # qualifying sheet is on it, naming the specific compound.
-            softest, current, softest_name, current_name = self._qualifying_tyre_state()
-            soft_confirmed = (current == softest) if softest else None
+            # Qualifying always runs the softest allowed compound (rain tyre when wet) —
+            # surface whether the qualifying sheet is on it, naming the specific compound.
+            target, current, target_name, current_name, is_wet = self._qualifying_tyre_state()
+            confirmed = (current == target) if target else None
             qp.set_readiness(qualifying_vm_from_cc_view(
-                view, active_setup_label=label, soft_confirmed=soft_confirmed,
-                softest_label=softest_name, current_label=current_name))
+                view, active_setup_label=label, soft_confirmed=confirmed,
+                softest_label=target_name, current_label=current_name, wet=is_wet))
         except Exception:
             pass
 
     def _qualifying_tyre_state(self):
-        """(softest_code, current_code, softest_name, current_name) for the qualifying
-        sheet under this event's tyre regulations. Softest = the rule for qualifying.
-        Never raises; blank codes when nothing is resolvable."""
+        """(target_code, current_code, target_name, current_name, is_wet) for the
+        qualifying sheet: the compound the qualifying rule wants (softest dry slick, or the
+        rain tyre when wet) and what is on the sheet now. Never raises; blanks when
+        nothing is resolvable."""
         try:
-            from strategy.tyre_selection import build_tyre_choice, current_code
+            from strategy.tyre_selection import resolve_qualifying_compound, current_code
             from data.tyres import get_by_code
             ev = None
             try:
                 ev = self._window._build_event_context()
             except Exception:
                 ev = None
-            choice = build_tyre_choice(
-                discipline="qualifying",
+            target, tname, is_wet, _reason = resolve_qualifying_compound(
                 available=getattr(ev, "available_tyres", ()) or (),
-                required=getattr(ev, "required_tyres", ()) or ())
-            softest = choice.recommended_code or ""
+                required=getattr(ev, "required_tyres", ()) or (),
+                weather=str(getattr(ev, "weather", "") or ""),
+                wet_override=self._track_wet)
             try:
                 cur = current_code(self._setups.sheet("qualifying").as_dict()) or ""
             except Exception:
                 cur = ""
-            sname = (get_by_code(softest).name if softest and get_by_code(softest)
-                     else softest)
             cname = get_by_code(cur).name if cur and get_by_code(cur) else cur
-            return softest, cur, sname, cname
+            return target, cur, tname, cname, is_wet
         except Exception:
-            return "", "", "", ""
+            return "", "", "", "", False
 
-    def _apply_softest_qualifying_compound(self) -> None:
-        """Put the softest allowed compound on the qualifying sheet (the qualifying rule).
+    def _apply_qualifying_compound(self) -> None:
+        """Put the qualifying compound (softest dry, or the rain tyre when wet) on the
+        qualifying sheet — the qualifying rule applied to the setup sheet itself.
 
-        Only writes when the sheet isn't already on it, so there's no revision churn.
+        Only touches an ALREADY-AUTHORED sheet and only when it isn't already on the
+        target, so it never authors an empty sheet and never churns revisions.
         """
         try:
             from strategy.tyre_selection import setup_fields_for
-            softest, current, _s, _c = self._qualifying_tyre_state()
-            if softest and current != softest:
-                fields = setup_fields_for(softest)
+            sheet = self._setups.sheet("qualifying")
+            if not getattr(sheet, "is_authored", False):
+                return
+            target, current, _t, _c, _wet = self._qualifying_tyre_state()
+            if target and current != target:
+                fields = setup_fields_for(target)
                 if fields:
                     self._setups.apply("qualifying", fields)
         except Exception:
             pass
+
+    def _on_track_wet_toggled(self, wet: bool) -> None:
+        """The driver set whether the track is wet — the qualifying tyre override.
+
+        Re-applies the qualifying compound (dry↔wet) and re-feeds, so the setup sheet and
+        the Garage follow the change immediately.
+        """
+        self._track_wet = bool(wet)
+        self._apply_qualifying_compound()
+        self.refresh()
 
     def _feed_strategy(self) -> None:
         try:
@@ -1724,6 +1744,11 @@ class LiveShellBridge(QObject):
             d = "race"
         self._discipline = d
         self._push_practice_mode(d)
+        # Selecting the qualifying sheet applies the qualifying tyre rule to it (softest
+        # dry / rain tyre), so the setup sheet is always on the right compound. Guarded to
+        # an authored sheet + only-when-different inside the helper, so no churn.
+        if d == "qualifying":
+            self._apply_qualifying_compound()
         try:
             gp = getattr(self._shell, "garage_page", None)
             if gp is not None and hasattr(gp, "set_status"):
@@ -1753,10 +1778,10 @@ class LiveShellBridge(QObject):
                 gp.set_discipline("qualifying")
         except Exception:
             pass
-        # Qualifying always runs the softest allowed compound — put it on the qualifying
-        # sheet now, BEFORE pushing the mode so the tracker records the qualifying laps on
-        # the right compound.
-        self._apply_softest_qualifying_compound()
+        # Qualifying always runs the softest allowed compound (rain tyre when wet) — put it
+        # on the qualifying sheet now, BEFORE pushing the mode so the tracker records the
+        # qualifying laps on the right compound.
+        self._apply_qualifying_compound()
         # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
         # and the qualifying compound to the tracker, then re-feed the Garage for it.
         self._push_practice_mode("qualifying")
@@ -1901,6 +1926,13 @@ class LiveShellBridge(QObject):
                     required=getattr(ev, "required_tyres", ()) or (),
                     race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
                 current_code(setup))
+            # Reflect the effective wet state on the "Track is wet" toggle: the driver's
+            # override when set, else the event weather.
+            if hasattr(garage, "set_track_wet"):
+                from strategy.tyre_selection import is_wet_weather
+                wet = (self._track_wet if self._track_wet is not None
+                       else is_wet_weather(str(getattr(ev, "weather", "") or "")))
+                garage.set_track_wet(bool(wet))
         except Exception:
             pass
 

@@ -173,3 +173,58 @@ def current_code(setup: Optional[dict]) -> str:
     front = normalise_code(str(d.get("tyre_front") or "").strip()) or ""
     rear = normalise_code(str(d.get("tyre_rear") or "").strip()) or ""
     return front if front and front == rear else ""
+
+
+#: Event weather strings that mean the track is wet. "Random Weather" is deliberately
+#: NOT here — the app cannot know if it is actually raining (GT7 broadcasts no weather),
+#: so a random-weather session relies on the driver's manual "track is wet" toggle.
+_WET_WEATHER = ("fixed wet", "light rain", "heavy rain")
+_HEAVY_WET_WEATHER = ("heavy rain",)
+
+
+def is_wet_weather(weather: str) -> bool:
+    """Whether an event weather setting means a wet track (excludes Random Weather)."""
+    return str(weather or "").strip().lower() in _WET_WEATHER
+
+
+def _is_wet_code(code: str) -> bool:
+    comp = get_by_code(normalise_code(str(code or "")) or "")
+    return bool(comp and comp.wet)
+
+
+def resolve_qualifying_compound(
+    *,
+    available: Sequence[str] = (),
+    required: Sequence[str] = (),
+    weather: str = "",
+    wet_override: Optional[bool] = None,
+) -> Tuple[str, str, bool, str]:
+    """The compound qualifying should run: (code, name, is_wet, reason). Never raises.
+
+    Qualifying always takes the SOFTEST compound available — peak grip, tyre life
+    irrelevant. In the DRY that is the softest allowed slick. When the track is WET it is
+    a rain tyre instead: Heavy Wet in heavy rain, otherwise Intermediate.
+
+    Wetness comes from ``wet_override`` when the driver has set it (True/False), else from
+    the event ``weather`` setting — GT7 reports no live rain, so the driver's toggle is the
+    only signal for Random Weather or a track that changes mid-session.
+    """
+    try:
+        wet = bool(wet_override) if wet_override is not None else is_wet_weather(weather)
+        if wet:
+            heavy = str(weather or "").strip().lower() in _HEAVY_WET_WEATHER
+            want = "HW" if heavy else "IM"
+            avail_wets = [c for c in _codes(available) if _is_wet_code(c)]
+            code = (want if want in avail_wets else avail_wets[0]) if avail_wets else want
+            comp = get_by_code(code)
+            reason = (f"{comp.name if comp else code} — the track is wet; qualifying runs "
+                      f"the rain tyre.")
+            return code, (comp.name if comp else code), True, reason
+        # Dry: the softest allowed slick (build_tyre_choice ranks wets last, so the
+        # qualifying recommendation is always the softest dry compound available).
+        choice = build_tyre_choice(discipline="qualifying", available=available, required=required)
+        code = choice.recommended_code or ""
+        comp = get_by_code(code) if code else None
+        return code, (comp.name if comp else code), False, choice.recommendation_reason
+    except Exception:  # pragma: no cover - defensive
+        return "", "", False, ""

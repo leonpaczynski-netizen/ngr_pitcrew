@@ -124,6 +124,7 @@ class SetupWorkspace(QWidget):
     baseline_requested = pyqtSignal(str)   # author the initial setup for BOTH sheets
     applied_in_game_confirmed = pyqtSignal(str)  # driver entered this sheet into GT7
     tyre_change_requested = pyqtSignal(str)      # compound code to put on the car
+    track_wet_changed = pyqtSignal(bool)         # driver toggled "track is wet" (rain)
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
@@ -167,6 +168,18 @@ class SetupWorkspace(QWidget):
             f"padding: 4px 10px; font-size: {_t.FS_LABEL}pt; }}")
         self._tyre.activated.connect(self._on_tyre_picked)
         tyre_row.addWidget(self._tyre)
+        # "Track is wet" — GT7 broadcasts no rain, so this is the driver's signal that the
+        # track is wet (for Random Weather or a track that changes). It flips qualifying
+        # onto the rain tyre; qualifying always runs the softest compound for the conditions.
+        from PyQt6.QtWidgets import QCheckBox
+        self._wet = QCheckBox("Track is wet (rain)")
+        self._wet.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._wet.setToolTip(
+            "GT7 doesn't report rain — tick this when the track is wet so qualifying "
+            "fits the rain tyre instead of the softest slick.")
+        self._wet.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        self._wet.toggled.connect(self._on_wet_toggled)
+        tyre_row.addWidget(self._wet)
         self._tyre_note = QLabel("")
         self._tyre_note.setWordWrap(True)
         self._tyre_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
@@ -563,6 +576,25 @@ class SetupWorkspace(QWidget):
     def _on_tyre_picked(self, index: int) -> None:
         if 0 <= index < len(self._tyre_codes):
             self.tyre_change_requested.emit(self._tyre_codes[index])
+
+    def _on_wet_toggled(self, checked: bool) -> None:
+        self.track_wet_changed.emit(bool(checked))
+
+    def set_track_wet(self, wet: bool) -> None:
+        """Reflect the effective wet state without re-emitting (the caller drives it).
+
+        Skipped while the driver has the box focused, so the 750 ms feed never flips a
+        tick the driver just made.
+        """
+        try:
+            if self._wet.hasFocus():
+                return
+            if self._wet.isChecked() != bool(wet):
+                self._wet.blockSignals(True)
+                self._wet.setChecked(bool(wet))
+                self._wet.blockSignals(False)
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def set_shift_rpm(self, value: int = 0, note: str = "") -> None:
         """Show the upshift point for the current discipline's sheet.

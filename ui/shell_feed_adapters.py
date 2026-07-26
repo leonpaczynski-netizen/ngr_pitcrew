@@ -380,7 +380,8 @@ def _readiness_status(level: str) -> str:
 
 def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "",
                                soft_confirmed: Optional[bool] = None,
-                               softest_label: str = "", current_label: str = ""):
+                               softest_label: str = "", current_label: str = "",
+                               wet: bool = False):
     from ui.components.qualifying_readiness import QualifyingReadinessVM, ReadinessItem
     if not isinstance(view, dict) or not view.get("ok", True):
         return QualifyingReadinessVM()
@@ -389,15 +390,17 @@ def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "",
         items.append(ReadinessItem("Qualifying setup selected", "ok", active_setup_label))
     if soft_confirmed is not None:
         # Qualifying always runs the SOFTEST compound the event allows — one lap, peak
-        # grip, tyre life irrelevant. Name the specific compound so the driver knows what
-        # to fit rather than a generic "soft".
+        # grip, tyre life irrelevant — or the rain tyre when the track is wet. Name the
+        # specific compound so the driver knows what to fit.
+        item_label = "Rain tyres confirmed" if wet else "Soft tyres confirmed"
         if soft_confirmed:
-            ok_note = f"On {current_label}" if current_label else "Softest allowed compound"
-            items.append(ReadinessItem("Soft tyres confirmed", "ok", ok_note))
+            ok_note = f"On {current_label}" if current_label else "Correct compound fitted"
+            items.append(ReadinessItem(item_label, "ok", ok_note))
         else:
-            blk_note = (f"Fit {softest_label} — qualifying runs the softest allowed compound"
-                        if softest_label else "Fit the softest allowed compound for qualifying")
-            items.append(ReadinessItem("Soft tyres confirmed", "blocked", blk_note))
+            rule = ("the track is wet — fit the rain tyre" if wet
+                    else "qualifying runs the softest allowed compound")
+            blk_note = f"Fit {softest_label} — {rule}" if softest_label else f"Fit the right compound: {rule}"
+            items.append(ReadinessItem(item_label, "blocked", blk_note))
     for row in (view.get("readiness") or []):
         try:
             name, level, note = (list(row) + ["", "", ""])[:3]
