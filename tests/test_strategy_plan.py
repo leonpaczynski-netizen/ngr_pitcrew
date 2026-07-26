@@ -98,6 +98,22 @@ class TestStartRace:
         assert "Ready to race" in w._race_ready.text()
 
 
+class TestSinglePrimaryCTA:
+    """One dominant CTA per screen: Build is primary with no plan, then demotes to a
+    quiet redo once a plan exists so Approve is the sole primary."""
+
+    def test_build_is_primary_when_no_plan(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(StrategyPlanVM())
+        assert w._build.objectName() == "ngrPrimaryAction"
+
+    def test_build_demotes_to_secondary_once_a_plan_exists(self, qapp):
+        w = StrategyPlanView()
+        w.set_plan(_vm())
+        assert w._build.objectName() == "ngrSecondaryAction"
+        assert w._approve.objectName() == "ngrPrimaryAction"   # approve stays primary
+
+
 class TestPlanSelection:
     """UAT-7: "no way to select a strat. Other than the first plan recommended no other
     stint lengths" — every plan is now choosable and shows its own shape."""

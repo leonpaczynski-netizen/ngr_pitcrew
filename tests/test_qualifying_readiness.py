@@ -65,6 +65,14 @@ class TestQualifyingReadiness:
         assert w._vm.ready is False
         assert w._begin.isEnabled() is False
 
+    def test_empty_checklist_explains_why_begin_is_disabled(self, qapp):
+        # No dead ends: a disabled Begin with an empty checklist must say why.
+        w = QualifyingReadiness()
+        w.set_readiness(QualifyingReadinessVM())
+        assert w._begin.isEnabled() is False
+        assert w._blockers.isHidden() is False
+        assert "qualifying setup" in w._blockers.text().lower()
+
     def test_vm_ready_logic(self):
         assert _ready_vm().ready is True
         assert _blocked_vm().ready is False

@@ -1396,7 +1396,8 @@ class LiveShellBridge(QObject):
                 f"Calibrated from telemetry — {cal.confidence.upper()} confidence "
                 f"(peak power {cal.peak_power_rpm} rpm, peak torque {cal.peak_torque_rpm} "
                 f"rpm, redline {cal.redline} rpm; {cal.sample_count} samples in gear "
-                f"{cal.gear_used}).", ok=True)
+                f"{cal.gear_used}). The shift targets below now reflect your car — "
+                f"nothing more to enter.", ok=True)
         except Exception:
             _status("Calibration failed — try again after recording a clean lap.", ok=False)
         self._feed_shift_strategy()
@@ -2032,7 +2033,9 @@ class LiveShellBridge(QObject):
                 audio_view = self._live_audio_view
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
-                race_phase=self._live_race_phase))
+                race_phase=self._live_race_phase,
+                session_mode=("qualifying" if self._live_session_mode == "qualifying"
+                              else "race")))
             # Show the approved/accepted plan — the wall looked empty because nothing
             # about the strategy was ever fed here. When nothing was formally approved,
             # fall back to the current recommendation so the wall always shows A plan
@@ -2546,8 +2549,18 @@ class LiveShellBridge(QObject):
                     fn()
         except Exception:
             pass
+        # Stay on the Strategy page after approving. Approving the plan is NOT starting
+        # the race — "Start Race" is the explicit next step, and its readiness caption
+        # lives here. Jumping to the Pit Wall stranded that forward action a page away
+        # (the driver had to navigate back to actually start). Approve → Start Race is now
+        # a straight line; Start Race is what opens the Live Pit Wall.
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            if sp is not None and hasattr(sp, "set_status"):
+                sp.set_status("Plan approved. Press Start Race when you're ready to go.")
+        except Exception:
+            pass
         self.refresh()
-        self._navigate("live_pit_wall")
 
     def _persist_approved_strategy(self, candidate_id: str) -> None:
         """Save the approved plan's essentials on the cycle so it reloads next launch.
@@ -2611,9 +2624,10 @@ class LiveShellBridge(QObject):
     def _on_debrief_action(self, key: str) -> None:
         try:
             k = (key or "").lower()
-            # The debrief is the terminal programme stage; closing it FINISHES the event.
+            # The debrief is the terminal programme stage; closing it FINISHES the event
+            # (with the same confirmation as Home's Finish this event).
             if k == "close":
-                self._finish_active_event()
+                self._on_finish_event()
                 return
             dest = {"to_qualifying": "qualifying", "to_race": "race_strategy",
                     "prepare_qualifying": "qualifying", "prepare_race": "race_strategy",
@@ -2624,7 +2638,24 @@ class LiveShellBridge(QObject):
             pass
 
     def _on_finish_event(self) -> None:
-        """Home 'Finish this event' — mark the active event complete."""
+        """Home 'Finish this event' — confirm, then mark the active event complete.
+
+        Finishing clears the active event and its live/review caches — heavier than the
+        neighbouring "switch"/"create" controls — so it confirms first, mirroring the
+        Start Race warning.
+        """
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            answer = QMessageBox.warning(
+                self._shell, "Finish event",
+                "Finish and close this event? Preparation for it stops and it is no "
+                "longer the active event.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        except Exception:
+            pass
         self._finish_active_event()
 
     def _finish_active_event(self) -> None:

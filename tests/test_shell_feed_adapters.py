@@ -67,6 +67,19 @@ class TestLive:
         assert vm.stint != "IN PIT"
         assert "Box" not in vm.engineer_instruction
 
+    def test_qualifying_mode_coaches_a_push_lap_not_a_race_grid(self):
+        # UAT/UI: entering qualifying must not land on a silent race-shaped pit wall.
+        st = _ns(current_lap=2, telemetry_fresh=True)
+        vm = live_pit_wall_vm_from_state(st, connected=True, session_mode="qualifying")
+        assert vm.session_mode == "qualifying"
+        assert "push lap" in vm.engineer_instruction.lower()
+
+    def test_qualifying_with_no_state_still_tells_the_driver_what_to_do(self):
+        vm = live_pit_wall_vm_from_state(None, connected=True, session_mode="qualifying")
+        assert vm.session_mode == "qualifying"
+        assert vm.engineer_instruction  # never blank in qualifying
+        assert "push lap" in vm.engineer_instruction.lower()
+
 
 class TestStrategy:
     def test_maps_rpvm(self):

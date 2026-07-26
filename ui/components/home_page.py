@@ -80,6 +80,9 @@ class HomePage(QWidget):
         self.setObjectName("ngrHomePage")
         self._candidates: list[dict] = []
         self._primary_surface = ""
+        #: When True the DO-THIS-NEXT button opens event management (no active event yet)
+        #: rather than navigating to a surface.
+        self._next_is_manage = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -127,10 +130,15 @@ class HomePage(QWidget):
         self._btn_manage = SecondaryActionButton("Create / edit events")
         self._btn_manage.clicked.connect(lambda: self.manage_events_requested.emit())
         ev_row.addWidget(self._btn_manage)
+        # Finishing is the odd one out — semi-destructive, so it sits apart from the
+        # everyday switch/create controls (after the stretch) and is warn-toned.
+        ev_row.addStretch(1)
         self._btn_finish = SecondaryActionButton("Finish this event")
+        self._btn_finish.setStyleSheet(
+            self._btn_finish.styleSheet()
+            + f" #ngrSecondaryAction {{ color: {_t.WARN}; border-color: {_t.WARN}; }}")
         self._btn_finish.clicked.connect(lambda: self.event_complete_requested.emit())
         ev_row.addWidget(self._btn_finish)
-        ev_row.addStretch(1)
         self._event_card.body.addLayout(ev_row)
         lay.addWidget(self._event_card)
 
@@ -145,8 +153,7 @@ class HomePage(QWidget):
         self._next_detail = _Row("")
         self._next_card.add(self._next_detail)
         self._btn_next = PrimaryActionButton()
-        self._btn_next.clicked.connect(
-            lambda: self._primary_surface and self.navigate_requested.emit(self._primary_surface))
+        self._btn_next.clicked.connect(self._on_next_clicked)
         btn_row = QHBoxLayout()
         btn_row.addWidget(self._btn_next)
         btn_row.addStretch(1)
@@ -302,6 +309,10 @@ class HomePage(QWidget):
             detail = (detail + "  " if detail else "") + \
                 f"Evidence for this comes from a recorded {run_name} — nothing else builds it."
             headline = cta
+        # With no active event, the ONE next step is to create/activate one — so the
+        # loud DO-THIS-NEXT button does exactly that instead of sitting dead under a
+        # headline that tells the driver to act.
+        self._next_is_manage = not app_state.has_active_event
         if not headline:
             headline = ("Activate an event to get a plan."
                         if not app_state.has_active_event else "Nothing outstanding.")
@@ -309,7 +320,9 @@ class HomePage(QWidget):
         self._next_headline.setText(headline)
         self._next_detail.setText(detail)
         self._next_detail.setVisible(bool(detail))
-        if self._primary_surface:
+        if self._next_is_manage:
+            self._btn_next.set_action("Create or activate an event", enabled=True)
+        elif self._primary_surface:
             self._btn_next.set_action(headline, enabled=True)
         else:
             self._btn_next.set_action("", enabled=False)
@@ -383,6 +396,13 @@ class HomePage(QWidget):
         self._learning.setVisible(bool(learning))
 
     # ---- signals ----------------------------------------------------------
+    def _on_next_clicked(self) -> None:
+        """DO-THIS-NEXT: manage events when there's none active, else navigate."""
+        if self._next_is_manage:
+            self.manage_events_requested.emit()
+        elif self._primary_surface:
+            self.navigate_requested.emit(self._primary_surface)
+
     def _on_switch(self) -> None:
         idx = self._event_combo.currentIndex()
         if 0 <= idx < len(self._candidates):

@@ -39,6 +39,21 @@ class TestDebrief:
         w._primary.click()
         assert seen == ["continue"]
 
+    def test_finish_event_is_reachable_on_the_debrief(self, qapp):
+        # The terminal stage must always offer closing the event out.
+        w = DebriefView()
+        w.set_debrief(_debrief())
+        assert w._finish.isHidden() is False
+        seen = []
+        w.action_requested.connect(lambda k: seen.append(k))
+        w._finish.click()
+        assert seen == ["close"]
+
+    def test_finish_hidden_when_there_is_no_debrief(self, qapp):
+        w = DebriefView()
+        w.set_debrief(DebriefVM())
+        assert w._finish.isHidden() is True
+
     def test_regressions_kept_visible(self, qapp):
         # Failed/regressed items must remain visible, never hidden.
         w = DebriefView()
