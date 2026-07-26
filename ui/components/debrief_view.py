@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget
 
 from ui import ngr_theme as _t
 from ui.components.cards import SectionHeading
-from ui.components.buttons import PrimaryActionButton
+from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 
 
 @dataclass(frozen=True)
@@ -82,6 +82,15 @@ class DebriefView(QWidget):
         self._primary.clicked.connect(lambda: self.action_requested.emit(self._vm.primary_action_key))
         act.addWidget(self._primary)
         act.addStretch(1)
+        # The debrief is the terminal stage — closing the event out must always be
+        # reachable here (the primary is usually "Continue development"). Kept quiet and
+        # off to the side, warn-toned, so it never competes with the forward action.
+        self._finish = SecondaryActionButton("Finish event")
+        self._finish.setStyleSheet(
+            self._finish.styleSheet()
+            + f" #ngrSecondaryAction {{ color: {_t.WARN}; border-color: {_t.WARN}; }}")
+        self._finish.clicked.connect(lambda: self.action_requested.emit("close"))
+        act.addWidget(self._finish)
         self._root.addLayout(act)
         self._root.addStretch(1)
 
@@ -113,6 +122,8 @@ class DebriefView(QWidget):
         self._section("Carried into next event", vm.carry_forward, _t.NGR_GREEN)
 
         self._primary.set_action(vm.primary_action_label, enabled=bool(vm.primary_action_label))
+        # Offer "Finish event" only once there's a real debrief (i.e. an event under way).
+        self._finish.setVisible(vm.has_debrief)
 
     def _section(self, caption: str, items, colour: str) -> None:
         items = tuple(items or ())

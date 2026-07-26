@@ -7,6 +7,7 @@ regulations, the compound table and a compound-comparing race-plan pass all exis
 
 from strategy.tyre_selection import (
     DEFAULT_AVAILABLE, build_tyre_choice, current_code, setup_fields_for, softness_rank,
+    resolve_qualifying_compound, is_wet_weather,
 )
 
 
@@ -109,3 +110,54 @@ class TestNeverRaises:
     def test_garbage_input_yields_an_empty_choice_not_an_error(self):
         c = build_tyre_choice(discipline=None, available=None, required=None)
         assert c.codes == DEFAULT_AVAILABLE
+
+
+class TestQualifyingCompoundRule:
+    """Qualifying always runs the softest compound — softest dry slick when dry, the rain
+    tyre when wet. Wetness = event weather OR the driver's manual override (GT7 reports no
+    live rain)."""
+
+    def test_dry_default_is_the_softest_slick(self):
+        code, name, wet, _ = resolve_qualifying_compound()
+        assert code == "RS" and wet is False
+
+    def test_restricted_dry_gives_softest_allowed_slick(self):
+        code, _n, wet, _ = resolve_qualifying_compound(available=["RH", "RM"])
+        assert code == "RM" and wet is False
+
+    def test_light_rain_fits_intermediate(self):
+        code, _n, wet, _ = resolve_qualifying_compound(weather="Light Rain")
+        assert code == "IM" and wet is True
+
+    def test_heavy_rain_fits_heavy_wet(self):
+        code, _n, wet, _ = resolve_qualifying_compound(weather="Heavy Rain")
+        assert code == "HW" and wet is True
+
+    def test_fixed_wet_fits_intermediate(self):
+        assert resolve_qualifying_compound(weather="Fixed Wet")[0] == "IM"
+
+    def test_random_weather_stays_dry_without_an_override(self):
+        # The app can't know a random-weather session is raining — dry until told.
+        assert resolve_qualifying_compound(weather="Random Weather")[2] is False
+
+    def test_manual_override_makes_it_wet_in_random_weather(self):
+        code, _n, wet, _ = resolve_qualifying_compound(
+            weather="Random Weather", wet_override=True)
+        assert wet is True and code == "IM"
+
+    def test_override_false_beats_a_wet_event_when_the_track_dries(self):
+        code, _n, wet, _ = resolve_qualifying_compound(
+            weather="Heavy Rain", wet_override=False)
+        assert wet is False and code == "RS"
+
+    def test_wet_honours_an_allowed_wet_restriction(self):
+        # Only Heavy Wet allowed + light rain → still HW (the only legal wet).
+        assert resolve_qualifying_compound(available=["HW"], weather="Light Rain")[0] == "HW"
+
+    def test_is_wet_weather_excludes_dry_and_random(self):
+        assert is_wet_weather("Light Rain") is True
+        assert is_wet_weather("Fixed Dry") is False
+        assert is_wet_weather("Random Weather") is False
+
+    def test_never_raises_on_garbage(self):
+        assert resolve_qualifying_compound(available=None, weather=None) is not None

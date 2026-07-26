@@ -219,6 +219,9 @@ class StrategyPlanView(QWidget):
                                  enabled=vm.has_plan)
         self._build.set_action("Rebuild the race plan" if vm.has_plan
                                else "Build the race plan", enabled=True)
+        # One dominant CTA per screen: with no plan, building IS the forward action
+        # (primary); once a plan exists, Approve is primary and Rebuild is a quieter redo.
+        self._build.set_secondary_look(vm.has_plan)
         # Start Race only makes sense once a plan exists; readiness detail is refreshed
         # separately via set_race_readiness (which the bridge calls each feed).
         self._start_race.setVisible(vm.has_plan)

@@ -210,6 +210,34 @@ class TestLiveSessionMode:
         assert win._live_mode_ref[0] == "Qualifying"
         assert win._practice_is_qual_ref[0] is True
 
+    def _author_quali(self, b):
+        # The compound rule only touches an AUTHORED qualifying sheet (never authors an
+        # empty one), so give it a real setup first.
+        b._setups.apply("qualifying", {"arb_front": 5, "arb_rear": 4,
+                                       "aero_front": 400, "aero_rear": 500})
+
+    def test_begin_qualifying_fits_the_softest_allowed_compound(self, qapp):
+        """Rule: qualifying always runs the softest allowed compound. With no tyre
+        restriction the softest dry racing compound (RS) is applied to the quali sheet."""
+        _shell, _win, b = self._wired(qapp)
+        self._author_quali(b)
+        b._on_begin_qualifying()
+        target, current, target_name, _cur_name, is_wet = b._qualifying_tyre_state()
+        assert target == "RS"                  # default-available softest dry
+        assert current == "RS"                 # Begin Qualifying applied it
+        assert is_wet is False and "Soft" in target_name
+
+    def test_track_wet_toggle_switches_qualifying_to_the_rain_tyre(self, qapp):
+        _shell, _win, b = self._wired(qapp)
+        self._author_quali(b)
+        b._on_begin_qualifying()               # dry: RS on the quali sheet
+        b._on_track_wet_toggled(True)          # driver says the track is wet
+        target, current, _tn, _cn, is_wet = b._qualifying_tyre_state()
+        assert is_wet is True and target == "IM"   # rain tyre
+        assert current == "IM"                     # applied to the sheet
+        b._on_track_wet_toggled(False)             # track dried again
+        assert b._qualifying_tyre_state()[0] == "RS"
+
     def test_telemetry_never_auto_asserts_race_mode(self, qapp):
         """A RACING phase must NOT flip the app into race mode — a practice/qualifying
         session can look like RACING, and race start is now an explicit driver action."""

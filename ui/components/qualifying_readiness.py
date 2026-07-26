@@ -135,6 +135,13 @@ class QualifyingReadiness(QWidget):
         if vm.blockers:
             self._blockers.setText("Remaining blockers:  " + "  ·  ".join(vm.blockers))
             self._blockers.setVisible(True)
+        elif not vm.items:
+            # No checklist at all → the driver hasn't got a qualifying setup yet. A
+            # disabled Begin with no words is the one dead-end the app forbids: say why.
+            self._blockers.setText(
+                "Build and apply a qualifying setup first — this checklist fills in once "
+                "there's a setup to qualify on.")
+            self._blockers.setVisible(True)
         else:
             self._blockers.setVisible(False)
 

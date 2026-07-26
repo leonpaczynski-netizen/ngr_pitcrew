@@ -34,6 +34,17 @@ class PrimaryActionButton(QPushButton):
         self.setEnabled(bool(enabled) and bool(label))
         self.setVisible(bool(label))
 
+    def set_secondary_look(self, secondary: bool) -> None:
+        """Demote (or restore) this button's prominence without swapping the widget.
+
+        A page must have only ONE dominant CTA. When a page's forward action moves on
+        (e.g. once a plan exists, "Approve" becomes primary and "Rebuild" is a redo), the
+        now-subordinate button adopts the quieter secondary look while keeping its slot.
+        """
+        self.setObjectName("ngrSecondaryAction" if secondary else "ngrPrimaryAction")
+        base = _t.secondary_button_qss() if secondary else _t.primary_button_qss()
+        self.setStyleSheet(base + f" QPushButton:focus {{ {_t.focus_ring_qss()} }}")
+
 
 class SecondaryActionButton(QPushButton):
     """A subordinate action, visually quieter than the primary CTA."""

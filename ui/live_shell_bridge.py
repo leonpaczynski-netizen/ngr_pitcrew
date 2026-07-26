@@ -80,6 +80,10 @@ class LiveShellBridge(QObject):
         #: The last live race phase reported by the telemetry bridge — "IN PIT",
         #: "RACING", "FINISHED" — used to surface the pit fuel call on the Live Pit Wall.
         self._live_race_phase: str = ""
+        #: Driver override for track wetness (qualifying tyre rule). None = follow the
+        #: event weather; True/False = the driver has said the track is wet/dry (the only
+        #: signal for Random Weather or a track that changes, since GT7 reports no rain).
+        self._track_wet: Optional[bool] = None
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
@@ -255,6 +259,8 @@ class LiveShellBridge(QObject):
                     gp.baseline_requested.connect(self._on_build_baseline)
                 if hasattr(gp, "tyre_change_requested"):
                     gp.tyre_change_requested.connect(self._on_tyre_change)
+                if hasattr(gp, "track_wet_changed"):
+                    gp.track_wet_changed.connect(self._on_track_wet_toggled)
                 if hasattr(gp, "shift_rpm_changed"):
                     gp.shift_rpm_changed.connect(self._on_shift_rpm_changed)
                 if hasattr(gp, "shift_rpm_recommend_requested"):
@@ -759,9 +765,72 @@ class LiveShellBridge(QObject):
                 return
             from ui.shell_feed_adapters import qualifying_vm_from_cc_view
             label, _applied = self._setups.active_setup("qualifying")
-            qp.set_readiness(qualifying_vm_from_cc_view(view, active_setup_label=label))
+            # Qualifying always runs the softest allowed compound (rain tyre when wet) —
+            # surface whether the qualifying sheet is on it, naming the specific compound.
+            target, current, target_name, current_name, is_wet = self._qualifying_tyre_state()
+            confirmed = (current == target) if target else None
+            qp.set_readiness(qualifying_vm_from_cc_view(
+                view, active_setup_label=label, soft_confirmed=confirmed,
+                softest_label=target_name, current_label=current_name, wet=is_wet))
         except Exception:
             pass
+
+    def _qualifying_tyre_state(self):
+        """(target_code, current_code, target_name, current_name, is_wet) for the
+        qualifying sheet: the compound the qualifying rule wants (softest dry slick, or the
+        rain tyre when wet) and what is on the sheet now. Never raises; blanks when
+        nothing is resolvable."""
+        try:
+            from strategy.tyre_selection import resolve_qualifying_compound, current_code
+            from data.tyres import get_by_code
+            ev = None
+            try:
+                ev = self._window._build_event_context()
+            except Exception:
+                ev = None
+            target, tname, is_wet, _reason = resolve_qualifying_compound(
+                available=getattr(ev, "available_tyres", ()) or (),
+                required=getattr(ev, "required_tyres", ()) or (),
+                weather=str(getattr(ev, "weather", "") or ""),
+                wet_override=self._track_wet)
+            try:
+                cur = current_code(self._setups.sheet("qualifying").as_dict()) or ""
+            except Exception:
+                cur = ""
+            cname = get_by_code(cur).name if cur and get_by_code(cur) else cur
+            return target, cur, tname, cname, is_wet
+        except Exception:
+            return "", "", "", "", False
+
+    def _apply_qualifying_compound(self) -> None:
+        """Put the qualifying compound (softest dry, or the rain tyre when wet) on the
+        qualifying sheet — the qualifying rule applied to the setup sheet itself.
+
+        Only touches an ALREADY-AUTHORED sheet and only when it isn't already on the
+        target, so it never authors an empty sheet and never churns revisions.
+        """
+        try:
+            from strategy.tyre_selection import setup_fields_for
+            sheet = self._setups.sheet("qualifying")
+            if not getattr(sheet, "is_authored", False):
+                return
+            target, current, _t, _c, _wet = self._qualifying_tyre_state()
+            if target and current != target:
+                fields = setup_fields_for(target)
+                if fields:
+                    self._setups.apply("qualifying", fields)
+        except Exception:
+            pass
+
+    def _on_track_wet_toggled(self, wet: bool) -> None:
+        """The driver set whether the track is wet — the qualifying tyre override.
+
+        Re-applies the qualifying compound (dry↔wet) and re-feeds, so the setup sheet and
+        the Garage follow the change immediately.
+        """
+        self._track_wet = bool(wet)
+        self._apply_qualifying_compound()
+        self.refresh()
 
     def _feed_strategy(self) -> None:
         try:
@@ -1396,7 +1465,8 @@ class LiveShellBridge(QObject):
                 f"Calibrated from telemetry — {cal.confidence.upper()} confidence "
                 f"(peak power {cal.peak_power_rpm} rpm, peak torque {cal.peak_torque_rpm} "
                 f"rpm, redline {cal.redline} rpm; {cal.sample_count} samples in gear "
-                f"{cal.gear_used}).", ok=True)
+                f"{cal.gear_used}). The shift targets below now reflect your car — "
+                f"nothing more to enter.", ok=True)
         except Exception:
             _status("Calibration failed — try again after recording a clean lap.", ok=False)
         self._feed_shift_strategy()
@@ -1674,6 +1744,11 @@ class LiveShellBridge(QObject):
             d = "race"
         self._discipline = d
         self._push_practice_mode(d)
+        # Selecting the qualifying sheet applies the qualifying tyre rule to it (softest
+        # dry / rain tyre), so the setup sheet is always on the right compound. Guarded to
+        # an authored sheet + only-when-different inside the helper, so no churn.
+        if d == "qualifying":
+            self._apply_qualifying_compound()
         try:
             gp = getattr(self._shell, "garage_page", None)
             if gp is not None and hasattr(gp, "set_status"):
@@ -1703,6 +1778,10 @@ class LiveShellBridge(QObject):
                 gp.set_discipline("qualifying")
         except Exception:
             pass
+        # Qualifying always runs the softest allowed compound (rain tyre when wet) — put it
+        # on the qualifying sheet now, BEFORE pushing the mode so the tracker records the
+        # qualifying laps on the right compound.
+        self._apply_qualifying_compound()
         # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
         # and the qualifying compound to the tracker, then re-feed the Garage for it.
         self._push_practice_mode("qualifying")
@@ -1847,6 +1926,13 @@ class LiveShellBridge(QObject):
                     required=getattr(ev, "required_tyres", ()) or (),
                     race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
                 current_code(setup))
+            # Reflect the effective wet state on the "Track is wet" toggle: the driver's
+            # override when set, else the event weather.
+            if hasattr(garage, "set_track_wet"):
+                from strategy.tyre_selection import is_wet_weather
+                wet = (self._track_wet if self._track_wet is not None
+                       else is_wet_weather(str(getattr(ev, "weather", "") or "")))
+                garage.set_track_wet(bool(wet))
         except Exception:
             pass
 
@@ -2032,7 +2118,9 @@ class LiveShellBridge(QObject):
                 audio_view = self._live_audio_view
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
-                race_phase=self._live_race_phase))
+                race_phase=self._live_race_phase,
+                session_mode=("qualifying" if self._live_session_mode == "qualifying"
+                              else "race")))
             # Show the approved/accepted plan — the wall looked empty because nothing
             # about the strategy was ever fed here. When nothing was formally approved,
             # fall back to the current recommendation so the wall always shows A plan
@@ -2546,8 +2634,18 @@ class LiveShellBridge(QObject):
                     fn()
         except Exception:
             pass
+        # Stay on the Strategy page after approving. Approving the plan is NOT starting
+        # the race — "Start Race" is the explicit next step, and its readiness caption
+        # lives here. Jumping to the Pit Wall stranded that forward action a page away
+        # (the driver had to navigate back to actually start). Approve → Start Race is now
+        # a straight line; Start Race is what opens the Live Pit Wall.
+        try:
+            sp = getattr(self._shell, "strategy_page", None)
+            if sp is not None and hasattr(sp, "set_status"):
+                sp.set_status("Plan approved. Press Start Race when you're ready to go.")
+        except Exception:
+            pass
         self.refresh()
-        self._navigate("live_pit_wall")
 
     def _persist_approved_strategy(self, candidate_id: str) -> None:
         """Save the approved plan's essentials on the cycle so it reloads next launch.
@@ -2611,9 +2709,10 @@ class LiveShellBridge(QObject):
     def _on_debrief_action(self, key: str) -> None:
         try:
             k = (key or "").lower()
-            # The debrief is the terminal programme stage; closing it FINISHES the event.
+            # The debrief is the terminal programme stage; closing it FINISHES the event
+            # (with the same confirmation as Home's Finish this event).
             if k == "close":
-                self._finish_active_event()
+                self._on_finish_event()
                 return
             dest = {"to_qualifying": "qualifying", "to_race": "race_strategy",
                     "prepare_qualifying": "qualifying", "prepare_race": "race_strategy",
@@ -2624,7 +2723,24 @@ class LiveShellBridge(QObject):
             pass
 
     def _on_finish_event(self) -> None:
-        """Home 'Finish this event' — mark the active event complete."""
+        """Home 'Finish this event' — confirm, then mark the active event complete.
+
+        Finishing clears the active event and its live/review caches — heavier than the
+        neighbouring "switch"/"create" controls — so it confirms first, mirroring the
+        Start Race warning.
+        """
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            answer = QMessageBox.warning(
+                self._shell, "Finish event",
+                "Finish and close this event? Preparation for it stops and it is no "
+                "longer the active event.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        except Exception:
+            pass
         self._finish_active_event()
 
     def _finish_active_event(self) -> None:

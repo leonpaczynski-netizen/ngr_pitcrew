@@ -16,7 +16,7 @@ from typing import Optional
 # Live Pit Wall  <-  adaptive_live_strategy.LiveStrategyState
 # ---------------------------------------------------------------------------
 def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=None,
-                                race_phase: str = ""):
+                                race_phase: str = "", session_mode: str = "race"):
     """Build the LivePitWallVM from a LiveStrategyState + optional audio view.
 
     When ``audio_view`` is supplied (from ``build_live_audio_strategy_view``), the
@@ -34,7 +34,17 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
     compatible, no behaviour change for existing callers).  Never raises.
     """
     from ui.components.live_pit_wall import LivePitWallVM
+    is_qual = str(session_mode or "race").lower() == "qualifying"
+    # The one-lap qualifying coach: on a glance-first surface the driver still needs to
+    # be told what to do, since there's no race plan/fuel/pit to drive the engineer line.
+    _QUAL_CUE = ("Out-lap now — build tyre temperature, then one committed push lap. "
+                 "Bank a clean lap before you push harder.")
     if state is None:
+        if is_qual:
+            return LivePitWallVM(
+                session_mode="qualifying", freshness="live" if connected else "none",
+                engineer_instruction=_QUAL_CUE if connected
+                else "Qualifying — waiting for the car to go on track.")
         return LivePitWallVM(freshness="live" if connected else "none",
                              engineer_instruction="" if connected else "Waiting for live telemetry…")
     g = lambda a: getattr(state, a, None)
@@ -143,6 +153,12 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         except Exception:
             pass
 
+    # In qualifying there is no race plan to drive the engineer line, so fall back to the
+    # push-lap coach rather than leaving the surface's own question ("what do I do now?")
+    # unanswered.
+    if is_qual and not engineer_instruction:
+        engineer_instruction = _QUAL_CUE
+
     # The pit call is the most time-critical thing on screen — while stopped it leads
     # the engineer line so the fuel number is the first thing read.
     if pit_call:
@@ -154,6 +170,7 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         pit_window=pit_window, gap_to_plan=gap,
         engineer_instruction=engineer_instruction, next_decision=next_decision,
         warning=warning, freshness=fresh, confidence=confidence, map_trust="none",
+        session_mode=("qualifying" if is_qual else "race"),
     )
 
 
@@ -361,7 +378,10 @@ def _readiness_status(level: str) -> str:
     return "warn"
 
 
-def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "", soft_confirmed: Optional[bool] = None):
+def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "",
+                               soft_confirmed: Optional[bool] = None,
+                               softest_label: str = "", current_label: str = "",
+                               wet: bool = False):
     from ui.components.qualifying_readiness import QualifyingReadinessVM, ReadinessItem
     if not isinstance(view, dict) or not view.get("ok", True):
         return QualifyingReadinessVM()
@@ -369,9 +389,18 @@ def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "", soft_confi
     if active_setup_label:
         items.append(ReadinessItem("Qualifying setup selected", "ok", active_setup_label))
     if soft_confirmed is not None:
-        items.append(ReadinessItem("Soft tyres confirmed",
-                                   "ok" if soft_confirmed else "blocked",
-                                   "" if soft_confirmed else "Fit Soft tyres for qualifying"))
+        # Qualifying always runs the SOFTEST compound the event allows — one lap, peak
+        # grip, tyre life irrelevant — or the rain tyre when the track is wet. Name the
+        # specific compound so the driver knows what to fit.
+        item_label = "Rain tyres confirmed" if wet else "Soft tyres confirmed"
+        if soft_confirmed:
+            ok_note = f"On {current_label}" if current_label else "Correct compound fitted"
+            items.append(ReadinessItem(item_label, "ok", ok_note))
+        else:
+            rule = ("the track is wet — fit the rain tyre" if wet
+                    else "qualifying runs the softest allowed compound")
+            blk_note = f"Fit {softest_label} — {rule}" if softest_label else f"Fit the right compound: {rule}"
+            items.append(ReadinessItem(item_label, "blocked", blk_note))
     for row in (view.get("readiness") or []):
         try:
             name, level, note = (list(row) + ["", "", ""])[:3]

@@ -38,6 +38,7 @@ class LivePitWallVM:
     confidence: str = "unknown"
     map_trust: str = "none"        # approved|fallback|low|none
     ptt_status: str = "RADIO READY"
+    session_mode: str = "race"     # race|qualifying — reframes the surface
 
 
 class LivePitWall(QWidget):
