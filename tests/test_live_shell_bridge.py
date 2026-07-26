@@ -210,6 +210,16 @@ class TestLiveSessionMode:
         assert win._live_mode_ref[0] == "Qualifying"
         assert win._practice_is_qual_ref[0] is True
 
+    def test_begin_qualifying_fits_the_softest_allowed_compound(self, qapp):
+        """Rule: qualifying always runs the softest allowed compound. With no tyre
+        restriction the softest dry racing compound (RS) is applied to the quali sheet."""
+        _shell, _win, b = self._wired(qapp)
+        b._on_begin_qualifying()
+        softest, current, softest_name, _cur_name = b._qualifying_tyre_state()
+        assert softest == "RS"                 # default-available softest
+        assert current == "RS"                 # Begin Qualifying applied it
+        assert "Soft" in softest_name
+
     def test_telemetry_never_auto_asserts_race_mode(self, qapp):
         """A RACING phase must NOT flip the app into race mode — a practice/qualifying
         session can look like RACING, and race start is now an explicit driver action."""

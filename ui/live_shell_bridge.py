@@ -759,7 +759,56 @@ class LiveShellBridge(QObject):
                 return
             from ui.shell_feed_adapters import qualifying_vm_from_cc_view
             label, _applied = self._setups.active_setup("qualifying")
-            qp.set_readiness(qualifying_vm_from_cc_view(view, active_setup_label=label))
+            # Qualifying always runs the softest allowed compound — surface whether the
+            # qualifying sheet is on it, naming the specific compound.
+            softest, current, softest_name, current_name = self._qualifying_tyre_state()
+            soft_confirmed = (current == softest) if softest else None
+            qp.set_readiness(qualifying_vm_from_cc_view(
+                view, active_setup_label=label, soft_confirmed=soft_confirmed,
+                softest_label=softest_name, current_label=current_name))
+        except Exception:
+            pass
+
+    def _qualifying_tyre_state(self):
+        """(softest_code, current_code, softest_name, current_name) for the qualifying
+        sheet under this event's tyre regulations. Softest = the rule for qualifying.
+        Never raises; blank codes when nothing is resolvable."""
+        try:
+            from strategy.tyre_selection import build_tyre_choice, current_code
+            from data.tyres import get_by_code
+            ev = None
+            try:
+                ev = self._window._build_event_context()
+            except Exception:
+                ev = None
+            choice = build_tyre_choice(
+                discipline="qualifying",
+                available=getattr(ev, "available_tyres", ()) or (),
+                required=getattr(ev, "required_tyres", ()) or ())
+            softest = choice.recommended_code or ""
+            try:
+                cur = current_code(self._setups.sheet("qualifying").as_dict()) or ""
+            except Exception:
+                cur = ""
+            sname = (get_by_code(softest).name if softest and get_by_code(softest)
+                     else softest)
+            cname = get_by_code(cur).name if cur and get_by_code(cur) else cur
+            return softest, cur, sname, cname
+        except Exception:
+            return "", "", "", ""
+
+    def _apply_softest_qualifying_compound(self) -> None:
+        """Put the softest allowed compound on the qualifying sheet (the qualifying rule).
+
+        Only writes when the sheet isn't already on it, so there's no revision churn.
+        """
+        try:
+            from strategy.tyre_selection import setup_fields_for
+            softest, current, _s, _c = self._qualifying_tyre_state()
+            if softest and current != softest:
+                fields = setup_fields_for(softest)
+                if fields:
+                    self._setups.apply("qualifying", fields)
         except Exception:
             pass
 
@@ -1704,6 +1753,10 @@ class LiveShellBridge(QObject):
                 gp.set_discipline("qualifying")
         except Exception:
             pass
+        # Qualifying always runs the softest allowed compound — put it on the qualifying
+        # sheet now, BEFORE pushing the mode so the tracker records the qualifying laps on
+        # the right compound.
+        self._apply_softest_qualifying_compound()
         # Push the qualifying mode to the runtime (shift RPM + announcer session mode)
         # and the qualifying compound to the tracker, then re-feed the Garage for it.
         self._push_practice_mode("qualifying")

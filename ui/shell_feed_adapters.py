@@ -378,7 +378,9 @@ def _readiness_status(level: str) -> str:
     return "warn"
 
 
-def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "", soft_confirmed: Optional[bool] = None):
+def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "",
+                               soft_confirmed: Optional[bool] = None,
+                               softest_label: str = "", current_label: str = ""):
     from ui.components.qualifying_readiness import QualifyingReadinessVM, ReadinessItem
     if not isinstance(view, dict) or not view.get("ok", True):
         return QualifyingReadinessVM()
@@ -386,9 +388,16 @@ def qualifying_vm_from_cc_view(view, *, active_setup_label: str = "", soft_confi
     if active_setup_label:
         items.append(ReadinessItem("Qualifying setup selected", "ok", active_setup_label))
     if soft_confirmed is not None:
-        items.append(ReadinessItem("Soft tyres confirmed",
-                                   "ok" if soft_confirmed else "blocked",
-                                   "" if soft_confirmed else "Fit Soft tyres for qualifying"))
+        # Qualifying always runs the SOFTEST compound the event allows — one lap, peak
+        # grip, tyre life irrelevant. Name the specific compound so the driver knows what
+        # to fit rather than a generic "soft".
+        if soft_confirmed:
+            ok_note = f"On {current_label}" if current_label else "Softest allowed compound"
+            items.append(ReadinessItem("Soft tyres confirmed", "ok", ok_note))
+        else:
+            blk_note = (f"Fit {softest_label} — qualifying runs the softest allowed compound"
+                        if softest_label else "Fit the softest allowed compound for qualifying")
+            items.append(ReadinessItem("Soft tyres confirmed", "blocked", blk_note))
     for row in (view.get("readiness") or []):
         try:
             name, level, note = (list(row) + ["", "", ""])[:3]

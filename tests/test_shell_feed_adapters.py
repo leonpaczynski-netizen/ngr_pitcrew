@@ -134,6 +134,22 @@ class TestQualifying:
                                         active_setup_label="Q", soft_confirmed=False)
         assert any(i.label == "Soft tyres confirmed" and i.status == "blocked" for i in vm.items)
 
+    def test_soft_not_confirmed_names_the_softest_to_fit(self):
+        vm = qualifying_vm_from_cc_view(
+            {"ok": True, "readiness": []}, active_setup_label="Q",
+            soft_confirmed=False, softest_label="Racing Soft", current_label="Racing Medium")
+        item = next(i for i in vm.items if i.label == "Soft tyres confirmed")
+        assert item.status == "blocked"
+        assert "Racing Soft" in item.note
+
+    def test_soft_confirmed_names_the_fitted_compound(self):
+        vm = qualifying_vm_from_cc_view(
+            {"ok": True, "readiness": []}, active_setup_label="Q",
+            soft_confirmed=True, softest_label="Racing Soft", current_label="Racing Soft")
+        item = next(i for i in vm.items if i.label == "Soft tyres confirmed")
+        assert item.status == "ok"
+        assert "Racing Soft" in item.note
+
     def test_bad_view_empty(self):
         assert qualifying_vm_from_cc_view(None).items == ()
 
