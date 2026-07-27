@@ -26,6 +26,25 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Sequence, Tuple
 
+#: Version of the deterministic track-model engine. Stamped into every model file the
+#: engine writes (accepted model, station map, reviewed segments) so a model built by an
+#: older engine can be flagged for re-modelling instead of being silently trusted after an
+#: in-place accuracy rebuild. "2.0" = the curvature-truth engine (this accuracy overhaul);
+#: anything below it (or absent) predates it.
+TRACK_MODEL_BUILDER_VERSION: str = "2.0"
+
+
+def builder_version_is_current(version) -> bool:
+    """True when a model's stamped builder_version matches the current engine.
+
+    A missing/blank/older version means the model was built before the curvature-truth
+    rebuild and its geometry should not be trusted without re-modelling. Never raises.
+    """
+    try:
+        return str(version or "").strip() == TRACK_MODEL_BUILDER_VERSION
+    except Exception:
+        return False
+
 #: Arc-length baseline (metres) over which curvature is differenced. Wide enough to
 #: reject 1 m position jitter, short enough to resolve a hairpin. This replaces the old
 #: 15-station box-car smoothing of an already-noisy 1 m forward difference.

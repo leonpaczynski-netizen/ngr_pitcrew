@@ -445,6 +445,13 @@ def format_model_trust_badge(summary: dict) -> tuple[str, str]:
     ai_ready = str(summary.get("ai_ready", "") or "")
     src_l = source.lower()
 
+    # A model built by an OLDER track engine (before the curvature-truth rebuild) must
+    # never read as trusted, however "verified" its own record claims to be — the geometry
+    # it was built from is no longer how the engine models a track. This takes precedence
+    # over every source label below.
+    if summary.get("builder_stale"):
+        return ("RE-MODEL RECOMMENDED · BUILT BY AN OLDER TRACK ENGINE", "warn")
+
     # Precedence matters and substrings overlap ("reviewed" lives inside "no
     # reviewed model"; "ai-ready" lives inside "not ai-ready") — so each branch
     # is guarded precisely against the known source labels.

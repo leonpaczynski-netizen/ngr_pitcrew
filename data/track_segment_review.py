@@ -629,8 +629,10 @@ def export_review_json(
         _ai_ready, _ = is_ai_ready(review)
         _modelling_status = "user_reviewed" if _ai_ready else "segment_detected"
 
+    from data.track_geometry_core import TRACK_MODEL_BUILDER_VERSION
     doc = {
         "schema":               _REVIEW_SCHEMA,
+        "builder_version":      TRACK_MODEL_BUILDER_VERSION,
         "track_location_id":    review.track_location_id,
         "layout_id":            review.layout_id,
         "calibration_car_id":   review.calibration_car_id,

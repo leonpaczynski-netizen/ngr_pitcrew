@@ -99,7 +99,7 @@ class SeededCorner:
     is_seeded_placeholder: bool = False   # True = inferred, not curvature-detected
     confidence:       float = 1.0
     width_m:          float = 0.0        # optional per-corner width hint
-    verification_source: str = "greedy"  # "greedy" | "ai_verified" | "engineer_validated"
+    verification_source: str = "greedy"  # "greedy" | "engineer_validated" (AI is audit-only)
 
 
 @dataclass
@@ -699,8 +699,10 @@ def export_station_map_json(
     fname   = station_map_filename(station_map.track_location_id, station_map.layout_id)
     path    = out_dir / fname
 
+    from data.track_geometry_core import TRACK_MODEL_BUILDER_VERSION
     payload = {
         "schema":             station_map.schema,
+        "builder_version":    TRACK_MODEL_BUILDER_VERSION,
         "track_location_id":  station_map.track_location_id,
         "layout_id":          station_map.layout_id,
         "lap_length_m":       station_map.lap_length_m,

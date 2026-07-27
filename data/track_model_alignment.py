@@ -382,8 +382,10 @@ def export_accepted_model_json(
     fname = accepted_model_filename(track_location_id, layout_id)
     path  = out_dir / fname
 
+    from data.track_geometry_core import TRACK_MODEL_BUILDER_VERSION
     payload = {
         "schema":                 ACCEPTED_MODEL_SCHEMA,
+        "builder_version":        TRACK_MODEL_BUILDER_VERSION,
         "track_location_id":      track_location_id,
         "layout_id":              layout_id,
         "match_status":           result.match_status,
