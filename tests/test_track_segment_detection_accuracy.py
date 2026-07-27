@@ -114,6 +114,41 @@ def test_hairpin_and_gentle_kink_both_detected():
     assert len(_apexes(result)) == 2
 
 
+def _signal_lap(pts, lap_number, brake_range, throttle_high_from):
+    samples = []
+    for i, (x, z) in enumerate(pts):
+        brake = 0.9 if brake_range[0] <= i <= brake_range[1] else 0.0
+        throttle = 0.9 if i >= throttle_high_from else 0.2
+        samples.append(TelemetrySample(
+            timestamp_ms=i * 50, lap_number=lap_number, x=x, y=0.0, z=z,
+            speed_kph=120.0, gear=4, rpm=7000.0, throttle=throttle, brake=brake))
+    return CalibrationLap(lap_number=lap_number, lap_time_ms=len(pts) * 50,
+                          samples=samples, quality=CalibrationLapQuality.USABLE)
+
+
+def _zones(pts, brake_range, throttle_from):
+    sess = CalibrationSession(
+        session_id="sig", track_location_id="loc", layout_id="loc__lay",
+        laps=[_signal_lap(pts, n + 1, brake_range, throttle_from) for n in range(2)])
+    result = detect_track_segments(sess)
+    braking = [s for s in result.segments if s.segment_type == TrackSegmentType.BRAKING_ZONE]
+    traction = [s for s in result.segments if s.segment_type == TrackSegmentType.TRACTION_ZONE]
+    return braking[0], traction[0]
+
+
+def test_braking_and_traction_zones_follow_the_signals_not_fixed_fractions():
+    # One wide corner (apex ~sample 70, run ~51–89). If the phase boundaries were fixed
+    # fractions of the window they'd be identical regardless of driver inputs; because
+    # they come from the SIGNALS, releasing the brakes later moves the braking-zone end
+    # later, and getting to throttle later moves the traction-zone start later.
+    kappa = [0.0] * 30 + _bump(40, 16.0, 0.03, 80) + [0.0] * 30
+    pts = _path_from_kappa(kappa)
+    brake_early, traction_early = _zones(pts, brake_range=(30, 56), throttle_from=72)
+    brake_late, traction_late = _zones(pts, brake_range=(30, 68), throttle_from=85)
+    assert brake_early.lap_progress_end < brake_late.lap_progress_end
+    assert traction_early.lap_progress_start < traction_late.lap_progress_start
+
+
 def test_detected_direction_matches_curvature_sign():
     left = detect_track_segments(_session(_path_from_kappa(
         [0.0] * 30 + _bump(20, 8.0, 0.03, 40) + [0.0] * 30)))

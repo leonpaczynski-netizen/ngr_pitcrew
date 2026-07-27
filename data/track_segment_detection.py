@@ -397,6 +397,22 @@ def _detect_corner_apex_candidates(
         min_speed = min(region_speed) if region_speed else 0.0
         direction = (TrackSegmentDirection.LEFT if sign > 0
                      else TrackSegmentDirection.RIGHT)
+
+        # Phase boundaries from the SIGNALS, not fixed fractions of the window:
+        #  - braking ends where the driver comes OFF the brakes (last braked sample
+        #    at/before the apex), i.e. trail-braking release;
+        #  - traction starts where the driver gets BACK to power (first throttle-up
+        #    at/after the apex).
+        brake_release_i = None
+        for j in range(start_i, apex_i + 1):
+            if samples[j].brake > config.brake_threshold:
+                brake_release_i = j
+        traction_start_i = None
+        for j in range(apex_i, end_i + 1):
+            if samples[j].throttle > config.throttle_high_threshold:
+                traction_start_i = j
+                break
+
         corners.append({
             "entry_idx"             : start_i,
             "apex_idx"              : apex_i,
@@ -404,6 +420,8 @@ def _detect_corner_apex_candidates(
             "progress_start"        : progress[start_i],
             "progress_apex"         : progress[apex_i],
             "progress_end"          : progress[end_i],
+            "progress_brake_release": progress[brake_release_i] if brake_release_i is not None else None,
+            "progress_traction"     : progress[traction_start_i] if traction_start_i is not None else None,
             "has_brake_evidence"    : has_brake,
             "has_curvature_evidence": True,
             "direction"             : direction,
@@ -1084,8 +1102,20 @@ def _build_segments_from_clusters(
         if not has_position_var or not has_curv:
             seg_warn.append("Corner direction UNKNOWN — no reliable heading/curvature data")
 
-        braking_end  = p_start + (p_apex - p_start) * 0.80
-        traction_srt = p_apex  + (p_end   - p_apex)  * 0.40
+        # Braking-zone end and traction-zone start from the driver's actual brake-release
+        # and throttle-application points, averaged across the laps that recorded them.
+        # Fall back to the geometric fractions only when no lap had a usable signal.
+        _brake_rel = [c["progress_brake_release"] for c in cluster
+                      if c.get("progress_brake_release") is not None]
+        _traction  = [c["progress_traction"] for c in cluster
+                      if c.get("progress_traction") is not None]
+        braking_end  = (statistics.mean(_brake_rel) if _brake_rel
+                        else p_start + (p_apex - p_start) * 0.80)
+        traction_srt = (statistics.mean(_traction) if _traction
+                        else p_apex + (p_end - p_apex) * 0.40)
+        # Keep them ordered within the corner window (signals can be noisy).
+        braking_end  = min(max(braking_end, p_start), p_apex)
+        traction_srt = min(max(traction_srt, p_apex), p_end)
 
         # Braking zone
         segments.append(DetectedTrackSegment(
