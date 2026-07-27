@@ -158,6 +158,95 @@ def test_corners_for_review_filters_overlays_and_maps_fields():
     assert "short sample" in rows[0]["note"]
 
 
+# --------------------------------------------------------------- segment editing
+def _real_review(*names):
+    """A review of APEX_ZONE (geometry) segments, so edits exercise the real API."""
+    from data.track_segment_review import ReviewedTrackSegment, TrackModelReviewResult
+    from data.track_segment_detection import (
+        TrackSegmentType as T, TrackSegmentDetectionConfidence as C,
+    )
+    conf = getattr(C, "HIGH", list(C)[0])
+    segs = []
+    for i, name in enumerate(names):
+        lo, hi = 0.1 + i * 0.2, 0.2 + i * 0.2
+        segs.append(ReviewedTrackSegment(
+            segment_id=f"seg{i}", segment_type=T.APEX_ZONE,
+            original_display_name=name, lap_progress_start=lo,
+            lap_progress_end=hi, lap_progress_mid=(lo + hi) / 2.0,
+            confidence=conf, turn_number=i + 1))
+    return TrackModelReviewResult(
+        track_location_id="loc", layout_id="loc__lay", calibration_car_id=None,
+        source_lap_count=3, detected_corner_count=len(segs), expected_corner_count=None,
+        detection_confidence=conf, segments=segs)
+
+
+def _svc_with_review(review):
+    svc = _svc(_Ctrl())
+    svc._session = svc.session.with_(has_segments=True).with_artefact("review", review)
+    return svc
+
+
+def test_approve_confirms_the_row_and_status_shows_it():
+    from data.track_segment_review import SegmentReviewStatus as St
+    svc = _svc_with_review(_real_review("Turn 1", "Turn 2"))
+    result = svc.edit_segment(0, "approve")
+    assert result.ok is True
+    assert svc.session.artefact("review").segments[0].review_status == St.CONFIRMED
+    assert corners_for_review(svc.session)[0]["status"].startswith("✓")
+
+
+def test_reject_marks_the_row_not_a_corner():
+    from data.track_segment_review import SegmentReviewStatus as St
+    svc = _svc_with_review(_real_review("Turn 1", "Turn 2"))
+    result = svc.edit_segment(1, "reject")
+    assert result.ok is True
+    assert svc.session.artefact("review").segments[1].review_status == St.REJECTED
+    assert "won't be used" in corners_for_review(svc.session)[1]["status"]
+
+
+def test_rename_needs_a_name_and_then_applies_it():
+    svc = _svc_with_review(_real_review("Turn 1"))
+    assert svc.edit_segment(0, "rename").ok is False          # blank name refused
+    result = svc.edit_segment(0, "rename", new_name="Roggia")
+    assert result.ok is True
+    assert corners_for_review(svc.session)[0]["name"] == "Roggia"
+
+
+def test_merge_with_next_removes_the_following_row():
+    svc = _svc_with_review(_real_review("Turn 1", "Turn 2", "Turn 3"))
+    result = svc.edit_segment(0, "merge")
+    assert result.ok is True
+    assert len(corners_for_review(svc.session)) == 2          # 3 → 2, next folded in
+
+
+def test_merge_on_the_last_row_is_refused_not_silent():
+    svc = _svc_with_review(_real_review("Turn 1", "Turn 2"))
+    result = svc.edit_segment(1, "merge")                     # nothing after the last row
+    assert result.ok is False
+    assert "merge" in result.reason.lower()
+
+
+def test_split_flags_the_row_for_the_next_rebuild():
+    from data.track_segment_review import SegmentReviewStatus as St
+    svc = _svc_with_review(_real_review("Turn 1"))
+    result = svc.edit_segment(0, "split")
+    assert result.ok is True
+    assert svc.session.artefact("review").segments[0].review_status == St.SPLIT_REQUIRED
+
+
+def test_editing_before_a_model_exists_is_refused():
+    svc = _svc(_Ctrl())                                       # no review artefact
+    result = svc.edit_segment(0, "approve")
+    assert result.ok is False
+    assert "build the model" in result.reason.lower()
+
+
+def test_editing_an_out_of_range_row_is_refused():
+    svc = _svc_with_review(_real_review("Turn 1"))
+    result = svc.edit_segment(9, "approve")
+    assert result.ok is False
+
+
 # ------------------------------------------------------------------------ validate
 def test_validate_before_build_is_refused():
     svc = _svc(_Ctrl())

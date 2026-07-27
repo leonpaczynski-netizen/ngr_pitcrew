@@ -20,17 +20,18 @@ from typing import Optional, Sequence
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QScrollArea, QFrame,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QInputDialog,
 )
 
 from ui import ngr_theme as _t
 from ui.components.cards import Card, SectionHeading
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
+from ui.track_map_widget import TrackMapWidget
 from data.track_modelling_guide import STEPS, GuidedView, build_guided_view, step_states
 from data.track_modelling_session import TrackModellingSession
 from data.track_calibration import MIN_USABLE_LAPS_FOR_PATH as _MIN_LAPS
 
-_CORNER_COLUMNS = ("#", "Corner", "Type", "Confidence", "")
+_CORNER_COLUMNS = ("#", "Corner", "Type", "Confidence", "Status")
 
 #: A floor of ``_MIN_LAPS`` builds a reference path at all; a few more clean laps
 #: average out one-off mistakes into a steadier racing line. Used only to tell the
@@ -47,6 +48,8 @@ class TrackModellingPage(QWidget):
     track_selected = pyqtSignal(str, str)
     #: (segment index, action) from the corner review list.
     segment_action = pyqtSignal(int, str)
+    #: (segment index, new name) — rename needs text, so it carries its own value.
+    segment_rename = pyqtSignal(int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -155,11 +158,18 @@ class TrackModellingPage(QWidget):
         self._corners_card.add(SectionHeading("DETECTED CORNERS", level=3))
         self._corners_hint = QLabel(
             "Check these against the real circuit. Anything wrong can be renamed, "
-            "renumbered, merged, split or rejected before you validate.")
+            "merged, split or rejected before you validate.")
         self._corners_hint.setWordWrap(True)
         self._corners_hint.setStyleSheet(
             f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         self._corners_card.add(self._corners_hint)
+
+        # The built track, so the driver can check the shape and corner positions
+        # against the real circuit — not just a table of names. Hidden until a model
+        # is built (there is nothing to draw before then).
+        self._map = TrackMapWidget()
+        self._map.setMinimumHeight(300)
+        self._corners_card.add(self._map)
         self._corners = QTableWidget(0, len(_CORNER_COLUMNS))
         self._corners.setHorizontalHeaderLabels(list(_CORNER_COLUMNS))
         self._corners.verticalHeader().setVisible(False)
@@ -261,13 +271,14 @@ class TrackModellingPage(QWidget):
             return str(item), str(item)
 
     def set_session(self, session: Optional[TrackModellingSession],
-                    *, laps_captured: int = 0, corners: Sequence = ()) -> None:
+                    *, laps_captured: int = 0, corners: Sequence = (),
+                    map_data=None) -> None:
         """Render a modelling session — the one call the host needs."""
         self.set_view(build_guided_view(session), session=session,
-                      laps_captured=laps_captured, corners=corners)
+                      laps_captured=laps_captured, corners=corners, map_data=map_data)
 
     def set_view(self, view: GuidedView, *, session=None,
-                 laps_captured: int = 0, corners: Sequence = ()) -> None:
+                 laps_captured: int = 0, corners: Sequence = (), map_data=None) -> None:
         if not isinstance(view, GuidedView):
             view = GuidedView()
         self._view = view
@@ -302,6 +313,10 @@ class TrackModellingPage(QWidget):
         self._corners_card.setVisible(view.shows_corner_list)
         if view.shows_corner_list:
             self._render_corners(corners)
+            has_map = map_data is not None and getattr(map_data, "has_map", False)
+            if has_map:
+                self._map.set_draw_data(map_data)
+            self._map.setVisible(bool(has_map))
 
     @staticmethod
     def _capture_text(view: GuidedView, laps: int) -> str:
@@ -345,10 +360,13 @@ class TrackModellingPage(QWidget):
         rows = list(corners or [])
         self._corners.setRowCount(len(rows))
         for r, corner in enumerate(rows):
+            # The last column shows the review status (so an edit is visibly reflected),
+            # falling back to any detection warnings when the corner is still unreviewed.
+            status = str(corner.get("status", "")) or str(corner.get("note", ""))
             values = (
                 str(corner.get("number", r + 1)), str(corner.get("name", "")),
                 str(corner.get("type", "")), str(corner.get("confidence", "")),
-                str(corner.get("note", "")))
+                status)
             for c, text in enumerate(values):
                 self._corners.setItem(r, c, QTableWidgetItem(text))
         self._corners.setVisible(bool(rows))
@@ -379,8 +397,18 @@ class TrackModellingPage(QWidget):
 
     def _on_segment_action(self, key: str) -> None:
         row = self._corners.currentRow()
-        if row >= 0:
-            self.segment_action.emit(row, key)
+        if row < 0:
+            return
+        if key == "rename":
+            # Rename needs a value; ask for it here and carry it on its own signal.
+            current = self._corners.item(row, 1)
+            suggested = current.text() if current is not None else ""
+            name, ok = QInputDialog.getText(
+                self, "Rename corner", "Corner name:", text=suggested)
+            if ok and name.strip():
+                self.segment_rename.emit(row, name.strip())
+            return
+        self.segment_action.emit(row, key)
 
     def current_view(self) -> GuidedView:
         return self._view

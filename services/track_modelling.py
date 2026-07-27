@@ -79,6 +79,70 @@ class TrackModellingService:
                                  session=self._session,
                                  reason=f"{loc} · {lay} selected.")
 
+    def edit_segment(self, row: int, op: str, *, new_name: str = "") -> TrackActionResult:
+        """Apply a corner-review edit to the displayed row (``op`` = approve / reject /
+        rename / merge / split).
+
+        The edit mutates the in-memory ``review`` artefact and is written to disk only at
+        ACTIVATE — exactly as the classic accept defers persistence. Row indices map to the
+        SAME geometry-filtered order the review table shows (``geometry_segment_ids``), so
+        "the second corner" always resolves to the second row the driver sees.
+        """
+        from services.track_modelling_pipeline import geometry_segment_ids
+        from data import track_segment_review as R
+
+        review = self._session.artefact("review")
+        ids = geometry_segment_ids(self._session)
+        if review is None or not ids:
+            return TrackActionResult(action="edit_segment", session=self._session,
+                                     reason="Build the model before reviewing corners.")
+        try:
+            seg_id = ids[int(row)]
+        except (IndexError, ValueError, TypeError):
+            return TrackActionResult(action="edit_segment", session=self._session,
+                                     reason="That corner is no longer in the list.")
+
+        op = _norm(op).lower()
+        name = self._segment_name(review, seg_id)
+        if op == "approve":
+            R.confirm_segment(review, seg_id)
+            reason = f"{name} confirmed."
+        elif op == "reject":
+            R.reject_segment(review, seg_id)
+            reason = f"{name} marked ‘not a corner’ — it won't be used."
+        elif op == "rename":
+            if not _norm(new_name):
+                return TrackActionResult(action="edit_segment", session=self._session,
+                                         reason="Enter a name to rename this corner.")
+            R.rename_segment(review, seg_id, _norm(new_name))
+            reason = f"Renamed to ‘{_norm(new_name)}’."
+        elif op == "merge":
+            try:
+                next_id = ids[int(row) + 1]
+            except IndexError:
+                return TrackActionResult(
+                    action="edit_segment", session=self._session,
+                    reason="Nothing after this corner to merge it with.")
+            R.merge_segments(review, seg_id, next_id)
+            reason = f"Merged {name} with the next corner."
+        elif op == "split":
+            # A split point can't be picked from the table, so record the intent; the
+            # next rebuild acts on it. Honest about what happened rather than silent.
+            R.mark_split_required(review, seg_id)
+            reason = f"{name} flagged to split — rebuild the model to apply it."
+        else:
+            return TrackActionResult(action="edit_segment", session=self._session,
+                                     reason="Unknown corner action.")
+        return TrackActionResult(ok=True, action="edit_segment",
+                                 session=self._session, reason=reason)
+
+    @staticmethod
+    def _segment_name(review, seg_id: str) -> str:
+        for s in getattr(review, "segments", None) or []:
+            if getattr(s, "segment_id", "") == seg_id:
+                return getattr(s, "display_name", "") or "This corner"
+        return "This corner"
+
     def perform(self, action: str) -> TrackActionResult:
         """Perform a coordinator action. Refuses anything illegal in this state."""
         try:

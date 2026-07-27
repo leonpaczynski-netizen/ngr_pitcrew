@@ -326,6 +326,8 @@ class LiveShellBridge(QObject):
         tmp = getattr(shell, "track_model_page", None)
         _c(tmp, "track_selected", self._on_track_selected)
         _c(tmp, "action_requested", self._on_track_action)
+        _c(tmp, "segment_action", self._on_track_segment)
+        _c(tmp, "segment_rename", self._on_track_segment_rename)
         _c(getattr(shell, "programme_page", None), "start_next_requested",
            self._on_programme_start_next)
         _c(getattr(shell, "guidance", None), "read_aloud_requested", self._on_read_aloud)
@@ -999,9 +1001,14 @@ class LiveShellBridge(QObject):
                 self._track_choices_loaded = True
                 page.set_tracks(*_track_choices())
             session = self._tracks.refresh()
+            # The map redraws every 1 m station, so only build it when the driver is
+            # actually looking at this page (it is one of many in the stack) — not on
+            # every 750 ms tick from wherever they happen to be.
+            map_data = self._track_map_data(session) if page.isVisible() else None
             page.set_session(session,
                              laps_captured=self._track_laps_captured(),
-                             corners=self._track_corners(session))
+                             corners=self._track_corners(session),
+                             map_data=map_data)
             # Re-apply a sticky status (e.g. why validation didn't pass) so the 750ms
             # refresh does not wipe it before the driver can read it.
             if self._tm_status:
@@ -1026,6 +1033,34 @@ class LiveShellBridge(QObject):
             return corners_for_review(session)
         except Exception:
             return []
+
+    def _track_map_data(self, session):
+        """Drawing primitives for the built track, so the corner-review step can be
+        checked against the real circuit's SHAPE, not just a table of names. None until
+        a station map exists (nothing to draw before the model is built)."""
+        try:
+            station_map = session.artefact("station_map") if session is not None else None
+            if station_map is None:
+                return None
+            from ui.track_map_vm import build_track_map_draw_data
+            return build_track_map_draw_data(station_map)
+        except Exception:
+            return None
+
+    def _on_track_segment(self, row: int, action: str) -> None:
+        """A corner-review edit (approve / reject / merge / split) on a table row."""
+        result = self._tracks.edit_segment(int(row), str(action))
+        self._tm_status = result.reason or ""
+        self._feed_track_model()
+        if result.reason:
+            self._track_status(result.reason)
+
+    def _on_track_segment_rename(self, row: int, new_name: str) -> None:
+        result = self._tracks.edit_segment(int(row), "rename", new_name=str(new_name))
+        self._tm_status = result.reason or ""
+        self._feed_track_model()
+        if result.reason:
+            self._track_status(result.reason)
 
     def _on_track_selected(self, location_id: str, layout_id: str) -> None:
         self._tm_status = ""

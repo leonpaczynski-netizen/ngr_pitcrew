@@ -44,11 +44,24 @@ def _geometry_segments(review) -> list:
         return list(getattr(review, "segments", None) or [])
 
 
+#: Review status → the plain phrase the corner list shows, so the driver can SEE that
+#: "Looks right"/"Not a corner"/… actually took. Blank statuses (unreviewed) show nothing.
+_STATUS_PHRASE = {
+    "confirmed": "✓ confirmed",
+    "engineer_validated": "✓ validated",
+    "rejected": "rejected — won't be used",
+    "renamed": "edited",
+    "split_required": "flagged to split on rebuild",
+    "merge_required": "flagged to merge",
+    "needs_more_laps": "needs more laps",
+}
+
+
 def corners_for_review(session: TrackModellingSession) -> List[dict]:
     """The detected corners as the guided page's review table renders them.
 
-    Keys match ``TrackModellingPage._render_corners``: number/name/type/confidence/note.
-    Empty when nothing has been detected yet.
+    Keys match ``TrackModellingPage._render_corners``: number/name/type/confidence/
+    status/note. Empty when nothing has been detected yet.
     """
     review = session.artefact("review") if session is not None else None
     out: List[dict] = []
@@ -56,15 +69,25 @@ def corners_for_review(session: TrackModellingSession) -> List[dict]:
         conf = getattr(getattr(seg, "confidence", None), "value", None) or \
             getattr(seg, "confidence", "")
         seg_type = getattr(getattr(seg, "segment_type", None), "value", "") or ""
+        status_raw = getattr(getattr(seg, "review_status", None), "value", None) or \
+            getattr(seg, "review_status", "") or ""
         out.append({
             "number": (seg.turn_number if getattr(seg, "turn_number", None) is not None
                        else i + 1),
             "name": getattr(seg, "display_name", "") or "",
             "type": str(seg_type).replace("_", " ").title(),
             "confidence": str(conf),
+            "status": _STATUS_PHRASE.get(str(status_raw), ""),
             "note": "; ".join(getattr(seg, "warnings", None) or []),
         })
     return out
+
+
+def geometry_segment_ids(session: TrackModellingSession) -> List[str]:
+    """Segment ids in the same order and filtering as ``corners_for_review`` rows, so
+    a display row index resolves to the exact segment that row shows (row → id)."""
+    review = session.artefact("review") if session is not None else None
+    return [str(getattr(s, "segment_id", "")) for s in _geometry_segments(review)]
 
 
 def _resolve_seed(session: TrackModellingSession):

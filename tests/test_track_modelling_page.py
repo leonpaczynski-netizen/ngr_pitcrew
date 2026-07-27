@@ -174,6 +174,33 @@ class TestLayoutsAreScopedToTheChosenCircuit:
         page._edit_buttons["reject"].click()
         assert seen == [(1, "reject")]
 
+    def test_rename_asks_for_a_name_and_emits_it(self, page, monkeypatch):
+        import ui.components.track_modelling as mod
+        monkeypatch.setattr(mod.QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("Roggia", True)))
+        seen = []
+        page.segment_rename.connect(lambda r, n: seen.append((r, n)))
+        page.set_session(_sel(has_segments=True),
+                         corners=[{"number": 1, "name": "T1"}])
+        page._corners.setCurrentCell(0, 0)
+        page._edit_buttons["rename"].click()
+        assert seen == [(0, "Roggia")]
+
+    def test_the_status_column_reflects_a_reviewed_corner(self, page):
+        page.set_session(_sel(has_segments=True),
+                         corners=[{"number": 1, "name": "T1", "status": "✓ confirmed"}])
+        assert page._corners.item(0, 4).text() == "✓ confirmed"
+
+    def test_the_track_map_shows_only_once_a_model_is_built(self, page):
+        import types
+        page.set_session(_sel(has_segments=True),
+                         corners=[{"number": 1, "name": "T1"}], map_data=None)
+        assert page._map.isVisibleTo(page) is False           # nothing to draw yet
+        page.set_session(_sel(has_segments=True),
+                         corners=[{"number": 1, "name": "T1"}],
+                         map_data=types.SimpleNamespace(has_map=True))
+        assert page._map.isVisibleTo(page) is True
+
 
 class TestErrorsAreExplained:
     def test_an_error_shows_the_cause_and_a_way_out(self, page):
