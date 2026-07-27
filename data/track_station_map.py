@@ -10,9 +10,12 @@ Layer 1 of the three-layer track modelling architecture:
 Design rules:
   - Track geometry is derived from X/Y/Z position ONLY.
   - Brake, throttle, gear, RPM, lock-up and wheelspin data are NOT used to define shape.
-  - Corner detection uses horizontal-plane curvature (heading change per metre).
-  - If curvature-detected count < corners_expected, seeded placeholders fill the gap
-    (LOW confidence) so the map always reflects the expected circuit anatomy.
+  - Corner detection uses horizontal-plane signed curvature (from track_geometry_core).
+  - Corners are never INVENTED to reach corners_expected: the threshold is not relaxed to
+    promote noise, and gaps are not padded with midpoint placeholders. Where official seed
+    corner windows exist, an unmatched window keeps a placeholder AT the seed apex position
+    (flagged is_seeded_placeholder); otherwise the map reports the corners the geometry
+    actually shows and the count gap is surfaced by alignment/readiness.
   - Pit/out-lap fragments are excluded from the station build.
 
 Coordinate system (GT7):
@@ -339,10 +342,10 @@ def _detect_corners(
         by_mag = sorted(detected_indices, key=lambda i: abs(stations[i].curvature), reverse=True)
         extra_indices    = sorted(by_mag[corners_expected:])
         detected_indices = sorted(by_mag[:corners_expected])
-    elif len(detected_indices) < corners_expected and peak_indices:
-        # Threshold too strict — relax and take the top N
-        by_mag = sorted(peak_indices, key=lambda i: abs(stations[i].curvature), reverse=True)
-        detected_indices = sorted(by_mag[:corners_expected])
+    # NB: if fewer curvature peaks are found than corners_expected we do NOT relax the
+    # threshold to promote sub-threshold noise, and we do NOT pad with midpoint
+    # placeholders (both invented corners). The map reports what the geometry actually
+    # shows; the count gap is surfaced honestly by the alignment/readiness layer.
 
     total_m = stations[-1].station_m if stations else 0.0
 
@@ -358,36 +361,11 @@ def _detect_corners(
             confidence       = min(1.0, abs(s.curvature) / 0.05),
         ))
 
-    # Fill missing corners with evenly distributed placeholders
-    if corners_expected > 0 and len(detected_corners) < corners_expected:
-        needed = corners_expected - len(detected_corners)
-        # Place placeholders in the largest gaps between existing corners
-        # (and between 0 and the first, and last and total_m)
-        existing_stations = [0.0] + [c.approx_station_m for c in detected_corners] + [total_m]
-        existing_stations.sort()
-        gaps = []
-        for i in range(len(existing_stations) - 1):
-            gap_size = existing_stations[i + 1] - existing_stations[i]
-            gaps.append((gap_size, existing_stations[i], existing_stations[i + 1]))
-        gaps.sort(reverse=True)  # largest gaps first
-
-        for _, gap_start, gap_end in gaps[:needed]:
-            mid = (gap_start + gap_end) / 2.0
-            placeholder = SeededCorner(
-                corner_id        = "?",   # numbered below
-                display_name     = "?",
-                approx_station_m = mid,
-                approx_progress  = mid / total_m if total_m > 0 else 0.0,
-                is_seeded_placeholder = True,
-                confidence       = 0.2,
-            )
-            detected_corners.append(placeholder)
-
-        # Sort and re-number all corners by station_m
-        detected_corners.sort(key=lambda c: c.approx_station_m)
-        for rank, c in enumerate(detected_corners, start=1):
-            c.corner_id    = f"T{rank}"
-            c.display_name = f"T{rank}"
+    # Missing corners are NOT filled with midpoint placeholders — inventing a corner at a
+    # geometric midpoint puts a turn where the track is straight. When the curvature-
+    # detected count is short of corners_expected, the map simply reports fewer corners;
+    # the seed-window path (build_track_station_map) still places seed-anchored
+    # placeholders, but those sit at real seed apex positions and are flagged.
 
     # Build extra peaks list — real curvature peaks suppressed beyond corners_expected
     extra_peaks: List[SeededCorner] = []
