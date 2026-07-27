@@ -404,3 +404,45 @@ def test_auto_finalize_without_laps_cannot_build(monkeypatch):
     result = svc.auto_finalize()
     assert result.ok is False
     assert svc.session.model_active is False
+
+
+# --------------------------------------------------------------- pit-lane mapping
+def _straight_station_map(n=300):
+    """A straight reference line along +z (x=0), so a pit-lane divergence in x is clear."""
+    stations = [types.SimpleNamespace(x=0.0, z=float(m), station_m=float(m)) for m in range(n)]
+    return types.SimpleNamespace(stations=stations, lap_length_m=float(n - 1), pit_lane=None)
+
+
+def _pit_lap():
+    # Drives along the line, diverges >60 m in x (into the pit), then rejoins.
+    pts = [(0.0, float(m)) for m in range(0, 100)]        # on the racing line
+    pts += [(100.0, float(m)) for m in range(100, 160)]   # in the pit lane (>60 m off)
+    pts += [(0.0, float(m)) for m in range(160, 260)]     # rejoined
+    return types.SimpleNamespace(samples=[types.SimpleNamespace(x=x, z=z) for x, z in pts])
+
+
+def test_map_pit_lane_attaches_a_boundary_from_the_out_lap():
+    svc = _svc(_Ctrl())
+    sm = _straight_station_map()
+    svc._session = svc.session.with_artefact("station_map", sm)
+    result = svc.map_pit_lane(_pit_lap())
+    assert result.ok is True
+    assert sm.pit_lane is not None
+    assert sm.pit_lane.entry_station_m < sm.pit_lane.exit_station_m
+
+
+def test_map_pit_lane_without_a_model_is_refused():
+    svc = _svc(_Ctrl())
+    result = svc.map_pit_lane(_pit_lap())
+    assert result.ok is False
+    assert "approve the track" in result.reason.lower()
+
+
+def test_map_pit_lane_on_a_lap_that_never_left_the_track_reports_it():
+    svc = _svc(_Ctrl())
+    svc._session = svc.session.with_artefact("station_map", _straight_station_map())
+    on_line = types.SimpleNamespace(
+        samples=[types.SimpleNamespace(x=0.0, z=float(m)) for m in range(260)])
+    result = svc.map_pit_lane(on_line)
+    assert result.ok is False
+    assert "pit lane" in result.reason.lower()

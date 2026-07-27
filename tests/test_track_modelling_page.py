@@ -52,6 +52,15 @@ class TestOneStepAtATime:
         page.set_session(_sel(capturing=True), laps_captured=1)
         assert "1 clean lap captured" in page._capture.text()
 
+    def test_the_engineer_capture_note_shows_only_while_recording(self, page):
+        page.set_session(_sel(capturing=True), laps_captured=2,
+                         capture_note="Keep going, 1 more to go.")
+        assert page._capture_note.isVisibleTo(page) is True
+        assert "keep going" in page._capture_note.text().lower()
+        # Not recording → the note is hidden even if one is passed.
+        page.set_session(_sel(has_captured_laps=True), capture_note="stale")
+        assert page._capture_note.isVisibleTo(page) is False
+
     def test_you_can_stop_while_recording(self, page):
         # The Stop button used to be greyed out because CAPTURING is a "busy" state,
         # leaving the driver no way to stop. It must be clickable while recording.

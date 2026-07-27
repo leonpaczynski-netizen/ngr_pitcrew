@@ -142,6 +142,15 @@ class TrackModellingPage(QWidget):
             f"color: {_t.NGR_GREEN}; font-size: {_t.FS_LABEL}pt; font-weight: 700;")
         self._card.add(self._capture)
 
+        # The engineer's live call during capture: keep driving / you can box now. Fed
+        # from the convergence detector; blank when there's nothing to say.
+        self._capture_note = QLabel("")
+        self._capture_note.setWordWrap(True)
+        self._capture_note.setStyleSheet(
+            f"color: {_t.TEXT_HI}; font-size: {_t.FS_BODY}pt; font-weight: 600;")
+        self._capture_note.setVisible(False)
+        self._card.add(self._capture_note)
+
         # Actions: one primary, escapes beside it.
         act = QHBoxLayout()
         self._primary = PrimaryActionButton()
@@ -272,13 +281,15 @@ class TrackModellingPage(QWidget):
 
     def set_session(self, session: Optional[TrackModellingSession],
                     *, laps_captured: int = 0, corners: Sequence = (),
-                    map_data=None) -> None:
+                    map_data=None, capture_note: str = "") -> None:
         """Render a modelling session — the one call the host needs."""
         self.set_view(build_guided_view(session), session=session,
-                      laps_captured=laps_captured, corners=corners, map_data=map_data)
+                      laps_captured=laps_captured, corners=corners, map_data=map_data,
+                      capture_note=capture_note)
 
     def set_view(self, view: GuidedView, *, session=None,
-                 laps_captured: int = 0, corners: Sequence = (), map_data=None) -> None:
+                 laps_captured: int = 0, corners: Sequence = (), map_data=None,
+                 capture_note: str = "") -> None:
         if not isinstance(view, GuidedView):
             view = GuidedView()
         self._view = view
@@ -301,6 +312,11 @@ class TrackModellingPage(QWidget):
         if view.shows_capture_status:
             self._capture.setText(self._capture_text(view, laps_captured))
         self._capture.setVisible(view.shows_capture_status)
+        # The engineer's live call only applies while actually recording (CAPTURING),
+        # not after the driver has already boxed (CAPTURE_COMPLETE).
+        show_note = view.busy and bool(capture_note)
+        self._capture_note.setText(capture_note if show_note else "")
+        self._capture_note.setVisible(show_note)
 
         # Enable the primary whenever there IS one. ``busy`` (recording / building)
         # must NOT grey it out: while CAPTURING the only action is "Stop recording",

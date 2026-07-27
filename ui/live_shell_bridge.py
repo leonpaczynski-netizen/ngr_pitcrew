@@ -144,6 +144,11 @@ class LiveShellBridge(QObject):
         #: Transient track-modelling status (e.g. why validation didn't pass). Re-applied
         #: every refresh so the 750ms tick doesn't wipe it; cleared by the next action.
         self._tm_status = ""
+        #: After the track is approved we capture one out-lap through the pit lane and map
+        #: it. ``_pit_lane_baseline_laps`` is the lap count at the moment mapping began, so
+        #: the first NEW completed lap is the pit-lane lap we detect from.
+        self._pit_lane_mode = False
+        self._pit_lane_baseline_laps = 0
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
         #: Scopes already seeded from applied history — see ``_seed_from_last_applied``.
@@ -1000,6 +1005,9 @@ class LiveShellBridge(QObject):
             if not self._track_choices_loaded:
                 self._track_choices_loaded = True
                 page.set_tracks(*_track_choices())
+            # If we're mapping the pit lane, detect it from the latest out-lap first, so
+            # the refreshed session reflects the completed model.
+            self._try_map_pit_lane()
             session = self._tracks.refresh()
             # The map redraws every 1 m station, so only build it when the driver is
             # actually looking at this page (it is one of many in the stack) — not on
@@ -1008,7 +1016,8 @@ class LiveShellBridge(QObject):
             page.set_session(session,
                              laps_captured=self._track_laps_captured(),
                              corners=self._track_corners(session),
-                             map_data=map_data)
+                             map_data=map_data,
+                             capture_note=self._track_capture_note(session))
             # Re-apply a sticky status (e.g. why validation didn't pass) so the 750ms
             # refresh does not wipe it before the driver can read it.
             if self._tm_status:
@@ -1033,6 +1042,68 @@ class LiveShellBridge(QObject):
             return corners_for_review(session)
         except Exception:
             return []
+
+    def _controller_lap_count(self) -> int:
+        try:
+            ctrl = getattr(self._tracks, "_controller", None)
+            return len(getattr(getattr(ctrl, "_session", None), "laps", None) or [])
+        except Exception:
+            return 0
+
+    def _begin_pit_lane_mapping(self) -> None:
+        """Approved — now capture one out-lap through the pit lane and map it.
+
+        Restarts capture so the pit lap is recorded; the first completed lap from here is
+        detected as the pit-lane lap (the car diverges from the racing line and rejoins)."""
+        self._pit_lane_mode = True
+        self._pit_lane_baseline_laps = self._controller_lap_count()
+        try:
+            ctrl = getattr(self._tracks, "_controller", None)
+            sess = self._tracks.session
+            if ctrl is not None and hasattr(ctrl, "start_session"):
+                ctrl.start_session(sess.location_id, sess.layout_id)
+        except Exception:
+            pass
+        self._tm_status = ("Track approved. Box now and drive the pit lane once — in "
+                           "through the pit entry, down the lane and back out — and I'll "
+                           "map it. That completes the model.")
+
+    def _try_map_pit_lane(self) -> None:
+        """While mapping the pit lane, detect it from the first completed out-lap."""
+        if not self._pit_lane_mode:
+            return
+        try:
+            ctrl = getattr(self._tracks, "_controller", None)
+            laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
+            if len(laps) <= self._pit_lane_baseline_laps:
+                return                                   # no new lap completed yet
+            result = self._tracks.map_pit_lane(laps[-1])
+            if result.ok:
+                self._pit_lane_mode = False
+                if ctrl is not None and hasattr(ctrl, "stop_session"):
+                    ctrl.stop_session()
+            # A miss (car never entered the pit) leaves us in mapping mode to try the
+            # next lap; either way surface the engineer's message.
+            self._tm_status = result.reason or self._tm_status
+        except Exception:
+            pass
+
+    def _track_capture_note(self, session) -> str:
+        """The engineer's live capture call during recording — keep driving, or box now.
+
+        Deterministic convergence over the usable laps so far: once the line is repeatable
+        the model has stopped changing and the driver is told to box. Blank when not
+        recording."""
+        try:
+            if not getattr(session, "capturing", False):
+                return ""
+            from data.track_convergence import (
+                assess_capture_convergence, convergence_coach_message)
+            ctrl = getattr(self._tracks, "_controller", None)
+            laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
+            return convergence_coach_message(assess_capture_convergence(laps))
+        except Exception:
+            return ""
 
     def _track_map_data(self, session):
         """Drawing primitives for the built track, so the corner-review step can be
@@ -1075,9 +1146,18 @@ class LiveShellBridge(QObject):
         # A message survives to the next action: a real error stays until recovered, an
         # advisory ("validation didn't pass") stays until the next step changes state.
         self._tm_status = result.reason or ""
+        # Drive-until-done: boxing (Stop recording) hands the model straight through
+        # build → validate → approve — no per-corner sign-off, no manual steps. If the
+        # geometry isn't sound enough yet the work is kept and the driver is told to keep
+        # lapping; when it approves, we move on to mapping the pit lane.
+        if action == "stop_capture" and result.ok:
+            final = self._tracks.auto_finalize()
+            self._tm_status = final.reason or self._tm_status
+            if final.ok and self._tracks.session.model_active:
+                self._begin_pit_lane_mapping()
         self._feed_track_model()
-        if result.reason:
-            self._track_status(result.reason)
+        if self._tm_status:
+            self._track_status(self._tm_status)
 
     def _track_status(self, text: str) -> None:
         try:

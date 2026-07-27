@@ -93,6 +93,39 @@ class TrackModellingService:
                                  session=self._session,
                                  reason=activate.reason or "Track approved.")
 
+    def map_pit_lane(self, pit_lap) -> TrackActionResult:
+        """Map the pit lane from one out-lap driven through it.
+
+        The detector finds where the car diverges from the racing line (the reference
+        path) and rejoins — it needs the built station map plus the pit lap's samples,
+        not the GT7 pit flag. On success the pit-lane boundary is attached to the station
+        map and re-exported, so live pit detection, pit loss and pit-window logic use it.
+        """
+        station_map = self._session.artefact("station_map")
+        if station_map is None:
+            return TrackActionResult(action="map_pit_lane", session=self._session,
+                                     reason="Approve the track model before mapping the pit lane.")
+        try:
+            from data.track_station_map import (
+                detect_pit_lane_from_pit_laps, export_station_map_json)
+            boundary = detect_pit_lane_from_pit_laps([pit_lap], station_map)
+        except Exception as exc:
+            return TrackActionResult(action="map_pit_lane", session=self._session,
+                                     reason=f"Could not map the pit lane: {exc}")
+        if boundary is None:
+            return TrackActionResult(
+                action="map_pit_lane", session=self._session,
+                reason="I couldn't see the pit lane on that lap — drive in through the "
+                       "pit entry, down the lane and back out, then it'll map.")
+        try:
+            station_map.pit_lane = boundary
+            export_station_map_json(station_map)
+        except Exception:
+            pass
+        self._session = self._session.with_artefact("station_map", station_map)
+        return TrackActionResult(ok=True, action="map_pit_lane", session=self._session,
+                                 reason="Pit lane mapped — the track model is complete.")
+
     # ---- write ------------------------------------------------------------
     def select_track(self, location_id: str, layout_id: str) -> TrackActionResult:
         """Choose the circuit and layout. Changing track discards the previous job."""
