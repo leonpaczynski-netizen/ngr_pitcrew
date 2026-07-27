@@ -52,6 +52,21 @@ class TestOneStepAtATime:
         page.set_session(_sel(capturing=True), laps_captured=1)
         assert "1 clean lap captured" in page._capture.text()
 
+    def test_you_can_stop_while_recording(self, page):
+        # The Stop button used to be greyed out because CAPTURING is a "busy" state,
+        # leaving the driver no way to stop. It must be clickable while recording.
+        page.set_session(_sel(capturing=True), laps_captured=2)
+        assert page._primary.text() == "Stop recording"
+        assert page._primary.isEnabled() is True
+
+    def test_recording_tells_you_how_many_laps_you_need(self, page):
+        # Below the floor: says how many more are needed to build at all.
+        page.set_session(_sel(capturing=True), laps_captured=1)
+        assert "at least 2" in page._capture.text()
+        # At/above the floor: says it is enough to build.
+        page.set_session(_sel(capturing=True), laps_captured=3)
+        assert "plenty" in page._capture.text().lower()
+
     def test_the_corner_list_appears_only_when_there_are_corners_to_check(self, page):
         page.set_session(_sel(has_captured_laps=True))
         assert page._corners_card.isVisibleTo(page) is False

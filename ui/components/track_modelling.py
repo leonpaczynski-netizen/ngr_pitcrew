@@ -28,8 +28,14 @@ from ui.components.cards import Card, SectionHeading
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
 from data.track_modelling_guide import STEPS, GuidedView, build_guided_view, step_states
 from data.track_modelling_session import TrackModellingSession
+from data.track_calibration import MIN_USABLE_LAPS_FOR_PATH as _MIN_LAPS
 
 _CORNER_COLUMNS = ("#", "Corner", "Type", "Confidence", "")
+
+#: A floor of ``_MIN_LAPS`` builds a reference path at all; a few more clean laps
+#: average out one-off mistakes into a steadier racing line. Used only to tell the
+#: driver how far along they are, never to gate the build (the pipeline does that).
+_GOOD_LAPS = 3
 
 
 class TrackModellingPage(QWidget):
@@ -282,20 +288,46 @@ class TrackModellingPage(QWidget):
         self._picker.setVisible(view.shows_track_picker)
 
         if view.shows_capture_status:
-            self._capture.setText(
-                f"● RECORDING — {laps_captured} clean lap"
-                f"{'s' if laps_captured != 1 else ''} captured"
-                if view.busy else
-                f"{laps_captured} lap{'s' if laps_captured != 1 else ''} captured")
+            self._capture.setText(self._capture_text(view, laps_captured))
         self._capture.setVisible(view.shows_capture_status)
 
+        # Enable the primary whenever there IS one. ``busy`` (recording / building)
+        # must NOT grey it out: while CAPTURING the only action is "Stop recording",
+        # and disabling it left the driver with no way to stop. BUILDING is the only
+        # busy state with no primary, so it disables itself (``view.primary`` is None).
         self._primary.set_action(view.primary.label if view.primary else "",
-                                 enabled=bool(view.primary) and not view.busy)
+                                 enabled=bool(view.primary))
         self._render_secondaries(view)
 
         self._corners_card.setVisible(view.shows_corner_list)
         if view.shows_corner_list:
             self._render_corners(corners)
+
+    @staticmethod
+    def _capture_text(view: GuidedView, laps: int) -> str:
+        """Recording status that also answers "how many laps do I need?".
+
+        While recording it names the count so far AND the target — the build needs
+        at least ``_MIN_LAPS`` clean laps, and a few more give a steadier line — so the
+        driver knows whether to keep going or press Stop. The "N clean lap(s) captured"
+        wording is preserved for callers/tests that key off it.
+        """
+        count = f"{laps} clean lap{'s' if laps != 1 else ''} captured"
+        if view.busy:  # CAPTURING
+            if laps < _MIN_LAPS:
+                more = _MIN_LAPS - laps
+                return (f"● RECORDING — {count}. Need at least {_MIN_LAPS} to build "
+                        f"a model ({more} more). Keep driving.")
+            if laps < _GOOD_LAPS:
+                return (f"● RECORDING — {count}. Enough to build; {_GOOD_LAPS}+ gives "
+                        f"a steadier line. Keep going, or press Stop recording.")
+            return (f"● RECORDING — {count}. That's plenty — press Stop recording "
+                    f"when you're done.")
+        # CAPTURE_COMPLETE
+        if laps < _MIN_LAPS:
+            return (f"{count} — need at least {_MIN_LAPS} to build a model. "
+                    f"Record more laps.")
+        return f"{count} — enough to build the model."
 
     def _render_secondaries(self, view: GuidedView) -> None:
         for btn in self._secondaries:
