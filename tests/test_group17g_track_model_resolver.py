@@ -552,7 +552,8 @@ class TestViewModelResolverSummary:
         from ui.track_modelling_vm import format_resolver_summary
         s = format_resolver_summary(None)
         expected = {"source_type", "modelling_status", "ai_ready", "blockers",
-                    "model_path", "warnings", "resolution_status", "candidate_count"}
+                    "model_path", "warnings", "resolution_status", "candidate_count",
+                    "builder_stale"}
         assert set(s.keys()) == expected
 
     def test_ai_ready_yes_when_ai_ready_model(self, tmp_path):

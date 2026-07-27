@@ -387,43 +387,62 @@ def _detect_corners(
 # Corner phase assignment
 # ---------------------------------------------------------------------------
 
-_APEX_WINDOW_M: float   = 40.0    # ±40 m around apex → apex region
-_EXIT_WINDOW_M: float   = 100.0   # 40–100 m after apex → exit
-_BRAKING_WINDOW_M: float = 100.0  # 100 m before corner start → braking
+_APEX_BAND_M: float     = 10.0    # ±10 m around the curvature peak → apex region
+_BRAKING_WINDOW_M: float = 100.0  # approach lead-in before turn-in → braking
 
 
 def _assign_corner_phases(stations: List[StationPoint], corners: List[SeededCorner]) -> None:
-    """Label corner_id and corner_phase on each station (in-place)."""
+    """Label corner_id and corner_phase on each station (in-place), from CURVATURE.
+
+    Turn-in / apex / exit are derived from the curvature run around each corner — turn-in
+    where |curvature| rises above the corner threshold, apex at the peak, exit where it
+    falls back below — rather than fixed ±40 m/100 m windows that were identical for a
+    hairpin and a fast kink and collided on closely-spaced corners. Braking is the approach
+    lead-in before turn-in; it is a driving region, not geometry, so it stays a fixed
+    look-back (the station map has no brake channel by design).
+    """
     if not corners:
-        # Mark everything straight
         for s in stations:
             s.corner_phase = CornerPhase.STRAIGHT
         return
 
-    # First pass: label everything straight
+    n = len(stations)
     for s in stations:
         s.corner_phase = CornerPhase.STRAIGHT
 
-    # Second pass: assign corner windows
+    def _idx_at(station_m: float) -> int:
+        return min(range(n), key=lambda i: abs(stations[i].station_m - station_m))
+
+    lo = _MIN_CURVATURE_THRESHOLD
     for corner in corners:
-        apex_m = corner.approx_station_m
-        for s in stations:
-            dist = s.station_m - apex_m
-            if abs(dist) <= _APEX_WINDOW_M:
-                s.corner_id   = corner.corner_id
-                s.corner_phase = CornerPhase.APEX
-            elif -_EXIT_WINDOW_M - _APEX_WINDOW_M <= dist < -_APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.TURN_IN
-            elif _APEX_WINDOW_M < dist <= _EXIT_WINDOW_M + _APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.EXIT
-            elif -_BRAKING_WINDOW_M - _APEX_WINDOW_M <= dist < -_EXIT_WINDOW_M - _APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.BRAKING
+        apex_i = _idx_at(corner.approx_station_m)
+        # Corner extent = the contiguous run of above-threshold curvature around the apex.
+        start = apex_i
+        while start > 0 and abs(stations[start - 1].curvature) >= lo:
+            start -= 1
+        end = apex_i
+        while end < n - 1 and abs(stations[end + 1].curvature) >= lo:
+            end += 1
+
+        for i in range(start, end + 1):
+            if stations[i].corner_id is not None:
+                continue   # already claimed by an earlier (adjacent) corner
+            dist_m = abs(stations[i].station_m - stations[apex_i].station_m)
+            if dist_m <= _APEX_BAND_M:
+                phase = CornerPhase.APEX
+            elif i < apex_i:
+                phase = CornerPhase.TURN_IN
+            else:
+                phase = CornerPhase.EXIT
+            stations[i].corner_id = corner.corner_id
+            stations[i].corner_phase = phase
+
+        # Braking approach: a fixed look-back before turn-in (behaviour, not geometry).
+        brake_from = _idx_at(stations[start].station_m - _BRAKING_WINDOW_M)
+        for i in range(max(0, brake_from), start):
+            if stations[i].corner_id is None:
+                stations[i].corner_id = corner.corner_id
+                stations[i].corner_phase = CornerPhase.BRAKING
 
 
 # ---------------------------------------------------------------------------

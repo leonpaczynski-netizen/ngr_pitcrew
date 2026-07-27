@@ -295,7 +295,8 @@ def format_segment_row(seg: object) -> dict[str, str]:
 
     _VERIFICATION_SOURCE_LABELS: dict[str, str] = {
         "greedy":             "Curvature-detected",
-        "ai_verified":        "AI-verified",
+        # "ai_verified" retired (determinism rebuild) — an old file still carrying it falls
+        # through to the raw string rather than reading as a sanctioned verification source.
         "engineer_validated": "Engineer-validated",
     }
     raw_vs = getattr(seg, "verification_source", "greedy") or "greedy"
