@@ -187,12 +187,16 @@ def derive_state(inp: TrackModellingInputs) -> TrackModellingState:
         return TrackModellingState.ERROR
     if not inp.identity_known:
         return TrackModellingState.NO_TRACK
-    if inp.model_active:
-        return TrackModellingState.ACTIVE
+    # Active capture/build wins over an approved model on disk. Re-recording a track that
+    # already has an accepted model must SHOW the recording (with a Stop button), not snap
+    # straight back to ACTIVE because the old model file still exists — that was the
+    # "Re-record does nothing / no way to stop" bug.
     if inp.building:
         return TrackModellingState.BUILDING
     if inp.capturing:
         return TrackModellingState.CAPTURING
+    if inp.model_active:
+        return TrackModellingState.ACTIVE
     # Has a built model (reference path or station map + segments)?
     if inp.has_segments or inp.has_station_map or inp.has_reference_path:
         if inp.validation_passed:

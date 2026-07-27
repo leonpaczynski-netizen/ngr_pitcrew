@@ -52,10 +52,16 @@ class TrackModellingService:
     def session(self) -> TrackModellingSession:
         return self._session
 
-    def refresh(self) -> TrackModellingSession:
-        """Fold live capture state and on-disk readiness into the session."""
+    def refresh(self, *, ignore_capture: bool = False) -> TrackModellingSession:
+        """Fold live capture state and on-disk readiness into the session.
+
+        ``ignore_capture`` skips reading the capture controller — used while mapping the
+        pit lane, where the controller is recording the pit out-lap but that must NOT read
+        as track-capture (which would flip an approved model back to the CAPTURING state).
+        """
         try:
-            session = session_from_capture(self._session, self._controller)
+            session = (self._session if ignore_capture
+                       else session_from_capture(self._session, self._controller))
             self._session = refresh_disk_readiness(session)
         except Exception:  # pragma: no cover - defensive
             pass

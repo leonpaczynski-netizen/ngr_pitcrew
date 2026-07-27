@@ -126,6 +126,19 @@ def test_fresh_track_derives_to_identified():
     assert derive_state(TrackModellingInputs()) is S.NO_TRACK
 
 
+def test_re_recording_over_an_approved_model_shows_capturing_not_active():
+    # Re-record: an accepted model is still on disk (model_active) but the driver has
+    # started capturing again. Active capture must win, so the flow shows CAPTURING (with
+    # a Stop button) rather than snapping back to ACTIVE — the "Re-record does nothing" bug.
+    inp = TrackModellingInputs(
+        identity_known=True, model_active=True, validation_passed=True, capturing=True)
+    assert derive_state(inp) is S.CAPTURING
+    # A build in progress likewise wins over the stale on-disk model.
+    building = TrackModellingInputs(
+        identity_known=True, model_active=True, building=True)
+    assert derive_state(building) is S.BUILDING
+
+
 def test_snapshot_lists_available_actions_only():
     coord = TrackModellingCoordinator(TrackModellingInputs(
         identity_known=True, validation_passed=True, has_segments=True,

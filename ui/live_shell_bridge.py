@@ -1006,9 +1006,11 @@ class LiveShellBridge(QObject):
                 self._track_choices_loaded = True
                 page.set_tracks(*_track_choices())
             # If we're mapping the pit lane, detect it from the latest out-lap first, so
-            # the refreshed session reflects the completed model.
+            # the refreshed session reflects the completed model. While mapping, the pit
+            # out-lap recording must NOT read as track-capture (the model is already
+            # approved), so refresh ignores the capture controller.
             self._try_map_pit_lane()
-            session = self._tracks.refresh()
+            session = self._tracks.refresh(ignore_capture=self._pit_lane_mode)
             # The map redraws every 1 m station, so only build it when the driver is
             # actually looking at this page (it is one of many in the stack) — not on
             # every 750 ms tick from wherever they happen to be.
@@ -1100,7 +1102,13 @@ class LiveShellBridge(QObject):
             from data.track_convergence import (
                 assess_capture_convergence, convergence_coach_message)
             ctrl = getattr(self._tracks, "_controller", None)
-            laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
+            # Raw recorded laps carry no quality/path-length until a build runs, so the
+            # convergence detector would reject every one. Evaluate them live first —
+            # assess_session_laps returns per-lap quality + path length that convergence
+            # keys off — so the "keep going / box now" call actually fires while driving.
+            laps = []
+            if ctrl is not None and hasattr(ctrl, "evaluate_laps"):
+                laps = ctrl.evaluate_laps() or []
             return convergence_coach_message(assess_capture_convergence(laps))
         except Exception:
             return ""
@@ -1150,7 +1158,7 @@ class LiveShellBridge(QObject):
         # build → validate → approve — no per-corner sign-off, no manual steps. If the
         # geometry isn't sound enough yet the work is kept and the driver is told to keep
         # lapping; when it approves, we move on to mapping the pit lane.
-        if action == "stop_capture" and result.ok:
+        if action == "stop_capture" and result.ok and not self._pit_lane_mode:
             final = self._tracks.auto_finalize()
             self._tm_status = final.reason or self._tm_status
             if final.ok and self._tracks.session.model_active:

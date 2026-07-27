@@ -431,6 +431,20 @@ def test_map_pit_lane_attaches_a_boundary_from_the_out_lap():
     assert sm.pit_lane.entry_station_m < sm.pit_lane.exit_station_m
 
 
+def test_refresh_ignore_capture_does_not_read_the_controller():
+    # While mapping the pit lane the controller is recording, but refresh(ignore_capture)
+    # must NOT let that read as track-capture (which would flip an approved model back to
+    # CAPTURING). Normal refresh DOES read it.
+    ctrl = _Ctrl()
+    ctrl._state = types.SimpleNamespace(name="RECORDING")
+    svc = _svc(ctrl)
+    svc.refresh()                                   # normal: reads the recording controller
+    assert svc.session.capturing is True
+    svc._session = svc.session.with_(capturing=False)
+    svc.refresh(ignore_capture=True)                # pit-lane mode: controller ignored
+    assert svc.session.capturing is False
+
+
 def test_map_pit_lane_without_a_model_is_refused():
     svc = _svc(_Ctrl())
     result = svc.map_pit_lane(_pit_lap())
