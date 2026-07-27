@@ -43,7 +43,22 @@ LAP_DURATION_OUTLIER_FACTOR: float = 2.0
 LAP_PATH_OUTLIER_FACTOR: float = 2.0
 
 #: Number of progress buckets used for the reference path.
+#: Legacy — the reference path now averages in physical metres (see REF_PATH_SPACING_M).
+#: Retained for resample_to_buckets(), which other callers/tests still use.
 N_PROGRESS_BUCKETS: int = 200
+
+#: Reference-path resampling spacing (metres). Physical arc-length averaging replaces the
+#: old self-normalized 200-bucket averaging, which smeared apexes whenever laps differed
+#: in length or line.
+REF_PATH_SPACING_M: float = 1.0
+
+#: Max stations a lap may be circularly shifted to align its start/finish datum with the
+#: reference lap before averaging (GT7 lap boundaries jitter by a few metres).
+DATUM_ALIGN_MAX_SHIFT: int = 25
+
+#: A lap whose per-station RMS XZ deviation from the median path exceeds this (metres) is a
+#: shape outlier — it cut a chicane, ran wide or spun — and is dropped before averaging.
+SHAPE_OUTLIER_RMS_M: float = 8.0
 
 #: Minimum usable laps needed to build a reference path.
 MIN_USABLE_LAPS_FOR_PATH: int = 2
@@ -728,6 +743,95 @@ def compute_corrected_lap_length(points: list) -> float:
     return closest.distance_along_lap_m
 
 
+def _resample_samples_uniform(
+    samples: list[TelemetrySample],
+    spacing_m: float = REF_PATH_SPACING_M,
+) -> list[tuple]:
+    """Resample a lap to uniform arc-length stations, carrying speed and yaw.
+
+    Returns ``(x, y, z, speed_kph, yaw_rate_or_None)`` tuples ~``spacing_m`` apart. This is
+    the physical-metre equivalent of the old per-lap progress bucketing: station *i* of one
+    lap is the same distance-into-the-lap as station *i* of another, so averaging them does
+    not smear a corner the way self-normalized progress buckets did.
+    """
+    n = len(samples)
+    if n < 2:
+        return [(s.x, s.y, s.z, s.speed_kph, s.yaw_rate) for s in samples]
+    cum = cumulative_distances(samples)
+    total = cum[-1]
+    if total <= 0.0:
+        return [(samples[0].x, samples[0].y, samples[0].z,
+                 samples[0].speed_kph, samples[0].yaw_rate)]
+    out: list[tuple] = []
+    target = 0.0
+    j = 0
+    while target <= total + 1e-9:
+        while j < n - 2 and cum[j + 1] < target:
+            j += 1
+        seg = cum[j + 1] - cum[j] if j + 1 < n else 0.0
+        t = 0.0 if seg < 1e-9 else (target - cum[j]) / seg
+        a = samples[j]
+        b = samples[min(j + 1, n - 1)]
+        x = a.x + t * (b.x - a.x)
+        y = a.y + t * (b.y - a.y)
+        z = a.z + t * (b.z - a.z)
+        spd = a.speed_kph + t * (b.speed_kph - a.speed_kph)
+        if a.yaw_rate is not None and b.yaw_rate is not None:
+            yaw = a.yaw_rate + t * (b.yaw_rate - a.yaw_rate)
+        else:
+            yaw = a.yaw_rate if a.yaw_rate is not None else b.yaw_rate
+        out.append((x, y, z, spd, yaw))
+        target += spacing_m
+    return out
+
+
+def _align_lap_offset(ref: list[tuple], lap: list[tuple], max_shift: int) -> int:
+    """Circular station shift that best aligns ``lap``'s start/finish datum to ``ref``.
+
+    Searches shifts in ``[-max_shift, +max_shift]`` for the one minimising XZ squared
+    error against the reference lap, so a lap whose S/F crossing is a few metres offset is
+    realigned before averaging (otherwise station *i* of each lap is a different physical
+    point and the apex smears). Returns 0 when nothing lines up better.
+    """
+    n = min(len(ref), len(lap))
+    if n < 4:
+        return 0
+    step = max(1, n // 200)          # subsample — a few hundred stations is plenty
+    best_err = float("inf")
+    best_k = 0
+    for k in range(-max_shift, max_shift + 1):
+        err = 0.0
+        for i in range(0, n, step):
+            j = (i + k) % n
+            dx = ref[i][0] - lap[j][0]
+            dz = ref[i][2] - lap[j][2]
+            err += dx * dx + dz * dz
+        if err < best_err:
+            best_err, best_k = err, k
+    return best_k
+
+
+def _roll(seq: list, k: int) -> list:
+    """Circularly shift a list by k (positive = later start)."""
+    if not seq:
+        return seq
+    k %= len(seq)
+    return seq[k:] + seq[:k]
+
+
+def _lap_shape_rms(lap: list[tuple], median_xz: list[tuple]) -> float:
+    """RMS XZ distance of a lap's stations from the median path (metres)."""
+    m = min(len(lap), len(median_xz))
+    if m == 0:
+        return 0.0
+    acc = 0.0
+    for i in range(m):
+        dx = lap[i][0] - median_xz[i][0]
+        dz = lap[i][2] - median_xz[i][1]
+        acc += dx * dx + dz * dz
+    return math.sqrt(acc / m)
+
+
 def build_reference_path(
     session: CalibrationSession,
     *,
@@ -845,52 +949,15 @@ def build_reference_path(
             pit_detection_enabled=pit_detection_enabled,
         )
 
-    # ── Per-lap bucketing ────────────────────────────────────────────────────
-    # Shape: [lap_index][bucket_index] = list[TelemetrySample]
-    all_buckets: list[list[list[TelemetrySample]]] = []
-    for lap in usable_laps:
-        all_buckets.append(resample_to_buckets(lap.samples, N_PROGRESS_BUCKETS))
-
-    # ── Merge buckets across laps ────────────────────────────────────────────
-    merged: list[list[TelemetrySample]] = []
-    for b_idx in range(N_PROGRESS_BUCKETS):
-        combined: list[TelemetrySample] = []
-        for lap_buckets in all_buckets:
-            combined.extend(lap_buckets[b_idx])
-        merged.append(combined)
-
-    # ── Build reference path points ──────────────────────────────────────────
-    points: list[ReferencePathPoint] = []
-    filled_buckets = 0
-    cumulative_dist = 0.0
-    prev_point: Optional[tuple[float, float, float]] = None
-
-    for b_idx, bucket in enumerate(merged):
-        if not bucket:
-            continue
-        filled_buckets += 1
-        avg_x, avg_y, avg_z, avg_spd, avg_yaw = _average_bucket(bucket)
-
-        if prev_point is not None:
-            step_dist = point_distance_3d(
-                prev_point[0], prev_point[1], prev_point[2],
-                avg_x, avg_y, avg_z,
-            )
-            cumulative_dist += step_dist
-        prev_point = (avg_x, avg_y, avg_z)
-
-        points.append(ReferencePathPoint(
-            lap_progress         = b_idx / (N_PROGRESS_BUCKETS - 1) if N_PROGRESS_BUCKETS > 1 else 0.0,
-            distance_along_lap_m = cumulative_dist,
-            x                    = avg_x,
-            y                    = avg_y,
-            z                    = avg_z,
-            speed_kph_avg        = avg_spd,
-            source_lap_count     = len(bucket),
-            yaw_rate_avg         = avg_yaw,
-        ))
-
-    if not points:
+    # ── Metre-aligned multi-lap averaging ─────────────────────────────────────
+    # Each lap is resampled to uniform 1 m stations, its start/finish datum aligned to the
+    # reference lap, shape outliers dropped, then stations are averaged in PHYSICAL metres.
+    # This replaces the old self-normalized 200-progress-bucket averaging, which put
+    # station k of two laps at different physical points and smeared every apex.
+    resampled = [_resample_samples_uniform(lap.samples, REF_PATH_SPACING_M)
+                 for lap in usable_laps]
+    resampled = [r for r in resampled if len(r) >= 2]
+    if not resampled:
         return CalibrationBuildResult(
             success=False,
             usable_lap_count=len(usable_laps),
@@ -905,28 +972,103 @@ def build_reference_path(
             pit_detection_enabled=pit_detection_enabled,
         )
 
-    # ── Lap closure correction ────────────────────────────────────────────────
-    corrected_length = compute_corrected_lap_length(points)
-    points[-1].distance_along_lap_m = corrected_length
+    # Truncate to the shortest lap so every lap covers the same station range, then align
+    # each lap's start/finish to the first (reference) lap.
+    min_count = min(len(r) for r in resampled)
+    truncated = [r[:min_count] for r in resampled]
+    ref_lap = truncated[0]
+    aligned = [ref_lap] + [
+        _roll(lap, _align_lap_offset(ref_lap, lap, DATUM_ALIGN_MAX_SHIFT))
+        for lap in truncated[1:]
+    ]
 
-    # ── Renormalise lap_progress to corrected lap length ──────────────────────
-    corrected_m = points[-1].distance_along_lap_m
+    # Shape-outlier rejection: drop a lap that deviates grossly from the median line (cut a
+    # chicane / ran wide / spun), but never below the minimum needed to build.
+    median_xz = [
+        (statistics.median(lap[i][0] for lap in aligned),
+         statistics.median(lap[i][2] for lap in aligned))
+        for i in range(min_count)
+    ]
+    scored = [(lap, _lap_shape_rms(lap, median_xz)) for lap in aligned]
+    kept = [lap for lap, rms in scored if rms <= SHAPE_OUTLIER_RMS_M]
+    dropped = len(aligned) - len(kept)
+    if len(kept) < MIN_USABLE_LAPS_FOR_PATH:
+        kept = aligned          # keep everything rather than drop below the floor
+        dropped = 0
+    if dropped:
+        all_warnings.append(
+            f"{dropped} lap(s) excluded from the averaged line as shape outliers "
+            f"(> {SHAPE_OUTLIER_RMS_M:.0f} m RMS off the median line)"
+        )
+
+    n_kept = len(kept)
+    points: list[ReferencePathPoint] = []
+    per_station_var: list[float] = []
+    for i in range(min_count):
+        xs = [lap[i][0] for lap in kept]
+        ys = [lap[i][1] for lap in kept]
+        zs = [lap[i][2] for lap in kept]
+        spds = [lap[i][3] for lap in kept]
+        yaws = [lap[i][4] for lap in kept if lap[i][4] is not None]
+        avg_x = sum(xs) / n_kept
+        avg_y = sum(ys) / n_kept
+        avg_z = sum(zs) / n_kept
+        avg_spd = sum(spds) / n_kept
+        avg_yaw = (sum(yaws) / len(yaws)) if yaws else None
+        # Per-station spatial spread (XZ) across laps — the honest measure of agreement.
+        if n_kept > 1:
+            per_station_var.append(
+                math.sqrt(sum((x - avg_x) ** 2 + (z - avg_z) ** 2
+                              for x, z in zip(xs, zs)) / n_kept))
+        points.append(ReferencePathPoint(
+            lap_progress         = i / (min_count - 1) if min_count > 1 else 0.0,
+            distance_along_lap_m = i * REF_PATH_SPACING_M,
+            x                    = avg_x,
+            y                    = avg_y,
+            z                    = avg_z,
+            speed_kph_avg        = avg_spd,
+            source_lap_count     = n_kept,
+            yaw_rate_avg         = avg_yaw,
+        ))
+
+    # ── Loop-closure: rubber-band the misclosure out along the path ────────────
+    if len(points) >= 3:
+        gap = point_distance_3d(points[-1].x, points[-1].y, points[-1].z,
+                                points[0].x, points[0].y, points[0].z)
+        raw_len = points[-1].distance_along_lap_m
+        if 0.0 < gap <= raw_len * 0.05:
+            ex = points[-1].x - points[0].x
+            ey = points[-1].y - points[0].y
+            ez = points[-1].z - points[0].z
+            last = len(points) - 1
+            for i, pt in enumerate(points):
+                f = i / last
+                pt.x -= ex * f
+                pt.y -= ey * f
+                pt.z -= ez * f
+            points = points[:-1]   # drop the now-duplicate closing point
+
+    # Recompute cumulative distance + progress from the closed geometry.
+    cumulative_dist = 0.0
+    for i, pt in enumerate(points):
+        if i > 0:
+            cumulative_dist += point_distance_3d(
+                points[i - 1].x, points[i - 1].y, points[i - 1].z, pt.x, pt.y, pt.z)
+        pt.distance_along_lap_m = cumulative_dist
+    corrected_m = points[-1].distance_along_lap_m if points else 0.0
     if corrected_m > 0:
         for pt in points:
             pt.lap_progress = pt.distance_along_lap_m / corrected_m
 
-    # ── Confidence score ─────────────────────────────────────────────────────
-    fill_rate = filled_buckets / N_PROGRESS_BUCKETS
-    lap_confidence = min(1.0, len(usable_laps) / 5.0)  # saturates at 5 laps
-    confidence = round(fill_rate * lap_confidence, 3)
+    # ── Confidence: lap count × geometric agreement (tight spread → high) ──────
+    lap_confidence = min(1.0, n_kept / 5.0)         # saturates at 5 laps
+    mean_spread = (sum(per_station_var) / len(per_station_var)) if per_station_var else 0.0
+    agreement = max(0.0, 1.0 - mean_spread / SHAPE_OUTLIER_RMS_M)
+    confidence = round(lap_confidence * (0.5 + 0.5 * agreement), 3)
 
-    if fill_rate < 0.8:
+    if n_kept < 3:
         all_warnings.append(
-            f"Reference path has sparse coverage: only {fill_rate:.0%} of buckets filled"
-        )
-    if len(usable_laps) < 3:
-        all_warnings.append(
-            f"Reference path built from only {len(usable_laps)} lap(s); "
+            f"Reference path built from only {n_kept} lap(s); "
             "3 or more are recommended for reliability"
         )
 
@@ -934,7 +1076,7 @@ def build_reference_path(
         track_location_id  = session.track_location_id,
         layout_id          = session.layout_id,
         calibration_car_id = session.calibration_car_id,
-        source_lap_count   = len(usable_laps),
+        source_lap_count   = n_kept,
         points             = points,
         confidence         = confidence,
         warnings           = list(all_warnings),
