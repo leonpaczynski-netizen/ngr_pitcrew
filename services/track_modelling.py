@@ -67,6 +67,32 @@ class TrackModellingService:
         except Exception:
             return False
 
+    # ---- drive-until-done -------------------------------------------------
+    def auto_finalize(self) -> TrackActionResult:
+        """Build → validate → activate in one pass, for the drive-until-done flow.
+
+        The driver never approves individual corners: once capture is complete, the model
+        is built, geometry-validated and (if it passes) activated automatically. Stops at
+        the first step that can't proceed and returns why — the captured work is always
+        kept, so a geometry problem just means "keep driving", not "lost your laps".
+        """
+        build = self.perform("build_model")
+        if not build.ok:
+            return TrackActionResult(ok=False, action="auto_finalize",
+                                     session=self._session,
+                                     reason=build.reason or "Could not build the model yet.")
+        validate = self.perform("validate")
+        if not self._session.validation_passed:
+            # ok=True: the model is kept, but it isn't sound enough to approve yet.
+            return TrackActionResult(ok=False, action="auto_finalize",
+                                     session=self._session,
+                                     reason=(validate.reason
+                                             or "The model doesn't line up well enough yet."))
+        activate = self.perform("activate")
+        return TrackActionResult(ok=bool(activate.ok), action="auto_finalize",
+                                 session=self._session,
+                                 reason=activate.reason or "Track approved.")
+
     # ---- write ------------------------------------------------------------
     def select_track(self, location_id: str, layout_id: str) -> TrackActionResult:
         """Choose the circuit and layout. Changing track discards the previous job."""

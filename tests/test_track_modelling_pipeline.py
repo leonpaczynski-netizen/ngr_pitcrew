@@ -356,3 +356,51 @@ def test_activate_writes_the_accepted_model_and_goes_active(monkeypatch):
     assert calls["review"] == 1
     assert review.track_location_id == "loc"      # stamped with the combo ids
     assert ctrl.saved is True                     # the path is persisted at activate
+
+
+# -------------------------------------------------------------- auto-finalize
+def _stub_full_pipeline(monkeypatch, match="PARTIAL_MATCH"):
+    """Stub build + align + activate exporters so auto_finalize runs end to end."""
+    _stub_build_domain(monkeypatch)
+    import data.track_model_alignment as al_mod
+    import data.track_segment_review as rev_mod
+    monkeypatch.setattr(al_mod, "align_track_model",
+                        lambda sm, layout_seed=None: _Alignment(match), raising=True)
+    monkeypatch.setattr(al_mod, "export_accepted_model_json",
+                        lambda *a, **k: "path", raising=True)
+    monkeypatch.setattr(rev_mod, "export_review_json", lambda *a, **k: "p", raising=True)
+
+
+def test_auto_finalize_drives_build_validate_activate_in_one_pass(monkeypatch):
+    # Drive-until-done: no per-corner approval, no manual Build/Validate/Use clicks.
+    _stub_full_pipeline(monkeypatch, match="PARTIAL_MATCH")   # geometry-accept path
+    svc = _svc(_Ctrl())
+    svc._session = svc.session.with_(has_captured_laps=True)
+    result = svc.auto_finalize()
+    assert result.ok is True
+    assert svc.session.model_active is True        # approved and active, hands-free
+
+
+def test_auto_finalize_stops_and_keeps_work_when_geometry_is_off(monkeypatch):
+    _stub_full_pipeline(
+        monkeypatch,
+        match="PARTIAL_MATCH")
+    import data.track_model_alignment as al_mod
+    monkeypatch.setattr(al_mod, "align_track_model",
+                        lambda sm, layout_seed=None: _Alignment(
+                            "PARTIAL_MATCH", blockers=["Lap length mismatch: 14%"]),
+                        raising=True)
+    svc = _svc(_Ctrl())
+    svc._session = svc.session.with_(has_captured_laps=True)
+    result = svc.auto_finalize()
+    assert result.ok is False
+    assert svc.session.model_active is False        # not approved
+    assert svc.session.has_station_map is True       # but the built work is kept
+    assert "lap length" in result.reason.lower()
+
+
+def test_auto_finalize_without_laps_cannot_build(monkeypatch):
+    svc = _svc(_Ctrl())                              # no captured laps
+    result = svc.auto_finalize()
+    assert result.ok is False
+    assert svc.session.model_active is False
