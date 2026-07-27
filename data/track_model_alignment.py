@@ -303,12 +303,12 @@ def align_track_model(
         )
 
     # ── Determine overall match status ─────────────────────────────────────
-    # ACCEPTABLE_MATCH (full acceptance) requires seed corner POSITIONS verified + a tight
-    # lap-length delta. Without seed corner windows, the best is GOOD_MATCH — but note
-    # this now means COUNT + LENGTH agree, where "count" is the real, curvature-detected
-    # corners (Stage 2 removed the placeholder padding that used to make count meaningless,
-    # so GOOD is no longer reachable on lap length alone). This preserves the Group 24 AC3
-    # decision that a count-matched model is acceptable without authored seed windows.
+    # A GOOD or ACCEPTABLE match must be verified by corner POSITION, not lap length +
+    # count alone (which can agree while the corners sit in the wrong places). Without seed
+    # corner windows the best achievable status is PARTIAL_MATCH — the model is usable but
+    # its geometry is unverified. (This supersedes the earlier Group 24 AC3 allowance that
+    # a count-matched model was acceptable without authored seed windows; the accuracy
+    # overhaul requires position verification for acceptance.)
     if blockers:
         if delta_pct > _MAX_LAP_DELTA_PARTIAL_PCT and seed_length_m > 0:
             match_status = TrackModelMatchStatus.FAILED_MATCH
@@ -316,11 +316,19 @@ def align_track_model(
             match_status = TrackModelMatchStatus.PARTIAL_MATCH
     elif delta_pct > _MAX_LAP_DELTA_GOOD_PCT and seed_length_m > 0:
         match_status = TrackModelMatchStatus.PARTIAL_MATCH
-    elif delta_pct <= _MAX_LAP_DELTA_STRICT_PCT and corner_defs:
+    elif not corner_defs:
+        # Count + length agree, but corner POSITIONS cannot be verified — cap at partial.
+        match_status = TrackModelMatchStatus.PARTIAL_MATCH
+        warnings.append(
+            "Matched on corner count and lap length only — corner positions cannot be "
+            "verified without a seed corner map, so this is a partial match. The model is "
+            "usable; author seed corner windows for this layout for full acceptance."
+        )
+    elif delta_pct <= _MAX_LAP_DELTA_STRICT_PCT:
         # Seed positions available, all matched (no blockers), lap delta tight.
         match_status = TrackModelMatchStatus.ACCEPTABLE_MATCH
     else:
-        # No seed position data, or lap delta 2–8% — good, but not fully accepted.
+        # Seed positions available and matched, lap delta 2–8% — good, not fully accepted.
         match_status = TrackModelMatchStatus.GOOD_MATCH
 
     return TrackModelAlignmentResult(

@@ -5,11 +5,19 @@ from data.track_model_alignment import (
     TrackModelMatchStatus,
     align_track_model,
 )
-from data.track_station_map import TrackStationMap, StationPoint
+from data.track_station_map import TrackStationMap, StationPoint, SeededCorner
+
+import types
+
+# Two corners with matching seed windows, so corner POSITIONS verify (PASS) and the match
+# status is then determined purely by the lap-length delta — which is what these tests
+# exercise. Without seed corner positions the gate caps everything at PARTIAL, so verified
+# corners are required to test the delta boundary at all (accuracy-overhaul gate).
+_CORNER_APEXES = (25.0, 75.0)
 
 
 def _make_station_map(lap_length_m: float = 1000.0) -> TrackStationMap:
-    """Build a minimal station map with enough stations to pass NOT_READY guard."""
+    """Minimal station map with enough stations + two real corners at 25%/75%."""
     stations = [
         StationPoint(
             station_m=float(i),
@@ -20,25 +28,39 @@ def _make_station_map(lap_length_m: float = 1000.0) -> TrackStationMap:
         )
         for i in range(210)  # > _MIN_STATIONS_FOR_ALIGNMENT (200)
     ]
+    corners = [
+        SeededCorner(
+            corner_id=f"T{n}", display_name=f"T{n}",
+            approx_station_m=apex / 100.0 * lap_length_m,
+            approx_progress=apex / 100.0,
+            is_seeded_placeholder=False, confidence=0.9)
+        for n, apex in enumerate(_CORNER_APEXES, start=1)
+    ]
     return TrackStationMap(
         track_location_id="test",
         layout_id="test",
         lap_length_m=lap_length_m,
         spacing_m=1.0,
         stations=stations,
-        seeded_corners=[],
+        seeded_corners=corners,
         extra_curvature_peaks=[],
+        corners_expected=len(corners),
+        seed_corner_positions_available=True,
     )
 
 
-import types
-
 def _make_seed(length_m: float) -> types.SimpleNamespace:
+    defs = [
+        types.SimpleNamespace(
+            corner_id=f"T{n}", display_name=f"T{n}",
+            start_progress_pct=apex - 5.0, apex_progress_pct=apex, end_progress_pct=apex + 5.0)
+        for n, apex in enumerate(_CORNER_APEXES, start=1)
+    ]
     return types.SimpleNamespace(
-        corners_expected=0,
+        corners_expected=len(defs),
         length_m=length_m,
         sectors=None,
-        corner_definitions=[],
+        corner_definitions=defs,
     )
 
 
