@@ -76,3 +76,53 @@ def test_current_builder_does_not_trigger_remodel():
         {"source_type": "Reviewed — AI-ready", "ai_ready": "Yes", "builder_stale": False})
     assert "RE-MODEL" not in text.upper()
     assert tone == "success"
+
+
+# --------------------------------------------------------------------------- live wiring
+def _review(builder_version):
+    from data.track_segment_review import TrackModelReviewResult
+    from data.track_segment_detection import TrackSegmentDetectionConfidence
+    return TrackModelReviewResult(
+        track_location_id="loc", layout_id="loc__lay", calibration_car_id="car",
+        source_lap_count=3, detected_corner_count=0, expected_corner_count=0,
+        detection_confidence=TrackSegmentDetectionConfidence.MEDIUM, segments=[],
+        builder_version=builder_version)
+
+
+def test_review_roundtrip_carries_builder_version(tmp_path):
+    from data.track_segment_review import export_review_json, import_review_json
+    path = export_review_json(_review(TRACK_MODEL_BUILDER_VERSION),
+                              output_dir=tmp_path, session_id="sid")
+    loaded = import_review_json(path)
+    assert loaded.builder_version == TRACK_MODEL_BUILDER_VERSION
+
+
+def test_old_file_without_builder_version_loads_blank(tmp_path):
+    import json as _json
+    from data.track_segment_review import _REVIEW_SCHEMA, import_review_json
+    doc = {"schema": _REVIEW_SCHEMA, "track_location_id": "loc", "layout_id": "loc__lay",
+           "calibration_car_id": "car", "source_lap_count": 3, "detected_corner_count": 0,
+           "expected_corner_count": 0, "detection_confidence": "medium", "segments": []}
+    p = tmp_path / "loc__loc__lay__reviewed_segments__old.json"
+    p.write_text(_json.dumps(doc), encoding="utf-8")
+    loaded = import_review_json(p)
+    assert loaded.builder_version == ""            # pre-overhaul file
+
+
+def test_resolved_model_flags_stale_and_badge_says_remodel():
+    from pathlib import Path
+    from data.track_model_resolver import _build_resolved_model
+    from ui.track_modelling_vm import format_resolver_summary, format_model_trust_badge
+    import types
+    # An old-engine reviewed model → stale → badge says RE-MODEL.
+    old = _build_resolved_model(_review(""), Path("x.json"))
+    assert old.builder_stale is True
+    result = types.SimpleNamespace(resolution_status="resolved", all_candidate_paths=[],
+                                   resolved_model=old)
+    summary = format_resolver_summary(result)
+    assert summary["builder_stale"] is True
+    _text, tone = format_model_trust_badge(summary)
+    assert tone == "warn" and "RE-MODEL" in _text.upper()
+    # A current-engine model is not stale.
+    cur = _build_resolved_model(_review(TRACK_MODEL_BUILDER_VERSION), Path("x.json"))
+    assert cur.builder_stale is False

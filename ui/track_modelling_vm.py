@@ -385,6 +385,7 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
         "warnings":          "",
         "resolution_status": "—",
         "candidate_count":   "—",
+        "builder_stale":     False,
     }
     if resolver_result is None:
         return _empty
@@ -426,6 +427,7 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
         "warnings":          "\n".join(warn_list[:3]) if warn_list else "",
         "resolution_status": res_status_str,
         "candidate_count":   str(len(candidates)),
+        "builder_stale":     bool(getattr(resolved, "builder_stale", False)),
     }
 
 

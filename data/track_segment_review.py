@@ -161,6 +161,9 @@ class TrackModelReviewResult:
     # Maturity level persisted in the JSON snapshot; computed at export time.
     # Values mirror TrackModellingStatus: segment_detected / user_reviewed / engineer_grade
     modelling_status: Optional[str] = None
+    # Track-model engine version this model was built by (stamped at export). Empty when
+    # loaded from a pre-overhaul file; used to flag stale models for re-modelling.
+    builder_version: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +732,7 @@ def import_review_json(json_path: Path) -> TrackModelReviewResult:
             created_at           = doc.get("created_at", ""),
             last_reviewed_at     = doc.get("last_reviewed_at"),
             modelling_status     = doc.get("modelling_status"),  # None for old files
+            builder_version      = str(doc.get("builder_version", "")),  # "" for old files
         )
     except (KeyError, ValueError) as exc:
         raise ValueError(f"Malformed review document in {json_path}: {exc}") from exc
