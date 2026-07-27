@@ -147,7 +147,20 @@ def _build_model(controller, session: TrackModellingSession):
 
 
 def _validate(session: TrackModellingSession):
-    """Align the built model against the official seed. Passes on a good match."""
+    """Align the built model against the seed, and decide whether it can be used.
+
+    Two ways to pass:
+      * GOOD/ACCEPTABLE match — corner POSITIONS verified against authored seed windows.
+      * PARTIAL match with NO blockers — the geometry is sound (lap length + corner count
+        agree) and the only thing missing is authored seed corner windows to verify corner
+        positions. That seed data exists for ~1 of 121 layouts, so requiring it would brick
+        modelling for almost every track. We accept it as usable-from-geometry: corners are
+        numbered in lap order and labelled left/right from the telemetry, which is what
+        setup, strategy and coaching consume.
+
+    Real geometry faults — lap-length mismatch (>8%), corner-count or corner-position
+    failures — always set blockers, so they still fail here regardless of match status.
+    """
     station_map = session.artefact("station_map")
     if station_map is None:
         return (False, "Build the model before validating it.", session)
@@ -163,15 +176,24 @@ def _validate(session: TrackModellingSession):
     status = getattr(getattr(alignment, "match_status", None), "name", "") \
         or str(getattr(alignment, "match_status", ""))
     blockers = list(getattr(alignment, "blockers", None) or [])
-    passed = status in ("GOOD_MATCH", "ACCEPTABLE_MATCH") and not blockers
-    if not passed:
+
+    seed_verified = status in ("GOOD_MATCH", "ACCEPTABLE_MATCH") and not blockers
+    usable_from_geometry = status == "PARTIAL_MATCH" and not blockers
+    if not (seed_verified or usable_from_geometry):
         reason = ("; ".join(blockers)
                   or f"The model does not line up with the track well enough yet "
                      f"({status.replace('_', ' ').lower() or 'no match'}). "
                      f"Record more clean laps and rebuild.")
         # ok=True (not an ERROR — the work is kept) but validation_passed stays False.
         return (True, reason, session.with_(validation_passed=False))
-    return (True, "", session.with_(validation_passed=True))
+
+    # Passing on geometry alone is honest about the one thing it can't guarantee: that
+    # each corner sits exactly where the official layout puts it.
+    note = ("" if seed_verified else
+            "Accepted from track geometry — corners are numbered in order and labelled "
+            "left/right from your laps. There's no seed corner map for this layout, so "
+            "corner positions aren't independently seed-verified.")
+    return (True, note, session.with_(validation_passed=True))
 
 
 def _activate(controller, session: TrackModellingSession):

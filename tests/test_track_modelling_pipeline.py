@@ -258,7 +258,11 @@ def test_validate_before_build_is_refused():
     assert "build" in svc.session.error_message.lower()
 
 
-def test_validate_below_threshold_keeps_the_work(monkeypatch):
+def test_partial_with_no_blockers_is_accepted_from_geometry(monkeypatch):
+    # A PARTIAL match blocked ONLY by missing seed corner windows (no blockers) is
+    # geometry-sound and usable — corners are labelled from the telemetry. It must
+    # validate so it can be activated and feed setup/strategy/coaching. (~120 of 121
+    # layouts have no seed windows, so requiring them would brick the feature.)
     import data.track_model_alignment as al_mod
     import data.track_intelligence as ti_mod
     monkeypatch.setattr(ti_mod, "resolve_track_layout",
@@ -269,10 +273,29 @@ def test_validate_below_threshold_keeps_the_work(monkeypatch):
     svc = _svc(_Ctrl())
     svc._session = svc.session.with_(has_segments=True).with_artefact("station_map", _StationMap())
     result = svc.perform("validate")
-    assert result.ok is True                     # NOT an error — the model is kept
-    assert svc.session.validation_passed is False
+    assert result.ok is True
+    assert svc.session.validation_passed is True          # usable from geometry
     assert svc.session.error is False
-    assert "line up" in result.reason.lower()
+    assert "geometry" in result.reason.lower()            # honest "positions unverified" note
+
+
+def test_partial_with_blockers_still_fails(monkeypatch):
+    # A PARTIAL match caused by a REAL geometry fault (here a lap-length mismatch) sets
+    # blockers and must still fail — accepting-from-geometry is only for the no-blocker case.
+    import data.track_model_alignment as al_mod
+    import data.track_intelligence as ti_mod
+    monkeypatch.setattr(ti_mod, "resolve_track_layout",
+                        lambda loc, lay, yaml_path=None: None, raising=True)
+    monkeypatch.setattr(al_mod, "align_track_model",
+                        lambda sm, layout_seed=None: _Alignment(
+                            "PARTIAL_MATCH", blockers=["Lap length mismatch: 12.4% exceeds 8%"]),
+                        raising=True)
+    svc = _svc(_Ctrl())
+    svc._session = svc.session.with_(has_segments=True).with_artefact("station_map", _StationMap())
+    result = svc.perform("validate")
+    assert result.ok is True                     # NOT an error — the work is kept
+    assert svc.session.validation_passed is False
+    assert "lap length" in result.reason.lower()
 
 
 def test_validate_good_match_passes(monkeypatch):
