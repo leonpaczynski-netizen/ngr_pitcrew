@@ -99,22 +99,30 @@ class TrackModellingService:
                                  session=self._session,
                                  reason=activate.reason or "Track approved.")
 
-    def map_pit_lane(self, pit_lap) -> TrackActionResult:
-        """Map the pit lane from one out-lap driven through it.
+    def map_pit_lane(self, pit_laps) -> TrackActionResult:
+        """Map the pit lane from the lap(s) driven through it.
 
         The detector finds where the car diverges from the racing line (the reference
-        path) and rejoins — it needs the built station map plus the pit lap's samples,
-        not the GT7 pit flag. On success the pit-lane boundary is attached to the station
-        map and re-exported, so live pit detection, pit loss and pit-window logic use it.
+        path) and rejoins — it needs the built station map plus the pit-lap samples, not
+        the GT7 pit flag. On MOST circuits the pit lane crosses the start/finish line, so
+        the traversal spans two consecutive laps (entry at the end of one, exit at the
+        start of the next). We stitch the given laps' samples into one continuous path so
+        entry AND exit are seen together; a boundary with entry_station > exit_station is
+        stored as-is (the wrap-around is handled downstream). On success the boundary is
+        attached to the station map and re-exported, so live pit detection, pit loss and
+        pit-window logic use it.
         """
         station_map = self._session.artefact("station_map")
         if station_map is None:
             return TrackActionResult(action="map_pit_lane", session=self._session,
                                      reason="Approve the track model before mapping the pit lane.")
+        laps = list(pit_laps) if isinstance(pit_laps, (list, tuple)) else [pit_laps]
+        samples = [s for lap in laps for s in (getattr(lap, "samples", None) or [])]
         try:
             from data.track_station_map import (
                 detect_pit_lane_from_pit_laps, export_station_map_json)
-            boundary = detect_pit_lane_from_pit_laps([pit_lap], station_map)
+            # A plain sample list IS accepted as one "lap" by the detector.
+            boundary = detect_pit_lane_from_pit_laps([samples], station_map)
         except Exception as exc:
             return TrackActionResult(action="map_pit_lane", session=self._session,
                                      reason=f"Could not map the pit lane: {exc}")

@@ -1072,7 +1072,12 @@ class LiveShellBridge(QObject):
                            "the model.")
 
     def _try_map_pit_lane(self) -> None:
-        """While mapping the pit lane, detect it from the first completed out-lap."""
+        """While mapping the pit lane, detect it from the completed out-lap(s).
+
+        The pit lane usually crosses the start/finish line, so the traversal is split
+        across two consecutive laps — detect on the last two completed laps stitched
+        together. Retry on every new lap until it maps (a warm-up lap before the pit lap
+        simply misses once), so the driver isn't forced to pit on a specific lap."""
         if not self._pit_lane_mode:
             return
         try:
@@ -1080,13 +1085,14 @@ class LiveShellBridge(QObject):
             laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
             if len(laps) <= self._pit_lane_baseline_laps:
                 return                                   # no new lap completed yet
-            result = self._tracks.map_pit_lane(laps[-1])
+            self._pit_lane_baseline_laps = len(laps)     # one attempt per new lap
+            result = self._tracks.map_pit_lane(laps[-2:])  # stitch the last two laps
             if result.ok:
                 self._pit_lane_mode = False
                 if ctrl is not None and hasattr(ctrl, "stop_session"):
                     ctrl.stop_session()
-            # A miss (car never entered the pit) leaves us in mapping mode to try the
-            # next lap; either way surface the engineer's message.
+            # A miss (car hasn't been through the pit yet) leaves us in mapping mode to
+            # try the next lap; either way surface the engineer's message.
             self._tm_status = result.reason or self._tm_status
         except Exception:
             pass

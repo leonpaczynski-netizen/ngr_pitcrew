@@ -431,6 +431,29 @@ def test_map_pit_lane_attaches_a_boundary_from_the_out_lap():
     assert sm.pit_lane.entry_station_m < sm.pit_lane.exit_station_m
 
 
+def _samples(*ranges):
+    """Build a sample list from (x, z_start, z_end) segments."""
+    out = []
+    for x, z0, z1 in ranges:
+        out += [types.SimpleNamespace(x=x, z=float(z)) for z in range(z0, z1)]
+    return types.SimpleNamespace(samples=out)
+
+
+def test_map_pit_lane_stitches_two_laps_when_the_pit_crosses_the_sf_line():
+    # The common case: pit entry is at the end of one lap, exit at the start of the next,
+    # so NEITHER lap alone contains both. Stitched together they must map.
+    svc = _svc(_Ctrl())
+    entry_side = _samples((0.0, 0, 150), (100.0, 150, 200))    # on line, then diverge (no return)
+    exit_side = _samples((100.0, 200, 250), (0.0, 250, 300))   # still diverged, then rejoin
+
+    svc._session = svc.session.with_artefact("station_map", _straight_station_map())
+    assert svc.map_pit_lane(entry_side).ok is False            # entry only — can't map
+
+    svc._session = svc.session.with_artefact("station_map", _straight_station_map())
+    result = svc.map_pit_lane([entry_side, exit_side])          # stitched → entry + exit
+    assert result.ok is True
+
+
 def test_refresh_ignore_capture_does_not_read_the_controller():
     # While mapping the pit lane the controller is recording, but refresh(ignore_capture)
     # must NOT let that read as track-capture (which would flip an approved model back to
