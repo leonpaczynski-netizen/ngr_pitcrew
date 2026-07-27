@@ -112,7 +112,9 @@ def compute_signed_curvature(
     ``baseline_m`` apart, straddling it — a centred, arc-length-normalised derivative
     that is robust to metre-scale jitter yet keeps the peak at the apex. Sign follows
     the heading turn direction (``+`` left / ``−`` right in the GT7 XZ plane), matching
-    ``StationPoint.curvature``.
+    ``StationPoint.curvature``. Verified against Fuji and Watkins Glen (both real-world
+    CLOCKWISE, i.e. right-dominant): each integrates to net −2π per lap, so negative
+    curvature is a driver's-right turn — the convention ``track_segment_detection`` uses.
     """
     n = len(xz)
     if n < 3:

@@ -395,6 +395,10 @@ def _detect_corner_apex_candidates(
         has_brake = any(s.brake > config.brake_threshold for s in region)
         region_speed = smoothed_speed[start_i: end_i + 1]
         min_speed = min(region_speed) if region_speed else 0.0
+        # Corner handedness from the signed-curvature run. This convention is CORRECT
+        # for GT7's frame, verified by net lap curvature: Fuji and Watkins Glen (both
+        # real-world CLOCKWISE circuits, i.e. right-dominant) each integrate to net −2π
+        # per lap, so negative curvature = a driver's-RIGHT turn and positive = LEFT.
         direction = (TrackSegmentDirection.LEFT if sign > 0
                      else TrackSegmentDirection.RIGHT)
 

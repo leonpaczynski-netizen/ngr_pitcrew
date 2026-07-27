@@ -322,8 +322,10 @@ _ProjEntry = namedtuple("_ProjEntry", "source params result")
 
 
 def _project_point(x: float, y: float, params: tuple) -> MapPoint:
-    off_x, off_y, scale, min_x, max_y = params
-    return MapPoint(off_x + (x - min_x) * scale, off_y + (max_y - y) * scale)
+    # Must mirror proj() exactly (both axes reflected) so a cache-hit car dot lands on
+    # the same reflected geometry as the cached centreline.
+    off_x, off_y, scale, max_x, max_y = params
+    return MapPoint(off_x + (max_x - x) * scale, off_y + (max_y - y) * scale)
 
 
 def _project_car_dot(cd, params: tuple):
@@ -373,9 +375,12 @@ def project_to_screen(
     off_y = margin + (avail_h - span_y * scale) / 2.0
 
     def proj(p: MapPoint) -> MapPoint:
-        # Reflect Y so higher Z appears higher on screen
+        # Reflect BOTH axes. Y-reflection puts higher Z at the top (top-down convention).
+        # X-reflection corrects GT7's left-handed XZ frame: without it, real-world
+        # CLOCKWISE circuits (Fuji, Watkins Glen) draw counter-clockwise — a mirror image
+        # of the actual track. With it, a right-hand corner curves right on screen.
         return MapPoint(
-            x = off_x + (p.x - min_x) * scale,
+            x = off_x + (max_x - p.x) * scale,
             y = off_y + (max_y - p.y) * scale,
         )
 
@@ -427,7 +432,7 @@ def project_to_screen(
 
     _PROJ_CACHE[cache_key] = _ProjEntry(
         source=draw_data,
-        params=(off_x, off_y, scale, min_x, max_y),
+        params=(off_x, off_y, scale, max_x, max_y),
         result=result,
     )
     while len(_PROJ_CACHE) > _PROJ_CACHE_MAX:

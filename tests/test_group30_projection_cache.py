@@ -48,8 +48,9 @@ def test_in_place_car_dot_mutation_is_not_served_stale():
 
     assert r2 is r1                      # geometry served from cache
     assert r2.car_dot.x != first_x      # but the dot reflects the new position
-    # Dot at x=90 projects further right than the dot at x=10.
-    assert r2.car_dot.x > first_x
+    # X is reflected in projection (corrects GT7's mirrored frame), so a larger world
+    # x projects further LEFT on screen: the dot at x=90 sits left of the dot at x=10.
+    assert r2.car_dot.x < first_x
 
 
 def test_car_dot_cleared_in_place_is_reflected():
@@ -75,9 +76,10 @@ def test_different_canvas_size_projects_separately():
     r_small = project_to_screen(dd, 400, 300)
     r_big = project_to_screen(dd, 800, 600)
     assert r_small is not r_big
-    # Larger canvas scales the same world span to a larger pixel span.
-    span_small = r_small.centreline[-1].x - r_small.centreline[0].x
-    span_big = r_big.centreline[-1].x - r_big.centreline[0].x
+    # Larger canvas scales the same world span to a larger pixel span (compare
+    # magnitude — X is reflected in projection, so the signed difference is negative).
+    span_small = abs(r_small.centreline[-1].x - r_small.centreline[0].x)
+    span_big = abs(r_big.centreline[-1].x - r_big.centreline[0].x)
     assert span_big > span_small
 
 
