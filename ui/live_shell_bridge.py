@@ -1066,9 +1066,10 @@ class LiveShellBridge(QObject):
                 ctrl.start_session(sess.location_id, sess.layout_id)
         except Exception:
             pass
-        self._tm_status = ("Track approved. Box now and drive the pit lane once — in "
-                           "through the pit entry, down the lane and back out — and I'll "
-                           "map it. That completes the model.")
+        self._tm_status = ("Track approved. Now take one lap through the pit lane — in at "
+                           "the pit entry, down the lane and back out — and I'll map it. A "
+                           "drive-through is enough; you don't need to stop. That completes "
+                           "the model.")
 
     def _try_map_pit_lane(self) -> None:
         """While mapping the pit lane, detect it from the first completed out-lap."""

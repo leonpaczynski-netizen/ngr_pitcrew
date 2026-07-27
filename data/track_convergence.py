@@ -109,7 +109,8 @@ def convergence_coach_message(result: ConvergenceResult) -> str:
         return ""
     if result.converged:
         return ("Track data is complete and consistent — box this lap and I'll approve "
-                "the model, then bring it round the pit lane once to map it.")
+                "the model, then take one lap through the pit lane to map it "
+                "(a drive-through is enough — no need to stop).")
     if result.usable_laps < MIN_USABLE_LAPS:
         need = MIN_USABLE_LAPS - result.usable_laps
         return (f"{result.usable_laps} clean lap{'s' if result.usable_laps != 1 else ''} "
