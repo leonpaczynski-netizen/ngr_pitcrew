@@ -124,9 +124,21 @@ class TrackModellingService:
                                  reason=_norm(message), session=self._session)
 
     def _do_start_capture(self, act: A) -> TrackActionResult:
+        # The capture controller is ``TrackCalibrationCaptureController`` — it starts a
+        # session with ``start_session(location_id, layout_id)``, NOT a bare ``start()``.
+        # The old ``hasattr(self._controller, "start")`` guard was always False, so the
+        # controller never recorded and ``refresh()`` immediately reset ``capturing`` to
+        # False (the "Start recording does nothing" bug).
         try:
-            if self._controller is not None and hasattr(self._controller, "start"):
-                self._controller.start()
+            if self._controller is not None and hasattr(self._controller, "start_session"):
+                ok = self._controller.start_session(
+                    self._session.location_id, self._session.layout_id)
+                if ok is False:
+                    reason = (getattr(self._controller, "_error", "")
+                              or "Could not start recording.")
+                    self._session = self._session.failed(reason)
+                    return TrackActionResult(action=act.value, session=self._session,
+                                             reason=reason)
         except Exception as exc:
             self._session = self._session.failed(f"Could not start recording: {exc}")
             return TrackActionResult(action=act.value, session=self._session,
@@ -137,8 +149,8 @@ class TrackModellingService:
 
     def _do_stop_capture(self, act: A) -> TrackActionResult:
         try:
-            if self._controller is not None and hasattr(self._controller, "stop"):
-                self._controller.stop()
+            if self._controller is not None and hasattr(self._controller, "stop_session"):
+                self._controller.stop_session()
         except Exception as exc:
             self._session = self._session.failed(f"Could not stop recording: {exc}")
             return TrackActionResult(action=act.value, session=self._session,

@@ -184,27 +184,52 @@ class TestService:
         assert "not available at this point" in result.reason
 
     def test_starting_and_stopping_capture(self):
+        # Mirrors the real ``TrackCalibrationCaptureController`` API:
+        # ``start_session(location_id, layout_id)`` and ``stop_session()``. The old
+        # stub exposed ``start()``/``stop()``, which the controller does NOT have — so
+        # the ``hasattr(...)`` guard was always False and nothing ever recorded.
         class _Ctrl:
             def __init__(self):
                 self.started = self.stopped = False
+                self.started_with = None
 
-            def start(self):
+            def start_session(self, location_id, layout_id):
                 self.started = True
+                self.started_with = (location_id, layout_id)
+                return True
 
-            def stop(self):
+            def stop_session(self):
                 self.stopped = True
+                return True
 
         ctrl = _Ctrl()
         svc = TrackModellingService(capture_controller=ctrl)
         svc.select_track("nonexistent_circuit", "nonexistent_circuit__nope")
         assert svc.perform("start_capture").ok is True
         assert ctrl.started is True and svc.session.capturing is True
+        # The selected track is passed through to the controller.
+        assert ctrl.started_with == (
+            "nonexistent_circuit", "nonexistent_circuit__nope")
         assert svc.perform("stop_capture").ok is True
         assert ctrl.stopped is True and svc.session.has_captured_laps is True
 
+    def test_a_start_that_reports_failure_becomes_an_error(self):
+        # ``start_session`` returns False (e.g. no track) rather than raising.
+        class _Refuses:
+            _error = "no track selected"
+
+            def start_session(self, location_id, layout_id):
+                return False
+
+        svc = TrackModellingService(capture_controller=_Refuses())
+        svc.select_track("nonexistent_circuit", "nonexistent_circuit__nope")
+        result = svc.perform("start_capture")
+        assert result.ok is False
+        assert "no track selected" in svc.session.error_message
+
     def test_a_capture_failure_becomes_an_error_with_its_reason(self):
         class _Boom:
-            def start(self):
+            def start_session(self, location_id, layout_id):
                 raise RuntimeError("no telemetry")
 
         svc = TrackModellingService(capture_controller=_Boom())
