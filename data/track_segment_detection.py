@@ -64,6 +64,11 @@ _DEFAULT_CORNER_LOOK_FORWARD: float       = 0.20
 _DEFAULT_APEX_MERGE_RADIUS: float         = 0.025   # 2.5 % of lap
 _DEFAULT_MIN_SEGMENT_SAMPLES: int         = 3
 _DEFAULT_SMOOTH_WINDOW: int               = 5
+#: A curvature run stays open down to this fraction of the entry threshold (hysteresis),
+#: so a corner is one run from turn-in to exit rather than fragmenting at the apex.
+_CURVATURE_HYSTERESIS_RATIO: float        = 0.5
+#: Curvature runs shorter than this (arc length) are noise blips, not corners.
+_DEFAULT_MIN_CORNER_LENGTH_M: float       = 6.0
 
 SEGMENT_MODELS_DIR: Path = Path(__file__).parent.parent / "data" / "track_models"
 
@@ -117,6 +122,7 @@ class SegmentDetectionConfig:
     corner_max_look_back: float        = _DEFAULT_CORNER_LOOK_BACK
     corner_max_look_forward: float     = _DEFAULT_CORNER_LOOK_FORWARD
     apex_merge_radius: float           = _DEFAULT_APEX_MERGE_RADIUS
+    min_corner_length_m: float         = _DEFAULT_MIN_CORNER_LENGTH_M
     # Auxiliary detections
     rpm_limiter_fraction: float        = _DEFAULT_RPM_LIMITER_FRACTION
     kerb_z_spike_threshold_m: float    = _DEFAULT_KERB_Z_SPIKE_M
@@ -288,98 +294,140 @@ def _has_position_variation(samples: list[TelemetrySample]) -> bool:
 # Corner cluster detection (per lap)
 # ---------------------------------------------------------------------------
 
+def _same_sign(a: float, b: float) -> bool:
+    """True if a and b have the same sign (0 counts as matching either)."""
+    return (a >= 0) == (b >= 0)
+
+
+def _curvature_runs(
+    curvatures: list[float],
+    cum_dists: list[float],
+    *,
+    hi_thresh: float,
+    lo_thresh: float,
+    min_len_m: float,
+) -> list[tuple[int, int, int, float]]:
+    """Corner runs from SIGNED curvature — the source of truth for corner geometry.
+
+    A run opens where |curvature| first rises above ``lo_thresh`` and stays open while it
+    remains above ``lo_thresh`` (hysteresis: turn-in → apex → exit is one run). A sign
+    change while open CLOSES the run and opens a new one — an L-then-R chicane is two
+    corners regardless of how close the apexes are (the old fixed 80 m / 2.5 %-lap merge
+    collapsed them into one). A run is kept only if its arc length ≥ ``min_len_m`` and its
+    peak |curvature| ≥ ``hi_thresh`` (so a gentle wobble that never reaches the entry
+    threshold is not a corner). Returns ``(start_idx, apex_idx, end_idx, sign)`` tuples.
+    """
+    n = len(curvatures)
+    runs: list[tuple[int, int, int, float]] = []
+    in_run = False
+    start = 0
+    run_sign = 1.0
+    peaked = False
+
+    def _emit(a: int, b: int) -> None:
+        if b <= a:
+            return
+        seg = range(a, b + 1)
+        apex = max(seg, key=lambda k: abs(curvatures[k]))
+        peak = abs(curvatures[apex])
+        length_m = cum_dists[b] - cum_dists[a]
+        if length_m >= min_len_m and peak >= hi_thresh:
+            runs.append((a, apex, b, 1.0 if curvatures[apex] >= 0 else -1.0))
+
+    for i in range(n):
+        c = curvatures[i]
+        a = abs(c)
+        s = 1.0 if c >= 0 else -1.0
+        if not in_run:
+            if a >= lo_thresh:
+                in_run, start, run_sign, peaked = True, i, s, (a >= hi_thresh)
+        else:
+            if a < lo_thresh:
+                if peaked:
+                    _emit(start, i - 1)
+                in_run = False
+            elif not _same_sign(s, run_sign):
+                if peaked:
+                    _emit(start, i - 1)
+                start, run_sign, peaked = i, s, (a >= hi_thresh)
+            elif a >= hi_thresh:
+                peaked = True
+    if in_run and peaked:
+        _emit(start, n - 1)
+    return runs
+
+
 def _detect_corner_apex_candidates(
     samples: list[TelemetrySample],
     progress: list[float],
     smoothed_speed: list[float],
     config: SegmentDetectionConfig,
 ) -> list[dict]:
-    """Return a list of corner candidate dicts from a single lap.
+    """Corner candidate dicts from a single lap, detected from GEOMETRY (curvature).
 
-    Each dict contains:
-      entry_idx, apex_idx, exit_idx,
-      progress_start, progress_apex, progress_end,
-      has_brake_evidence, has_curvature_evidence, direction,
-      min_speed_kph
+    Corners come from signed centreline curvature via the shared geometry core, NOT from
+    speed minima — a flat-out kink with no speed drop is a corner, a brake-for-traffic
+    point on a straight is not. Speed and brake are read only to LABEL the corner
+    (min speed, braking evidence, phases downstream). Each dict carries:
+      entry_idx, apex_idx, exit_idx, progress_start/apex/end,
+      has_brake_evidence, has_curvature_evidence (always True), direction,
+      min_speed_kph, peak_curvature.
     """
     n = len(samples)
     if n < config.min_segment_samples:
         return []
 
+    from data.track_geometry_core import compute_signed_curvature
+    xz = [(s.x, s.z) for s in samples]
     cum_dists = cumulative_distances(samples)
-    headings = _compute_headings_xz(samples)
-    raw_curvatures = _compute_curvature(headings, cum_dists)
-    curvatures = _smooth(raw_curvatures, window=config.smooth_window)
+    curvatures = compute_signed_curvature(xz, arc_length=cum_dists)
 
-    apex_indices = _find_local_minima(smoothed_speed, config.min_corner_speed_drop_kph)
-    if not apex_indices:
-        return []
+    hi = config.curvature_corner_threshold
+    lo = hi * _CURVATURE_HYSTERESIS_RATIO
+    runs = _curvature_runs(
+        curvatures, cum_dists,
+        hi_thresh=hi, lo_thresh=lo, min_len_m=config.min_corner_length_m,
+    )
 
     corners: list[dict] = []
+    for start_i, apex_i, end_i, sign in runs:
+        region = samples[start_i: end_i + 1]
+        has_brake = any(s.brake > config.brake_threshold for s in region)
+        region_speed = smoothed_speed[start_i: end_i + 1]
+        min_speed = min(region_speed) if region_speed else 0.0
+        direction = (TrackSegmentDirection.LEFT if sign > 0
+                     else TrackSegmentDirection.RIGHT)
 
-    for apex_idx in apex_indices:
-        apex_progress = progress[apex_idx]
-        apex_speed    = smoothed_speed[apex_idx]
-
-        # ── Find entry start ─────────────────────────────────────────────
-        entry_idx = apex_idx
-        for j in range(apex_idx - 1, -1, -1):
-            if apex_progress - progress[j] > config.corner_max_look_back:
-                break
-            # Stop when speed is clearly high enough that we're back on the straight
-            if smoothed_speed[j] > apex_speed + config.min_corner_speed_drop_kph:
-                entry_idx = j
-                break
-            # Also accept braking as entry start
+        # Phase boundaries from the SIGNALS, not fixed fractions of the window:
+        #  - braking ends where the driver comes OFF the brakes (last braked sample
+        #    at/before the apex), i.e. trail-braking release;
+        #  - traction starts where the driver gets BACK to power (first throttle-up
+        #    at/after the apex).
+        brake_release_i = None
+        for j in range(start_i, apex_i + 1):
             if samples[j].brake > config.brake_threshold:
-                entry_idx = j
-
-        # ── Find exit end ─────────────────────────────────────────────────
-        exit_idx = apex_idx
-        for j in range(apex_idx + 1, n):
-            if progress[j] - apex_progress > config.corner_max_look_forward:
+                brake_release_i = j
+        traction_start_i = None
+        for j in range(apex_i, end_i + 1):
+            if samples[j].throttle > config.throttle_high_threshold:
+                traction_start_i = j
                 break
-            exit_idx = j
-            # Stop when throttle is high and speed has recovered meaningfully
-            if (samples[j].throttle > config.throttle_high_threshold
-                    and smoothed_speed[j] > apex_speed + config.min_corner_speed_drop_kph * 0.4):
-                break
-
-        if exit_idx <= entry_idx:
-            continue
-
-        # ── Evidence ────────────────────────────────────────────────────
-        region_samples = samples[entry_idx: exit_idx + 1]
-        has_brake = any(s.brake > config.brake_threshold for s in region_samples)
-
-        region_curvatures = curvatures[entry_idx: exit_idx + 1]
-        max_abs_curv = max((abs(c) for c in region_curvatures), default=0.0)
-        has_curvature = max_abs_curv > config.curvature_corner_threshold
-
-        # Direction from mean curvature in the tightest part of the corner
-        apex_window = curvatures[max(0, apex_idx - 3): apex_idx + 4]
-        avg_curv = (sum(apex_window) / len(apex_window)) if apex_window else 0.0
-        if has_curvature and abs(avg_curv) > config.curvature_corner_threshold:
-            direction = (TrackSegmentDirection.LEFT if avg_curv > 0
-                         else TrackSegmentDirection.RIGHT)
-        else:
-            direction = None
 
         corners.append({
-            "entry_idx"             : entry_idx,
-            "apex_idx"              : apex_idx,
-            "exit_idx"              : exit_idx,
-            "progress_start"        : progress[entry_idx],
-            "progress_apex"         : progress[apex_idx],
-            "progress_end"          : progress[exit_idx],
+            "entry_idx"             : start_i,
+            "apex_idx"              : apex_i,
+            "exit_idx"              : end_i,
+            "progress_start"        : progress[start_i],
+            "progress_apex"         : progress[apex_i],
+            "progress_end"          : progress[end_i],
+            "progress_brake_release": progress[brake_release_i] if brake_release_i is not None else None,
+            "progress_traction"     : progress[traction_start_i] if traction_start_i is not None else None,
             "has_brake_evidence"    : has_brake,
-            "has_curvature_evidence": has_curvature,
+            "has_curvature_evidence": True,
             "direction"             : direction,
-            "min_speed_kph"         : apex_speed,
+            "min_speed_kph"         : min_speed,
+            "peak_curvature"        : abs(curvatures[apex_i]),
         })
-
-    # Merge corners whose windows overlap or are very close
-    corners = _merge_corner_candidates(corners, config.apex_merge_radius)
     return corners
 
 
@@ -945,7 +993,13 @@ def _cluster_apex_progress(
         placed = False
         for cluster in clusters:
             mean_p = statistics.mean(x["progress_apex"] for x in cluster)
-            if abs(c["progress_apex"] - mean_p) <= merge_radius:
+            # Same lap position AND same turn direction. A left and a right apex a metre
+            # apart (a chicane) are DIFFERENT corners and must never share a cluster, even
+            # inside the merge radius — the old position-only clustering merged them.
+            cluster_dir = cluster[0].get("direction")
+            same_dir = (c.get("direction") == cluster_dir
+                        or c.get("direction") is None or cluster_dir is None)
+            if abs(c["progress_apex"] - mean_p) <= merge_radius and same_dir:
                 cluster.append(c)
                 placed = True
                 break
@@ -956,16 +1010,23 @@ def _cluster_apex_progress(
 
 
 def _confidence_from_cluster(cluster: list[dict]) -> TrackSegmentDetectionConfidence:
-    """Determine confidence from how many laps agree and what evidence is available."""
+    """Confidence from geometric AGREEMENT across laps, not raw lap count.
+
+    Corners are now curvature-detected, so every candidate has curvature evidence; the
+    signal for confidence is how well the laps agree on WHERE the apex is (tight spread)
+    and how firmly it is a corner (peak curvature clearly above the entry threshold),
+    rather than the old "needs ≥3 laps" rule that was unreachable in a 2-lap session.
+    """
     n = len(cluster)
-    has_curv = any(c.get("has_curvature_evidence", False) for c in cluster)
-    if n >= 3 and has_curv:
+    if n <= 1:
+        return TrackSegmentDetectionConfidence.LOW
+    apex_progresses = [c["progress_apex"] for c in cluster]
+    spread = (max(apex_progresses) - min(apex_progresses)) if len(apex_progresses) > 1 else 0.0
+    mean_peak = statistics.mean(c.get("peak_curvature", 0.0) for c in cluster)
+    # Tight lap-to-lap agreement (< 1 % of lap) on a firm corner → HIGH.
+    if spread <= 0.01 and mean_peak >= _DEFAULT_CURVATURE_THRESHOLD:
         return TrackSegmentDetectionConfidence.HIGH
-    if n >= 2:
-        return TrackSegmentDetectionConfidence.MEDIUM
-    if has_curv:
-        return TrackSegmentDetectionConfidence.MEDIUM
-    return TrackSegmentDetectionConfidence.LOW
+    return TrackSegmentDetectionConfidence.MEDIUM
 
 
 def _build_segments_from_clusters(
@@ -1021,10 +1082,15 @@ def _build_segments_from_clusters(
             elif right_count > left_count:
                 direction = TrackSegmentDirection.RIGHT
 
+        mean_peak_curv = statistics.mean(
+            c.get("peak_curvature", 0.0) for c in cluster) if cluster else 0.0
+        apex_radius_m = (1.0 / mean_peak_curv) if mean_peak_curv > 1e-6 else 0.0
         evidence: list[str] = [
             f"Confirmed across {n_laps} usable laps",
-            f"Speed minimum ~{min_spd:.0f} kph",
         ]
+        if apex_radius_m > 0:
+            evidence.append(f"Apex curvature radius ~{apex_radius_m:.0f} m (from XZ geometry)")
+        evidence.append(f"Speed minimum ~{min_spd:.0f} kph")
         if has_brake:
             evidence.append("Brake signal detected")
         if has_curv:
@@ -1036,8 +1102,20 @@ def _build_segments_from_clusters(
         if not has_position_var or not has_curv:
             seg_warn.append("Corner direction UNKNOWN — no reliable heading/curvature data")
 
-        braking_end  = p_start + (p_apex - p_start) * 0.80
-        traction_srt = p_apex  + (p_end   - p_apex)  * 0.40
+        # Braking-zone end and traction-zone start from the driver's actual brake-release
+        # and throttle-application points, averaged across the laps that recorded them.
+        # Fall back to the geometric fractions only when no lap had a usable signal.
+        _brake_rel = [c["progress_brake_release"] for c in cluster
+                      if c.get("progress_brake_release") is not None]
+        _traction  = [c["progress_traction"] for c in cluster
+                      if c.get("progress_traction") is not None]
+        braking_end  = (statistics.mean(_brake_rel) if _brake_rel
+                        else p_start + (p_apex - p_start) * 0.80)
+        traction_srt = (statistics.mean(_traction) if _traction
+                        else p_apex + (p_end - p_apex) * 0.40)
+        # Keep them ordered within the corner window (signals can be noisy).
+        braking_end  = min(max(braking_end, p_start), p_apex)
+        traction_srt = min(max(traction_srt, p_apex), p_end)
 
         # Braking zone
         segments.append(DetectedTrackSegment(
@@ -1425,7 +1503,8 @@ def detect_track_segments(
             result_warnings.append(
                 f"Corner count mismatch: detected {detected_corner_count}, "
                 f"expected {expected_corner_count} (diff {diff}). "
-                "Record more calibration laps or adjust speed-drop threshold."
+                "Record more clean calibration laps — corners are never invented to "
+                "reach the expected count."
             )
 
     if not has_pos_var:

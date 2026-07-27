@@ -120,7 +120,21 @@ class PitCrewShell(QMainWindow):
 
         self.rail = ProgressRail()
         self.rail.setStyleSheet(f"background: {_t.CARBON};")
-        right.addWidget(self.rail)
+        # The rail lays out 8 stage buttons in a row (~1360px of content). Left to
+        # dictate the window's minimum width, it made a maximised window wider than the
+        # screen on scaled displays — clipping the nav on the left and the guidance
+        # column on the right. Wrap it so it scrolls horizontally when the window is
+        # narrow instead of forcing the whole shell wide; every stage stays reachable.
+        from PyQt6.QtWidgets import QScrollArea, QFrame
+        rail_scroll = QScrollArea()
+        rail_scroll.setWidgetResizable(True)
+        rail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        rail_scroll.setWidget(self.rail)
+        rail_scroll.setStyleSheet(f"background: {_t.CARBON};")
+        rail_scroll.setFixedHeight(max(self.rail.sizeHint().height(), 30) + 16)
+        right.addWidget(rail_scroll)
 
         content = QHBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
@@ -254,7 +268,13 @@ class PitCrewShell(QMainWindow):
         area = QScrollArea()
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.Shape.NoFrame)
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Horizontal scrolling is AS-NEEDED, not OFF. Some pages (the Garage setup
+        # sheet ~1824px, the live pit wall, strategy) are genuinely wider than the
+        # content viewport on a scaled or smaller display. With the bar forced OFF the
+        # inner widget was clipped at the viewport edge and the right-hand controls
+        # became unreachable ("buttons cut off"). AS-NEEDED shows no bar when the page
+        # fits and lets the driver reach the full width when it does not.
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         area.setWidget(page)
 

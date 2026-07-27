@@ -295,7 +295,8 @@ def format_segment_row(seg: object) -> dict[str, str]:
 
     _VERIFICATION_SOURCE_LABELS: dict[str, str] = {
         "greedy":             "Curvature-detected",
-        "ai_verified":        "AI-verified",
+        # "ai_verified" retired (determinism rebuild) — an old file still carrying it falls
+        # through to the raw string rather than reading as a sanctioned verification source.
         "engineer_validated": "Engineer-validated",
     }
     raw_vs = getattr(seg, "verification_source", "greedy") or "greedy"
@@ -385,6 +386,7 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
         "warnings":          "",
         "resolution_status": "—",
         "candidate_count":   "—",
+        "builder_stale":     False,
     }
     if resolver_result is None:
         return _empty
@@ -426,6 +428,7 @@ def format_resolver_summary(resolver_result: Optional[object]) -> dict[str, str]
         "warnings":          "\n".join(warn_list[:3]) if warn_list else "",
         "resolution_status": res_status_str,
         "candidate_count":   str(len(candidates)),
+        "builder_stale":     bool(getattr(resolved, "builder_stale", False)),
     }
 
 
@@ -444,6 +447,13 @@ def format_model_trust_badge(summary: dict) -> tuple[str, str]:
     source = str(summary.get("source_type", "") or "")
     ai_ready = str(summary.get("ai_ready", "") or "")
     src_l = source.lower()
+
+    # A model built by an OLDER track engine (before the curvature-truth rebuild) must
+    # never read as trusted, however "verified" its own record claims to be — the geometry
+    # it was built from is no longer how the engine models a track. This takes precedence
+    # over every source label below.
+    if summary.get("builder_stale"):
+        return ("RE-MODEL RECOMMENDED · BUILT BY AN OLDER TRACK ENGINE", "warn")
 
     # Precedence matters and substrings overlap ("reviewed" lives inside "no
     # reviewed model"; "ai-ready" lives inside "not ai-ready") — so each branch

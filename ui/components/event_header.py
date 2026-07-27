@@ -9,7 +9,7 @@ never rebuilt.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy
 
 from ui import ngr_theme as _t
 from ui.app_state import AppState
@@ -58,6 +58,12 @@ class EventHeaderBar(QWidget):
             f"color: {_t.TEXT_HI}; font-size: {_t.FS_H2}pt; font-weight: 700;"
         )
         self._ctx_line = _dim("", _t.FS_BODY)
+        # The identity text (long event name + full track id) must never force the
+        # header — and so the whole window — wider than the screen. Let both lines
+        # shrink to nothing and clip; the full text stays available as a tooltip.
+        for _lbl in (self._event_line, self._ctx_line):
+            _lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            _lbl.setMinimumWidth(0)
         # Centre the two lines vertically against the prominent logo.
         ident.addStretch(1)
         ident.addWidget(self._event_line)
@@ -87,13 +93,17 @@ class EventHeaderBar(QWidget):
 
         name = app_state.event_name or "No active event"
         series = app_state.event.series if hasattr(app_state.event, "series") else ""
-        self._event_line.setText(f"{series + ' · ' if series else ''}{name}")
+        _event_text = f"{series + ' · ' if series else ''}{name}"
+        self._event_line.setText(_event_text)
+        self._event_line.setToolTip(_event_text)
 
         car = app_state.car or "—"
         track = app_state.track or "—"
         layout = app_state.layout_id or ""
         track_disp = f"{track} · {layout}" if layout else track
-        self._ctx_line.setText(f"{car}   |   {track_disp}")
+        _ctx_text = f"{car}   |   {track_disp}"
+        self._ctx_line.setText(_ctx_text)
+        self._ctx_line.setToolTip(_ctx_text)
 
         stage = app_state.programme_stage or "—"
         self._stage.setText(f"Stage: {stage.title() if stage != '—' else '—'}")

@@ -102,6 +102,9 @@ class ResolvedTrackModel:
     source_path: Optional[Path] = None
     reviewed_model: Optional[TrackModelReviewResult] = None
     seed_layout: Optional[object] = None   # TrackLayoutSeed if loaded
+    #: True when the reviewed model was built by an older track engine (pre-overhaul) and
+    #: should be re-modelled rather than trusted. False for seed-only (nothing built yet).
+    builder_stale: bool = False
 
 
 @dataclass
@@ -196,6 +199,9 @@ def _build_resolved_model(
     ai_ready, blockers = is_ai_ready(review)
     pct = review_completion_pct(review)
 
+    from data.track_geometry_core import builder_version_is_current
+    builder_stale = not builder_version_is_current(getattr(review, "builder_version", ""))
+
     return ResolvedTrackModel(
         track_location_id   = review.track_location_id,
         layout_id           = review.layout_id,
@@ -213,6 +219,7 @@ def _build_resolved_model(
         source_path         = path,
         reviewed_model      = review,
         seed_layout         = seed_layout,
+        builder_stale       = builder_stale,
     )
 
 

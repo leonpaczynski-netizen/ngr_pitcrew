@@ -2896,59 +2896,12 @@ class TrackModellingMixin:
         return
 
     def _tm_ai_corner_verify_done(self, result_tuple) -> None:
-        """Slot: called via signal from AI verify worker thread (thread-safe)."""
-        result, error_msg = result_tuple if isinstance(result_tuple, tuple) else (result_tuple, "")
-
-        self._tm_btn_ai_corner_verify.setEnabled(
-            getattr(self, "_tm_station_map", None) is not None
-        )
-        self._tm_btn_ai_corner_verify.setText("AI Corner Verify")
-
-        _vlbl = getattr(self, "_tm_lbl_ai_verify_status", None)
-        if result is None:
-            reason = error_msg or "Unknown error"
-            if _vlbl is not None:
-                _vlbl.setText(f"AI corner verify failed: {reason}")
-                _vlbl.setStyleSheet("color: #EE5555; font-size: 10px;")
-            self.statusBar().showMessage(
-                f"AI corner verification failed: {reason}", 5000
-            )
-            return
-
-        # Update verification_source on matched corners
-        sm = getattr(self, "_tm_station_map", None)
-        if sm is not None:
-            for corner in sm.seeded_corners:
-                if corner.corner_id in result:
-                    corner.verification_source = "ai_verified"
-
-        # Propagate verification_source to ReviewedTrackSegment (matched by turn_number)
-        review = getattr(self, "_tm_review_result", None)
-        if review is not None and sm is not None:
-            corner_src: dict[str, str] = {
-                c.corner_id: c.verification_source for c in sm.seeded_corners
-            }
-            for seg in review.segments:
-                if seg.turn_number is not None:
-                    cid = f"T{seg.turn_number}"
-                    if cid in corner_src:
-                        seg.verification_source = corner_src[cid]
-
-        # Count updated corners and report
-        n_updated = sum(
-            1 for c in sm.seeded_corners
-            if c.verification_source == "ai_verified"
-        ) if sm is not None else 0
-        n_total = len(sm.seeded_corners) if sm is not None else 0
-
-        if _vlbl is not None:
-            _vlbl.setText(
-                f"AI corner verify: {n_updated} of {n_total} corners confirmed ✓")
-            _vlbl.setStyleSheet("color: #6A9A6A; font-size: 10px;")
-        self.statusBar().showMessage(
-            f"AI corner verification complete — {n_updated} corners updated", 5000
-        )
-        self._tm_refresh_seg_table()
+        """Retired no-op. AI corner verification was removed in the determinism rebuild
+        (Sprint 1); corner positions come from the deterministic greedy seed-matcher and AI
+        is audit-only. The old body stamped ``verification_source = "ai_verified"`` onto
+        corners/segments — that write-path is gone so AI can never be re-wired as a source
+        of truth. The signal stays connected to this harmless no-op; nothing emits it."""
+        return
 
     # ----------------------------------------------------------------
 

@@ -136,8 +136,14 @@ class LiveShellBridge(QObject):
         self._plans = RacePlanService(db=db, config=self._config)
         self._plan_done.connect(self._on_plan_done)
         from services.track_modelling import TrackModellingService
+        from services.track_modelling_pipeline import build_track_model_builders
+        _tm_ctrl = getattr(window, "_tm_controller", None)
         self._tracks = TrackModellingService(
-            capture_controller=getattr(window, "_tm_controller", None))
+            capture_controller=_tm_ctrl,
+            builders=build_track_model_builders(_tm_ctrl))
+        #: Transient track-modelling status (e.g. why validation didn't pass). Re-applied
+        #: every refresh so the 750ms tick doesn't wipe it; cleared by the next action.
+        self._tm_status = ""
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
         #: Scopes already seeded from applied history — see ``_seed_from_last_applied``.
@@ -992,20 +998,50 @@ class LiveShellBridge(QObject):
             if not self._track_choices_loaded:
                 self._track_choices_loaded = True
                 page.set_tracks(*_track_choices())
-            page.set_session(self._tracks.refresh())
+            session = self._tracks.refresh()
+            page.set_session(session,
+                             laps_captured=self._track_laps_captured(),
+                             corners=self._track_corners(session))
+            # Re-apply a sticky status (e.g. why validation didn't pass) so the 750ms
+            # refresh does not wipe it before the driver can read it.
+            if self._tm_status:
+                self._track_status(self._tm_status)
         except Exception:
             pass
 
+    def _track_laps_captured(self) -> int:
+        """Clean laps captured so far, from the capture controller."""
+        try:
+            ctrl = getattr(self._tracks, "_controller", None)
+            if ctrl is not None and hasattr(ctrl, "get_status_summary"):
+                s = ctrl.get_status_summary()
+                return int(s.get("usable_laps") or s.get("lap_count") or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _track_corners(self, session) -> list:
+        try:
+            from services.track_modelling_pipeline import corners_for_review
+            return corners_for_review(session)
+        except Exception:
+            return []
+
     def _on_track_selected(self, location_id: str, layout_id: str) -> None:
+        self._tm_status = ""
         result = self._tracks.select_track(location_id, layout_id)
         self._feed_track_model()
         if not result.ok:
+            self._tm_status = result.reason
             self._track_status(result.reason)
 
     def _on_track_action(self, action: str) -> None:
         result = self._tracks.perform(action)
+        # A message survives to the next action: a real error stays until recovered, an
+        # advisory ("validation didn't pass") stays until the next step changes state.
+        self._tm_status = result.reason or ""
         self._feed_track_model()
-        if not result.ok and result.reason:
+        if result.reason:
             self._track_status(result.reason)
 
     def _track_status(self, text: str) -> None:

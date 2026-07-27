@@ -482,14 +482,19 @@ class TestDaytonaSeededCorners:
         seed = _make_layout_seed(corners_expected=12, length_m=5729.0)
         return build_track_station_map(ref, layout_seed=seed)
 
-    def test_corner_count_equals_expected(self):
+    def test_corners_are_not_padded_up_to_expected(self):
+        # Corners reflect the geometry actually detected — never padded up to the seed
+        # count. With no seed corner-windows, nothing is an invented placeholder.
         sm = self._daytona_map()
-        assert len(sm.seeded_corners) == 12
+        assert len(sm.seeded_corners) <= 12
+        assert all(not c.is_seeded_placeholder for c in sm.seeded_corners)
+        assert sm.corners_detected == sum(
+            1 for c in sm.seeded_corners if not c.is_seeded_placeholder)
 
-    def test_corners_numbered_t1_through_t12(self):
+    def test_corners_numbered_sequentially(self):
         sm = self._daytona_map()
         ids = [c.corner_id for c in sm.seeded_corners]
-        assert ids == [f"T{i}" for i in range(1, 13)]
+        assert ids == [f"T{i}" for i in range(1, len(ids) + 1)]
 
     def test_corner_stations_in_ascending_order(self):
         sm = self._daytona_map()
@@ -513,8 +518,10 @@ class TestDaytonaSeededCorners:
         sm   = build_track_station_map(ref, layout_seed=seed)
         assert sm.station_count() > 0
 
-    def test_fewer_detected_than_expected_gets_placeholders(self):
-        """If only 2 corners detected but 12 expected, placeholders fill to 12."""
+    def test_fewer_detected_than_expected_is_not_padded(self):
+        """A near-straight path detects few/no corners and is NOT padded with invented
+        placeholders — putting a turn where the track is straight is the bug removed in
+        the accuracy overhaul."""
         from data.track_station_map import build_track_station_map
         # Straight-line ref path has almost no curvature → few detected corners
         @dataclass
@@ -543,7 +550,8 @@ class TestDaytonaSeededCorners:
         ref  = FlatRefPath(points=points)
         seed = _make_layout_seed(corners_expected=12, length_m=5729.0)
         sm   = build_track_station_map(ref, layout_seed=seed)
-        assert len(sm.seeded_corners) == 12
+        assert len(sm.seeded_corners) < 12
+        assert all(not c.is_seeded_placeholder for c in sm.seeded_corners)
 
 
 # ===========================================================================
@@ -637,7 +645,7 @@ class TestDrawingPrimitives:
         seed = _make_layout_seed(corners_expected=12)
         sm   = build_track_station_map(ref, layout_seed=seed)
         dd   = build_track_map_draw_data(sm)
-        assert len(dd.corner_labels) == 12
+        assert len(dd.corner_labels) == len(sm.seeded_corners)
 
     def test_no_car_dot_without_match(self):
         from ui.track_map_vm import build_track_map_draw_data
@@ -799,7 +807,10 @@ class TestLegacyRefPathHandling:
         ref  = _make_ref_path(n_points=200, lap_length_m=5729.0)
         seed = _make_layout_seed(corners_expected=12)
         sm   = build_track_station_map(ref, layout_seed=seed)
-        assert len(sm.seeded_corners) == 12
+        # Extracts the corners the geometry shows, capped at the expected count, with no
+        # invented placeholders (the old code always padded to exactly 12).
+        assert 0 < len(sm.seeded_corners) <= 12
+        assert all(not c.is_seeded_placeholder for c in sm.seeded_corners)
 
     def test_200_point_path_map_can_be_matched(self):
         from data.track_station_map import build_track_station_map

@@ -367,15 +367,20 @@ class TestDef17QSeedPositionUnavailable:
 class TestDef17QAcceptanceGate:
     """Accept Track Model requires seed corner position data."""
 
-    def test_accept_enabled_without_seed_positions_good_match(self):
-        """Corner count matches but no seed positions → max GOOD_MATCH → accept NOW enabled (Group 24 AC3)."""
+    def test_accept_disabled_without_seed_positions(self):
+        """Corner count + length match, but NO seed corner windows → positions cannot be
+        verified → capped at PARTIAL_MATCH → accept disabled.
+
+        This supersedes the earlier Group 24 AC3 allowance (accept enabled on count alone):
+        the accuracy overhaul requires per-corner position verification for acceptance."""
         corners = _make_12_corners()
         sm      = _make_station_map_from_corners(corners)
         seed    = _make_layout_seed_with_defs(12, sm.lap_length_m, defs=None)
         result  = align_track_model(sm, seed)
+        assert result.match_status == TrackModelMatchStatus.PARTIAL_MATCH
         states  = get_acceptance_button_states(result, has_station_map=True)
-        assert states["accept"], (
-            f"Accept should be enabled for GOOD_MATCH without blockers (status={result.match_status})"
+        assert not states["accept"], (
+            f"Accept must be disabled without seed corner positions (status={result.match_status})"
         )
 
     def test_accept_enabled_when_all_seed_windows_matched(self):

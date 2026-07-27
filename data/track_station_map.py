@@ -10,9 +10,12 @@ Layer 1 of the three-layer track modelling architecture:
 Design rules:
   - Track geometry is derived from X/Y/Z position ONLY.
   - Brake, throttle, gear, RPM, lock-up and wheelspin data are NOT used to define shape.
-  - Corner detection uses horizontal-plane curvature (heading change per metre).
-  - If curvature-detected count < corners_expected, seeded placeholders fill the gap
-    (LOW confidence) so the map always reflects the expected circuit anatomy.
+  - Corner detection uses horizontal-plane signed curvature (from track_geometry_core).
+  - Corners are never INVENTED to reach corners_expected: the threshold is not relaxed to
+    promote noise, and gaps are not padded with midpoint placeholders. Where official seed
+    corner windows exist, an unmatched window keeps a placeholder AT the seed apex position
+    (flagged is_seeded_placeholder); otherwise the map reports the corners the geometry
+    actually shows and the count gap is surfaced by alignment/readiness.
   - Pit/out-lap fragments are excluded from the station build.
 
 Coordinate system (GT7):
@@ -38,7 +41,6 @@ DEFAULT_TRACK_WIDTH_M: float = 12.0   # 6 m each side — representative GT car 
 DEFAULT_SPACING_M: float     = 1.0
 _MIN_CURVATURE_THRESHOLD: float = 0.006   # rad/m ≈ 167 m radius — gentle curve
 _CORNER_MIN_SEPARATION_M: float = 80.0   # prevent splitting one wide corner into two
-_CURVATURE_SMOOTH_WINDOW: int  = 15      # stations over which to smooth curvature
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ class SeededCorner:
     is_seeded_placeholder: bool = False   # True = inferred, not curvature-detected
     confidence:       float = 1.0
     width_m:          float = 0.0        # optional per-corner width hint
-    verification_source: str = "greedy"  # "greedy" | "ai_verified" | "engineer_validated"
+    verification_source: str = "greedy"  # "greedy" | "engineer_validated" (AI is audit-only)
 
 
 @dataclass
@@ -212,16 +214,11 @@ def resample_path_to_uniform_spacing(
 # ---------------------------------------------------------------------------
 
 def _compute_heading(stations: List[StationPoint]) -> None:
-    """Set heading_rad on each station (in-place) using forward XZ difference."""
-    n = len(stations)
-    for i in range(n):
-        if i < n - 1:
-            dx = stations[i + 1].x - stations[i].x
-            dz = stations[i + 1].z - stations[i].z
-        else:
-            dx = stations[i].x - stations[i - 1].x
-            dz = stations[i].z - stations[i - 1].z
-        stations[i].heading_rad = math.atan2(dx, dz)
+    """Set heading_rad on each station (in-place) via the shared geometry core."""
+    from data.track_geometry_core import compute_headings
+    xz = [(s.x, s.z) for s in stations]
+    for st, h in zip(stations, compute_headings(xz)):
+        st.heading_rad = h
 
 
 def _compute_gradient(stations: List[StationPoint]) -> None:
@@ -237,65 +234,41 @@ def _compute_gradient(stations: List[StationPoint]) -> None:
         stations[i].gradient = (dy / ds) if ds > 1e-9 else 0.0
 
 
-def _angular_diff(a: float, b: float) -> float:
-    """Signed angular difference a–b, normalised to [–π, π]."""
-    d = a - b
-    while d > math.pi:
-        d -= 2 * math.pi
-    while d < -math.pi:
-        d += 2 * math.pi
-    return d
-
-
 def _compute_curvature(
     stations: List[StationPoint],
     ref_points: Optional[List] = None,
 ) -> None:
-    """Set curvature (rad/m) on each station (in-place), then smooth.
+    """Set signed curvature (rad/m) on each station (in-place) via the geometry core.
 
-    When ref_points (list of ReferencePathPoint with yaw_rate_avg) is provided,
-    the XZ heading-difference curvature is blended with yaw-rate curvature by
-    taking the maximum of the two magnitudes (preserving XZ sign).
+    Curvature is a centred, arc-length-baselined difference of the heading — a
+    phase-preserving smoothed derivative that keeps the peak at the apex. It comes from
+    X/Z geometry ONLY: the old ``max(|xz_curvature|, |yaw_curvature|)`` blend rectified
+    yaw noise into false corners and is gone. ``ref_points`` is accepted for backward
+    compatibility but is used only as an optional yaw cross-check, never to alter the
+    geometric magnitude.
     """
-    n = len(stations)
-    raw: List[float] = []
-    for i in range(n):
-        if i == 0:
-            dh = _angular_diff(stations[1].heading_rad, stations[0].heading_rad)
-            ds = stations[1].station_m - stations[0].station_m
-        elif i == n - 1:
-            dh = _angular_diff(stations[-1].heading_rad, stations[-2].heading_rad)
-            ds = stations[-1].station_m - stations[-2].station_m
-        else:
-            dh = _angular_diff(stations[i + 1].heading_rad, stations[i - 1].heading_rad)
-            ds = stations[i + 1].station_m - stations[i - 1].station_m
-        xz_curv = (dh / ds) if ds > 1e-9 else 0.0
+    from data.track_geometry_core import (
+        compute_signed_curvature, yaw_curvature_discrepancy,
+    )
+    xz = [(s.x, s.z) for s in stations]
+    arc = [s.station_m for s in stations]
+    curv = compute_signed_curvature(xz, arc_length=arc)
+    for st, c in zip(stations, curv):
+        st.curvature = c
 
-        # Yaw-rate blending when reference path is available
-        yaw_curv = 0.0
-        if ref_points:
-            # Find nearest reference point by progress_pct
-            st_prog = stations[i].progress_pct / 100.0
-            ref_pt = min(ref_points, key=lambda p: abs(p.lap_progress - st_prog))
-            yaw_rate = getattr(ref_pt, "yaw_rate_avg", None)
-            speed_kph = getattr(ref_pt, "speed_kph_avg", None) or 0.0
-            speed_ms = speed_kph / 3.6
-            if yaw_rate is not None and speed_ms >= 2.78:
-                yaw_curv = min(abs(yaw_rate / speed_ms), 0.5)
-
-        blended = max(abs(xz_curv), yaw_curv)
-        raw.append(blended if xz_curv >= 0 else -blended)
-
-    # Rolling average smoothing
-    w = _CURVATURE_SMOOTH_WINDOW
-    smoothed: List[float] = []
-    for i in range(n):
-        lo = max(0, i - w // 2)
-        hi = min(n, i + w // 2 + 1)
-        smoothed.append(sum(raw[lo:hi]) / (hi - lo))
-
-    for i, s in enumerate(stations):
-        s.curvature = smoothed[i]
+    # Optional diagnostic cross-check against yaw — recorded nowhere geometry-defining.
+    if ref_points:
+        try:
+            yaw_rates, speeds = [], []
+            for s in stations:
+                prog = s.progress_pct / 100.0
+                rp = min(ref_points, key=lambda p: abs(p.lap_progress - prog))
+                yaw_rates.append(getattr(rp, "yaw_rate_avg", None))
+                spd = getattr(rp, "speed_kph_avg", None)
+                speeds.append((spd / 3.6) if spd is not None else None)
+            yaw_curvature_discrepancy(curv, yaw_rates, speeds)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -369,10 +342,10 @@ def _detect_corners(
         by_mag = sorted(detected_indices, key=lambda i: abs(stations[i].curvature), reverse=True)
         extra_indices    = sorted(by_mag[corners_expected:])
         detected_indices = sorted(by_mag[:corners_expected])
-    elif len(detected_indices) < corners_expected and peak_indices:
-        # Threshold too strict — relax and take the top N
-        by_mag = sorted(peak_indices, key=lambda i: abs(stations[i].curvature), reverse=True)
-        detected_indices = sorted(by_mag[:corners_expected])
+    # NB: if fewer curvature peaks are found than corners_expected we do NOT relax the
+    # threshold to promote sub-threshold noise, and we do NOT pad with midpoint
+    # placeholders (both invented corners). The map reports what the geometry actually
+    # shows; the count gap is surfaced honestly by the alignment/readiness layer.
 
     total_m = stations[-1].station_m if stations else 0.0
 
@@ -388,36 +361,11 @@ def _detect_corners(
             confidence       = min(1.0, abs(s.curvature) / 0.05),
         ))
 
-    # Fill missing corners with evenly distributed placeholders
-    if corners_expected > 0 and len(detected_corners) < corners_expected:
-        needed = corners_expected - len(detected_corners)
-        # Place placeholders in the largest gaps between existing corners
-        # (and between 0 and the first, and last and total_m)
-        existing_stations = [0.0] + [c.approx_station_m for c in detected_corners] + [total_m]
-        existing_stations.sort()
-        gaps = []
-        for i in range(len(existing_stations) - 1):
-            gap_size = existing_stations[i + 1] - existing_stations[i]
-            gaps.append((gap_size, existing_stations[i], existing_stations[i + 1]))
-        gaps.sort(reverse=True)  # largest gaps first
-
-        for _, gap_start, gap_end in gaps[:needed]:
-            mid = (gap_start + gap_end) / 2.0
-            placeholder = SeededCorner(
-                corner_id        = "?",   # numbered below
-                display_name     = "?",
-                approx_station_m = mid,
-                approx_progress  = mid / total_m if total_m > 0 else 0.0,
-                is_seeded_placeholder = True,
-                confidence       = 0.2,
-            )
-            detected_corners.append(placeholder)
-
-        # Sort and re-number all corners by station_m
-        detected_corners.sort(key=lambda c: c.approx_station_m)
-        for rank, c in enumerate(detected_corners, start=1):
-            c.corner_id    = f"T{rank}"
-            c.display_name = f"T{rank}"
+    # Missing corners are NOT filled with midpoint placeholders — inventing a corner at a
+    # geometric midpoint puts a turn where the track is straight. When the curvature-
+    # detected count is short of corners_expected, the map simply reports fewer corners;
+    # the seed-window path (build_track_station_map) still places seed-anchored
+    # placeholders, but those sit at real seed apex positions and are flagged.
 
     # Build extra peaks list — real curvature peaks suppressed beyond corners_expected
     extra_peaks: List[SeededCorner] = []
@@ -439,43 +387,62 @@ def _detect_corners(
 # Corner phase assignment
 # ---------------------------------------------------------------------------
 
-_APEX_WINDOW_M: float   = 40.0    # ±40 m around apex → apex region
-_EXIT_WINDOW_M: float   = 100.0   # 40–100 m after apex → exit
-_BRAKING_WINDOW_M: float = 100.0  # 100 m before corner start → braking
+_APEX_BAND_M: float     = 10.0    # ±10 m around the curvature peak → apex region
+_BRAKING_WINDOW_M: float = 100.0  # approach lead-in before turn-in → braking
 
 
 def _assign_corner_phases(stations: List[StationPoint], corners: List[SeededCorner]) -> None:
-    """Label corner_id and corner_phase on each station (in-place)."""
+    """Label corner_id and corner_phase on each station (in-place), from CURVATURE.
+
+    Turn-in / apex / exit are derived from the curvature run around each corner — turn-in
+    where |curvature| rises above the corner threshold, apex at the peak, exit where it
+    falls back below — rather than fixed ±40 m/100 m windows that were identical for a
+    hairpin and a fast kink and collided on closely-spaced corners. Braking is the approach
+    lead-in before turn-in; it is a driving region, not geometry, so it stays a fixed
+    look-back (the station map has no brake channel by design).
+    """
     if not corners:
-        # Mark everything straight
         for s in stations:
             s.corner_phase = CornerPhase.STRAIGHT
         return
 
-    # First pass: label everything straight
+    n = len(stations)
     for s in stations:
         s.corner_phase = CornerPhase.STRAIGHT
 
-    # Second pass: assign corner windows
+    def _idx_at(station_m: float) -> int:
+        return min(range(n), key=lambda i: abs(stations[i].station_m - station_m))
+
+    lo = _MIN_CURVATURE_THRESHOLD
     for corner in corners:
-        apex_m = corner.approx_station_m
-        for s in stations:
-            dist = s.station_m - apex_m
-            if abs(dist) <= _APEX_WINDOW_M:
-                s.corner_id   = corner.corner_id
-                s.corner_phase = CornerPhase.APEX
-            elif -_EXIT_WINDOW_M - _APEX_WINDOW_M <= dist < -_APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.TURN_IN
-            elif _APEX_WINDOW_M < dist <= _EXIT_WINDOW_M + _APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.EXIT
-            elif -_BRAKING_WINDOW_M - _APEX_WINDOW_M <= dist < -_EXIT_WINDOW_M - _APEX_WINDOW_M:
-                if s.corner_id is None:
-                    s.corner_id    = corner.corner_id
-                    s.corner_phase = CornerPhase.BRAKING
+        apex_i = _idx_at(corner.approx_station_m)
+        # Corner extent = the contiguous run of above-threshold curvature around the apex.
+        start = apex_i
+        while start > 0 and abs(stations[start - 1].curvature) >= lo:
+            start -= 1
+        end = apex_i
+        while end < n - 1 and abs(stations[end + 1].curvature) >= lo:
+            end += 1
+
+        for i in range(start, end + 1):
+            if stations[i].corner_id is not None:
+                continue   # already claimed by an earlier (adjacent) corner
+            dist_m = abs(stations[i].station_m - stations[apex_i].station_m)
+            if dist_m <= _APEX_BAND_M:
+                phase = CornerPhase.APEX
+            elif i < apex_i:
+                phase = CornerPhase.TURN_IN
+            else:
+                phase = CornerPhase.EXIT
+            stations[i].corner_id = corner.corner_id
+            stations[i].corner_phase = phase
+
+        # Braking approach: a fixed look-back before turn-in (behaviour, not geometry).
+        brake_from = _idx_at(stations[start].station_m - _BRAKING_WINDOW_M)
+        for i in range(max(0, brake_from), start):
+            if stations[i].corner_id is None:
+                stations[i].corner_id = corner.corner_id
+                stations[i].corner_phase = CornerPhase.BRAKING
 
 
 # ---------------------------------------------------------------------------
@@ -751,8 +718,10 @@ def export_station_map_json(
     fname   = station_map_filename(station_map.track_location_id, station_map.layout_id)
     path    = out_dir / fname
 
+    from data.track_geometry_core import TRACK_MODEL_BUILDER_VERSION
     payload = {
         "schema":             station_map.schema,
+        "builder_version":    TRACK_MODEL_BUILDER_VERSION,
         "track_location_id":  station_map.track_location_id,
         "layout_id":          station_map.layout_id,
         "lap_length_m":       station_map.lap_length_m,
