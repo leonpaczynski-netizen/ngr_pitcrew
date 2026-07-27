@@ -115,6 +115,9 @@ def align_track_model(
     seed_corners_expected = getattr(layout_seed, "corners_expected", 0) or 0
     seed_length_m         = getattr(layout_seed, "length_m", 0.0) or 0.0
     seed_sectors          = getattr(layout_seed, "sectors", None)
+    # Per-corner apex windows, when the seed provides them. These are what let us verify
+    # corner POSITION (not just count); without them a model can only be a PARTIAL_MATCH.
+    corner_defs           = getattr(layout_seed, "corner_definitions", []) or []
 
     # ── Station map metrics ────────────────────────────────────────────────
     station_count   = station_map.station_count()
@@ -168,9 +171,14 @@ def align_track_model(
         )
 
     # ── Corner count ───────────────────────────────────────────────────────
-    if seed_corners_expected > 0 and model_corners != seed_corners_expected:
+    # Count only the corners the geometry actually confirmed — placeholders are not real
+    # detections. When seed corner windows exist, per-corner position matching (below) is
+    # the authority on count, so the raw-count blocker is only used when they don't.
+    real_corners = model_corners - placeholder_cnt
+    if seed_corners_expected > 0 and not corner_defs and real_corners != seed_corners_expected:
         blockers.append(
-            f"Corner count mismatch: model has {model_corners}, seed expects {seed_corners_expected}"
+            f"Corner count mismatch: {real_corners} curvature-detected corner(s) vs "
+            f"{seed_corners_expected} expected. Record more clean calibration laps."
         )
     if placeholder_cnt > 0:
         warnings.append(
@@ -186,7 +194,6 @@ def align_track_model(
         warnings.append(f"Reference path confidence {confidence:.2f} is below 0.60")
 
     # ── Seed corner position matching (Group 17Q — DEF-17Q-001/002) ────────
-    corner_defs = getattr(layout_seed, "corner_definitions", []) or []
     seed_corner_positions_available = bool(corner_defs)
     corner_candidate_matches: List[CornerCandidateMatch] = []
     corners_matched   = 0
@@ -296,8 +303,12 @@ def align_track_model(
         )
 
     # ── Determine overall match status ─────────────────────────────────────
-    # DEF-17Q-002: ACCEPTABLE_MATCH requires seed corner positions available + no blockers.
-    # Without corner definitions, cap at GOOD_MATCH — cannot claim full position verification.
+    # ACCEPTABLE_MATCH (full acceptance) requires seed corner POSITIONS verified + a tight
+    # lap-length delta. Without seed corner windows, the best is GOOD_MATCH — but note
+    # this now means COUNT + LENGTH agree, where "count" is the real, curvature-detected
+    # corners (Stage 2 removed the placeholder padding that used to make count meaningless,
+    # so GOOD is no longer reachable on lap length alone). This preserves the Group 24 AC3
+    # decision that a count-matched model is acceptable without authored seed windows.
     if blockers:
         if delta_pct > _MAX_LAP_DELTA_PARTIAL_PCT and seed_length_m > 0:
             match_status = TrackModelMatchStatus.FAILED_MATCH
@@ -306,10 +317,10 @@ def align_track_model(
     elif delta_pct > _MAX_LAP_DELTA_GOOD_PCT and seed_length_m > 0:
         match_status = TrackModelMatchStatus.PARTIAL_MATCH
     elif delta_pct <= _MAX_LAP_DELTA_STRICT_PCT and corner_defs:
-        # Seed positions available, lap delta tight, no blockers — full acceptance possible
+        # Seed positions available, all matched (no blockers), lap delta tight.
         match_status = TrackModelMatchStatus.ACCEPTABLE_MATCH
     else:
-        # No seed position data, or lap delta 2–5% — good but not fully accepted
+        # No seed position data, or lap delta 2–8% — good, but not fully accepted.
         match_status = TrackModelMatchStatus.GOOD_MATCH
 
     return TrackModelAlignmentResult(

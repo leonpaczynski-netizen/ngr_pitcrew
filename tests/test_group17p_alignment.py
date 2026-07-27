@@ -527,3 +527,25 @@ class TestAlignmentVmSummary:
         )
         states = get_acceptance_button_states(r, has_station_map=True)
         assert not states["accept"], "Once accepted, accept button should be disabled"
+
+
+# ---------------------------------------------------------------------------
+# Accuracy overhaul (Stage 4): a GOOD_MATCH requires the right number of REAL
+# (curvature-detected) corners — not padded count, and not lap length alone.
+# ---------------------------------------------------------------------------
+
+class TestRealCornerCountGate:
+    def test_short_real_corner_count_is_not_good_match(self):
+        # 8 real curvature peaks but the seed expects 12, no seed corner windows. With
+        # placeholder padding gone (Stage 2), the count no longer reaches 12, so the
+        # count blocker fires and the model is NOT a GOOD_MATCH on lap length alone.
+        sm   = _make_station_map(corners_expected=12, n_curvature_peaks=8,
+                                 lap_length_m=5800.0)
+        seed = _make_layout_seed(corners_expected=12, length_m=5800.0)
+        result = align_track_model(sm, seed)
+        assert not any(c.is_seeded_placeholder for c in sm.seeded_corners)
+        assert result.match_status != TrackModelMatchStatus.GOOD_MATCH
+        assert result.match_status != TrackModelMatchStatus.ACCEPTABLE_MATCH
+        assert any("count" in b.lower() for b in result.blockers)
+        # (The positive path — count-matched model reaching GOOD_MATCH without seed
+        # windows, i.e. Group 24 AC3 — is covered by test_group17q_seed_corner_matching.)
