@@ -156,7 +156,18 @@ class TestAnalyse:
         result = svc.analyse("race")
         assert result.ok is True
         assert result.has_recommendation is False
-        assert "No change recommended" in result.headline
+        # A no-change result must clearly SAY no change (not read as a hang). With no
+        # driver feeling supplied it must also own that the balance wasn't judged.
+        assert "No change" in result.headline
+        assert result.weighed_feeling is False
+        assert "balance wasn't judged" in result.headline
+
+    def test_no_change_with_feeling_reassures_it_is_in_window(self, tmp_path):
+        svc, _s, _a = self._built(tmp_path, _COMBINED_NO_CHANGE)
+        result = svc.analyse("race", feeling="pushes wide mid corner")
+        assert result.ok is True and result.has_recommendation is False
+        assert result.weighed_feeling is True
+        assert "inside its window" in result.headline
 
     def test_a_failure_says_why(self, tmp_path):
         advisor = _Advisor(baseline=_BASELINE_OK, combined=None, raise_on="combined")

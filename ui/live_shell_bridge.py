@@ -2621,8 +2621,14 @@ class LiveShellBridge(QObject):
         discipline = self._discipline
         self._pending_work = "analyse"
         self._garage_status("Analysing the current setup…")
+        # Fold the driver's handling verdict from Review into the analysis. Without
+        # it the brain sees telemetry symptoms only, so an understeer felt by the
+        # driver on a car with clean telemetry would falsely read "inside its window".
+        from strategy.setup_feedback_evidence import feedback_to_feeling
+        feeling = feedback_to_feeling(getattr(self, "_last_feedback", None))
         self._spawn(lambda: self._analysis_done.emit(self._setups.analyse(
-            discipline, live_corner_aggregates=self._live_corner_aggregates())))
+            discipline, feeling=feeling,
+            live_corner_aggregates=self._live_corner_aggregates())))
 
     def _live_corner_aggregates(self) -> list:
         """Live per-corner telemetry, when the host runs an aggregator ([] otherwise)."""
@@ -2773,6 +2779,9 @@ class LiveShellBridge(QObject):
         nothing to show. The outcome is now built from the recorded laps plus the
         feedback, compared against the previous recorded run.
         """
+        # Keep the driver's handling verdict so the next Analyse can weigh it
+        # (the Garage "Analyse" otherwise sees telemetry symptoms only).
+        self._last_feedback = dict(feedback or {})
         try:
             window = self._window
             for name in ("record_driver_feedback", "_record_driver_feedback", "save_driver_feedback"):

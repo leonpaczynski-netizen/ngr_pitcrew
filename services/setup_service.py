@@ -67,6 +67,7 @@ class AnalysisResult:
     validation_errors: Tuple[str, ...] = field(default_factory=tuple)
     status: str = ""
     raw: str = ""
+    weighed_feeling: bool = False   # did the analysis include the driver's handling verdict?
 
     @property
     def has_recommendation(self) -> bool:
@@ -82,7 +83,18 @@ class AnalysisResult:
             return f"{n} change{'s' if n != 1 else ''} recommended."
         if self.validation_errors:
             return "No change recommended — " + "; ".join(self.validation_errors[:2])
-        return self.reason or "No change recommended — the setup is inside its window."
+        if self.reason:
+            return self.reason
+        # "No change" is only honest reassurance when the driver's handling verdict
+        # was actually weighed. Without it, the analysis saw telemetry symptoms only
+        # (lock-ups, wheelspin, off-track) — a car that understeers by *feel* with
+        # clean telemetry would falsely read "inside its window". Say so, and point
+        # the driver at the one input that would settle the balance.
+        if self.weighed_feeling:
+            return ("No change recommended — the setup is inside its window "
+                    "(weighed your handling notes and the recorded laps).")
+        return ("No change from the recorded laps — but the balance wasn't judged. "
+                "Note how it handled (understeer/oversteer) in Review, then analyse again.")
 
 
 @dataclass(frozen=True)
@@ -322,7 +334,8 @@ class SetupService:
                            if isinstance(r, Mapping)),
             validation_errors=tuple(_norm(e) for e in
                                     (data.get("validation_errors") or ()) if _norm(e)),
-            status=_norm(data.get("recommendation_status")), raw=_norm(payload))
+            status=_norm(data.get("recommendation_status")), raw=_norm(payload),
+            weighed_feeling=bool(_norm(feeling)))
 
     # ---- apply / revert ---------------------------------------------------
     def apply(self, discipline: str, fields: Optional[Mapping]) -> SetupOutcome:
