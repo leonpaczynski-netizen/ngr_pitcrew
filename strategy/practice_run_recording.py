@@ -243,17 +243,39 @@ def evaluate_run_binding(
             reason="That run recorded no completed laps, so there is nothing to learn from.")
 
     cyc = cycle if isinstance(cycle, Mapping) else {}
+    # PRIMARY compatibility signal: the event id. Both the recorded session and the
+    # preparation cycle carry the event they belong to; a run driven while THIS event
+    # was active is evidence for it regardless of how its car/track strings are spelled.
+    # Comparing car/track strings alone was fragile — a session car_name ("Nissan GT-R
+    # NISMO GT3 '13") rarely equals the cycle car ("GT-R"), and a session track spelled
+    # differently from the cycle track ("Fuji International Speedway" vs "Fuji Speedway")
+    # would silently flag a genuine event run as "will not count as evidence".
+    s_event, c_event = _norm(meta.get("event_id")), _norm(cyc.get("event_id"))
+    _valid_event = s_event not in ("", "0") and c_event not in ("", "0")
+    event_match = _valid_event and s_event == c_event
+    event_conflict = _valid_event and s_event != c_event
+
     s_track, s_car = _norm(meta.get("track")).lower(), _norm(meta.get("car_name")).lower()
     c_track, c_car = _norm(cyc.get("track")).lower(), _norm(cyc.get("car")).lower()
     # Unknown context on either side is NOT a mismatch claim — it stays unknown, and
     # an unknown side cannot assert compatibility either.
     known = bool(s_track and s_car and c_track and c_car)
-    compatible = known and s_track == c_track and s_car == c_car
+    name_match = known and s_track == c_track and s_car == c_car
+
+    # The event id wins when it is a clean match; a hard event conflict (the run was
+    # recorded under a DIFFERENT active event) is authoritative the other way. Only when
+    # there is no usable event id on either side do we fall back to car/track names.
+    compatible = event_match or (not event_conflict and name_match)
     warning = ""
-    if known and not compatible:
+    if event_conflict:
+        warning = ("Recorded while a different event was active — it will not count as "
+                   "evidence for this event.")
+    elif compatible:
+        warning = ""
+    elif known:
         warning = (f"Recorded in {meta.get('car_name')} at {meta.get('track')}, which is not this "
                    f"event's car/track — it will not count as evidence for this event.")
-    elif not known:
+    else:
         warning = ("The car or track for this run is unknown, so it cannot count as evidence "
                    "for this event.")
 

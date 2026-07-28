@@ -157,6 +157,39 @@ class TestBindingDecision:
         assert d.ok is True and d.compatible is False
         assert "unknown" in d.warning.lower()
 
+    def test_same_event_id_counts_despite_car_track_string_mismatch(self):
+        # THE BUG: a genuine run for this event whose session car/track strings are
+        # spelled differently from the cycle's (full GT7 name vs short name; track
+        # location vs display name) must STILL count — the event id is the identity.
+        cyc = {"event_id": 42, "car": "GT-R", "track": "Fuji Speedway"}
+        meta = {"id": 7, "total_laps": 9, "event_id": 42,
+                "car_name": "Nissan GT-R NISMO GT3 '13",
+                "track": "Fuji International Speedway"}
+        d = evaluate_run_binding(activity_id="a1", cycle_id="c1", session_id=7,
+                                 session_meta=meta, cycle=cyc)
+        assert d.ok and d.compatible is True
+        assert d.contributes_event_evidence is True
+        assert d.warning == ""
+
+    def test_different_event_id_does_not_count(self):
+        cyc = {"event_id": 42, "car": "GT-R", "track": "Fuji Speedway"}
+        meta = {"id": 7, "total_laps": 9, "event_id": 99,
+                "car_name": "GT-R", "track": "Fuji Speedway"}   # names match, event differs
+        d = evaluate_run_binding(activity_id="a1", cycle_id="c1", session_id=7,
+                                 session_meta=meta, cycle=cyc)
+        assert d.ok is True and d.compatible is False
+        assert "different event" in d.warning
+
+    def test_no_event_id_falls_back_to_car_track_names(self):
+        # Backward compatible: with no usable event id, the car/track match still decides.
+        cyc = {"car": "Porsche Cayman GT4", "track": "Watkins Glen International"}
+        d = evaluate_run_binding(activity_id="a1", cycle_id="c1", session_id=7,
+                                 session_meta=_meta(), cycle=cyc)
+        assert d.ok and d.compatible is True
+        d2 = evaluate_run_binding(activity_id="a1", cycle_id="c1", session_id=7,
+                                  session_meta=_meta(car="Mazda MX-5"), cycle=cyc)
+        assert d2.compatible is False and "not this event" in d2.warning
+
 
 class TestRecorderWrites:
     def test_start_writes_one_activity(self):
