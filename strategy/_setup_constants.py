@@ -129,7 +129,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     event_preparation_activity_sessions — the preparation-programme layer (one cycle per upcoming
 #     NGR round, typed/ordered activities, explicit session binding). References events.id; no legacy
 #     back-fill (legacy cycle association stays unknown). Additive. Idempotent.
-DB_VERSION: int = 28
+# v29 (event_id evidence re-key): backfills event_preparation_cycles.event_id from events.name
+#     and sessions.event_id from the bound cycle's event_id, so recorded runs match a cycle by the
+#     stable integer event_id rather than fragile track/car text. Best-effort. Idempotent.
+DB_VERSION: int = 29
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
