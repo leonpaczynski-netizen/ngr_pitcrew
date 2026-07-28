@@ -47,6 +47,54 @@ class TestFeedbackToFeeling:
         # Exit understeer + mid oversteer have no clean flag; must NOT wrongly fire
         # exit/other flags (bad advice is worse than none).
         assert _flags({"mid_corner": "Oversteer"}) == set()
+        assert _flags({"exit_stability": "Understeer"}) == set()
+
+    # --- the rest of the dropdowns, mapped to their real setup-brain flags ----
+    def test_entry_neutral_marks_entry_balance_good(self):
+        assert "entry_balance_good" in _flags({"corner_entry": "Neutral"})
+
+    def test_poor_braking_confidence_fires_braking_instability(self):
+        assert "braking_instability" in _flags({"braking_confidence": "Poor"})
+        assert "braking_instability" in _flags({"braking_confidence": "Below par"})
+
+    def test_good_braking_confidence_fires_nothing(self):
+        assert _flags({"braking_confidence": "Good"}) == set()
+
+    def test_poor_rotation_reads_as_wont_rotate_understeer(self):
+        assert "mid_corner_understeer" in _flags({"rotation": "Below par"})
+
+    def test_severe_bottoming_fires_bottoming(self):
+        assert "bottoming" in _flags({"bottoming": "Severe"})
+        assert _flags({"bottoming": "Minor"}) == set()
+
+    def test_gearing_too_long_and_about_right(self):
+        assert "gearing_too_long" in _flags({"gear_choice": "Too long"})
+        assert "gearbox_good" in _flags({"gear_choice": "About right"})
+        assert _flags({"gear_choice": "Too short"}) == set()
+
+    def test_worse_fuel_fires_fuel_use_high(self):
+        assert "fuel_use_high" in _flags({"fuel_behaviour": "Worse than expected"})
+
+    def test_drivetrain_dependent_states_are_left_to_telemetry(self):
+        # Traction/drive-out point at different axles per drivetrain; kerbs/straight
+        # line/tyre have no single lever. None may fabricate a flag.
+        for field, val in (("traction", "Poor"), ("drive_out", "Poor"),
+                           ("kerb_behaviour", "Severe"), ("straight_line", "Poor"),
+                           ("tyre_condition", "Worse than expected"),
+                           ("confidence", "Poor")):
+            assert _flags({field: val}) == set(), f"{field} must not fabricate a flag"
+
+    def test_multiple_dropdowns_combine(self):
+        fb = {"corner_entry": "Understeer", "rotation": "Poor",
+              "mid_corner": "Understeer", "exit_stability": "Oversteer"}
+        got = _flags(fb)
+        # rotation Poor and mid Understeer both resolve to the SAME flag — set, so once.
+        assert {"entry_understeer", "mid_corner_understeer", "rear_loose_on_exit"} <= got
+
+    def test_identical_phrases_are_deduped(self):
+        # Two overlapping inputs that would emit the same phrase must not repeat it.
+        s = feedback_to_feeling({"mid_corner": "Understeer", "notes": "pushes wide"})
+        assert s.count("pushes wide") == 1
 
 
 class TestHonestNoChangeHeadline:

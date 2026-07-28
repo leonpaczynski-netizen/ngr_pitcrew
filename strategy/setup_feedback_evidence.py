@@ -36,62 +36,129 @@ def combine_driver_feedback_text(feedback_row: dict) -> str:
         return ""
 
 
-# Structured balance-field value -> the PHASE-SPECIFIC phrase the setup diagnosis
-# actually recognises.  Every phrase here was verified to fire the intended flag
-# in strategy.setup_diagnosis._parse_driver_feel; combos with no clean flag
-# (exit understeer / mid-corner oversteer) are deliberately OMITTED so we never
-# mis-attribute a complaint to the wrong corner phase and give bad advice.
+# ---------------------------------------------------------------------------
+# Structured practice-feedback dropdowns -> setup-diagnosis feeling text.
+#
+# The Practice Review form (ui/components/practice_feedback.py) captures the
+# driver's verdict through DROPDOWNS, not free text — the better system.  The
+# Garage "Analyse" otherwise sees only telemetry symptoms (lock-ups, wheelspin,
+# off-track); a car that understeers by *feel* with clean telemetry would read
+# "inside its window".  These tables map each dropdown state to the exact phrase
+# strategy.setup_diagnosis._parse_driver_feel recognises, so the driver's answers
+# fire the real setup rules.
+#
+# ACCURACY RULE: a dropdown state is mapped ONLY when there is an existing flag
+# whose remedy is unambiguous and drivetrain-independent.  States with no sound
+# home are deliberately OMITTED (listed at the bottom) rather than forced onto a
+# near-miss flag — wrong advice is worse than none, and this must hold to the same
+# accuracy bar as the rest of the setup brain.
+# ---------------------------------------------------------------------------
+
+# Per-phase balance dropdowns (_BALANCE: Understeer / Neutral / Oversteer …).
 _BALANCE_TO_PHRASE: dict[str, dict[str, str]] = {
     "corner_entry": {
-        "understeer": "understeer on entry",
-        "oversteer": "rear loose under braking",
+        "neutral": "entry balance is good",            # -> entry_balance_good (suppress turn-in tweaks)
+        "understeer": "understeer on entry",           # -> entry_understeer
+        "oversteer": "rear steps out under braking",   # -> rear_loose_under_braking (entry OS is a brake-phase problem)
     },
     "mid_corner": {
-        "understeer": "pushes wide",
+        "understeer": "pushes wide",                   # -> mid_corner_understeer
+        # oversteer: no mid-corner-oversteer flag exists -> omit
     },
     "exit_stability": {
-        "understeer": "power understeer on exit",  # no flag today; harmless, future-proof
-        "oversteer": "oversteer on exit",
-        "strong oversteer": "snap oversteer on exit",
+        "oversteer": "oversteer on exit",              # -> rear_loose_on_exit
+        "strong oversteer": "snap oversteer on exit",  # -> snap_oversteer_exit
+        # understeer (power understeer): no flag -> omit
     },
+}
+
+# Scale dropdowns (_SCALE: Poor / Below par / OK / Good / Excellent) — mapped only
+# at the LOW end, and only where "poor" points at one clear lever.
+_SCALE_LOW = {"poor", "below par"}
+_SCALE_LOW_TO_PHRASE: dict[str, str] = {
+    "braking_confidence": "locks up and is nervous under braking",  # -> braking_instability
+    "rotation": "won't rotate",                                     # -> mid_corner_understeer
+    # traction / drive_out: "poor traction" points at rear grip on a RWD but the
+    #   front on a FWD — the correct lever is drivetrain-dependent, so telemetry
+    #   (wheelspin detection) owns it, not a blind feeling flag. OMITTED.
+    # straight_line / confidence: no single setup lever -> OMITTED.
+}
+
+# Severity dropdowns (_SEVERITY: None / Minor / Noticeable / Severe) — high end only.
+_SEVERITY_HIGH = {"noticeable", "severe"}
+_SEVERITY_HIGH_TO_PHRASE: dict[str, str] = {
+    "bottoming": "bottoming",                          # -> bottoming
+    # kerb_behaviour: unsettled-over-kerbs is a compliance/damper judgement with no
+    #   dedicated flag -> OMITTED.
+}
+
+# Gearing dropdown (_GEAR: Too short / About right / Too long).
+_GEAR_TO_PHRASE: dict[str, str] = {
+    "too long": "gearing too long",                    # -> gearing_too_long (veto a lengthening)
+    "about right": "gearbox is good",                  # -> gearbox_good (suppress gearing tweaks)
+    # "too short": no gearing-too-short flag; telemetry detects it -> OMITTED.
+}
+
+# Vs-expectation dropdown (_VS_EXPECT) — only fuel has a flag.
+_VS_EXPECT_WORSE_TO_PHRASE: dict[str, str] = {
+    "fuel_behaviour": "using too much fuel",           # -> fuel_use_high (acknowledged, not a lever)
+    # tyre_condition: tyre wear is a strategy input, not a setup lever here -> OMITTED.
 }
 
 
 def feedback_to_feeling(feedback: dict | None) -> str:
-    """Turn a structured practice-feedback dict into a feeling string the setup
-    diagnosis parses.
+    """Turn a structured practice-feedback dict (the Review dropdowns) into a
+    feeling string the setup diagnosis parses.
 
-    The Garage "Analyse" only sees telemetry symptoms (lock-ups, wheelspin,
-    off-track); it never sees the driver's handling verdict.  A car that
-    understeers by *feel* but has clean telemetry would therefore read
-    "inside its window".  This maps each balance field
-    (corner_entry / mid_corner / exit_stability, values like "Understeer",
-    "Strong oversteer") to the exact phase-specific phrase
-    ``_parse_driver_feel`` recognises, so the balance rules actually fire.
+    Every mapped dropdown state produces the exact phrase ``_parse_driver_feel``
+    recognises, so the driver's answers fire the real balance / braking / gearing
+    rules — the dropdowns feed the brain directly instead of being ignored.
+    States with no sound flag are intentionally skipped (see the tables above).
     Free-text notes are appended verbatim.  Best-effort; never raises.
     """
     if not isinstance(feedback, dict):
         return ""
     try:
         parts: list[str] = []
+
+        def _val(field: str) -> str:
+            return str(feedback.get(field) or "").strip().lower()
+
+        # Per-phase balance.
         for field, mapping in _BALANCE_TO_PHRASE.items():
-            raw = str(feedback.get(field) or "").strip().lower()
-            if not raw or raw == "neutral":
+            raw = _val(field)
+            if not raw:
                 continue
-            # Prefer the strongest specific match ("strong oversteer" before
-            # "oversteer"), else fall back to the base balance direction.
             phrase = mapping.get(raw)
-            if phrase is None:
+            if phrase is None:                      # fall back to the base direction
                 if "understeer" in raw:
                     phrase = mapping.get("understeer")
                 elif "oversteer" in raw:
                     phrase = mapping.get("oversteer")
             if phrase:
                 parts.append(phrase)
+
+        # Low-end scales, high-end severities, gearing, fuel.
+        for field, phrase in _SCALE_LOW_TO_PHRASE.items():
+            if _val(field) in _SCALE_LOW:
+                parts.append(phrase)
+        for field, phrase in _SEVERITY_HIGH_TO_PHRASE.items():
+            if _val(field) in _SEVERITY_HIGH:
+                parts.append(phrase)
+        gear = _val("gear_choice")
+        if gear in _GEAR_TO_PHRASE:
+            parts.append(_GEAR_TO_PHRASE[gear])
+        for field, phrase in _VS_EXPECT_WORSE_TO_PHRASE.items():
+            if _val(field) == "worse than expected":
+                parts.append(phrase)
+
         notes = str(feedback.get("notes") or "").strip()
         if notes:
             parts.append(notes)
-        return "; ".join(parts)
+        # De-duplicate while preserving order (rotation + mid understeer can repeat).
+        seen: set[str] = set()
+        out = [p for p in parts if not (p in seen or seen.add(p))]
+        return "; ".join(out)
     except Exception:
         return ""
 
