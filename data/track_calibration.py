@@ -68,6 +68,20 @@ MIN_USABLE_LAPS_FOR_PATH: int = 2
 #: (captured when Start/Stop was pressed mid-lap) rather than a generic outlier.
 PARTIAL_LAP_PATH_FRACTION: float = 0.5
 
+#: A complete lap on a closed circuit returns to its own start (the car re-crosses the
+#: same start/finish line), so the straight-line distance from the first valid sample to
+#: the last is small — a few sample frames plus the line width. A lap that ENDS far from
+#: where it started never completed the loop (Start/Stop pressed mid-lap, or a mis-split
+#: boundary lap). Such a lap corrupts the reference path — it drags the final section off
+#: to wherever recording stopped, leaving a whole section of the circuit unmodelled. This
+#: check is independent of lap count, so it catches the 2-lap case the median-based
+#: partial detector cannot (UAT: "St Croix B is missing a whole section").
+LAP_CLOSURE_TOLERANCE_M: float = 60.0
+#: …and it must also be a meaningful fraction of the lap, so a small/odd layout whose
+#: start-finish detection is a little loose is never falsely rejected. Both must be
+#: exceeded for a lap to be rejected as non-closing.
+LAP_CLOSURE_PATH_FRACTION: float = 0.05
+
 #: Road-normal Y threshold below which a sample is considered off-track.
 OFF_TRACK_ROAD_PLANE_Y_THRESHOLD: float = 0.5
 
@@ -440,6 +454,22 @@ def evaluate_lap_quality(
             f"Off-track samples exceed limit ({off_track_count}/{n} = "
             f"{off_track_count / n:.0%} > {MAX_OFF_TRACK_FRACTION:.0%})"
         )
+
+    # ── Hard reject: lap never returned to the start/finish (incomplete loop) ──
+    # Independent of lap count and medians, so it catches an incomplete lap even when
+    # only two laps were recorded (where the boundary-partial detector is disabled and
+    # the 2-lap median sits between a good and a bad lap, flagging neither).
+    valid_xyz = [s for s in samples if s.has_valid_xyz()]
+    if len(valid_xyz) >= 2 and path_length > 0:
+        first, last = valid_xyz[0], valid_xyz[-1]
+        closing_gap = math.hypot(last.x - first.x, last.z - first.z)
+        closure_threshold = max(LAP_CLOSURE_TOLERANCE_M,
+                                LAP_CLOSURE_PATH_FRACTION * path_length)
+        if closing_gap > closure_threshold:
+            reasons.append(
+                f"Lap does not return to the start/finish (ends {closing_gap:.0f} m "
+                f"away) — an incomplete lap, likely Start/Stop pressed mid-lap"
+            )
 
     # ── Hard reject: duration outlier ────────────────────────────────────────
     if session_median_duration_ms and session_median_duration_ms > 0 and duration_ms > 0:

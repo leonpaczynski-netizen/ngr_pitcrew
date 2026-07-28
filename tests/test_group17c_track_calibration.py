@@ -513,7 +513,11 @@ class TestEvaluateLapQuality:
         assert any("zero" in r.lower() or "missing" in r.lower() for r in result.reasons)
 
     def test_some_zero_xyz_low_confidence(self):
-        samples = _straight_line_samples(100)
+        # A closed (circular) lap so the closure gate is satisfied — this test is about
+        # a FEW zero-xyz samples degrading to low-confidence, not about lap closure. A
+        # small radius keeps the step to the zeroed origin under the jump threshold, so
+        # only the zero-xyz signal (not a coordinate jump) drives the verdict.
+        samples = _circular_samples(100, radius=30.0)
         # Make a few zero
         for i in range(3):
             samples[i] = _sample(x=0, y=0, z=0)
@@ -521,6 +525,28 @@ class TestEvaluateLapQuality:
         result = evaluate_lap_quality(lap)
         # Not all zero — should be low confidence, not rejected for xyz alone
         assert result.quality in (CalibrationLapQuality.LOW_CONFIDENCE, CalibrationLapQuality.USABLE)
+
+    # ── Lap closure (returns to the start/finish) ─────────────────────────────
+
+    def test_incomplete_lap_that_never_returns_to_start_is_rejected(self):
+        # A lap that ends far from where it started never completed the loop (Start/Stop
+        # pressed mid-lap). Using it drags the reference path's final section off to
+        # wherever recording stopped, leaving a whole section unmodelled — the St Croix B
+        # "missing a whole section" defect. A long straight line ends ~its whole length
+        # from the start, so it must be rejected.
+        samples = _straight_line_samples(200, dx=10.0)   # ~2 km straight, gap ~2 km
+        lap = _make_lap(samples=samples)
+        result = evaluate_lap_quality(lap)
+        assert result.quality == CalibrationLapQuality.REJECTED
+        assert any("return to the start" in r.lower() or "incomplete lap" in r.lower()
+                   for r in result.reasons)
+
+    def test_a_closed_loop_lap_passes_closure(self):
+        # A full circular lap returns to its own start → closure satisfied, not rejected.
+        lap = _make_lap(samples=_circular_samples(160, radius=400.0))
+        result = evaluate_lap_quality(lap)
+        assert result.quality != CalibrationLapQuality.REJECTED
+        assert not any("return to the start" in r.lower() for r in result.reasons)
 
     # ── Coordinate jumps ─────────────────────────────────────────────────────
 

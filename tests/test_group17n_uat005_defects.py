@@ -58,11 +58,24 @@ def _make_telemetry_sample(i: int, lap_number: int = 1, x_offset: float = 0.0):
 
 def _make_usable_lap(lap_number: int = 1, n_samples: int = 120, x_offset: float = 1.0):
     """Create a lap that will pass quality checks.
-    Starts at i=1 (not 0) to avoid all-zero xyz on the first sample.
+
+    A CLOSED loop (points around a circle) so it returns to its own start/finish — a real
+    calibration lap must, and the quality gate now rejects laps that end far from where
+    they began (the "incomplete lap" that corrupted a reference path). x_offset shifts the
+    whole loop so distinct laps differ slightly without breaking closure.
     """
-    from data.track_calibration import CalibrationLap, CalibrationLapQuality
-    samples = [_make_telemetry_sample(i + 1, lap_number, x_offset=x_offset)
-               for i in range(n_samples)]
+    import math as _math
+    from data.track_calibration import CalibrationLap, CalibrationLapQuality, TelemetrySample
+    radius = 500.0
+    samples = []
+    for i in range(n_samples):
+        angle = 2 * _math.pi * i / n_samples
+        samples.append(TelemetrySample(
+            timestamp_ms=i * 100, lap_number=lap_number,
+            x=radius * _math.cos(angle) + x_offset, y=0.0, z=radius * _math.sin(angle),
+            speed_kph=180.0, gear=4, rpm=7000.0, throttle=0.8, brake=0.0,
+            road_distance=float(i) * 29.0, yaw_rate=0.01, road_plane_y=1.0,
+            is_off_track=False))
     return CalibrationLap(
         lap_number      = lap_number,
         lap_time_ms     = n_samples * 100,
