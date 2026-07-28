@@ -131,6 +131,81 @@ class TestShiftRpmField:
         assert seen == [7000]
 
 
+class TestFrontWeightDistField:
+    """The optional front weight distribution spinbox — same interaction pattern as
+    shift RPM: setting via the public API does not re-emit; an actual edit emits once;
+    a periodic feed does not overwrite a focused edit."""
+
+    def test_signal_declared(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.front_weight_dist_changed.connect(seen.append)
+        w.front_weight_dist_changed.emit(42)
+        assert seen == [42]
+
+    def test_default_is_zero_special_value_text(self, qapp):
+        """0 is the default and shows the 'use drivetrain default' label."""
+        w = SetupWorkspace()
+        assert w._front_weight_dist.value() == 0
+        assert w._front_weight_dist.specialValueText() == "Use drivetrain default"
+
+    def test_setting_the_value_does_not_re_emit(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.front_weight_dist_changed.connect(seen.append)
+        w.set_front_weight_dist(42)
+        assert w._front_weight_dist.value() == 42 and seen == []
+
+    def test_an_edit_emits_the_new_value_once(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.front_weight_dist_changed.connect(seen.append)
+        w.set_front_weight_dist(42)
+        w._front_weight_dist.setValue(38)
+        w._on_front_weight_dist_edited()
+        assert seen == [38]
+        w._on_front_weight_dist_edited()        # no change → no repeat emit
+        assert seen == [38]
+
+    def test_zero_edit_emits_zero(self, qapp):
+        """Clearing the field back to 0 emits the signal so the bridge can reset
+        to 'use drivetrain prior'."""
+        w = SetupWorkspace()
+        seen = []
+        w.front_weight_dist_changed.connect(seen.append)
+        w.set_front_weight_dist(42)
+        w._front_weight_dist.setValue(0)
+        w._on_front_weight_dist_edited()
+        assert seen == [0]
+
+    def test_range_clamped_on_set(self, qapp):
+        """Values outside 0-80 are clamped — the spinbox range and the API agree."""
+        w = SetupWorkspace()
+        w.set_front_weight_dist(99)
+        assert w._front_weight_dist.value() == 80
+        w.set_front_weight_dist(-5)
+        assert w._front_weight_dist.value() == 0
+
+    def test_a_periodic_feed_does_not_clobber_a_focused_edit(self, qapp):
+        """Same guard as shift_rpm: while the field has focus the 750ms feed
+        must not overwrite the value the driver is typing."""
+        w = SetupWorkspace()
+        w.show()
+        w.set_front_weight_dist(42)
+        w._front_weight_dist.setFocus()
+        if w._front_weight_dist.hasFocus():     # offscreen platforms may not focus
+            w._front_weight_dist.setValue(38)   # driver is mid-edit
+            w.set_front_weight_dist(42)         # periodic feed lands
+            assert w._front_weight_dist.value() == 38   # edit preserved
+        w.close()
+
+    def test_suffix_and_tooltip_set(self, qapp):
+        w = SetupWorkspace()
+        assert "%" in w._front_weight_dist.suffix()
+        assert "front" in w._front_weight_dist.suffix().lower()
+        assert "drivetrain" in w._front_weight_dist.toolTip().lower()
+
+
 class TestLockControl:
     """UAT-7: "how do I 'lock the base setup'?" The guidance CTA pointed at the Garage
     but there was nothing to click."""

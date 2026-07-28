@@ -126,11 +126,15 @@ class LiveShellBridge(QObject):
         # Persisted applied-revision history: fills the Garage Lineage tab and lets a
         # past setup be loaded back ("the settings I'm running in GT7").
         self._setup_history = SetupHistoryStore(default_history_path(_cfg_path))
+        #: The driver's front weight distribution % entered in the Garage spinbox.
+        #: Injected into SetupInputs whenever the baseline generator is invoked.
+        #: None (or 0) = "use the drivetrain prior" (no physics override).
+        self._front_weight_dist_pct: Optional[float] = None
         self._setups = SetupService(
             store=self._sheets, advisor=getattr(window, "_driving_advisor", None),
             authority=getattr(window, "_setup_authority", None), db=db,
             history=self._setup_history,
-            inputs_provider=lambda: build_setup_inputs(db, self._config))
+            inputs_provider=lambda: self._build_inputs())
         # Track modelling, headless and guided. Reuses the domain untouched; the
         # coordinator decides which actions are legal at each point.
         # Race plan, headless — the strategy page could previously only DISPLAY a plan
@@ -294,6 +298,8 @@ class LiveShellBridge(QObject):
                     gp.ballast_changed.connect(self._on_ballast_changed)
                 if hasattr(gp, "regulation_changed"):
                     gp.regulation_changed.connect(self._on_regulation_changed)
+                if hasattr(gp, "front_weight_dist_changed"):
+                    gp.front_weight_dist_changed.connect(self._on_front_weight_dist_changed)
         except Exception:
             pass
         try:
@@ -1573,6 +1579,7 @@ class LiveShellBridge(QObject):
             )
             self._feed_tyres(gp, setup or {})
             self._feed_shift_rpm(gp)
+            self._feed_front_weight_dist(gp)
             self._feed_gearing(gp)
             self._feed_lock(gp)
         except Exception:
@@ -2059,6 +2066,23 @@ class LiveShellBridge(QObject):
                 revertable=True))
         return tuple(nodes)
 
+    def _build_inputs(self):
+        """Build ``SetupInputs``, merging the Garage's front-weight-dist override.
+
+        Called by the ``inputs_provider`` lambda every time the setup engine needs context
+        (baseline build, analysis, sheet-scope resolution). The front weight distribution
+        % the driver entered in the Garage spinbox is injected here — the only place that
+        touches the frozen dataclass — so the value propagates to every call that reads
+        ``inp.front_weight_dist_pct`` without the domain layer needing to know about the UI.
+        """
+        from services.setup_inputs import build_setup_inputs
+        from dataclasses import replace
+        inp = build_setup_inputs(self._db, self._config)
+        val = self._front_weight_dist_pct
+        if val:
+            return replace(inp, front_weight_dist_pct=float(val))
+        return inp
+
     def _feed_shift_rpm(self, garage) -> None:
         """Show the upshift point for the selected discipline.
 
@@ -2083,6 +2107,29 @@ class LiveShellBridge(QObject):
             garage.set_shift_rpm(rpm, note)
         except Exception:
             pass
+
+    def _feed_front_weight_dist(self, garage) -> None:
+        """Reflect the stored front-weight-dist value on the Garage spinbox.
+
+        The 750 ms feed calls this every tick; the ``set_front_weight_dist`` implementation
+        guards against clobbering a focused edit and uses blockSignals to avoid re-emitting.
+        """
+        try:
+            if not hasattr(garage, "set_front_weight_dist"):
+                return
+            val = int(self._front_weight_dist_pct or 0)
+            garage.set_front_weight_dist(val)
+        except Exception:
+            pass
+
+    def _on_front_weight_dist_changed(self, value: int) -> None:
+        """Store the user's front weight distribution % for the next baseline build.
+
+        The value is kept in-memory for the session. 0 means "use the drivetrain prior"
+        (i.e. send None to the backend). The baseline generator reads this via
+        ``_build_inputs()`` which injects it into ``SetupInputs.front_weight_dist_pct``.
+        """
+        self._front_weight_dist_pct = float(value) if int(value or 0) > 0 else None
 
     def _on_discipline(self, discipline: str) -> None:
         """Remember the selected discipline and re-feed the Garage for it."""

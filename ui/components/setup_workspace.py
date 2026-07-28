@@ -127,6 +127,7 @@ class SetupWorkspace(QWidget):
     track_wet_changed = pyqtSignal(bool)         # driver toggled "track is wet" (rain)
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
+    front_weight_dist_changed = pyqtSignal(int)  # driver entered front weight distribution %
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
     car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
@@ -223,6 +224,40 @@ class SetupWorkspace(QWidget):
         shift_row.addWidget(self._shift_note, 1)
         lay.addLayout(shift_row)
         self._shift_rpm_value = 0
+
+        # Front weight distribution — optional physics-based spring-frequency input.
+        # The user enters the car's front weight distribution % so the baseline generator
+        # can derive a realistic front/rear spring split instead of relying only on the
+        # drivetrain prior. 0 = "use the drivetrain default" (no override).
+        fwd_row = QHBoxLayout()
+        fwd_row.setSpacing(_t.SPACE_SM)
+        fwd_cap = QLabel("Front weight dist.")
+        fwd_cap.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_LABEL}pt;")
+        fwd_row.addWidget(fwd_cap)
+        self._front_weight_dist = QSpinBox()
+        self._front_weight_dist.setRange(0, 80)
+        self._front_weight_dist.setSingleStep(1)
+        self._front_weight_dist.setSuffix("% front")
+        self._front_weight_dist.setSpecialValueText("Use drivetrain default")   # value 0
+        self._front_weight_dist.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._front_weight_dist.setMaximumWidth(200)
+        self._front_weight_dist.setStyleSheet(
+            f"QSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+        self._front_weight_dist.setToolTip(
+            "Optional. Front weight distribution %. 0 = use the drivetrain default. "
+            "e.g. 42 = 42% front / 58% rear. "
+            "Improves the physics-based spring-frequency baseline split.")
+        # editingFinished (not valueChanged) so we emit once the driver settles on a
+        # value, not on every spin tick.
+        self._front_weight_dist.editingFinished.connect(self._on_front_weight_dist_edited)
+        fwd_row.addWidget(self._front_weight_dist)
+        fwd_note = QLabel("Optional — car spec sheet or weighbridge reading")
+        fwd_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        fwd_row.addWidget(fwd_note, 1)
+        lay.addLayout(fwd_row)
+        self._front_weight_dist_value = 0
 
         # Status pills
         status_row = QHBoxLayout()
@@ -676,6 +711,32 @@ class SetupWorkspace(QWidget):
             return                      # editingFinished fires even when nothing changed
         self._shift_rpm_value = v
         self.shift_rpm_changed.emit(v)
+
+    def set_front_weight_dist(self, value: int = 0) -> None:
+        """Show the front weight distribution % the driver has entered.
+
+        Setting the spin box must not re-emit ``front_weight_dist_changed`` — that
+        would echo a value the caller just fed back as though the driver had typed it.
+        While the driver is editing the field the 750 ms feed must not overwrite it —
+        same pattern as ``set_shift_rpm``.
+        """
+        try:
+            v = max(0, min(80, int(value or 0)))
+        except (TypeError, ValueError):
+            v = 0
+        if self._front_weight_dist.hasFocus():
+            return                      # leave the value the driver is typing alone
+        self._front_weight_dist_value = v
+        self._front_weight_dist.blockSignals(True)
+        self._front_weight_dist.setValue(v)
+        self._front_weight_dist.blockSignals(False)
+
+    def _on_front_weight_dist_edited(self) -> None:
+        v = int(self._front_weight_dist.value())
+        if v == self._front_weight_dist_value:
+            return                      # editingFinished fires even when nothing changed
+        self._front_weight_dist_value = v
+        self.front_weight_dist_changed.emit(v)
 
     def set_lock_state(self, lockable: bool = False, locked: bool = False,
                        hint: str = "", discipline: str = "", lock_label: str = "") -> None:
