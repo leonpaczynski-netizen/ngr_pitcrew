@@ -39,32 +39,36 @@ driver-profile version)**; contexts never mixed.
 - ⬜ Verify the analyse path (rule engine) and the outcome store use the **same**
   scope key everywhere; close any place that falls back to an empty/global key.
 
-## Phase 2 — Learn from outcomes (directive item 2) — 🟡 / 🔎
+## Phase 2 — Learn from outcomes (directive item 2) — ✅ WIRED (`97577d6`)
 After each applied change + recorded run, record improved/worsened; strengthen what
 repeatedly helps this scope, lock out what repeatedly hurts.
-- ✅ `RuleOutcomeStore` (success rate per car+track+profile_version → confidence
-  up/downgrade) and the **closed-loop lockout** exist.
-- 🔎 Confirm the **feed is wired in the new shell**: applied recommendation →
-  recorded run → outcome written. If the new shell doesn't feed it, this is the
-  single highest-value fix (the store learns nothing if nothing writes to it).
-- ⬜ Surface "this change has helped you N/M times on this car+track" in the Garage
-  so the learning is visible, not hidden in a store.
+- ✅ `RuleOutcomeStore` + closed-loop lockout (consume side) — already wired.
+- ✅ **Write side now wired** — NEW `services/setup_learning.py`
+  (`persist_applied_recommendation` + `run_scoring_pass`); the backend dispatcher
+  runs the pass on session-open (fires under the new shell), the bridge persists the
+  applied rec on confirm, and classic `_trigger_scoring_pass` delegates to the same
+  service. Closed-loop test: apply → slower run → 'worsened' → hard-block. **Needs
+  live-rig confirmation** (real telemetry sessions).
+- ⬜ Scope is car+track (layout ""); per-layout + profile-version scoping = follow-up.
+- ⬜ Surface "this change has helped you N/M times here" in the Garage so the
+  learning is visible, not hidden in a store.
 
-## Phase 3 — Track style as it changes (directive item 3) — ⬜ **the heart**
-Re-derive the driver profile from each **coaching run + debrief**, versioned over
-time, so advice reflects how Leon drives **now** — not months ago. *This is the
-missing engine.*
-- ✅ `DriverProfile` is versioned; a coaching-run review (`build_coaching_review`)
-  and the Holistic Brain per-corner/cross-session verdicts exist as inputs.
-- ⬜ **Profile re-derivation:** a deterministic pass that reads recent coaching/
-  debrief evidence (braking consistency, rotation, throttle habits, best-vs-avg)
-  and produces a **new profile version** with updated style tags/biases — scoped so
-  a wet-oval habit doesn't rewrite the road-course profile.
-- ⬜ **Versioned history + decay:** keep prior versions; weight recent evidence more,
-  age out stale traits, and *never* let a single session flip a trait (needs
-  corroboration) — mirror the existing "age alone never decays" doctrine.
-- ⬜ **Bind to outcomes:** when the profile version changes, the outcome store keys
-  roll forward so old-style outcomes don't wrongly gate the new style.
+## Phase 3 — Track style as it changes (directive item 3) — ✅ MVP (`03b729e`)
+Re-derive the driver profile from observed driving, versioned, so advice reflects
+how Leon drives **now**.
+- ✅ **Profile re-derivation** — NEW `strategy/driver_profile_evolution.py`: reads
+  persisted balance feedback across recent sessions (driver-level, new
+  `SessionDB.get_recent_driver_feedback`); where a tendency is CORROBORATED
+  (≥3 of last N, dominating 2:1, min 4 sessions) it ADDS the matching preference —
+  persistent understeer → stronger front-bite, persistent exit-oversteer → stronger
+  rear-stability. Add-only, never flips on one session, versioned
+  (`profile_version` gains `+obs-fb/-rs`), each adjustment cites its evidence, bounded
+  to direction/confidence bias. Wired into both advisor paths; analyse text discloses
+  "Learned from your recent sessions — …".
+- ⬜ **Richer signals:** fold in coaching/consistency/lock-up/wheelspin evidence
+  (currently balance feedback only); per-context weighting; decay of stale traits.
+- ⬜ **Bind to outcomes:** roll outcome-store keys forward when the version changes
+  (today the DB read is by car+track, so it's unaffected — a clean follow-up).
 
 ## Phase 4 — Personalize the move (directive item 4) — 🟡
 Bias **direction** toward known preferences; scale **magnitude** to how badly the
