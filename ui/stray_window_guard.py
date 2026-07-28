@@ -83,8 +83,11 @@ class StrayWindowGuard(QObject):
             wt = w.windowType() & Qt.WindowType.WindowType_Mask
             if wt in _SAFE_WINDOW_TYPES:               # menus, combos, tooltips
                 return False
-            # A window the driver is meant to see has a title. The stray one is blank.
-            if (w.windowTitle() or "").strip():
+            # A window the driver is meant to see has a REAL title. A Qt-internal name
+            # ("_q_titlebar" etc.) is never a driver-facing window, so such a window is
+            # stray even though technically titled; every other titled window is trusted.
+            title = (w.windowTitle() or "").strip()
+            if title and not title.startswith("_q_"):
                 return False
             return True
         except Exception:

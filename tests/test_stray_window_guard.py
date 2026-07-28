@@ -33,6 +33,14 @@ class TestClassification:
         w.setWindowTitle("Transcribe to GT7")
         assert g._is_stray(w) is False
 
+    def test_qt_internal_titlebar_window_is_stray(self, qapp):
+        # The observed flasher: a Qt native title-bar helper titled "_q_titlebar".
+        # A "_q_"-internal title is never a real window, so the guard must catch it.
+        g = StrayWindowGuard(main_window=None)
+        w = QWidget()
+        w.setWindowTitle("_q_titlebar")
+        assert g._is_stray(w) is True
+
     def test_real_dialog_is_not_stray(self, qapp):
         g = StrayWindowGuard(main_window=None)
         dlg = QDialog()
