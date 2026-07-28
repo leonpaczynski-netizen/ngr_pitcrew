@@ -111,6 +111,10 @@ class GuidedView:
     shows_track_picker: bool = False
     shows_capture_status: bool = False
     shows_corner_list: bool = False
+    #: Draw the track map wherever there is a model to show — while reviewing, and once
+    #: it is approved/active — so the driver can SEE the shape is mapped (confidence),
+    #: not only during the review step.
+    shows_map: bool = False
 
     @property
     def total_steps(self) -> int:
@@ -163,6 +167,7 @@ def _build(session: TrackModellingSession) -> GuidedView:
         shows_track_picker=state in (S.NO_TRACK, S.IDENTIFIED, S.ERROR),
         shows_capture_status=state in (S.CAPTURING, S.CAPTURE_COMPLETE),
         shows_corner_list=state in (S.DRAFT_MODEL, S.REVIEW_REQUIRED, S.VALIDATED),
+        shows_map=state in (S.DRAFT_MODEL, S.REVIEW_REQUIRED, S.VALIDATED, S.ACTIVE),
     )
 
 

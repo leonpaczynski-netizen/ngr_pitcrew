@@ -149,6 +149,9 @@ class LiveShellBridge(QObject):
         #: the first NEW completed lap is the pit-lane lap we detect from.
         self._pit_lane_mode = False
         self._pit_lane_baseline_laps = 0
+        #: (loc, lay) -> on-disk station map, so the map draws for an already-modelled
+        #: track without re-reading the large file every refresh.
+        self._tm_disk_map_cache: dict = {}
         #: Scopes already seeded from the classic sheets — see ``_seed_sheets``.
         self._seeded: set = set()
         #: Scopes already seeded from applied history — see ``_seed_from_last_applied``.
@@ -1121,17 +1124,37 @@ class LiveShellBridge(QObject):
             return ""
 
     def _track_map_data(self, session):
-        """Drawing primitives for the built track, so the corner-review step can be
-        checked against the real circuit's SHAPE, not just a table of names. None until
-        a station map exists (nothing to draw before the model is built)."""
+        """Drawing primitives for the built track, shown while reviewing AND once the
+        model is approved/active — visual proof the shape is mapped. Falls back to the
+        on-disk station map when an already-modelled track is selected (no in-memory
+        artefact), so the map draws immediately on selection too."""
         try:
             station_map = session.artefact("station_map") if session is not None else None
+            if station_map is None and getattr(session, "model_active", False):
+                station_map = self._load_station_map_from_disk(session)
             if station_map is None:
                 return None
             from ui.track_map_vm import build_track_map_draw_data
             return build_track_map_draw_data(station_map)
         except Exception:
             return None
+
+    def _load_station_map_from_disk(self, session):
+        """The accepted track's station map from disk, cached per layout (the file is
+        large — don't re-read it every 750 ms tick)."""
+        key = (getattr(session, "location_id", ""), getattr(session, "layout_id", ""))
+        if key in self._tm_disk_map_cache:
+            return self._tm_disk_map_cache[key]
+        station_map = None
+        try:
+            from data.track_station_map import find_station_map_path, import_station_map_json
+            path = find_station_map_path(key[0], key[1])
+            if path is not None:
+                station_map = import_station_map_json(path)
+        except Exception:
+            station_map = None
+        self._tm_disk_map_cache[key] = station_map
+        return station_map
 
     def _on_track_segment(self, row: int, action: str) -> None:
         """A corner-review edit (approve / reject / merge / split) on a table row."""

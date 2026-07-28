@@ -204,11 +204,19 @@ class TestLayoutsAreScopedToTheChosenCircuit:
         import types
         page.set_session(_sel(has_segments=True),
                          corners=[{"number": 1, "name": "T1"}], map_data=None)
-        assert page._map.isVisibleTo(page) is False           # nothing to draw yet
+        assert page._map_card.isVisibleTo(page) is False      # nothing to draw yet
         page.set_session(_sel(has_segments=True),
                          corners=[{"number": 1, "name": "T1"}],
                          map_data=types.SimpleNamespace(has_map=True))
-        assert page._map.isVisibleTo(page) is True
+        assert page._map_card.isVisibleTo(page) is True
+
+    def test_the_track_map_still_shows_once_the_model_is_approved(self, page):
+        # Confidence: an approved/active model must still draw its map (no corner list).
+        import types
+        page.set_session(_sel(model_active=True),
+                         map_data=types.SimpleNamespace(has_map=True))
+        assert page._map_card.isVisibleTo(page) is True
+        assert page._corners_card.isVisibleTo(page) is False  # no review controls when active
 
 
 class TestErrorsAreExplained:

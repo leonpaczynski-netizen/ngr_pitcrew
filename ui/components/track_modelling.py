@@ -162,6 +162,16 @@ class TrackModellingPage(QWidget):
         self._card.body.addLayout(act)
         lay.addWidget(self._card)
 
+        # The built track, in its own card so it shows whenever there IS a model —
+        # while reviewing AND once approved/active — giving the driver visual proof the
+        # shape is mapped. Hidden until a model is built (nothing to draw before then).
+        self._map_card = Card()
+        self._map_card.add(SectionHeading("TRACK MAP", level=3))
+        self._map = TrackMapWidget()
+        self._map.setMinimumHeight(300)
+        self._map_card.add(self._map)
+        lay.addWidget(self._map_card)
+
         # Corner review — only on the review/validate steps.
         self._corners_card = Card()
         self._corners_card.add(SectionHeading("DETECTED CORNERS", level=3))
@@ -172,13 +182,6 @@ class TrackModellingPage(QWidget):
         self._corners_hint.setStyleSheet(
             f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         self._corners_card.add(self._corners_hint)
-
-        # The built track, so the driver can check the shape and corner positions
-        # against the real circuit — not just a table of names. Hidden until a model
-        # is built (there is nothing to draw before then).
-        self._map = TrackMapWidget()
-        self._map.setMinimumHeight(300)
-        self._corners_card.add(self._map)
         self._corners = QTableWidget(0, len(_CORNER_COLUMNS))
         self._corners.setHorizontalHeaderLabels(list(_CORNER_COLUMNS))
         self._corners.verticalHeader().setVisible(False)
@@ -326,13 +329,15 @@ class TrackModellingPage(QWidget):
                                  enabled=bool(view.primary))
         self._render_secondaries(view)
 
+        # The map shows wherever there is a model (review AND active), for confidence.
+        has_map = view.shows_map and map_data is not None and getattr(map_data, "has_map", False)
+        if has_map:
+            self._map.set_draw_data(map_data)
+        self._map_card.setVisible(bool(has_map))
+
         self._corners_card.setVisible(view.shows_corner_list)
         if view.shows_corner_list:
             self._render_corners(corners)
-            has_map = map_data is not None and getattr(map_data, "has_map", False)
-            if has_map:
-                self._map.set_draw_data(map_data)
-            self._map.setVisible(bool(has_map))
 
     @staticmethod
     def _capture_text(view: GuidedView, laps: int) -> str:
