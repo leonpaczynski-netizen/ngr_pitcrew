@@ -16,7 +16,8 @@ from typing import Optional
 # Live Pit Wall  <-  adaptive_live_strategy.LiveStrategyState
 # ---------------------------------------------------------------------------
 def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=None,
-                                race_phase: str = "", session_mode: str = "race"):
+                                race_phase: str = "", session_mode: str = "race",
+                                engineer_override: str = ""):
     """Build the LivePitWallVM from a LiveStrategyState + optional audio view.
 
     When ``audio_view`` is supplied (from ``build_live_audio_strategy_view``), the
@@ -153,10 +154,15 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         except Exception:
             pass
 
+    # A session-specific engineer line (practice feel / qualifying one-lap coaching)
+    # WINS over the strategy line — in practice and qualifying the driver wants feel and
+    # pace, not fuel/stops. Only the race defers to the strategy engine (override "").
+    if engineer_override:
+        engineer_instruction = engineer_override
     # In qualifying there is no race plan to drive the engineer line, so fall back to the
     # push-lap coach rather than leaving the surface's own question ("what do I do now?")
     # unanswered.
-    if is_qual and not engineer_instruction:
+    elif is_qual and not engineer_instruction:
         engineer_instruction = _QUAL_CUE
 
     # The pit call is the most time-critical thing on screen — while stopped it leads

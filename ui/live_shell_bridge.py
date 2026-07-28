@@ -667,6 +667,39 @@ class LiveShellBridge(QObject):
         except Exception:
             return 0
 
+    def _live_last_best_lap_s(self) -> "tuple":
+        """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
+        try:
+            logger = getattr(self._window, "_logger", None)
+            if logger is None:
+                return None, None
+            best_ms = logger.best_lap_ms() if hasattr(logger, "best_lap_ms") else -1
+            recs = logger.records() if hasattr(logger, "records") else []
+            last_ms = getattr(recs[-1], "lap_time_ms", -1) if recs else -1
+            best_s = best_ms / 1000.0 if best_ms and best_ms > 0 else None
+            last_s = last_ms / 1000.0 if last_ms and last_ms > 0 else None
+            return last_s, best_s
+        except Exception:
+            return None, None
+
+    def _maybe_speak_engineer(self, text: str) -> None:
+        """Speak the session engineer line ONCE per new lap (not every 750ms tick), so
+        the engineer's voice tracks the session without chattering. Never raises."""
+        try:
+            if not text:
+                return
+            lap = self._live_lap_count()
+            if lap == getattr(self, "_live_engineer_spoken_lap", None):
+                return
+            self._live_engineer_spoken_lap = lap
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is None or not hasattr(announcer, "announce"):
+                return
+            from voice.announcer import Priority
+            announcer.announce(text, Priority.MEDIUM, "live_engineer")
+        except Exception:
+            pass
+
     # ---- guided practice loop (the write side) ---------------------------
     def _run_status(self, text: str) -> None:
         try:
@@ -2462,11 +2495,24 @@ class LiveShellBridge(QObject):
                     except Exception:
                         self._live_audio_view = None
                 audio_view = self._live_audio_view
+            # Session-type-aware engineer: in practice/qualifying the engineer talks
+            # feel and one-lap pace, not race strategy — like a real engineer adjusting
+            # to the session. Race defers to the strategy engine (override "").
+            from strategy.live_engineer_session import (
+                normalise_session_mode, session_engineer_call)
+            _sess = normalise_session_mode(self._live_session_mode, self._live_race_phase)
+            _last_s, _best_s = self._live_last_best_lap_s()
+            _eng_call = session_engineer_call(
+                _sess, connected=connected, lap_count=self._live_lap_count(),
+                last_lap_s=_last_s, best_lap_s=_best_s)
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
                 race_phase=self._live_race_phase,
-                session_mode=("qualifying" if self._live_session_mode == "qualifying"
-                              else "race")))
+                session_mode=("qualifying" if _sess == "qualifying" else "race"),
+                engineer_override=_eng_call))
+            # Speak it once per new lap (not every 750ms tick) so the engineer's voice
+            # tracks the session without chattering.
+            self._maybe_speak_engineer(_eng_call)
             # Show the approved/accepted plan — the wall looked empty because nothing
             # about the strategy was ever fed here. When nothing was formally approved,
             # fall back to the current recommendation so the wall always shows A plan
