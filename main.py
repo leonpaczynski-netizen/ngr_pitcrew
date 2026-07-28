@@ -727,6 +727,19 @@ def main() -> None:
         _new_shell.showMaximized()
     else:
         window.show()
+
+    # Safety net: suppress + log any stray, empty top-level window that tries to
+    # steal keyboard focus (an intermittent flashing-box bug). Conservative — real
+    # dialogs, titled windows, and combo/menu popups are never touched. Disable with
+    # NGR_NO_STRAY_GUARD=1. Kept alive for the app's lifetime.
+    _stray_guard = None
+    try:
+        from ui.stray_window_guard import install_stray_window_guard
+        _stray_guard = install_stray_window_guard(
+            app, _new_shell if _new_shell is not None else window, logger=logger)
+    except Exception as _exc:
+        print(f"[StrayWindowGuard] not installed: {_exc}")
+
     exit_code = app.exec()
 
     # Graceful shutdown (query_listener first — may be mid-recording)
