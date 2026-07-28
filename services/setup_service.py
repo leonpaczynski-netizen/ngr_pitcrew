@@ -138,6 +138,10 @@ class SetupInputs:
     track_profile: Any = None
     historical_setups: Tuple[dict, ...] = field(default_factory=tuple)
     mandatory_compounds: str = ""
+    #: Optional front-axle weight fraction override supplied by the Garage UI,
+    #: expressed as a PERCENTAGE (0–100).  None or 0 → use the drivetrain prior.
+    #: The backend divides by 100 before passing to derive_spring_frequencies.
+    front_weight_dist_pct: Optional[float] = None
 
     @property
     def is_known(self) -> bool:
@@ -278,6 +282,7 @@ class SetupService:
                 track_profile=inp.track_profile,
                 track_name=inp.track,
                 historical_setups=list(inp.historical_setups),
+                front_weight_dist_override=inp.front_weight_dist_pct,
             )
         except Exception as exc:
             return False, {}, f"the engine failed ({exc})"

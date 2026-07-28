@@ -288,6 +288,222 @@ _CORNER_DENSE = 6.0
 _ELEVATION_SIGNIFICANT_M = 30.0
 
 
+# ---------------------------------------------------------------------------
+# Physics-based spring natural frequency targets — Group 77 / spring-baseline
+# ---------------------------------------------------------------------------
+# Named band constants (all Hz).  None may come from any external tuning
+# document — each traces to car-class band / physics / discipline / track.
+_SPRING_BAND_ROAD  = (1.5, 3.0)   # Road cars: compliance and ride quality
+_SPRING_BAND_SPORT = (2.5, 5.0)   # Sport/GT4/touring: balanced platform
+_SPRING_BAND_RACE  = (4.0, 8.0)   # Gr.3/Gr.4/Prototype + high power-to-weight
+
+# Qualifying squeezes one extra flying lap out of the platform (×10% stiffer).
+_QUALI_STIFFNESS_FACTOR = 1.10
+
+# Track-character modifiers applied to the band midpoint before the split.
+# Straight-heavy → stiffer (higher Hz) for high-speed stability.
+# Corner-dense   → softer  (lower Hz) for mechanical grip and rotation.
+_TRACK_STRAIGHT_HZ_STEP = +0.30
+_TRACK_CORNER_HZ_STEP   = -0.20
+
+# Drivetrain-keyed front-axle weight fraction prior (0.0–1.0).
+# Keys match the lowercased VehicleModel.drivetrain strings (rr/mr/fr/ff/awd).
+# "4wd" maps to "awd" in build_vehicle_model; this dict uses the final key.
+_WEIGHT_DIST_PRIOR: dict = {
+    "rr":  0.38,   # rear-engined: weight well over the back axle
+    "mr":  0.42,   # mid-engined: still rear-biased, slightly less so
+    "fr":  0.48,   # front-engined RWD: near-neutral, slight front bias
+    "ff":  0.60,   # front-wheel drive: engine + driven axle both at the front
+    "awd": 0.50,   # all-wheel drive: by design near 50:50
+}
+
+# Total Hz span applied as a bounded delta between the front and rear axles
+# based on the front-weight deviation from 50:50.  Kept modest so both axles
+# stay inside the selected class band after the split clamp.
+_SPLIT_HZ_SPAN = 2.0
+
+
+@dataclass(frozen=True)
+class SpringFrequencies:
+    """Physics-derived spring natural frequency target for both axles.
+
+    Produced by ``derive_spring_frequencies``; consumed by the baseline engine
+    as ``chassis_seed_overrides["springs_front/rear"]``.  Immutable.
+    """
+    front_hz: float
+    rear_hz: float
+    front_reason: str
+    rear_reason: str
+
+
+def derive_spring_frequencies(
+    vehicle: VehicleModel,
+    objective: str,
+    track=None,
+    front_weight_dist: Optional[float] = None,
+) -> SpringFrequencies:
+    """Physics-based spring natural frequency target for both axles.
+
+    Ordering of operations (important for predictability and in-band behaviour):
+      1. Band selection    — car class / power-to-weight → Road / Sport / Race band.
+         Insufficient data (weight, category or drivetrain missing) → FALLBACK to
+         NEUTRAL_SEEDS springs immediately; no further computation.
+      2. Base Hz           — band midpoint.
+      3. Track adjustment  — trustworthy track only: straight-heavy circuit adds
+         ``_TRACK_STRAIGHT_HZ_STEP``; corner-dense circuit adds
+         ``_TRACK_CORNER_HZ_STEP``.  At most one adjustment is applied (first match).
+      4. Front/rear split  — resolve the front-axle weight fraction
+         (``front_weight_dist`` arg → ``data.car_weight_distribution`` file →
+         ``_WEIGHT_DIST_PRIOR[drivetrain]``), then compute a bounded delta so that
+         the front axle is stiffer when the car is front-heavy and the rear axle is
+         stiffer when the car is rear-heavy.  Both values are clamped to the selected
+         band [lo, hi] so the split cannot push either axle outside its class band.
+      5. Discipline factor — qualifying objective applies ``_QUALI_STIFFNESS_FACTOR``
+         (×1.10) AFTER the band clamp, so qualifying is allowed to slightly exceed
+         the band ceiling (by ≤10%).  Unknown/wet objectives use factor 1.0.
+      6. GT7 slider clamp  — both values clamped to [1.00, 20.00].
+
+    Net invariants:
+      * RR/MR → rear_hz >= front_hz  (rear-heavy → rear stiffer)
+      * FF     → front_hz >= rear_hz  (front-heavy → front stiffer)
+      * Both within [1.00, 20.00]
+      * Qualifying both_hz >= race both_hz for the same car + track
+
+    Parameters
+    ----------
+    vehicle:
+        VehicleModel from ``build_vehicle_model()``.
+    objective:
+        Objective string: ``"base"`` | ``"qualifying"`` | ``"race"``.
+        Unknown strings default to factor 1.0 (no crash).
+    track:
+        Duck-typed ``TrackTuneProfile`` or None.  Only consulted when
+        ``track.trustworthy`` is True.
+    front_weight_dist:
+        Front-axle weight fraction in (0.0, 1.0), or None.  When None the
+        per-car data file and then ``_WEIGHT_DIST_PRIOR`` are tried in order.
+
+    Returns
+    -------
+    SpringFrequencies with front_hz, rear_hz and human-readable reason strings.
+    Pure; never raises.
+    """
+    # Function-local import to avoid a module-level cycle
+    # (setup_baseline imports driving_advisor function-locally which imports
+    # setup_engineering function-locally; no module-level cycle exists here
+    # because setup_baseline's only module-level import is setup_ranges).
+    try:
+        from strategy.setup_baseline import NEUTRAL_SEEDS as _NS
+    except Exception:
+        # Should never happen in practice; keep an inline fallback so tests that
+        # import setup_engineering in isolation don't break.
+        _NS = {"springs_front": 3.50, "springs_rear": 3.00}
+
+    _neutral_front = float(_NS.get("springs_front", 3.50))
+    _neutral_rear  = float(_NS.get("springs_rear",  3.00))
+
+    obj = (objective or OBJ_BASE).strip().lower()
+    w_kg = vehicle.weight_kg
+    cat  = (vehicle.category or "").strip()
+    dt   = (vehicle.drivetrain or "").strip().lower()
+
+    # ── Step 1: band selection (first match wins) ────────────────────────────
+    if (w_kg is None or w_kg <= 0) or cat == "" or dt == "":
+        return SpringFrequencies(
+            front_hz=_neutral_front,
+            rear_hz=_neutral_rear,
+            front_reason="insufficient data (weight/category/drivetrain missing) → neutral fallback",
+            rear_reason="insufficient data (weight/category/drivetrain missing) → neutral fallback",
+        )
+
+    cat_lower = cat.lower()
+    if cat_lower.startswith("gr."):
+        lo, hi = _SPRING_BAND_RACE
+        band_name = f"{cat} race band"
+    elif vehicle.high_power_to_weight:
+        lo, hi = _SPRING_BAND_RACE
+        band_name = "race band (high power-to-weight ≥ 320 hp/t)"
+    elif "road" in cat_lower:
+        lo, hi = _SPRING_BAND_ROAD
+        band_name = "road band"
+    else:
+        lo, hi = _SPRING_BAND_SPORT
+        band_name = "sport band"
+
+    # ── Step 2: base Hz = band midpoint ──────────────────────────────────────
+    base_hz = (lo + hi) / 2.0
+
+    # ── Step 3: track adjustment (trustworthy track only; first match) ───────
+    track_note = ""
+    trustworthy = bool(getattr(track, "trustworthy", False)) if track else False
+    if trustworthy:
+        _sf  = getattr(track, "straight_fraction",      None)
+        _cd  = getattr(track, "corner_density_per_km",  None)
+        if _sf is not None and _sf >= _STRAIGHT_HEAVY:
+            base_hz += _TRACK_STRAIGHT_HZ_STEP
+            track_note = "straight-heavy track stiffened"
+        elif _cd is not None and _cd >= _CORNER_DENSE:
+            base_hz += _TRACK_CORNER_HZ_STEP
+            track_note = "technical track softened"
+
+    # ── Step 4: front/rear split ─────────────────────────────────────────────
+    # Resolution order: arg → car file → drivetrain prior
+    if front_weight_dist is not None:
+        frac = float(front_weight_dist)
+        frac_label = "override"
+    else:
+        try:
+            from data.car_weight_distribution import resolve_front_weight_dist as _rwd
+            _file_frac = _rwd(vehicle.car)
+        except Exception:
+            _file_frac = None
+        if _file_frac is not None:
+            frac = float(_file_frac)
+            frac_label = "car data file"
+        else:
+            _prior = _WEIGHT_DIST_PRIOR.get(dt)
+            frac = float(_prior) if _prior is not None else 0.50
+            frac_label = f"{dt.upper()} drivetrain prior" if _prior is not None else "neutral prior"
+
+    # Bounded delta: positive → front stiffer (front-heavy); negative → rear stiffer.
+    delta = (frac - 0.50) * _SPLIT_HZ_SPAN
+    front_hz = max(lo, min(hi, base_hz + delta))
+    rear_hz  = max(lo, min(hi, base_hz - delta))
+
+    # ── Step 5: discipline factor (applied after band clamp) ─────────────────
+    disc_note = ""
+    if obj == OBJ_QUALI:
+        front_hz *= _QUALI_STIFFNESS_FACTOR
+        rear_hz  *= _QUALI_STIFFNESS_FACTOR
+        disc_note = "qualifying stiffened"
+
+    # ── Step 6: GT7 slider clamp ─────────────────────────────────────────────
+    front_hz = max(1.00, min(20.00, front_hz))
+    rear_hz  = max(1.00, min(20.00, rear_hz))
+
+    # ── Reason strings ────────────────────────────────────────────────────────
+    if frac > 0.50:
+        bias_desc = f"{dt.upper()} {frac_label} front-heavy bias (front stiffer)"
+    elif frac < 0.50:
+        bias_desc = f"{dt.upper()} {frac_label} rear-traction bias (rear stiffer)"
+    else:
+        bias_desc = f"{dt.upper()} balanced weight distribution"
+
+    _parts = [band_name, bias_desc]
+    if track_note:
+        _parts.append(track_note)
+    if disc_note:
+        _parts.append(disc_note)
+    reason = ", ".join(_parts)
+
+    return SpringFrequencies(
+        front_hz=round(front_hz, 2),
+        rear_hz=round(rear_hz, 2),
+        front_reason=reason,
+        rear_reason=reason,
+    )
+
+
 def derive_engineering_intents(
     vehicle: VehicleModel,
     track,                       # TrackTuneProfile (duck-typed) or None
