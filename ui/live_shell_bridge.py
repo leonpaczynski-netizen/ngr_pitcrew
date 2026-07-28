@@ -1577,46 +1577,63 @@ class LiveShellBridge(QObject):
         return 0
 
     def _on_shift_engine_seeded(self, data: dict) -> None:
-        """Persist manual engine data and recompute the shift strategy.
+        """Persist the seeded manual engine data, then recompute the shift strategy.
+
+        The engine data is saved FIRST, merged onto whatever is already stored, so it
+        survives even if the strategy computation below can't run. That matters because
+        seeding engine data is usually needed EXACTLY when the car's specs are unknown —
+        which is when the computation is insufficient. Previously the save came after the
+        computation, so an insufficient/failed compute (e.g. result.qualifying_profile is
+        None → .to_dict() raises) silently dropped the engine data the driver just entered.
 
         The timestamp (computed_at) is injected HERE — the domain and store never
         generate a timestamp.
         """
         try:
-            from datetime import datetime
-            from strategy.shift_strategy_inputs import (
-                resolve_shift_inputs, compute_shift_fingerprint, inputs_snapshot)
-            from strategy.shift_strategy_engine import compute_shift_strategy
-            from strategy.setup_engineering import resolve_car_specs
-
             inputs_obj = self._setups.inputs()
             scope = str(inputs_obj.scope or "")
             if not scope:
+                self._feed_shift_strategy()
                 return
-            car = str(inputs_obj.car or "")
-            sheet = self._setups.sheet("race")
-            car_specs = resolve_car_specs(car) if car else {}
-            active_revision = self._shift_active_revision()
+
+            # 1. Persist the engine data first (merge onto existing stored data).
             stored = self._shift_store.get(scope) or {}
-            req_saving = float(stored.get("required_fuel_saving_pct") or 0.0)
+            payload = dict(stored)
+            payload["manual_engine_data"] = dict(data or {})
 
-            shift_inputs = resolve_shift_inputs(
-                sheet, car_specs, active_revision, dict(data or {}))
-            result = compute_shift_strategy(
-                shift_inputs, required_fuel_saving_pct=req_saving)
+            # 2. Best-effort enrichment: fingerprint, timestamp, snapshot, and the
+            #    computed profiles. A failure here must NOT lose the engine data.
+            try:
+                from datetime import datetime
+                from strategy.shift_strategy_inputs import (
+                    resolve_shift_inputs, compute_shift_fingerprint, inputs_snapshot)
+                from strategy.shift_strategy_engine import compute_shift_strategy
+                from strategy.setup_engineering import resolve_car_specs
 
-            fingerprint = compute_shift_fingerprint(shift_inputs)
-            payload = {
-                "fingerprint": fingerprint,
-                "computed_at": datetime.utcnow().isoformat() + "Z",
-                "manual_engine_data": dict(data or {}),
-                # FIX A.4: persist snapshot so next load can name the changed field.
-                "inputs_snapshot": inputs_snapshot(shift_inputs),
-                # FIX B: populate profiles from the real computed result.
-                "qualifying_profile_json": result.qualifying_profile.to_dict(),
-                "race_profile_json":       result.race_profile.to_dict(),
-                "required_fuel_saving_pct": req_saving,
-            }
+                car = str(inputs_obj.car or "")
+                sheet = self._setups.sheet("race")
+                car_specs = resolve_car_specs(car) if car else {}
+                active_revision = self._shift_active_revision()
+                req_saving = float(payload.get("required_fuel_saving_pct") or 0.0)
+
+                shift_inputs = resolve_shift_inputs(
+                    sheet, car_specs, active_revision, dict(data or {}))
+                result = compute_shift_strategy(
+                    shift_inputs, required_fuel_saving_pct=req_saving)
+
+                payload["fingerprint"] = compute_shift_fingerprint(shift_inputs)
+                payload["computed_at"] = datetime.utcnow().isoformat() + "Z"
+                payload["inputs_snapshot"] = inputs_snapshot(shift_inputs)
+                payload["required_fuel_saving_pct"] = req_saving
+                qp = getattr(result, "qualifying_profile", None)
+                rp = getattr(result, "race_profile", None)
+                if qp is not None and hasattr(qp, "to_dict"):
+                    payload["qualifying_profile_json"] = qp.to_dict()
+                if rp is not None and hasattr(rp, "to_dict"):
+                    payload["race_profile_json"] = rp.to_dict()
+            except Exception:
+                pass
+
             self._shift_store.save(scope, payload)
         except Exception:
             pass

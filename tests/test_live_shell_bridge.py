@@ -324,6 +324,24 @@ class TestShiftTelemetryCalibration:
         status = shell.garage_page.shift_strategy_view._lbl_calib.text()
         assert "Calibrated from telemetry" in status
 
+    def test_seeded_engine_data_persists_even_when_strategy_compute_fails(self, qapp, monkeypatch):
+        # Seeding engine data is usually needed EXACTLY when the car's specs are unknown —
+        # i.e. when the strategy computation is insufficient. The seeded values must persist
+        # regardless (they used to be dropped because the save came after a failing compute).
+        import strategy.shift_strategy_engine as eng
+
+        def _boom(*a, **k):
+            raise RuntimeError("insufficient inputs")
+
+        monkeypatch.setattr(eng, "compute_shift_strategy", _boom)
+        shell, _win, b = self._wired(qapp, self._pull())
+        scope = str(b._setups.inputs().scope or "")
+        assert scope
+        seed = {"peak_power_rpm": 7000, "peak_torque_rpm": 5200, "redline": 7600}
+        b._on_shift_engine_seeded(seed)
+        stored = b._shift_store.get(scope) or {}
+        assert stored.get("manual_engine_data") == seed
+
     def test_no_telemetry_database_is_reported_not_crashed(self, qapp):
         shell, _win, b = self._wired(qapp, self._pull())
         b._db = None
