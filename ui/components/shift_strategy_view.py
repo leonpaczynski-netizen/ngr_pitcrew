@@ -531,19 +531,23 @@ class ShiftStrategyView(QWidget):
             self._banner_lbl.setVisible(False)
 
     def _render_engine_card(self, vm: ShiftStrategyVM) -> None:
-        # Seed the spinboxes from the VM's engine data — only when the
-        # driver is not actively editing a field (avoids mid-type clobber).
+        # Seed the spinboxes from the VM's STORED engine data. Two guards keep the driver's
+        # entry from being wiped by the 750 ms refresh before they seed it:
+        #  1. skip a field being actively edited (mid-type clobber), and
+        #  2. skip when there is no stored value yet (None) — the old code reset the field
+        #     to 0 via ``int(value or 0)`` the moment focus was lost, which zeroed a value
+        #     the driver had just typed but not yet seeded. Only a REAL stored value writes.
         for attr, value in [
             ("_spin_power_rpm",  vm.engine_peak_power_rpm),
             ("_spin_torque_rpm", vm.engine_peak_torque_rpm),
             ("_spin_redline",    vm.engine_redline),
         ]:
             spin: QSpinBox = getattr(self, attr)
-            if not spin.hasFocus():
-                v = int(value or 0)
-                spin.blockSignals(True)
-                spin.setValue(v)
-                spin.blockSignals(False)
+            if spin.hasFocus() or value is None:
+                continue
+            spin.blockSignals(True)
+            spin.setValue(int(value))
+            spin.blockSignals(False)
 
     def _render_table(self, vm: ShiftStrategyVM) -> None:
         rows = vm.rows

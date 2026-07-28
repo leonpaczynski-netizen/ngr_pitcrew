@@ -102,6 +102,22 @@ def test_widget_constructs(qapp):
     assert view is not None
 
 
+def test_typed_engine_data_is_not_wiped_by_a_refresh_before_seeding(qapp):
+    """The engine-data spins must keep the driver's typed value across the 750 ms refresh
+    until they seed it. Previously a refresh with no stored value (None) reset them to 0
+    the instant focus was lost, so entered values vanished on click-off."""
+    from ui.components.shift_strategy_view import ShiftStrategyView
+    view = ShiftStrategyView()
+    view._spin_power_rpm.setValue(6500)
+    view._spin_torque_rpm.setValue(5000)
+    view._spin_redline.setValue(7600)
+    # A refresh whose VM carries NO stored engine data yet (rows=() → None values).
+    view.set_view(_minimal_vm(rows=()))
+    assert view._spin_power_rpm.value() == 6500
+    assert view._spin_torque_rpm.value() == 5000
+    assert view._spin_redline.value() == 7600
+
+
 # ---------------------------------------------------------------------------
 # set_view renders one table row per VM row
 # ---------------------------------------------------------------------------
