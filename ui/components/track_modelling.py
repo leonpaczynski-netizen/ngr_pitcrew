@@ -366,9 +366,10 @@ class TrackModellingPage(QWidget):
         return f"{count} — enough to build the model."
 
     def _render_secondaries(self, view: GuidedView) -> None:
+        from ui.qt_layout_utils import discard_widget
         for btn in self._secondaries:
             self._secondary_row.removeWidget(btn)
-            btn.setParent(None)
+            discard_widget(btn)     # hide+delete; never reparent-to-None (stray window)
         self._secondaries = []
         for i, action in enumerate(view.secondary):
             btn = SecondaryActionButton(action.label)

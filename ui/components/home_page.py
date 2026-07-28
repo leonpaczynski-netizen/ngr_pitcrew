@@ -339,11 +339,11 @@ class HomePage(QWidget):
         self._attention_card.setVisible(bool(msgs))
 
         # -- readiness
-        while self._readiness_box.count():
-            item = self._readiness_box.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
+        # Clear via the safe helper: reparenting the visible holders to None (the old
+        # idiom) promoted each to a native top-level that flashed once per 750 ms
+        # refresh — the stray-window bug. hide()+deleteLater() never creates one.
+        from ui.qt_layout_utils import clear_layout
+        clear_layout(self._readiness_box)
         dims = list(view.get("readiness") or []) if has_view else []
         for dim in dims:
             try:

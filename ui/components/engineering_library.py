@@ -122,7 +122,9 @@ class EngineeringLibrary(QWidget):
             self._stack.setCurrentIndex(1)
             return False
         self._hosted = widget
-        widget.setParent(None)
+        # addWidget reparents into the host directly; hide first so the move never
+        # passes through a visible top-level (the stray-window flash).
+        widget.hide()
         self._detail_host.addWidget(widget)
         widget.setVisible(True)
         self._detail_title.set_text(title or "")
@@ -136,7 +138,8 @@ class EngineeringLibrary(QWidget):
         self._hosted = None
         if w is not None:
             self._detail_host.removeWidget(w)
-            w.setParent(None)
+            from ui.qt_layout_utils import detach_widget
+            detach_widget(w)     # hidden before reparent-to-None → no top-level flash
         return w
 
     def showing_detail(self) -> bool:

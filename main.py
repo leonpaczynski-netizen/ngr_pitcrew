@@ -735,8 +735,11 @@ def main() -> None:
     _stray_guard = None
     try:
         from ui.stray_window_guard import install_stray_window_guard
+        _stray_log = os.path.join(
+            os.path.dirname(config_path) or ".", "stray_window.log")
         _stray_guard = install_stray_window_guard(
-            app, _new_shell if _new_shell is not None else window, logger=logger)
+            app, _new_shell if _new_shell is not None else window,
+            logger=logger, log_path=_stray_log)
     except Exception as _exc:
         print(f"[StrayWindowGuard] not installed: {_exc}")
 

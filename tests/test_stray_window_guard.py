@@ -96,6 +96,36 @@ class TestSuppression:
         assert out.count("suppressed a stray top-level window") == 1
 
 
+class TestSourceCaptureAndFileSink:
+    def test_report_written_to_log_file_with_source(self, qapp, tmp_path):
+        # The injected logger (a LapDataLogger) has no .warning; the file sink must
+        # still capture the report so the culprit survives a console-less run.
+        log = tmp_path / "stray_window.log"
+        g = StrayWindowGuard(main_window=None, log_path=str(log))
+
+        def _make_and_show():           # a named frame we expect to see in the trace
+            w = QWidget()
+            w.show()
+            g.eventFilter(w, _show_event())
+
+        _make_and_show()
+        text = log.read_text(encoding="utf-8")
+        assert "suppressed a stray top-level window" in text
+        assert "shown from:" in text
+        # The capturing frame is the application code that showed the window.
+        assert "_make_and_show" in text
+
+    def test_logger_without_warning_falls_back_to_print(self, qapp, capsys, tmp_path):
+        class _NoWarn:                  # mimics LapDataLogger (no .warning)
+            pass
+        g = StrayWindowGuard(main_window=None, logger=_NoWarn(),
+                             log_path=str(tmp_path / "s.log"))
+        w = QWidget()
+        w.show()
+        g.eventFilter(w, _show_event())
+        assert "suppressed a stray top-level window" in capsys.readouterr().out
+
+
 class TestInstall:
     def test_install_returns_guard_and_is_disablable(self, qapp, monkeypatch):
         monkeypatch.delenv("NGR_NO_STRAY_GUARD", raising=False)

@@ -27,6 +27,7 @@ Disable with the environment variable ``NGR_NO_STRAY_GUARD=1`` if it ever misfir
 from __future__ import annotations
 
 import os
+import traceback
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QEvent, Qt
@@ -47,11 +48,16 @@ class StrayWindowGuard(QObject):
     """Application event filter that suppresses stray focus-stealing top-levels."""
 
     def __init__(self, main_window: Optional[QWidget], logger=None,
-                 hide_empty: bool = True) -> None:
+                 hide_empty: bool = True, log_path: Optional[str] = None) -> None:
         super().__init__()
         self._main = main_window
         self._logger = logger
         self._hide_empty = hide_empty
+        #: A dedicated on-disk sink. The injected ``logger`` is a LapDataLogger with no
+        #: ``.warning`` — so the report used to fall back to bare ``print`` and was lost
+        #: whenever the app ran without a console. This file always captures it, with the
+        #: source traceback, so the culprit can be found from a single real run.
+        self._log_path = log_path
         #: class name -> times seen, so each culprit is logged once (then counted).
         self._seen: dict[str, int] = {}
 
@@ -98,21 +104,58 @@ class StrayWindowGuard(QObject):
         except Exception:
             return f"class={type(w).__name__} (describe failed)"
 
+    def _source_frames(self) -> str:
+        """The project call stack at the moment the stray window was shown.
+
+        A programmatic ``widget.show()`` delivers the Show event SYNCHRONOUSLY inside
+        the ``show()`` call, so this stack names the exact code that created and showed
+        the window — which is what lets the source be removed (the guard is only a net).
+        Qt/stdlib/guard frames are dropped so only the app's own frames remain.
+        """
+        try:
+            frames = traceback.extract_stack()[:-2]   # drop _report + eventFilter
+            keep = []
+            for fr in frames:
+                fn = (fr.filename or "").replace("\\", "/")
+                if "/site-packages/" in fn or "/PyQt6/" in fn:
+                    continue
+                if fn.endswith("ui/stray_window_guard.py"):
+                    continue
+                keep.append(f"    {fr.filename}:{fr.lineno} in {fr.name}() | {fr.line}")
+            tail = keep[-8:] if keep else ["    (no application frames on the stack — "
+                                           "likely a spontaneous window-system show)"]
+            return "\n".join(tail)
+        except Exception:
+            return "    (traceback capture failed)"
+
     def _report(self, w: QWidget, hidden: bool) -> None:
         key = type(w).__name__ + ":" + (w.objectName() or "")
         count = self._seen.get(key, 0) + 1
         self._seen[key] = count
         if count > 1:
             return   # already reported this culprit; the counter is enough
+        source = self._source_frames()
         msg = (f"[StrayWindowGuard] suppressed a stray top-level window "
-               f"({'hidden' if hidden else 'de-focused'}): {self._describe(w)}")
+               f"({'hidden' if hidden else 'de-focused'}): {self._describe(w)}\n"
+               f"  shown from:\n{source}")
+        # Injected logger first (best-effort — it may not have .warning); then a bare
+        # print; then always the dedicated file sink so the line + source survive a
+        # console-less run.
+        logged = False
         if self._logger is not None:
             try:
                 self._logger.warning(msg)
+                logged = True
             except Exception:
-                print(msg)
-        else:
+                logged = False
+        if not logged:
             print(msg)
+        if self._log_path:
+            try:
+                with open(self._log_path, "a", encoding="utf-8") as fh:
+                    fh.write(msg + "\n")
+            except Exception:
+                pass
 
     # ---- the filter -------------------------------------------------------
     def eventFilter(self, obj, event) -> bool:
@@ -138,13 +181,16 @@ class StrayWindowGuard(QObject):
 
 
 def install_stray_window_guard(app, main_window: Optional[QWidget],
-                               logger=None) -> Optional[StrayWindowGuard]:
+                               logger=None, log_path: Optional[str] = None
+                               ) -> Optional[StrayWindowGuard]:
     """Install the guard on ``app``. No-op when NGR_NO_STRAY_GUARD=1 or app is None.
 
-    Returns the guard (kept alive by the caller) or None.
+    ``log_path`` is a dedicated file the guard appends stray-window reports to (with
+    the source traceback), so the culprit survives a console-less run. Returns the
+    guard (kept alive by the caller) or None.
     """
     if app is None or os.environ.get("NGR_NO_STRAY_GUARD") == "1":
         return None
-    guard = StrayWindowGuard(main_window, logger=logger)
+    guard = StrayWindowGuard(main_window, logger=logger, log_path=log_path)
     app.installEventFilter(guard)
     return guard
