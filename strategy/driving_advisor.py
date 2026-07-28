@@ -1595,7 +1595,15 @@ class DrivingAdvisor:
         if drivetrain:
             _drivetrain_str = drivetrain.lower().strip()
         else:
+            # Prefer the curated drivetrain data file (covers 527 cars); the tiny
+            # hardcoded override map is the last-resort fallback.
             _drivetrain_str = _CAR_DT_OVERRIDES.get(car_name)
+            if not _drivetrain_str:
+                try:
+                    from data.car_drivetrain import resolve_drivetrain as _rdt
+                    _drivetrain_str = (_rdt(car_name) or "").lower() or None
+                except Exception:
+                    pass
 
         _drivetrain_enum: "_DrivetrainType | None"
         _dt_map = {

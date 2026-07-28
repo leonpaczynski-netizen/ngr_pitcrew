@@ -165,8 +165,18 @@ def _build(db, config: dict) -> SetupInputs:
         compounds = ""
 
     # The classic form read drivetrain and gear count from two combos that its own car
-    # autofill had populated from these specs — so read the specs directly.
+    # autofill had populated from these specs — so read the specs directly. car_specs
+    # carries NO drivetrain for any car, so fall back to the curated drivetrain data
+    # file (data/car_drivetrains.json) — without it the whole engineering layer runs
+    # drivetrain-blind (identical balance/camber/toe reasoning for a FWD hatch and an
+    # RR 911). Unknown stays "" (callers keep their neutral behaviour).
     drivetrain = _norm(specs.get("drivetrain"))
+    if not drivetrain:
+        try:
+            from data.car_drivetrain import resolve_drivetrain
+            drivetrain = _norm(resolve_drivetrain(car))
+        except Exception:
+            drivetrain = ""
     try:
         num_gears = int(specs.get("num_gears") or 0)
     except (TypeError, ValueError):
