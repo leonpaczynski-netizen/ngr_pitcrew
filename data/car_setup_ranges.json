@@ -94,7 +94,7 @@
     },
     "ballast_kg": {
       "min": 0.0,
-      "max": 0.0
+      "max": 200.0
     },
     "ballast_position": {
       "min": -50,
@@ -200,7 +200,219 @@
     },
     "ballast_kg": {
       "min": 0.0,
-      "max": 60.0
+      "max": 200.0
+    },
+    "ballast_position": {
+      "min": -50,
+      "max": 50
+    },
+    "power_restrictor": {
+      "min": 0.0,
+      "max": 100.0
+    }
+  },
+  "Porsche Cayman GT4 Clubsport '16": {
+    "ride_height_front": {
+      "min": 45,
+      "max": 75
+    },
+    "ride_height_rear": {
+      "min": 55,
+      "max": 90
+    },
+    "springs_front": {
+      "min": 2.5,
+      "max": 4.0
+    },
+    "springs_rear": {
+      "min": 2.5,
+      "max": 4.0
+    },
+    "dampers_front_comp": {
+      "min": 20,
+      "max": 40
+    },
+    "dampers_front_ext": {
+      "min": 30,
+      "max": 50
+    },
+    "dampers_rear_comp": {
+      "min": 20,
+      "max": 40
+    },
+    "dampers_rear_ext": {
+      "min": 30,
+      "max": 50
+    },
+    "arb_front": {
+      "min": 1,
+      "max": 10
+    },
+    "arb_rear": {
+      "min": 1,
+      "max": 10
+    },
+    "camber_front": {
+      "min": 0.0,
+      "max": 6.0
+    },
+    "camber_rear": {
+      "min": 0.0,
+      "max": 6.0
+    },
+    "toe_front": {
+      "min": -1.0,
+      "max": 1.0
+    },
+    "toe_rear": {
+      "min": -1.0,
+      "max": 1.0
+    },
+    "aero_front": {
+      "min": 150,
+      "max": 200
+    },
+    "aero_rear": {
+      "min": 200,
+      "max": 350
+    },
+    "lsd_initial": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_accel": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_decel": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_front_initial": {
+      "min": 0,
+      "max": 60
+    },
+    "lsd_front_accel": {
+      "min": 0,
+      "max": 60
+    },
+    "lsd_front_decel": {
+      "min": 0,
+      "max": 60
+    },
+    "brake_bias": {
+      "min": -5,
+      "max": 5
+    },
+    "ballast_kg": {
+      "min": 0.0,
+      "max": 200.0
+    },
+    "ballast_position": {
+      "min": -50,
+      "max": 50
+    },
+    "power_restrictor": {
+      "min": 0.0,
+      "max": 100.0
+    }
+  },
+  "Ford Shelby GT350R '16": {
+    "ride_height_front": {
+      "min": 75,
+      "max": 160
+    },
+    "ride_height_rear": {
+      "min": 95,
+      "max": 180
+    },
+    "springs_front": {
+      "min": 1.8,
+      "max": 3.7
+    },
+    "springs_rear": {
+      "min": 2.0,
+      "max": 3.9
+    },
+    "dampers_front_comp": {
+      "min": 20,
+      "max": 40
+    },
+    "dampers_front_ext": {
+      "min": 30,
+      "max": 50
+    },
+    "dampers_rear_comp": {
+      "min": 20,
+      "max": 40
+    },
+    "dampers_rear_ext": {
+      "min": 30,
+      "max": 50
+    },
+    "arb_front": {
+      "min": 1,
+      "max": 10
+    },
+    "arb_rear": {
+      "min": 1,
+      "max": 10
+    },
+    "camber_front": {
+      "min": 0.0,
+      "max": 6.0
+    },
+    "camber_rear": {
+      "min": 0.0,
+      "max": 6.0
+    },
+    "toe_front": {
+      "min": -1.0,
+      "max": 1.0
+    },
+    "toe_rear": {
+      "min": -1.0,
+      "max": 1.0
+    },
+    "aero_front": {
+      "min": 60,
+      "max": 160
+    },
+    "aero_rear": {
+      "min": 150,
+      "max": 300
+    },
+    "lsd_initial": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_accel": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_decel": {
+      "min": 5,
+      "max": 60
+    },
+    "lsd_front_initial": {
+      "min": 0,
+      "max": 0
+    },
+    "lsd_front_accel": {
+      "min": 0,
+      "max": 0
+    },
+    "lsd_front_decel": {
+      "min": 0,
+      "max": 0
+    },
+    "brake_bias": {
+      "min": -5,
+      "max": 5
+    },
+    "ballast_kg": {
+      "min": 0.0,
+      "max": 200.0
     },
     "ballast_position": {
       "min": -50,

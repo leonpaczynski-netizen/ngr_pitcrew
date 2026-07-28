@@ -287,6 +287,8 @@ class LiveShellBridge(QObject):
                     gp.car_ranges_requested.connect(self._on_car_ranges)
                 if hasattr(gp, "gearing_changed"):
                     gp.gearing_changed.connect(self._on_gearing_changed)
+                if hasattr(gp, "ballast_changed"):
+                    gp.ballast_changed.connect(self._on_ballast_changed)
         except Exception:
             pass
         try:
@@ -2212,6 +2214,20 @@ class LiveShellBridge(QObject):
                     sheet.get("transmission_max_speed_kmh") or 0.0))
         except Exception:
             pass
+
+    def _on_ballast_changed(self, ballast: dict) -> None:
+        """Write the driver's ballast entry (weight + position) onto the selected
+        discipline's sheet, through the canonical clamp/authority/persist path — the same
+        write as any other setup change. Ballast is a real handling parameter and a common
+        regulation requirement (adding weight to meet a series minimum), so it belongs in
+        the setup like springs or ARBs."""
+        if not ballast:
+            return
+        outcome = self._setups.apply(self._discipline, ballast)
+        if outcome.ok:
+            self._mirror_to_classic(self._discipline)
+        self._garage_status(outcome.reason or "Ballast updated.")
+        self.refresh()
 
     def _on_gearing_changed(self, gearing: dict) -> None:
         """Write the driver's gear-ratio entry onto the selected discipline's sheet.

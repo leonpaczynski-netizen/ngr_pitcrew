@@ -130,6 +130,7 @@ class SetupWorkspace(QWidget):
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
     car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
+    ballast_changed = pyqtSignal(dict)           # {ballast_kg, ballast_position}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -365,6 +366,7 @@ class SetupWorkspace(QWidget):
         # Bubble gearing_changed from the sheet up through the workspace so the bridge
         # wiring (which connects to garage_page.gearing_changed) still works unchanged.
         self._sheet.gearing_changed.connect(self.gearing_changed)
+        self._sheet.ballast_changed.connect(self.ballast_changed)
 
         lay.addWidget(self._stack, 1)
 
@@ -518,6 +520,20 @@ class SetupWorkspace(QWidget):
         # Full GT7-style settings sheet — the changed fields are highlighted.
         changed = {r.field for r in vm.proposed_rows() if r.field}
         self._sheet.set_setup(setup_values, changed_fields=changed)
+        # Load the current ballast into the editable ballast entry (values live in the
+        # setup dict; a scalar or [value] shape is accepted).
+        sv = setup_values or {}
+
+        def _scalar(v):
+            return (v[0] if isinstance(v, (list, tuple)) and v else v) or 0
+
+        try:
+            if hasattr(self._sheet, "set_ballast"):
+                self._sheet.set_ballast(
+                    ballast_kg=float(_scalar(sv.get("ballast_kg")) or 0.0),
+                    ballast_position=int(_scalar(sv.get("ballast_position")) or 0))
+        except Exception:
+            pass
         self._btn_full.setEnabled(bool(setup_values))
         if not setup_values:
             self._btn_changed.setChecked(True)

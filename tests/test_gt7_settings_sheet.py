@@ -69,3 +69,24 @@ class TestGT7SettingsSheet:
         s = GT7SettingsSheet()
         s.set_setup("not a dict")            # must not raise
         assert s._empty.isHidden() is False
+
+    def test_ballast_is_editable_and_emits_changes(self, qapp):
+        s = GT7SettingsSheet()
+        seen = []
+        s.ballast_changed.connect(seen.append)
+        # Load stored ballast (e.g. 109 kg to meet a minimum weight, biased rearward).
+        s.set_ballast(ballast_kg=109, ballast_position=8)
+        assert s._ballast_kg_spin.value() == 109
+        assert s._ballast_pos_spin.value() == 8
+        # Editing emits the change for the bridge to apply/persist.
+        s._ballast_pos_spin.setValue(12)
+        s._on_ballast_edited()
+        assert seen and seen[-1] == {"ballast_kg": 109.0, "ballast_position": 12}
+
+    def test_ballast_survives_a_setup_rerender(self, qapp):
+        # The editable ballast section must persist across set_setup like the gearbox entry.
+        s = GT7SettingsSheet()
+        s.set_ballast(ballast_kg=90, ballast_position=-5)
+        s.set_setup(_setup())
+        assert s._ballast_kg_spin.value() == 90
+        assert s._ballast_pos_spin.value() == -5

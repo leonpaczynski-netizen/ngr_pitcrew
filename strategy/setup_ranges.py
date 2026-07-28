@@ -44,7 +44,7 @@ GENERIC_DEFAULTS: dict[str, tuple] = {
     "lsd_front_accel":        (0,    60),
     "lsd_front_decel":        (0,    60),
     "brake_bias":             (-5,   5),
-    "ballast_kg":             (0,    60),
+    "ballast_kg":             (0,    200),   # GT7 ballast slider is 0–200 kg for all cars
     "ballast_position":       (-50,  50),
     "power_restrictor":       (0,    100),
 }

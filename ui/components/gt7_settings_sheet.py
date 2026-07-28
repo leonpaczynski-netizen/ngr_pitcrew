@@ -69,6 +69,10 @@ class GT7SettingsSheet(QWidget):
     #: Payload: {gear_ratios: [float, ...], final_drive: float, transmission_max_speed_kmh: float}
     gearing_changed = pyqtSignal(dict)
 
+    #: Emitted when the driver finishes editing ballast weight or position.
+    #: Payload: {ballast_kg: float, ballast_position: int}
+    ballast_changed = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ngrGt7Sheet")
@@ -102,6 +106,96 @@ class GT7SettingsSheet(QWidget):
         # It is a persistent widget (not rebuilt on each set_setup call); set_setup
         # rescues it before clearing the column and re-adds it after.
         self._trans_section = self._build_transmission_section()
+        self._ballast_section = self._build_ballast_section()
+
+    def _build_ballast_section(self) -> QFrame:
+        """Editable Ballast entry: weight (kg) and position (front −/rear +).
+
+        Ballast is a real handling tool AND often a regulation requirement (a series
+        minimum weight is met by adding ballast), so the driver must be able to enter both
+        how much and where it sits — the balance shifts with position. editingFinished
+        emits ballast_changed; the value goes through the same clamp/persist path as any
+        setup field."""
+        box = QFrame()
+        box.setObjectName("ngrGt7Section")
+        box.setStyleSheet(
+            f"#ngrGt7Section {{ background: {_t.CARBON_RAISED}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_MD}px; }}")
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(_t.SPACE_MD, _t.SPACE_SM, _t.SPACE_MD, _t.SPACE_SM)
+        outer.setSpacing(_t.SPACE_XS)
+
+        title = QLabel("Ballast (entry)")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_t.TEXT_HI}; font-weight: 700; font-size: {_t.FS_LABEL}pt; "
+            f"letter-spacing: 0.5px; border-bottom: 1px solid {_t.HAIRLINE}; "
+            f"padding-bottom: 3px;")
+        outer.addWidget(title)
+
+        note = QLabel("Weight added to meet a minimum; position −50 (front) … +50 (rear) "
+                      "shifts the balance.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        outer.addWidget(note)
+
+        qss = (f"QDoubleSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+               f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+               f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(_t.SPACE_SM)
+        grid.setVerticalSpacing(2)
+
+        kg_cap = QLabel("Ballast (kg)")
+        kg_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        kg_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(kg_cap, 0, 0)
+        self._ballast_kg_spin = QDoubleSpinBox()
+        self._ballast_kg_spin.setRange(0.0, 200.0)
+        self._ballast_kg_spin.setSingleStep(1.0)
+        self._ballast_kg_spin.setDecimals(0)
+        self._ballast_kg_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._ballast_kg_spin.setMaximumWidth(100)
+        self._ballast_kg_spin.setStyleSheet(qss)
+        self._ballast_kg_spin.editingFinished.connect(self._on_ballast_edited)
+        grid.addWidget(self._ballast_kg_spin, 1, 0)
+
+        pos_cap = QLabel("Position")
+        pos_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        pos_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(pos_cap, 0, 1)
+        self._ballast_pos_spin = QDoubleSpinBox()
+        self._ballast_pos_spin.setRange(-50.0, 50.0)
+        self._ballast_pos_spin.setSingleStep(1.0)
+        self._ballast_pos_spin.setDecimals(0)
+        self._ballast_pos_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._ballast_pos_spin.setMaximumWidth(100)
+        self._ballast_pos_spin.setStyleSheet(qss)
+        self._ballast_pos_spin.editingFinished.connect(self._on_ballast_edited)
+        grid.addWidget(self._ballast_pos_spin, 1, 1)
+
+        grid.setColumnStretch(2, 1)
+        outer.addLayout(grid)
+        return box
+
+    def _on_ballast_edited(self) -> None:
+        self.ballast_changed.emit({
+            "ballast_kg": float(self._ballast_kg_spin.value()),
+            "ballast_position": int(self._ballast_pos_spin.value()),
+        })
+
+    def set_ballast(self, ballast_kg: float = 0.0, ballast_position: int = 0) -> None:
+        """Load stored ballast into the entry spins. Blocks signals so the programmatic
+        feed doesn't re-emit; skips while a spin has focus so a mid-edit isn't overwritten."""
+        spins = (self._ballast_kg_spin, self._ballast_pos_spin)
+        if any(s.hasFocus() for s in spins):
+            return
+        self._ballast_kg_spin.blockSignals(True)
+        self._ballast_kg_spin.setValue(float(ballast_kg or 0.0))
+        self._ballast_kg_spin.blockSignals(False)
+        self._ballast_pos_spin.blockSignals(True)
+        self._ballast_pos_spin.setValue(float(ballast_position or 0))
+        self._ballast_pos_spin.blockSignals(False)
 
     def _build_transmission_section(self) -> QFrame:
         """Build the editable Transmission entry box (gear ratios, final drive, top speed).
@@ -203,9 +297,10 @@ class GT7SettingsSheet(QWidget):
         """Render a setup dict in GT7 layout. ``changed_fields`` are highlighted."""
         changed = set(changed_fields or ())
 
-        # Rescue the persistent Transmission section before clearing the column so it
-        # isn't scheduled for deletion by _clear_layout.
+        # Rescue the persistent editable sections before clearing the column so they
+        # aren't scheduled for deletion by _clear_layout.
         self._right.removeWidget(self._trans_section)
+        self._right.removeWidget(self._ballast_section)
 
         _clear_layout(self._left)
         _clear_layout(self._right)
@@ -225,9 +320,10 @@ class GT7SettingsSheet(QWidget):
             else:
                 self._right.addWidget(panel)
 
-        # Always show the editable Transmission section in the right column, whether or
-        # not there are setup values — the driver can enter gear ratios at any time.
+        # Always show the editable Transmission + Ballast sections in the right column,
+        # whether or not there are setup values — the driver can enter them at any time.
         self._right.addWidget(self._trans_section)
+        self._right.addWidget(self._ballast_section)
         self._left.addStretch(1)
         self._right.addStretch(1)
 
