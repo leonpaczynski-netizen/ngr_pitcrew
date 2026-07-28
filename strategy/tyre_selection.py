@@ -187,6 +187,18 @@ def is_wet_weather(weather: str) -> bool:
     return str(weather or "").strip().lower() in _WET_WEATHER
 
 
+def is_fixed_weather(weather: str) -> bool:
+    """Whether the event weather is DETERMINISTIC — the track's wetness is decided by the
+    event, not by the driver.
+
+    A fixed event (Fixed Dry, Fixed Wet, Light/Heavy Rain) has a known condition, so the
+    driver's manual "track is wet" toggle is irrelevant and should not apply. Only "Random
+    Weather" (or an unset weather) is indeterminate and relies on the driver's signal.
+    """
+    w = str(weather or "").strip().lower()
+    return bool(w) and w != "random" and w != "random weather"
+
+
 def _is_wet_code(code: str) -> bool:
     comp = get_by_code(normalise_code(str(code or "")) or "")
     return bool(comp and comp.wet)

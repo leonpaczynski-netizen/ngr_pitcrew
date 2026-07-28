@@ -84,6 +84,9 @@ class LiveShellBridge(QObject):
         #: event weather; True/False = the driver has said the track is wet/dry (the only
         #: signal for Random Weather or a track that changes, since GT7 reports no rain).
         self._track_wet: Optional[bool] = None
+        #: The cycle the wet override belongs to; when the active cycle changes the
+        #: override is dropped so a wet-toggle never leaks from one event to the next.
+        self._wet_cycle_id: Optional[str] = None
         #: "" or a short description of the long-running Garage job in flight, so a
         #: pressed Analyse/Baseline button is never silent.
         self._pending_work = ""
@@ -2270,13 +2273,25 @@ class LiveShellBridge(QObject):
                     required=getattr(ev, "required_tyres", ()) or (),
                     race_duration_minutes=float(getattr(ev, "race_duration_minutes", 0) or 0)),
                 current_code(setup))
-            # Reflect the effective wet state on the "Track is wet" toggle: the driver's
-            # override when set, else the event weather.
+            # Reflect the effective wet state on the "Track is wet" toggle. Switching
+            # events clears any leaked driver override so a wet-toggle from a previous
+            # event never bleeds onto the next one. For a FIXED-weather event the event
+            # decides the condition and the toggle is disabled; only Random Weather relies
+            # on the driver's manual signal.
             if hasattr(garage, "set_track_wet"):
-                from strategy.tyre_selection import is_wet_weather
-                wet = (self._track_wet if self._track_wet is not None
-                       else is_wet_weather(str(getattr(ev, "weather", "") or "")))
-                garage.set_track_wet(bool(wet))
+                from strategy.tyre_selection import is_wet_weather, is_fixed_weather
+                weather = str(getattr(ev, "weather", "") or "")
+                cid = self._runs.active_cycle_id() if self._runs else None
+                if cid != self._wet_cycle_id:
+                    self._wet_cycle_id = cid
+                    self._track_wet = None            # event changed → drop stale override
+                fixed = is_fixed_weather(weather)
+                if fixed:
+                    self._track_wet = None            # event decides; ignore any override
+                    wet = is_wet_weather(weather)
+                else:
+                    wet = self._track_wet if self._track_wet is not None else False
+                garage.set_track_wet(bool(wet), enabled=not fixed)
         except Exception:
             pass
 

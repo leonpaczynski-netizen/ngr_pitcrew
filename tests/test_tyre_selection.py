@@ -159,5 +159,16 @@ class TestQualifyingCompoundRule:
         assert is_wet_weather("Fixed Dry") is False
         assert is_wet_weather("Random Weather") is False
 
+    def test_fixed_weather_is_deterministic_random_is_not(self):
+        from strategy.tyre_selection import is_fixed_weather
+        # A fixed event decides its own condition — the driver toggle must not apply.
+        assert is_fixed_weather("Fixed Dry") is True
+        assert is_fixed_weather("Fixed Wet") is True
+        assert is_fixed_weather("Heavy Rain") is True
+        # Random (or unset) is indeterminate → the driver's manual signal is the only cue.
+        assert is_fixed_weather("Random") is False
+        assert is_fixed_weather("Random Weather") is False
+        assert is_fixed_weather("") is False
+
     def test_never_raises_on_garbage(self):
         assert resolve_qualifying_compound(available=None, weather=None) is not None

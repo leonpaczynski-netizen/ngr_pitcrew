@@ -261,3 +261,23 @@ class TestGearingControls:
         w.gearing_changed.emit({"gear_ratios": [3.0], "final_drive": 3.5,
                                 "transmission_max_speed_kmh": 260.0})
         assert len(seen) == 1
+
+
+class TestTrackWetToggle:
+    """A fixed-weather event decides its own condition; the toggle is disabled and shows
+    it. Only Random Weather leaves the driver's manual override live (UAT: a Fixed Dry
+    event wrongly showed 'wet')."""
+
+    def test_fixed_weather_disables_the_toggle_and_relabels_it(self, qapp):
+        w = SetupWorkspace()
+        w.set_track_wet(False, enabled=False)
+        assert w._wet.isEnabled() is False
+        assert "set by event weather" in w._wet.text()
+        assert w._wet.isChecked() is False
+
+    def test_random_weather_leaves_the_toggle_live(self, qapp):
+        w = SetupWorkspace()
+        w.set_track_wet(True, enabled=True)
+        assert w._wet.isEnabled() is True
+        assert w._wet.text() == "Track is wet (rain)"
+        assert w._wet.isChecked() is True

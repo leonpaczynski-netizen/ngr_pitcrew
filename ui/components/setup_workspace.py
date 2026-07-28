@@ -602,13 +602,19 @@ class SetupWorkspace(QWidget):
     def _on_wet_toggled(self, checked: bool) -> None:
         self.track_wet_changed.emit(bool(checked))
 
-    def set_track_wet(self, wet: bool) -> None:
+    def set_track_wet(self, wet: bool, enabled: bool = True) -> None:
         """Reflect the effective wet state without re-emitting (the caller drives it).
 
-        Skipped while the driver has the box focused, so the 750 ms feed never flips a
-        tick the driver just made.
+        ``enabled`` is False for a FIXED-weather event: the condition is decided by the
+        event, so the box shows it but the driver cannot override it. Only Random Weather
+        leaves the toggle live. Skipped while the driver has the box focused, so the 750 ms
+        feed never flips a tick the driver just made.
         """
         try:
+            if self._wet.isEnabled() != bool(enabled):
+                self._wet.setEnabled(bool(enabled))
+                self._wet.setText("Track is wet (rain)" if enabled
+                                  else "Track is wet (rain) — set by event weather")
             if self._wet.hasFocus():
                 return
             if self._wet.isChecked() != bool(wet):
