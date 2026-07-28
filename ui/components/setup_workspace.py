@@ -430,12 +430,34 @@ class SetupWorkspace(QWidget):
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
-        self._vm = vm
-        self._lineage.set_nodes(lineage_nodes or ())
-        self._compare.set_comparisons(comparisons or ())
         discipline = (discipline or "race").lower()
         if discipline not in {k for k, _ in DISCIPLINES}:
             discipline = "race"
+
+        # Skip an identical re-render. The Garage feed repaints this panel every 750 ms
+        # with the SAME recommendation; re-mutating every pill/tooltip/table cell on each
+        # tick made a native tooltip window flash and follow the mouse (UAT: "flashing box
+        # on the race setup"). Only render when something the driver would see changed.
+        try:
+            _rows_fp = tuple((r.field, r.current_value, r.recommended_value, r.delta,
+                              r.confidence) for r in vm.proposed_rows())
+        except Exception:
+            _rows_fp = ()
+        fingerprint = (
+            discipline, active_setup, bool(saved), bool(applied), bool(validated),
+            bool(has_recorded_run), getattr(vm.header, "primary_issue", ""),
+            len(getattr(vm, "why_cards", ()) or ()),
+            tuple(sorted((setup_values or {}).keys())), _rows_fp,
+            tuple(str(n) for n in (lineage_nodes or ())),
+            tuple(str(c) for c in (comparisons or ())),
+        )
+        if fingerprint == getattr(self, "_last_reco_fp", None):
+            return
+        self._last_reco_fp = fingerprint
+
+        self._vm = vm
+        self._lineage.set_nodes(lineage_nodes or ())
+        self._compare.set_comparisons(comparisons or ())
         self._selector.set_discipline(discipline)
         self._note.setText(DISCIPLINE_NOTE.get(discipline, ""))
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")

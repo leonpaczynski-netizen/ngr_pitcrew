@@ -281,3 +281,34 @@ class TestTrackWetToggle:
         assert w._wet.isEnabled() is True
         assert w._wet.text() == "Track is wet (rain)"
         assert w._wet.isChecked() is True
+
+
+class TestRenderIsSkippedWhenNothingChanged:
+    """The Garage feed repaints every 750 ms with the same recommendation; re-mutating
+    every pill/tooltip/table cell each tick made a native tooltip window flash (UAT). An
+    identical call is now a no-op; a changed one still renders."""
+
+    def _vm(self):
+        return build_recommendation_vm({
+            "changes": [{"field": "arb_rear", "setting": "Rear ARB", "from": 5, "to": 3,
+                         "confidence_level": "high", "symptom": "understeer"}],
+            "diagnosis": {"primary_issue": "Mid-corner understeer"},
+        })
+
+    def test_identical_second_call_is_skipped(self, qapp):
+        w = SetupWorkspace()
+        w.set_recommendation(self._vm(), discipline="race", validated=False)
+        # Externally flip the validated pill; an identical feed call must NOT overwrite it,
+        # proving the render was skipped.
+        w._pill_valid.set_status("SENTINEL", tone="neutral")
+        w.set_recommendation(self._vm(), discipline="race", validated=False)
+        assert "SENTINEL" in w._pill_valid.text()
+
+    def test_a_changed_field_re_renders(self, qapp):
+        w = SetupWorkspace()
+        w.set_recommendation(self._vm(), discipline="race", validated=False)
+        w._pill_valid.set_status("SENTINEL", tone="neutral")
+        # validated True is a real change → renders → pill no longer the sentinel.
+        w.set_recommendation(self._vm(), discipline="race", validated=True)
+        assert "SENTINEL" not in w._pill_valid.text()
+        assert "Validated by a run" in w._pill_valid.text()
