@@ -1334,6 +1334,43 @@ class SessionDB:
             self._migrate_v28()
             self._conn.execute("PRAGMA user_version = 28")
             self._conn.commit()
+        if version < 29:
+            self._migrate_v29()
+            self._conn.execute("PRAGMA user_version = 29")
+            self._conn.commit()
+
+    def _migrate_v29(self) -> None:
+        """Backfill the stable event_id link so evidence matches by id, not text.
+
+        Existing prep data linked cycles↔sessions by track/car TEXT (fragile — a spelling
+        or encoding difference silently dropped valid recorded runs). Both cycles and
+        sessions already carry an event_id column; this fills the ones left at 0:
+          1. cycle.event_id  ← events.id, resolved by the cycle's event_name.
+          2. session.event_id ← the event_id of the cycle it is bound to (via the
+             activity-session bindings). So a driver's already-recorded, bound runs gain
+             the stable link and register as evidence. Idempotent (only touches 0 rows).
+        """
+        try:
+            self._conn.execute(
+                """UPDATE event_preparation_cycles
+                   SET event_id = (SELECT e.id FROM events e
+                                   WHERE e.name = event_preparation_cycles.event_name)
+                   WHERE (event_id IS NULL OR event_id = 0)
+                     AND event_name IN (SELECT name FROM events)""")
+            self._conn.execute(
+                """UPDATE sessions
+                   SET event_id = (
+                       SELECT c.event_id FROM event_preparation_activity_sessions b
+                       JOIN event_preparation_cycles c ON c.cycle_id = b.cycle_id
+                       WHERE CAST(sessions.id AS TEXT) = b.session_id AND c.event_id > 0
+                       LIMIT 1)
+                   WHERE (event_id IS NULL OR event_id = 0)
+                     AND EXISTS (
+                       SELECT 1 FROM event_preparation_activity_sessions b
+                       JOIN event_preparation_cycles c ON c.cycle_id = b.cycle_id
+                       WHERE CAST(sessions.id AS TEXT) = b.session_id AND c.event_id > 0)""")
+        except Exception:
+            pass  # additive backfill is best-effort — never block startup
 
     def _migrate_v28(self) -> None:
         """Engineering-Brain Phase 48 — Event Preparation Cycle persistence (schema v28). Adds THREE
@@ -6365,14 +6402,16 @@ class SessionDB:
         count (SELECT-only, single bounded JOIN — constant query count regardless of session count).
         This is the event-scoped Practice query the flat sessions.event_id column never provided."""
         rows = self._conn.execute(
-            "SELECT b.session_id, b.activity_id, a.activity_type, s.total_laps, s.track, s.car_name "
+            "SELECT b.session_id, b.activity_id, a.activity_type, s.total_laps, s.track, "
+            "       s.car_name, s.event_id "
             "FROM event_preparation_activity_sessions b "
             "JOIN event_preparation_activities a ON a.activity_id = b.activity_id "
             "LEFT JOIN sessions s ON CAST(s.id AS TEXT) = b.session_id "
             "WHERE b.cycle_id = ? ORDER BY b.session_id",
             (str(cycle_id or ""),)).fetchall()
         return [{"session_id": r[0], "activity_id": r[1], "activity_type": r[2],
-                 "total_laps": int(r[3] or 0), "track": r[4] or "", "car_name": r[5] or ""}
+                 "total_laps": int(r[3] or 0), "track": r[4] or "", "car_name": r[5] or "",
+                 "event_id": int(r[6] or 0)}
                 for r in rows]
 
     def build_event_preparation_report(self, cycle_id: str, memory_context_key: str = "",
@@ -6445,14 +6484,30 @@ class SessionDB:
         # silently strengthen exact event confidence). Invalid (no laps) sessions contribute nothing.
         ctrack = (cyc_row["track"] or "").strip().lower()
         ccar = (cyc_row["car"] or "").strip().lower()
+        cev = int(cyc_row["event_id"] or 0)
         samples = []
         for s in sess_rows:
             laps = int(s["total_laps"] or 0)
+            sev = int(s.get("event_id") or 0)
+            s_track = (s["track"] or "").strip().lower()
+            s_car = (s["car_name"] or "").strip().lower()
             compat = EvidenceCompatibility.EXACT
-            if ctrack and (s["track"] or "").strip().lower() and (s["track"] or "").strip().lower() != ctrack:
-                compat = EvidenceCompatibility.INCOMPATIBLE
-            elif ccar and (s["car_name"] or "").strip().lower() and (s["car_name"] or "").strip().lower() != ccar:
-                compat = EvidenceCompatibility.INCOMPATIBLE
+            if cev and sev:
+                # STABLE event_id link — the authority. The TRACK text is NOT checked here
+                # (event_id already pins the track), which is what fixes the é/encoding
+                # corruption that silently dropped valid runs. The CAR is still verified:
+                # one event = one car, and car names are reliable ASCII, so a run in the
+                # wrong car genuinely must not count as this event's evidence.
+                if sev != cev:
+                    compat = EvidenceCompatibility.INCOMPATIBLE
+                elif ccar and s_car and s_car != ccar:
+                    compat = EvidenceCompatibility.INCOMPATIBLE
+            else:
+                # Legacy rows with no event_id — fall back to the track+car text match.
+                if ctrack and s_track and s_track != ctrack:
+                    compat = EvidenceCompatibility.INCOMPATIBLE
+                elif ccar and s_car and s_car != ccar:
+                    compat = EvidenceCompatibility.INCOMPATIBLE
             samples.append(PracticeEvidenceSample(
                 session_id=str(s["session_id"]), activity_id=s["activity_id"],
                 activity_type=_atype(s["activity_type"]), is_valid=laps > 0, valid_laps=laps,
