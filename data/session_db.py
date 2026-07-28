@@ -8928,6 +8928,25 @@ class SessionDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_recent_driver_feedback(self, limit: int = 12) -> list[dict]:
+        """Most recent driver_feedback rows across ALL cars/tracks (driver-level).
+
+        Driver STYLE is a property of the driver, not a car+track — so profile
+        evolution (Phase 3) reads feedback broadly. Recency-ordered; the corroboration
+        threshold downstream keeps one off-context session from moving the profile.
+        Never raises.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT * FROM driver_feedback
+                       ORDER BY submitted_at DESC LIMIT ?""",
+                    (int(limit),),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     # ------------------------------------------------------------------
     # Grip alerts
     # ------------------------------------------------------------------

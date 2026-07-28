@@ -103,6 +103,19 @@ class SetupRecommendationResult:
 # Keep in _CANONICAL_SETUP_PARAMS so they are still recognised/diagnostic.
 _DISPLAY_ONLY_FIELDS: frozenset[str] = frozenset({"transmission_max_speed_kmh"})
 
+
+def _resolve_driver_profile(db):
+    """(DriverProfile, evolution_rationale) — evolved from observed driving when a db
+    is available (Phase 3), the static baseline otherwise. Never raises."""
+    from strategy.setup_driver_profile import build_driver_profile
+    try:
+        if db is not None:
+            from strategy.driver_profile_evolution import build_evolved_driver_profile
+            return build_evolved_driver_profile(db)
+    except Exception:
+        pass
+    return build_driver_profile(), []
+
 # Setup-tuning categories that can be locked by event rules. Must match the
 # selectable checkboxes in DashboardWindow._TUNING_CATEGORIES — "tyres" is NOT a
 # setup-tuning field (compound choice is a strategy decision handled elsewhere),
@@ -1722,7 +1735,9 @@ class DrivingAdvisor:
                 from strategy.setup_driver_profile import build_driver_profile
                 from strategy.setup_rule_engine import run_rule_engine, RuleOutcomeStore
                 from strategy.setup_plan import plan_to_raw_data, rejected_to_json
-                _profile = build_driver_profile()
+                # Phase 3: evolve the static profile from observed driving so advice
+                # tracks how the driver drives NOW. Falls back to the static baseline.
+                _profile, _profile_evolution = _resolve_driver_profile(self._db)
                 _ranges = resolve_ranges(car_name)
                 # Group 46: load learning outcomes from DB and populate RuleOutcomeStore.
                 # car key = str(car_id) to match what _process_rule receives.
@@ -1800,6 +1815,11 @@ class DrivingAdvisor:
                 f"Dominant problem: {(diagnosis or {}).get('dominant_problem', 'unknown')}. "
                 f"Rule engine proposed {len(_plan.proposed)} change(s)."
             )
+            # Phase 3: disclose when the driver profile was evolved from observed
+            # driving (explainability — the driver sees WHY the bias shifted).
+            if _profile_evolution:
+                _analysis_text += " Learned from your recent sessions — " + \
+                    " ".join(_profile_evolution)
             # Phase 8: context-aware fuel/aero reasoning. The old note ("fuel is not a
             # setup lever") was too absolute — on a fuel-heavy, drag-sensitive circuit
             # aero/gearing DO affect fuel-per-lap and total race time. When that holds,
@@ -2556,8 +2576,8 @@ class DrivingAdvisor:
         }, ensure_ascii=False)
 
         try:
-            # Step 1: build driver profile
-            _profile = build_driver_profile()
+            # Step 1: build driver profile (Phase 3: evolved from observed driving)
+            _profile, _profile_evolution = _resolve_driver_profile(self._db)
 
             # Step 2: build the baseline raw_data dict
             # Group 45: wire session_type, tyre_wear_multiplier, car_class through
