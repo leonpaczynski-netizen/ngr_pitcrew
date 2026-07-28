@@ -2314,7 +2314,7 @@ class LiveShellBridge(QObject):
         try:
             if not hasattr(rc, "set_compound_options"):
                 return
-            from strategy.tyre_selection import build_tyre_choice
+            from strategy.tyre_selection import build_tyre_choice, current_code
             ev = None
             try:
                 ev = self._window._build_event_context()
@@ -2328,25 +2328,32 @@ class LiveShellBridge(QObject):
                     getattr(ev, "race_duration_minutes", 0) or 0))
             codes = [o.code for o in (choice.options or ())]
             new_codes = tuple(codes)
-
-            # Only rebuild the combo when the allowed-compound set changes.
-            # On a stable event, codes are constant across refreshes — do nothing so the
-            # driver's current selection stays put.
-            if new_codes == self._last_compound_codes:
-                return
             self._last_compound_codes = new_codes
 
-            # Codes changed (e.g. event just loaded / tyre regulations changed).
-            # Pre-select: use the existing override if the driver already picked, otherwise
-            # nudge toward the first un-sampled compound; only apply when no run is open
-            # (once a run is recording, the override is authoritative).
+            # Pre-select priority — the compound the practice run will be tagged with:
+            #   1. the driver's explicit run-card pick (override) — never overwrite it;
+            #   2. otherwise the compound of the APPLIED setup, so Practice runs the tyre
+            #      the driver actually put on the car. This is what "pull the compound from
+            #      the applied setup" means, and it stops the selector from defaulting to a
+            #      DIFFERENT compound the driver could confirm by mistake and mis-tag the run;
+            #   3. only when the applied setup names no compound does the cover-all-compounds
+            #      nudge (first un-sampled) apply.
+            # Called every refresh: run_card.set_compound_options guards an open popup and
+            # only moves the index when it differs, so the shown compound tracks the applied
+            # setup without clobbering a live pick.
             if self._test_compound_override and self._test_compound_override in new_codes:
                 preselected = self._test_compound_override
             else:
-                required, sampled = self._tyre_compound_coverage()
-                sampled_up = {s.upper() for s in sampled}
-                unsampled = [c for c in codes if c.upper() not in sampled_up]
-                preselected = unsampled[0] if unsampled else ""
+                applied = (current_code(
+                    self._setups.sheet(self._discipline).as_dict()) or "").upper()
+                allowed_up = {c.upper() for c in codes}
+                if applied and applied in allowed_up:
+                    preselected = applied
+                else:
+                    required, sampled = self._tyre_compound_coverage()
+                    sampled_up = {s.upper() for s in sampled}
+                    unsampled = [c for c in codes if c.upper() not in sampled_up]
+                    preselected = unsampled[0] if unsampled else ""
             rc.set_compound_options(codes, preselected=preselected)
         except Exception:
             pass

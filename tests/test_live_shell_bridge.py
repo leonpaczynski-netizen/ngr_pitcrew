@@ -386,3 +386,48 @@ class TestRegulationBOP:
             assert sheet.get("weight_kg") == 1335 and sheet.get("power_hp") == 606
         eff = effective_car_specs("GT-R", b._setups.sheet("race").as_dict())
         assert eff.get("weight_kg") == 1335 and eff.get("power_hp") == 606
+
+
+class TestPracticeCompoundFromAppliedSetup:
+    """The Practice run-card tyre selector must default to the compound on the APPLIED
+    setup — Practice runs the tyre the driver put on the car — not an arbitrary
+    un-sampled compound the driver could confirm by mistake and mis-tag the run."""
+
+    def _selected_code(self, rc):
+        idx = rc._compound_combo.currentIndex()
+        codes = list(rc._compound_codes)
+        return codes[idx].upper() if 0 <= idx < len(codes) else ""
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()   # seeds the store from the classic form (Racing: Hard -> RH)
+        return b, shell
+
+    def test_selector_defaults_to_the_applied_compound(self, qapp):
+        b, shell = self._wired(qapp)
+        # The seeded/applied setup is on Racing: Hard.
+        assert b._setups.sheet("race").as_dict().get("tyre_front") == "Racing: Hard"
+        rc = shell.run_card
+        b._feed_run_compound_options(rc)
+        assert self._selected_code(rc) == "RH", "Practice must default to the applied RH"
+
+    def test_driver_pick_override_still_wins(self, qapp):
+        b, shell = self._wired(qapp)
+        rc = shell.run_card
+        b._feed_run_compound_options(rc)
+        # Driver explicitly picks a different compound on the run card.
+        b._on_test_compound_change("RS")
+        b._feed_run_compound_options(rc)
+        assert self._selected_code(rc) == "RS", "an explicit pick must not be overwritten"
+
+    def test_falls_back_to_unsampled_only_when_no_applied_compound(self, qapp):
+        b, shell = self._wired(qapp)
+        # Blank the sheet compound so there is no applied compound to honour.
+        b._setups.apply("race", {"tyre_front": "", "tyre_rear": ""})
+        rc = shell.run_card
+        b._feed_run_compound_options(rc)
+        # With no applied compound, the cover-all-compounds nudge is allowed to pick.
+        assert self._selected_code(rc) in {"RH", "RM", "RS", ""}
