@@ -300,6 +300,81 @@ def _fb_val(feedback: dict, field: str) -> str:
     return str((feedback or {}).get(field) or "").strip().lower()
 
 
+# ---------------------------------------------------------------------------
+# Overall handling severity — how badly is the car off, OVERALL.
+# ---------------------------------------------------------------------------
+# Consumed by the rule engine to size the corrective step (a persistent single-step
+# nudge is too timid when the car is severely off). "Either signal": the WORSE of
+# what the driver reported in the Practice-Review dropdowns and what the telemetry
+# bands show — either can escalate. mild reproduces the historical single-step
+# behaviour exactly; moderate/severe unlock a larger corrective move that is still
+# bounded downstream by the per-car range clamp and the anti-ratchet reserve.
+_SEV_MILD, _SEV_MODERATE, _SEV_SEVERE = "mild", "moderate", "severe"
+_SEV_RANK: "dict[str, int]" = {_SEV_MILD: 0, _SEV_MODERATE: 1, _SEV_SEVERE: 2}
+_SEV_BY_RANK: "dict[int, str]" = {0: _SEV_MILD, 1: _SEV_MODERATE, 2: _SEV_SEVERE}
+
+_FB_BALANCE_STRONG: frozenset = frozenset({"strong understeer", "strong oversteer"})
+_FB_BALANCE_MILD: frozenset = frozenset({"understeer", "oversteer"})
+
+
+def _driver_reported_severity(feedback: "dict | None") -> str:
+    """Worst handling severity the driver reported across the balance / rotation /
+    braking / bottoming dropdowns. 'strong' grades and a 'severe' rating read as
+    severe; a plain imbalance or a poor rotation/braking rating reads as moderate."""
+    if not isinstance(feedback, dict):
+        return _SEV_MILD
+    rank = 0
+    for f in ("corner_entry", "mid_corner", "exit_stability"):
+        v = _fb_val(feedback, f)
+        if v in _FB_BALANCE_STRONG:
+            rank = max(rank, 2)
+        elif v in _FB_BALANCE_MILD:
+            rank = max(rank, 1)
+    for f in ("rotation", "braking_confidence"):
+        if _fb_val(feedback, f) in _FB_SCALE_LOW:
+            rank = max(rank, 1)
+    b = _fb_val(feedback, "bottoming")
+    if b == "severe":
+        rank = max(rank, 2)
+    elif b == "noticeable":
+        rank = max(rank, 1)
+    return _SEV_BY_RANK[rank]
+
+
+def _telemetry_severity(wheelspin_band: object, bottoming_band: object) -> str:
+    """Worst handling severity implied by the telemetry bands (mild when quiet)."""
+    w = str(wheelspin_band or "").strip().lower()
+    b = str(bottoming_band or "").strip().lower()
+    rank = 0
+    if w == "severe":
+        rank = max(rank, 2)
+    elif w == "major":
+        rank = max(rank, 1)
+    if b in ("severe", "major"):
+        rank = max(rank, 2)
+    elif b in ("moderate", "meaningful"):
+        rank = max(rank, 1)
+    return _SEV_BY_RANK[rank]
+
+
+def overall_handling_severity(
+    feedback: "dict | None", wheelspin_band: object, bottoming_band: object
+) -> "tuple[str, str]":
+    """(level, source) — the WORSE of the driver's report and the telemetry bands.
+
+    level ∈ {mild, moderate, severe}; source ∈ {"", driver, telemetry, both}.
+    mild returns source "" (nothing notable — today's conservative behaviour).
+    """
+    d = _driver_reported_severity(feedback)
+    t = _telemetry_severity(wheelspin_band, bottoming_band)
+    dr, tr = _SEV_RANK[d], _SEV_RANK[t]
+    top = max(dr, tr)
+    if top == 0:
+        return _SEV_MILD, ""
+    src = "both" if dr == tr else ("driver" if dr > tr else "telemetry")
+    return _SEV_BY_RANK[top], src
+
+
 def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]":
     """Map the EXACT structured Practice-Review dropdown values to driver-feel flags.
 
@@ -2428,6 +2503,12 @@ def _build_setup_diagnosis_inner(
         driver_feel_flags, w_band, aero_front_near_min, aero_rear_near_min, avg_lockups
     )
 
+    # Overall handling severity (either the driver's rating or the telemetry bands),
+    # so the rule engine can size the corrective step to how badly the car is off.
+    handling_severity, handling_severity_source = overall_handling_severity(
+        feedback, w_band, b_band
+    )
+
     return {
         # Averaged telemetry counters
         "avg_bottoming":              avg_bottoming,
@@ -2461,6 +2542,9 @@ def _build_setup_diagnosis_inner(
         "aero_rear_near_min":         aero_rear_near_min,
         # Driver feel
         "driver_feel_flags":          driver_feel_flags,
+        # Overall handling severity (drives severity-scaled corrective step sizing).
+        "handling_severity":          handling_severity,
+        "handling_severity_source":   handling_severity_source,
         # Group 46: per-gear telemetry signals (real detection — see above comments)
         "wheelspin_by_gear":          wheelspin_by_gear,
         "bog_by_gear":                bog_by_gear,  # None — signal not derivable (deferred)

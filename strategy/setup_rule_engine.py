@@ -683,6 +683,59 @@ def _movement_cap_rejection(
     )
 
 
+# ---------------------------------------------------------------------------
+# Severity-scaled corrective step
+# ---------------------------------------------------------------------------
+# A persistent single-step nudge is too timid when the car is diagnosed as handling
+# badly OVERALL. Scale the corrective step by the whole-car handling severity
+# (diagnosis["handling_severity"], set in setup_diagnosis from EITHER the driver's
+# Practice-Review rating OR the telemetry bands). moderate/severe size the move
+# TOWARD the operating-band edge in the corrective direction — 'enough to get the
+# car out of the bad zone' — but never past the anti-ratchet reserve and never
+# smaller than the engineered base step. Downstream the per-car range clamp and the
+# movement cap still bound the result, so bigger can never mean unsafe or past the
+# mechanical limit. mild (or a diagnosis without the key) leaves the delta untouched,
+# so existing behaviour is preserved exactly. Pack A safety rules never reach here
+# (they return earlier in _process_rule).
+_SEVERITY_RANGELESS_MULT = {"moderate": 2.0, "severe": 3.0}
+
+
+def _severity_scaled_delta(
+    field: str, from_value: float, base_delta: float, ranges: dict, diagnosis: dict
+) -> "tuple[float, float, str]":
+    """Enlarge a corrective delta by the diagnosed whole-car handling severity.
+
+    Returns (delta, factor, level). For a range-managed field the move is sized
+    toward the operating-band edge (severe → the reserve edge; moderate → halfway);
+    a range-less field (gearbox) uses a plain multiplier. Never smaller than the base
+    step; mild / unknown leaves the delta untouched (factor 1.0).
+    """
+    try:
+        level = str((diagnosis or {}).get("handling_severity", "mild")).strip().lower()
+    except Exception:
+        level = "mild"
+    if level not in ("moderate", "severe") or not base_delta:
+        return base_delta, 1.0, level
+    try:
+        lo, hi = float(ranges[field][0]), float(ranges[field][1])
+        span = hi - lo
+    except (KeyError, IndexError, TypeError, ValueError):
+        span = 0.0
+    if span <= 0:                       # range-less field → multiplier fallback
+        f = _SEVERITY_RANGELESS_MULT[level]
+        return base_delta * f, f, level
+    reserve = _MOVEMENT_CAP_RESERVE_FRAC * span
+    room = ((hi - reserve) if base_delta > 0 else (lo + reserve)) - from_value
+    # Already at/beyond the operating edge in the corrective direction → keep the base
+    # step (the movement cap will surface the near-limit rejection).
+    if room == 0 or (base_delta > 0) != (room > 0):
+        return base_delta, 1.0, level
+    scaled = room * (1.0 if level == "severe" else 0.5)
+    if abs(scaled) < abs(base_delta):   # never weaker than the engineered step
+        return base_delta, 1.0, level
+    return scaled, (scaled / base_delta if base_delta else 1.0), level
+
+
 def _process_rule(
     rule: SetupRule,
     diagnosis: dict,
@@ -829,6 +882,14 @@ def _process_rule(
     # the setup_fields/changes consistency validator.
     if from_value is None:
         return
+
+    # --- Severity-scaled corrective step ---
+    # Enlarge the move when the car is diagnosed as handling badly overall. Bounded
+    # below by the range clamp + movement cap; mild leaves it unchanged.
+    delta, _sev_factor, _sev_level = _severity_scaled_delta(
+        rule.field, from_value, delta, ranges, diagnosis
+    )
+    to_value = from_value + delta
 
     # --- Clamp to ranges ---
     if to_value is not None and rule.field in ranges:
@@ -1051,6 +1112,13 @@ def _process_rule(
     if _cap_hit:
         intent = intent._replace(
             rationale=f"{intent.rationale} (movement capped — {_cap_reason})"
+        )
+
+    # If the whole-car handling severity enlarged the step, disclose why (explainable).
+    if _sev_factor > 1.0:
+        intent = intent._replace(
+            rationale=(f"{intent.rationale} · step enlarged for {_sev_level} handling "
+                       "(bigger corrective move; still bounded by the safe range)")
         )
 
     # --- Conflict resolution: same field, check existing candidate ---
