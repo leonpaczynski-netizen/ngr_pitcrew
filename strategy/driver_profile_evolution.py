@@ -33,6 +33,18 @@ from strategy.setup_driver_profile import DriverProfile, build_driver_profile
 _MIN_SESSIONS = 4
 _CORROBORATION = 3
 _DOMINANCE = 2.0
+#: A session whose clean lap times sit within this coefficient of variation is "tight".
+_CONSISTENT_COV = 0.02
+
+
+def observe_consistency(cov_list) -> bool:
+    """True when the driver has been PERSISTENTLY consistent — at least
+    ``_CORROBORATION`` of the recent sessions are tight (low lap-time variance)."""
+    try:
+        tight = [c for c in (cov_list or []) if c is not None and c <= _CONSISTENT_COV]
+        return len(tight) >= _CORROBORATION
+    except Exception:
+        return False
 
 _UNDERSTEER = frozenset({"understeer", "strong understeer"})
 _OVERSTEER = frozenset({"oversteer", "strong oversteer"})
@@ -85,12 +97,15 @@ def observe_feedback(rows: Sequence[Mapping]) -> ObservedTendencies:
 
 
 def evolve_profile(base: DriverProfile,
-                   tendencies: ObservedTendencies) -> "tuple[DriverProfile, list[str]]":
+                   tendencies: ObservedTendencies,
+                   *, consistent: bool = False) -> "tuple[DriverProfile, list[str]]":
     """Return (evolved_profile, rationale). ADD-only; returns the base unchanged when
     there is not enough corroborated evidence. Never raises."""
     try:
         rationale: list[str] = []
-        if tendencies.sessions < _MIN_SESSIONS:
+        # The consistency signal comes from lap telemetry, not the balance feedback, so
+        # it can apply even when there is not enough balance feedback to move anything.
+        if tendencies.sessions < _MIN_SESSIONS and not consistent:
             return base, rationale
 
         tags = list(base.style_tags)
@@ -128,6 +143,12 @@ def evolve_profile(base: DriverProfile,
                 f"Exit oversteer reported in {tendencies.oversteer_sessions} of the last "
                 f"{tendencies.sessions} sessions — strengthened your rear-stability "
                 f"preference (bias baselines toward a planted rear).")
+        if consistent:
+            _add("race_values_consistency")
+            suffix += "-cons"
+            rationale.append(
+                "You've run consistently tight over recent sessions — strengthened your "
+                "consistency preference (favour stable, tyre-kind setups).")
 
         if not suffix:
             return base, rationale
@@ -158,4 +179,9 @@ def build_evolved_driver_profile(db, *, limit: int = 12) -> "tuple[DriverProfile
             db, "get_recent_driver_feedback") else []
     except Exception:
         rows = []
-    return evolve_profile(base, observe_feedback(rows))
+    try:
+        cov = db.get_recent_session_consistency() if db is not None and hasattr(
+            db, "get_recent_session_consistency") else []
+    except Exception:
+        cov = []
+    return evolve_profile(base, observe_feedback(rows), consistent=observe_consistency(cov))

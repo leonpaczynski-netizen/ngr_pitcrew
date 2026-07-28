@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 from strategy.setup_driver_profile import build_driver_profile
 from strategy.driver_profile_evolution import (
     observe_feedback, evolve_profile, build_evolved_driver_profile,
-    ObservedTendencies, _MIN_SESSIONS,
+    observe_consistency, ObservedTendencies, _MIN_SESSIONS, _CONSISTENT_COV,
 )
 
 
@@ -73,6 +73,28 @@ class TestEvolve:
         evolved, _ = evolve_profile(base, observe_feedback(_us(5)))
         # Every baseline tag survives; evolution only adds.
         assert set(base.style_tags).issubset(set(evolved.style_tags))
+
+
+class TestConsistencySignal:
+    def test_persistent_tightness_reads_consistent(self):
+        assert observe_consistency([0.01, 0.015, 0.012]) is True
+
+    def test_one_tight_session_is_not_enough(self):
+        assert observe_consistency([0.01, 0.05, 0.06]) is False
+
+    def test_consistency_adds_race_values_consistency(self):
+        base = build_driver_profile()
+        # No balance signal, but persistently consistent → race_values_consistency.
+        evolved, why = evolve_profile(base, observe_feedback([]), consistent=True)
+        assert evolved.race_values_consistency is True
+        assert evolved.profile_version.endswith("-cons")
+        assert why and "consist" in why[0].lower()
+
+    def test_consistency_and_understeer_both_apply(self):
+        base = build_driver_profile()
+        evolved, why = evolve_profile(base, observe_feedback(_us(5)), consistent=True)
+        assert evolved.prefers_front_bite and evolved.race_values_consistency
+        assert "+obs-fb-cons" in evolved.profile_version
 
 
 class TestEndToEnd:

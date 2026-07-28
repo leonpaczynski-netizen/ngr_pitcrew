@@ -8928,6 +8928,35 @@ class SessionDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_recent_session_consistency(self, limit: int = 8, min_laps: int = 3) -> list[float]:
+        """Coefficient of variation (stdev/mean) of clean lap times for each of the most
+        recent sessions (driver-level) that have >= min_laps clean laps. Lower = more
+        consistent. Used by profile evolution to learn whether the driver runs
+        consistently. Never raises."""
+        try:
+            import statistics
+            with self._lock:
+                sess = self._conn.execute(
+                    "SELECT id FROM sessions ORDER BY id DESC LIMIT ?", (int(limit),)
+                ).fetchall()
+            out: list[float] = []
+            for s in sess:
+                with self._lock:
+                    laps = self._conn.execute(
+                        """SELECT lap_time_ms FROM lap_records
+                           WHERE session_id=? AND lap_time_ms>0
+                                 AND is_pit_lap=0 AND is_out_lap=0""",
+                        (s[0],),
+                    ).fetchall()
+                times = [r[0] for r in laps if r[0] and r[0] > 0]
+                if len(times) >= int(min_laps):
+                    mean = statistics.mean(times)
+                    if mean > 0:
+                        out.append(statistics.pstdev(times) / mean)
+            return out
+        except Exception:
+            return []
+
     def get_recent_driver_feedback(self, limit: int = 12) -> list[dict]:
         """Most recent driver_feedback rows across ALL cars/tracks (driver-level).
 
