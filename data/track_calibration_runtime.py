@@ -181,6 +181,7 @@ class TrackCalibrationCaptureController:
         self._last_build_result  : Optional[CalibrationBuildResult] = None
         self._saved_path         : Optional[Path] = None
         self._error              : str = ""
+        self._prev_last_lap_ms   : Optional[int] = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -216,6 +217,7 @@ class TrackCalibrationCaptureController:
         self._last_build_result   = None
         self._saved_path          = None
         self._error               = ""
+        self._prev_last_lap_ms    = None   # reliable lap-boundary signal (see add_sample)
         return True
 
     def add_sample_from_packet(self, packet) -> bool:
@@ -230,15 +232,36 @@ class TrackCalibrationCaptureController:
         if self._session is None:
             return False
 
-        lap_num = infer_lap_number(packet, fallback=self._current_lap_number or 1)
-        if lap_num is None:
+        # Lap boundary detection. GT7 posts a new positive ``last_lap_ms`` when a lap
+        # completes — reliable in Time Trial, where all track modelling is done, unlike
+        # ``laps_completed`` (which GT7 marks unreliable and which mis-splits TT laps
+        # into uneven fragments). Prefer last_lap_ms; fall back to laps_completed only
+        # when last_lap_ms is unavailable (e.g. tests / a mode that never posts it).
+        last_ms = getattr(packet, "last_lap_ms", None)
+        try:
+            last_ms = int(last_ms)
+        except (TypeError, ValueError):
+            last_ms = None
+
+        if last_ms is not None:
+            # GT7 always carries last_lap_ms (-1 until the first lap completes). A change
+            # to a new POSITIVE value = a lap just completed. Tracking prev on every packet
+            # (including the -1 phase) means the first completion (-1 → time) also registers.
+            prev = self._prev_last_lap_ms
+            self._prev_last_lap_ms = last_ms
             lap_num = self._current_lap_number or 1
+            if prev is not None and last_ms > 0 and last_ms != prev:
+                lap_num += 1                              # a full lap just completed
+        else:
+            lap_num = infer_lap_number(packet, fallback=self._current_lap_number or 1)
+            if lap_num is None:
+                lap_num = self._current_lap_number or 1
 
         sample = packet_to_calibration_sample(packet, lap_num)
         if sample is None:
             return False
 
-        # Detect lap boundary: close the previous lap when lap number changes
+        # Close the previous lap when the lap number advances.
         if (
             self._current_lap_number is not None
             and lap_num != self._current_lap_number

@@ -101,6 +101,28 @@ def _make_two_good_laps(ctrl: TrackCalibrationCaptureController) -> None:
         )
 
 
+def test_time_trial_laps_split_on_last_lap_ms_not_laps_completed():
+    """In Time Trial laps_completed is unreliable, but GT7 posts a new last_lap_ms each
+    lap. Boundaries must follow last_lap_ms so consistent TT laps aren't mis-split."""
+    ctrl = TrackCalibrationCaptureController()
+    ctrl.start_session("loc", "loc__lay")
+    n = MIN_CALIBRATION_SAMPLES + 10
+
+    def feed(last_lap_ms, x0):
+        for i in range(n):
+            p = _MockPacket(laps_completed=0, pos_x=x0 + float(i), time_of_day_ms=(x0 * 100) + i)
+            p.last_lap_ms = last_lap_ms
+            ctrl.add_sample_from_packet(p)
+
+    feed(-1, 0)          # lap in progress — no time posted yet
+    feed(132000, 1000)   # first lap posts 2:12.000 → boundary
+    feed(132400, 2000)   # next lap posts a new time → boundary
+    ctrl.stop_session()
+
+    # laps_completed stayed 0 throughout, yet the laps were split by last_lap_ms.
+    assert len(ctrl._session.laps) == 3
+
+
 # ---------------------------------------------------------------------------
 # TestCanCaptureSample
 # ---------------------------------------------------------------------------
