@@ -440,6 +440,16 @@ def main() -> None:
 
     config = load_config(config_path)
 
+    # Open CLEAN: never auto-load a previously-active event. The driver preps for
+    # several races and picks which one to work on each session (and may do more than
+    # one in a day), so a sticky "last active event" persisted in config caused stale
+    # state — a finished event still showing, the wrong car/weather, evidence not
+    # registering. Clear the event pointers in memory at launch; the Home event picker
+    # re-activates whichever event the driver selects (which reloads all of its data).
+    # In-memory only — not persisted here — so the config file is never clobbered.
+    config.pop("active_event_id", None)
+    config.pop("active_cycle_id", None)
+
     event_queue: queue.PriorityQueue = queue.PriorityQueue()
     ui_queue:    queue.Queue         = queue.Queue(maxsize=5)
 

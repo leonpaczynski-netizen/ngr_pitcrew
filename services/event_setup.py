@@ -371,6 +371,14 @@ class EventSetupService:
         except Exception:
             existing = {}
         now = _now_iso()
+        # Activating an event is a DELIBERATE choice to prepare it, so a previously
+        # completed/abandoned cycle is REOPENED here. This is an explicit user action
+        # (save_and_activate is only ever called from the event picker / "Switch to this
+        # event"), not the silent/passive reopen the doctrine guards against. Without it,
+        # re-selecting a finished event left it "active in config but complete", and its
+        # recorded runs stopped registering as evidence (the exact UAT blocker).
+        _prev_state = _norm(existing.get("explicit_state"))
+        _explicit_state = "" if _prev_state in ("complete", "abandoned") else _prev_state
         try:
             self._db.upsert_preparation_cycle({
                 "cycle_id": cycle_id,
@@ -382,7 +390,7 @@ class EventSetupService:
                 "track": _norm(draft.track),
                 "layout": _norm(existing.get("layout")),
                 "official_race_date": _norm(existing.get("official_race_date")),
-                "explicit_state": _norm(existing.get("explicit_state")),
+                "explicit_state": _explicit_state,
                 "created_at": _norm(existing.get("created_at")) or now,
                 "updated_at": now,
             })

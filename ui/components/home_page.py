@@ -293,6 +293,23 @@ class HomePage(QWidget):
         self._btn_switch.setVisible(have_candidates)
         self._btn_switch.setEnabled(have_candidates)
 
+        # Default the switcher to the ACTIVE event so the dropdown matches the header.
+        # It used to always sit at index 0 (the earliest-race-date cycle), which is why
+        # the dropdown showed a different / closed event than the title.
+        ev = (view.get("event") or {}) if has_view else {}
+        active_cid = _norm(ev.get("cycle_id"))
+        active_name = _norm(ev.get("event_name"))
+        if have_candidates and (active_cid or active_name) and not (
+                self._event_combo.hasFocus() or self._event_combo.view().isVisible()):
+            for i, c in enumerate(self._candidates):
+                if (active_cid and _norm(c.get("cycle_id")) == active_cid) or \
+                        (active_name and _norm(c.get("event_name")) == active_name):
+                    if self._event_combo.currentIndex() != i:
+                        self._event_combo.blockSignals(True)
+                        self._event_combo.setCurrentIndex(i)
+                        self._event_combo.blockSignals(False)
+                    break
+
         # -- next action
         na = (view.get("next_action") or {}) if has_view else {}
         headline = _norm(na.get("headline"))

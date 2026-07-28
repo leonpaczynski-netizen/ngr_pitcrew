@@ -145,13 +145,18 @@ class TestSaveAndActivate:
         assert len(db.cycles) == 1
         assert len(db.events) == 1
 
-    def test_a_finished_cycle_is_never_silently_reopened(self):
+    def test_explicitly_activating_a_finished_event_reopens_it(self):
+        # Selecting/activating a finished event is a DELIBERATE choice to prepare it
+        # again, so it is reopened (its recorded runs then register as evidence). This
+        # is not the SILENT/passive reopen the doctrine guards against — save_and_activate
+        # only runs on the user's explicit event-picker action.
         db = _DB(cycles={"cycle-gr-enduro-rd2": {
             "cycle_id": "cycle-gr-enduro-rd2", "explicit_state": "complete",
             "created_at": "2026-01-01T00:00:00"}})
         svc, _cfg = self._svc(db)
         svc.save_and_activate(_draft())
-        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == "complete"
+        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == ""
+        # History (created_at) is preserved — reopening, not recreating.
         assert db.cycles["cycle-gr-enduro-rd2"]["created_at"] == "2026-01-01T00:00:00"
 
 
