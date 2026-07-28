@@ -70,10 +70,14 @@ class TestNavigationActions:
         shell.qualifying_page.begin_requested.emit()
         assert shell.current_destination() == "live_pit_wall"
 
-    def test_strategy_approve_goes_live(self, wired):
+    def test_strategy_approve_stays_on_strategy_until_start_race(self, wired):
+        # Approving the plan is NOT starting the race — "Start Race" is the explicit next
+        # step (fa7bafe). Approve must NOT jump to the Pit Wall (which stranded Start Race
+        # a page away); it stays put and tells the driver to press Start Race.
         shell, win, _ = wired
+        shell._navigate("strategy")
         shell.strategy_page.approve_requested.emit()
-        assert shell.current_destination() == "live_pit_wall"
+        assert shell.current_destination() != "live_pit_wall"
 
     def test_debrief_close_goes_home(self, wired):
         shell, win, _ = wired
