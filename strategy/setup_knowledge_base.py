@@ -366,8 +366,41 @@ def _delta_noop(setup: dict, ranges: dict, diagnosis: dict) -> float:
 
 
 # Public resolver registry — keyed by string name used in SetupRule.delta_fn
+# Ballast position is a coarse, whole-car balance tool on the GT7 −50 (front) … +50
+# (rear) scale. Direction is universal vehicle dynamics — a nose-heavy car understeers,
+# a tail-heavy car oversteers — but SENSITIVITY is drivetrain-dependent: on a rear-heavy
+# layout (MR) the car sits nearer neutral, so a given shift bites harder and the step is
+# halved. (RR is handled by omission, not a smaller step — see the rule table below.)
+def _delta_ballast_rearward(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """+5: shift ballast rearward to cure understeer on a front-heavy layout (FF/FR/AWD),
+    which has headroom before the rear goes light."""
+    return 5.0
+
+
+def _delta_ballast_rearward_small(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """+3: the same understeer cure on an MR car, where the near-neutral balance makes
+    rearward ballast more sensitive, so the step is smaller."""
+    return 3.0
+
+
+def _delta_ballast_forward(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """−5: shift ballast forward to calm oversteer on a rear-heavy layout (RR/MR), where
+    reducing the tail-heavy bias is exactly the right lever."""
+    return -5.0
+
+
+def _delta_ballast_forward_small(setup: dict, ranges: dict, diagnosis: dict) -> float:
+    """−3: the same oversteer cure on a front-heavy layout (FR/AWD), where the car is
+    already nose-biased so only a small forward nudge is warranted."""
+    return -3.0
+
+
 _DELTA_RESOLVERS: dict[str, object] = {
     "raise_rear_rh": _delta_raise_rear_rh,
+    "ballast_rearward": _delta_ballast_rearward,
+    "ballast_rearward_small": _delta_ballast_rearward_small,
+    "ballast_forward": _delta_ballast_forward,
+    "ballast_forward_small": _delta_ballast_forward_small,
     "raise_front_rh": _delta_raise_front_rh,
     "increase_rear_aero": _delta_increase_rear_aero,
     "increase_front_aero": _delta_increase_front_aero,
@@ -1209,6 +1242,89 @@ _PACK_NOABS: list[SetupRule] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Pack BALLAST — drivetrain-scoped whole-car balance via ballast position
+# ---------------------------------------------------------------------------
+# Ballast position shifts the weight bias across the WHOLE lap, so it is a coarse balance
+# lever that defers (low confidence) to the finer, phase-specific tools. The DIRECTION is
+# universal vehicle dynamics (nose-heavy understeers, tail-heavy oversteers); which
+# drivetrains get which rule — and how big the step — follows each layout's static bias:
+#   • Understeer → rearward: FF/FR/AWD carry front bias with headroom (full +5 step); MR
+#     sits nearer neutral so ballast bites harder (+3). RR is OMITTED — a tail-heavy car
+#     must not be made MORE rear-biased to cure understeer (snap-oversteer risk); it uses
+#     the finer tools instead.
+#   • Oversteer → forward: RR/MR are tail-heavy, so forward ballast is the right, potent
+#     lever (full −5); FR/AWD are already nose-biased, so only a small nudge (−3). FF is
+#     OMITTED — a nose-heavy car rarely oversteers and forward ballast would only deepen
+#     its understeer.
+# Encoded as one physics table so the per-drivetrain choices live in a single place.
+
+_BALLAST_UNDERSTEER_SPEC = [   # (drivetrain, delta_fn, confidence)
+    (DrivetrainType.ff,  "ballast_rearward",       ConfidenceLevel.med),
+    (DrivetrainType.fr,  "ballast_rearward",       ConfidenceLevel.low),
+    (DrivetrainType.awd, "ballast_rearward",       ConfidenceLevel.low),
+    (DrivetrainType.mr,  "ballast_rearward_small", ConfidenceLevel.low),
+]
+
+_BALLAST_OVERSTEER_SPEC = [
+    (DrivetrainType.rr,  "ballast_forward",       ConfidenceLevel.med),
+    (DrivetrainType.mr,  "ballast_forward",       ConfidenceLevel.low),
+    (DrivetrainType.fr,  "ballast_forward_small", ConfidenceLevel.low),
+    (DrivetrainType.awd, "ballast_forward_small", ConfidenceLevel.low),
+]
+
+
+def _ballast_understeer_rule(dt: DrivetrainType, delta_fn: str, conf: ConfidenceLevel) -> SetupRule:
+    return SetupRule(
+        rule_id=f"BAL_US_{dt.value.upper()}", pack="BALLAST", phase=RulePhase.driver_style,
+        preconditions={"driver_feel_flags.mid_corner_understeer": True},
+        contraindications={   # never add rear weight bias when the rear is already loose
+            "driver_feel_flags.rear_loose_on_exit": True,
+            "driver_feel_flags.snap_oversteer_exit": True,
+        },
+        field="ballast_position", delta_fn=delta_fn,
+        title=f"Shift ballast rearward — persistent understeer ({dt.value.upper()})",
+        symptom="Car pushes wide — a nose-heavy balance the finer tools haven't cured.",
+        rationale=(
+            "A nose-heavy car understeers; moving ballast rearward reduces the front "
+            "axle's relative workload and frees rotation across the whole lap. Coarse and "
+            "global, so it defers to ARB/aero/LSD where those target the specific phase. "
+            f"Scoped to {dt.value.upper()} with a step sized to that layout's sensitivity."),
+        risk=RiskLevel.med, base_confidence=conf,
+        driver_style_tags=["prefers_front_bite"], applies_drivetrain=dt,
+    )
+
+
+def _ballast_oversteer_rule(dt: DrivetrainType, delta_fn: str, conf: ConfidenceLevel) -> SetupRule:
+    return SetupRule(
+        rule_id=f"BAL_OS_{dt.value.upper()}", pack="BALLAST", phase=RulePhase.exit,
+        preconditions={"__any__": [
+            "driver_feel_flags.rear_loose_on_exit",
+            "driver_feel_flags.snap_oversteer_exit",
+        ]},
+        contraindications={   # never add front weight bias when the front is already vague
+            "driver_feel_flags.floaty_front": True,
+            "driver_feel_flags.mid_corner_understeer": True,
+        },
+        field="ballast_position", delta_fn=delta_fn,
+        title=f"Shift ballast forward — loose rear ({dt.value.upper()})",
+        symptom="Rear steps out — a tail-heavy balance the finer tools haven't calmed.",
+        rationale=(
+            "A tail-heavy car oversteers; moving ballast forward reduces the rear weight "
+            "bias and calms rotation across the whole lap. Coarse and global, so it defers "
+            "to the finer exit tools (LSD/aero/ARB) where those apply. "
+            f"Scoped to {dt.value.upper()} with a step sized to that layout's sensitivity."),
+        risk=RiskLevel.med, base_confidence=conf,
+        driver_style_tags=["dislikes_snap_exit"], applies_drivetrain=dt,
+    )
+
+
+_PACK_BALLAST: list[SetupRule] = (
+    [_ballast_understeer_rule(*s) for s in _BALLAST_UNDERSTEER_SPEC]
+    + [_ballast_oversteer_rule(*s) for s in _BALLAST_OVERSTEER_SPEC]
+)
+
+
+# ---------------------------------------------------------------------------
 # Register all built-in packs at import time
 # ---------------------------------------------------------------------------
 
@@ -1217,3 +1333,4 @@ register_pack("B", _PACK_B)
 register_pack("CD", _PACK_CD)
 register_pack("P", _PACK_P)
 register_pack("NOABS", _PACK_NOABS)
+register_pack("BALLAST", _PACK_BALLAST)

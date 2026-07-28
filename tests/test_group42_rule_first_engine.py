@@ -35,7 +35,7 @@ from strategy.setup_rule_engine import (
 )
 from strategy.setup_driver_profile import build_driver_profile, DriverProfile, DriverStyleAlignment
 from strategy.setup_knowledge_base import (
-    ConfidenceLevel, RiskLevel, RulePhase,
+    ConfidenceLevel, RiskLevel, RulePhase, DrivetrainType,
     get_all_rules,
 )
 from strategy.setup_ranges import resolve_ranges
@@ -809,3 +809,49 @@ class TestEdgeCases:
         assert "transmission_max_speed_kmh" in pf, (
             f"protected_fields must always include transmission_max_speed_kmh; got {pf}"
         )
+
+
+# ===========================================================================
+# Ballast position — drivetrain-scoped whole-car balance lever
+# ===========================================================================
+
+class TestBallastDrivetrainLever:
+    """Ballast position is a real handling lever, scoped by drivetrain: the DIRECTION is
+    universal (nose-heavy understeers, tail-heavy oversteers) but which layouts get which
+    move differs, because the same ballast bites differently on an MR vs an FR vs an RR."""
+
+    def _plan(self, feeling: str, drivetrain: DrivetrainType) -> SetupPlan:
+        diag = build_setup_diagnosis(
+            laps=[_make_lap()], setup={"ballast_position": 0}, car_name="",
+            event_ctx={}, feeling=feeling, location_confidence="low")
+        return run_rule_engine(diag, {"ballast_position": 0}, resolve_ranges(""),
+                               build_driver_profile(), drivetrain=drivetrain)
+
+    def _ballast(self, plan: SetupPlan):
+        return [c for c in plan.proposed if c.field == "ballast_position"]
+
+    def test_understeer_shifts_ballast_rearward_on_a_front_heavy_car(self):
+        moves = self._ballast(self._plan(
+            "car pushes wide understeer through mid corner", DrivetrainType.fr))
+        assert moves and moves[0].delta > 0        # rearward = positive
+
+    def test_understeer_does_not_add_rear_ballast_on_a_tail_heavy_rr_car(self):
+        # An RR car is already tail-heavy; adding rear weight to cure understeer would
+        # invite snap oversteer, so ballast must NOT be proposed here.
+        assert self._ballast(self._plan(
+            "car pushes wide understeer through mid corner", DrivetrainType.rr)) == []
+
+    def test_oversteer_shifts_ballast_forward_on_a_tail_heavy_rr_car(self):
+        moves = self._ballast(self._plan(
+            "rear loose on exit, snap oversteer", DrivetrainType.rr))
+        assert moves and moves[0].delta < 0        # forward = negative
+
+    def test_oversteer_does_not_add_front_ballast_on_a_nose_heavy_ff_car(self):
+        # A nose-heavy FF car rarely oversteers; forward ballast would deepen understeer.
+        assert self._ballast(self._plan(
+            "rear loose on exit, snap oversteer", DrivetrainType.ff)) == []
+
+    def test_mr_understeer_uses_a_smaller_step_than_fr(self):
+        fr = self._ballast(self._plan("understeer pushes wide mid corner", DrivetrainType.fr))
+        mr = self._ballast(self._plan("understeer pushes wide mid corner", DrivetrainType.mr))
+        assert fr and mr and abs(mr[0].delta) < abs(fr[0].delta)   # MR more sensitive
