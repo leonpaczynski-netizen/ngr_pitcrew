@@ -1492,6 +1492,7 @@ class DrivingAdvisor:
         self, setup_dict: dict, n_laps: int = 5,
         car_name: str = "", car_specs: dict | None = None,
         feeling: str | None = None,
+        feedback: "dict | None" = None,
         allowed_tuning: "list[str] | None" = None, tuning_locked: bool = False,
         compound: str = "",
         prior_outcomes: "list[dict] | None" = None,
@@ -1535,7 +1536,7 @@ class DrivingAdvisor:
         _event_ctx = getattr(self, "_event_ctx", {})
         if diagnosis is None:
             try:
-                diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, feeling)
+                diagnosis = build_setup_diagnosis(recent, setup_dict, car_name, _event_ctx, feeling, feedback=feedback)
             except Exception:
                 diagnosis = {}
 

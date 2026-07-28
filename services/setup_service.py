@@ -291,9 +291,15 @@ class SetupService:
 
     # ---- analyse ----------------------------------------------------------
     def analyse(self, discipline: str = "race", *, feeling: str = "",
+                feedback: "Mapping | None" = None,
                 n_laps: int = 5, live_corner_aggregates: Sequence = (),
                 extra_candidates: Sequence = ()) -> AnalysisResult:
-        """Run the setup brain over the current sheet and report what it concluded."""
+        """Run the setup brain over the current sheet and report what it concluded.
+
+        ``feedback`` is the structured Practice-Review dropdown dict; the brain reads
+        its exact values natively (see strategy.setup_diagnosis). ``feeling`` remains
+        the optional free-text notes / legacy path.
+        """
         d = normalise_discipline(discipline)
         inp = self.inputs()
         if not inp.is_known:
@@ -305,10 +311,15 @@ class SetupService:
             return AnalysisResult(
                 discipline=d,
                 reason="There is no setup on this sheet yet — build the initial setup first.")
+        # A "no change" result may only claim the balance was judged when a real
+        # handling verdict (free-text feeling OR a structured dropdown) was supplied.
+        from strategy.setup_diagnosis import feedback_has_handling_signal
+        _weighed = bool(_norm(feeling)) or feedback_has_handling_signal(feedback)
         try:
             payload = self._advisor.build_combined_setup_response(
                 sheet.as_dict(), n_laps=int(n_laps or 0), car_name=inp.car,
                 car_specs=dict(inp.car_specs or {}), feeling=_norm(feeling) or None,
+                feedback=dict(feedback) if feedback else None,
                 allowed_tuning=inp.allowed_tuning, tuning_locked=inp.tuning_locked,
                 compound=inp.mandatory_compounds, purpose=PURPOSE.get(d, "Race"),
                 car_class=inp.car_class, drivetrain=inp.drivetrain,
@@ -335,7 +346,7 @@ class SetupService:
             validation_errors=tuple(_norm(e) for e in
                                     (data.get("validation_errors") or ()) if _norm(e)),
             status=_norm(data.get("recommendation_status")), raw=_norm(payload),
-            weighed_feeling=bool(_norm(feeling)))
+            weighed_feeling=_weighed)
 
     # ---- apply / revert ---------------------------------------------------
     def apply(self, discipline: str, fields: Optional[Mapping]) -> SetupOutcome:

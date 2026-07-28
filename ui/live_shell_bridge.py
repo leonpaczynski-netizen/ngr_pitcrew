@@ -2621,13 +2621,15 @@ class LiveShellBridge(QObject):
         discipline = self._discipline
         self._pending_work = "analyse"
         self._garage_status("Analysing the current setup…")
-        # Fold the driver's handling verdict from Review into the analysis. Without
-        # it the brain sees telemetry symptoms only, so an understeer felt by the
+        # Fold the driver's handling verdict from Review into the analysis. The brain
+        # reads the structured dropdowns NATIVELY (balance, braking, rotation, gearing,
+        # traction, kerbs); only the free-text notes go through the text path. Without
+        # this the brain sees telemetry symptoms only, so an understeer felt by the
         # driver on a car with clean telemetry would falsely read "inside its window".
-        from strategy.setup_feedback_evidence import feedback_to_feeling
-        feeling = feedback_to_feeling(getattr(self, "_last_feedback", None))
+        feedback = dict(getattr(self, "_last_feedback", None) or {})
+        notes = str(feedback.get("notes") or "").strip()
         self._spawn(lambda: self._analysis_done.emit(self._setups.analyse(
-            discipline, feeling=feeling,
+            discipline, feeling=notes, feedback=feedback or None,
             live_corner_aggregates=self._live_corner_aggregates())))
 
     def _live_corner_aggregates(self) -> list:

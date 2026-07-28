@@ -274,6 +274,142 @@ def _has_throttle_exit_context(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Structured Practice-Review feedback — the brain reads the DROPDOWNS directly
+# ---------------------------------------------------------------------------
+# The Practice Review form (ui/components/practice_feedback.py) captures the
+# driver's verdict as a structured {field: value} dict of dropdown selections.
+# The brain consumes those exact values NATIVELY here — no free-text synthesis and
+# no substring matching. This is the authoritative, unambiguous path; the free-text
+# _parse_driver_feel path remains only for the optional notes field / legacy callers.
+#
+# Field/value -> flag decisions are held to the same accuracy bar as the rest of the
+# brain: a value maps to a flag only when the remedy is unambiguous and drivetrain-
+# independent. Values with no sound flag (mid-corner oversteer, exit power-understeer,
+# gear "too short") intentionally set nothing rather than fire a near-miss.
+
+# Exact dropdown vocabularies (mirrors practice_feedback.py; lower-cased).
+_FB_BALANCE_UNDERSTEER: frozenset = frozenset({"understeer", "strong understeer"})
+_FB_BALANCE_OVERSTEER: frozenset = frozenset({"oversteer", "strong oversteer"})
+_FB_SCALE_LOW: frozenset = frozenset({"poor", "below par"})
+_FB_SCALE_HIGH: frozenset = frozenset({"good", "excellent"})
+_FB_SEVERITY_HIGH: frozenset = frozenset({"noticeable", "severe"})
+
+
+def _fb_val(feedback: dict, field: str) -> str:
+    """Lower-cased, stripped value of a feedback dropdown field ('' when absent)."""
+    return str((feedback or {}).get(field) or "").strip().lower()
+
+
+def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]":
+    """Map the EXACT structured Practice-Review dropdown values to driver-feel flags.
+
+    Reads each dropdown field/value directly (dict lookup, no phrase, no substring).
+    Returns the same fully-keyed flag dict shape as ``_parse_driver_feel`` — every
+    ``_FEEL_VOCABULARY`` key present, unmapped states left False. Never raises.
+    """
+    flags: dict[str, bool] = {key: False for key in _FEEL_VOCABULARY}
+    if not isinstance(feedback, dict):
+        return flags
+    try:
+        # Entry balance: understeer -> entry_understeer; oversteer is a brake-phase
+        # problem -> rear_loose_under_braking; neutral means the driver is happy.
+        entry = _fb_val(feedback, "corner_entry")
+        if entry in _FB_BALANCE_UNDERSTEER:
+            flags["entry_understeer"] = True
+        elif entry in _FB_BALANCE_OVERSTEER:
+            flags["rear_loose_under_braking"] = True
+        elif entry == "neutral":
+            flags["entry_balance_good"] = True
+
+        # Mid-corner balance: understeer -> mid_corner_understeer.
+        # (mid-corner OVERSTEER has no dedicated flag -> intentionally unmapped.)
+        if _fb_val(feedback, "mid_corner") in _FB_BALANCE_UNDERSTEER:
+            flags["mid_corner_understeer"] = True
+
+        # Exit balance: oversteer -> rear_loose_on_exit; the strong grade adds snap.
+        # (exit power-understeer has no flag -> intentionally unmapped.)
+        exit_bal = _fb_val(feedback, "exit_stability")
+        if exit_bal in _FB_BALANCE_OVERSTEER:
+            flags["rear_loose_on_exit"] = True
+        if exit_bal == "strong oversteer":
+            flags["snap_oversteer_exit"] = True
+
+        # Rotation: poor rotation IS the car refusing to rotate = mid understeer.
+        if _fb_val(feedback, "rotation") in _FB_SCALE_LOW:
+            flags["mid_corner_understeer"] = True
+
+        # Braking confidence: poor -> the rear is unstable / locks under braking.
+        if _fb_val(feedback, "braking_confidence") in _FB_SCALE_LOW:
+            flags["braking_instability"] = True
+
+        # Bottoming severity.
+        if _fb_val(feedback, "bottoming") in _FB_SEVERITY_HIGH:
+            flags["bottoming"] = True
+
+        # Gearing: too long can veto a lengthening; about-right suppresses tweaks.
+        # ("too short" has no flag; telemetry detects it -> intentionally unmapped.)
+        gear = _fb_val(feedback, "gear_choice")
+        if gear == "too long":
+            flags["gearing_too_long"] = True
+        elif gear == "about right":
+            flags["gearbox_good"] = True
+
+        # Fuel worse than expected — acknowledged, not a setup lever.
+        if _fb_val(feedback, "fuel_behaviour") == "worse than expected":
+            flags["fuel_use_high"] = True
+    except Exception:
+        return {key: False for key in _FEEL_VOCABULARY}
+    return flags
+
+
+def traction_status_from_feedback(feedback: "dict | None") -> str:
+    """Native traction verdict from the Traction / Drive-out dropdowns.
+
+    Returns "good" | "degraded" | "unknown". Drivetrain-agnostic: it reports the
+    driver's confidence in putting power down; the downstream rules decide the lever
+    (and use "good" to veto an unwarranted LSD-accel increase). Traction leads
+    Drive-out when both are set. Never raises.
+    """
+    try:
+        for field in ("traction", "drive_out"):
+            v = _fb_val(feedback or {}, field)
+            if v in _FB_SCALE_LOW:
+                return "degraded"
+            if v in _FB_SCALE_HIGH:
+                return "good"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _feedback_reports_kerb_compliance(feedback: "dict | None") -> bool:
+    """True when the Kerb-behaviour dropdown reports a noticeable/severe problem.
+
+    Feeds compliance_priority, which STILL requires telemetry kerb corroboration
+    (avg_kerb over threshold) at the call site — the dropdown supplies the driver's
+    half of that AND-gate. Never raises.
+    """
+    try:
+        return _fb_val(feedback or {}, "kerb_behaviour") in _FB_SEVERITY_HIGH
+    except Exception:
+        return False
+
+
+def feedback_has_handling_signal(feedback: "dict | None") -> bool:
+    """True when the structured feedback carries any handling verdict the brain reads.
+
+    Used so a "no change" result can honestly say whether the balance was judged.
+    Overall better/worse and free-text notes alone do NOT count as a handling signal.
+    """
+    if not isinstance(feedback, dict):
+        return False
+    if any(driver_feel_flags_from_feedback(feedback).values()):
+        return True
+    return traction_status_from_feedback(feedback) != "unknown" \
+        or _feedback_reports_kerb_compliance(feedback)
+
+
+# ---------------------------------------------------------------------------
 # Bottoming band thresholds
 # ---------------------------------------------------------------------------
 
@@ -1808,6 +1944,7 @@ def build_setup_diagnosis(
     event_ctx: dict,
     feeling: str | None,
     location_confidence: "str | None" = None,
+    feedback: "dict | None" = None,
 ) -> dict:
     """Build a structured setup diagnosis from laps, setup, and driver feel.
 
@@ -1822,12 +1959,16 @@ def build_setup_diagnosis(
     event_ctx:
         Event context dict (same schema as DrivingAdvisor._event_ctx).
     feeling:
-        Free-text driver feeling string, or None.
+        Free-text driver feeling string, or None (the optional notes field / legacy).
     location_confidence:
         Optional explicit override: "high" | "low" | None.
         When None, derived from event_ctx["location_confidence"] or the track
         model resolver (lazy import, guarded by try/except). Defaults to "low"
         (conservative) when no signal is available.
+    feedback:
+        Structured Practice-Review dropdown dict, or None. When present the brain
+        reads its exact values NATIVELY (balance, braking, rotation, bottoming,
+        gearing, traction, kerbs) and merges them over the free-text feeling flags.
 
     Returns
     -------
@@ -1840,7 +1981,7 @@ def build_setup_diagnosis(
     """
     try:
         return _build_setup_diagnosis_inner(
-            laps, setup, car_name, event_ctx, feeling, location_confidence
+            laps, setup, car_name, event_ctx, feeling, location_confidence, feedback
         )
     except Exception:
         return _build_setup_diagnosis_conservative()
@@ -1853,6 +1994,7 @@ def _build_setup_diagnosis_inner(
     event_ctx: dict,
     feeling: str | None,
     location_confidence: "str | None",
+    feedback: "dict | None" = None,
 ) -> dict:
     """Inner implementation of build_setup_diagnosis — not exception-safe.
 
@@ -2017,6 +2159,13 @@ def _build_setup_diagnosis_inner(
     # Gearbox flag and advanced gearing / wheelspin / compliance diagnosis
     # ------------------------------------------------------------------
     driver_feel_flags = _parse_driver_feel(feeling)
+    # Merge the NATIVE structured-dropdown flags over the free-text flags. The
+    # dropdowns are the authoritative driver verdict; a flag set by either source
+    # stays set (they reinforce, never cancel).
+    if feedback:
+        for _k, _v in driver_feel_flags_from_feedback(feedback).items():
+            if _v:
+                driver_feel_flags[_k] = True
 
     # A6: Collect all frames across laps for top-gear signal analysis
     all_frames: list = []
@@ -2087,6 +2236,11 @@ def _build_setup_diagnosis_inner(
 
     # Compliance priority
     compliance_priority = _detect_compliance_priority(feeling, avg_kerb)
+    # Native: a noticeable/severe Kerb-behaviour dropdown supplies the driver half
+    # of the compliance AND-gate; telemetry kerb corroboration is still required.
+    if (not compliance_priority and _feedback_reports_kerb_compliance(feedback)
+            and avg_kerb > _COMPLIANCE_KERB_THRESHOLD):
+        compliance_priority = True
 
     # Gearbox flag: derived from the gearing_diagnosis_category rather than
     # the old flat 93%/limiter heuristic, so the AI block and the validation
@@ -2156,6 +2310,12 @@ def _build_setup_diagnosis_inner(
 
     # Derive driver feel traction status
     driver_feel_traction_status = _derive_driver_feel_traction_status(_feeling_history)
+    # Native: an explicit Traction / Drive-out dropdown is the driver's latest, most
+    # direct verdict and takes precedence over text history when it says anything.
+    if feedback:
+        _fb_traction = traction_status_from_feedback(feedback)
+        if _fb_traction != "unknown":
+            driver_feel_traction_status = _fb_traction
 
     # Compute aero_rear_healthy (amendment: fraction-of-max threshold)
     # Use resolve_ranges for per-car aero_rear range; only True when aero_rear has valid range
