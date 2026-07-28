@@ -289,6 +289,27 @@ class EventDispatcher(threading.Thread):
                     self._recorder.finalize_lap(record.lap_num, record.lap_time_ms)
                 except Exception as e:
                     _log.error("Dispatcher recorder error: %s", e)
+            # Open a DB session on the FIRST completed lap of ANY mode — practice, time
+            # trial, qualifying — not only on RACE_STARTED. A baseline/practice run (all
+            # track modelling and baseline laps are driven in Time Trial) never fires
+            # RACE_STARTED, so without this the session_id stayed 0, no laps were written,
+            # total_laps stayed 0, and "End run & record" reported "no completed laps".
+            if (self._db is not None and self._recorder is not None
+                    and self._session_id == 0):
+                try:
+                    car_id = int(self._car_id_ref[0])
+                    tag    = self._session_tag
+                    stype  = (record.session_type.value
+                              if hasattr(record.session_type, "value")
+                              else str(getattr(record, "session_type", "") or "")) or "practice"
+                    self._session_id = self._db.open_session(
+                        car_id, tag.track, stype, tag.car, tag.config_id,
+                        event_id=int(tag.event_id))
+                    print(f"[Dispatcher] session opened on first lap: id={self._session_id} "
+                          f"type={stype} track={tag.track}")
+                except Exception as e:
+                    print(f"[Dispatcher] db open_session (first lap) error: {e}")
+
             if self._db is not None and self._session_id > 0 and self._recorder is not None:
                 try:
                     lap_stats = self._recorder.last_lap()
