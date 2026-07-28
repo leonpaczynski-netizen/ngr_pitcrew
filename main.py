@@ -307,6 +307,15 @@ class EventDispatcher(threading.Thread):
                         event_id=int(tag.event_id))
                     print(f"[Dispatcher] session opened on first lap: id={self._session_id} "
                           f"type={stype} track={tag.track}")
+                    # Phase 2 (closed-loop learning): a new session opening means the
+                    # PRIOR session (driven with the last applied setup) can now be
+                    # scored. Runs the SAME headless pass as the classic UI, so the new
+                    # shell learns too. Best-effort, off the hot path, never raises.
+                    try:
+                        from services.setup_learning import run_scoring_pass
+                        run_scoring_pass(self._db, car_id, tag.track, "", self._session_id)
+                    except Exception as _se:
+                        print(f"[Dispatcher] scoring pass error: {_se}")
                 except Exception as e:
                     print(f"[Dispatcher] db open_session (first lap) error: {e}")
 
@@ -359,6 +368,11 @@ class EventDispatcher(threading.Thread):
                         event_id=int(tag.event_id))
                     print(f"[Dispatcher] fallback race session opened: id={self._session_id} "
                           f"car={car_id} ({tag.car}) track={tag.track}")
+                    try:  # Phase 2: score the prior session's applied setup (see above).
+                        from services.setup_learning import run_scoring_pass
+                        run_scoring_pass(self._db, car_id, tag.track, "", self._session_id)
+                    except Exception as _se:
+                        print(f"[Dispatcher] scoring pass error: {_se}")
                 except Exception as e:
                     print(f"[Dispatcher] db open_session error: {e}")
 

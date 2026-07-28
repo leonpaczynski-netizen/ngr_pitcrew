@@ -754,11 +754,48 @@ class LiveShellBridge(QObject):
             vm = self._recommendation_vm()
             if vm is not None:
                 self._setups.apply(d, vm.applied_field_values())
+        # Phase 2 (closed-loop learning): record this applied change against the
+        # session it was based on BEFORE consuming it, so a later run can score
+        # whether it helped or hurt — the write side that lets the brain stop
+        # re-recommending a change that made the car worse. Best-effort, never blocks.
+        self._persist_applied_for_learning(self._last_analysis)
         self._last_analysis = None      # the recommendation is on the car now — consumed
         outcome = self._setups.confirm_applied_in_game(
             d, applied_at=time.strftime("%Y-%m-%d %H:%M"))
         self._garage_status(outcome.reason)
         self.refresh()
+
+    def _persist_applied_for_learning(self, analysis) -> None:
+        """Persist a just-applied recommendation so a later run scores it (Phase 2).
+
+        The 'before' session is the most recent recorded session for this car+track
+        (the laps the analysis was based on). Scoped by car+track (layout ""), matching
+        the scoring trigger + the analyse consume side. Never raises."""
+        try:
+            if analysis is None or self._db is None:
+                return
+            changes = list(getattr(analysis, "changes", ()) or ())
+            if not changes:
+                return
+            inp = self._setups.inputs()
+            car_name = getattr(inp, "car", "") or ""
+            track = getattr(inp, "track", "") or ""
+            if not car_name or not track:
+                return
+            car_id = int(self._db.get_car_id(car_name) or 0)
+            if car_id <= 0:
+                return
+            before = int(self._db.get_previous_session_id(car_id, track, 2_147_483_647) or 0)
+            if before <= 0:
+                return  # no recorded session yet → nothing to score against later
+            from services.setup_learning import persist_applied_recommendation
+            persist_applied_recommendation(
+                self._db, car_id=car_id, track=track, layout_id="",
+                before_session_id=before, changes=changes,
+                driver_profile_version=str(getattr(analysis, "driver_profile_version", "") or ""),
+                rule_engine_version=str(getattr(analysis, "rule_engine_version", "") or ""))
+        except Exception:
+            pass
 
     def _on_lock_setup(self, discipline: str, lock: bool) -> None:
         """Lock (or reopen) a discipline's setup on the active cycle — the explicit

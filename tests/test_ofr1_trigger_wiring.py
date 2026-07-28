@@ -36,9 +36,24 @@ def _method_body(src: str, name: str) -> str:
     return m.group(0)
 
 
+def _func_body(src: str, name: str) -> str:
+    """Body of a MODULE-LEVEL function (0-indent def), e.g. run_scoring_pass."""
+    m = re.search(rf"\ndef {name}\(.*?(?=\ndef |\Z)", src, re.DOTALL)
+    assert m, f"function {name!r} not found in source"
+    return m.group(0)
+
+
 @pytest.fixture(scope="module")
 def dash_src() -> str:
     return (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8") + (ROOT / "ui" / "live_ui.py").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def service_src() -> str:
+    # The scoring-pass orchestration now lives in the headless learning service
+    # (run_scoring_pass); the classic _trigger_scoring_pass delegates to it so both
+    # the classic UI and the new shell (via the backend dispatcher) run the same code.
+    return (ROOT / "services" / "setup_learning.py").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -50,25 +65,25 @@ class TestTriggerScoringPassBody:
         body = _method_body(dash_src, "_trigger_scoring_pass")
         assert body
 
-    def test_calls_get_previous_session_id(self, dash_src):
+    def test_delegates_to_run_scoring_pass(self, dash_src):
+        # The classic method must delegate to the shared headless service.
         body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "get_previous_session_id" in body
+        assert "run_scoring_pass" in body
 
-    def test_calls_get_applied_unverified_recs(self, dash_src):
-        body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "get_applied_unverified_recs" in body
+    def test_calls_get_previous_session_id(self, service_src):
+        assert "get_previous_session_id" in _func_body(service_src, "run_scoring_pass")
 
-    def test_calls_aggregate_lap_window(self, dash_src):
-        body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "aggregate_lap_window" in body
+    def test_calls_get_applied_unverified_recs(self, service_src):
+        assert "get_applied_unverified_recs" in _func_body(service_src, "run_scoring_pass")
 
-    def test_calls_compute_verdict_and_confidence(self, dash_src):
-        body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "compute_verdict_and_confidence" in body
+    def test_calls_aggregate_lap_window(self, service_src):
+        assert "aggregate_lap_window" in _func_body(service_src, "run_scoring_pass")
 
-    def test_calls_persist_score(self, dash_src):
-        body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "persist_score" in body
+    def test_calls_compute_verdict_and_confidence(self, service_src):
+        assert "compute_verdict_and_confidence" in _func_body(service_src, "run_scoring_pass")
+
+    def test_calls_persist_score(self, service_src):
+        assert "persist_score" in _func_body(service_src, "run_scoring_pass")
 
     def test_no_config_strategy_read(self, dash_src):
         body = _method_body(dash_src, "_trigger_scoring_pass")
@@ -86,16 +101,15 @@ class TestTriggerScoringPassBody:
             "_trigger_scoring_pass must be fully wrapped in try/except "
             "so it can never raise")
 
-    def test_calls_get_recent_feedback(self, dash_src):
-        """I1: the feedback query must be wired — get_recent_feedback appears in body."""
-        body = _method_body(dash_src, "_trigger_scoring_pass")
-        assert "get_recent_feedback" in body, (
-            "_trigger_scoring_pass must call get_recent_feedback to populate "
+    def test_calls_get_recent_feedback(self, service_src):
+        """I1: the feedback query must be wired — get_recent_feedback in the pass."""
+        assert "get_recent_feedback" in _func_body(service_src, "run_scoring_pass"), (
+            "run_scoring_pass must call get_recent_feedback to populate "
             "has_driver_feedback")
 
-    def test_no_hardcoded_has_driver_feedback_false(self, dash_src):
+    def test_no_hardcoded_has_driver_feedback_false(self, service_src):
         """I1: has_driver_feedback=False must no longer be hardcoded."""
-        body = _method_body(dash_src, "_trigger_scoring_pass")
+        body = _func_body(service_src, "run_scoring_pass")
         assert "has_driver_feedback=False" not in body, (
             "has_driver_feedback must be wired from get_recent_feedback, "
             "not hardcoded to False")

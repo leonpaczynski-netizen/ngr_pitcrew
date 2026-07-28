@@ -1007,120 +1007,16 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         unexpected data cannot block session opening.  Inputs come in as explicit
         params — never reads config['strategy']."""
         try:
-            # Guard: DB must be present and car+track must be identified.
-            if self._db is None or car_id <= 0 or not track:
-                return
-            # Resolve the "after" session: the session just finished (most recent
-            # session for this car+track before the freshly opened new_session_id).
-            after_sid = self._db.get_previous_session_id(car_id, track, new_session_id)
-            if not after_sid:
-                return
-            # Fetch recs that are applied but not yet scored for this layout.
-            recs = self._db.get_applied_unverified_recs(car_id, track, layout_id)
-            # Skip any rec that was created in the after session itself —
-            # a recommendation cannot be scored against its own creation session.
-            scoreable = [r for r in recs if r.get("session_id") != after_sid]
-            if not scoreable:
-                return
-            from data.recommendation_scoring import (
-                aggregate_lap_window,
-                compute_verdict_and_confidence,
-            )
-            # Fetch after-side laps once (shared across all recs).
-            after_laps = self._db.get_laps_for_scoring(after_sid)
-            after_window = aggregate_lap_window(after_laps)
-            multi_count = len(scoreable)
-            # Query driver feedback once for this car+track (not per rec).
-            _feedback_rows = self._db.get_recent_feedback(car_id, track)
-            has_driver_feedback = bool(_feedback_rows)
-            # Group 47: build a single feedback string from the most-recent row's
-            # free-text/structured fields for deterministic outcome classification.
-            _feedback_text = _combine_driver_feedback_text(
-                _feedback_rows[0] if _feedback_rows else {}
-            )
-            written = 0
-            for rec in scoreable:
-                # Fetch before-side laps per rec (each rec may have been created
-                # in a different earlier session).
-                before_laps = self._db.get_laps_for_scoring(rec["session_id"])
-                before_window = aggregate_lap_window(before_laps)
-                result = compute_verdict_and_confidence(
-                    rec, before_window, after_window,
-                    multi_rec_count=multi_count,
-                    has_driver_feedback=has_driver_feedback,
-                )
-                self._db.persist_score(
-                    result.rec_id, result.verdict, result.confidence, result.details
-                )
-                # Engineering-Brain Phase 1: stamp the measured verdict onto the setup
-                # lineage node this rec produced, so rollback can find a worse setup.
-                if result.verdict != "insufficient_data":
-                    try:
-                        self._db.record_lineage_outcome_by_rec(
-                            result.rec_id, result.verdict, after_sid)
-                    except Exception:
-                        pass
-                # Group 46: record per-rule learning outcomes (best-effort, never raises).
-                # Only when verdict is not "insufficient_data" (no signal — skip).
-                if result.verdict != "insufficient_data":
-                    written += 1
-                    try:
-                        _ac_json = rec.get("approved_changes_json") or ""
-                        if _ac_json:
-                            _ac_list = json.loads(_ac_json)
-                            if isinstance(_ac_list, list):
-                                # All recs in get_applied_unverified_recs come from
-                                # the analyse path (baseline path never calls
-                                # insert_setup_recommendations), so source_path is "Analyse".
-                                _source_path = "Analyse"
-                                # session_type is not stored on setup_recommendations;
-                                # default to "" (learning_outcomes schema has NOT NULL DEFAULT '').
-                                _session_type_lo = ""
-                                _dpv = rec.get("driver_profile_version") or ""
-                                _rev = rec.get("rule_engine_version") or ""
-                                for _ch in _ac_list:
-                                    if not isinstance(_ch, dict):
-                                        continue
-                                    _rule_id = _ch.get("rule_id", "")
-                                    if not _rule_id:
-                                        continue
-                                    # Group 47: derive richer outcome-verification
-                                    # evidence for this change.  The persisted
-                                    # confidence-feed `verdict` stays the telemetry
-                                    # OFR-1 verdict (non-regressive); the typed
-                                    # outcome_kind + evidence/feedback/safety notes
-                                    # are stored additively for explainability.
-                                    _g47 = _verify_change_outcome(
-                                        _rule_id, _ch.get("field", ""),
-                                        car_id, track, layout_id,
-                                        before_window, after_window, _feedback_text,
-                                    )
-                                    self._db.record_learning_outcome(
-                                        car_id=car_id,
-                                        track=track,
-                                        layout_id=layout_id,
-                                        session_id=after_sid,
-                                        session_type=_session_type_lo,
-                                        rule_id=_rule_id,
-                                        source_path=_source_path,
-                                        verdict=result.verdict,
-                                        confidence=result.confidence,
-                                        driver_profile_version=_dpv,
-                                        rule_engine_version=_rev,
-                                        target_issue=_g47["target_issue"],
-                                        evidence_summary=_g47["evidence_summary"],
-                                        driver_feedback=_feedback_text,
-                                        safety_notes=_g47["safety_notes"],
-                                        outcome_kind=_g47["outcome_kind"],
-                                    )
-                    except Exception:
-                        pass  # learning persistence is best-effort — never disrupt scoring
-            print(f"[Learning] scored {len(scoreable)} recommendation(s) for "
-                  f"{car_id}/{track} ({written} non-trivial)")
+            # Delegate to the shared headless scoring service (one source of truth —
+            # the backend dispatcher runs the SAME pass so the new shell learns too),
+            # then nudge Home if it wrote anything. See services/setup_learning.py.
+            from services.setup_learning import run_scoring_pass
+            written = run_scoring_pass(self._db, car_id, track, layout_id, new_session_id)
             if written >= 1:
                 self._home_refresh_if_visible()
         except Exception as exc:
             print(f"[Learning] scoring pass error: {exc}")
+        return
 
     # --- Live tab -----------------------------------------------------------
 
