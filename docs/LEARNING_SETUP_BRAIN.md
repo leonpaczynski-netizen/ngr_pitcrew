@@ -12,18 +12,21 @@ Legend: ✅ done · 🟡 partial · ⬜ not started · 🔎 audit needed to conf
 
 ---
 
-## Phase 0 — Audit the loop (🔎 do first)
-Before building more "learning," confirm what actually closes today, end to end in
-the **new shell**:
-- Is a `RuleOutcomeStore` outcome genuinely recorded when an applied change is
-  followed by a recorded run? (store + closed-loop lockout exist — is the *feed*
-  wired in the new shell, or only the classic one?)
-- Is the `DriverProfile` version stamped onto outcomes and recommendations so scope
-  keys are real?
-- Does any path re-derive the profile from coaching/debrief today, or is it static?
-
-Output: a one-page "what learns today vs. what's a stub" so phases 2–3 target real
-gaps, not assumed ones.
+## Phase 0 — Audit the loop — ✅ DONE → [LEARNING_SETUP_BRAIN_PHASE0_AUDIT.md](LEARNING_SETUP_BRAIN_PHASE0_AUDIT.md)
+Findings (2026-07-28, three read-only traces):
+- **Everyday apply→record→outcome loop: OPEN.** The rule engine *consumes* outcomes
+  and enforces the lockout correctly (already wired in the new shell), but nothing
+  *captures* an outcome from an applied change + recorded run — the new shell's
+  `confirm_applied_in_game` never writes one, and the classic writer chain is dead
+  (`insert_setup_recommendations` has no caller). `RuleOutcomeStore` is in-memory and
+  rebuilt empty every analyse.
+- **profile_version scoping = no-op:** frozen `"v1.0-hardcoded"`; the DB read doesn't
+  even filter on it.
+- **Driver profile = 100% static:** `build_driver_profile()` takes no args; coaching/
+  debrief are display-only.
+- **Consequence for ordering:** item 2 is *one write-path wiring away* from working
+  (consume side is done); item 3 is genuine greenfield (with usable signals). So
+  **Phase 2 moves ahead of Phase 3.**
 
 ---
 
