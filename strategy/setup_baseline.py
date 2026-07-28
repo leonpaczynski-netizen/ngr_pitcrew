@@ -482,6 +482,7 @@ def build_baseline_setup(
     historical_seed_overrides: "dict | None" = None,
     engineering_bias: "dict | None" = None,
     final_drive_lean: float = 0.0,
+    chassis_seed_overrides: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -643,6 +644,19 @@ def build_baseline_setup(
             continue
 
         seed = NEUTRAL_SEEDS[field]
+
+        # Car/objective-specific chassis seed (dampers/camber/toe) — replaces the flat
+        # neutral constant so these fields differ by car and by race vs qualifying
+        # instead of coming out identical for every car. A proven-history override
+        # (below) still wins; profile/session bias still stack on top. Marked as
+        # engineering provenance so the UI shows it was shaped for the car, not a
+        # blind default.
+        if chassis_seed_overrides and field in chassis_seed_overrides:
+            try:
+                seed = float(chassis_seed_overrides[field])
+                _eng_fields.add(field)
+            except (TypeError, ValueError):
+                pass
 
         # Phase 9 baseline lift: for personal-fit levers the driver has a STRONG
         # proven prior for — geometry (camber/toe) and, from Group 64, the LSD

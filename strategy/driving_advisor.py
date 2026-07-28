@@ -2583,11 +2583,12 @@ class DrivingAdvisor:
             # ride-height for elevation, ARB balance, RR rear-stability, etc.). Flows through
             # the SAME clamp/validate pipeline; degrades to no-op if anything is missing.
             _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+            _chassis_seeds: dict = {}
             _driver_fit_reasoning = None
             try:
                 from strategy.setup_engineering import (
                     build_vehicle_model, derive_engineering_intents, resolve_car_specs,
-                    coupling_report,
+                    coupling_report, derive_chassis_seeds,
                 )
                 from strategy.setup_authoring import objective_from_session_type
                 _specs = resolve_car_specs(car_name)
@@ -2612,8 +2613,13 @@ class DrivingAdvisor:
                 _eng_lean = _eng_plan.final_drive_lean
                 _eng_reasoning = _eng_plan.as_json()
                 _eng_reasoning["coupling"] = coupling_report(_eng_plan)
+                # Car/objective-specific seeds for the fields the intent layer does not
+                # shape (dampers/camber/toe), so they differ per car instead of coming
+                # out at a flat constant for every car.
+                _chassis_seeds = derive_chassis_seeds(_vehicle, _objective)
             except Exception:
                 _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
+                _chassis_seeds = {}
             # Evidence-scaled driver fit: tailor the neutral base toward the driver's
             # stated style IN PROPORTION to how far each seed sits from their window.
             try:
@@ -2643,6 +2649,7 @@ class DrivingAdvisor:
                 historical_seed_overrides=_seed_overrides,
                 engineering_bias=_eng_bias,
                 final_drive_lean=_eng_lean,
+                chassis_seed_overrides=_chassis_seeds,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta

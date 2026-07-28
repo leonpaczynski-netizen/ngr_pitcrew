@@ -220,6 +220,59 @@ class EngineeringPlan:
 # Objective constants mirror strategy.setup_authoring.SetupObjective values.
 OBJ_BASE, OBJ_QUALI, OBJ_RACE = "base", "qualifying", "race"
 
+
+# ---------------------------------------------------------------------------
+# Chassis seeds (dampers / camber / toe) — car- and objective-specific starting
+# values for the fields the DIRECTIONAL-intent layer above does not shape. Without
+# this they come out at a single flat neutral constant for EVERY car — identical
+# compression/expansion and toe on a light GT3 and a heavy road car, and identical
+# between race and qualifying — which is exactly what a driver notices as "weird".
+# Derived ONLY from mass + drivetrain + objective (all already known); when mass is
+# unknown the mass factor is neutral so nothing is invented. Everything is clamped to
+# the car's real range downstream in build_baseline_setup.
+_DAMPER_REF_MASS_KG = 1300.0
+_DAMPER_BASE = {"dampers_front_comp": 30.0, "dampers_front_ext": 40.0,
+                "dampers_rear_comp": 25.0, "dampers_rear_ext": 35.0}
+
+
+def derive_chassis_seeds(vehicle: VehicleModel, objective: str) -> "dict":
+    """Car/objective-specific seeds for dampers, camber and toe. Pure; never raises."""
+    obj = (objective or OBJ_BASE).strip().lower()
+    dt = (vehicle.drivetrain or "").lower()
+    seeds: dict = {}
+
+    # Dampers scale with sprung MASS (more mass → more damping to control it) and with
+    # OBJECTIVE (qualifying firmer for response; race softer for compliance over a
+    # stint). A stiff, high-downforce car (high power/weight) also runs firmer damping.
+    mass = vehicle.weight_kg
+    mass_f = max(0.75, min(1.30, mass / _DAMPER_REF_MASS_KG)) if mass else 1.0
+    stiff_f = 1.12 if vehicle.high_power_to_weight else 1.0
+    obj_damp = {OBJ_QUALI: 1.10, OBJ_RACE: 0.95}.get(obj, 1.0)
+    for f, base in _DAMPER_BASE.items():
+        seeds[f] = float(round(base * mass_f * stiff_f * obj_damp))
+
+    # Camber (negative, for grip): front-drive fights understeer with more FRONT
+    # camber; rear-engined/rear-drive wants more REAR camber. Qualifying a touch more
+    # (peak grip); race a touch less (tyre temperature/wear over a stint).
+    front_c = {"ff": 0.6, "fr": 0.3, "awd": 0.3}.get(dt, 0.0)
+    rear_c = {"rr": 0.5, "mr": 0.3, "awd": 0.2}.get(dt, 0.0)
+    obj_c = {OBJ_QUALI: 0.3, OBJ_RACE: -0.1}.get(obj, 0.0)
+    seeds["camber_front"] = round(1.0 + front_c + obj_c, 1)
+    seeds["camber_rear"] = round(1.5 + rear_c + obj_c, 1)
+
+    # Toe: a hint of front toe-OUT for turn-in, rear toe-IN for stability. Rear-drive
+    # carries more rear toe-in for traction stability; front-drive a little more front
+    # toe-out. Qualifying trims toe (less scrub/drag, sharper); race adds rear toe-in.
+    front_t = {"ff": -0.02}.get(dt, 0.0)
+    rear_t = {"rr": 0.05, "fr": 0.04, "mr": 0.04, "awd": 0.03}.get(dt, 0.0)
+    obj_front_t = {OBJ_RACE: -0.02}.get(obj, 0.0)
+    obj_rear_t = {OBJ_QUALI: -0.02, OBJ_RACE: 0.03}.get(obj, 0.0)
+    seeds["toe_front"] = round(0.0 + front_t + obj_front_t, 2)
+    seeds["toe_rear"] = round(0.05 + rear_t + obj_rear_t, 2)
+
+    return seeds
+
+
 # Track shaping thresholds (mirror track_tune_profile's).
 _STRAIGHT_HEAVY = 0.22
 _CORNER_DENSE = 6.0

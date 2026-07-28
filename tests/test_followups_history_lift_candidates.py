@@ -154,7 +154,10 @@ def test_baseline_response_no_history_no_lift():
     res = json.loads(adv.build_baseline_setup_response(
         _CAR, _r(), "MR", 6, None, False, session_type="Race",
         track_name="Watkins Glen", historical_setups=[]))
-    assert res["setup_fields"]["camber_front"] == 1.0
+    # Camber is now a car/objective-specific chassis seed (not a flat constant): an
+    # MR car on a Race objective trims camber a touch off the 1.0 anchor → 0.9. The
+    # point of THIS test is that with no history there is no proven-setup lift.
+    assert res["setup_fields"]["camber_front"] == 0.9
     assert res.get("historical_lift") == []
 
 
