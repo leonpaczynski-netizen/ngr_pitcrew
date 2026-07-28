@@ -131,6 +131,7 @@ class SetupWorkspace(QWidget):
     car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
     ballast_changed = pyqtSignal(dict)           # {ballast_kg, ballast_position}
+    regulation_changed = pyqtSignal(dict)        # {weight_kg, power_hp} — series BOP override
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -367,6 +368,7 @@ class SetupWorkspace(QWidget):
         # wiring (which connects to garage_page.gearing_changed) still works unchanged.
         self._sheet.gearing_changed.connect(self.gearing_changed)
         self._sheet.ballast_changed.connect(self.ballast_changed)
+        self._sheet.regulation_changed.connect(self.regulation_changed)
 
         lay.addWidget(self._stack, 1)
 
@@ -532,6 +534,10 @@ class SetupWorkspace(QWidget):
                 self._sheet.set_ballast(
                     ballast_kg=float(_scalar(sv.get("ballast_kg")) or 0.0),
                     ballast_position=int(_scalar(sv.get("ballast_position")) or 0))
+            if hasattr(self._sheet, "set_regulation"):
+                self._sheet.set_regulation(
+                    weight_kg=float(_scalar(sv.get("weight_kg")) or 0.0),
+                    power_hp=float(_scalar(sv.get("power_hp")) or 0.0))
         except Exception:
             pass
         self._btn_full.setEnabled(bool(setup_values))

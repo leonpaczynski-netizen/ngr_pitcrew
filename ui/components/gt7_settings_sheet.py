@@ -73,6 +73,10 @@ class GT7SettingsSheet(QWidget):
     #: Payload: {ballast_kg: float, ballast_position: int}
     ballast_changed = pyqtSignal(dict)
 
+    #: Emitted when the driver finishes editing a series-regulated weight or power.
+    #: Payload: {weight_kg: float, power_hp: float} (0 = use the stock car spec).
+    regulation_changed = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ngrGt7Sheet")
@@ -107,6 +111,98 @@ class GT7SettingsSheet(QWidget):
         # rescues it before clearing the column and re-adds it after.
         self._trans_section = self._build_transmission_section()
         self._ballast_section = self._build_ballast_section()
+        self._regulation_section = self._build_regulation_section()
+
+    def _build_regulation_section(self) -> QFrame:
+        """Editable series-regulation (BOP) entry: minimum weight and maximum power.
+
+        Weight and power otherwise default from the stock car spec, but a series can
+        mandate a specific figure (e.g. Supercars: 1335 kg / 606 bhp) that a car built
+        with parts + ballast doesn't match. Entering them here makes the setup brain reason
+        from the real regulated car. 0 = leave on the stock spec. editingFinished emits
+        regulation_changed."""
+        box = QFrame()
+        box.setObjectName("ngrGt7Section")
+        box.setStyleSheet(
+            f"#ngrGt7Section {{ background: {_t.CARBON_RAISED}; "
+            f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_MD}px; }}")
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(_t.SPACE_MD, _t.SPACE_SM, _t.SPACE_MD, _t.SPACE_SM)
+        outer.setSpacing(_t.SPACE_XS)
+
+        title = QLabel("Series regulation (entry)")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_t.TEXT_HI}; font-weight: 700; font-size: {_t.FS_LABEL}pt; "
+            f"letter-spacing: 0.5px; border-bottom: 1px solid {_t.HAIRLINE}; "
+            f"padding-bottom: 3px;")
+        outer.addWidget(title)
+
+        note = QLabel("Only if the series sets them — e.g. a minimum weight or a power cap. "
+                      "Leave at 0 to use the car's stock figures.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
+        outer.addWidget(note)
+
+        qss = (f"QDoubleSpinBox {{ color: {_t.TEXT_HI}; background: {_t.CARBON_HI}; "
+               f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
+               f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(_t.SPACE_SM)
+        grid.setVerticalSpacing(2)
+
+        w_cap = QLabel("Weight (kg)")
+        w_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        w_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(w_cap, 0, 0)
+        self._weight_spin = QDoubleSpinBox()
+        self._weight_spin.setRange(0.0, 3000.0)
+        self._weight_spin.setSingleStep(1.0)
+        self._weight_spin.setDecimals(0)
+        self._weight_spin.setSpecialValueText("stock")   # 0 shows "stock"
+        self._weight_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._weight_spin.setMaximumWidth(110)
+        self._weight_spin.setStyleSheet(qss)
+        self._weight_spin.editingFinished.connect(self._on_regulation_edited)
+        grid.addWidget(self._weight_spin, 1, 0)
+
+        p_cap = QLabel("Power (bhp)")
+        p_cap.setStyleSheet(f"color: {_t.TEXT_MUTE}; font-size: {_t.FS_CAPTION}pt;")
+        p_cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        grid.addWidget(p_cap, 0, 1)
+        self._power_spin = QDoubleSpinBox()
+        self._power_spin.setRange(0.0, 2000.0)
+        self._power_spin.setSingleStep(1.0)
+        self._power_spin.setDecimals(0)
+        self._power_spin.setSpecialValueText("stock")
+        self._power_spin.setMinimumHeight(_t.TOUCH_MIN_H)
+        self._power_spin.setMaximumWidth(110)
+        self._power_spin.setStyleSheet(qss)
+        self._power_spin.editingFinished.connect(self._on_regulation_edited)
+        grid.addWidget(self._power_spin, 1, 1)
+
+        grid.setColumnStretch(2, 1)
+        outer.addLayout(grid)
+        return box
+
+    def _on_regulation_edited(self) -> None:
+        self.regulation_changed.emit({
+            "weight_kg": float(self._weight_spin.value()),
+            "power_hp": float(self._power_spin.value()),
+        })
+
+    def set_regulation(self, weight_kg: float = 0.0, power_hp: float = 0.0) -> None:
+        """Load stored regulated weight/power. Blocks signals; skips a focused spin so a
+        mid-edit isn't overwritten by the 750 ms feed."""
+        spins = (self._weight_spin, self._power_spin)
+        if any(s.hasFocus() for s in spins):
+            return
+        self._weight_spin.blockSignals(True)
+        self._weight_spin.setValue(float(weight_kg or 0.0))
+        self._weight_spin.blockSignals(False)
+        self._power_spin.blockSignals(True)
+        self._power_spin.setValue(float(power_hp or 0.0))
+        self._power_spin.blockSignals(False)
 
     def _build_ballast_section(self) -> QFrame:
         """Editable Ballast entry: weight (kg) and position (front −/rear +).
@@ -301,6 +397,7 @@ class GT7SettingsSheet(QWidget):
         # aren't scheduled for deletion by _clear_layout.
         self._right.removeWidget(self._trans_section)
         self._right.removeWidget(self._ballast_section)
+        self._right.removeWidget(self._regulation_section)
 
         _clear_layout(self._left)
         _clear_layout(self._right)
@@ -324,6 +421,7 @@ class GT7SettingsSheet(QWidget):
         # whether or not there are setup values — the driver can enter them at any time.
         self._right.addWidget(self._trans_section)
         self._right.addWidget(self._ballast_section)
+        self._right.addWidget(self._regulation_section)
         self._left.addStretch(1)
         self._right.addStretch(1)
 

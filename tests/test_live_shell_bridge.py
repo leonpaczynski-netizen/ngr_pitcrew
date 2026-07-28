@@ -359,3 +359,30 @@ class TestShiftTelemetryCalibration:
         scope = str(b._setups.inputs().scope or "")
         stored = b._shift_store.get(scope) or {}
         assert "calibrated_engine_data" not in stored
+
+
+class TestRegulationBOP:
+    """A series-regulated weight/power entered in the Garage persists onto BOTH
+    disciplines and overrides the stock spec the vehicle model reasons from."""
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        win._current_car_id = lambda: 7
+        win._build_event_context = lambda: build_event_context(
+            event={"id": 3, "name": "Round 3"},
+            strategy={"car": "GT-R", "track_location_id": "fuji", "track": "Fuji Speedway"})
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()
+        return b
+
+    def test_regulation_persists_to_both_disciplines_and_feeds_the_specs(self, qapp):
+        from strategy.setup_engineering import effective_car_specs
+        b = self._wired(qapp)
+        b._on_regulation_changed({"weight_kg": 1335, "power_hp": 606})   # Supercars BOP
+        for disc in ("race", "qualifying"):
+            sheet = b._setups.sheet(disc).as_dict()
+            assert sheet.get("weight_kg") == 1335 and sheet.get("power_hp") == 606
+        eff = effective_car_specs("GT-R", b._setups.sheet("race").as_dict())
+        assert eff.get("weight_kg") == 1335 and eff.get("power_hp") == 606

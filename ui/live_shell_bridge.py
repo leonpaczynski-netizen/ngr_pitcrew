@@ -289,6 +289,8 @@ class LiveShellBridge(QObject):
                     gp.gearing_changed.connect(self._on_gearing_changed)
                 if hasattr(gp, "ballast_changed"):
                     gp.ballast_changed.connect(self._on_ballast_changed)
+                if hasattr(gp, "regulation_changed"):
+                    gp.regulation_changed.connect(self._on_regulation_changed)
         except Exception:
             pass
         try:
@@ -2214,6 +2216,20 @@ class LiveShellBridge(QObject):
                     sheet.get("transmission_max_speed_kmh") or 0.0))
         except Exception:
             pass
+
+    def _on_regulation_changed(self, reg: dict) -> None:
+        """Write the series-regulated weight/power onto BOTH discipline sheets — it's a
+        car/regulation figure, not a per-discipline tune, so Race and Qualifying share it.
+        The vehicle model then reasons from the real regulated car (effective_car_specs)."""
+        if not reg:
+            return
+        last = None
+        for disc in ("race", "qualifying"):
+            last = self._setups.apply(disc, reg)
+            if last.ok:
+                self._mirror_to_classic(disc)
+        self._garage_status((last.reason if last else "") or "Regulation updated.")
+        self.refresh()
 
     def _on_ballast_changed(self, ballast: dict) -> None:
         """Write the driver's ballast entry (weight + position) onto the selected

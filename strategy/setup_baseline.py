@@ -76,6 +76,8 @@ NEUTRAL_SEEDS: dict[str, float] = {
     "ballast_kg":           0.0,
     "ballast_position":     0,
     "power_restrictor":     100.0,
+    "weight_kg":            0.0,   # 0 = use stock car_specs weight (series BOP override)
+    "power_hp":             0.0,   # 0 = use stock car_specs power  (series BOP override)
 }
 
 # ---------------------------------------------------------------------------

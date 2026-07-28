@@ -90,3 +90,16 @@ class TestGT7SettingsSheet:
         s.set_setup(_setup())
         assert s._ballast_kg_spin.value() == 90
         assert s._ballast_pos_spin.value() == -5
+
+    def test_regulation_weight_and_power_are_editable_and_emit(self, qapp):
+        s = GT7SettingsSheet()
+        seen = []
+        s.regulation_changed.connect(seen.append)
+        s.set_regulation(weight_kg=1335, power_hp=606)      # Supercars BOP
+        assert s._weight_spin.value() == 1335 and s._power_spin.value() == 606
+        s._power_spin.setValue(600)
+        s._on_regulation_edited()
+        assert seen and seen[-1] == {"weight_kg": 1335.0, "power_hp": 600.0}
+        # Survives a setup rerender.
+        s.set_setup(_setup())
+        assert s._weight_spin.value() == 1335

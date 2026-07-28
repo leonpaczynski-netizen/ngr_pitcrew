@@ -38,6 +38,10 @@ NUMERIC_FIELDS: Tuple[Tuple[str, float, int], ...] = (
     ("brake_bias_front", 0.0, 0),
     ("ballast_kg", 0.0, 0), ("ballast_position", 0.0, 0),
     ("power_restrictor", 100.0, 0),
+    # Series-regulated car figures (BOP). 0 = "use the stock car_specs.json value";
+    # a series minimum weight / maximum power (e.g. Supercars 1335 kg / 606 bhp) is entered
+    # here and overrides the stock spec the vehicle model reasons from.
+    ("weight_kg", 0.0, 0), ("power_hp", 0.0, 0),
     ("ecu_ingame_output", 100.0, 0),
     ("nitrous_output", 0.0, 0),
     ("final_drive", 0.0, 3),
