@@ -5,12 +5,48 @@ import pytest
 
 from ui.shell_feed_adapters import (
     live_pit_wall_vm_from_state, strategy_plan_vm_from_rpvm,
-    qualifying_vm_from_cc_view, debrief_vm_from_memory,
+    qualifying_vm_from_cc_view, debrief_vm_from_memory, session_debrief_vm,
 )
 
 
 def _ns(**kw):
     return types.SimpleNamespace(**kw)
+
+
+class TestSessionDebrief:
+    def _review(self, **kw):
+        base = dict(clean_laps=6, best_ms=132154, average_clean_ms=134800,
+                    consistency_ms=2332, fuel_per_lap=11.22, laps_of_fuel=8.9,
+                    compounds=("RS",), lock_ups=2, wheelspin=0, laps=[])
+        base.update(kw)
+        return _ns(**base)
+
+    def test_summarises_a_finished_session(self):
+        vm = session_debrief_vm(self._review(),
+                                {"track": "Sainte-Croix", "session_type": "race", "total_laps": 24},
+                                laps=[{"position": 6}, {"position": 4}])
+        assert "P4" in vm.what_happened          # final position wins
+        assert "24 laps" in vm.what_happened
+        assert "best 2:12.154" in vm.what_happened
+        assert "11.22 L/lap" in vm.setup_outcome and "8.9 laps/tank" in vm.setup_outcome
+        assert "RS" in vm.strategy_outcome
+        assert any("lock-up" in f for f in vm.findings)
+        assert vm.has_debrief is True
+
+    def test_practice_run_without_a_position_uses_the_session_kind(self):
+        vm = session_debrief_vm(self._review(),
+                                {"track": "Fuji", "session_type": "practice", "total_laps": 7})
+        assert vm.what_happened.startswith("Fuji — Practice")
+
+    def test_no_laps_and_no_clean_laps_is_empty(self):
+        vm = session_debrief_vm(_ns(clean_laps=0, laps=[]), {"track": "X"})
+        assert vm.has_debrief is False
+
+    def test_degradation_is_reported_when_there_are_enough_clean_laps(self):
+        rows = [_ns(time_ms=132000 + i * 200, excluded_reason="") for i in range(6)]
+        vm = session_debrief_vm(self._review(laps=rows),
+                                {"track": "Spa", "session_type": "race"})
+        assert "deg +0.20s/lap" in vm.strategy_outcome
 
 
 class TestLive:

@@ -511,6 +511,124 @@ def _behaviour_label(item) -> str:
     return str(item or "")
 
 
+def _fmt_lap_ms(ms) -> str:
+    try:
+        ms = int(ms or 0)
+    except (TypeError, ValueError):
+        ms = 0
+    if ms <= 0:
+        return "—"
+    s = ms / 1000.0
+    return f"{int(s // 60)}:{s % 60:06.3f}"
+
+
+def _final_position(laps) -> int:
+    """The last non-zero finishing position across a session's laps (0 if none)."""
+    pos = 0
+    for r in laps or []:
+        try:
+            p = int((r or {}).get("position") or 0)
+        except (TypeError, ValueError):
+            p = 0
+        if p > 0:
+            pos = p
+    return pos
+
+
+def _deg_per_lap_s(review) -> Optional[float]:
+    """Average per-lap change in clean lap time (s/lap); + = getting slower. None if too few."""
+    rows = getattr(review, "laps", None) or []
+    times = []
+    for r in rows:
+        if str(getattr(r, "excluded_reason", "") or ""):
+            continue
+        t = int(getattr(r, "time_ms", 0) or 0)
+        if t > 0:
+            times.append(t)
+    if len(times) < 4:
+        return None
+    deltas = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+    return (sum(deltas) / len(deltas)) / 1000.0
+
+
+def _feedback_standout(feedback) -> str:
+    """A short 'what stood out' phrase from the driver's structured feedback, if any."""
+    if not isinstance(feedback, dict):
+        return ""
+    notable = []
+    for key, label in (("entry_balance", "entry"), ("mid_corner_balance", "mid-corner"),
+                       ("exit_balance", "exit")):
+        v = str(feedback.get(key) or "").strip()
+        if v and v.lower() not in ("", "ok", "neutral", "balanced"):
+            notable.append(f"{v.lower()} on {label}")
+    return "; ".join(notable[:3])
+
+
+def session_debrief_vm(review, meta, *, laps=(), feedback=None,
+                       primary_label: str = "Continue", primary_key: str = "continue"):
+    """Per-session debrief from a recorded session's RunReview + meta (+ optional laps /
+    feedback). Shows what happened THIS session — result, pace, consistency, fuel, tyres —
+    so a finished race/run has a real debrief rather than an empty development scorecard."""
+    from ui.components.debrief_view import DebriefVM
+    meta = dict(meta or {})
+    clean = int(getattr(review, "clean_laps", 0) or 0)
+    laps = list(laps or [])
+    if clean <= 0 and not laps:
+        return DebriefVM()
+
+    track = str(meta.get("track") or "").strip()
+    stype = str(meta.get("session_type") or "").strip()
+    total = int(meta.get("total_laps") or 0)
+    pos = _final_position(laps)
+    result = f"P{pos}" if pos else (stype.title() or "Session")
+
+    head = [result]
+    if total:
+        head.append(f"{total} lap{'s' if total != 1 else ''}")
+    best, avg = int(getattr(review, "best_ms", 0) or 0), int(getattr(review, "average_clean_ms", 0) or 0)
+    if best:
+        head.append(f"best {_fmt_lap_ms(best)}")
+    if avg:
+        head.append(f"avg {_fmt_lap_ms(avg)}")
+    what_happened = (f"{track} — " if track else "") + " · ".join(head)
+
+    fpl = float(getattr(review, "fuel_per_lap", 0.0) or 0.0)
+    lot = float(getattr(review, "laps_of_fuel", 0.0) or 0.0)
+    setup_outcome = ""
+    if fpl:
+        setup_outcome = f"Fuel {fpl:.2f} L/lap" + (f" · ~{lot:.1f} laps/tank" if lot else "")
+
+    strat = []
+    comps = tuple(getattr(review, "compounds", ()) or ())
+    if comps:
+        strat.append("Tyres: " + ", ".join(str(c) for c in comps))
+    deg = _deg_per_lap_s(review)
+    if deg is not None:
+        strat.append(f"deg {deg:+.2f}s/lap")
+    strategy_outcome = " · ".join(strat)
+
+    new_evidence = []
+    cons = int(getattr(review, "consistency_ms", 0) or 0)
+    if cons and clean:
+        new_evidence.append(f"{clean} clean lap{'s' if clean != 1 else ''}, ±{cons / 1000:.2f}s spread")
+
+    findings = []
+    fb = _feedback_standout(feedback)
+    if fb:
+        findings.append(fb)
+    lu, ws = int(getattr(review, "lock_ups", 0) or 0), int(getattr(review, "wheelspin", 0) or 0)
+    if lu:
+        findings.append(f"{lu} lock-up{'s' if lu != 1 else ''}")
+    if ws:
+        findings.append(f"{ws} wheelspin moment{'s' if ws != 1 else ''}")
+
+    return DebriefVM(
+        what_happened=what_happened, setup_outcome=setup_outcome,
+        strategy_outcome=strategy_outcome, new_evidence=tuple(new_evidence),
+        findings=tuple(findings),
+        primary_action_label=primary_label, primary_action_key=primary_key)
+
+
 def debrief_vm_from_memory(mem, *, next_label: str = "Continue development", next_key: str = "continue"):
     from ui.components.debrief_view import DebriefVM
     if not isinstance(mem, dict) or not mem.get("ok", True) or mem.get("insufficient"):

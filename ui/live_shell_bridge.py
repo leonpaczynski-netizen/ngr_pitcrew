@@ -1320,14 +1320,33 @@ class LiveShellBridge(QObject):
         try:
             dp = getattr(self._shell, "debrief_page", None)
             db = self._db
-            if dp is None or db is None or not hasattr(db, "build_cross_session_memory"):
+            if dp is None or db is None:
                 return
-            from ui.shell_feed_adapters import debrief_vm_from_memory
-            try:
-                mem = db.build_cross_session_memory()
-            except Exception:
-                mem = None
-            dp.set_debrief(debrief_vm_from_memory(mem))
+            # Per-session debrief: summarise the last recorded session (race or run) —
+            # result, pace, consistency, fuel, tyres — so a finished session actually has
+            # a debrief. (The old cross-session development scorecard only populates from
+            # the setup-experiment loop, which the race flow never drives, so it was
+            # always empty here.)
+            last, _prev = self._recorded_pair()
+            sid = int(last or self._live_session_id() or 0)
+            if sid and hasattr(db, "get_session_laps"):
+                review = self._review_for(sid)
+                meta, laps = {}, []
+                try:
+                    if hasattr(db, "get_session_meta"):
+                        meta = dict(db.get_session_meta(sid) or {})
+                    laps = db.get_session_laps(sid) or []
+                except Exception:
+                    meta, laps = {}, []
+                from ui.shell_feed_adapters import session_debrief_vm
+                feedback = getattr(self._window, "_last_feedback_dict", None)
+                vm = session_debrief_vm(review, meta, laps=laps, feedback=feedback)
+                if vm.has_debrief:
+                    dp.set_debrief(vm)
+                    return
+            # Nothing recorded yet — show the page's own "complete a session" placeholder.
+            from ui.components.debrief_view import DebriefVM
+            dp.set_debrief(DebriefVM())
         except Exception:
             pass
 
