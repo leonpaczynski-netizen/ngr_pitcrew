@@ -149,6 +149,8 @@ class LiveShellBridge(QObject):
         #: the first NEW completed lap is the pit-lane lap we detect from.
         self._pit_lane_mode = False
         self._pit_lane_baseline_laps = 0
+        #: Count of modelling laps already spoken, so each new lap is announced once.
+        self._tm_last_spoken_lap = 0
         #: (loc, lay) -> on-disk station map, so the map draws for an already-modelled
         #: track without re-reading the large file every refresh.
         self._tm_disk_map_cache: dict = {}
@@ -1018,11 +1020,15 @@ class LiveShellBridge(QObject):
             # actually looking at this page (it is one of many in the stack) — not on
             # every 750 ms tick from wherever they happen to be.
             map_data = self._track_map_data(session) if page.isVisible() else None
+            # Evaluate the recorded laps once, then both SPEAK the engineer's per-lap call
+            # (once per new lap) and show it on the page.
+            lap_results = self._track_lap_results(session)
+            self._voice_track_modelling(session, lap_results)
             page.set_session(session,
                              laps_captured=self._track_laps_captured(),
                              corners=self._track_corners(session),
                              map_data=map_data,
-                             capture_note=self._track_capture_note(session))
+                             capture_note=self._track_capture_note(lap_results))
             # Re-apply a sticky status (e.g. why validation didn't pass) so the 750ms
             # refresh does not wipe it before the driver can read it.
             if self._tm_status:
@@ -1100,28 +1106,55 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
-    def _track_capture_note(self, session) -> str:
-        """The engineer's live capture call during recording — keep driving, or box now.
-
-        Deterministic convergence over the usable laps so far: once the line is repeatable
-        the model has stopped changing and the driver is told to box. Blank when not
-        recording."""
+    def _track_lap_results(self, session) -> list:
+        """Per-lap quality results while recording, evaluated live. Raw recorded laps carry
+        no quality/path length until a build runs, so evaluate_laps (assess_session_laps)
+        is what gives the convergence + callout logic real laps to judge. [] when idle."""
         try:
             if not getattr(session, "capturing", False):
-                return ""
-            from data.track_convergence import (
-                assess_capture_convergence, convergence_coach_message)
+                return []
             ctrl = getattr(self._tracks, "_controller", None)
-            # Raw recorded laps carry no quality/path-length until a build runs, so the
-            # convergence detector would reject every one. Evaluate them live first —
-            # assess_session_laps returns per-lap quality + path length that convergence
-            # keys off — so the "keep going / box now" call actually fires while driving.
-            laps = []
             if ctrl is not None and hasattr(ctrl, "evaluate_laps"):
-                laps = ctrl.evaluate_laps() or []
-            return convergence_coach_message(assess_capture_convergence(laps))
+                return ctrl.evaluate_laps() or []
+        except Exception:
+            pass
+        return []
+
+    def _track_capture_note(self, results) -> str:
+        """The engineer's live capture call for the visual note: whether the last lap
+        counted (and why not), and how many clean laps remain — or box now."""
+        try:
+            from data.track_convergence import lap_modelling_callout
+            return lap_modelling_callout(results)
         except Exception:
             return ""
+
+    def _voice_track_modelling(self, session, results) -> None:
+        """Speak the engineer's per-lap modelling call and mute lap-time chatter while
+        modelling. Fires once per newly completed lap. In VR the driver can't read the
+        screen, so this is the primary channel."""
+        try:
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is None:
+                return
+            if not bool(getattr(session, "capturing", False)):
+                self._tm_last_spoken_lap = 0          # reset for the next capture
+                return
+            # While modelling, the lap-time announcer is muted (see AnnouncerEventHandler)
+            # so the only voice is the modelling call the driver actually needs.
+            if hasattr(announcer, "set_session_mode"):
+                announcer.set_session_mode("track_modelling")
+            n = len(results or [])
+            if n > self._tm_last_spoken_lap and n > 0:
+                self._tm_last_spoken_lap = n
+                from data.track_convergence import lap_modelling_callout
+                from voice.announcer import Priority
+                text = lap_modelling_callout(results)
+                if text and hasattr(announcer, "announce"):
+                    announcer.announce(text, Priority.MEDIUM, "track_model_lap",
+                                       0.0, interrupt=True)
+        except Exception:
+            pass
 
     def _track_map_data(self, session):
         """Drawing primitives for the built track, shown while reviewing AND once the

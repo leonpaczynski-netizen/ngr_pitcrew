@@ -1202,6 +1202,10 @@ class AnnouncerEventHandler:
     # --- lap ---
 
     def _on_lap(self, data: dict) -> None:
+        # While modelling a track, the driver wants the engineer's per-lap modelling call
+        # (valid / why-not / box), not lap-time deltas — the bridge speaks that itself.
+        if self._a._session_mode == "track_modelling":
+            return
         record   = data["record"]
         lap_n    = record.lap_num
         has_best = data["has_best"]

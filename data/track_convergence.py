@@ -103,6 +103,64 @@ def assess_capture_convergence(
     return ConvergenceResult(converged=True, usable_laps=n, spread_pct=spread_pct, reason="")
 
 
+def _quality_str(lap) -> str:
+    q = getattr(lap, "quality", None)
+    return str(getattr(q, "value", "") or getattr(q, "name", "") or q).lower()
+
+
+def _lap_reject_phrase(lap) -> str:
+    """Why a lap doesn't count, in the driver's terms — from its quality reasons."""
+    q = _quality_str(lap)
+    reasons = " ".join(getattr(lap, "reasons", None) or []).lower()
+    if q in ("partial_start", "partial_stop"):
+        return "it was only a part-lap"
+    if "off-track" in reasons or "off track" in reasons:
+        return "you ran off track"
+    if "pit" in reasons:
+        return "too much of it was in the pit lane"
+    if "path length" in reasons:
+        return "the line was too different from your others"
+    if "duration" in reasons:
+        return "the lap time was well off your others"
+    if "too few" in reasons or "samples" in reasons:
+        return "it was too short"
+    if "jump" in reasons or "teleport" in reasons:
+        return "the telemetry glitched"
+    if q == "low_confidence":
+        return "it was a bit scrappy — keep it clean"
+    return "it wasn't clean enough"
+
+
+def lap_modelling_callout(results) -> str:
+    """The engineer's call after a completed calibration lap: whether it counted (and if
+    not, why), then how many clean laps remain — or "box now" once the model is stable.
+
+    ``results`` is the sequence of per-lap quality results so far (``LapQualityResult`` or
+    any object with ``.quality``/``.reasons``). Speaks about the LAST lap. Pure; never raises."""
+    try:
+        rows = list(results or [])
+        if not rows:
+            return ""
+        last = rows[-1]
+        conv = assess_capture_convergence(rows)
+        if _quality_str(last) == "usable":
+            if conv.converged:
+                return ("Good lap — that's enough. Box this lap and drive through the pit "
+                        "lane to finish the model.")
+            remaining = max(1, MIN_USABLE_LAPS - conv.usable_laps)
+            s = "s" if remaining != 1 else ""
+            return (f"Good lap — that's {conv.usable_laps} clean. "
+                    f"{remaining} more clean lap{s} to go.")
+        reason = _lap_reject_phrase(last)
+        still = MIN_USABLE_LAPS - conv.usable_laps
+        if still > 0:
+            s = "s" if still != 1 else ""
+            return f"That lap doesn't count — {reason}. Still need {still} clean lap{s}."
+        return f"That lap doesn't count — {reason}."
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
 def convergence_coach_message(result: ConvergenceResult) -> str:
     """What the engineer says to the driver about capture progress."""
     if not isinstance(result, ConvergenceResult):

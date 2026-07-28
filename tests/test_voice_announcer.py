@@ -188,6 +188,20 @@ class TestAnnouncerEventHandler:
         handler.handle(event)
         assert ann.announce.called
 
+    def test_lap_time_is_silent_while_modelling_a_track(self):
+        # During track modelling the engineer's per-lap modelling call is spoken by the
+        # bridge; the lap-time delta announcer must stay quiet so it isn't talking over it.
+        ann = _make_announcer()
+        ann.set_session_mode("track_modelling")
+        ann.announce = MagicMock()
+
+        handler = AnnouncerEventHandler(ann)
+        data = {"record": MagicMock(lap_num=3, delta_ms=500), "has_best": True,
+                "laps_remaining": 10, "remaining_time_ms": -1}
+        handler.handle(TelemetryEvent(type=EventType.LAP_COMPLETED, data=data,
+                                      priority=Priority.LOW))
+        ann.announce.assert_not_called()
+
     def test_fuel_low_not_called_in_practice_mode(self):
         ann = _make_announcer()
         ann.set_session_mode("practice")
