@@ -187,14 +187,28 @@ class StrayWindowGuard(QObject):
         except Exception:
             pass
 
+    def _return_focus_to_main(self) -> None:
+        if self._main is not None:
+            try:
+                self._main.activateWindow()
+                self._main.raise_()
+            except Exception:
+                pass
+
     # ---- the filter -------------------------------------------------------
     def eventFilter(self, obj, event) -> bool:
         try:
-            if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) \
-                    and obj.isWindow() and obj is not self._main:
+            et = event.type()
+            is_win = isinstance(obj, QWidget) and obj.isWindow() and obj is not self._main
+            # Diagnostic: capture EVERY non-main top-level on Show AND on Activate — a
+            # window that steals focus by RAISING/activating (not re-showing) emits no
+            # Show event, which is why the culprit had been logging nothing. This names
+            # it (class + traceback) in the log on the next run regardless of how it
+            # appears.
+            if is_win and et in (QEvent.Type.Show, QEvent.Type.WindowActivate):
                 self._diagnostic_log(obj)
-            if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) \
-                    and self._is_stray(obj):
+
+            if et == QEvent.Type.Show and self._is_stray(obj):
                 # Never let it activate/steal focus again.
                 obj.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
                 hidden = False
@@ -202,12 +216,23 @@ class StrayWindowGuard(QObject):
                     obj.hide()
                     hidden = True
                 self._report(obj, hidden)
-                # Return focus to the main window if the stray grabbed it.
-                if self._main is not None:
+                self._return_focus_to_main()
+
+            # Focus-steal net: a non-main top-level that keeps grabbing activation while
+            # being empty/stray (the flashing box) — hand focus straight back to the
+            # main window so the driver can keep typing. Real, content-bearing dialogs
+            # are left alone (they are not empty and not _is_stray), so this cannot
+            # steal focus from a genuine dialog the driver opened.
+            elif et == QEvent.Type.WindowActivate and is_win \
+                    and (self._is_stray(obj) or self._looks_empty(obj)):
+                obj.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+                if self._hide_empty and self._looks_empty(obj):
                     try:
-                        self._main.activateWindow()
+                        obj.hide()
                     except Exception:
                         pass
+                self._report(obj, hidden=True)
+                self._return_focus_to_main()
         except Exception:
             pass
         return super().eventFilter(obj, event)

@@ -96,6 +96,36 @@ class TestSuppression:
         assert out.count("suppressed a stray top-level window") == 1
 
 
+class TestFocusStealNet:
+    def _activate_event(self):
+        return QEvent(QEvent.Type.WindowActivate)
+
+    def test_empty_toplevel_activation_returns_focus_to_main(self, qapp):
+        main = QWidget()
+        g = StrayWindowGuard(main_window=main)
+        flasher = QWidget()          # empty, no title → the flashing box
+        flasher.show()
+        g.eventFilter(flasher, self._activate_event())
+        # de-focused so it can never hold focus, and hidden (empty).
+        assert flasher.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating) is True
+        assert flasher.isVisible() is False
+
+    def test_real_content_dialog_activation_is_left_alone(self, qapp):
+        main = QWidget()
+        g = StrayWindowGuard(main_window=main)
+        dlg = QDialog()
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("real content"))
+        lay.addWidget(QPushButton("ok"))
+        dlg.setWindowTitle("Real Dialog")
+        dlg.show()
+        g.eventFilter(dlg, self._activate_event())
+        # A genuine content dialog keeps focus — the net must not touch it.
+        assert dlg.isVisible() is True
+        assert dlg.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating) is False
+        dlg.close()
+
+
 class TestSourceCaptureAndFileSink:
     def test_report_written_to_log_file_with_source(self, qapp, tmp_path):
         # The injected logger (a LapDataLogger) has no .warning; the file sink must
