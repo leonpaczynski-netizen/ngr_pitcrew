@@ -164,10 +164,12 @@ def test_schema_version_is_v10(db):
     # additive setup_working_window* tables).
     # Reconciled for Engineering-Brain Phase 8: 23 → 24 (_migrate_v24 added the standalone
     # additive engineering_development_records table).
+    # Reconciled for the event_id evidence re-key: 28 → 29 (_migrate_v29 backfills the
+    # stable event_id link onto cycles and their bound sessions).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 28
+    assert version == DB_VERSION == 29
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

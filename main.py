@@ -471,6 +471,15 @@ def main() -> None:
 
     recorder = LapTelemetryRecorder()
     db = SessionDB("data/gt7_sessions.db")
+    # One-time housekeeping: clear "ghost" sessions — 0-lap rows left by an eager
+    # session-open that never recorded a lap (a live-mode toggle before driving). They
+    # carry no data and cluttered the history; bound prep-activity sessions are spared.
+    try:
+        _pruned = db.prune_empty_sessions()
+        if _pruned:
+            print(f"[startup] pruned {_pruned} empty (0-lap) session(s)")
+    except Exception as _pe:
+        print(f"[startup] session prune skipped: {_pe}")
 
     strategy_engine = RaceStrategyEngine(tracker, announcer, config, bridge, db=db)
     # Saved stops are restored into the Strategy Builder UI only (dashboard __init__).

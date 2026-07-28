@@ -594,6 +594,19 @@ class LiveMixin:
                 car_id    = int(self._dispatcher._car_id_ref[0])
                 _type_map = {"Practice": "practice", "Qualifying": "qualifying", "Race": "race"}
                 session_type = _type_map.get(mode, "practice")
+                # Don't ACCUMULATE empty sessions: this handler fires on every live-mode
+                # change (including programmatic sync of the combo), and each eager open
+                # left a 0-lap "ghost" if no lap was then driven. If the current session
+                # never recorded a lap, replace it rather than stacking another (UAT:
+                # "hasn't registered any sessions" / hundreds of 0-lap rows). The
+                # dispatcher re-opens correctly on the first completed lap regardless.
+                prev = int(getattr(self._dispatcher, "_session_id", 0) or 0)
+                if prev > 0 and self._db.session_is_empty(prev):
+                    try:
+                        self._db.delete_session(prev)
+                    except Exception:
+                        pass
+                    self._dispatcher.set_session_id(0)
                 sid = self._db.open_session(
                     car_id, track, session_type, car_name, config_id,
                     event_id=event_id,

@@ -6964,6 +6964,47 @@ class SessionDB:
             self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             self._conn.commit()
 
+    def session_is_empty(self, session_id: int) -> bool:
+        """True if the session recorded no laps — an eager open that never drove.
+
+        Checks the lap_records table (the source of truth) rather than the cached
+        total_laps column, so a session that was opened but never written is correctly
+        seen as empty even if total_laps drifted.
+        """
+        if not session_id:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM lap_records WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        return int(row[0] or 0) == 0
+
+    def prune_empty_sessions(self, keep_session_id: int = 0) -> int:
+        """Delete sessions that recorded no laps and are not bound to any prep activity.
+
+        These are "ghost" sessions left by an eager session-open that never recorded a
+        lap (a live-mode toggle before driving). They carry no data and clutter the
+        session history. A session bound to a preparation activity is NEVER pruned (it is
+        deliberate evidence, even if empty), and ``keep_session_id`` spares the currently
+        open session. Returns the number pruned.
+        """
+        with self._lock:
+            bound = "SELECT session_id FROM event_preparation_activity_sessions"
+            rows = self._conn.execute(
+                f"""SELECT s.id FROM sessions s
+                    WHERE (SELECT COUNT(*) FROM lap_records l WHERE l.session_id = s.id) = 0
+                      AND s.id != ?
+                      AND s.id NOT IN ({bound})""",
+                (int(keep_session_id or 0),),
+            ).fetchall()
+            ids = [int(r[0]) for r in rows]
+            for sid in ids:
+                self._conn.execute("DELETE FROM lap_telemetry WHERE session_id = ?", (sid,))
+                self._conn.execute("DELETE FROM lap_records WHERE session_id = ?", (sid,))
+                self._conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            self._conn.commit()
+        return len(ids)
+
     # ------------------------------------------------------------------
     # Events CRUD
     # ------------------------------------------------------------------
