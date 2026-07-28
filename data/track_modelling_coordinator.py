@@ -275,6 +275,15 @@ class TrackModellingCoordinator:
         # SELECT_TRACK and RESET are always legal (re-identify / recover).
         targets.setdefault(TrackModellingAction.SELECT_TRACK, TrackModellingState.IDENTIFIED)
         targets.setdefault(TrackModellingAction.RESET, TrackModellingState.NO_TRACK)
+        # "Pick a different track" must be reachable from ANY settled state where a track
+        # IS chosen, not just IDENTIFIED — otherwise once a model is ACTIVE (or mid-review)
+        # the driver is trapped on that track with no way back to the picker (UAT: "no way
+        # to get out of that track"). Excluded where it is meaningless or unsafe: NO_TRACK
+        # (nothing chosen), ERROR (the picker is already shown with "Start again"), and the
+        # busy states CAPTURING/BUILDING (Stop / let it finish first).
+        if self._state not in (TrackModellingState.NO_TRACK, TrackModellingState.ERROR,
+                               TrackModellingState.CAPTURING, TrackModellingState.BUILDING):
+            targets.setdefault(TrackModellingAction.CLEAR_TRACK, TrackModellingState.NO_TRACK)
         return targets
 
     def available_actions(self) -> Tuple[TrackModellingAction, ...]:

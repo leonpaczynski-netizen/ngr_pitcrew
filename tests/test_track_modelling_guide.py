@@ -81,6 +81,33 @@ class TestOneStepAtATime:
         assert v.headline == "This track is modelled"
 
 
+class TestPickADifferentTrackIsAlwaysReachable:
+    """UAT: 'once you choose a track there is no way to get out of that track.' Every
+    settled state where a track IS chosen must offer 'Pick a different track'."""
+
+    def test_active_model_can_still_change_track(self):
+        v = build_guided_view(_sel(model_active=True))
+        assert "Pick a different track" in [a.label for a in v.secondary]
+
+    def test_validated_model_can_still_change_track(self):
+        v = build_guided_view(_sel(has_segments=True, review_complete=True,
+                                   validation_passed=True))
+        assert "Pick a different track" in [a.label for a in v.secondary]
+
+    def test_mid_review_can_still_change_track(self):
+        v = build_guided_view(_sel(has_segments=True))
+        assert "Pick a different track" in [a.label for a in v.secondary]
+
+    def test_nothing_selected_does_not_offer_it(self):
+        v = build_guided_view(TrackModellingSession())
+        assert "Pick a different track" not in [a.label for a in v.secondary]
+
+    def test_recording_does_not_offer_it(self):
+        # Busy: Stop first. The escape would silently discard a live recording.
+        v = build_guided_view(_sel(capturing=True))
+        assert "Pick a different track" not in [a.label for a in v.secondary]
+
+
 class TestOnlyLegalActionsAreOffered:
     def test_the_guide_never_offers_what_the_coordinator_forbids(self):
         """Every action the guide shows must be one the coordinator allows."""
