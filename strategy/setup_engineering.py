@@ -132,6 +132,26 @@ def resolve_car_specs(car: str) -> dict:
     return dict(entry) if isinstance(entry, dict) else {}
 
 
+def effective_car_specs(car: str, setup: Optional[dict] = None) -> dict:
+    """Per-car specs to reason with — the JSON defaults, OVERRIDDEN by any regulated
+    weight/power the driver entered on the setup.
+
+    Weight and power default from ``data/car_specs.json``, but a series can mandate a
+    specific minimum weight or maximum power (e.g. Supercars: 1335 kg / 606 bhp) that the
+    stock figures don't reflect — a car lightened with parts and ballasted back up to a
+    minimum can't be derived from stock weight + ballast. So a ``weight_kg`` / ``power_hp``
+    set on the setup (>0) wins; otherwise the JSON default stands. Pure; never raises."""
+    specs = dict(resolve_car_specs(car) or {})
+    s = setup or {}
+    w = _num(s.get("weight_kg"))
+    if w is not None and w > 0:
+        specs["weight_kg"] = w
+    p = _num(s.get("power_hp"))
+    if p is not None and p > 0:
+        specs["power_hp"] = p
+    return specs
+
+
 # ---------------------------------------------------------------------------
 # Engineering intents
 # ---------------------------------------------------------------------------

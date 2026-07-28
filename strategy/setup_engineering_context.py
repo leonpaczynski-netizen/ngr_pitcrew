@@ -255,10 +255,18 @@ def build_setup_engineering_context(
     any missing input (never raises)."""
     history_prior = history_prior or {}
 
-    # Vehicle model (from the real specs when available).
+    # Vehicle model — from the real specs, with any series-regulated weight/power the
+    # driver entered on the setup taking precedence over the stock JSON figures.
     try:
-        from strategy.setup_engineering import build_vehicle_model, resolve_car_specs
-        specs = car_specs if car_specs is not None else resolve_car_specs(car)
+        from strategy.setup_engineering import (
+            build_vehicle_model, resolve_car_specs, effective_car_specs)
+        base = car_specs if car_specs is not None else resolve_car_specs(car)
+        specs = effective_car_specs(car, current_setup)
+        # Preserve any extra keys an explicitly-passed car_specs carried.
+        if car_specs is not None:
+            merged = dict(base)
+            merged.update({k: v for k, v in specs.items() if k in ("weight_kg", "power_hp")})
+            specs = merged
         vehicle = build_vehicle_model(car, drivetrain, num_gears, specs)
     except Exception:
         vehicle = None

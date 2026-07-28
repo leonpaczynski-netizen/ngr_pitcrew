@@ -68,6 +68,18 @@ def test_resolve_car_specs_reads_real_file():
     assert resolve_car_specs("No Such Car") == {}
 
 
+def test_effective_car_specs_lets_a_series_override_weight_and_power():
+    from strategy.setup_engineering import effective_car_specs
+    # No override → stock JSON figures stand.
+    base = effective_car_specs(_CAR, {})
+    assert base.get("power_hp") == 509 and base.get("weight_kg") == 1243
+    # A series-regulated weight/power on the setup wins (e.g. Supercars 1335 kg / 606 bhp).
+    reg = effective_car_specs(_CAR, {"weight_kg": 1335, "power_hp": 606})
+    assert reg.get("weight_kg") == 1335 and reg.get("power_hp") == 606
+    # Zero / missing overrides are ignored — the stock figure is kept, never nulled.
+    assert effective_car_specs(_CAR, {"weight_kg": 0}).get("weight_kg") == 1243
+
+
 # ------------------------------------------------------------------ RR engineering
 
 def test_rr_gets_front_bite_rear_stability_brake_forward():
