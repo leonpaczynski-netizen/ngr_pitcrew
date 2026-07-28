@@ -388,6 +388,33 @@ class TestRegulationBOP:
         assert eff.get("weight_kg") == 1335 and eff.get("power_hp") == 606
 
 
+class TestConfirmInGameAppliesRecommendation:
+    """"I've entered this in GT7" must write the shown recommendation onto the sheet
+    first, so the next Analyse doesn't re-recommend the changes the driver just made."""
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()   # seeds the sheet from the classic form (arb_rear = 4)
+        return b
+
+    def test_confirm_in_game_writes_recommendation_and_consumes_it(self, qapp):
+        from services.setup_service import AnalysisResult
+        b = self._wired(qapp)
+        assert b._setups.sheet("race").as_dict().get("arb_rear") == 4.0
+        # A pending recommendation the driver has read and typed into GT7: arb_rear 4 -> 6.
+        b._last_analysis = AnalysisResult(
+            ok=True, discipline="race",
+            changes=({"field": "arb_rear", "from": 4, "to": 6, "to_clamped": 6},),
+            setup_fields={"arb_rear": 6})
+        b._on_applied_in_game("race")
+        # The sheet now matches what is on the car, and the recommendation is consumed.
+        assert b._setups.sheet("race").as_dict().get("arb_rear") == 6.0
+        assert b._last_analysis is None
+
+
 class TestPracticeCompoundFromAppliedSetup:
     """The Practice run-card tyre selector must default to the compound on the APPLIED
     setup — Practice runs the tyre the driver put on the car — not an arbitrary

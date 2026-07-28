@@ -740,11 +740,23 @@ class LiveShellBridge(QObject):
         Applying a recommendation only writes the SHEET; GT7 can only be updated by the
         driver. This confirmation is therefore the ONLY thing that can make a setup
         active — nothing is able to infer it.
+
+        Confirming "I've entered this in GT7" means the shown recommendation is now on
+        the car, so it is FIRST written onto the sheet (exactly as "Apply recommendation"
+        does — idempotent if the driver already pressed that button). Without this, a
+        driver who read the recommendation, typed it straight into GT7 and confirmed left
+        the app's sheet holding the PRE-change values, so the next Analyse re-recommended
+        the very changes just made. The recommendation is then consumed.
         """
         import time
+        d = discipline or self._discipline
+        if str(d).lower() == str(self._discipline).lower():
+            vm = self._recommendation_vm()
+            if vm is not None:
+                self._setups.apply(d, vm.applied_field_values())
+        self._last_analysis = None      # the recommendation is on the car now — consumed
         outcome = self._setups.confirm_applied_in_game(
-            discipline or self._discipline,
-            applied_at=time.strftime("%Y-%m-%d %H:%M"))
+            d, applied_at=time.strftime("%Y-%m-%d %H:%M"))
         self._garage_status(outcome.reason)
         self.refresh()
 
