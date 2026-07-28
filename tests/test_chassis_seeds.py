@@ -33,11 +33,14 @@ class TestSeedsDifferByCar:
         assert any(heavy_ff[f] != light_mr[f] for f in _DAMPERS)
         assert heavy_ff["dampers_front_comp"] > light_mr["dampers_front_comp"]
 
-    def test_camber_reflects_drivetrain(self):
+    def test_camber_is_front_greater_than_rear_and_fwd_gets_more_front(self):
         ff = derive_chassis_seeds(_veh("FF", 1400), "base")   # front-drive
         rr = derive_chassis_seeds(_veh("RR", 1400), "base")   # rear-engined
-        assert ff["camber_front"] > rr["camber_front"]        # FWD wants more front
-        assert rr["camber_rear"] > ff["camber_rear"]          # RR wants more rear
+        # Reference tunes: camber is FRONT > REAR on every car, regardless of drivetrain.
+        assert ff["camber_front"] > ff["camber_rear"]
+        assert rr["camber_front"] > rr["camber_rear"]
+        # Front-drive gets a little extra front camber to fight understeer.
+        assert ff["camber_front"] > rr["camber_front"]
 
     def test_rear_toe_reflects_drivetrain(self):
         rwd = derive_chassis_seeds(_veh("RR", 1400), "base")

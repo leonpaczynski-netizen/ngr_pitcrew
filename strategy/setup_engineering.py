@@ -251,24 +251,33 @@ def derive_chassis_seeds(vehicle: VehicleModel, objective: str) -> "dict":
     for f, base in _DAMPER_BASE.items():
         seeds[f] = float(round(base * mass_f * stiff_f * obj_damp))
 
-    # Camber (negative, for grip): front-drive fights understeer with more FRONT
-    # camber; rear-engined/rear-drive wants more REAR camber. Qualifying a touch more
-    # (peak grip); race a touch less (tyre temperature/wear over a stint).
-    front_c = {"ff": 0.6, "fr": 0.3, "awd": 0.3}.get(dt, 0.0)
-    rear_c = {"rr": 0.5, "mr": 0.3, "awd": 0.2}.get(dt, 0.0)
-    obj_c = {OBJ_QUALI: 0.3, OBJ_RACE: -0.1}.get(obj, 0.0)
-    seeds["camber_front"] = round(1.0 + front_c + obj_c, 1)
-    seeds["camber_rear"] = round(1.5 + rear_c + obj_c, 1)
+    # Camber (negative, for grip). Calibrated against reference tunes, which agree on
+    # what a good baseline looks like: FRONT > REAR on EVERY car regardless of drivetrain
+    # (~2.5 / 1.9), scaling UP with downforce / car class (race + high power-to-weight run
+    # more camber) and DOWN a touch for a race stint vs a one-lap qualifying setup. Only a
+    # small front-drive nudge (more front camber to fight understeer). Values clamp to the
+    # car's range downstream, so a road car with a tight camber range never over-cambers.
+    cat = (getattr(vehicle, "category", "") or "").lower()
+    if cat.startswith("gr.") or getattr(vehicle, "high_power_to_weight", False):
+        df = 1.10          # GT3/GT4/prototypes and high power/weight → more camber
+    elif "road" in cat:
+        df = 0.85          # softer road cars → less
+    else:
+        df = 1.0
+    obj_c = {OBJ_QUALI: 0.15, OBJ_RACE: -0.2}.get(obj, 0.0)
+    front_nudge = 0.2 if dt == "ff" else 0.0
+    seeds["camber_front"] = round(2.4 * df + obj_c + front_nudge, 1)
+    seeds["camber_rear"] = round(1.9 * df + obj_c, 1)
 
-    # Toe: a hint of front toe-OUT for turn-in, rear toe-IN for stability. Rear-drive
-    # carries more rear toe-in for traction stability; front-drive a little more front
-    # toe-out. Qualifying trims toe (less scrub/drag, sharper); race adds rear toe-in.
-    front_t = {"ff": -0.02}.get(dt, 0.0)
-    rear_t = {"rr": 0.05, "fr": 0.04, "mr": 0.04, "awd": 0.03}.get(dt, 0.0)
-    obj_front_t = {OBJ_RACE: -0.02}.get(obj, 0.0)
-    obj_rear_t = {OBJ_QUALI: -0.02, OBJ_RACE: 0.03}.get(obj, 0.0)
-    seeds["toe_front"] = round(0.0 + front_t + obj_front_t, 2)
-    seeds["toe_rear"] = round(0.05 + rear_t + obj_rear_t, 2)
+    # Toe: a slight front toe-OUT for turn-in, a SUBSTANTIAL rear toe-IN for stability
+    # (references run ~-0.05 front / ~+0.14 rear, not the tiny values before). Rear-drive
+    # carries more rear toe-in for traction; a race stint adds rear toe-in for stability,
+    # a qualifying lap trims it (less scrub) and sharpens front turn-in.
+    rear_dt = {"rr": 0.03, "fr": 0.02, "mr": 0.02, "awd": 0.0}.get(dt, 0.0)
+    obj_ft = {OBJ_RACE: -0.02}.get(obj, 0.0)
+    obj_rt = {OBJ_QUALI: -0.03, OBJ_RACE: 0.03}.get(obj, 0.0)
+    seeds["toe_front"] = round(-0.05 + obj_ft, 2)
+    seeds["toe_rear"] = round(0.14 + rear_dt + obj_rt, 2)
 
     return seeds
 
