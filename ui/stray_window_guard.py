@@ -60,6 +60,11 @@ class StrayWindowGuard(QObject):
         self._log_path = log_path
         #: class name -> times seen, so each culprit is logged once (then counted).
         self._seen: dict[str, int] = {}
+        #: Diagnostic: every top-level window class already logged, so the file gets
+        #: ONE traceback per distinct top-level (main window, dialogs, AND whatever is
+        #: flashing) — the guard's stray classifier may not recognise the culprit, so
+        #: this catches it regardless of type/title.
+        self._diag_seen: set = set()
 
     # ---- classification ---------------------------------------------------
     def _is_stray(self, w: QWidget) -> bool:
@@ -157,9 +162,37 @@ class StrayWindowGuard(QObject):
             except Exception:
                 pass
 
+    # ---- diagnostic: log EVERY top-level window shown --------------------
+    def _diagnostic_log(self, w: QWidget) -> None:
+        """Append one traceback per distinct top-level window class to the log file.
+
+        The stray classifier is conservative and may not flag the real culprit (a
+        titled window, a dialog, a native flash). This logs ALL of them so a single
+        run names every top-level and where it was shown from — the flasher is then
+        identifiable by its class/traceback even when ``_is_stray`` returns False.
+        """
+        if not self._log_path:
+            return
+        try:
+            key = (type(w).__name__ + "|" + (w.objectName() or "") + "|"
+                   + (w.windowTitle() or ""))
+            if key in self._diag_seen:
+                return
+            self._diag_seen.add(key)
+            wt = int(w.windowType() & Qt.WindowType.WindowType_Mask)
+            line = (f"[StrayWindowGuard/diag] top-level shown: {self._describe(w)} "
+                    f"windowType={wt}\n  shown from:\n{self._source_frames()}\n")
+            with open(self._log_path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception:
+            pass
+
     # ---- the filter -------------------------------------------------------
     def eventFilter(self, obj, event) -> bool:
         try:
+            if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) \
+                    and obj.isWindow() and obj is not self._main:
+                self._diagnostic_log(obj)
             if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) \
                     and self._is_stray(obj):
                 # Never let it activate/steal focus again.

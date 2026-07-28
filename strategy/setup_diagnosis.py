@@ -317,27 +317,45 @@ _FB_BALANCE_STRONG: frozenset = frozenset({"strong understeer", "strong overstee
 _FB_BALANCE_MILD: frozenset = frozenset({"understeer", "oversteer"})
 
 
+#: Every Practice-Review field that expresses dissatisfaction, grouped by scale.
+#: BALANCE dropdowns (strong grade = severe, plain imbalance = moderate); SCALE
+#: dropdowns ("Poor" = severe, "Below par" = moderate); SEVERITY dropdowns
+#: ("Severe" = severe, "Noticeable" = moderate). Reading ALL of them — not just a
+#: handful — is what lets a genuinely poor car actually register as severe (a
+#: "rear won't put the power down" complaint lands on `traction`, which the first
+#: cut ignored, so the car read as mild and the change was never enlarged).
+_SEV_BALANCE_FIELDS = ("corner_entry", "mid_corner", "exit_stability")
+_SEV_SCALE_FIELDS = ("braking_confidence", "traction", "rotation",
+                     "drive_out", "straight_line")
+_SEV_SEVERITY_FIELDS = ("bottoming", "kerb_behaviour")
+
+
 def _driver_reported_severity(feedback: "dict | None") -> str:
-    """Worst handling severity the driver reported across the balance / rotation /
-    braking / bottoming dropdowns. 'strong' grades and a 'severe' rating read as
-    severe; a plain imbalance or a poor rotation/braking rating reads as moderate."""
+    """Worst handling severity the driver reported across EVERY Practice-Review
+    dissatisfaction field. A 'strong' balance grade, a 'Poor' scale rating, or a
+    'Severe' issue read as severe; a plain imbalance, a 'Below par' rating, or a
+    'Noticeable' issue read as moderate."""
     if not isinstance(feedback, dict):
         return _SEV_MILD
     rank = 0
-    for f in ("corner_entry", "mid_corner", "exit_stability"):
+    for f in _SEV_BALANCE_FIELDS:
         v = _fb_val(feedback, f)
         if v in _FB_BALANCE_STRONG:
             rank = max(rank, 2)
         elif v in _FB_BALANCE_MILD:
             rank = max(rank, 1)
-    for f in ("rotation", "braking_confidence"):
-        if _fb_val(feedback, f) in _FB_SCALE_LOW:
+    for f in _SEV_SCALE_FIELDS:
+        v = _fb_val(feedback, f)
+        if v == "poor":
+            rank = max(rank, 2)
+        elif v == "below par":
             rank = max(rank, 1)
-    b = _fb_val(feedback, "bottoming")
-    if b == "severe":
-        rank = max(rank, 2)
-    elif b == "noticeable":
-        rank = max(rank, 1)
+    for f in _SEV_SEVERITY_FIELDS:
+        v = _fb_val(feedback, f)
+        if v == "severe":
+            rank = max(rank, 2)
+        elif v == "noticeable":
+            rank = max(rank, 1)
     return _SEV_BY_RANK[rank]
 
 

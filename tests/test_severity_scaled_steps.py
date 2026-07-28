@@ -41,9 +41,16 @@ class TestOverallHandlingSeverity:
         assert overall_handling_severity(None, "major", "minor") == ("moderate", "telemetry")
 
     def test_either_signal_escalates_worse_wins(self):
-        # driver moderate, telemetry severe → severe (telemetry drove it)
-        fb = {"rotation": "poor"}
+        # driver moderate ('below par'), telemetry severe → severe (telemetry drove it)
+        fb = {"rotation": "below par"}
         assert overall_handling_severity(fb, "severe", "minor") == ("severe", "telemetry")
+
+    def test_a_poor_scale_rating_alone_reads_severe(self):
+        # "rear won't put power down" → traction Poor → severe, even with calm telemetry.
+        assert overall_handling_severity({"traction": "poor"}, "low", "minor") == ("severe", "driver")
+
+    def test_below_par_reads_moderate(self):
+        assert overall_handling_severity({"drive_out": "below par"}, "low", "minor") == ("moderate", "driver")
 
     def test_both_at_same_level_reports_both(self):
         fb = {"exit_stability": "strong oversteer"}
