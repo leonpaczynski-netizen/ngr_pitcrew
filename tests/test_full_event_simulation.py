@@ -240,20 +240,28 @@ def _stage_programme_initial(s: _Sim) -> list:
     return [] if dom else ["no initial objective domain in next_action"]
 
 
-def _record_run(s: _Sim, domain: str, n: int, laps: int = 5) -> int:
+def _record_run(s: _Sim, domain: str, n: int, laps: int = 5, *,
+                car: str = None, track: str = None,
+                cycle_id: str = None, event_id: int = None) -> int:
+    """Record a completed run and bind it to its cycle activity. Overrides let a
+    branch test drive an incompatible car/track or a different cycle."""
     from strategy.practice_run_recording import completed_activity_row, run_type_for_domain
+    car = car or CAR
+    track = track or TRACK
+    cid = cycle_id or s.cycle_id
+    eid = event_id if event_id is not None else s.event_id
     rt = run_type_for_domain(domain)
-    aid = f"{s.cycle_id}::{rt.value}::{n}"
+    aid = f"{cid}::{rt.value}::{n}"
     s.db.upsert_preparation_activity({
-        "activity_id": aid, "cycle_id": s.cycle_id, "activity_type": rt.value,
+        "activity_id": aid, "cycle_id": cid, "activity_type": rt.value,
         "title": f"{rt.value} {n}", "objective": f"Build {domain} evidence",
         "state": "in_progress", "order_index": n})
-    sid = s.db.open_session(car_id=1, track=TRACK, session_type="Practice",
-                            car_name=CAR, event_id=s.event_id)
+    sid = s.db.open_session(car_id=1, track=track, session_type="Practice",
+                            car_name=car, event_id=eid)
     for lap in range(1, laps + 1):
-        s.db.write_lap(sid, lap, 95_000, 3.0, None, event_id=s.event_id)
-    s.db.bind_session_to_activity(aid, sid, cycle_id=s.cycle_id)
-    row = next((a for a in s.db.list_preparation_activities(s.cycle_id)
+        s.db.write_lap(sid, lap, 95_000, 3.0, None, event_id=eid)
+    s.db.bind_session_to_activity(aid, sid, cycle_id=cid)
+    row = next((a for a in s.db.list_preparation_activities(cid)
                 if a["activity_id"] == aid), None)
     if row is not None:
         s.db.upsert_preparation_activity(completed_activity_row(row))
@@ -395,3 +403,106 @@ def test_full_event_lifecycle():
                     s.db.close()
             except Exception:
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Widened coverage: the BRANCHES the happy path doesn't hit. These share one    #
+# wired stack (built once) and each drives its own event, so a branch defect is #
+# isolated to its own test. All are deterministic/offline.                      #
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def wired():
+    import shutil
+    tmp = tempfile.mkdtemp(prefix="ngr_sim_mod_")
+    s = _Sim(tmp)
+    _stage_construct(s)
+    yield s
+    try:
+        if s.bridge is not None:
+            s.bridge.stop()
+    except Exception:
+        pass
+    try:
+        if s.db is not None:
+            s.db.close()
+    except Exception:
+        pass
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _activate(s: _Sim, name, *, car=CAR, track=TRACK, race_type="lap",
+              laps=25, mins=60, tyres=("RH", "RM", "RS")):
+    from services.event_setup import EventDraft
+    d = EventDraft(name=name, car=car, track=track, race_type=race_type,
+                   laps=laps, duration_mins=mins).with_rule("avail_tyres", list(tyres))
+    res = s.bridge._events.save_and_activate(d)
+    assert res.ok, (getattr(res, "message", ""), getattr(res, "issues", ""))
+    s.cycle_id, s.event_id = res.cycle_id, res.event_id
+    return res
+
+
+def test_incompatible_run_is_excluded_from_evidence(wired):
+    """A run driven in a DIFFERENT car must not count as evidence for this event —
+    the compatibility gate (the intent behind the event-id/car-track binding)."""
+    _activate(wired, "Branch — Wrong Car")
+    good = _record_run(wired, "setup_base", 1)                    # this event's car
+    bad = _record_run(wired, "setup_base", 2, car="Mazda MX-5")  # wrong car
+    wired.bridge.refresh()
+    rep = wired.db.build_event_preparation_report(wired.cycle_id, now_date="2026-08-01")
+    membership = {str(x) for x in (rep.get("evidence_membership") or [])}
+    assert str(good) in membership, "compatible run should be evidence"
+    assert str(bad) not in membership, "wrong-car run must NOT count as evidence"
+
+
+def test_unfinished_run_with_no_completed_laps_is_not_evidence(wired):
+    """Opening a session but completing no laps (total_laps == 0) is not a run —
+    it must contribute no evidence."""
+    _activate(wired, "Branch — Zero Laps")
+    from strategy.practice_run_recording import run_type_for_domain
+    rt = run_type_for_domain("setup_base")
+    aid = f"{wired.cycle_id}::{rt.value}::zero"
+    wired.db.upsert_preparation_activity({
+        "activity_id": aid, "cycle_id": wired.cycle_id, "activity_type": rt.value,
+        "title": "empty", "objective": "Build setup_base evidence",
+        "state": "in_progress", "order_index": 1})
+    sid = wired.db.open_session(car_id=1, track=TRACK, session_type="Practice",
+                                car_name=CAR, event_id=wired.event_id)  # no write_lap
+    wired.db.bind_session_to_activity(aid, sid, cycle_id=wired.cycle_id)
+    rep = wired.db.build_event_preparation_report(wired.cycle_id, now_date="2026-08-01")
+    assert (rep.get("progress") or {}).get("practice_sessions", 0) == 0
+    membership = {str(x) for x in (rep.get("evidence_membership") or [])}
+    assert str(sid) not in membership
+
+
+def test_multi_discipline_locks_are_independent(wired):
+    """Locking Race must not clear Qualifying, and reopening one must leave the
+    other locked (the per-discipline merge in lock_setup)."""
+    _activate(wired, "Branch — Locks")
+    assert wired.db.lock_setup(wired.cycle_id, "race", locked=True)
+    assert wired.db.lock_setup(wired.cycle_id, "qualifying", locked=True)
+    locks = {str(x).lower() for x in (wired.db.setup_locks(wired.cycle_id) or ())}
+    assert {"race", "qualifying"} <= locks, f"both should be locked, got {locks}"
+    # Reopen Race; Qualifying must survive.
+    assert wired.db.lock_setup(wired.cycle_id, "race", locked=False)
+    locks = {str(x).lower() for x in (wired.db.setup_locks(wired.cycle_id) or ())}
+    assert "qualifying" in locks and "race" not in locks, locks
+
+
+def test_timed_race_event_activates_with_duration(wired):
+    """A time-certain race (not lap-count) must validate, activate, and carry its
+    duration into the strategy context the rest of the app reads."""
+    res = _activate(wired, "Branch — Timed", race_type="timed", laps=0, mins=45)
+    assert res.cycle_id
+    assert wired.db.get_preparation_cycle(res.cycle_id) is not None
+    strat = wired.config.get("strategy") or {}
+    assert float(strat.get("race_duration_minutes") or 0) == 45.0, strat
+
+
+def test_wet_compounds_are_accepted_in_event_setup(wired):
+    """Event setup must accept wet compounds (Intermediate / Heavy-Wet), not only
+    slicks — a rain event has to be preparable."""
+    res = _activate(wired, "Branch — Wet", tyres=("IM", "HW", "RH"))
+    assert res.ok
+    evt = wired.db.get_event("Branch — Wet") or {}
+    avail = [str(t).upper() for t in (evt.get("avail_tyres") or [])]
+    assert "IM" in avail and "HW" in avail, f"wet compounds not persisted: {evt.get('avail_tyres')}"
