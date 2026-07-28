@@ -4,7 +4,12 @@ import pytest
 
 from PyQt6.QtWidgets import QApplication
 
-from ui.components.gt7_settings_sheet import GT7SettingsSheet, _LEFT_TITLES
+from PyQt6.QtWidgets import QLabel
+
+from ui.components.gt7_settings_sheet import (
+    GT7SettingsSheet, _LEFT_TITLES, _keys_for_label,
+)
+from ui import ngr_theme as _t
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +95,42 @@ class TestGT7SettingsSheet:
         s.set_setup(_setup())
         assert s._ballast_kg_spin.value() == 90
         assert s._ballast_pos_spin.value() == -5
+
+    def _green_values(self, sheet):
+        """Text of every value box currently highlighted as changed (NGR_GREEN border)."""
+        out = []
+        for lbl in sheet.findChildren(QLabel):
+            ss = lbl.styleSheet() or ""
+            if _t.NGR_GREEN in ss and "border" in ss:
+                out.append(lbl.text())
+        return out
+
+    def test_changed_field_in_every_section_highlights_not_just_suspension(self, qapp):
+        # Regression: a recommendation changing an LSD (Differential & Brakes) value AND
+        # an ARB (Suspension) value must highlight BOTH — previously only Tyres/Suspension
+        # were in the section-key map, so the LSD change was never boxed.
+        s = GT7SettingsSheet()
+        setup = dict(_setup())
+        setup["lsd_accel"] = 27
+        s.set_setup(setup, changed_fields={"arb_front", "lsd_accel"})
+        greens = self._green_values(s)
+        assert "27" in greens, "LSD Accel (Differential) change must highlight"
+        assert "5" in greens, "ARB front (Suspension) change must still highlight"
+
+    def test_aero_and_transmission_changes_highlight(self, qapp):
+        s = GT7SettingsSheet()
+        s.set_setup(_setup(), changed_fields={"aero_rear", "final_drive"})
+        greens = self._green_values(s)
+        assert "590" in greens          # aero_rear from _setup()
+        assert "3.900" in greens        # final_drive from _setup() (3-dp render)
+
+    def test_keys_for_label_covers_all_sections(self, qapp):
+        assert _keys_for_label("LSD Accel Sensitivity") == ("lsd_accel",)
+        assert _keys_for_label("Anti-Roll Bar") == ("arb_front", "arb_rear")
+        assert _keys_for_label("Downforce") == ("aero_front", "aero_rear")
+        assert _keys_for_label("Ballast (kg)") == ("ballast_kg",)
+        assert _keys_for_label("Gear 3") == ("gear_3", "gear_ratios")
+        assert _keys_for_label("Unknown row") == ()
 
     def test_regulation_weight_and_power_are_editable_and_emit(self, qapp):
         s = GT7SettingsSheet()

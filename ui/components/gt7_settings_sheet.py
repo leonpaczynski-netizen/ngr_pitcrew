@@ -32,20 +32,63 @@ from ui.setup_transcribe_view import build_transcribe_sections
 # column, GT7-style; everything else falls to the right column in order.
 _LEFT_TITLES = ("Tyres", "Suspension", "Differential & Brakes")
 
-# Map a section title to the setup-dict keys behind its rows, so we can flag which
-# rows changed. Ordered to match build_transcribe_sections' row order.
-_SECTION_FIELD_KEYS: dict[str, list[tuple]] = {
-    "Tyres": [("tyre_front", "tyre_rear")],
-    "Suspension": [
-        ("ride_height_front", "ride_height_rear"),
-        ("arb_front", "arb_rear"),
-        ("dampers_front_comp", "dampers_rear_comp"),
-        ("dampers_front_ext", "dampers_rear_ext"),
-        ("springs_front", "springs_rear"),
-        ("camber_front", "camber_rear"),
-        ("toe_front", "toe_rear"),
-    ],
+# Map each rendered row LABEL to the setup-dict key(s) behind it (front, rear), so a
+# recommended change highlights the right value. Keyed by LABEL — not by row position —
+# because build_transcribe_sections inserts/omits rows (e.g. the AWD front-LSD rows,
+# unused gears), which a positional map got wrong: it only covered Tyres + Suspension,
+# so a Differential change (LSD accel), Aero, Transmission etc. never highlighted.
+# Labels MUST match build_transcribe_sections exactly. Gear rows ("Gear N") are handled
+# dynamically in _keys_for_label.
+_FIELD_KEYS_BY_LABEL: dict[str, tuple] = {
+    # Tyres
+    "Compound": ("tyre_front", "tyre_rear"),
+    # Suspension
+    "Body Height (mm)": ("ride_height_front", "ride_height_rear"),
+    "Anti-Roll Bar": ("arb_front", "arb_rear"),
+    "Damping (Compression)": ("dampers_front_comp", "dampers_rear_comp"),
+    "Damping (Expansion)": ("dampers_front_ext", "dampers_rear_ext"),
+    "Natural Frequency (Hz)": ("springs_front", "springs_rear"),
+    "Camber (°)": ("camber_front", "camber_rear"),
+    "Toe (°)": ("toe_front", "toe_rear"),
+    # Differential & Brakes
+    "LSD Initial Torque": ("lsd_initial",),
+    "LSD Accel Sensitivity": ("lsd_accel",),
+    "LSD Braking Sens.": ("lsd_decel",),
+    "LSD Front Initial": ("lsd_front_initial",),
+    "LSD Front Accel": ("lsd_front_accel",),
+    "LSD Front Braking": ("lsd_front_decel",),
+    "Torque Distribution (R%)": ("torque_distribution_rear",),
+    "Brake Balance": ("brake_bias_front",),
+    # Aerodynamics
+    "Downforce": ("aero_front", "aero_rear"),
+    # Transmission
+    "Final Drive": ("final_drive",),
+    "Top Speed (km/h)": ("transmission_max_speed_kmh",),
+    "Transmission": ("transmission_type",),
+    # Performance Adjustment
+    "Ballast (kg)": ("ballast_kg",),
+    "Ballast Position": ("ballast_position",),
+    "Power Restrictor (%)": ("power_restrictor",),
+    # Engine / ECU
+    "ECU": ("ecu_ingame",),
+    "ECU Output (%)": ("ecu_ingame_output",),
+    # Nitrous
+    "Type": ("nitrous_type",),
+    "Output (%)": ("nitrous_output",),
 }
+
+
+def _keys_for_label(label: str) -> tuple:
+    """The (front[, rear]) setup keys behind a rendered row label, for highlighting.
+
+    Handles the numbered gear rows ("Gear 1".."Gear 8") dynamically — a recommendation
+    may name an individual gear (gear_N) or the whole ratio set (gear_ratios).
+    """
+    s = str(label or "")
+    if s.startswith("Gear "):
+        n = s[5:].strip()
+        return (f"gear_{n}", "gear_ratios") if n.isdigit() else ("gear_ratios",)
+    return _FIELD_KEYS_BY_LABEL.get(s, ())
 
 
 def _tabular_font(bold: bool = True) -> QFont:
@@ -497,7 +540,6 @@ class GT7SettingsSheet(QWidget):
                 grid.addWidget(c, r0, ci)
             r0 += 1
 
-        keys = _SECTION_FIELD_KEYS.get(sec.get("title", ""), [])
         for idx, row in enumerate(rows):
             label, front = row[0], row[1]
             rear = row[2] if len(row) > 2 else None
@@ -506,7 +548,9 @@ class GT7SettingsSheet(QWidget):
             lbl.setStyleSheet(f"color: {_t.TEXT}; font-size: {_t.FS_BODY}pt;")
             grid.addWidget(lbl, ri, 0)
 
-            fkeys = keys[idx] if idx < len(keys) else ()
+            # Highlight by LABEL so every section (Differential, Aero, Transmission …)
+            # flags its changed rows, not just Tyres/Suspension.
+            fkeys = _keys_for_label(label)
             f_changed = bool(fkeys) and fkeys[0] in changed
             grid.addWidget(self._value_box(front, f_changed), ri, 1)
             if rear is not None:
