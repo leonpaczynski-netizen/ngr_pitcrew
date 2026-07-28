@@ -211,6 +211,17 @@ class TestFinishEvent:
         assert strat["race_type"] == "timed"
         assert strat["race_duration_minutes"] == 120
 
+    def test_switching_events_changes_the_working_car(self):
+        # Two events with different cars. Activating the second, then switching back to
+        # the first (the way Home's "Switch to this event" does — draft_for then activate)
+        # must make the working car follow the event, not stay on the current one.
+        svc, cfg = self._svc()
+        svc.save_and_activate(_draft(name="Round A", car="Porsche Cayman GT4"))
+        svc.save_and_activate(_draft(name="Round B", car="Ford Shelby GT350R"))
+        assert cfg["strategy"]["car"] == "Ford Shelby GT350R"      # B is active
+        svc.save_and_activate(svc.draft_for("Round A"))
+        assert cfg["strategy"]["car"] == "Porsche Cayman GT4"      # car follows the event
+
     def test_rules_are_not_duplicated_into_the_config(self):
         """Every consumer reads rules DB-first; a second copy is a second thing to go
         stale — the exact cache the classic fan-out was stripped of."""

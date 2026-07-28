@@ -206,7 +206,11 @@ def draft_from_event(evt: Optional[dict], car: str = "") -> EventDraft:
         if e.get(key) is not None:
             rules[key] = e[key]
     return EventDraft(
-        name=_norm(e.get("name")), car=_norm(car or e.get("car")),
+        # The EVENT's own car wins; the passed car is only a fallback for an event that
+        # has none. The old order (car or e.get("car")) let the current working car
+        # override the event's, so switching events kept the current car — the setup,
+        # runs and telemetry all stayed tagged to the wrong car.
+        name=_norm(e.get("name")), car=_norm(e.get("car") or car),
         track=_norm(e.get("track")),
         race_type="timed" if _norm(e.get("race_type")).lower().startswith("t") else "lap",
         laps=int(e.get("laps") or 25),
@@ -243,7 +247,12 @@ class EventSetupService:
         return _norm(self._config.get("active_event_id"))
 
     def draft_for(self, event_name: str) -> EventDraft:
-        """A draft for an existing event, or a blank one carrying the current car."""
+        """A draft for an existing event, or a blank one carrying the current car.
+
+        The event's car is stored on its preparation CYCLE (the events table has no car
+        column), so we read it from there. Only when the target event has no car of its
+        own do we fall back to the current working car — otherwise switching to another
+        event kept the current car, tagging its setup/runs/telemetry to the wrong car."""
         name = _norm(event_name)
         strat = self._config.get("strategy") or {}
         if not name:
@@ -252,9 +261,17 @@ class EventSetupService:
             row = self._db.get_event(name) if self._db is not None else None
         except Exception:
             row = None
+        event_car = ""
+        try:
+            if self._db is not None and hasattr(self._db, "get_preparation_cycle"):
+                cyc = self._db.get_preparation_cycle(_cycle_id_for(name)) or {}
+                event_car = _norm(cyc.get("car"))
+        except Exception:
+            event_car = ""
+        car = event_car or _norm(strat.get("car"))
         if not row:
-            return EventDraft(name=name, car=_norm(strat.get("car")))
-        return draft_from_event(row, car=_norm(strat.get("car")))
+            return EventDraft(name=name, car=car)
+        return draft_from_event(row, car=car)
 
     # ---- write ------------------------------------------------------------
     def save_and_activate(self, draft: EventDraft) -> SaveResult:
