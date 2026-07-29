@@ -2650,9 +2650,11 @@ class DrivingAdvisor:
                 # Resolves front weight distribution: override arg (from UI, pct→fraction) → per-car
                 # data file → drivetrain prior.  Mutation stays inside this try block so the existing
                 # except resets _chassis_seeds = {} on any failure, keeping the neutral fallback safe.
-                from data.car_weight_distribution import resolve_front_weight_dist as _rwd_fn
+                # Pass only the explicit UI override (pct→fraction) or None.
+                # derive_spring_frequencies resolves the car-data file itself when the
+                # arg is None, so the source label ("override" vs "car data") is set
+                # correctly inside that function — no double-resolve here.
                 _front_wd = (front_weight_dist_override / 100.0) if front_weight_dist_override else None
-                _front_wd = _front_wd or _rwd_fn(car_name)
                 _spring_freq = derive_spring_frequencies(
                     _vehicle, _objective, track_profile, _front_wd
                 )

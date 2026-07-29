@@ -89,7 +89,7 @@ class TestBandSelection:
     def test_gr3_car_front_in_race_band(self):
         sf = derive_spring_frequencies(_gr3_rr(), OBJ_RACE)
         lo, hi = _SPRING_BAND_RACE
-        assert lo <= sf.front_hz <= hi * _SPRING_BAND_RACE[1]  # allow up to band hi before quali factor
+        assert lo <= sf.front_hz <= hi
 
     def test_gr3_car_rear_in_race_band(self):
         sf = derive_spring_frequencies(_gr3_rr(), OBJ_RACE)
@@ -290,6 +290,29 @@ class TestFallback:
         assert sf.front_hz == _NEUTRAL_FRONT
         assert sf.rear_hz  == _NEUTRAL_REAR
 
+    def test_unrecognised_nonempty_drivetrain_no_data_returns_neutral(self, monkeypatch):
+        """AC5 regression: a non-empty but unrecognised drivetrain (e.g. 'hev')
+        with no explicit override and no car-data entry must return the NEUTRAL_SEEDS
+        fallback — NOT a 50:50 sport-band Hz (the pre-fix silent 0.50 default)."""
+        import data.car_weight_distribution as _wd
+        # Empty cache so the file resolver also returns None.
+        monkeypatch.setattr(_wd, "_CACHE", {})
+        # "hev" is not in _WEIGHT_DIST_PRIOR; weight/category are valid so Step 1 passes.
+        v = build_vehicle_model("Hybrid Test Car", "hev", 6,
+                                {"weight_kg": 1400, "power_hp": 300, "category": "Sport Car"})
+        sf = derive_spring_frequencies(v, OBJ_BASE)
+        assert sf.front_hz == _NEUTRAL_FRONT, (
+            f"Unrecognised drivetrain 'hev': expected neutral front {_NEUTRAL_FRONT}; "
+            f"got {sf.front_hz}"
+        )
+        assert sf.rear_hz == _NEUTRAL_REAR, (
+            f"Unrecognised drivetrain 'hev': expected neutral rear {_NEUTRAL_REAR}; "
+            f"got {sf.rear_hz}"
+        )
+        assert "fallback" in sf.front_reason.lower() or "neutral" in sf.front_reason.lower(), (
+            f"Reason should mention 'fallback' or 'neutral'; got {sf.front_reason!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Safety bounds [1.00, 20.00]
@@ -351,6 +374,54 @@ class TestReasonStrings:
         v = build_vehicle_model("T", "fr", 6, {})
         sf = derive_spring_frequencies(v, OBJ_BASE)
         assert "fallback" in sf.front_reason.lower() or "neutral" in sf.front_reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# Reason-string source attribution (FIX 1 regression guard)
+# ---------------------------------------------------------------------------
+
+class TestReasonStringSourceLabel:
+    """The reason string must identify the correct source of the weight distribution:
+    'override' when the caller supplies an explicit fraction; 'car data' when it
+    came from the per-car data file; 'prior' when it fell through to the drivetrain
+    prior.  A pre-fix bug labelled car-data values as 'override' because
+    driving_advisor pre-resolved the file and passed the result as the arg."""
+
+    def test_explicit_arg_reason_says_override(self):
+        """When front_weight_dist is supplied directly, reason mentions 'override'."""
+        v = _gr3_rr()
+        # 0.62 is non-balanced so the bias_desc branch includes frac_label.
+        sf = derive_spring_frequencies(v, OBJ_BASE, front_weight_dist=0.62)
+        assert "override" in sf.front_reason.lower(), (
+            f"Explicit arg: reason should contain 'override'; got {sf.front_reason!r}"
+        )
+
+    def test_car_data_file_reason_says_car_data_not_override(self, monkeypatch):
+        """When the weight fraction comes from the car-data file (not an explicit arg),
+        the reason must say 'car data' — NOT 'override'."""
+        import data.car_weight_distribution as _wd
+        # Inject a file entry (0.38 → non-balanced, so the bias label is included).
+        monkeypatch.setattr(_wd, "_CACHE", {"Porsche 911 RSR (991) '17": 0.38})
+        v = _gr3_rr()
+        # No explicit front_weight_dist arg → file is consulted.
+        sf = derive_spring_frequencies(v, OBJ_BASE)
+        assert "override" not in sf.front_reason.lower(), (
+            f"Car-data source must NOT be labelled 'override'; got {sf.front_reason!r}"
+        )
+        assert "car data" in sf.front_reason.lower(), (
+            f"Car-data source must be labelled 'car data'; got {sf.front_reason!r}"
+        )
+
+    def test_drivetrain_prior_reason_says_prior(self, monkeypatch):
+        """When neither arg nor file provides a fraction, the drivetrain prior is used
+        and the reason mentions 'prior'."""
+        import data.car_weight_distribution as _wd
+        monkeypatch.setattr(_wd, "_CACHE", {})   # empty → file returns None
+        v = _gr3_rr()   # RR prior = 0.38 → rear-traction bias
+        sf = derive_spring_frequencies(v, OBJ_BASE)
+        assert "prior" in sf.front_reason.lower(), (
+            f"Drivetrain prior: reason should mention 'prior'; got {sf.front_reason!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

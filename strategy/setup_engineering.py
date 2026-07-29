@@ -462,8 +462,17 @@ def derive_spring_frequencies(
             frac_label = "car data file"
         else:
             _prior = _WEIGHT_DIST_PRIOR.get(dt)
-            frac = float(_prior) if _prior is not None else 0.50
-            frac_label = f"{dt.upper()} drivetrain prior" if _prior is not None else "neutral prior"
+            if _prior is None:
+                # Unrecognised drivetrain, no explicit override, no car-data entry.
+                # AC5: no fraction source available → neutral fallback, no guessing.
+                return SpringFrequencies(
+                    front_hz=_neutral_front,
+                    rear_hz=_neutral_rear,
+                    front_reason="unknown drivetrain, no weight-dist data → neutral fallback",
+                    rear_reason="unknown drivetrain, no weight-dist data → neutral fallback",
+                )
+            frac = float(_prior)
+            frac_label = f"{dt.upper()} drivetrain prior"
 
     # Bounded delta: positive → front stiffer (front-heavy); negative → rear stiffer.
     delta = (frac - 0.50) * _SPLIT_HZ_SPAN
