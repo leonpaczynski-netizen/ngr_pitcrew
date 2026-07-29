@@ -2471,10 +2471,15 @@ class LiveShellBridge(QObject):
             if hasattr(garage, "set_track_wet"):
                 from strategy.tyre_selection import is_wet_weather, is_fixed_weather
                 weather = str(getattr(ev, "weather", "") or "")
-                cid = self._runs.active_cycle_id() if self._runs else None
-                if cid != self._wet_cycle_id:
-                    self._wet_cycle_id = cid
-                    self._track_wet = None            # event changed → drop stale override
+                # Reset the driver's manual wet override when the EVENT changes — keyed on
+                # the event's own identity, NOT the coarse active_cycle_id (which is empty
+                # for an unassigned cycle and shared across events, so a 'wet' tick bled
+                # onto the next Random event — UAT: 'in garage track is wet but event is
+                # random').
+                key = str(getattr(ev, "event_id", "") or getattr(ev, "event_name", "") or "")
+                if key != self._wet_cycle_id:
+                    self._wet_cycle_id = key
+                    self._track_wet = None            # different event → drop stale override
                 fixed = is_fixed_weather(weather)
                 if fixed:
                     self._track_wet = None            # event decides; ignore any override

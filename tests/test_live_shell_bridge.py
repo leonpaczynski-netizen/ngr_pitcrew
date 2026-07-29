@@ -166,6 +166,65 @@ class _Announcer:
         self.mode = mode
 
 
+class TestGarageWetOverrideIsPerEvent:
+    """UAT: 'in garage track is wet but event is random'. A manual wet tick must not bleed
+    onto the NEXT Random event — the override is reset on the event's own identity, not the
+    coarse active_cycle_id (empty for an unassigned cycle and shared across events)."""
+
+    class _Garage:
+        def __init__(self):
+            self.wet = None
+            self.enabled = None
+
+        def set_tyre_choice(self, *a, **k):
+            pass
+
+        def set_track_wet(self, wet, enabled=True):
+            self.wet, self.enabled = wet, enabled
+
+    def _bridge(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        win._practice_is_qual_ref = [False]
+        win._live_mode_ref = ["Race"]
+        win._announcer = _Announcer()
+        return win, LiveShellBridge(shell, ctrl, window=win, config=_config())
+
+    def test_wet_tick_does_not_bleed_to_the_next_random_event(self, qapp):
+        win, b = self._bridge(qapp)
+        g = self._Garage()
+
+        # Event A — Random weather. First feed establishes the event; then the driver ticks
+        # wet and the next feed honours it.
+        win._build_event_context = lambda: build_event_context(
+            event={"id": 1, "weather": "Random Weather",
+                   "avail_tyres": ["RH", "RM", "RS", "IM", "HW"]})
+        b._feed_tyres(g, {})
+        assert g.wet is False and g.enabled is True     # Random defaults dry, driver-controlled
+        b._track_wet = True                             # driver ticks "Track is wet"
+        b._feed_tyres(g, {})
+        assert g.wet is True                            # honoured for event A
+
+        # Switch to a DIFFERENT Random event — must start dry, not inherit A's tick.
+        win._build_event_context = lambda: build_event_context(
+            event={"id": 2, "weather": "Random Weather",
+                   "avail_tyres": ["RH", "RM", "RS", "IM", "HW"]})
+        b._feed_tyres(g, {})
+        assert g.wet is False                           # no bleed across events
+        assert g.enabled is True                        # Random stays driver-controllable
+
+    def test_fixed_dry_event_forces_dry_and_disables_the_toggle(self, qapp):
+        win, b = self._bridge(qapp)
+        g = self._Garage()
+        b._track_wet = True                             # a stale override must be ignored
+        win._build_event_context = lambda: build_event_context(
+            event={"id": 3, "weather": "Fixed Dry",
+                   "avail_tyres": ["RH", "RM", "RS"]})
+        b._feed_tyres(g, {})
+        assert g.wet is False and g.enabled is False    # the event decides; toggle disabled
+
+
 class TestLiveSessionMode:
     """UAT: 'Begin quali doesn't start quali' and 'the race strat wasn't loaded'. The
     shell must actually assert the live session mode (Qualifying / Race) that drives the

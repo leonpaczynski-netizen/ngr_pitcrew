@@ -124,6 +124,15 @@ class TestNormalisation:
         assert ctx.required_tyres == ("RM",)
         assert ctx.available_tyres == ("RH", "RM", "RS")
 
+    def test_json_string_tyre_lists_are_decoded(self):
+        # DB event rows store avail/req tyres as a JSON STRING, not a Python list. It must
+        # be decoded as JSON, not split on commas (which corrupted the Garage tyre dropdown
+        # into '["RH"', '"RM"', ...).
+        ctx = build_event_context(event=db_event(
+            avail_tyres='["RH","RM","RS","IM","HW"]', req_tyres='["RM"]'))
+        assert ctx.available_tyres == ("RH", "RM", "RS", "IM", "HW")
+        assert ctx.required_tyres == ("RM",)
+
     def test_strategy_field_names_mapped(self):
         # Strategy uses tyre_wear_multiplier / race_duration_minutes / refuel_speed_lps.
         ctx = build_event_context(strategy=strategy_dict())
