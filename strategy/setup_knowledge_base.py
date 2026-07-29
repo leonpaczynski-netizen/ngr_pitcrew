@@ -62,14 +62,18 @@ Deferred
   is in place).
 - Tyre-compound / tyre-wear / fuel signals: not read by any rule (deferred;
   no dedicated tyre telemetry diagnosis keys exist today).
-- applies_session / applies_drivetrain scope enforcement: not enforced by the
-  engine (deferred; scope fields are set on rules but the engine does not yet
-  filter by them at runtime).
 - Voice path: narration-only (deferred; a full rule-first rebuild of the voice
   path so it too is authored by the rule engine is deferred).
-- No car-specific / drivetrain-specific rule packs (deferred).
-- Per-car DrivetrainType / CarClass scoping (currently all rules default to
-  'any' for those axes — add specificity once more data is in).
+
+NOW ENFORCED (previously deferred):
+- applies_session / applies_drivetrain scope enforcement IS live: Group 45
+  implemented ``_scope_matches`` (strategy/setup_rule_engine.py), called for
+  every non-Pack-A rule, so rules whose ``applies_drivetrain`` / ``applies_session``
+  do not match the current context are skipped at runtime.
+- Drivetrain-specific rule packs exist and are scoped per drivetrain — e.g.
+  ``_PACK_BALLAST`` proposes a ``ballast_position`` move only for the matching
+  DrivetrainType (understeer -> rearward, oversteer -> forward). Not every axis
+  is populated yet; add CarClass specificity as more data lands.
 """
 from __future__ import annotations
 

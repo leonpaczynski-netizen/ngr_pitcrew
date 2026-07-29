@@ -782,3 +782,66 @@ class TestPOUIWiring:
             f"42% front (frac=0.42, rear-heavy): expected rear_hz >= front_hz; "
             f"got front={sf.front_hz}, rear={sf.rear_hz}"
         )
+
+
+# ===========================================================================
+# Ballast integration — end-to-end through build_baseline_setup_response
+# ===========================================================================
+
+class TestBallastIntegration:
+    """Ballast params flow end-to-end through DrivingAdvisor.build_baseline_setup_response;
+    the setup_fields it returns carry ballast-adjusted springs when kg > 0 and the shift
+    is large enough, and are byte-identical to no-ballast when kg == 0."""
+
+    def _call(self, car_name, drivetrain, ballast_kg=0.0, ballast_position=0.0):
+        """Call the production DrivingAdvisor and return parsed setup_fields."""
+        import json
+        from strategy.setup_ranges import resolve_ranges
+        adv = _make_advisor()
+        raw = adv.build_baseline_setup_response(
+            car_name=car_name,
+            ranges=resolve_ranges(""),   # generic (unclamped) 1–20 Hz spring range
+            drivetrain=drivetrain,
+            num_gears=6,
+            allowed_tuning=None,
+            tuning_locked=False,
+            session_type="Race Setup",
+            ballast_kg=ballast_kg,
+            ballast_position=ballast_position,
+        )
+        return json.loads(raw).get("setup_fields", {})
+
+    def test_rear_ballast_changes_springs_rear_end_to_end(self):
+        """build_baseline_setup_response with rear ballast → springs_rear differs from no-ballast.
+
+        Porsche 911 RSR (991) '17 is RR (frac≈0.38); adding 60 kg at pos=+30
+        (rear) lowers the effective front fraction further, raising rear_hz.
+        With generic (unclamped) ranges the 2dp delta of ~0.02 Hz survives rounding.
+        """
+        sf_no  = self._call("Porsche 911 RSR (991) '17", "rr",
+                             ballast_kg=0.0, ballast_position=0.0)
+        sf_bal = self._call("Porsche 911 RSR (991) '17", "rr",
+                             ballast_kg=60.0, ballast_position=30.0)
+        rear_no  = sf_no.get("springs_rear")
+        rear_bal = sf_bal.get("springs_rear")
+        assert rear_no  is not None, "springs_rear absent from no-ballast response"
+        assert rear_bal is not None, "springs_rear absent from ballast response"
+        assert rear_bal != rear_no, (
+            f"springs_rear should differ with rear ballast: "
+            f"no-ballast={rear_no}, with-ballast={rear_bal}"
+        )
+
+    def test_zero_ballast_kg_is_byte_identical_to_no_ballast(self):
+        """ballast_kg=0.0 → setup_fields byte-identical to calling without ballast params.
+
+        Golden guard: the zero-ballast path must NOT change any setup value.
+        """
+        sf_no       = self._call("Porsche 911 RSR (991) '17", "rr")
+        sf_zero_bal = self._call("Porsche 911 RSR (991) '17", "rr",
+                                  ballast_kg=0.0, ballast_position=30.0)
+        assert sf_no.get("springs_rear")  == sf_zero_bal.get("springs_rear"), (
+            "ballast_kg=0 must not change springs_rear vs no-ballast call"
+        )
+        assert sf_no.get("springs_front") == sf_zero_bal.get("springs_front"), (
+            "ballast_kg=0 must not change springs_front vs no-ballast call"
+        )

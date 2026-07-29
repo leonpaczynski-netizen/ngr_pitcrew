@@ -142,6 +142,10 @@ class SetupInputs:
     #: expressed as a PERCENTAGE (0–100).  None or 0 → use the drivetrain prior.
     #: The backend divides by 100 before passing to derive_spring_frequencies.
     front_weight_dist_pct: Optional[float] = None
+    #: Ballast mass in kg (0–200).  0 = no ballast fitted / not supplied.
+    ballast_kg: float = 0.0
+    #: Ballast position on the GT7 slider (-50 = full front, +50 = full rear, 0 = centre).
+    ballast_position: float = 0.0
 
     @property
     def is_known(self) -> bool:
@@ -283,6 +287,8 @@ class SetupService:
                 track_name=inp.track,
                 historical_setups=list(inp.historical_setups),
                 front_weight_dist_override=inp.front_weight_dist_pct,
+                ballast_kg=inp.ballast_kg,
+                ballast_position=inp.ballast_position,
             )
         except Exception as exc:
             return False, {}, f"the engine failed ({exc})"

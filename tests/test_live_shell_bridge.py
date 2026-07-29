@@ -534,3 +534,42 @@ class TestSaveFrontWeightDist:
         # garage_page.set_status should have received a confirmation message.
         status = shell.garage_page._status.text()
         assert "38" in status and "Toyota GR86" in status
+
+
+class TestBuildInputsBallast:
+    """_build_inputs injects ballast_kg / ballast_position from the active discipline sheet.
+
+    Mirrors the TestBridgeWriteSide/_build_inputs pattern: wire a real bridge (no
+    filesystem, seeded from the fake _Form), write ballast onto the sheet via the same
+    _on_ballast_changed path the real Garage uses, then confirm _build_inputs returns the
+    expected SetupInputs values.
+    """
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()   # seeds the store from the classic form
+        return b
+
+    def test_ballast_injected_when_nonzero(self, qapp):
+        b = self._wired(qapp)
+        b._on_ballast_changed({"ballast_kg": 60, "ballast_position": 30})
+        inp = b._build_inputs()
+        assert inp.ballast_kg == 60.0
+        assert inp.ballast_position == 30.0
+
+    def test_ballast_defaults_to_zero_when_not_set(self, qapp):
+        b = self._wired(qapp)
+        # No ballast written — sheet has no ballast_kg key; result must be 0.0 (no-op).
+        inp = b._build_inputs()
+        assert inp.ballast_kg == 0.0
+        assert inp.ballast_position == 0.0
+
+    def test_zero_ballast_kg_does_not_inject(self, qapp):
+        b = self._wired(qapp)
+        # Explicitly writing ballast_kg=0 must still give 0.0 on SetupInputs (no replace).
+        b._on_ballast_changed({"ballast_kg": 0, "ballast_position": 25})
+        inp = b._build_inputs()
+        assert inp.ballast_kg == 0.0

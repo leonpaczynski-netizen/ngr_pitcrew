@@ -322,6 +322,12 @@ _WEIGHT_DIST_PRIOR: dict = {
 # stay inside the selected class band after the split clamp.
 _SPLIT_HZ_SPAN = 2.0
 
+# Ballast-aware effective weight distribution constants.
+_BALLAST_POS_FULL  = 50.0   # GT7 ballast_position slider extreme (|pos| that means fully front/rear)
+_BALLAST_AUTHORITY = 1.0    # scale on the position->fraction mapping; named knob, calibratable later
+_BALLAST_FRAC_LO   = 0.30   # effective front-fraction safety clamp lower bound
+_BALLAST_FRAC_HI   = 0.70   # effective front-fraction safety clamp upper bound
+
 
 @dataclass(frozen=True)
 class SpringFrequencies:
@@ -341,6 +347,8 @@ def derive_spring_frequencies(
     objective: str,
     track=None,
     front_weight_dist: Optional[float] = None,
+    ballast_kg: float = 0.0,
+    ballast_position: float = 0.0,
 ) -> SpringFrequencies:
     """Physics-based spring natural frequency target for both axles.
 
@@ -476,6 +484,20 @@ def derive_spring_frequencies(
             # label must not repeat it (avoids "RR RR drivetrain prior ...").
             frac_label = "drivetrain prior"
 
+    # ── Step 4b: ballast adjustment (mass-weighted; exact no-op when ballast_kg<=0) ──
+    # Positive ballast_position = rearward, negative = forward (GT7 convention).
+    # Sign invariant: positive position → lower _bpos_frac → lowers effective front fraction.
+    ballast_note = ""
+    _bkg = float(ballast_kg or 0.0)
+    if _bkg > 0.0 and (w_kg is not None and w_kg > 0.0):
+        _bpos_frac = 0.5 - 0.5 * _BALLAST_AUTHORITY * (float(ballast_position or 0.0) / _BALLAST_POS_FULL)
+        _eff = (frac * w_kg + _bpos_frac * _bkg) / (w_kg + _bkg)
+        _eff = max(_BALLAST_FRAC_LO, min(_BALLAST_FRAC_HI, _eff))
+        if abs(_eff - frac) >= 0.005:
+            _dir = "rear" if _eff < frac else "front"
+            ballast_note = f"effective front {_eff:.0%} (base {frac:.0%}, {_dir} ballast)"
+            frac = _eff
+
     # Bounded delta: positive → front stiffer (front-heavy); negative → rear stiffer.
     delta = (frac - 0.50) * _SPLIT_HZ_SPAN
     front_hz = max(lo, min(hi, base_hz + delta))
@@ -501,6 +523,8 @@ def derive_spring_frequencies(
         bias_desc = f"{dt.upper()} balanced weight distribution"
 
     _parts = [band_name, bias_desc]
+    if ballast_note:
+        _parts.append(ballast_note)
     if track_note:
         _parts.append(track_note)
     if disc_note:
