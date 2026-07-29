@@ -451,6 +451,7 @@ def run_rule_engine(
     track: str = "",
     profile_version: str = "",
     blocked_rule_ids: "dict | None" = None,
+    cold_start_aggression: float = 1.0,
 ) -> SetupPlan:
     """Evaluate all registered rules against diagnosis and return a SetupPlan.
 
@@ -487,6 +488,7 @@ def run_rule_engine(
             track=track,
             profile_version=profile_version,
             blocked_rule_ids=blocked_rule_ids,
+            cold_start_aggression=cold_start_aggression,
         )
     except Exception as exc:
         log.warning("run_rule_engine failed: %s", exc, exc_info=True)
@@ -508,6 +510,7 @@ def _run_rule_engine_inner(
     track: str = "",
     profile_version: str = "",
     blocked_rule_ids: "dict | None" = None,
+    cold_start_aggression: float = 1.0,
 ) -> SetupPlan:
     proposed: list[SetupChangeIntent] = []
     rejected: list[SetupChangeIntent] = []
@@ -560,6 +563,7 @@ def _run_rule_engine_inner(
                 track=track,
                 profile_version=profile_version,
                 blocked_rule_ids=_blocked_rules,
+                cold_start_aggression=cold_start_aggression,
             )
         except Exception as exc:
             log.debug("Rule %s failed: %s", rule.rule_id, exc)
@@ -755,6 +759,7 @@ def _process_rule(
     track: str = "",
     profile_version: str = "",
     blocked_rule_ids: "dict | None" = None,
+    cold_start_aggression: float = 1.0,
 ) -> None:
     """Process a single rule — updates proposed_by_field, rejected, protected_fields.
 
@@ -865,6 +870,19 @@ def _process_rule(
     delta = resolve_delta(rule.delta_fn, setup, ranges, diagnosis)
     if delta == 0.0:
         return  # no-op
+
+    # --- Cold-start aggression (data-maturity weighting) ---
+    # While the setup has little recorded data the driver's feedback is the best signal,
+    # so corrective moves are scaled up (up to 3x at blank), decaying to 1x as real runs
+    # accumulate and telemetry takes over. Only corrective rules reach here (Pack A safety
+    # rules returned earlier), and the range clamp + movement cap below still bound the
+    # result — bold, never past the operating-band edge. Default 1.0 → unchanged.
+    try:
+        _agg = float(cold_start_aggression)
+    except (TypeError, ValueError):
+        _agg = 1.0
+    if _agg > 1.0:
+        delta = delta * _agg
 
     # --- Compute from/to values ---
     from_value: "float | None" = None

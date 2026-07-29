@@ -8482,6 +8482,24 @@ class SessionDB:
         except Exception:
             return 0
 
+    def count_qualifying_runs(self, car_id: int, track: str, min_laps: int = 5) -> int:
+        """Number of recorded runs for this car+track with at least ``min_laps`` timed
+        laps — the data-maturity signal for cold-start aggression (a too-short bail-out
+        run doesn't count as a real read of the setup). Returns 0 on miss; never raises."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM ("
+                    "  SELECT s.id FROM sessions s "
+                    "  JOIN lap_records l ON l.session_id = s.id AND l.lap_time_ms > 0 "
+                    "  WHERE s.car_id = ? AND s.track = ? "
+                    "  GROUP BY s.id HAVING COUNT(*) >= ?)",
+                    (int(car_id or 0), track or "", int(min_laps)),
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def get_recent_fuel_sequence(self, car_id: int, track: str, limit: int = 15) -> list:
         """Return per-lap fuel consumption values (L/lap) for this car+track.
 
