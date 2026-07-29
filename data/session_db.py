@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS lap_records (
     rev_limiter_count       INTEGER NOT NULL DEFAULT 0,
     max_lat_g               REAL    NOT NULL DEFAULT 0.0,
     off_track_count         INTEGER NOT NULL DEFAULT 0,
+    spin_count              INTEGER NOT NULL DEFAULT 0,
     tyre_temp_avg           REAL    NOT NULL DEFAULT 0.0,
     is_out_lap              INTEGER NOT NULL DEFAULT 0,
     is_pit_lap              INTEGER NOT NULL DEFAULT 0,
@@ -1342,6 +1343,22 @@ class SessionDB:
             self._migrate_v30()
             self._conn.execute("PRAGMA user_version = 30")
             self._conn.commit()
+        if version < 31:
+            self._migrate_v31()
+            self._conn.execute("PRAGMA user_version = 31")
+            self._conn.commit()
+
+    def _migrate_v31(self) -> None:
+        """Add lap_records.spin_count (schema v31). A sustained large yaw rotation (a spin,
+        not a snap of oversteer) is now recorded per lap so the clean-lap gates can reject a
+        spun lap (UAT: a lap with a spin was still reported clean). Additive, DEFAULT 0 —
+        existing rows read as 'no spin recorded'. Duplicate-column guard ⇒ idempotent."""
+        try:
+            self._conn.execute(
+                "ALTER TABLE lap_records ADD COLUMN spin_count INTEGER NOT NULL DEFAULT 0")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def _migrate_v30(self) -> None:
         """Lap-record integrity (schema v30). UAT surfaced two corruptions that make
@@ -8077,13 +8094,13 @@ class SessionDB:
                     oversteer_count, oversteer_throttle_on,
                     kerb_count, bottoming_count, snap_throttle_count,
                     over_braking_count, abrupt_release_count, rev_limiter_count,
-                    max_lat_g, off_track_count, tyre_temp_avg,
+                    max_lat_g, off_track_count, spin_count, tyre_temp_avg,
                     is_out_lap, is_pit_lap, delta_ms, position,
                     session_type, event_positions_json,
                     fuel_start, fuel_end,
                     tyre_temp_fl_avg, tyre_temp_fr_avg,
                     tyre_temp_rl_avg, tyre_temp_rr_avg)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id, car_id, track, lap_num, lap_time_ms,
                     round(float(fuel_used), 4),
@@ -8105,6 +8122,7 @@ class SessionDB:
                     getattr(stats, "rev_limiter_count", 0),
                     round(float(getattr(stats, "max_lat_g", 0.0)), 3),
                     getattr(stats, "off_track_count", 0),
+                    getattr(stats, "spin_count", 0),
                     round(float(getattr(stats, "tyre_temp_avg", 0.0)), 1),
                     1 if is_out_lap else 0,
                     1 if is_pit_lap else 0,
@@ -8369,7 +8387,7 @@ class SessionDB:
                 f"SELECT lap_num, lap_time_ms, compound, fuel_used,"
                 f" is_pit_lap, is_out_lap, fuel_start, fuel_end,"
                 f" lock_up_count, wheelspin_count, oversteer_count,"
-                f" oversteer_throttle_on, kerb_count, max_lat_g,"
+                f" oversteer_throttle_on, kerb_count, max_lat_g, spin_count,"
                 f" tyre_temp_fl_avg, tyre_temp_fr_avg,"
                 f" tyre_temp_rl_avg, tyre_temp_rr_avg,"
                 f" snap_throttle_count, brake_consistency_m,"

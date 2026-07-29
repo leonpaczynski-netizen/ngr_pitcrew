@@ -56,6 +56,18 @@ class TestRunReview:
         assert out.excluded_reason == "in/out lap"
         assert len(r.laps) == 3          # nothing is hidden from the driver
 
+    def test_a_lap_with_a_spin_is_not_counted_clean(self):
+        # UAT: a lap with a spin was still reported clean. It must drop out of the clean
+        # count / best / average, but still be shown to the driver with reason "spin".
+        rows = _laps(92500, 92100, 92300)
+        rows[1]["spin_count"] = 1                 # the middle lap had a spin
+        r = build_run_review(rows)
+        assert r.clean_laps == 2                  # the spun lap is excluded
+        assert r.best_ms == 92300                 # 92100 (spun) is NOT the best
+        spun = [l for l in r.laps if not l.clean][0]
+        assert spun.excluded_reason == "spin"
+        assert len(r.laps) == 3                   # still shown, not hidden
+
     def test_an_out_lap_never_becomes_the_best_lap(self):
         """UAT-6: "in practice review it's counting out lap as the best lap".
 
