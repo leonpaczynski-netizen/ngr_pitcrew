@@ -2078,20 +2078,29 @@ class LiveShellBridge(QObject):
         return tuple(nodes)
 
     def _build_inputs(self):
-        """Build ``SetupInputs``, merging the Garage's front-weight-dist override.
+        """Build ``SetupInputs``, merging Garage overrides: front-weight-dist and ballast.
 
         Called by the ``inputs_provider`` lambda every time the setup engine needs context
         (baseline build, analysis, sheet-scope resolution). The front weight distribution
-        % the driver entered in the Garage spinbox is injected here — the only place that
-        touches the frozen dataclass — so the value propagates to every call that reads
-        ``inp.front_weight_dist_pct`` without the domain layer needing to know about the UI.
+        % the driver entered in the Garage spinbox and the ballast values stored on the
+        active discipline sheet are both injected here — the only place that touches the
+        frozen dataclass — so the values propagate to every call that reads these fields
+        without the domain layer needing to know about the UI.
         """
         from services.setup_inputs import build_setup_inputs
         from dataclasses import replace
         inp = build_setup_inputs(self._db, self._config)
         val = self._front_weight_dist_pct
         if val:
-            return replace(inp, front_weight_dist_pct=float(val))
+            inp = replace(inp, front_weight_dist_pct=float(val))
+        try:
+            _sheet = self._setups.sheet(self._discipline)
+            _bkg  = float(_sheet.get("ballast_kg", 0.0) or 0.0)
+            _bpos = float(_sheet.get("ballast_position", 0.0) or 0.0)
+            if _bkg > 0.0:
+                inp = replace(inp, ballast_kg=_bkg, ballast_position=_bpos)
+        except Exception:
+            pass   # fail-safe: zero ballast is the correct default
         return inp
 
     def _feed_shift_rpm(self, garage) -> None:
