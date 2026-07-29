@@ -37,6 +37,10 @@ from strategy.setup_engineering import (
     _SPRING_BAND_RACE,
     _SPRING_BAND_ROAD,
     _SPRING_BAND_SPORT,
+    _BALLAST_POS_FULL,
+    _BALLAST_AUTHORITY,
+    _BALLAST_FRAC_LO,
+    _BALLAST_FRAC_HI,
 )
 from strategy.setup_baseline import NEUTRAL_SEEDS
 
@@ -541,4 +545,190 @@ class TestIntegration:
         assert springs_front_built != NEUTRAL_SEEDS["springs_front"], (
             f"Built springs_front={springs_front_built} should not equal neutral "
             f"{NEUTRAL_SEEDS['springs_front']} for a Gr.3 car"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ballast-aware effective weight distribution
+# ---------------------------------------------------------------------------
+
+class TestBallastAdjustment:
+    """Ballast-aware effective weight distribution: derive_spring_frequencies
+    accepts ballast_kg + ballast_position and adjusts the front-fraction
+    mass-weighted before computing the front/rear split."""
+
+    # ── Zero ballast is an EXACT no-op ──────────────────────────────────────
+
+    def test_zero_ballast_exact_noop_fr(self):
+        """ballast_kg=0 → result bit-identical to no-ballast call (FR car)."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        no_b = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=0.0, ballast_position=30.0)
+        assert with_b.front_hz    == no_b.front_hz
+        assert with_b.rear_hz     == no_b.rear_hz
+        assert with_b.front_reason == no_b.front_reason
+        assert with_b.rear_reason  == no_b.rear_reason
+
+    def test_position_alone_without_kg_is_noop(self):
+        """ballast_position alone (kg=0) changes nothing — position alone does nothing."""
+        v = _gr3_rr()
+        no_b    = derive_spring_frequencies(v, OBJ_BASE)
+        with_pos = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=0.0, ballast_position=50.0)
+        assert with_pos.front_hz    == no_b.front_hz
+        assert with_pos.rear_hz     == no_b.rear_hz
+        assert with_pos.front_reason == no_b.front_reason
+        assert with_pos.rear_reason  == no_b.rear_reason
+
+    # ── Rear / front ballast changes the split directionally ────────────────
+
+    def test_rear_ballast_fr_raises_rear_hz(self):
+        """FR car, kg=50, pos=+30 (rear) → rear_hz strictly > no-ballast rear_hz."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        no_b   = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=50.0, ballast_position=30.0)
+        assert with_b.rear_hz > no_b.rear_hz, (
+            f"FR rear ballast: expected rear_hz ({with_b.rear_hz}) > no-ballast ({no_b.rear_hz})"
+        )
+
+    def test_front_ballast_rr_raises_front_hz(self):
+        """RR car, kg=50, pos=-30 (front) → front_hz strictly > no-ballast front_hz."""
+        v = _gr3_rr()   # weight_kg=1243
+        no_b   = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=50.0, ballast_position=-30.0)
+        assert with_b.front_hz > no_b.front_hz, (
+            f"RR front ballast: expected front_hz ({with_b.front_hz}) > no-ballast ({no_b.front_hz})"
+        )
+
+    # ── Missing / zero car mass with kg=50 → equals zero-ballast, no crash ──
+
+    def test_zero_car_mass_with_ballast_same_as_no_ballast(self):
+        """weight_kg=None + ballast_kg=50 → fallback fires; result = no-ballast result."""
+        v_none = build_vehicle_model("T", "fr", 6, {"category": "Gr.3", "power_hp": 400})
+        sf_no  = derive_spring_frequencies(v_none, OBJ_BASE)
+        sf_bal = derive_spring_frequencies(v_none, OBJ_BASE, ballast_kg=50.0, ballast_position=25.0)
+        assert sf_bal.front_hz == sf_no.front_hz
+        assert sf_bal.rear_hz  == sf_no.rear_hz
+
+    def test_zero_weight_kg_with_ballast_same_as_no_ballast(self):
+        """weight_kg=0 + ballast_kg=50 → result = no-ballast result."""
+        v_zero = build_vehicle_model(
+            "T", "fr", 6, {"category": "Gr.3", "power_hp": 400, "weight_kg": 0}
+        )
+        sf_no  = derive_spring_frequencies(v_zero, OBJ_BASE)
+        sf_bal = derive_spring_frequencies(v_zero, OBJ_BASE, ballast_kg=50.0, ballast_position=25.0)
+        assert sf_bal.front_hz == sf_no.front_hz
+        assert sf_bal.rear_hz  == sf_no.rear_hz
+
+    # ── Clamp: heavy ballast at max position stays within band AND [1.00, 20.00] ──
+
+    def test_heavy_ballast_max_pos_stays_in_race_band_and_gt7(self):
+        """Gr.3 car, 200 kg at ±50 → both Hz within race band and [1.00, 20.00]."""
+        v = _gr3_rr()
+        lo, hi = _SPRING_BAND_RACE
+        for pos in (50.0, -50.0):
+            sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=200.0, ballast_position=pos)
+            assert lo <= sf.front_hz <= hi, (
+                f"pos={pos}: front_hz={sf.front_hz} outside race band [{lo},{hi}]"
+            )
+            assert lo <= sf.rear_hz <= hi, (
+                f"pos={pos}: rear_hz={sf.rear_hz} outside race band [{lo},{hi}]"
+            )
+            assert 1.00 <= sf.front_hz <= 20.00
+            assert 1.00 <= sf.rear_hz  <= 20.00
+
+    # ── Reason string contains "effective front" and direction ───────────────
+
+    def test_reason_contains_effective_front_when_shift_gte_0005(self):
+        """Large rear ballast → reason contains 'effective front' and direction word."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=50.0, ballast_position=30.0)
+        assert "effective front" in sf.front_reason, (
+            f"Expected 'effective front' in reason; got {sf.front_reason!r}"
+        )
+        # The direction word "rear" appears when eff < base frac
+        assert "rear" in sf.front_reason or "front" in sf.front_reason
+
+    def test_reason_unchanged_when_kg_tiny_shift_below_threshold(self):
+        """Tiny ballast (0.1 kg on 1500 kg car) → shift < 0.005, no ballast phrase."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=0.1, ballast_position=30.0)
+        assert "effective front" not in sf.front_reason, (
+            f"Tiny ballast should not appear in reason; got {sf.front_reason!r}"
+        )
+
+    def test_reason_unchanged_when_kg_zero(self):
+        """Zero ballast → no ballast phrase in reason."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=0.0, ballast_position=30.0)
+        assert "effective front" not in sf.front_reason
+
+    # ── Determinism ──────────────────────────────────────────────────────────
+
+    def test_determinism_same_ballast_inputs_identical(self):
+        """Ballast path is deterministic: same inputs → bit-identical output."""
+        v = _veh("fr", 1500, 300, "Sport Car")
+        a = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=50.0, ballast_position=25.0)
+        b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=50.0, ballast_position=25.0)
+        assert a.front_hz     == b.front_hz
+        assert a.rear_hz      == b.rear_hz
+        assert a.front_reason == b.front_reason
+        assert a.rear_reason  == b.rear_reason
+
+    # ── Drivetrain invariants survive modest ballast ─────────────────────────
+
+    def test_rr_rear_hz_gte_front_hz_with_modest_rear_ballast(self):
+        """RR car + modest rear ballast (kg=30, pos=+10) → rear_hz >= front_hz."""
+        v = _gr3_rr()
+        sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=30.0, ballast_position=10.0)
+        assert sf.rear_hz >= sf.front_hz, (
+            f"RR + rear ballast: rear_hz ({sf.rear_hz}) should be >= front_hz ({sf.front_hz})"
+        )
+
+    def test_ff_front_hz_gte_rear_hz_with_modest_front_ballast(self):
+        """FF car + modest front ballast (kg=30, pos=-10) → front_hz >= rear_hz."""
+        v = _veh("ff", 1300, 150, "Road Car")
+        sf = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=30.0, ballast_position=-10.0)
+        assert sf.front_hz >= sf.rear_hz, (
+            f"FF + front ballast: front_hz ({sf.front_hz}) should be >= rear_hz ({sf.rear_hz})"
+        )
+
+    # ── Formula-isolation micro-tests for _bpos_frac ─────────────────────────
+    # Verified via observable effect (pos=0 → neutral, +50 → full rear, -50 → full front).
+
+    def test_ballast_front_frac_pos_zero_is_neutral_awd(self):
+        """At pos=0, ballast contributes 50/50 — for a neutral (AWD 0.50) car,
+        any ballast at pos=0 leaves frac unchanged → output identical to no-ballast."""
+        v = build_vehicle_model("AWD Test", "awd", 6,
+                                {"weight_kg": 1000, "power_hp": 250, "category": "Sport Car"})
+        no_b   = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=200.0, ballast_position=0.0)
+        # AWD prior = 0.50; ballast at pos=0 → _bpos_frac=0.5 → _eff stays 0.50
+        assert with_b.front_hz == no_b.front_hz, (
+            f"pos=0 ballast on AWD: front_hz should be unchanged; "
+            f"got {no_b.front_hz} → {with_b.front_hz}"
+        )
+        assert with_b.rear_hz == no_b.rear_hz
+
+    def test_ballast_front_frac_pos_plus50_is_full_rear_observable(self):
+        """At pos=+50 (full rear), _bpos_frac=0.0 (all ballast at rear).
+        For a front-heavy car (FF), heavy rear ballast must lower front_hz."""
+        v = _veh("ff", 1000, 200, "Sport Car")
+        no_b   = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=200.0, ballast_position=50.0)
+        # pos=+50 → _bpos_frac=0.0 → 100% rear ballast → pulls eff frac below 0.60 (FF prior)
+        assert with_b.front_hz < no_b.front_hz, (
+            f"pos=+50 (full rear): front_hz should decrease for FF; "
+            f"got {with_b.front_hz} vs no-ballast {no_b.front_hz}"
+        )
+
+    def test_ballast_front_frac_pos_minus50_is_full_front_observable(self):
+        """At pos=-50 (full front), _bpos_frac=1.0 (all ballast at front).
+        For a rear-heavy car (RR), heavy front ballast must raise front_hz."""
+        v = _gr3_rr()
+        no_b   = derive_spring_frequencies(v, OBJ_BASE)
+        with_b = derive_spring_frequencies(v, OBJ_BASE, ballast_kg=200.0, ballast_position=-50.0)
+        # pos=-50 → _bpos_frac=1.0 → 100% front ballast → raises eff frac above 0.38 (RR prior)
+        assert with_b.front_hz > no_b.front_hz, (
+            f"pos=-50 (full front): front_hz should increase for RR; "
+            f"got {with_b.front_hz} vs no-ballast {no_b.front_hz}"
         )

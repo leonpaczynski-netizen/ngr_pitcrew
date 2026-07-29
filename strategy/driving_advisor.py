@@ -2503,6 +2503,8 @@ class DrivingAdvisor:
         layout_id: str = "",
         historical_setups: "list[dict] | None" = None,
         front_weight_dist_override: Optional[float] = None,
+        ballast_kg: float = 0.0,
+        ballast_position: float = 0.0,
     ) -> str:
         """Return a JSON string with a from-scratch baseline setup.
 
@@ -2656,7 +2658,8 @@ class DrivingAdvisor:
                 # correctly inside that function — no double-resolve here.
                 _front_wd = (front_weight_dist_override / 100.0) if front_weight_dist_override else None
                 _spring_freq = derive_spring_frequencies(
-                    _vehicle, _objective, track_profile, _front_wd
+                    _vehicle, _objective, track_profile, _front_wd,
+                    ballast_kg=ballast_kg, ballast_position=ballast_position,
                 )
                 _chassis_seeds["springs_front"] = _spring_freq.front_hz
                 _chassis_seeds["springs_rear"]  = _spring_freq.rear_hz
