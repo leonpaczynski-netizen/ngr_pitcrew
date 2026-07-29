@@ -64,3 +64,73 @@ def test_build_initial_app_state_active_cycle_empty_string_gives_no_active_event
     config = {"active_cycle_id": ""}
     state = build_initial_app_state(window, config)
     assert state.has_active_event is False
+
+
+# ---------------------------------------------------------------------------
+# Qt tests: HomePage rendering when resolution_state="event_requires_selection"
+# ---------------------------------------------------------------------------
+import pytest
+from PyQt6.QtWidgets import QApplication
+from ui.components.home_page import HomePage
+from ui.app_state import AppState
+
+_REQUIRES_SELECTION_PROMPT = (
+    "Which event are you preparing for? Pick one below to start attaching laps."
+)
+
+_ONE_CANDIDATE_VIEW = {
+    "resolution_state": "event_requires_selection",
+    "candidates": [{"cycle_id": "c1", "event_name": "NGR Porsche Cup Rd7"}],
+}
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
+
+
+class TestRequiresSelectionHomePage:
+    """HomePage rendering for the event_requires_selection resolution state.
+
+    These tests cover the UAT scenario where a single incomplete event arrives
+    in the requires-selection state (because no active_cycle_id is set on open).
+    """
+
+    def test_requires_selection_shows_count_neutral_prompt(self, qapp):
+        """The event_state label must show the count-neutral action prompt and
+        must not contain the old "Several" wording."""
+        page = HomePage()
+        page.render(AppState.empty(), _ONE_CANDIDATE_VIEW)
+        text = page._event_state.text()
+        assert _REQUIRES_SELECTION_PROMPT in text
+        assert "Several" not in text
+
+    def test_requires_selection_shows_event_picker(self, qapp):
+        """The candidate combo and Switch button must be visible (not hidden) and
+        enabled, and the combo must carry the single candidate item.
+
+        Visibility note: QWidget.isVisible() requires the widget to be in a
+        shown window, so we assert isHidden() is False (setVisible(True) was
+        called) and isEnabled() is True as the reliable Qt-unit-test proxy.
+        """
+        page = HomePage()
+        page.render(AppState.empty(), _ONE_CANDIDATE_VIEW)
+        assert not page._event_combo.isHidden(), (
+            "_event_combo was hidden; expected setVisible(True) from have_candidates=True"
+        )
+        assert page._btn_switch.isEnabled(), (
+            "_btn_switch was disabled; expected enabled with one candidate"
+        )
+        assert not page._btn_switch.isHidden(), (
+            "_btn_switch was hidden; expected setVisible(True) from have_candidates=True"
+        )
+        assert page._event_combo.count() == 1
+        assert "NGR Porsche Cup Rd7" in page._event_combo.itemText(0)
+
+    def test_no_active_event_header_when_requires_selection(self, qapp):
+        """The event title must show 'No active event' — not an event name —
+        when AppState.empty() (has_active_event=False) is paired with the
+        requires-selection view."""
+        page = HomePage()
+        page.render(AppState.empty(), _ONE_CANDIDATE_VIEW)
+        assert page._event_title.text() == "No active event"
