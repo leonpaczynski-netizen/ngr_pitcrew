@@ -1781,6 +1781,19 @@ class DrivingAdvisor:
                     _blocked_rules = blocked_rules_from_outcomes(_outcomes)
                 except Exception:
                     _blocked_rules = {}
+                # Cold-start aggression: while this car+track has little recorded data,
+                # the driver's feedback is the best signal, so corrective moves are scaled
+                # up (to 3x at blank), decaying to 1x once 3 qualifying runs (>=5 laps
+                # each) exist and telemetry becomes the dominant driver.
+                _cold_start_agg = 1.0
+                try:
+                    from strategy.setup_maturity import cold_start_aggression, data_maturity
+                    if (self._db is not None and _car_id_learn > 0
+                            and hasattr(self._db, "count_qualifying_runs")):
+                        _qr = self._db.count_qualifying_runs(_car_id_learn, _track_learn)
+                        _cold_start_agg = cold_start_aggression(data_maturity(_qr))
+                except Exception:
+                    _cold_start_agg = 1.0
                 _plan = run_rule_engine(
                     diagnosis or {},
                     setup_dict,
@@ -1796,6 +1809,7 @@ class DrivingAdvisor:
                     track=_track_learn,
                     profile_version=_profile_ver_learn,
                     blocked_rule_ids=_blocked_rules,
+                    cold_start_aggression=_cold_start_agg,
                 )
             except Exception:
                 # Rule engine failure → fall through to empty plan (deterministic fallback handles)
