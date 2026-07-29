@@ -354,6 +354,18 @@ class EventSetupService:
             strat["total_laps"] = int(draft.laps or 0)
             strat["race_duration_minutes"] = int(draft.duration_mins or 0)
             strat["event_id"] = int(event_id or 0)
+            # Re-derive the canonical track ids from the (new) track name and write them
+            # UNCONDITIONALLY. These are the ONLY per-event writer of the ids besides the
+            # Track Modelling tab; without this they stayed frozen at whatever that tab
+            # last set, so every event's setup build + save inherited a stale layout_id —
+            # which mis-directed track shaping AND blocked personal-history recall.
+            try:
+                from data.track_intelligence import resolve_ids_for_track_name
+                loc_id, lay_id = resolve_ids_for_track_name(strat["track"])
+                strat["track_location_id"] = loc_id
+                strat["layout_id"] = lay_id
+            except Exception:
+                pass
         except Exception:  # pragma: no cover - defensive
             pass
 

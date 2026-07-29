@@ -112,11 +112,30 @@ class SetupSheetStore:
             self.load()
 
     # ---- read -------------------------------------------------------------
+    def _match_car_track(self, key: str) -> str:
+        """The single stored scope sharing this key's car|track prefix, or "".
+
+        Continuity fallback for when the layout_id segment changes (e.g. a stale
+        layout_id is corrected): the car|track prefix already identifies the setup
+        problem because the track NAME encodes the layout for multi-layout circuits.
+        Only returns a match when EXACTLY ONE stored scope shares the prefix, so a
+        different layout's sheet is never handed over by mistake.
+        """
+        if key.count("|") < 2:
+            return ""
+        prefix = key.rsplit("|", 1)[0]  # car|track
+        matches = [k for k in self._sheets if k.rsplit("|", 1)[0] == prefix]
+        return matches[0] if len(matches) == 1 else ""
+
     def get(self, scope: str, discipline: str = "race") -> SetupSheet:
         """The working sheet for a scope+discipline. Never None."""
         self._ensure_loaded()
-        return self._sheets.get(_norm(scope), {}).get(
-            normalise_discipline(discipline), empty_sheet())
+        key = _norm(scope)
+        bucket = self._sheets.get(key)
+        if bucket is None:
+            alt = self._match_car_track(key)
+            bucket = self._sheets.get(alt) if alt else None
+        return (bucket or {}).get(normalise_discipline(discipline), empty_sheet())
 
     def has_setup(self, scope: str, discipline: str = "race") -> bool:
         """Whether a REAL setup has been authored here (not just defaults)."""

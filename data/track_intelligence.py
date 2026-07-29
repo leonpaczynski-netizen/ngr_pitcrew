@@ -571,6 +571,84 @@ def search_track_layouts(
     return results
 
 
+def _fold_track_name(s: str) -> str:
+    """Lowercase, fold en/em dashes to a hyphen, collapse whitespace."""
+    t = str(s or "").strip().lower().replace("–", "-").replace("—", "-")
+    return " ".join(t.split())
+
+
+# Generic words that do not distinguish one circuit from another, so they are ignored
+# when comparing a display name to a seed name by token content.
+_TRACK_STOPWORDS = frozenset({
+    "circuit", "de", "the", "international", "grand", "prix", "full", "short",
+    "long", "course", "layout", "reverse", "gp", "raceway", "speedway",
+})
+
+
+def _sig_tokens(folded: str) -> set:
+    return {t for t in folded.replace("-", " ").split()
+            if t and t not in _TRACK_STOPWORDS}
+
+
+def resolve_ids_for_track_name(
+    track_name: str,
+    yaml_path: Optional[Path] = None,
+) -> tuple[str, str]:
+    """Resolve a display track name to ``(track_location_id, layout_id)``.
+
+    Deterministic, offline. Matches a LOCATION by display name or alias, in priority:
+    exact match; then either name a (>= 5-char) substring of the other; then the
+    distinguishing tokens of the shorter name being a subset of the other's (so
+    "Fuji Speedway" resolves to "Fuji International Speedway" while "Sainte-Croix"
+    never matches "Spa"). If the name also names a specific LAYOUT (its display name
+    appears in the track name), that layout is used; otherwise the location's first/
+    primary layout. Returns ("","") when unresolved, so a caller can clear stale ids.
+    """
+    name = _fold_track_name(track_name)
+    if not name:
+        return "", ""
+    name_tokens = _sig_tokens(name)
+    best_loc = None
+    best_score = 0
+    for loc in load_track_seed(yaml_path).track_locations:
+        for cand in [loc.display_name] + list(loc.aliases or []):
+            fc = _fold_track_name(cand)
+            if not fc:
+                continue
+            if fc == name:
+                best_loc, best_score = loc, 10_000
+                break
+            score = 0
+            if (fc in name or name in fc) and min(len(fc), len(name)) >= 5:
+                score = 1000 + min(len(fc), len(name))
+            else:
+                ct = _sig_tokens(fc)
+                # All distinguishing tokens of the shorter name appear in the other.
+                if ct and name_tokens and (ct <= name_tokens or name_tokens <= ct):
+                    score = 100 + len(ct & name_tokens)
+            if score > best_score:
+                best_loc, best_score = loc, score
+        if best_score >= 10_000:
+            break
+    if best_loc is None:
+        return "", ""
+    layouts = best_loc.layouts or []
+    if not layouts:
+        return best_loc.track_location_id, ""
+    # Pick the layout whose distinguishing tokens appear in the name — so "Circuit B"
+    # resolves the seed's "Layout B" (matched on the "b"), while a bare location name
+    # with no layout word falls to the first/primary layout.
+    best_lay = None
+    best_lay_score = 0
+    for lay in layouts:
+        lt = _sig_tokens(_fold_track_name(lay.display_name))
+        if lt and lt <= name_tokens and len(lt) > best_lay_score:
+            best_lay, best_lay_score = lay, len(lt)
+    if best_lay is not None:
+        return best_loc.track_location_id, best_lay.layout_id
+    return best_loc.track_location_id, layouts[0].layout_id
+
+
 def audit_layout_seed(
     layout_seed,
     track_location_id: Optional[str] = None,
