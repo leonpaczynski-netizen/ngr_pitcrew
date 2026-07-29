@@ -157,6 +157,23 @@ def test_migrate_v30_dedupes_existing_duplicates(db):
     assert db.get_session_meta(sid)["total_laps"] == 2      # total_laps drift repaired
 
 
+def test_get_latest_session_for_event_is_scoped(db):
+    # Newest session WITH laps for event 5 must be returned — never event 9's session,
+    # and never an opened-but-empty session (UAT: laps must persist, scoped to the event).
+    s_old = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=5)
+    db.write_lap(s_old, 1, 92_000, 2.0, None)
+    s_other = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=9)
+    db.write_lap(s_other, 1, 91_000, 2.0, None)
+    s_new = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=5)
+    db.write_lap(s_new, 1, 90_500, 2.0, None)
+    db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=7)  # empty
+
+    assert db.get_latest_session_for_event(5) == s_new
+    assert db.get_latest_session_for_event(9) == s_other
+    assert db.get_latest_session_for_event(7) == 0     # opened but no laps → not reviewable
+    assert db.get_latest_session_for_event(0) == 0
+
+
 # ---------------------------------------------------------------------------
 # write_feedback
 # ---------------------------------------------------------------------------

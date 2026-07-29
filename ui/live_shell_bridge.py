@@ -563,11 +563,25 @@ class LiveShellBridge(QObject):
             pass
 
     def _review_session_id(self):
-        """The session the Review tab is about: the live one, else the last recorded."""
+        """The session the Review tab is about: the live one, else the last recorded run,
+        else the most-recent recorded session for the active event.
+
+        The final fallback keeps a practice run's laps reviewable even when the run was
+        never bound to a preparation cycle (UAT: 'no laps persisting after a practice
+        session'). It is event-scoped, so it never surfaces another event's session."""
         sid = self._live_session_id()
         if sid:
             return sid
         last, _prev = self._recorded_pair()
+        if last:
+            return last
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            eid = int(getattr(ev, "event_id", 0) or 0)
+            if eid and self._db is not None and hasattr(self._db, "get_latest_session_for_event"):
+                return int(self._db.get_latest_session_for_event(eid) or 0) or last
+        except Exception:
+            pass
         return last
 
     def _recorded_runs(self) -> list:
@@ -1424,6 +1438,55 @@ class LiveShellBridge(QObject):
             f"That is the run this area of the programme needs.")
         self.refresh()
 
+    def _debrief_session_id(self) -> int:
+        """The session the Debrief is about — STRICTLY the active event's last session.
+
+        UAT: the Debrief showed an OLD event, not the active one. It resolved from a
+        process-lifetime in-memory id (_last_recorded_session_id) that survives an event
+        switch, and never checked the session actually belonged to the active event.
+
+        Resolve only from runs bound to the active preparation cycle, plus the live/just-
+        finished session, and verify each candidate's event_id matches the active event
+        before returning it. Returns 0 when the active event has no session of its own
+        (so the Debrief shows its empty placeholder instead of a stale event)."""
+        db = self._db
+        active_eid = 0
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            active_eid = int(getattr(ev, "event_id", 0) or 0)
+        except Exception:
+            active_eid = 0
+
+        def _belongs(sid: int) -> bool:
+            if not sid:
+                return False
+            if active_eid <= 0:
+                return True   # no active-event identity to check against — accept
+            try:
+                meta = db.get_session_meta(sid) if hasattr(db, "get_session_meta") else None
+                return int((meta or {}).get("event_id") or 0) == active_eid
+            except Exception:
+                return False
+
+        # 1. Runs bound to the active preparation cycle (survives a restart), newest first.
+        ids = [int(r.get("session_id") or 0) for r in self._recorded_runs()
+               if int(r.get("session_id") or 0) > 0]
+        for sid in reversed(ids):
+            if _belongs(sid):
+                return sid
+        # 2. The live / just-finished session — only if it is THIS event's.
+        live = int(self._live_session_id() or 0)
+        if live and _belongs(live):
+            return live
+        # 3. The most-recent recorded session for THIS event, even if it was never bound
+        #    to a preparation cycle — so a practice run's laps stay reviewable (persist)
+        #    rather than vanishing when the live session id is gone.
+        if active_eid > 0 and hasattr(db, "get_latest_session_for_event"):
+            sid = int(db.get_latest_session_for_event(active_eid) or 0)
+            if sid:
+                return sid
+        return 0
+
     def _feed_debrief(self) -> None:
         try:
             dp = getattr(self._shell, "debrief_page", None)
@@ -1435,8 +1498,7 @@ class LiveShellBridge(QObject):
             # a debrief. (The old cross-session development scorecard only populates from
             # the setup-experiment loop, which the race flow never drives, so it was
             # always empty here.)
-            last, _prev = self._recorded_pair()
-            sid = int(last or self._live_session_id() or 0)
+            sid = self._debrief_session_id()
             if sid and hasattr(db, "get_session_laps"):
                 review = self._review_for(sid)
                 meta, laps = {}, []

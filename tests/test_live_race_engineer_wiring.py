@@ -29,6 +29,8 @@ Covers the changes from the live-race-engineer activation brief:
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
@@ -403,6 +405,32 @@ class TestTrackModellingSilencesLiveEngineer:
         bridge._feed_live()
 
         assert len(spoken) == 1              # normal practice → the engineer speaks
+
+
+class TestDebriefScopedToActiveEvent:
+    """UAT: the Debrief showed an OLD event, not the active one. It must resolve strictly
+    to the active event's session and never a stale cross-event id, and fall back to the
+    active event's most-recent recorded session so unbound practice laps still persist."""
+
+    def test_debrief_rejects_a_run_from_another_event(self, qapp):
+        bridge, _shell, win, _db = _make_bridge(qapp)
+        win._build_event_context = lambda: types.SimpleNamespace(event_id=5, track="Monza", car="x")
+        bridge._recorded_runs = lambda: [{"session_id": 42}]   # bound run, but event 9
+        bridge._live_session_id = lambda: 0
+        bridge._db.get_session_meta = lambda sid: {"event_id": 9}
+        bridge._db.get_latest_session_for_event = lambda eid: 0
+
+        assert bridge._debrief_session_id() == 0                # not the other event's run
+
+    def test_debrief_falls_back_to_event_scoped_unbound_session(self, qapp):
+        bridge, _shell, win, _db = _make_bridge(qapp)
+        win._build_event_context = lambda: types.SimpleNamespace(event_id=5, track="Monza", car="x")
+        bridge._recorded_runs = lambda: []                     # nothing bound to the cycle
+        bridge._live_session_id = lambda: 0
+        bridge._db.get_session_meta = lambda sid: {"event_id": 5}
+        bridge._db.get_latest_session_for_event = lambda eid: 77 if eid == 5 else 0
+
+        assert bridge._debrief_session_id() == 77              # persisted, event-scoped
 
 
 class TestPracticeDoesNotLookLikeARace:

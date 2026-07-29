@@ -8316,6 +8316,27 @@ class SessionDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_latest_session_for_event(self, event_id: int) -> int:
+        """Most-recent telemetry session id for an event that actually has laps, or 0.
+
+        Lets the Review/Debrief surface a recorded run for the active event even when the
+        run was never bound to a preparation cycle (UAT: 'still no laps persisting after a
+        practice session' — the laps were written but, unbound, no screen read them).
+        Strictly event-scoped, so it never surfaces another event's session; returns 0 on
+        miss and never raises."""
+        if not event_id:
+            return 0
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM sessions WHERE event_id = ? AND total_laps > 0 "
+                    "ORDER BY date_utc DESC, id DESC LIMIT 1",
+                    (int(event_id),),
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def get_session_laps(
         self,
         session_id: int,
