@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "note": "Curated known-good COMPLETE starting setups, per car + track + discipline. The from-scratch baseline recalls the matching entry and starts from it (instead of generic class defaults); the rule engine then refines it from your telemetry. This is the deterministic equivalent of recalling a proven setup - offline, no AI. Match is by normalised car (with aliases) + track (display name OR alias) + discipline (qualifying/race). A matched entry takes precedence over generic seeds AND over personal-history seeds for the fields it specifies, because a vetted complete setup is a better from-scratch start than either. Every field is optional (only the ones present are seeded). Toe convention: negative = toe-OUT, positive = toe-IN.",
+  "setups": [
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Autodromo Nazionale Monza",
+      "track_aliases": ["Monza", "Monza With Chicane", "Autodromo Nazionale Monza - Grand Prix"],
+      "discipline": "qualifying",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 62,
+        "springs_front": 3.5, "springs_rear": 3.3,
+        "arb_front": 7, "arb_rear": 6,
+        "dampers_front_comp": 30, "dampers_front_ext": 44,
+        "dampers_rear_comp": 34, "dampers_rear_ext": 46,
+        "camber_front": 2.5, "camber_rear": 1.8,
+        "toe_front": -0.03, "toe_rear": 0.08,
+        "aero_front": 410, "aero_rear": 570,
+        "lsd_initial": 18, "lsd_accel": 10, "lsd_decel": 30,
+        "brake_bias": -1,
+        "final_drive": 4.10,
+        "gear_1": 3.050, "gear_2": 2.180, "gear_3": 1.690,
+        "gear_4": 1.350, "gear_5": 1.105, "gear_6": 0.920
+      }
+    },
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Autodromo Nazionale Monza",
+      "track_aliases": ["Monza", "Monza With Chicane", "Autodromo Nazionale Monza - Grand Prix"],
+      "discipline": "race",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 63,
+        "springs_front": 3.4, "springs_rear": 3.35,
+        "arb_front": 7, "arb_rear": 7,
+        "dampers_front_comp": 29, "dampers_front_ext": 43,
+        "dampers_rear_comp": 35, "dampers_rear_ext": 45,
+        "camber_front": 2.4, "camber_rear": 2.0,
+        "toe_front": 0.00, "toe_rear": 0.10,
+        "aero_front": 390, "aero_rear": 595,
+        "lsd_initial": 22, "lsd_accel": 8, "lsd_decel": 33,
+        "brake_bias": -1,
+        "final_drive": 4.00,
+        "gear_1": 2.980, "gear_2": 2.140, "gear_3": 1.660,
+        "gear_4": 1.330, "gear_5": 1.090, "gear_6": 0.905
+      }
+    },
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Watkins Glen International - Grand Prix",
+      "track_aliases": ["Watkins Glen", "Watkins Glen International", "Watkins Glen (Full Course)", "Watkins Glen International - Long Course"],
+      "discipline": "qualifying",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 61,
+        "springs_front": 3.55, "springs_rear": 3.35,
+        "arb_front": 7, "arb_rear": 6,
+        "dampers_front_comp": 30, "dampers_front_ext": 44,
+        "dampers_rear_comp": 35, "dampers_rear_ext": 46,
+        "camber_front": 2.6, "camber_rear": 1.9,
+        "toe_front": -0.02, "toe_rear": 0.08,
+        "aero_front": 430, "aero_rear": 585,
+        "lsd_initial": 20, "lsd_accel": 9, "lsd_decel": 31,
+        "brake_bias": -1
+      }
+    },
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Watkins Glen International - Grand Prix",
+      "track_aliases": ["Watkins Glen", "Watkins Glen International", "Watkins Glen (Full Course)", "Watkins Glen International - Long Course"],
+      "discipline": "race",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 62,
+        "springs_front": 3.45, "springs_rear": 3.4,
+        "arb_front": 7, "arb_rear": 7,
+        "dampers_front_comp": 29, "dampers_front_ext": 43,
+        "dampers_rear_comp": 36, "dampers_rear_ext": 45,
+        "camber_front": 2.5, "camber_rear": 2.1,
+        "toe_front": 0.00, "toe_rear": 0.10,
+        "aero_front": 400, "aero_rear": 600,
+        "lsd_initial": 22, "lsd_accel": 8, "lsd_decel": 33,
+        "brake_bias": -1
+      }
+    },
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Circuit de Spa-Francorchamps",
+      "track_aliases": ["Spa-Francorchamps", "Spa", "Spa Francorchamps", "Circuit de Spa Francorchamps"],
+      "discipline": "qualifying",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 63,
+        "springs_front": 3.6, "springs_rear": 3.35,
+        "arb_front": 7, "arb_rear": 6,
+        "dampers_front_comp": 31, "dampers_front_ext": 44,
+        "dampers_rear_comp": 34, "dampers_rear_ext": 46,
+        "camber_front": 2.8, "camber_rear": 1.8,
+        "toe_front": -0.03, "toe_rear": 0.10,
+        "aero_front": 450, "aero_rear": 600,
+        "lsd_initial": 14, "lsd_accel": 18, "lsd_decel": 22,
+        "brake_bias": -1
+      }
+    },
+    {
+      "car": "Porsche 911 RSR '17",
+      "car_aliases": ["Porsche 911 RSR (991) '17", "Porsche 911 RSR"],
+      "track": "Circuit de Spa-Francorchamps",
+      "track_aliases": ["Spa-Francorchamps", "Spa", "Spa Francorchamps", "Circuit de Spa Francorchamps"],
+      "discipline": "race",
+      "source": "Leon's vetted reference setup (calibrated 2026-07-29)",
+      "fields": {
+        "ride_height_front": 55, "ride_height_rear": 62,
+        "springs_front": 3.45, "springs_rear": 3.45,
+        "arb_front": 7, "arb_rear": 7,
+        "dampers_front_comp": 29, "dampers_front_ext": 43,
+        "dampers_rear_comp": 36, "dampers_rear_ext": 45,
+        "camber_front": 2.7, "camber_rear": 2.2,
+        "toe_front": 0.00, "toe_rear": 0.08,
+        "aero_front": 405, "aero_rear": 615,
+        "lsd_initial": 22, "lsd_accel": 8, "lsd_decel": 33,
+        "brake_bias": -1
+      }
+    }
+  ]
+}

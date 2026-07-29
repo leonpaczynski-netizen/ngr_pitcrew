@@ -104,6 +104,10 @@ _LABEL_CAR_RANGE  = "car-range adapted (neutral intent, off-boundary)"
 # Provenance for a seed lifted from the driver's PROVEN historical setup (Phase 9
 # baseline lift) — the base starts from validated geometry, not a neutral guess.
 _LABEL_HISTORY    = "seeded from your proven setup"
+# Provenance for a value taken from the curated proven-setup library (a vetted known-good
+# complete setup for this exact car+track). Ranks ABOVE the personal-history lift: a vetted
+# complete setup is a better from-scratch start than a generic default or a per-field lift.
+_LABEL_PROVEN     = "seeded from the proven-setup library"
 # Provenance for a value shaped by the engineering-reasoning layer (vehicle + track
 # + objective coupling) — an engineer's directional call, not a neutral default.
 _LABEL_ENGINEERING = "engineered for car + track + objective"
@@ -241,6 +245,7 @@ def _build_gearbox_changes(
     num_gears: int,
     locked_fields: set,
     final_drive_lean: float = 0.0,
+    proven_gearbox: "dict | None" = None,
 ) -> list[dict]:
     """Build change dicts for gearbox fields (final_drive + gear_1..gear_N).
 
@@ -275,15 +280,23 @@ def _build_gearbox_changes(
     changes: list[dict] = []
     _gear_lo, _gear_hi = _GRR
     _fd_lo, _fd_hi = _FDR
+    _pg = proven_gearbox or {}
 
-    # final_drive (only if not locked). The engineering lean shifts it off the
-    # neutral midpoint toward longer (lower) or shorter (higher) gearing.
+    # final_drive (only if not locked). A proven-library value wins; otherwise the
+    # engineering lean shifts it off the neutral midpoint toward longer (lower) or
+    # shorter (higher) gearing.
     if "final_drive" not in locked_fields:
         _fd_range = ranges.get("final_drive", (_fd_lo, _fd_hi))
-        _fd_mid = (_fd_range[0] + _fd_range[1]) / 2.0
-        _fd_target = _fd_mid + (float(final_drive_lean) or 0.0)
-        _fd_val = _round_for_field("final_drive", _clamp(_fd_target, _fd_range[0], _fd_range[1]))
-        _fd_label = _LABEL_ENGINEERING if final_drive_lean else _LABEL_MIDPOINT
+        _fd_proven = _pg.get("final_drive")
+        if _fd_proven is not None:
+            _fd_val = _round_for_field(
+                "final_drive", _clamp(float(_fd_proven), _fd_range[0], _fd_range[1]))
+            _fd_label = _LABEL_PROVEN
+        else:
+            _fd_mid = (_fd_range[0] + _fd_range[1]) / 2.0
+            _fd_target = _fd_mid + (float(final_drive_lean) or 0.0)
+            _fd_val = _round_for_field("final_drive", _clamp(_fd_target, _fd_range[0], _fd_range[1]))
+            _fd_label = _LABEL_ENGINEERING if final_drive_lean else _LABEL_MIDPOINT
         changes.append(_make_change_dict(
             field="final_drive",
             from_val=_fd_val,   # from-scratch: "from" == "to" (starting point)
@@ -322,6 +335,15 @@ def _build_gearbox_changes(
         ratio = round(_clamp(ratio, _gear_lo, _gear_hi), 3)
         raw_ratios.append(ratio)
 
+    # A proven-library gear set replaces the generic geometric spread (clamped to range).
+    # Track which gears came from the library so each carries the right provenance label.
+    _proven_gear = [False] * effective_n
+    for idx in range(effective_n):
+        _gv = _pg.get(f"gear_{idx + 1}")
+        if _gv is not None:
+            raw_ratios[idx] = round(_clamp(float(_gv), _gear_lo, _gear_hi), 3)
+            _proven_gear[idx] = True
+
     # Enforce strict monotonic decrease (rounding can cause ties)
     for i in range(1, len(raw_ratios)):
         if raw_ratios[i] >= raw_ratios[i - 1]:
@@ -337,7 +359,7 @@ def _build_gearbox_changes(
             field=_gear_key,
             from_val=ratio,   # from-scratch: "from" == "to" (starting point)
             to_val=ratio,
-            label=_LABEL_MIDPOINT,
+            label=_LABEL_PROVEN if _proven_gear[idx] else _LABEL_MIDPOINT,
             alignment="neutral",
         ))
 
@@ -483,6 +505,8 @@ def build_baseline_setup(
     engineering_bias: "dict | None" = None,
     final_drive_lean: float = 0.0,
     chassis_seed_overrides: "dict | None" = None,
+    proven_seed_overrides: "dict | None" = None,
+    proven_gearbox: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -675,6 +699,19 @@ def build_baseline_setup(
             except (TypeError, ValueError, KeyError):
                 _hist_seeded = False
 
+        # Proven-library seed: a vetted COMPLETE setup for this exact car+track wins over
+        # the generic seeds AND the personal-history lift for the fields it names — a
+        # known-good from-scratch start. The rule engine still refines it from telemetry;
+        # profile/session bias still stack on top as a small personal-fit adjustment.
+        _proven_seeded = False
+        if proven_seed_overrides and field in proven_seed_overrides:
+            try:
+                seed = float(proven_seed_overrides[field])
+                _proven_seeded = True
+                _hist_seeded = False
+            except (TypeError, ValueError):
+                pass
+
         # Ride height: the flat 80mm neutral seed collides with tight race-car
         # ceilings — e.g. the Porsche 911 RSR front range is {55, 80}, so the
         # generic clamp pins the seed to the MAX, the exact opposite of the low
@@ -729,7 +766,12 @@ def build_baseline_setup(
         # _LABEL_CAR_RANGE provenance (unless it was also driver-profile biased, in
         # which case the bias label wins) so a re-placed boundary value is never
         # presented as an undiagnosed "neutral default".
-        if _hist_seeded:
+        if _proven_seeded:
+            # Highest provenance — the base value came from a vetted library setup for
+            # this exact car+track (even if profile/session bias then stacked on top).
+            label = _LABEL_PROVEN
+            alignment = "aligned"
+        elif _hist_seeded:
             # History provenance wins — the base value came from a proven setup, even
             # if profile/session bias then stacked on top.
             label = _LABEL_HISTORY
@@ -801,7 +843,8 @@ def build_baseline_setup(
     # final_drive_lean gears the car to the circuit (longer for top speed on a
     # straight-heavy track, shorter for acceleration on a corner-dense one).
     gb_changes = _build_gearbox_changes(ranges, num_gears, locked_fields,
-                                        final_drive_lean=final_drive_lean)
+                                        final_drive_lean=final_drive_lean,
+                                        proven_gearbox=proven_gearbox)
     for ch in gb_changes:
         changes.append(ch)
         f = ch.get("field")
