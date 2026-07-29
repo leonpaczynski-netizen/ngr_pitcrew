@@ -128,6 +128,7 @@ class SetupWorkspace(QWidget):
     shift_rpm_changed = pyqtSignal(int)          # driver set the upshift point for this sheet
     shift_rpm_recommend_requested = pyqtSignal()  # derive the upshift point from the car
     front_weight_dist_changed = pyqtSignal(int)  # driver entered front weight distribution %
+    save_front_weight_dist_requested = pyqtSignal()  # save current % front to the car library
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
     car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
@@ -246,13 +247,17 @@ class SetupWorkspace(QWidget):
             f"border: 1px solid {_t.HAIRLINE}; border-radius: {_t.RADIUS_SM}px; "
             f"padding: 4px 8px; font-size: {_t.FS_LABEL}pt; }}")
         self._front_weight_dist.setToolTip(
-            "Optional. Front weight distribution %. 0 = use the drivetrain default. "
-            "e.g. 42 = 42% front / 58% rear. "
+            "Car's BASE front weight distribution % (before ballast). "
+            "0 = use the drivetrain default. e.g. 42 = 42% front / 58% rear. "
+            "Saving stores it to your car library for this car. "
             "Improves the physics-based spring-frequency baseline split.")
         # editingFinished (not valueChanged) so we emit once the driver settles on a
         # value, not on every spin tick.
         self._front_weight_dist.editingFinished.connect(self._on_front_weight_dist_edited)
         fwd_row.addWidget(self._front_weight_dist)
+        self._save_front_weight_dist_btn = SecondaryActionButton("Save to car library")
+        self._save_front_weight_dist_btn.clicked.connect(self._on_save_front_weight_dist_clicked)
+        fwd_row.addWidget(self._save_front_weight_dist_btn)
         fwd_note = QLabel("Optional — car spec sheet or weighbridge reading")
         fwd_note.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
         fwd_row.addWidget(fwd_note, 1)
@@ -737,6 +742,10 @@ class SetupWorkspace(QWidget):
             return                      # editingFinished fires even when nothing changed
         self._front_weight_dist_value = v
         self.front_weight_dist_changed.emit(v)
+
+    def _on_save_front_weight_dist_clicked(self) -> None:
+        """Relay the driver's "Save to car library" press; the bridge owns the store."""
+        self.save_front_weight_dist_requested.emit()
 
     def set_lock_state(self, lockable: bool = False, locked: bool = False,
                        hint: str = "", discipline: str = "", lock_label: str = "") -> None:

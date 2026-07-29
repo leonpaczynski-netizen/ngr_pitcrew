@@ -169,3 +169,139 @@ class TestCaching:
         from data.car_weight_distribution import resolve_front_weight_dist
         result = resolve_front_weight_dist("Any Car Whatsoever")
         assert result is None   # {} → nothing to resolve
+
+
+# ---------------------------------------------------------------------------
+# Overlay: set_overlay_path / invalidate / seed+overlay merge
+# ---------------------------------------------------------------------------
+
+class TestOverlay:
+    """Overlay-on-top-of-seed behaviour introduced alongside CarWeightDistStore."""
+
+    def test_overlay_wins_over_seed(self, tmp_path, monkeypatch):
+        """When both seed and overlay have the same key, overlay value is returned."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Car A": 0.40}', encoding="utf-8")
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text('{"Car A": 0.55}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("Car A") == pytest.approx(0.55)
+
+    def test_car_only_in_overlay_resolves(self, tmp_path, monkeypatch):
+        """A car not in the seed but present in the overlay resolves correctly."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{}', encoding="utf-8")
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text('{"New Car": 0.48}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("New Car") == pytest.approx(0.48)
+
+    def test_car_only_in_seed_resolves_when_overlay_active(self, tmp_path, monkeypatch):
+        """A car not overridden by the overlay is still found in the seed."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Seed Car": 0.40}', encoding="utf-8")
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text('{"Other Car": 0.55}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("Seed Car") == pytest.approx(0.40)
+
+    def test_missing_overlay_falls_back_to_seed(self, tmp_path, monkeypatch):
+        """A non-existent overlay file is silently ignored; seed is used."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Car": 0.42}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(tmp_path / "nonexistent.json"))
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("Car") == pytest.approx(0.42)
+
+    def test_corrupt_overlay_falls_back_to_seed(self, tmp_path, monkeypatch):
+        """A corrupt overlay file is silently ignored; seed is used."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Car": 0.42}', encoding="utf-8")
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text("NOT VALID JSON", encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("Car") == pytest.approx(0.42)
+
+    def test_no_overlay_path_seed_only(self, tmp_path, monkeypatch):
+        """When _OVERLAY_PATH is None/empty, only the seed is read."""
+        import data.car_weight_distribution as mod
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Car": 0.42}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", None)
+        monkeypatch.setattr(mod, "_CACHE", None)
+        from data.car_weight_distribution import resolve_front_weight_dist
+        assert resolve_front_weight_dist("Car") == pytest.approx(0.42)
+
+    def test_invalidate_causes_re_read(self, tmp_path, monkeypatch):
+        """After invalidate() the next resolve re-reads seed + overlay."""
+        import data.car_weight_distribution as mod
+        from data.car_weight_distribution import invalidate, resolve_front_weight_dist
+
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{}', encoding="utf-8")
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text('{"Car": 0.42}', encoding="utf-8")
+
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        monkeypatch.setattr(mod, "_CACHE", None)
+
+        # First resolve — loads seed + overlay
+        r1 = resolve_front_weight_dist("Car")
+        assert r1 == pytest.approx(0.42)
+
+        # Change the overlay file and invalidate
+        overlay_file.write_text('{"Car": 0.55}', encoding="utf-8")
+        invalidate()
+
+        # Second resolve — must pick up new value
+        r2 = resolve_front_weight_dist("Car")
+        assert r2 == pytest.approx(0.55)
+
+    def test_set_overlay_path_invalidates_cache(self, tmp_path, monkeypatch):
+        """set_overlay_path() wipes _CACHE so the next call re-reads."""
+        import data.car_weight_distribution as mod
+        from data.car_weight_distribution import set_overlay_path, resolve_front_weight_dist
+
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text('{"Car": 0.42}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_PATH", seed_file)
+
+        # Prime the cache with seed-only (overlay disabled)
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", None)
+        monkeypatch.setattr(mod, "_CACHE", None)
+        _ = resolve_front_weight_dist("Car")
+        assert mod._CACHE is not None  # cache was populated
+
+        # set_overlay_path should wipe the cache
+        overlay_file = tmp_path / "overlay.json"
+        overlay_file.write_text('{"Car": 0.55}', encoding="utf-8")
+        # monkeypatch _OVERLAY_PATH so teardown restores it
+        monkeypatch.setattr(mod, "_OVERLAY_PATH", str(overlay_file))
+        # manually call set_overlay_path; it re-sets _OVERLAY_PATH and calls invalidate()
+        set_overlay_path(str(overlay_file))
+        assert mod._CACHE is None  # invalidated
+
+        # Next resolve picks up the overlay
+        r = resolve_front_weight_dist("Car")
+        assert r == pytest.approx(0.55)

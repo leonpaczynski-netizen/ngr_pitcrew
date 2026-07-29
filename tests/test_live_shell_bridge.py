@@ -458,3 +458,79 @@ class TestPracticeCompoundFromAppliedSetup:
         b._feed_run_compound_options(rc)
         # With no applied compound, the cover-all-compounds nudge is allowed to pick.
         assert self._selected_code(rc) in {"RH", "RM", "RS", ""}
+
+
+class TestSaveFrontWeightDist:
+    """_on_save_front_weight_dist routes to CarWeightDistStore and invalidates the cache.
+
+    Uses a fake store injected after construction so no filesystem is touched and
+    the test stays fast/offline.
+    """
+
+    class _FakeStore:
+        def __init__(self):
+            self.calls: list = []
+
+        def set(self, car_name: str, frac: float) -> bool:
+            self.calls.append((car_name, frac))
+            return True
+
+    def _wired(self, qapp):
+        ctrl = PitCrewController()
+        shell = PitCrewShell(ctrl)
+        win = _FakeWindow()
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        b.refresh()
+        return b, shell
+
+    def test_save_calls_store_and_invalidates(self, qapp, monkeypatch):
+        b, _shell = self._wired(qapp)
+        fake_store = self._FakeStore()
+        b._car_wt_store = fake_store
+        invalidated = []
+        monkeypatch.setattr(b._car_wt_mod, "invalidate", lambda: invalidated.append(True))
+        b._front_weight_dist_pct = 42.0
+        monkeypatch.setattr(
+            b._setups, "inputs",
+            lambda: type("I", (), {"car": "Porsche 911 RSR (991) '17"})())
+        b._on_save_front_weight_dist()
+        assert len(fake_store.calls) == 1
+        assert fake_store.calls[0][0] == "Porsche 911 RSR (991) '17"
+        assert abs(fake_store.calls[0][1] - 0.42) < 0.001
+        assert len(invalidated) == 1
+
+    def test_no_car_name_does_not_save(self, qapp, monkeypatch):
+        b, _shell = self._wired(qapp)
+        fake_store = self._FakeStore()
+        b._car_wt_store = fake_store
+        b._front_weight_dist_pct = 42.0
+        monkeypatch.setattr(
+            b._setups, "inputs",
+            lambda: type("I", (), {"car": ""})())
+        b._on_save_front_weight_dist()
+        assert fake_store.calls == []
+
+    def test_zero_pct_does_not_save(self, qapp, monkeypatch):
+        b, _shell = self._wired(qapp)
+        fake_store = self._FakeStore()
+        b._car_wt_store = fake_store
+        b._front_weight_dist_pct = None
+        monkeypatch.setattr(
+            b._setups, "inputs",
+            lambda: type("I", (), {"car": "Porsche 911 RSR (991) '17"})())
+        b._on_save_front_weight_dist()
+        assert fake_store.calls == []
+
+    def test_status_reported_on_success(self, qapp, monkeypatch):
+        b, shell = self._wired(qapp)
+        fake_store = self._FakeStore()
+        b._car_wt_store = fake_store
+        monkeypatch.setattr(b._car_wt_mod, "invalidate", lambda: None)
+        b._front_weight_dist_pct = 38.0
+        monkeypatch.setattr(
+            b._setups, "inputs",
+            lambda: type("I", (), {"car": "Toyota GR86"})())
+        b._on_save_front_weight_dist()
+        # garage_page.set_status should have received a confirmation message.
+        status = shell.garage_page._status.text()
+        assert "38" in status and "Toyota GR86" in status

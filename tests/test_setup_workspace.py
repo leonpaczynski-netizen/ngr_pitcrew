@@ -206,6 +206,40 @@ class TestFrontWeightDistField:
         assert "drivetrain" in w._front_weight_dist.toolTip().lower()
 
 
+class TestSaveFrontWeightDistButton:
+    """'Save to car library' button next to the % front spinbox.
+
+    The button signals the caller (bridge) to persist the value; the workspace
+    itself performs no I/O.  Pattern mirrors TestCarRangesButton.
+    """
+
+    def test_signal_declared(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.save_front_weight_dist_requested.connect(lambda: seen.append(True))
+        w.save_front_weight_dist_requested.emit()
+        assert seen == [True]
+
+    def test_button_exists(self, qapp):
+        w = SetupWorkspace()
+        assert hasattr(w, "_save_front_weight_dist_btn")
+        assert "car library" in w._save_front_weight_dist_btn.text().lower()
+
+    def test_click_emits_save_front_weight_dist_requested(self, qapp):
+        w = SetupWorkspace()
+        seen = []
+        w.save_front_weight_dist_requested.connect(lambda: seen.append(True))
+        w._save_front_weight_dist_btn.click()
+        assert seen == [True]
+
+    def test_tooltip_mentions_base_and_ballast(self, qapp):
+        """Tooltip must communicate this is the BASE distribution (before ballast)."""
+        w = SetupWorkspace()
+        tip = w._front_weight_dist.toolTip().lower()
+        assert "base" in tip
+        assert "ballast" in tip
+
+
 class TestLockControl:
     """UAT-7: "how do I 'lock the base setup'?" The guidance CTA pointed at the Garage
     but there was nothing to click."""

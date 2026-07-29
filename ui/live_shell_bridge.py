@@ -126,6 +126,15 @@ class LiveShellBridge(QObject):
         # Persisted applied-revision history: fills the Garage Lineage tab and lets a
         # past setup be loaded back ("the settings I'm running in GT7").
         self._setup_history = SetupHistoryStore(default_history_path(_cfg_path))
+        # User car weight-distribution overlay: persists the driver's % front value per
+        # car so it survives a restart. The resolver is told the overlay path once so
+        # subsequent resolves merge it on top of the seed without any restart.
+        from services.car_weight_dist_store import CarWeightDistStore, default_car_weight_dist_path
+        import data.car_weight_distribution as _wdmod
+        _overlay_path = default_car_weight_dist_path(_cfg_path)
+        self._car_wt_store = CarWeightDistStore(_overlay_path)
+        self._car_wt_mod = _wdmod
+        _wdmod.set_overlay_path(_overlay_path)
         #: The driver's front weight distribution % entered in the Garage spinbox.
         #: Injected into SetupInputs whenever the baseline generator is invoked.
         #: None (or 0) = "use the drivetrain prior" (no physics override).
@@ -300,6 +309,8 @@ class LiveShellBridge(QObject):
                     gp.regulation_changed.connect(self._on_regulation_changed)
                 if hasattr(gp, "front_weight_dist_changed"):
                     gp.front_weight_dist_changed.connect(self._on_front_weight_dist_changed)
+                if hasattr(gp, "save_front_weight_dist_requested"):
+                    gp.save_front_weight_dist_requested.connect(self._on_save_front_weight_dist)
         except Exception:
             pass
         try:
@@ -2130,6 +2141,38 @@ class LiveShellBridge(QObject):
         ``_build_inputs()`` which injects it into ``SetupInputs.front_weight_dist_pct``.
         """
         self._front_weight_dist_pct = float(value) if int(value or 0) > 0 else None
+
+    def _on_save_front_weight_dist(self) -> None:
+        """Persist the current front weight distribution % to the user's car overlay.
+
+        Guards: no car selected (event not activated), or % is zero/not entered
+        (0 means "use drivetrain default" and has nothing to save). The store rejects
+        fractions outside the open interval (0, 1), so only 1–99% are accepted.
+        """
+        try:
+            car_name = str(self._setups.inputs().car or "")
+        except Exception:
+            self._garage_status("No active event — activate an event before saving.")
+            return
+        pct = self._front_weight_dist_pct   # float or None; None == "use drivetrain prior"
+        if not car_name:
+            self._garage_status(
+                "No car selected — activate an event first so the library knows which car.")
+            return
+        if not pct or float(pct) <= 0:
+            self._garage_status(
+                "Enter a front weight % above 0 first — "
+                "0 means 'use drivetrain default' and is not saved.")
+            return
+        ok = self._car_wt_store.set(car_name, pct / 100.0)
+        self._car_wt_mod.invalidate()
+        if ok:
+            self._garage_status(
+                f"Saved {int(pct)}% front for {car_name} to the car library.")
+        else:
+            self._garage_status(
+                f"Could not save {int(pct)}% front for {car_name} — "
+                "value must be between 1 and 99%.")
 
     def _on_discipline(self, discipline: str) -> None:
         """Remember the selected discipline and re-feed the Garage for it."""
