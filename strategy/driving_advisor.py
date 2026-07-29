@@ -2502,6 +2502,7 @@ class DrivingAdvisor:
         track_name: str = "",
         layout_id: str = "",
         historical_setups: "list[dict] | None" = None,
+        front_weight_dist_override: Optional[float] = None,
     ) -> str:
         """Return a JSON string with a from-scratch baseline setup.
 
@@ -2616,7 +2617,7 @@ class DrivingAdvisor:
             try:
                 from strategy.setup_engineering import (
                     build_vehicle_model, derive_engineering_intents, resolve_car_specs,
-                    coupling_report, derive_chassis_seeds,
+                    coupling_report, derive_chassis_seeds, derive_spring_frequencies,
                 )
                 from strategy.setup_authoring import objective_from_session_type
                 _specs = resolve_car_specs(car_name)
@@ -2645,6 +2646,20 @@ class DrivingAdvisor:
                 # shape (dampers/camber/toe), so they differ per car instead of coming
                 # out at a flat constant for every car.
                 _chassis_seeds = derive_chassis_seeds(_vehicle, _objective)
+                # Physics-based spring frequency targets — car class + weight dist + track + objective.
+                # Resolves front weight distribution: override arg (from UI, pct→fraction) → per-car
+                # data file → drivetrain prior.  Mutation stays inside this try block so the existing
+                # except resets _chassis_seeds = {} on any failure, keeping the neutral fallback safe.
+                # Pass only the explicit UI override (pct→fraction) or None.
+                # derive_spring_frequencies resolves the car-data file itself when the
+                # arg is None, so the source label ("override" vs "car data") is set
+                # correctly inside that function — no double-resolve here.
+                _front_wd = (front_weight_dist_override / 100.0) if front_weight_dist_override else None
+                _spring_freq = derive_spring_frequencies(
+                    _vehicle, _objective, track_profile, _front_wd
+                )
+                _chassis_seeds["springs_front"] = _spring_freq.front_hz
+                _chassis_seeds["springs_rear"]  = _spring_freq.rear_hz
             except Exception:
                 _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
                 _chassis_seeds = {}

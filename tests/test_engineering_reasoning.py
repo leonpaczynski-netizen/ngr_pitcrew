@@ -191,6 +191,9 @@ def test_end_to_end_authored_values_stay_in_range_and_differ_by_track():
 def test_end_to_end_default_build_baseline_unchanged_without_engineering():
     # build_baseline_setup with no engineering_bias is byte-for-byte unchanged (safety:
     # existing callers/tests are unaffected).
+    # NOTE: springs are car-physics-derived only via build_baseline_setup_response
+    # (which sets chassis_seed_overrides["springs_front/rear"] via derive_spring_frequencies).
+    # NEUTRAL_SEEDS remains the direct-call fallback when chassis_seed_overrides are absent.
     from strategy.setup_baseline import build_baseline_setup
     from strategy.setup_driver_profile import build_driver_profile
     a = build_baseline_setup(_CAR, resolve_ranges(_CAR), "RR", 6,
