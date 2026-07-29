@@ -18,7 +18,7 @@ from datetime import date
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
 
-ACTIVE_CYCLE_RESOLUTION_VERSION = "active_cycle_resolution_v1"
+ACTIVE_CYCLE_RESOLUTION_VERSION = "active_cycle_resolution_v2"
 ACTIVE_CYCLE_RESOLUTION_SCHEMA = 1
 
 
@@ -177,10 +177,16 @@ def resolve_active_cycle(
     if not non_terminal:
         return _resolution(S.NO_ACTIVE_EVENT, "", False, "all cycles are complete or abandoned")
 
-    # rule 4 — exactly one active candidate
+    # rule 4 — exactly one non-terminal candidate
+    # Surgical: only the plain-active case requires explicit selection (no auto-activate on open).
+    # Blocked / context-changed / paused / upcoming still surface their own state so callers can
+    # display appropriate guidance without requiring the user to go through a selection screen.
     if len(non_terminal) == 1:
         c = non_terminal[0]
         st = _single_state(c)
+        if st == S.ONE_ACTIVE_EVENT:
+            return _resolution(S.EVENT_REQUIRES_SELECTION, "", True,
+                               "single non-terminal cycle requires explicit selection")
         return _resolution(st, c.cycle_id, False, f"single non-terminal cycle ({st.value})")
 
     # rule 5 — several active candidates → explicit selection required (never newest-by-default)

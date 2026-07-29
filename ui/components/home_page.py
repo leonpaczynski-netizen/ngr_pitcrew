@@ -44,7 +44,7 @@ _RESOLUTION_TEXT = {
     "multiple_active_events": "Several events are open — pick the one you are preparing.",
     "upcoming_event": "This event has not opened for preparation yet.",
     "paused_event": "Preparation on this event is paused.",
-    "event_requires_selection": "Several events could be active — choose one to continue.",
+    "event_requires_selection": "Which event are you preparing for? Pick one below to start attaching laps.",
     "event_context_changed": "The event details changed since preparation started — re-check the brief.",
     "event_blocked": "This event is blocked; resolve the blocker before preparing.",
 }

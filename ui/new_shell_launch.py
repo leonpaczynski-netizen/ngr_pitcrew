@@ -58,9 +58,22 @@ def _active_setup(window, purpose: str = "Race"):
 
 
 def build_initial_app_state(window=None, config=None):
-    """Build an AppState from the window's canonical context adapters. Never raises."""
+    """Build an AppState from the window's canonical context adapters. Never raises.
+
+    Gate: if ``active_cycle_id`` is absent or empty in *config* the event context is
+    suppressed so the header shows "no active event".  This covers both the initial
+    load (main.py clears active_cycle_id on open) and every 750 ms refresh in
+    LiveShellBridge.refresh() — both pass the same config dict.  Once the driver
+    explicitly selects an event, ``event_setup.save_and_activate`` writes
+    ``active_cycle_id`` into that dict, the gate does not fire, and the resolver's
+    Rule 1 binds the laps.
+    """
     from ui.app_state import build_app_state
     ev = _safe_ctx(window, "_build_event_context")
+    # Suppress the event context when no cycle has been explicitly selected so the
+    # Home header never auto-activates the last-used event on open.
+    if not str((config or {}).get("active_cycle_id", "") or "").strip():
+        ev = None
     se = _safe_ctx(window, "_build_session_context")
     st = _safe_ctx(window, "_build_strategy_context")
     label, applied = _active_setup(window)
