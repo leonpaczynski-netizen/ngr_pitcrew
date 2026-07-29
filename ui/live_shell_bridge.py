@@ -681,9 +681,11 @@ class LiveShellBridge(QObject):
             return 0
 
     def _live_lap_count(self) -> int:
+        # Count distinct completed (timed) laps — the SAME measure the Practice
+        # Review uses — rather than the raw total_laps counter (which also counts
+        # out-/pit-/invalid rows), so the pit wall and Review can't disagree.
         try:
-            meta = self._db.get_session_meta(self._live_session_id()) if self._db else None
-            return int((meta or {}).get("total_laps") or 0)
+            return int(self._db.count_valid_laps(self._live_session_id())) if self._db else 0
         except Exception:
             return 0
 

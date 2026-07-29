@@ -233,6 +233,11 @@ class EventDispatcher(threading.Thread):
         self._car_id_ref = car_id_ref or [0]
         self._tracker = tracker
         self._session_id: int = 0
+        # Highest lap_num written into the current DB session. A completed lap whose
+        # number is LOWER than this means GT7 started a new stint/session (its lap
+        # counter restarted) — we roll to a fresh DB session so the two stints don't
+        # collide lap numbers under the (session_id, lap_num) unique index.
+        self._last_lap_num: int = 0
         self._stop = threading.Event()
         # Legacy Fan-Out Removal Phase 6a: the dispatcher no longer reads
         # config["strategy"] in the telemetry event path. It holds a frozen
@@ -246,6 +251,8 @@ class EventDispatcher(threading.Thread):
 
     def set_session_id(self, sid: int) -> None:
         self._session_id = sid
+        if sid == 0:
+            self._last_lap_num = 0
 
     def set_session_tag(self, tag) -> None:
         """Atomically swap the frozen session tag (called from the UI thread)."""
@@ -289,6 +296,17 @@ class EventDispatcher(threading.Thread):
                     self._recorder.finalize_lap(record.lap_num, record.lap_time_ms)
                 except Exception as e:
                     _log.error("Dispatcher recorder error: %s", e)
+            # New stint / GT7 session restart: the game's lap counter jumped backwards.
+            # Continuing to write into the same DB session would collide lap numbers with
+            # the previous stint (under the v30 unique index the later stint would overwrite
+            # the earlier one's laps). Roll to a fresh session so each stint stands alone;
+            # the open-on-zero block below then re-opens on this lap.
+            if (self._db is not None and self._session_id > 0
+                    and record.lap_num < self._last_lap_num):
+                print(f"[Dispatcher] lap {record.lap_num} < last {self._last_lap_num} "
+                      f"— new stint, rolling to a fresh session")
+                self._session_id = 0
+                self._last_lap_num = 0
             # Open a DB session on the FIRST completed lap of ANY mode — practice, time
             # trial, qualifying — not only on RACE_STARTED. A baseline/practice run (all
             # track modelling and baseline laps are driven in Time Trial) never fires
@@ -343,6 +361,8 @@ class EventDispatcher(threading.Thread):
                                       if hasattr(record.session_type, "value")
                                       else str(getattr(record, "session_type", ""))),
                     )
+                    if int(record.lap_num) > self._last_lap_num:
+                        self._last_lap_num = int(record.lap_num)
                 except Exception as e:
                     print(f"[Dispatcher] db write_lap error: {e}")
 
