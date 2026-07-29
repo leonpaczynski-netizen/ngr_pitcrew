@@ -2094,7 +2094,11 @@ class LiveShellBridge(QObject):
         if val:
             inp = replace(inp, front_weight_dist_pct=float(val))
         try:
-            _sheet = self._setups.sheet(self._discipline)
+            # Pass the already-built ``inp`` so SetupService.sheet() does NOT call back
+            # into self.inputs() -> inputs_provider -> _build_inputs() (infinite recursion
+            # that RecursionError-caught, silently ran build_setup_inputs ~1000x per call
+            # and lagged the whole app).
+            _sheet = self._setups.sheet(self._discipline, inputs=inp)
             _bkg  = float(_sheet.get("ballast_kg", 0.0) or 0.0)
             _bpos = float(_sheet.get("ballast_position", 0.0) or 0.0)
             if _bkg > 0.0:

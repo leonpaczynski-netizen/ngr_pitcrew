@@ -573,3 +573,27 @@ class TestBuildInputsBallast:
         b._on_ballast_changed({"ballast_kg": 0, "ballast_position": 25})
         inp = b._build_inputs()
         assert inp.ballast_kg == 0.0
+
+    def test_build_inputs_does_not_recurse(self, qapp, monkeypatch):
+        """Regression: reading the ballast sheet must NOT re-enter inputs_provider.
+
+        _build_inputs() calls self._setups.sheet(); if sheet() calls self.inputs()
+        (which is the inputs_provider = _build_inputs), it recurses ~1000 deep until
+        RecursionError, running the heavy build_setup_inputs at every level and lagging
+        the whole app. The fix passes inputs=inp to sheet(). This proves the expensive
+        builder runs exactly ONCE per _build_inputs() call.
+        """
+        b = self._wired(qapp)
+        b._on_ballast_changed({"ballast_kg": 60, "ballast_position": 30})
+        import services.setup_inputs as si
+        real_si = si.build_setup_inputs
+        calls = {"n": 0}
+
+        def _counting(*a, **k):
+            calls["n"] += 1
+            return real_si(*a, **k)
+
+        monkeypatch.setattr(si, "build_setup_inputs", _counting)
+        inp = b._build_inputs()
+        assert calls["n"] == 1, f"build_setup_inputs ran {calls['n']}x — recursion is back"
+        assert inp.ballast_kg == 60.0  # and ballast still injected
