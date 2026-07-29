@@ -286,12 +286,12 @@ class TestAC8NamedConstants:
     def test_sport_band_is_a_named_constant(self):
         from strategy.setup_engineering import _SPRING_BAND_SPORT
         lo, hi = _SPRING_BAND_SPORT
-        assert lo == 2.5 and hi == 5.0, f"_SPRING_BAND_SPORT changed: {_SPRING_BAND_SPORT}"
+        assert lo == 2.2 and hi == 3.8, f"_SPRING_BAND_SPORT changed: {_SPRING_BAND_SPORT}"
 
     def test_race_band_is_a_named_constant(self):
         from strategy.setup_engineering import _SPRING_BAND_RACE
         lo, hi = _SPRING_BAND_RACE
-        assert lo == 4.0 and hi == 8.0, f"_SPRING_BAND_RACE changed: {_SPRING_BAND_RACE}"
+        assert lo == 2.9 and hi == 4.7, f"_SPRING_BAND_RACE changed: {_SPRING_BAND_RACE}"
 
     def test_quali_stiffness_factor_is_a_named_constant(self):
         from strategy.setup_engineering import _QUALI_STIFFNESS_FACTOR
@@ -391,8 +391,8 @@ class TestAC9ClassBandBoundary:
         assert a.rear_hz  == b.rear_hz
 
     def test_crossing_the_boundary_gives_distinct_hz(self):
-        """ptw=320 (race band, midpoint=6.0) differs clearly from ptw=319
-        (sport band, midpoint=3.75) — no accidental overlap."""
+        """ptw=320 (race band, centre ~3.8) is stiffer than ptw=319
+        (sport band, centre ~3.0) — a Gr.3 rides firmer than a Gr.4, no overlap."""
         v_race  = self._veh_ptw(320)
         v_sport = self._veh_ptw(319)
         sf_race  = derive_spring_frequencies(v_race,  OBJ_BASE)
@@ -814,14 +814,15 @@ class TestBallastIntegration:
     def test_rear_ballast_changes_springs_rear_end_to_end(self):
         """build_baseline_setup_response with rear ballast → springs_rear differs from no-ballast.
 
-        Porsche 911 RSR (991) '17 is RR (frac≈0.38); adding 60 kg at pos=+30
-        (rear) lowers the effective front fraction further, raising rear_hz.
-        With generic (unclamped) ranges the 2dp delta of ~0.02 Hz survives rounding.
+        Porsche 911 RSR (991) '17 is RR (frac≈0.38); adding ballast at the rear lowers
+        the effective front fraction further, raising rear_hz. Uses 120 kg at pos=+50 so
+        the shift is clearly visible at the springs' 1-decimal precision across the
+        (recalibrated, realistic) race spring band.
         """
         sf_no  = self._call("Porsche 911 RSR (991) '17", "rr",
                              ballast_kg=0.0, ballast_position=0.0)
         sf_bal = self._call("Porsche 911 RSR (991) '17", "rr",
-                             ballast_kg=60.0, ballast_position=30.0)
+                             ballast_kg=120.0, ballast_position=50.0)
         rear_no  = sf_no.get("springs_rear")
         rear_bal = sf_bal.get("springs_rear")
         assert rear_no  is not None, "springs_rear absent from no-ballast response"

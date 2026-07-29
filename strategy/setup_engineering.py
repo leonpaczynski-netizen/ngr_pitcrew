@@ -294,8 +294,14 @@ _ELEVATION_SIGNIFICANT_M = 30.0
 # Named band constants (all Hz).  None may come from any external tuning
 # document — each traces to car-class band / physics / discipline / track.
 _SPRING_BAND_ROAD  = (1.5, 3.0)   # Road cars: compliance and ride quality
-_SPRING_BAND_SPORT = (2.5, 5.0)   # Sport/GT4/touring: balanced platform
-_SPRING_BAND_RACE  = (4.0, 8.0)   # Gr.3/Gr.4/Prototype + high power-to-weight
+# Recalibrated 2026-07-29: the old Sport (2.5, 5.0) and Race (4.0, 8.0) bands centred at
+# 3.75 and 6.0 Hz — far stiffer than real GT7 road-course cars (Gr.4 ~3, Gr.3 ~3.5-4; a
+# vetted RSR-at-Monza reference sits at ~3.4). Both bands are lowered so the Sport centre
+# is ~3.0 and the Race centre ~3.7, keeping Race stiffer than Sport (a Gr.3 rides firmer
+# than a Gr.4) while landing realistic numbers. Per-car+track proven-library entries still
+# override springs where present, so this only shapes cars/tracks without a curated setup.
+_SPRING_BAND_SPORT = (2.2, 3.8)   # Sport/GT4/touring: balanced platform (centre ~3.0)
+_SPRING_BAND_RACE  = (2.9, 4.7)   # Gr.3/Gr.4/Prototype + high power-to-weight (centre ~3.8)
 
 # Qualifying squeezes one extra flying lap out of the platform (×10% stiffer).
 _QUALI_STIFFNESS_FACTOR = 1.10

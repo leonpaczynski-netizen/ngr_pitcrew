@@ -129,17 +129,17 @@ class TestA7PerDisciplineBallast:
     needed from the caller.
 
     The Porsche 911 RSR (991) '17 is an RR car (base front-fraction ≈ 0.38).
-    60 kg at ballast_position=+30 (rear) lowers the effective front fraction
+    120 kg at ballast_position=+50 (rear) lowers the effective front fraction
     further from 0.38, widening the rear-heavier split and raising springs_rear.
-    With generic (unclamped, 1–20 Hz) ranges the ~0.04 Hz delta survives
-    1-dp quantisation.
+    The magnitude is chosen so the shift survives 1-dp quantisation across the
+    recalibrated (realistic) race spring band.
     """
 
     def test_race_with_rear_ballast_springs_differ_from_race_without(self):
         """A7 prerequisite: ballast alone changes the race spring output."""
         sf_no_bal  = _advisor_springs(ballast_kg=0.0, session_type="Race Setup")
         sf_with_bal = _advisor_springs(
-            ballast_kg=60.0, ballast_position=30.0, session_type="Race Setup"
+            ballast_kg=120.0, ballast_position=50.0, session_type="Race Setup"
         )
         rear_no  = sf_no_bal.get("springs_rear")
         rear_bal = sf_with_bal.get("springs_rear")

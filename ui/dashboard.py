@@ -8684,6 +8684,17 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         strat["total_laps"]          = self._evt_laps.value()
         strat["race_duration_minutes"] = self._evt_duration.value()
         strat["event_id"] = self._db.get_event_id(evt_name) if self._db is not None else 0
+        # Re-derive the canonical track ids from the (new) track name and write them
+        # UNCONDITIONALLY, so they can never stay frozen at a previous track's ids (the
+        # Track Modelling tab was otherwise their only writer). Keeps track shaping and
+        # personal-history recall pointed at the real track.
+        try:
+            from data.track_intelligence import resolve_ids_for_track_name
+            loc_id, lay_id = resolve_ids_for_track_name(strat["track"])
+            strat["track_location_id"] = loc_id
+            strat["layout_id"] = lay_id
+        except Exception:
+            pass
         return strat
 
 

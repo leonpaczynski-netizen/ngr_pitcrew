@@ -2608,6 +2608,24 @@ class DrivingAdvisor:
                     _seed_overrides = {}
                     _bl_prior = {}
 
+            # Proven-setup library: a vetted COMPLETE setup for this exact car+track+
+            # discipline. When one exists it becomes the from-scratch starting point
+            # (the deterministic equivalent of recalling a known-good setup), taking
+            # precedence over the generic seeds and the personal-history lift. Matched by
+            # display car+track name, so it is robust to the layout_id plumbing. The rule
+            # engine still refines it from telemetry.
+            _proven_seeds: dict = {}
+            _proven_gearbox: dict = {}
+            try:
+                from strategy.proven_setup_library import (
+                    find_proven_setup, split_seed_and_gearbox,
+                )
+                _proven_fields = find_proven_setup(car_name, track_name, session_type)
+                if _proven_fields:
+                    _proven_seeds, _proven_gearbox = split_seed_and_gearbox(_proven_fields)
+            except Exception:
+                _proven_seeds, _proven_gearbox = {}, {}
+
             # Engineering-reasoning layer (audit: docs/AUDIT_setup_brain_engineer_evolution.md).
             # Build a vehicle model from the car specs and reason over vehicle + track +
             # objective + driver into coupled directional intents (gearing to the straight,
