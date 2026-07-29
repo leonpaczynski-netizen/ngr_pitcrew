@@ -65,10 +65,20 @@ class TestShouldUseNewShell:
 
 class TestPopulate:
     def test_build_initial_app_state_from_window(self):
-        s = build_initial_app_state(_FakeWindow(), {})
+        # An explicit active_cycle_id is now required for the header to show an
+        # active event (no-auto-active-on-open feature); without it the gate in
+        # build_initial_app_state suppresses the event context. Provide one here so
+        # this test still exercises the populated path.
+        s = build_initial_app_state(_FakeWindow(), {"active_cycle_id": "cycle-x"})
         assert s.car == "GT-R"
         assert s.has_active_event is True
         assert s.connected is True
+
+    def test_build_initial_app_state_no_active_cycle_suppresses_event(self):
+        # No explicit selection on open -> no active event, even though the window
+        # provides an event context (the stale-strategy regression this feature fixes).
+        s = build_initial_app_state(_FakeWindow(), {})
+        assert s.has_active_event is False
 
     def test_build_initial_app_state_none_window_is_empty(self):
         s = build_initial_app_state(None, {})
@@ -82,7 +92,8 @@ class TestPopulate:
 
 class TestLaunch:
     def test_launch_returns_populated_shell(self, qapp):
-        shell = launch_new_shell(window=_FakeWindow(), config={}, db=_FakeDB())
+        shell = launch_new_shell(window=_FakeWindow(),
+                                 config={"active_cycle_id": "cycle-x"}, db=_FakeDB())
         assert isinstance(shell, PitCrewShell)
         assert shell._controller.state().car == "GT-R"
         assert shell.guidance._primary.text() == "Bind the latest Practice session"
