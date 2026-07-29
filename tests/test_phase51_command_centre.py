@@ -25,9 +25,21 @@ def test_only_completed_is_no_active_event():
     assert r.state == R.NO_ACTIVE_EVENT
 
 
-def test_single_active_resolves_to_it():
+def test_single_plain_active_no_selection_requires_selection():
+    # Rebaseline: single plain-active event no longer auto-activates on open — must be
+    # explicitly selected (requirement).
     r = resolve_active_cycle([_c("a", explicit_state="active", event_name="Cup R3")])
-    assert r.state == R.ONE_ACTIVE_EVENT and r.resolved_cycle_id == "a"
+    assert r.state == R.EVENT_REQUIRES_SELECTION
+    assert r.resolved_cycle_id == ""
+    assert r.selection_required is True
+
+
+def test_single_plain_active_explicit_selection_resolves_one_active():
+    # Rule 1 (explicit selected_cycle_id) wins and returns ONE_ACTIVE_EVENT.
+    r = resolve_active_cycle([_c("a", explicit_state="active", event_name="Cup R3")],
+                             selected_cycle_id="a")
+    assert r.state == R.ONE_ACTIVE_EVENT
+    assert r.resolved_cycle_id == "a"
     assert r.selection_required is False
 
 
