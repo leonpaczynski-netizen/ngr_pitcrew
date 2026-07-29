@@ -621,7 +621,11 @@ class RaceStateTracker:
                 print(f"[StateTracker] PRE_RACE->RACING  race_type={self._race_type.value}"
                       f"  laps_in_race={self._laps_in_race}  speed={p.speed_kmh:.1f}")
                 self._race_is_active = True
-                if self._session_type == SessionType.PRACTICE:
+                # Honour the override-aware property (as RACE_FINISHED already does), not
+                # the raw auto-detected type: GT7 auto-classifies any multi-car lobby as a
+                # RACE, so a driver doing a baseline practice run in a lobby would otherwise
+                # trigger "Race started." The explicit PRACTICE override now wins.
+                if self.session_type == SessionType.PRACTICE:
                     # Practice: allow RACING phase so laps are recorded, but don't
                     # fire RACE_STARTED and mark the first lap as an outlap.
                     self._outlap_pending = True

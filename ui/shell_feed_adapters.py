@@ -44,10 +44,17 @@ def live_pit_wall_vm_from_state(state, *, connected: bool = True, audio_view=Non
         if is_qual:
             return LivePitWallVM(
                 session_mode="qualifying", freshness="live" if connected else "none",
-                engineer_instruction=_QUAL_CUE if connected
+                engineer_instruction=(engineer_override or _QUAL_CUE) if connected
                 else "Qualifying — waiting for the car to go on track.")
-        return LivePitWallVM(freshness="live" if connected else "none",
-                             engineer_instruction="" if connected else "Waiting for live telemetry…")
+        # Practice (or a race that hasn't started): there is no race plan/fuel/pit to
+        # drive the surface, so show the session engineer's feel/pace line
+        # (engineer_override) rather than an empty wall, and carry session_mode through so
+        # the surface frames itself as practice — not a race.
+        return LivePitWallVM(
+            session_mode=str(session_mode or "").lower() or "race",
+            freshness="live" if connected else "none",
+            engineer_instruction=(engineer_override if connected
+                                  else "Waiting for live telemetry…"))
     g = lambda a: getattr(state, a, None)
     in_pit = str(race_phase or "").upper() == "IN PIT"
 
