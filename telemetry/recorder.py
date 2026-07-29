@@ -82,6 +82,9 @@ class LapStats:
     avg_tyre_radius: dict = field(default_factory=dict)  # {"fl":f,"fr":f,"rl":f,"rr":f}
     # B6 — off-track detection (road normal diverges from vertical)
     off_track_count: int = 0
+    # Spin: sustained large yaw rotation (a spin, not a snap of oversteer). A lap with a
+    # spin is not a clean lap — the clean-lap gates reject it.
+    spin_count: int = 0
     # B7 — gearbox engineering analysis (limiter events, straights, corner exits)
     gearbox_analysis: dict = field(default_factory=dict)
     frames: list[TelemetryFrame] = field(default_factory=list, repr=False)
@@ -103,6 +106,9 @@ _TWO_PI = 6.283185307   # 2π — avoids importing math
 
 # Thresholds for per-lap event counters
 _OVERSTEER_YAW_THRESHOLD  = 0.8    # rad/s (~46°/s) — onset of snap rotation
+_SPIN_YAW_THRESHOLD       = 1.5    # rad/s (~86°/s) — sustained = a spin, not a snap
+_SPIN_MIN_FRAMES          = 3      # consecutive high-yaw frames (~0.3 s at ~10 Hz)
+_SPIN_MIN_SPEED_KMH       = 15.0   # ignore near-stationary pirouettes / pit maneuvers
 _KERB_SUSPENSION_THRESHOLD = 0.04  # m (40 mm) — hard kerb / sharp bump compression
 _BOTTOMING_HEIGHT_THRESHOLD = 0.04 # m (40 mm) — chassis very close to ground
 _SNAP_THROTTLE_DELTA       = 0.6   # 0–1 change per ~100 ms frame = aggressive stab
@@ -173,6 +179,20 @@ def _compute_stats(frames: list[TelemetryFrame], lap_num: int,
                 in_oversteer = True
         else:
             in_oversteer = False
+
+    # Spin: a SUSTAINED large yaw rotation is the car actually spinning — distinct from a
+    # snap of oversteer the driver caught (the 0.8 rad/s oversteer counter above). Count one
+    # spin per run of >= _SPIN_MIN_FRAMES consecutive high-yaw frames above a low speed floor.
+    # A lap with a spin is later marked NOT clean (UAT: a spun lap was reported clean).
+    spin_count = 0
+    _spin_run = 0
+    for f in frames:
+        if abs(f.angvel_z) >= _SPIN_YAW_THRESHOLD and f.speed_kmh > _SPIN_MIN_SPEED_KMH:
+            _spin_run += 1
+            if _spin_run == _SPIN_MIN_FRAMES:   # count once when the run first qualifies
+                spin_count += 1
+        else:
+            _spin_run = 0
 
     # Kerb / hard bump: any wheel suspension travel exceeds threshold
     kerb_count = 0
@@ -346,6 +366,7 @@ def _compute_stats(frames: list[TelemetryFrame], lap_num: int,
         avg_tyre_radius=avg_tyre_radius,
         off_track_count=off_track_count,
         gearbox_analysis=gearbox_analysis,
+        spin_count=spin_count,
         frames=frames,
         tyre_temp_fl_avg=tyre_temp_fl_avg,
         tyre_temp_fr_avg=tyre_temp_fr_avg,

@@ -187,10 +187,14 @@ def _build_run_review(lap_rows: Sequence[Mapping]) -> RunReview:
     for r in ordered:
         t = _i(r.get("lap_time_ms"))
         pit_or_out = _in_or_out(r)
-        slow = (not pit_or_out) and t > reference * CLEAN_LAP_TOLERANCE
+        # A lap with a spin is not a clean lap — it must not feed best/average/consistency
+        # (UAT: 'it didn't recognise when I had a spin and still told me I had a clean lap').
+        spun = _i(r.get("spin_count")) > 0
+        slow = (not pit_or_out) and (not spun) and t > reference * CLEAN_LAP_TOLERANCE
         reason = ("in/out lap" if pit_or_out
-                  else ("off the pace" if slow else ""))
-        clean = not (pit_or_out or slow)
+                  else "spin" if spun
+                  else "off the pace" if slow else "")
+        clean = not (pit_or_out or spun or slow)
         if clean:
             clean_times.append(t)
         classified.append((r, t, clean, reason))

@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS lap_records (
     rev_limiter_count       INTEGER NOT NULL DEFAULT 0,
     max_lat_g               REAL    NOT NULL DEFAULT 0.0,
     off_track_count         INTEGER NOT NULL DEFAULT 0,
+    spin_count              INTEGER NOT NULL DEFAULT 0,
     tyre_temp_avg           REAL    NOT NULL DEFAULT 0.0,
     is_out_lap              INTEGER NOT NULL DEFAULT 0,
     is_pit_lap              INTEGER NOT NULL DEFAULT 0,
@@ -1338,6 +1339,75 @@ class SessionDB:
             self._migrate_v29()
             self._conn.execute("PRAGMA user_version = 29")
             self._conn.commit()
+        if version < 30:
+            self._migrate_v30()
+            self._conn.execute("PRAGMA user_version = 30")
+            self._conn.commit()
+        if version < 31:
+            self._migrate_v31()
+            self._conn.execute("PRAGMA user_version = 31")
+            self._conn.commit()
+
+    def _migrate_v31(self) -> None:
+        """Add lap_records.spin_count (schema v31). A sustained large yaw rotation (a spin,
+        not a snap of oversteer) is now recorded per lap so the clean-lap gates can reject a
+        spun lap (UAT: a lap with a spin was still reported clean). Additive, DEFAULT 0 —
+        existing rows read as 'no spin recorded'. Duplicate-column guard ⇒ idempotent."""
+        try:
+            self._conn.execute(
+                "ALTER TABLE lap_records ADD COLUMN spin_count INTEGER NOT NULL DEFAULT 0")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+    def _migrate_v30(self) -> None:
+        """Lap-record integrity (schema v30). UAT surfaced two corruptions that make
+        the same run report different lap counts on different screens:
+          (1) DUPLICATE (session_id, lap_num) rows — a double-fired LAP_COMPLETED, or a
+              GT7 stint restart re-inserting lap 1.. into the still-open DB session, wrote
+              the same lap number twice; the Practice Review then rendered a repeated
+              "lap 6" row verbatim.
+          (2) total_laps DRIFT — the counter was bumped once per raw write (including the
+              duplicates), so the pit wall (which reads total_laps) over-counted versus the
+              Review (which counts distinct valid laps).
+        This migration collapses duplicate lap rows keeping the most-recent id, prunes the
+        now-orphaned lap_telemetry blobs, adds a UNIQUE index on (session_id, lap_num) so
+        write_lap can upsert going forward, and recomputes total_laps from the deduped row
+        count for ONLY the sessions it actually touched. Corrective and idempotent (a second
+        run finds no duplicates and the index already present)."""
+        try:
+            dup_sessions = {
+                int(r[0]) for r in self._conn.execute(
+                    "SELECT session_id FROM lap_records "
+                    "GROUP BY session_id, lap_num HAVING COUNT(*) > 1"
+                ).fetchall()
+            }
+            if dup_sessions:
+                # Keep the most-recent row per (session_id, lap_num); drop the rest.
+                self._conn.execute(
+                    "DELETE FROM lap_records WHERE id NOT IN "
+                    "(SELECT MAX(id) FROM lap_records GROUP BY session_id, lap_num)"
+                )
+                try:
+                    self._conn.execute(
+                        "DELETE FROM lap_telemetry WHERE lap_record_id NOT IN "
+                        "(SELECT id FROM lap_records)"
+                    )
+                except Exception:
+                    pass  # lap_telemetry may not exist on very old DBs
+                for sid in dup_sessions:
+                    self._conn.execute(
+                        "UPDATE sessions SET total_laps = "
+                        "(SELECT COUNT(*) FROM lap_records WHERE session_id = ?) "
+                        "WHERE id = ?",
+                        (sid, sid),
+                    )
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_lap_records_session_lapnum "
+                "ON lap_records(session_id, lap_num)"
+            )
+        except Exception:
+            pass  # corrective migration is best-effort — never block startup
 
     def _migrate_v29(self) -> None:
         """Backfill the stable event_id link so evidence matches by id, not text.
@@ -7997,6 +8067,24 @@ class SessionDB:
                 "over_braking":  (getattr(stats, "over_braking_positions", []) if stats else []),
             })
 
+            # Upsert semantics on (session_id, lap_num): a re-fired LAP_COMPLETED for a
+            # lap already written (double-fire) must REPLACE the row, not duplicate it —
+            # the UNIQUE index (schema v30) also forbids a second insert. Drop any prior
+            # row (and its telemetry blob) for this lap first; last write wins. A genuine
+            # new stint (GT7 lap counter restarting) is handled upstream by rolling to a
+            # fresh session, so this only ever collapses a true re-fire of the same lap.
+            try:
+                self._conn.execute(
+                    "DELETE FROM lap_telemetry WHERE session_id = ? AND lap_num = ?",
+                    (session_id, lap_num),
+                )
+            except Exception:
+                pass
+            self._conn.execute(
+                "DELETE FROM lap_records WHERE session_id = ? AND lap_num = ?",
+                (session_id, lap_num),
+            )
+
             cur = self._conn.execute(
                 """INSERT INTO lap_records
                    (session_id, car_id, track, lap_num, lap_time_ms, fuel_used,
@@ -8006,13 +8094,13 @@ class SessionDB:
                     oversteer_count, oversteer_throttle_on,
                     kerb_count, bottoming_count, snap_throttle_count,
                     over_braking_count, abrupt_release_count, rev_limiter_count,
-                    max_lat_g, off_track_count, tyre_temp_avg,
+                    max_lat_g, off_track_count, spin_count, tyre_temp_avg,
                     is_out_lap, is_pit_lap, delta_ms, position,
                     session_type, event_positions_json,
                     fuel_start, fuel_end,
                     tyre_temp_fl_avg, tyre_temp_fr_avg,
                     tyre_temp_rl_avg, tyre_temp_rr_avg)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     session_id, car_id, track, lap_num, lap_time_ms,
                     round(float(fuel_used), 4),
@@ -8034,6 +8122,7 @@ class SessionDB:
                     getattr(stats, "rev_limiter_count", 0),
                     round(float(getattr(stats, "max_lat_g", 0.0)), 3),
                     getattr(stats, "off_track_count", 0),
+                    getattr(stats, "spin_count", 0),
                     round(float(getattr(stats, "tyre_temp_avg", 0.0)), 1),
                     1 if is_out_lap else 0,
                     1 if is_pit_lap else 0,
@@ -8051,9 +8140,13 @@ class SessionDB:
             )
             lap_record_id = cur.lastrowid or 0
 
+            # Keep total_laps equal to the actual number of lap rows rather than an
+            # increment counter (which drifted when a lap was written twice). Derived
+            # from COUNT(*), so it is self-healing and duplicate-proof.
             self._conn.execute(
-                "UPDATE sessions SET total_laps = total_laps + 1 WHERE id = ?",
-                (session_id,),
+                "UPDATE sessions SET total_laps = "
+                "(SELECT COUNT(*) FROM lap_records WHERE session_id = ?) WHERE id = ?",
+                (session_id, session_id),
             )
 
             # Persist compressed frame blob if provided
@@ -8241,6 +8334,27 @@ class SessionDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_latest_session_for_event(self, event_id: int) -> int:
+        """Most-recent telemetry session id for an event that actually has laps, or 0.
+
+        Lets the Review/Debrief surface a recorded run for the active event even when the
+        run was never bound to a preparation cycle (UAT: 'still no laps persisting after a
+        practice session' — the laps were written but, unbound, no screen read them).
+        Strictly event-scoped, so it never surfaces another event's session; returns 0 on
+        miss and never raises."""
+        if not event_id:
+            return 0
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT id FROM sessions WHERE event_id = ? AND total_laps > 0 "
+                    "ORDER BY date_utc DESC, id DESC LIMIT 1",
+                    (int(event_id),),
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def get_session_laps(
         self,
         session_id: int,
@@ -8273,7 +8387,7 @@ class SessionDB:
                 f"SELECT lap_num, lap_time_ms, compound, fuel_used,"
                 f" is_pit_lap, is_out_lap, fuel_start, fuel_end,"
                 f" lock_up_count, wheelspin_count, oversteer_count,"
-                f" oversteer_throttle_on, kerb_count, max_lat_g,"
+                f" oversteer_throttle_on, kerb_count, max_lat_g, spin_count,"
                 f" tyre_temp_fl_avg, tyre_temp_fr_avg,"
                 f" tyre_temp_rl_avg, tyre_temp_rr_avg,"
                 f" snap_throttle_count, brake_consistency_m,"
@@ -8348,6 +8462,25 @@ class SessionDB:
             return dict(row) if row is not None else None
         except Exception:
             return None
+
+    def count_valid_laps(self, session_id: int) -> int:
+        """Number of distinct completed (timed) laps for a session — the SAME
+        population the Practice Review counts, so the live pit-wall counter and the
+        Review can never disagree (UAT: pit wall showed 18 while Review showed 9).
+        Excludes zero/negative-time rows (out-laps written metadata-only, aborted
+        laps). Returns 0 on miss; never raises."""
+        if not session_id:
+            return 0
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM lap_records "
+                    "WHERE session_id = ? AND lap_time_ms > 0",
+                    (session_id,),
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
 
     def get_recent_fuel_sequence(self, car_id: int, track: str, limit: int = 15) -> list:
         """Return per-lap fuel consumption values (L/lap) for this car+track.

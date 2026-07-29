@@ -102,6 +102,79 @@ def test_get_session_laps(db):
 
 
 # ---------------------------------------------------------------------------
+# Lap-record integrity (schema v30) — UAT: duplicated "lap 6", pit wall 18 vs
+# Review 9. A re-fired LAP_COMPLETED must upsert, total_laps must not drift, and
+# the pit-wall count must match the Review's valid-lap population.
+# ---------------------------------------------------------------------------
+
+def test_write_lap_upsert_replaces_refired_lap(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    db.write_lap(sid, 1, 92_000, 2.0, None)
+    db.write_lap(sid, 2, 91_500, 2.0, None)
+    # A double-fired LAP_COMPLETED for lap 2 (with a corrected time) must REPLACE
+    # the existing row, not create a second "lap 2".
+    db.write_lap(sid, 2, 91_800, 2.1, None)
+
+    laps = db.get_session_laps(sid)
+    assert [l["lap_num"] for l in laps] == [1, 2]              # no duplicate lap 2
+    times = {l["lap_num"]: l["lap_time_ms"] for l in laps}
+    assert times[2] == 91_800                                 # last write wins
+    assert db.get_session_meta(sid)["total_laps"] == 2        # no drift from the re-fire
+    assert db.count_valid_laps(sid) == 2
+
+
+def test_count_valid_laps_matches_review_population(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    db.write_lap(sid, 1, 0, 0.0, None, is_out_lap=True)       # out-lap: no time
+    db.write_lap(sid, 2, 91_500, 2.0, None)
+    db.write_lap(sid, 3, 91_200, 2.0, None)
+
+    # Pit-wall counter uses count_valid_laps; it must equal the Review's timed-lap
+    # count, NOT the raw total_laps (which also counts the out-lap row).
+    assert db.count_valid_laps(sid) == len(db.get_session_laps(sid)) == 2
+    assert db.get_session_meta(sid)["total_laps"] == 3
+
+
+def test_migrate_v30_dedupes_existing_duplicates(db):
+    sid = db.open_session(car_id=1, track="Fuji", session_type="Practice")
+    # Reproduce the legacy corruption: without the unique index, inject a duplicate
+    # lap_num and a drifted total_laps, then re-run the (idempotent) migration.
+    with db._lock:
+        db._conn.execute("DROP INDEX IF EXISTS idx_lap_records_session_lapnum")
+    _insert_lap_direct(db, sid, 1, 92_000)
+    _insert_lap_direct(db, sid, 1, 92_500)                   # duplicate lap 1
+    _insert_lap_direct(db, sid, 2, 91_800)
+    with db._lock:
+        db._conn.execute("UPDATE sessions SET total_laps = 3 WHERE id = ?", (sid,))
+        db._conn.commit()
+
+    db._migrate_v30()
+
+    laps = db.get_session_laps(sid)
+    assert [l["lap_num"] for l in laps] == [1, 2]            # duplicate collapsed
+    times = {l["lap_num"]: l["lap_time_ms"] for l in laps}
+    assert times[1] == 92_500                               # kept the most-recent row
+    assert db.get_session_meta(sid)["total_laps"] == 2      # total_laps drift repaired
+
+
+def test_get_latest_session_for_event_is_scoped(db):
+    # Newest session WITH laps for event 5 must be returned — never event 9's session,
+    # and never an opened-but-empty session (UAT: laps must persist, scoped to the event).
+    s_old = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=5)
+    db.write_lap(s_old, 1, 92_000, 2.0, None)
+    s_other = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=9)
+    db.write_lap(s_other, 1, 91_000, 2.0, None)
+    s_new = db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=5)
+    db.write_lap(s_new, 1, 90_500, 2.0, None)
+    db.open_session(car_id=1, track="Monza", session_type="Practice", event_id=7)  # empty
+
+    assert db.get_latest_session_for_event(5) == s_new
+    assert db.get_latest_session_for_event(9) == s_other
+    assert db.get_latest_session_for_event(7) == 0     # opened but no laps → not reviewable
+    assert db.get_latest_session_for_event(0) == 0
+
+
+# ---------------------------------------------------------------------------
 # write_feedback
 # ---------------------------------------------------------------------------
 
@@ -166,10 +239,13 @@ def test_schema_version_is_v10(db):
     # additive engineering_development_records table).
     # Reconciled for the event_id evidence re-key: 28 → 29 (_migrate_v29 backfills the
     # stable event_id link onto cycles and their bound sessions).
+    # Reconciled for lap-record integrity: 29 → 30 (_migrate_v30 dedupes duplicate
+    # (session_id, lap_num) rows, adds the unique index, and repairs total_laps drift).
+    # Reconciled for spin detection: 30 → 31 (_migrate_v31 adds lap_records.spin_count).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 29
+    assert version == DB_VERSION == 31
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

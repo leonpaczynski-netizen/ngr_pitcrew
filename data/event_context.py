@@ -105,8 +105,20 @@ def _as_str_tuple(v) -> Tuple[str, ...]:
     if isinstance(v, (list, tuple)):
         return tuple(_as_str(x) for x in v if _as_str(x))
     if isinstance(v, str):
+        s = v.strip()
+        # A JSON-array string (e.g. '["RH","RM","RS"]', how event rows store the
+        # avail/req tyre lists) must be decoded as JSON — NOT split on commas, which
+        # left the elements as '["RH"', '"RM"' and corrupted the Garage tyre dropdown.
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                import json
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return tuple(_as_str(x) for x in parsed if _as_str(x))
+            except Exception:
+                pass
         # Comma-separated fallback (e.g. mandatory_compounds strings).
-        return tuple(p.strip() for p in v.split(",") if p.strip())
+        return tuple(p.strip() for p in s.split(",") if p.strip())
     return ()
 
 

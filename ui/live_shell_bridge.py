@@ -563,11 +563,25 @@ class LiveShellBridge(QObject):
             pass
 
     def _review_session_id(self):
-        """The session the Review tab is about: the live one, else the last recorded."""
+        """The session the Review tab is about: the live one, else the last recorded run,
+        else the most-recent recorded session for the active event.
+
+        The final fallback keeps a practice run's laps reviewable even when the run was
+        never bound to a preparation cycle (UAT: 'no laps persisting after a practice
+        session'). It is event-scoped, so it never surfaces another event's session."""
         sid = self._live_session_id()
         if sid:
             return sid
         last, _prev = self._recorded_pair()
+        if last:
+            return last
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            eid = int(getattr(ev, "event_id", 0) or 0)
+            if eid and self._db is not None and hasattr(self._db, "get_latest_session_for_event"):
+                return int(self._db.get_latest_session_for_event(eid) or 0) or last
+        except Exception:
+            pass
         return last
 
     def _recorded_runs(self) -> list:
@@ -681,9 +695,11 @@ class LiveShellBridge(QObject):
             return 0
 
     def _live_lap_count(self) -> int:
+        # Count distinct completed (timed) laps — the SAME measure the Practice
+        # Review uses — rather than the raw total_laps counter (which also counts
+        # out-/pit-/invalid rows), so the pit wall and Review can't disagree.
         try:
-            meta = self._db.get_session_meta(self._live_session_id()) if self._db else None
-            return int((meta or {}).get("total_laps") or 0)
+            return int(self._db.count_valid_laps(self._live_session_id())) if self._db else 0
         except Exception:
             return 0
 
@@ -1422,6 +1438,55 @@ class LiveShellBridge(QObject):
             f"That is the run this area of the programme needs.")
         self.refresh()
 
+    def _debrief_session_id(self) -> int:
+        """The session the Debrief is about — STRICTLY the active event's last session.
+
+        UAT: the Debrief showed an OLD event, not the active one. It resolved from a
+        process-lifetime in-memory id (_last_recorded_session_id) that survives an event
+        switch, and never checked the session actually belonged to the active event.
+
+        Resolve only from runs bound to the active preparation cycle, plus the live/just-
+        finished session, and verify each candidate's event_id matches the active event
+        before returning it. Returns 0 when the active event has no session of its own
+        (so the Debrief shows its empty placeholder instead of a stale event)."""
+        db = self._db
+        active_eid = 0
+        try:
+            ev = self._window._build_event_context() if self._window else None
+            active_eid = int(getattr(ev, "event_id", 0) or 0)
+        except Exception:
+            active_eid = 0
+
+        def _belongs(sid: int) -> bool:
+            if not sid:
+                return False
+            if active_eid <= 0:
+                return True   # no active-event identity to check against — accept
+            try:
+                meta = db.get_session_meta(sid) if hasattr(db, "get_session_meta") else None
+                return int((meta or {}).get("event_id") or 0) == active_eid
+            except Exception:
+                return False
+
+        # 1. Runs bound to the active preparation cycle (survives a restart), newest first.
+        ids = [int(r.get("session_id") or 0) for r in self._recorded_runs()
+               if int(r.get("session_id") or 0) > 0]
+        for sid in reversed(ids):
+            if _belongs(sid):
+                return sid
+        # 2. The live / just-finished session — only if it is THIS event's.
+        live = int(self._live_session_id() or 0)
+        if live and _belongs(live):
+            return live
+        # 3. The most-recent recorded session for THIS event, even if it was never bound
+        #    to a preparation cycle — so a practice run's laps stay reviewable (persist)
+        #    rather than vanishing when the live session id is gone.
+        if active_eid > 0 and hasattr(db, "get_latest_session_for_event"):
+            sid = int(db.get_latest_session_for_event(active_eid) or 0)
+            if sid:
+                return sid
+        return 0
+
     def _feed_debrief(self) -> None:
         try:
             dp = getattr(self._shell, "debrief_page", None)
@@ -1433,8 +1498,7 @@ class LiveShellBridge(QObject):
             # a debrief. (The old cross-session development scorecard only populates from
             # the setup-experiment loop, which the race flow never drives, so it was
             # always empty here.)
-            last, _prev = self._recorded_pair()
-            sid = int(last or self._live_session_id() or 0)
+            sid = self._debrief_session_id()
             if sid and hasattr(db, "get_session_laps"):
                 review = self._review_for(sid)
                 meta, laps = {}, []
@@ -2311,12 +2375,35 @@ class LiveShellBridge(QObject):
             mode = getattr(self._window, "_live_mode_ref", None)
             if isinstance(mode, list) and mode:
                 mode[0] = mode_str
-            # Keep the announcer's session mode in step so its qualifying push-lap
-            # coaching fires in qualifying and its race pit/fuel calls fire in a race.
+            is_race = (mode_str == "Race")
+            # Declare the session type to the WHOLE runtime, mirroring the classic UI
+            # (ui/live_ui.py). The new shell only ever wrote the shift-beep refs above, so
+            # it left the telemetry tracker on auto-detect — and GT7 auto-classifies any
+            # multi-car lobby as a RACE. A baseline practice run then fired "Race started."
+            # and framed the pit wall as a live race. Forcing the override keeps a plain
+            # practice run a PRACTICE session end-to-end.
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is not None and hasattr(tracker, "set_session_type_override"):
+                try:
+                    from telemetry.state import SessionType
+                    tracker.set_session_type_override(
+                        SessionType.QUALIFYING if is_qual
+                        else SessionType.RACE if is_race
+                        else SessionType.PRACTICE)
+                except Exception:
+                    pass
+            # Suppress strategy pit/fuel alerts unless it is an actual race/qualifying.
+            engine = getattr(self._window, "_strategy_engine", None)
+            if engine is not None:
+                if hasattr(engine, "set_race_active"):
+                    engine.set_race_active(is_race)
+                if hasattr(engine, "set_qualifying_active"):
+                    engine.set_qualifying_active(is_qual and not is_race)
+            # Keep the announcer's session mode in step — practice / qualifying / race,
+            # NOT always "race" (which let a plain practice run speak race calls).
             announcer = getattr(self._window, "_announcer", None)
             if announcer is not None and hasattr(announcer, "set_session_mode"):
-                announcer.set_session_mode(
-                    "qualifying" if self._live_session_mode == "qualifying" else "race")
+                announcer.set_session_mode(mode_str.lower())
         except Exception:
             pass
         self._push_active_compound(discipline)
@@ -2384,10 +2471,15 @@ class LiveShellBridge(QObject):
             if hasattr(garage, "set_track_wet"):
                 from strategy.tyre_selection import is_wet_weather, is_fixed_weather
                 weather = str(getattr(ev, "weather", "") or "")
-                cid = self._runs.active_cycle_id() if self._runs else None
-                if cid != self._wet_cycle_id:
-                    self._wet_cycle_id = cid
-                    self._track_wet = None            # event changed → drop stale override
+                # Reset the driver's manual wet override when the EVENT changes — keyed on
+                # the event's own identity, NOT the coarse active_cycle_id (which is empty
+                # for an unassigned cycle and shared across events, so a 'wet' tick bled
+                # onto the next Random event — UAT: 'in garage track is wet but event is
+                # random').
+                key = str(getattr(ev, "event_id", "") or getattr(ev, "event_name", "") or "")
+                if key != self._wet_cycle_id:
+                    self._wet_cycle_id = key
+                    self._track_wet = None            # different event → drop stale override
                 fixed = is_fixed_weather(weather)
                 if fixed:
                     self._track_wet = None            # event decides; ignore any override
@@ -2558,6 +2650,20 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _track_modelling_active(self) -> bool:
+        """True while a track-model capture (or pit-lane mapping) is running. The live
+        race/practice engineer voice must stay silent then, so the track-modelling
+        callout ('box to map the pit lane') is the only thing spoken — otherwise the
+        generic practice line spoke over it (UAT: during track modelling the engineer
+        used practice 'clean laps' language and never told me to box for the pit lane)."""
+        try:
+            if getattr(self, "_pit_lane_mode", False):
+                return True
+            sess = getattr(getattr(self, "_tracks", None), "session", None)
+            return bool(getattr(sess, "capturing", False))
+        except Exception:
+            return False
+
     def _feed_live(self) -> None:
         """Feed the Live Pit Wall from the canonical live race state. Never raises.
 
@@ -2570,55 +2676,64 @@ class LiveShellBridge(QObject):
             if lp is None:
                 return
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
+            from strategy.live_engineer_session import (
+                normalise_session_mode, session_engineer_call)
             connected = self._connected()
+            # The session type gates EVERYTHING that follows. Only an ACTUAL RACE gets the
+            # race strategy state, the adaptive pit decision, the pit plan and the "race"
+            # framing. A baseline practice or a qualifying run must never look like a live
+            # race (UAT: "it told me race started when doing a baseline practice session")
+            # — the tracker auto-classifies any multi-car lobby as a race, so gating on the
+            # normalised session mode (which honours the explicit practice/qual state) is
+            # what keeps a practice run out of the race surface.
+            _sess = normalise_session_mode(self._live_session_mode, self._live_race_phase)
+            _is_race = (_sess == "race")
             state = None
             audio_view = None
-            try:
-                tracker = getattr(self._window, "_tracker", None)
-                if tracker is not None and getattr(tracker, "race_type", None) is not None:
-                    from strategy.canonical_live_race_state import build_canonical_live_race_state
-                    canon = build_canonical_live_race_state(
-                        tracker,
-                        elapsed_s=getattr(self._window, "_live_race_elapsed_s", None),
-                        telemetry_fresh=connected,
-                        fuel_per_lap_plan=getattr(self._window, "_live_fuel_plan", None),
-                        lap_time_plan_s=getattr(self._window, "_live_pace_plan_s", None),
-                        recent_fuel_burn_samples=getattr(self._window, "_live_fuel_samples", None),
-                        recent_clean_lap_times_s=getattr(self._window, "_live_clean_lap_times", None),
-                        pit_loss_s=getattr(self._window, "_live_pit_loss_s", None),
-                        driver_reports=getattr(self._window, "_live_driver_reports", None))
-                    state = canon.to_live_strategy_state()
-            except Exception:
-                state = None
-            # Build the audio-first + adaptive-strategy view ONCE PER LAP, not on every
-            # 750ms display tick: the driver's model is "at the end of every lap, are we
-            # still optimal?", and recomputing every tick made the replan warning flicker
-            # as live figures wobbled AND re-ran the strategy view twice on a lap-signal +
-            # timer double-fire. The lap gate reuses the cached decision between laps; KPI
-            # (fuel/tyre/lap) still refresh every tick from the fresh state.
-            if state is not None:
-                cur_lap = getattr(state, "current_lap", None)
-                stale = (self._live_audio_view is None
-                         or cur_lap != self._live_decision_lap
-                         or not getattr(state, "telemetry_fresh", True))
-                if stale:
-                    try:
-                        from strategy.live_audio_strategy_build import build_live_audio_strategy_view
-                        self._live_audio_view = build_live_audio_strategy_view(state)
-                        decision = (self._live_audio_view or {}).get("strategy_decision") or {}
-                        self._live_decision = decision
-                        rec = str(decision.get("recommendation") or "")
-                        self._live_pending = rec in ("REPLAN_RECOMMENDED", "REPLAN_URGENT")
-                        self._live_decision_lap = cur_lap
-                    except Exception:
-                        self._live_audio_view = None
-                audio_view = self._live_audio_view
+            if _is_race:
+                try:
+                    tracker = getattr(self._window, "_tracker", None)
+                    if tracker is not None and getattr(tracker, "race_type", None) is not None:
+                        from strategy.canonical_live_race_state import build_canonical_live_race_state
+                        canon = build_canonical_live_race_state(
+                            tracker,
+                            elapsed_s=getattr(self._window, "_live_race_elapsed_s", None),
+                            telemetry_fresh=connected,
+                            fuel_per_lap_plan=getattr(self._window, "_live_fuel_plan", None),
+                            lap_time_plan_s=getattr(self._window, "_live_pace_plan_s", None),
+                            recent_fuel_burn_samples=getattr(self._window, "_live_fuel_samples", None),
+                            recent_clean_lap_times_s=getattr(self._window, "_live_clean_lap_times", None),
+                            pit_loss_s=getattr(self._window, "_live_pit_loss_s", None),
+                            driver_reports=getattr(self._window, "_live_driver_reports", None))
+                        state = canon.to_live_strategy_state()
+                except Exception:
+                    state = None
+                # Build the audio-first + adaptive-strategy view ONCE PER LAP, not on every
+                # 750ms display tick: the driver's model is "at the end of every lap, are we
+                # still optimal?", and recomputing every tick made the replan warning flicker
+                # as live figures wobbled AND re-ran the strategy view twice on a lap-signal +
+                # timer double-fire. The lap gate reuses the cached decision between laps; KPI
+                # (fuel/tyre/lap) still refresh every tick from the fresh state.
+                if state is not None:
+                    cur_lap = getattr(state, "current_lap", None)
+                    stale = (self._live_audio_view is None
+                             or cur_lap != self._live_decision_lap
+                             or not getattr(state, "telemetry_fresh", True))
+                    if stale:
+                        try:
+                            from strategy.live_audio_strategy_build import build_live_audio_strategy_view
+                            self._live_audio_view = build_live_audio_strategy_view(state)
+                            decision = (self._live_audio_view or {}).get("strategy_decision") or {}
+                            self._live_decision = decision
+                            rec = str(decision.get("recommendation") or "")
+                            self._live_pending = rec in ("REPLAN_RECOMMENDED", "REPLAN_URGENT")
+                            self._live_decision_lap = cur_lap
+                        except Exception:
+                            self._live_audio_view = None
+                    audio_view = self._live_audio_view
             # Session-type-aware engineer: in practice/qualifying the engineer talks
             # feel and one-lap pace, not race strategy — like a real engineer adjusting
             # to the session. Race defers to the strategy engine (override "").
-            from strategy.live_engineer_session import (
-                normalise_session_mode, session_engineer_call)
-            _sess = normalise_session_mode(self._live_session_mode, self._live_race_phase)
             _last_s, _best_s = self._live_last_best_lap_s()
             _eng_call = session_engineer_call(
                 _sess, connected=connected, lap_count=self._live_lap_count(),
@@ -2626,19 +2741,19 @@ class LiveShellBridge(QObject):
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
                 race_phase=self._live_race_phase,
-                session_mode=("qualifying" if _sess == "qualifying" else "race"),
+                session_mode=_sess,
                 engineer_override=_eng_call))
             # Speak it once per new lap (not every 750ms tick) so the engineer's voice
-            # tracks the session without chattering.
-            self._maybe_speak_engineer(_eng_call)
-            # Show the approved/accepted plan — the wall looked empty because nothing
-            # about the strategy was ever fed here. When nothing was formally approved,
-            # fall back to the current recommendation so the wall always shows A plan
-            # rather than looking like the strategy was never built.
+            # tracks the session without chattering — but stay silent during a track-model
+            # capture so the track-modelling callout is the only voice the driver hears.
+            if not self._track_modelling_active():
+                self._maybe_speak_engineer(_eng_call)
+            # Only an actual race shows a pit plan. In practice/qualifying, pass an empty
+            # dict so no race-plan card lingers on the wall.
             if hasattr(lp, "show_plan"):
-                lp.show_plan(self._live_accepted_plan
-                             or self._approved_strategy()
-                             or self._recommended_plan_dict())
+                lp.show_plan((self._live_accepted_plan
+                              or self._approved_strategy()
+                              or self._recommended_plan_dict()) if _is_race else {})
             # Defensive: if the singleton RaceStrategyEngine has no stints yet (e.g.
             # the app restarted after a plan was approved last session), push the
             # approved plan now so PTT "when do I pit" answers correctly.

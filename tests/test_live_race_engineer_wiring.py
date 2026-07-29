@@ -29,6 +29,8 @@ Covers the changes from the live-race-engineer activation brief:
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
@@ -185,8 +187,14 @@ def _cfg():
 
 
 def _make_bridge(qapp, tracker=None, signal_bridge=None, query_listener=None,
-                 live_page=None, connected=True):
-    """Build a wired LiveShellBridge with inline spawn and duck-typed fakes."""
+                 live_page=None, connected=True, session_mode="race"):
+    """Build a wired LiveShellBridge with inline spawn and duck-typed fakes.
+
+    These are live-RACE-engineer tests, so the bridge is put in the race session by
+    default. Under the session-type gate a tracker.race_type alone no longer implies a
+    race (a baseline practice run also carries a race_type), so the race surface only
+    builds when the session is explicitly a race — which production sets via Start Race.
+    """
     from ui.pit_crew_controller import PitCrewController
     from ui.pit_crew_shell import PitCrewShell
     from ui.live_shell_bridge import LiveShellBridge
@@ -203,6 +211,7 @@ def _make_bridge(qapp, tracker=None, signal_bridge=None, query_listener=None,
     db = _FakeDB()
     bridge = LiveShellBridge(shell, ctrl, window=win, config=_cfg(), db=db,
                              spawn=lambda fn: fn())
+    bridge._live_session_mode = session_mode
     return bridge, shell, win, db
 
 
@@ -366,6 +375,86 @@ class TestFeedLiveWithDivergence:
 
         vm = lp.last_vm
         assert vm is not None
+
+
+class TestTrackModellingSilencesLiveEngineer:
+    """UAT: during track modelling the engineer spoke the practice 'clean laps' line and
+    never said to box for the pit lane — _feed_live spoke unconditionally over the
+    track-modelling callout. While a capture is active the live engineer must stay silent."""
+
+    def test_live_engineer_muted_during_pit_lane_mapping(self, qapp):
+        lp = _FakeLivePage()
+        bridge, _shell, _win, _db = _make_bridge(qapp, live_page=lp, connected=True,
+                                                 session_mode="practice")
+        spoken = []
+        bridge._maybe_speak_engineer = lambda call: spoken.append(call)
+        bridge._pit_lane_mode = True         # mapping the pit lane == modelling active
+
+        bridge._feed_live()
+
+        assert spoken == []                  # muted so the track-model callout owns the voice
+
+    def test_live_engineer_speaks_when_not_modelling(self, qapp):
+        lp = _FakeLivePage()
+        bridge, _shell, _win, _db = _make_bridge(qapp, live_page=lp, connected=True,
+                                                 session_mode="practice")
+        spoken = []
+        bridge._maybe_speak_engineer = lambda call: spoken.append(call)
+        bridge._pit_lane_mode = False        # idle track service, plain practice
+
+        bridge._feed_live()
+
+        assert len(spoken) == 1              # normal practice → the engineer speaks
+
+
+class TestDebriefScopedToActiveEvent:
+    """UAT: the Debrief showed an OLD event, not the active one. It must resolve strictly
+    to the active event's session and never a stale cross-event id, and fall back to the
+    active event's most-recent recorded session so unbound practice laps still persist."""
+
+    def test_debrief_rejects_a_run_from_another_event(self, qapp):
+        bridge, _shell, win, _db = _make_bridge(qapp)
+        win._build_event_context = lambda: types.SimpleNamespace(event_id=5, track="Monza", car="x")
+        bridge._recorded_runs = lambda: [{"session_id": 42}]   # bound run, but event 9
+        bridge._live_session_id = lambda: 0
+        bridge._db.get_session_meta = lambda sid: {"event_id": 9}
+        bridge._db.get_latest_session_for_event = lambda eid: 0
+
+        assert bridge._debrief_session_id() == 0                # not the other event's run
+
+    def test_debrief_falls_back_to_event_scoped_unbound_session(self, qapp):
+        bridge, _shell, win, _db = _make_bridge(qapp)
+        win._build_event_context = lambda: types.SimpleNamespace(event_id=5, track="Monza", car="x")
+        bridge._recorded_runs = lambda: []                     # nothing bound to the cycle
+        bridge._live_session_id = lambda: 0
+        bridge._db.get_session_meta = lambda sid: {"event_id": 5}
+        bridge._db.get_latest_session_for_event = lambda eid: 77 if eid == 5 else 0
+
+        assert bridge._debrief_session_id() == 77              # persisted, event-scoped
+
+
+class TestPracticeDoesNotLookLikeARace:
+    """UAT: 'it told me race started when doing a baseline practice session'. Even though
+    the tracker carries a race_type (GT7 auto-classifies a multi-car lobby as a race), a
+    PRACTICE session must not build the race strategy surface or show a pit plan."""
+
+    def test_practice_feed_live_shows_no_plan_and_frames_as_practice(self, qapp):
+        tracker = _FakeTracker(race_type="lap", laps_in_race=25, laps_recorded=5,
+                               best_lap_ms=96000)
+        lp = _FakeLivePage()
+        bridge, _shell, win, _db = _make_bridge(qapp, tracker=tracker, live_page=lp,
+                                                connected=True, session_mode="practice")
+        win._live_pace_plan_s = 90.0
+
+        bridge._feed_live()
+
+        # No race strategy state built → no adaptive replan → not pending, no audio view.
+        assert bridge._live_pending is False
+        assert bridge._live_audio_view is None
+        # The plan card is hidden (empty dict), not populated with a race plan.
+        assert lp.last_plan == {}
+        # The surface frames itself as practice, not a race.
+        assert lp.last_vm is not None and lp.last_vm.session_mode == "practice"
 
 
 # ===========================================================================

@@ -227,6 +227,29 @@ class TestComputeStats:
         stats = _compute_stats([frame, frame], 1, 90000)
         assert stats.oversteer_count >= 1
 
+    def test_spin_detection_sustained_high_yaw(self):
+        from telemetry.recorder import _compute_stats
+        # 3 consecutive frames of sustained high yaw (>= 1.5 rad/s) above the speed floor.
+        spin = _make_frame(speed_kmh=40.0, angvel_z=2.0)
+        stats = _compute_stats([spin, spin, spin], 1, 90000)
+        assert stats.spin_count >= 1
+
+    def test_a_caught_snap_is_not_a_spin(self):
+        from telemetry.recorder import _compute_stats
+        # A single high-yaw frame the driver catches is oversteer, not a sustained spin.
+        snap = _make_frame(speed_kmh=60.0, angvel_z=2.0)
+        calm = _make_frame(speed_kmh=60.0, angvel_z=0.1)
+        stats = _compute_stats([snap, calm, snap, calm], 1, 90000)
+        assert stats.spin_count == 0
+        assert stats.oversteer_count >= 1          # still counted as oversteer
+
+    def test_low_speed_rotation_is_not_a_spin(self):
+        from telemetry.recorder import _compute_stats
+        # Below the speed floor (a slow pit pirouette) is ignored.
+        slow = _make_frame(speed_kmh=10.0, angvel_z=2.5)
+        stats = _compute_stats([slow, slow, slow, slow], 1, 90000)
+        assert stats.spin_count == 0
+
     def test_rev_limiter_by_gear(self):
         from telemetry.recorder import _compute_stats
         # Two consecutive frames with limiter active in gear 4

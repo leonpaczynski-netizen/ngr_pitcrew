@@ -97,6 +97,8 @@ def aggregate_lap_window(
                 continue
             if exclude_out and out:
                 continue
+            if _int(row, "spin_count"):
+                continue   # a lap with a spin is not clean evidence for a before/after
             clean.append(row)
 
         clean_count = len(clean)
