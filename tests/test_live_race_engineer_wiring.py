@@ -375,6 +375,36 @@ class TestFeedLiveWithDivergence:
         assert vm is not None
 
 
+class TestTrackModellingSilencesLiveEngineer:
+    """UAT: during track modelling the engineer spoke the practice 'clean laps' line and
+    never said to box for the pit lane — _feed_live spoke unconditionally over the
+    track-modelling callout. While a capture is active the live engineer must stay silent."""
+
+    def test_live_engineer_muted_during_pit_lane_mapping(self, qapp):
+        lp = _FakeLivePage()
+        bridge, _shell, _win, _db = _make_bridge(qapp, live_page=lp, connected=True,
+                                                 session_mode="practice")
+        spoken = []
+        bridge._maybe_speak_engineer = lambda call: spoken.append(call)
+        bridge._pit_lane_mode = True         # mapping the pit lane == modelling active
+
+        bridge._feed_live()
+
+        assert spoken == []                  # muted so the track-model callout owns the voice
+
+    def test_live_engineer_speaks_when_not_modelling(self, qapp):
+        lp = _FakeLivePage()
+        bridge, _shell, _win, _db = _make_bridge(qapp, live_page=lp, connected=True,
+                                                 session_mode="practice")
+        spoken = []
+        bridge._maybe_speak_engineer = lambda call: spoken.append(call)
+        bridge._pit_lane_mode = False        # idle track service, plain practice
+
+        bridge._feed_live()
+
+        assert len(spoken) == 1              # normal practice → the engineer speaks
+
+
 class TestPracticeDoesNotLookLikeARace:
     """UAT: 'it told me race started when doing a baseline practice session'. Even though
     the tracker carries a race_type (GT7 auto-classifies a multi-car lobby as a race), a

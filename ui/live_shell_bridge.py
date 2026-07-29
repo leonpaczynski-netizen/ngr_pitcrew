@@ -2583,6 +2583,20 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _track_modelling_active(self) -> bool:
+        """True while a track-model capture (or pit-lane mapping) is running. The live
+        race/practice engineer voice must stay silent then, so the track-modelling
+        callout ('box to map the pit lane') is the only thing spoken — otherwise the
+        generic practice line spoke over it (UAT: during track modelling the engineer
+        used practice 'clean laps' language and never told me to box for the pit lane)."""
+        try:
+            if getattr(self, "_pit_lane_mode", False):
+                return True
+            sess = getattr(getattr(self, "_tracks", None), "session", None)
+            return bool(getattr(sess, "capturing", False))
+        except Exception:
+            return False
+
     def _feed_live(self) -> None:
         """Feed the Live Pit Wall from the canonical live race state. Never raises.
 
@@ -2663,8 +2677,10 @@ class LiveShellBridge(QObject):
                 session_mode=_sess,
                 engineer_override=_eng_call))
             # Speak it once per new lap (not every 750ms tick) so the engineer's voice
-            # tracks the session without chattering.
-            self._maybe_speak_engineer(_eng_call)
+            # tracks the session without chattering — but stay silent during a track-model
+            # capture so the track-modelling callout is the only voice the driver hears.
+            if not self._track_modelling_active():
+                self._maybe_speak_engineer(_eng_call)
             # Only an actual race shows a pit plan. In practice/qualifying, pass an empty
             # dict so no race-plan card lingers on the wall.
             if hasattr(lp, "show_plan"):
