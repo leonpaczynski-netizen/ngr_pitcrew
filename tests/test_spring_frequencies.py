@@ -423,6 +423,20 @@ class TestReasonStringSourceLabel:
             f"Drivetrain prior: reason should mention 'prior'; got {sf.front_reason!r}"
         )
 
+    def test_drivetrain_prior_reason_does_not_double_the_code(self, monkeypatch):
+        """Regression: the drivetrain code must appear once, not twice
+        (was 'RR RR drivetrain prior ...')."""
+        import data.car_weight_distribution as _wd
+        monkeypatch.setattr(_wd, "_CACHE", {})   # empty → file returns None
+        v = _gr3_rr()   # drivetrain 'rr'
+        sf = derive_spring_frequencies(v, OBJ_BASE)
+        assert "RR RR" not in sf.front_reason, (
+            f"Drivetrain code doubled in reason: {sf.front_reason!r}"
+        )
+        assert sf.front_reason.count("RR") == 1, (
+            f"Expected the drivetrain code exactly once; got {sf.front_reason!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Determinism

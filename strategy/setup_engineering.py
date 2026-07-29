@@ -472,7 +472,9 @@ def derive_spring_frequencies(
                     rear_reason="unknown drivetrain, no weight-dist data → neutral fallback",
                 )
             frac = float(_prior)
-            frac_label = f"{dt.upper()} drivetrain prior"
+            # NB: the reason string below already prepends {dt.upper()}, so the
+            # label must not repeat it (avoids "RR RR drivetrain prior ...").
+            frac_label = "drivetrain prior"
 
     # Bounded delta: positive → front stiffer (front-heavy); negative → rear stiffer.
     delta = (frac - 0.50) * _SPLIT_HZ_SPAN
