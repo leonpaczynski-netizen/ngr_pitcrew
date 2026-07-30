@@ -2728,6 +2728,8 @@ class DrivingAdvisor:
                 engineering_bias=_eng_bias,
                 final_drive_lean=_eng_lean,
                 chassis_seed_overrides=_chassis_seeds,
+                proven_seed_overrides=_proven_seeds,
+                proven_gearbox=_proven_gearbox,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta

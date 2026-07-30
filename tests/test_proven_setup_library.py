@@ -95,6 +95,32 @@ def test_baseline_uses_proven_seed_and_labels_it():
     assert _change(result, "gear_1")["to_clamped"] == 2.98
 
 
+def test_build_baseline_response_applies_the_library_end_to_end():
+    """Integration guard: the proven seeds must survive the full
+    build_baseline_setup_response path (the unit test above exercises
+    build_baseline_setup directly; this catches the wiring dropping the seeds)."""
+    import json
+    from types import SimpleNamespace
+    from strategy.driving_advisor import DrivingAdvisor
+    from strategy.setup_ranges import resolve_ranges
+
+    rec = SimpleNamespace(recent_laps=lambda n: [], last_lap=lambda: None, best_lap=lambda: None)
+    adv = DrivingAdvisor(rec, SimpleNamespace(), {})
+    raw = adv.build_baseline_setup_response(
+        car_name="Porsche 911 RSR '17",
+        ranges=resolve_ranges("Porsche 911 RSR (991) '17"),
+        drivetrain="RR", num_gears=6, allowed_tuning=None, tuning_locked=False,
+        session_type="Race Setup", track_name="Autodromo Nazionale Monza")
+    sf = json.loads(raw)["setup_fields"]
+    # The vetted library values come through — NOT the generic baseline, and NOT
+    # re-biased by the driver profile (a complete vetted setup already encodes it).
+    assert sf["aero_front"] == 390 and sf["aero_rear"] == 595
+    assert sf["lsd_initial"] == 22 and sf["lsd_accel"] == 8 and sf["lsd_decel"] == 33
+    assert sf["final_drive"] == 4.0 and sf["gear_1"] == 2.98
+    assert sf["arb_front"] == 7 and sf["arb_rear"] == 7        # not nudged to 7/6 by bias
+    assert sf["camber_front"] == 2.4 and sf["camber_rear"] == 2.0
+
+
 def test_proven_library_outranks_personal_history():
     ranges = resolve_ranges("")
     result = build_baseline_setup(
