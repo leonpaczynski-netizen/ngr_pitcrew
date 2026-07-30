@@ -729,10 +729,13 @@ def build_baseline_setup(
         # generic-range cars and wide-range fields this returns the seed unchanged.
         base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
 
-        # Compute value WITH combined bias (profile + session)
+        # Compute value WITH combined bias (profile + session). A proven-library seed is a
+        # COMPLETE vetted setup that already encodes the driver's preference, so profile/
+        # session bias must NOT stack on top (that double-counts and pushes the vetted
+        # numbers off — e.g. adding front aero to an already-chosen low-downforce Monza wing).
         to_val = base_val
         is_biased = False
-        if field in bias:
+        if field in bias and not _proven_seeded:
             to_val += bias[field]
             is_biased = True
 
@@ -744,7 +747,8 @@ def build_baseline_setup(
             # alone. Max downforce is only authored when the track genuinely
             # demands it (aero_bias == "add"); otherwise cap at 85% of the range so
             # a straight-heavy/neutral circuit keeps a sane drag level.
-            if field in ("aero_front", "aero_rear") and _track_aero_bias != "add" and hi > lo:
+            if (field in ("aero_front", "aero_rear") and _track_aero_bias != "add"
+                    and hi > lo and not _proven_seeded):
                 to_val = min(to_val, lo + 0.85 * (hi - lo))
 
         # Round to natural precision. "from" mirrors the authored base (from-scratch
