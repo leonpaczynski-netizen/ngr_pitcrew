@@ -81,6 +81,16 @@ class EventHeaderBar(QWidget):
         self._setup = _dim("", _t.FS_CAPTION)
         lay.addWidget(self._setup, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        # Active strategy plan (revision-aware once the runtime surfaces it)
+        self._strategy = _dim("", _t.FS_CAPTION)
+        lay.addWidget(self._strategy, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Recording / data state — distinct from connection (a signal can be live
+        # while no run is recording). Always shown so the driver can never mistake
+        # whether data is being captured; red + "REC" + ● glyph (never colour alone).
+        self._rec = StatusPill("IDLE", tone="neutral", glyph="○")
+        lay.addWidget(self._rec, 0, Qt.AlignmentFlag.AlignVCenter)
+
         # Connection pill
         self._conn = StatusPill("NO SIGNAL", tone="neutral")
         lay.addWidget(self._conn, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -113,6 +123,21 @@ class EventHeaderBar(QWidget):
             self._setup.setText(f"Setup: {app_state.active_setup_label} ({applied})")
         else:
             self._setup.setText("Setup: —")
+
+        strat = app_state.strategy
+        if getattr(strat, "has_plan", False):
+            stops = int(getattr(strat, "planned_stops", 0) or 0)
+            self._strategy.setText(f"Strategy: {stops}-stop" if stops > 0 else "Strategy: plan set")
+        else:
+            self._strategy.setText("Strategy: —")
+        self._strategy.setToolTip(self._strategy.text())
+
+        sess = app_state.session
+        if getattr(sess, "is_recording", False):
+            laps = int(getattr(sess, "laps_recorded", 0) or 0)
+            self._rec.set_status(f"REC · Lap {laps}", tone="danger", glyph="●")
+        else:
+            self._rec.set_status("IDLE", tone="neutral", glyph="○")
 
         if app_state.connected:
             self._conn.set_status("LIVE", tone="success", glyph="●")
