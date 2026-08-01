@@ -248,10 +248,12 @@ def test_schema_version_is_v10(db):
     # event_preparation_cycles.cycle_id slug with a UUID, preserving the slug in legacy_cycle_id).
     # Reconciled for Program 3 planned-vs-actual run: 33 → 34 (_migrate_v34 adds session_runs +
     # stints and backfills one completed run per existing session).
+    # Reconciled for Program 3 dynamic strategy: 34 → 35 (_migrate_v35 adds immutable
+    # strategy_revisions + race_state_snapshots).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 34
+    assert version == DB_VERSION == 35
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

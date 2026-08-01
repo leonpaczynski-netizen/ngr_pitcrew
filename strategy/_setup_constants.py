@@ -142,7 +142,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v34 (Program 3 planned-vs-actual run): adds session_runs (one row per actual execution of a planned
 #     session/activity) + stints, plus lap_records.session_run_id/.stint_id. Backfills each existing
 #     session to one completed run with a single stint. Purely additive; no live writer repointed. Idempotent.
-DB_VERSION: int = 34
+# v35 (Program 3 dynamic strategy): adds immutable strategy_revisions (parent-chained; only latest active)
+#     + race_state_snapshots (persisted at lap completion / material trigger). Two standalone additive
+#     tables; no existing table touched, no backfill (runtime population is Phase G). Idempotent.
+DB_VERSION: int = 35
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

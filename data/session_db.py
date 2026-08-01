@@ -1395,6 +1395,53 @@ class SessionDB:
             self._migrate_v34()
             self._conn.execute("PRAGMA user_version = 34")
             self._conn.commit()
+        if version < 35:
+            self._migrate_v35()
+            self._conn.execute("PRAGMA user_version = 35")
+            self._conn.commit()
+
+    def _migrate_v35(self) -> None:
+        """Program 3 Phase B — immutable strategy revisions + race-state snapshots
+        (schema v35). A material race event (fuel/pace deviation, rain, damage, missed
+        pit, penalty) never mutates the plan invisibly: it appends a NEW immutable
+        strategy_revisions row (parent-chained; only the latest is active) built from a
+        persisted race_state_snapshots row captured at lap completion or the trigger.
+        Two standalone additive tables; nothing existing is touched or backfilled —
+        runtime population is Phase G. CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS race_state_snapshots (
+            snapshot_id    TEXT PRIMARY KEY,
+            session_run_id TEXT    NOT NULL DEFAULT '',
+            event_id       INTEGER NOT NULL DEFAULT 0,
+            lap_number     INTEGER NOT NULL DEFAULT 0,
+            trigger        TEXT    NOT NULL DEFAULT '',
+            state_json     TEXT    NOT NULL DEFAULT '{}',
+            fingerprint    TEXT    NOT NULL DEFAULT '',
+            created_at     TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_race_snap_run ON race_state_snapshots(session_run_id);
+        CREATE INDEX IF NOT EXISTS idx_race_snap_event ON race_state_snapshots(event_id);
+        CREATE TABLE IF NOT EXISTS strategy_revisions (
+            revision_id            TEXT PRIMARY KEY,
+            parent_revision_id     TEXT    NOT NULL DEFAULT '',
+            event_id               INTEGER NOT NULL DEFAULT 0,
+            session_run_id         TEXT    NOT NULL DEFAULT '',
+            cycle_id               TEXT    NOT NULL DEFAULT '',
+            revision_index         INTEGER NOT NULL DEFAULT 1,
+            trigger                TEXT    NOT NULL DEFAULT '',
+            race_state_snapshot_id TEXT    NOT NULL DEFAULT '',
+            plan_json              TEXT    NOT NULL DEFAULT '{}',
+            reason                 TEXT    NOT NULL DEFAULT '',
+            confidence             REAL    NOT NULL DEFAULT 0.0,
+            communicated           INTEGER NOT NULL DEFAULT 0,
+            is_active              INTEGER NOT NULL DEFAULT 1,
+            created_at             TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_run ON strategy_revisions(session_run_id);
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_event ON strategy_revisions(event_id);
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_parent ON strategy_revisions(parent_revision_id);
+        """)
+        self._conn.commit()
 
     def _migrate_v34(self) -> None:
         """Program 3 Phase B — planned session vs actual run + stint (schema v34).
@@ -6758,6 +6805,84 @@ class SessionDB:
             (stint_id, str(session_run_id or ""), int(stint_index or 0), str(created_at or "")))
         self._conn.commit()
         return stint_id
+
+    # ---- race-state snapshots + immutable strategy revisions (v35) --------
+    def append_race_state_snapshot(self, *, session_run_id: str = "", event_id: int = 0,
+                                   lap_number: int = 0, trigger: str = "", state_json: str = "{}",
+                                   fingerprint: str = "", created_at: str = "") -> str:
+        """Persist one immutable race-state snapshot (at lap completion or a material
+        trigger). Append-only — snapshots are never updated."""
+        snapshot_id = new_id()
+        self._conn.execute(
+            "INSERT INTO race_state_snapshots (snapshot_id, session_run_id, event_id, lap_number, "
+            "trigger, state_json, fingerprint, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (snapshot_id, str(session_run_id or ""), int(event_id or 0), int(lap_number or 0),
+             str(trigger or ""), str(state_json or "{}"), str(fingerprint or ""),
+             str(created_at or "")))
+        self._conn.commit()
+        return snapshot_id
+
+    def get_snapshots_for_run(self, session_run_id: str) -> list:
+        rows = self._conn.execute(
+            "SELECT snapshot_id, session_run_id, event_id, lap_number, trigger, state_json, "
+            "fingerprint, created_at FROM race_state_snapshots WHERE session_run_id=? "
+            "ORDER BY lap_number, created_at, snapshot_id", (str(session_run_id or ""),)).fetchall()
+        keys = ("snapshot_id", "session_run_id", "event_id", "lap_number", "trigger",
+                "state_json", "fingerprint", "created_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def append_strategy_revision(self, *, session_run_id: str = "", event_id: int = 0,
+                                 cycle_id: str = "", trigger: str = "", plan_json: str = "{}",
+                                 reason: str = "", confidence: float = 0.0,
+                                 race_state_snapshot_id: str = "", communicated: bool = False,
+                                 created_at: str = "") -> str:
+        """Append a NEW immutable strategy revision for a race run and make it the active
+        one. The plan is never mutated in place: this parent-chains onto the prior active
+        revision, deactivates it, and increments the revision index. Historical revisions
+        stay queryable; only the latest accepted revision is active."""
+        prior = self.get_active_strategy_revision(session_run_id)
+        parent_id = prior["revision_id"] if prior else ""
+        index = (int(prior["revision_index"]) + 1) if prior else 1
+        if prior:
+            self._conn.execute(
+                "UPDATE strategy_revisions SET is_active=0 WHERE revision_id=?",
+                (prior["revision_id"],))
+        revision_id = new_id()
+        self._conn.execute(
+            "INSERT INTO strategy_revisions (revision_id, parent_revision_id, event_id, "
+            "session_run_id, cycle_id, revision_index, trigger, race_state_snapshot_id, plan_json, "
+            "reason, confidence, communicated, is_active, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+            (revision_id, parent_id, int(event_id or 0), str(session_run_id or ""),
+             str(cycle_id or ""), index, str(trigger or ""), str(race_state_snapshot_id or ""),
+             str(plan_json or "{}"), str(reason or ""), float(confidence or 0.0),
+             1 if communicated else 0, str(created_at or "")))
+        self._conn.commit()
+        return revision_id
+
+    def _row_to_strategy_revision(self, r) -> dict:
+        keys = ("revision_id", "parent_revision_id", "event_id", "session_run_id", "cycle_id",
+                "revision_index", "trigger", "race_state_snapshot_id", "plan_json", "reason",
+                "confidence", "communicated", "is_active", "created_at")
+        return dict(zip(keys, r))
+
+    _STRAT_REV_COLS = ("revision_id, parent_revision_id, event_id, session_run_id, cycle_id, "
+                       "revision_index, trigger, race_state_snapshot_id, plan_json, reason, "
+                       "confidence, communicated, is_active, created_at")
+
+    def get_strategy_revisions(self, session_run_id: str) -> list:
+        """All revisions for a race run, oldest first — the full auditable history."""
+        rows = self._conn.execute(
+            f"SELECT {self._STRAT_REV_COLS} FROM strategy_revisions WHERE session_run_id=? "
+            "ORDER BY revision_index, created_at", (str(session_run_id or ""),)).fetchall()
+        return [self._row_to_strategy_revision(r) for r in rows]
+
+    def get_active_strategy_revision(self, session_run_id: str) -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._STRAT_REV_COLS} FROM strategy_revisions "
+            "WHERE session_run_id=? AND is_active=1 ORDER BY revision_index DESC LIMIT 1",
+            (str(session_run_id or ""),)).fetchone()
+        return self._row_to_strategy_revision(r) if r else None
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a
