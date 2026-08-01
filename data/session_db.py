@@ -1403,6 +1403,60 @@ class SessionDB:
             self._migrate_v36()
             self._conn.execute("PRAGMA user_version = 36")
             self._conn.commit()
+        if version < 37:
+            self._migrate_v37()
+            self._conn.execute("PRAGMA user_version = 37")
+            self._conn.commit()
+
+    def _migrate_v37(self) -> None:
+        """Program 3 Phase B — driver-profile versioning with history (schema v37).
+
+        Replaces the mutating profile-version string (which the DB read ignored) with a
+        real, immutable, parent-chained version history: each row records its effective
+        date, prior version, the profile snapshot, the change-set from the prior version
+        and the reason, so historical recommendations stay traceable to the profile
+        version active at the time (never rewritten with the latest). Adds one additive
+        table and seeds a v1.0 snapshot from the existing user_profile singleton if one
+        exists. CREATE IF NOT EXISTS + seed-only-when-empty ⇒ idempotent."""
+        import json as _json
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS driver_profile_versions (
+            version_id       TEXT PRIMARY KEY,
+            prior_version_id TEXT    NOT NULL DEFAULT '',
+            version_label    TEXT    NOT NULL DEFAULT '',
+            effective_from   TEXT    NOT NULL DEFAULT '',
+            profile_json     TEXT    NOT NULL DEFAULT '{}',
+            changes_json     TEXT    NOT NULL DEFAULT '[]',
+            evidence_window  TEXT    NOT NULL DEFAULT '',
+            reason           TEXT    NOT NULL DEFAULT '',
+            is_current       INTEGER NOT NULL DEFAULT 1,
+            created_at       TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_driver_profile_ver_current
+            ON driver_profile_versions(is_current);
+        """)
+        # Seed v1.0 from the existing user_profile singleton, once.
+        try:
+            already = self._conn.execute(
+                "SELECT COUNT(*) FROM driver_profile_versions").fetchone()[0]
+            prof = self._conn.execute(
+                "SELECT name, driving_style_summary, setup_preferences, brake_bias_preference, "
+                "throttle_style, trail_braking_preference, stability_preference, "
+                "rotation_preference, updated_at FROM user_profile LIMIT 1").fetchone()
+            if not already and prof:
+                keys = ("name", "driving_style_summary", "setup_preferences", "brake_bias_preference",
+                        "throttle_style", "trail_braking_preference", "stability_preference",
+                        "rotation_preference", "updated_at")
+                snapshot = dict(zip(keys, prof))
+                self._conn.execute(
+                    "INSERT INTO driver_profile_versions (version_id, version_label, effective_from, "
+                    "profile_json, reason, is_current, created_at) VALUES (?,?,?,?,?,1,?)",
+                    (new_id(), "v1.0-baseline", str(snapshot.get("updated_at") or ""),
+                     _json.dumps(snapshot), "seeded from existing user_profile at v37 migration",
+                     str(snapshot.get("updated_at") or "")))
+        except Exception:
+            pass  # additive seed is best-effort — never block startup
+        self._conn.commit()
 
     def _migrate_v36(self) -> None:
         """Program 3 Phase B — car-spec & track-model version registries (schema v36).
@@ -6989,6 +7043,53 @@ class SessionDB:
             "AND layout_id=? AND approved=1 ORDER BY created_at DESC, version_id LIMIT 1",
             (str(track_location_id or ""), str(layout_id or ""))).fetchone()
         return self._row_to_track_model_version(r) if r else None
+
+    # ---- driver-profile versioning (v37) ---------------------------------
+    _DPV_COLS = ("version_id, prior_version_id, version_label, effective_from, profile_json, "
+                 "changes_json, evidence_window, reason, is_current, created_at")
+
+    def _row_to_driver_profile_version(self, r) -> dict:
+        keys = ("version_id", "prior_version_id", "version_label", "effective_from",
+                "profile_json", "changes_json", "evidence_window", "reason", "is_current",
+                "created_at")
+        return dict(zip(keys, r))
+
+    def append_driver_profile_version(self, *, version_label: str = "", effective_from: str = "",
+                                      profile_json: str = "{}", changes_json: str = "[]",
+                                      evidence_window: str = "", reason: str = "",
+                                      created_at: str = "") -> str:
+        """Append a NEW immutable driver-profile version and make it current. Parent-chains
+        onto the prior current version; the prior stays intact and queryable so historical
+        recommendations remain traceable to the profile that was active at the time."""
+        prior = self.get_current_driver_profile_version()
+        prior_id = prior["version_id"] if prior else ""
+        if prior:
+            self._conn.execute(
+                "UPDATE driver_profile_versions SET is_current=0 WHERE version_id=?",
+                (prior["version_id"],))
+        version_id = new_id()
+        self._conn.execute(
+            "INSERT INTO driver_profile_versions (version_id, prior_version_id, version_label, "
+            "effective_from, profile_json, changes_json, evidence_window, reason, is_current, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,1,?)",
+            (version_id, prior_id, str(version_label or ""), str(effective_from or ""),
+             str(profile_json or "{}"), str(changes_json or "[]"), str(evidence_window or ""),
+             str(reason or ""), str(created_at or "")))
+        self._conn.commit()
+        return version_id
+
+    def get_driver_profile_versions(self) -> list:
+        """Full driver-profile version history, oldest first."""
+        rows = self._conn.execute(
+            f"SELECT {self._DPV_COLS} FROM driver_profile_versions "
+            "ORDER BY created_at, version_id").fetchall()
+        return [self._row_to_driver_profile_version(r) for r in rows]
+
+    def get_current_driver_profile_version(self) -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._DPV_COLS} FROM driver_profile_versions "
+            "WHERE is_current=1 ORDER BY created_at DESC, version_id LIMIT 1").fetchone()
+        return self._row_to_driver_profile_version(r) if r else None
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a

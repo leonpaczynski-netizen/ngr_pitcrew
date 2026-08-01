@@ -148,7 +148,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v36 (Program 3 spec/version registries): adds car_spec_revisions (a car's spec/BoP as it applied at an
 #     event) + track_model_versions (approved track-model versions). Two standalone additive tables; no
 #     existing table touched, no disk scan (registration deferred to Phase C/E). Idempotent.
-DB_VERSION: int = 36
+# v37 (Program 3 driver-profile versioning): adds driver_profile_versions — an immutable, parent-chained
+#     version history (effective date, prior version, snapshot, change-set) replacing the ignored version
+#     string; seeds v1.0 from the existing user_profile singleton. Additive, seed-once. Idempotent.
+DB_VERSION: int = 37
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
