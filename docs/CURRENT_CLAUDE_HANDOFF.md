@@ -26,9 +26,10 @@ disconnect/reconnect, finalises on record; blocks honestly on unresolved context
 test with a real SessionDB + fake telemetry window. **The full pipeline now fires live** (recording
 label + diagnostics header + engineer choreography), driven by real telemetry. **STOPPED at the
 hardware-UAT gate — `docs/LIVE_ACTIVATION_1_UAT.md`; live certification NOT TESTED** (the remaining
-validation is the driver on GT7/PSVR2). Known follow-ups (non-blocking): setup_snapshot_id +
-track_model_version_id are resolved as optional-empty for now (a later slice can populate them).
-_(Program 3.1 section below stands.)_
+validation is the driver on GT7/PSVR2). All canonical identity fields now resolve, including the
+optional `track_model_version_id` (approved track-model for the session's track/layout) and
+`setup_snapshot_id` (the setup on the car for the practised discipline, via
+`SetupService.applied_setup_snapshot_id`). _(Program 3.1 section below stands.)_
 
 ## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01)
 Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
