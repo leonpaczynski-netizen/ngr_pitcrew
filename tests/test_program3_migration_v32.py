@@ -77,7 +77,7 @@ def test_backfill_id_is_uuid7_and_order_preserving():
 def test_fresh_db_reaches_v32_with_uuid_columns(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
     ver = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert ver == 32
+    assert ver >= 32
     for table in CORE_TABLES:
         cols = {r[1] for r in db._conn.execute(f"PRAGMA table_info({table})")}
         assert "uuid" in cols, f"{table} missing uuid column"
@@ -97,7 +97,7 @@ def test_existing_db_backfills_all_rows(tmp_path):
     path = str(tmp_path / "old.db")
     _seed_v31_db(path)
     db = SessionDB(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 32
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 32
     for table in CORE_TABLES:
         n_total = db._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         n_uuid = db._conn.execute(
@@ -150,7 +150,7 @@ def test_migration_is_idempotent(tmp_path):
     db1._conn.close()
     # reopen — _migrate runs again but v32 is already applied
     db2 = SessionDB(path)
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == 32
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] >= 32
     after = {t: [r[0] for r in db2._conn.execute(f"SELECT uuid FROM {t} ORDER BY id")]
              for t in CORE_TABLES}
     assert before == after  # uuids unchanged on re-open

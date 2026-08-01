@@ -49,8 +49,9 @@ def test_activation_creates_cycle_and_sets_active_cycle(window):
     db.upsert_event({"name": "GR Enduro Rd2", "car": "Porsche Cayman GT4 Clubsport '16",
                      "track": "Watkins Glen International", "layout_id": "grand_prix",
                      "race_type": "timed", "race_duration_minutes": 60})
+    import uuid as _uuid
     cycle_id = window._ensure_active_preparation_cycle("GR Enduro Rd2")
-    assert cycle_id == "cycle-gr-enduro-rd2"
+    assert _uuid.UUID(cycle_id).version == 7          # opaque UUID identity (v33)
     assert window._config["active_cycle_id"] == cycle_id
     # a real cycle row now exists, populated from the event
     cyc = db.get_preparation_cycle(cycle_id)
@@ -78,9 +79,13 @@ def test_command_centre_resolves_the_activated_event(window):
 def test_activation_is_idempotent(window):
     db = window._db
     db.upsert_event({"name": "GR Enduro Rd2", "car": "c", "track": "t", "layout_id": "l"})
+    import uuid as _uuid
     a = window._ensure_active_preparation_cycle("GR Enduro Rd2")
     b = window._ensure_active_preparation_cycle("GR Enduro Rd2")
-    assert a == b == "cycle-gr-enduro-rd2"
+    # idempotent identity: re-activating reuses the SAME cycle (found by event_id),
+    # it does not re-mint a second UUID.
+    assert a == b
+    assert _uuid.UUID(a).version == 7
     # no duplicate cycles created for the same event
     cycles = [c for c in db.list_preparation_cycles() if c.get("cycle_id") == a]
     assert len(cycles) == 1

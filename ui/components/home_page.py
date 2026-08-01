@@ -274,7 +274,9 @@ class HomePage(QWidget):
         self._candidates = [c for c in cands if isinstance(c, Mapping)]
         labels = []
         for c in self._candidates:
-            label = _norm(c.get("event_name")) or _norm(c.get("cycle_id"))
+            # cycle_id is an opaque UUID (v33) — fall back to a friendly placeholder
+            # rather than showing a raw id if an event somehow has no name.
+            label = _norm(c.get("event_name")) or "Untitled event"
             extra = " · ".join(p for p in (_norm(c.get("series")), _norm(c.get("round"))) if p)
             labels.append(f"{label} — {extra}" if extra else label)
         # render() runs on every AppState change (frequent while connected/live). Only

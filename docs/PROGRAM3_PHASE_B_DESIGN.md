@@ -32,7 +32,7 @@ This honours the "full UUID identity" decision (UUID is the identity everything 
 | Program-3 identity | Backing table | Today | Phase B |
 |---|---|---|---|
 | `event_id` | `events` | INTEGER PK, pointer stored as **name** in config | add `uuid TEXT UNIQUE`; config strategy pointer migrates to uuid |
-| `event_programme_id` | `event_preparation_cycles` | `cycle_id` TEXT slug | keep slug as natural key **+** add `uuid` (stable programme identity) |
+| `event_programme_id` | `event_preparation_cycles` | `cycle_id` TEXT slug | **REPLACE** slug with a UUID (decision 2026-08-01); remap child refs + config pointer + `_cycle_id_for` in **v33** |
 | `session_plan_id` | **new** `session_plans` (from `event_preparation_activities`) | activity `activity_id` slug | formalise: an activity **is** a planned session; add `uuid` |
 | `session_run_id` | **new** `session_runs` | *absent* — `sessions.id` conflates plan+run | **new table**: one row per actual execution of a plan; `uuid` PK |
 | `stint_id` | **new** `stints` | *absent* | **new table**; `uuid` PK; FK→`session_run` |
@@ -111,7 +111,7 @@ Deliverables: a **migration report** (counts per bucket + reasons), a **read-onl
 
 ## 6. Rollback / backup
 
-- Pre-migration: the migration writes a one-time timestamped DB copy `session.db.pre_v32.bak` (guarded so it only snapshots once, before the first Program-3 migration runs). *(Confirm with user: acceptable to snapshot the live DB on first launch after upgrade?)*
+- Pre-migration: the migration writes a one-time timestamped DB copy `session.db.pre_v32.bak` (guarded so it only snapshots once, before the first Program-3 migration runs). **Approved 2026-08-01.**
 - Each migration's down-note is documented; because all changes are additive (new columns/tables/views), a rollback is "ignore the new columns" — no data loss for existing readers.
 - The golden suites (`test_race_config_id_hash.py`, fan-out allowlist) are the tripwire: if any migration perturbs `config_id` or the allowlist, those tests fail the run.
 
@@ -140,8 +140,8 @@ New suites, all offline/DB-only (no PyQt):
 
 ---
 
-## 9. Open questions for the reviewer
+## 9. Reviewer decisions (2026-08-01)
 
-1. **DB backup on first migrated launch** (§6) — OK to write a one-time `session.db.pre_v32.bak` beside the live DB?
-2. **Programme identity** — keep the human-readable `cycle_id` slug as the natural key *and* add a uuid (recommended), or replace the slug?
-3. Anything in §8 you'd rather pull **into** the first increment vs leave for its phase?
+1. **DB backup on first migrated launch** — ✅ Yes, write a one-time `session.db.pre_v32.bak`.
+2. **Programme identity** — ✅ **Replace** the `cycle_id` slug with a UUID (v33, with code churn to config/`resolve_active_cycle`/`race_plan`/activity binding/`_cycle_id_for`).
+3. Increment scope unchanged: v32 purely additive first.

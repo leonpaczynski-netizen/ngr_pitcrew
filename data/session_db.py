@@ -19,6 +19,7 @@ import json
 import os
 import sqlite3
 import threading
+import uuid
 import zlib
 from dataclasses import asdict as _dc_asdict
 from datetime import datetime, timezone
@@ -1156,6 +1157,17 @@ def _iso_to_ms(value) -> int:
         return 0
 
 
+def _looks_like_uuid(value) -> bool:
+    """True if value parses as a UUID. Used by the v33 cycle-id migration to skip
+    rows already carrying a UUID (a fresh cycle or a re-run) — legacy slugs like
+    'cycle-round-4-fuji' never parse, so they are the ones remapped."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except Exception:
+        return False
+
+
 def _json_loads_list(v) -> list:
     if isinstance(v, (list, tuple)):
         return list(v)
@@ -1373,6 +1385,50 @@ class SessionDB:
             self._migrate_v32()
             self._conn.execute("PRAGMA user_version = 32")
             self._conn.commit()
+        if version < 33:
+            self._migrate_v33()
+            self._conn.execute("PRAGMA user_version = 33")
+            self._conn.commit()
+
+    def _migrate_v33(self) -> None:
+        """Program 3 Phase B — event-programme identity becomes a UUID (schema v33).
+
+        Replaces the human-readable event_preparation_cycles.cycle_id slug
+        (e.g. 'cycle-round-4-fuji') with an opaque UUIDv7, cascading the new id onto
+        the two child tables (event_preparation_activities and
+        event_preparation_activity_sessions). The old slug is preserved in a new
+        legacy_cycle_id column for audit/debugging. No config heal is needed:
+        main.py clears active_cycle_id in-memory on every launch, so the active
+        cycle is always re-minted through the create-or-reuse path (now keyed by
+        event_id) on the driver's next activation. Only rows whose cycle_id is not
+        already a UUID are remapped ⇒ idempotent."""
+        from data.ids import new_id
+        try:
+            self._conn.execute(
+                "ALTER TABLE event_preparation_cycles ADD COLUMN legacy_cycle_id TEXT")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        try:
+            rows = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles").fetchall()
+        except Exception:
+            return  # table absent on a very old DB — nothing to remap
+        for (old_cid,) in rows:
+            old = str(old_cid or "")
+            if not old or _looks_like_uuid(old):
+                continue  # already a UUID (fresh row / re-run) — leave it
+            new_cid = new_id()
+            self._conn.execute(
+                "UPDATE event_preparation_activities SET cycle_id=? WHERE cycle_id=?",
+                (new_cid, old))
+            self._conn.execute(
+                "UPDATE event_preparation_activity_sessions SET cycle_id=? WHERE cycle_id=?",
+                (new_cid, old))
+            self._conn.execute(
+                "UPDATE event_preparation_cycles SET cycle_id=?, legacy_cycle_id=? "
+                "WHERE cycle_id=?", (new_cid, old, old))
+        self._conn.commit()
 
     def _backup_before_program3(self) -> None:
         """Write a one-time ``<db>.pre_v32.bak`` snapshot before the v32 identity
@@ -6528,15 +6584,38 @@ class SessionDB:
         self._conn.commit()
         return True
 
+    def get_cycle_by_event(self, event_id: int = 0, event_name: str = "") -> "dict | None":
+        """Find the single preparation cycle for an event — by stable event_id first
+        (Program 3: identity, never the display name), then by event_name as a
+        fallback. Since v33 replaced the derivable cycle_id slug with an opaque UUID,
+        this is how the create-or-reuse path stays idempotent (one cycle per event):
+        it locates the existing cycle to reuse its id instead of re-deriving it.
+        Returns the most-recent match, or None."""
+        eid = int(event_id or 0)
+        name = str(event_name or "").strip()
+        row = None
+        if eid > 0:
+            row = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles WHERE event_id=? "
+                "ORDER BY created_at DESC, cycle_id LIMIT 1", (eid,)).fetchone()
+        if row is None and name:
+            row = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles WHERE event_name=? "
+                "ORDER BY created_at DESC, cycle_id LIMIT 1", (name,)).fetchone()
+        if row is None:
+            return None
+        return self.get_preparation_cycle(row[0])
+
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
-        """Read one preparation cycle (SELECT-only)."""
+        """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a
+        lookup by the pre-v33 'cycle-...' id still resolves via legacy_cycle_id."""
         import json as _json
         r = self._conn.execute(
             "SELECT cycle_id,event_id,event_name,series,round_label,driver_id,team,car,track,layout,"
             "prep_open_date,official_quali_date,official_race_date,format_profile_id,disciplines_json,"
             "championship_objective,context_digest,gt7_version,explicit_state,setup_lock_json,"
-            "strategy_final_json FROM event_preparation_cycles WHERE cycle_id=?",
-            (str(cycle_id or ""),)).fetchone()
+            "strategy_final_json FROM event_preparation_cycles WHERE cycle_id=? OR legacy_cycle_id=?",
+            (str(cycle_id or ""), str(cycle_id or ""))).fetchone()
         if not r:
             return None
         try:

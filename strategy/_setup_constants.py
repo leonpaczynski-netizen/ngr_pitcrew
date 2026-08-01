@@ -136,7 +136,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     table (events, sessions, setups, setup_snapshots, lap_records, setup_lineage, cars,
 #     ai_interactions) and backfills existing rows with time-ordered ids so ORDER BY uuid == original
 #     chronology. Integer PKs retained (dual-key transition); config_id untouched. Additive. Idempotent.
-DB_VERSION: int = 32
+# v33 (Program 3 event-programme identity): replaces the event_preparation_cycles.cycle_id slug with an
+#     opaque UUIDv7 (cascaded onto the two child tables), preserving the old slug in legacy_cycle_id.
+#     Cycle reuse is now keyed by event_id (get_cycle_by_event), not a re-derived slug. Idempotent.
+DB_VERSION: int = 33
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

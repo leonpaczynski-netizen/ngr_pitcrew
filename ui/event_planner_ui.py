@@ -502,12 +502,7 @@ class EventPlannerMixin:
         try:
             if self._db is None or not evt_name:
                 return ""
-            import re
             import datetime
-            slug = re.sub(r"[^a-z0-9]+", "-", str(evt_name).strip().lower()).strip("-")
-            if not slug:
-                return ""
-            cycle_id = f"cycle-{slug}"
             ev = {}
             try:
                 ev = self._db.get_event(evt_name) or {}
@@ -515,11 +510,18 @@ class EventPlannerMixin:
                 ev = {}
             if not ev:
                 ev = self._active_event() or {}
+            event_id = int(ev.get("event_id") or ev.get("id") or 0)
+            # v33: cycle_id is an opaque UUID — reuse the event's existing cycle
+            # (located by stable event_id/name) or mint a fresh one, instead of
+            # re-deriving a 'cycle-<slug>' that would never match the stored UUID.
             existing = None
             try:
-                existing = self._db.get_preparation_cycle(cycle_id)
+                if hasattr(self._db, "get_cycle_by_event"):
+                    existing = self._db.get_cycle_by_event(event_id, evt_name)
             except Exception:
                 existing = None
+            from data.ids import new_id as _new_id
+            cycle_id = str((existing or {}).get("cycle_id") or "") or _new_id()
             now_iso = datetime.datetime.now().isoformat(timespec="seconds")
             # the car is not an event-table column — it lives in the strategy context (set by the Garage /
             # Event Planner fanout) and on the cycle. Authority depends on the caller (DEF-073-019):

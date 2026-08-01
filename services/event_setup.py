@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from data.ids import new_id
+
 #: Race formats the app understands. Stored as these exact codes.
 RACE_TYPES: Tuple[Tuple[str, str], ...] = (
     ("lap", "A set number of laps"),
@@ -263,8 +265,9 @@ class EventSetupService:
             row = None
         event_car = ""
         try:
-            if self._db is not None and hasattr(self._db, "get_preparation_cycle"):
-                cyc = self._db.get_preparation_cycle(_cycle_id_for(name)) or {}
+            if self._db is not None and hasattr(self._db, "get_cycle_by_event"):
+                eid = int((row or {}).get("id") or (row or {}).get("event_id") or 0)
+                cyc = self._db.get_cycle_by_event(eid, name) or {}
                 event_car = _norm(cyc.get("car"))
         except Exception:
             event_car = ""
@@ -375,13 +378,19 @@ class EventSetupService:
         An event saved without a cycle is invisible to the Command Centre. A cycle the
         driver explicitly completed or abandoned is NEVER silently reopened.
         """
-        cycle_id = _cycle_id_for(draft.name)
-        if not cycle_id or self._db is None or not hasattr(self._db, "upsert_preparation_cycle"):
+        if self._db is None or not hasattr(self._db, "upsert_preparation_cycle"):
             return ""
-        try:
-            existing = self._db.get_preparation_cycle(cycle_id) or {}
-        except Exception:
-            existing = {}
+        # Reuse the event's existing cycle if there is one, else mint a fresh UUID.
+        # v33 replaced the derivable cycle_id slug with an opaque UUID, so "one cycle
+        # per event" is now guaranteed by looking the cycle up by stable event_id
+        # (get_cycle_by_event) rather than re-deriving the id from the name.
+        existing = {}
+        if hasattr(self._db, "get_cycle_by_event"):
+            try:
+                existing = self._db.get_cycle_by_event(int(event_id or 0), _norm(draft.name)) or {}
+            except Exception:
+                existing = {}
+        cycle_id = _norm(existing.get("cycle_id")) or new_id()
         now = _now_iso()
         # Activating an event is a DELIBERATE choice to prepare it, so a previously
         # completed/abandoned cycle is REOPENED here. This is an explicit user action
