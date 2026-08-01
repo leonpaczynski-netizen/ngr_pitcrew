@@ -6860,6 +6860,15 @@ class SessionDB:
             "INSERT OR IGNORE INTO event_preparation_activity_sessions "
             "(activity_id,session_id,cycle_id,created_at) VALUES (?,?,?,?)",
             (aid, sid, cid, str(created_at or "")))
+        # Program 3 (Phase C): link this session's run to the plan it was just bound to,
+        # so the run knows its session_plan_id (best-effort; only fills an unbound run).
+        try:
+            self._conn.execute(
+                "UPDATE session_runs SET session_plan_id=?, cycle_id=? "
+                "WHERE session_id=? AND (session_plan_id IS NULL OR session_plan_id='')",
+                (aid, cid, int(sid)))
+        except Exception:
+            pass
         self._conn.commit()
         return True
 
@@ -8724,12 +8733,13 @@ class SessionDB:
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO sessions
-                       (car_id, car_name, config_id, track, session_type, date_utc, event_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (car_id, car_name, config_id, track, session_type, date_utc, event_id, uuid)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     car_id, car_name, config_id, track, session_type,
                     datetime.now(timezone.utc).isoformat(),
                     event_id,
+                    new_id(),   # Program 3 (Phase C): stamp new sessions with canonical identity
                 ),
             )
             sid = cur.lastrowid
@@ -8739,7 +8749,38 @@ class SessionDB:
             sid, car_id=car_id, track=track, session_type=session_type,
             config_id=config_id, event_id=event_id, layout_id=layout_id,
             driver_id=driver_id, gt7_version=gt7_version)
+        # Program 3 (Phase C): open the canonical session_run for this recording so new
+        # telemetry flows into the run spine. Best-effort — never affects session creation.
+        self._attach_session_run(
+            sid, event_id=event_id, session_type=session_type, config_id=config_id)
         return sid
+
+    def _attach_session_run(self, session_id, *, event_id=0, session_type="",
+                            config_id="") -> None:
+        """Create the canonical session_run (+ its opening stint) for a newly opened
+        recording session, so new laps trace to an actual run. Idempotent per session
+        (skips if a run already exists) and best-effort — a failure never blocks
+        recording. The run starts unbound to a plan; bind_session_to_activity links it
+        to its planned activity when the driver records the run."""
+        try:
+            if self.get_run_for_session(int(session_id)) is not None:
+                return
+            srow = self._conn.execute(
+                "SELECT uuid FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+            suuid = srow[0] if srow else ""
+            cyc = ""
+            if int(event_id or 0) > 0:
+                c = self.get_cycle_by_event(int(event_id))
+                cyc = (c or {}).get("cycle_id", "") if c else ""
+            now = datetime.now(timezone.utc).isoformat()
+            run_id = self.create_session_run(
+                session_id=int(session_id), session_uuid=str(suuid or ""),
+                event_id=int(event_id or 0), cycle_id=str(cyc or ""),
+                session_type=str(session_type or ""), status="recording",
+                started_at=now, created_at=now)
+            self.add_stint(run_id, stint_index=0, created_at=now)
+        except Exception:
+            pass  # additive; recording never depends on the run spine
 
     def _attach_session_context(
         self, session_id, *, car_id, track, session_type, config_id, event_id,
@@ -8872,6 +8913,26 @@ class SessionDB:
                 ),
             )
             lap_record_id = cur.lastrowid or 0
+
+            # Program 3 (Phase C): stamp the lap with its canonical identity + run/stint,
+            # so every lap traces to a stable id and an actual run. Best-effort; direct SQL
+            # (we already hold the lock). A missing run just leaves those cross-refs empty.
+            try:
+                r = self._conn.execute(
+                    "SELECT run_id FROM session_runs WHERE session_id=? "
+                    "ORDER BY created_at, run_id LIMIT 1", (session_id,)).fetchone()
+                if r:
+                    st = self._conn.execute(
+                        "SELECT stint_id FROM stints WHERE session_run_id=? "
+                        "ORDER BY stint_index, created_at LIMIT 1", (r[0],)).fetchone()
+                    self._conn.execute(
+                        "UPDATE lap_records SET uuid=?, session_run_id=?, stint_id=? WHERE id=?",
+                        (new_id(), r[0], (st[0] if st else ""), lap_record_id))
+                else:
+                    self._conn.execute(
+                        "UPDATE lap_records SET uuid=? WHERE id=?", (new_id(), lap_record_id))
+            except Exception:
+                pass
 
             # Keep total_laps equal to the actual number of lap rows rather than an
             # increment counter (which drifted when a lap was written twice). Derived
