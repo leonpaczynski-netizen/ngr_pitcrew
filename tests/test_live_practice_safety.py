@@ -13,6 +13,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _NEW = [
     "strategy/live_practice_activation.py",
     "strategy/live_practice_runtime.py",
+    "strategy/practice_engineer_choreography.py",
     "ui/live_practice_db_port.py",
 ]
 
@@ -33,7 +34,8 @@ def test_new_modules_author_nothing_forbidden():
 
 
 def test_decision_core_is_qt_and_db_free():
-    for rel in ("strategy/live_practice_activation.py", "strategy/live_practice_runtime.py"):
+    for rel in ("strategy/live_practice_activation.py", "strategy/live_practice_runtime.py",
+                "strategy/practice_engineer_choreography.py"):
         src = (_ROOT / rel).read_text(encoding="utf-8")
         assert "PyQt6" not in src, f"{rel} must be Qt-free"
         assert "sqlite3" not in src and "session_db" not in src, f"{rel} must be DB-free"
@@ -41,7 +43,8 @@ def test_decision_core_is_qt_and_db_free():
 
 def test_decision_core_uses_no_wall_clock():
     # Timestamps are injected via the port/DB, never read from the clock in the pure core.
-    for rel in ("strategy/live_practice_activation.py", "strategy/live_practice_runtime.py"):
+    for rel in ("strategy/live_practice_activation.py", "strategy/live_practice_runtime.py",
+                "strategy/practice_engineer_choreography.py"):
         src = (_ROOT / rel).read_text(encoding="utf-8")
         assert "datetime.now" not in src and "time.time" not in src, f"{rel} reads the wall clock"
 

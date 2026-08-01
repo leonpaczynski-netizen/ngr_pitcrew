@@ -61,6 +61,8 @@ class LivePracticeCoordinator:
         self.identity: dict = {}
         self.last_finalised_lap: int = 0
         self._valid_laps: int = 0
+        self._invalid_laps: int = 0
+        self._last_invalid_reason: str = ""
 
     # -- properties -------------------------------------------------------- #
     @property
@@ -74,6 +76,14 @@ class LivePracticeCoordinator:
     @property
     def valid_lap_count(self) -> int:
         return self._valid_laps
+
+    @property
+    def invalid_lap_count(self) -> int:
+        return self._invalid_laps
+
+    @property
+    def last_invalid_reason(self) -> str:
+        return self._last_invalid_reason
 
     @property
     def is_recording(self) -> bool:
@@ -147,6 +157,9 @@ class LivePracticeCoordinator:
         self.last_finalised_lap = int(lap_number)
         if d.valid:
             self._valid_laps += 1
+        else:
+            self._invalid_laps += 1
+            self._last_invalid_reason = d.invalid_reasons[0] if d.invalid_reasons else ""
         return LapOutcome(True, d.valid, d.reason, d.invalid_reasons)
 
     def complete(self) -> bool:

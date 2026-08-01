@@ -376,6 +376,60 @@ class TestV5RunRecording:
         assert panel._values["session_run_id"].text() == "run-1"
         assert panel._laps.text() == "5 valid laps"
 
+    def test_practice_engineer_choreography_speaks_on_edges(self, wired):
+        # §7 end-to-end: stepping the authoritative coordinator drives the engineer's messages
+        # through the bridge, one per edge (brief → recording → … → conclusion), silent between.
+        from strategy.live_practice_runtime import LivePracticeCoordinator
+
+        class _Port:
+            def resolve_activation_context(self):
+                return {"planned_session_type": "Practice", "event_programme_id": "cyc-1",
+                        "event_id": "42", "session_plan_id": "plan-1", "car_id": "333",
+                        "car_spec_revision_id": "spec-1", "driver_profile_version_id": "drv-1",
+                        "context_revision_id": "ctx-1"}
+
+            def create_run(self, identity):
+                return "run-1", "stint-1"
+
+            def persist_lap(self, **kw):
+                pass
+
+            def set_run_status(self, *a):
+                pass
+
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view()             # setup_base → target 5–8 (target_min=5)
+        co = LivePracticeCoordinator(_Port())
+        bridge._live_practice = co
+
+        cues = []
+
+        def step(fn):
+            fn()
+            m = bridge._speak_practice_engineer()
+            if m is not None:
+                cues.append(m.cue.value)
+
+        step(lambda: co.activate())                       # → BRIEF
+        step(lambda: co.telemetry_connected())            # → RECORDING_CONFIRMED
+        step(lambda: None)                                # pure tick → silent
+        for i in range(4):
+            step(lambda i=i: co.on_lap(session_run_id="run-1", event_id="42",
+                                       lap_number=i + 1, lap_time_ms=90000))   # PROGRESS ×4
+        step(lambda: co.on_lap(session_run_id="run-1", event_id="42",
+                               lap_number=5, lap_time_ms=90000))               # 5th valid → SUFFICIENT
+        step(lambda: co.on_lap(session_run_id="run-1", event_id="42", lap_number=6,
+                               lap_time_ms=120000, is_pit_lap=True))           # → INVALID_LAP
+        step(lambda: co.complete())                       # → CONCLUSION
+
+        assert "brief" in cues
+        assert "recording_confirmed" in cues
+        assert "sufficient" in cues
+        assert "invalid_lap" in cues
+        assert "conclusion" in cues
+        assert cues.count("conclusion") == 1              # exactly once
+        assert None not in cues                           # the pure tick added nothing
+
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
         bridge._last_guidance_view = _view()

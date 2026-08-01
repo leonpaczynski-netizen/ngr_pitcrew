@@ -98,6 +98,11 @@ class LiveShellBridge(QObject):
         #: until an explicit, fully-resolved Practice activation opens a canonical session run;
         #: while set it is the source of truth for the live valid-lap count + connected state.
         self._live_practice = None
+        #: The Practice Engineer's message choreographer (§7). Edge-driven: it speaks the brief,
+        #: recording confirmation, progress, invalid-lap feedback, sufficiency and conclusion once
+        #: each, and stays silent between — anti-chatter is structural.
+        from strategy.practice_engineer_choreography import PracticeEngineerVoice
+        self._practice_voice = PracticeEngineerVoice()
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -662,6 +667,9 @@ class LiveShellBridge(QObject):
                 rc.set_recording("")
         except Exception:
             pass
+        # Practice Engineer choreography (§7): speak the brief / confirmation / progress /
+        # invalid-lap / sufficiency / conclusion on their edges. Silent between edges.
+        self._speak_practice_engineer()
         self._feed_run_review()
         # Compound selector on the run card — separate try block so a failure here does
         # not blank the run card itself.
@@ -888,6 +896,51 @@ class LiveShellBridge(QObject):
             }
         except Exception:
             return {"active": False, "recording_state": "not_started"}
+
+    def _practice_engineer_phase(self):
+        """Build the engineer's phase snapshot from the authoritative coordinator + the current
+        objective's brief (§7). Returns an empty phase when no run is active."""
+        from strategy.practice_engineer_choreography import EngineerPhase
+        lp = getattr(self, "_live_practice", None)
+        if lp is None:
+            return EngineerPhase()
+        try:
+            view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+            headline = str((view.get("next_action") or {}).get("headline") or "")
+            from strategy.practice_run_recording import domain_from_objective_headline
+            from strategy.run_brief import brief_for_domain, _target_lap_bounds
+            domain = domain_from_objective_headline(headline)
+            brief = brief_for_domain(domain) if domain else None
+            target_laps = brief.target_laps if brief is not None else ""
+            lo, _hi = _target_lap_bounds(target_laps) if target_laps else (0, 0)
+            return EngineerPhase(
+                run_state=lp.state.value, valid_laps=int(lp.valid_lap_count),
+                invalid_laps=int(lp.invalid_lap_count), invalid_reason=lp.last_invalid_reason,
+                target_min=int(lo or 0), target_laps=target_laps,
+                objective=domain or headline)
+        except Exception:
+            return EngineerPhase(run_state=getattr(getattr(lp, "state", None), "value", "not_started"))
+
+    def _speak_practice_engineer(self) -> "object":
+        """Observe the current phase and speak the engineer's message if the choreographer emits
+        one on this edge (§7). Anti-chatter is inherited — no edge, no speech. Returns the message
+        (or None) so callers/tests can inspect it. Never raises."""
+        try:
+            voice = getattr(self, "_practice_voice", None)
+            if voice is None:
+                return None
+            msg = voice.observe(self._practice_engineer_phase())
+            if msg is None or not msg.text:
+                return msg
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "announce"):
+                from voice.announcer import Priority
+                pri = {"high": Priority.HIGH, "medium": Priority.MEDIUM,
+                       "low": Priority.LOW}.get(msg.priority.value, Priority.MEDIUM)
+                announcer.announce(msg.text, pri, "practice_engineer")
+            return msg
+        except Exception:
+            return None
 
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
