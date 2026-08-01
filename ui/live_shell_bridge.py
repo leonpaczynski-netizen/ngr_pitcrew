@@ -3000,6 +3000,33 @@ class LiveShellBridge(QObject):
         self.refresh()
 
     # ---- event selection / creation --------------------------------------
+    def _reset_context_caches(self) -> None:
+        """Clear every per-event / per-run cache in ONE place so switching, creating or
+        finishing an event cannot leave a page rendering the previous event's data.
+
+        Program 3 (Phase D3): the three switch/finish handlers previously each carried
+        their OWN copy of this list, so a newly-added cache was easy to forget in one of
+        them — the exact drift the UI audit flagged, and this now also clears the
+        per-cycle caches (_runs_cache / _run_discipline / _lock_report) the old block
+        missed, which could show the previous event's runs/lock state on the first tick
+        after a switch. Every field here is rebuilt on the next refresh() tick, so
+        clearing is safe. The active event has already changed in config, so any
+        in-flight background worker is rejected by the existing nav-key guard."""
+        self._review_cache.clear()
+        self._runs_cache = None
+        self._run_discipline = {}
+        self._lock_report = None
+        self._last_analysis = None
+        self._live_accepted_plan = None
+        self._live_audio_view = None
+        self._live_decision_lap = None
+        self._live_decision = None
+        self._live_pending = False
+        self._last_guidance_view = None
+        self._last_engine_plan_key = ""
+        self._test_compound_override = None
+        self._last_compound_codes = ()
+
     def _on_activate_event(self, event_name: str) -> None:
         """Switch the event being prepared, through the headless service.
 
@@ -3016,13 +3043,7 @@ class LiveShellBridge(QObject):
             result = None
         if result is not None and not result.ok:
             self._guidance_status(result.message or "Could not switch to that event.")
-        self._review_cache.clear()
-        self._live_accepted_plan = None
-        self._live_audio_view = None
-        self._live_decision_lap = None
-        self._live_decision = None
-        self._live_pending = False
-        self._last_guidance_view = None
+        self._reset_context_caches()
         self.refresh()
 
     def _on_manage_events(self) -> None:
@@ -3068,13 +3089,7 @@ class LiveShellBridge(QObject):
                 page.show_issues(result.issues or ())
             return
         # The active event changed — every surface must be rebuilt against it.
-        self._review_cache.clear()
-        self._live_accepted_plan = None
-        self._live_audio_view = None
-        self._live_decision_lap = None
-        self._live_decision = None
-        self._live_pending = False
-        self._last_guidance_view = None
+        self._reset_context_caches()
         self.refresh()
         self._navigate("home")
 
@@ -3391,13 +3406,7 @@ class LiveShellBridge(QObject):
             result = None
         if result is not None:
             self._guidance_status(result.message or "")
-        self._review_cache.clear()
-        self._live_accepted_plan = None
-        self._live_audio_view = None
-        self._live_decision_lap = None
-        self._live_decision = None
-        self._live_pending = False
-        self._last_guidance_view = None
+        self._reset_context_caches()
         self._navigate("home")
         self.refresh()
 
