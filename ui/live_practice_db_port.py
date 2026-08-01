@@ -49,15 +49,32 @@ class SessionDbLivePracticePort:
         """Open the recording session (spine auto-creates the canonical run + stint), bind it
         to the planned session, and return (run_id, stint_id). Returns ('','') on failure —
         the coordinator treats an empty run as unrecordable."""
-        idn = identity if isinstance(identity, Mapping) else {}
+        idn = dict(identity if isinstance(identity, Mapping) else {})
+        # The gate's identity carries only canonical fields; pull the live session + open-session
+        # params from the full resolved context.
         try:
-            self._session_id = int(self._db.open_session(
-                _int(idn.get("car_id")), _norm(idn.get("track")), "Practice",
-                car_name=_norm(idn.get("car_name")), config_id=_norm(idn.get("config_id")),
-                event_id=_int(idn.get("event_id")),
-                layout_id=_norm(idn.get("layout_id")),
-                driver_id=_norm(idn.get("driver_id")),
-                gt7_version=_norm(idn.get("gt7_version"))))
+            full = self._resolve() or {}
+            for k in ("live_session_id", "track", "car_name", "config_id", "layout_id",
+                      "driver_id", "gt7_version"):
+                if not _norm(idn.get(k)) and k in full:
+                    idn[k] = full[k]
+        except Exception:
+            pass
+        # LIVE: adopt the telemetry session the dispatcher already opened (never open a second
+        # session for the same recording). OFFLINE/tests: open one. The spine's open_session /
+        # _attach_session_run already created the canonical run + stint either way.
+        adopt = _int(idn.get("live_session_id"))
+        try:
+            if adopt > 0:
+                self._session_id = adopt
+            else:
+                self._session_id = int(self._db.open_session(
+                    _int(idn.get("car_id")), _norm(idn.get("track")), "Practice",
+                    car_name=_norm(idn.get("car_name")), config_id=_norm(idn.get("config_id")),
+                    event_id=_int(idn.get("event_id")),
+                    layout_id=_norm(idn.get("layout_id")),
+                    driver_id=_norm(idn.get("driver_id")),
+                    gt7_version=_norm(idn.get("gt7_version"))))
         except Exception:
             return "", ""
         run = None
