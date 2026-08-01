@@ -1399,6 +1399,47 @@ class SessionDB:
             self._migrate_v35()
             self._conn.execute("PRAGMA user_version = 35")
             self._conn.commit()
+        if version < 36:
+            self._migrate_v36()
+            self._conn.execute("PRAGMA user_version = 36")
+            self._conn.commit()
+
+    def _migrate_v36(self) -> None:
+        """Program 3 Phase B — car-spec & track-model version registries (schema v36).
+
+        First-class immutable versions for two things that previously had no version
+        identity: a car's spec/BoP as it applied at an event (car_spec_revisions) and an
+        approved track model (track_model_versions). Both let a lap trace to the exact
+        car spec and track-model version in force. Two standalone additive tables;
+        nothing existing is touched and no disk scan runs here (registering models from
+        data/track_models is deferred to Phase C/E). CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS car_spec_revisions (
+            spec_revision_id TEXT PRIMARY KEY,
+            car_id           INTEGER NOT NULL DEFAULT 0,
+            car_name         TEXT    NOT NULL DEFAULT '',
+            event_id         INTEGER NOT NULL DEFAULT 0,
+            bop_json         TEXT    NOT NULL DEFAULT '{}',
+            spec_json        TEXT    NOT NULL DEFAULT '{}',
+            label            TEXT    NOT NULL DEFAULT '',
+            created_at       TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_car_spec_car ON car_spec_revisions(car_id);
+        CREATE INDEX IF NOT EXISTS idx_car_spec_event ON car_spec_revisions(event_id);
+        CREATE TABLE IF NOT EXISTS track_model_versions (
+            version_id        TEXT PRIMARY KEY,
+            track_location_id TEXT    NOT NULL DEFAULT '',
+            layout_id         TEXT    NOT NULL DEFAULT '',
+            model_status      TEXT    NOT NULL DEFAULT '',
+            approved          INTEGER NOT NULL DEFAULT 0,
+            source_path       TEXT    NOT NULL DEFAULT '',
+            confidence        REAL    NOT NULL DEFAULT 0.0,
+            created_at        TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_track_model_scope
+            ON track_model_versions(track_location_id, layout_id);
+        """)
+        self._conn.commit()
 
     def _migrate_v35(self) -> None:
         """Program 3 Phase B — immutable strategy revisions + race-state snapshots
@@ -6883,6 +6924,71 @@ class SessionDB:
             "WHERE session_run_id=? AND is_active=1 ORDER BY revision_index DESC LIMIT 1",
             (str(session_run_id or ""),)).fetchone()
         return self._row_to_strategy_revision(r) if r else None
+
+    # ---- car-spec & track-model version registries (v36) -----------------
+    def add_car_spec_revision(self, *, car_id: int = 0, car_name: str = "", event_id: int = 0,
+                              bop_json: str = "{}", spec_json: str = "{}", label: str = "",
+                              created_at: str = "") -> str:
+        spec_revision_id = new_id()
+        self._conn.execute(
+            "INSERT INTO car_spec_revisions (spec_revision_id, car_id, car_name, event_id, "
+            "bop_json, spec_json, label, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (spec_revision_id, int(car_id or 0), str(car_name or ""), int(event_id or 0),
+             str(bop_json or "{}"), str(spec_json or "{}"), str(label or ""), str(created_at or "")))
+        self._conn.commit()
+        return spec_revision_id
+
+    def get_car_spec_revisions(self, car_id: int = 0, event_id: int = 0) -> list:
+        clauses, params = [], []
+        if car_id:
+            clauses.append("car_id=?"); params.append(int(car_id))
+        if event_id:
+            clauses.append("event_id=?"); params.append(int(event_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            "SELECT spec_revision_id, car_id, car_name, event_id, bop_json, spec_json, label, "
+            f"created_at FROM car_spec_revisions{where} ORDER BY created_at, spec_revision_id",
+            params).fetchall()
+        keys = ("spec_revision_id", "car_id", "car_name", "event_id", "bop_json", "spec_json",
+                "label", "created_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def register_track_model_version(self, *, track_location_id: str = "", layout_id: str = "",
+                                     model_status: str = "", approved: bool = False,
+                                     source_path: str = "", confidence: float = 0.0,
+                                     created_at: str = "") -> str:
+        version_id = new_id()
+        self._conn.execute(
+            "INSERT INTO track_model_versions (version_id, track_location_id, layout_id, "
+            "model_status, approved, source_path, confidence, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (version_id, str(track_location_id or ""), str(layout_id or ""), str(model_status or ""),
+             1 if approved else 0, str(source_path or ""), float(confidence or 0.0),
+             str(created_at or "")))
+        self._conn.commit()
+        return version_id
+
+    def _row_to_track_model_version(self, r) -> dict:
+        keys = ("version_id", "track_location_id", "layout_id", "model_status", "approved",
+                "source_path", "confidence", "created_at")
+        return dict(zip(keys, r))
+
+    _TMV_COLS = ("version_id, track_location_id, layout_id, model_status, approved, source_path, "
+                 "confidence, created_at")
+
+    def get_track_model_versions(self, track_location_id: str, layout_id: str = "") -> list:
+        rows = self._conn.execute(
+            f"SELECT {self._TMV_COLS} FROM track_model_versions WHERE track_location_id=? "
+            "AND layout_id=? ORDER BY created_at, version_id",
+            (str(track_location_id or ""), str(layout_id or ""))).fetchall()
+        return [self._row_to_track_model_version(r) for r in rows]
+
+    def get_approved_track_model_version(self, track_location_id: str,
+                                         layout_id: str = "") -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._TMV_COLS} FROM track_model_versions WHERE track_location_id=? "
+            "AND layout_id=? AND approved=1 ORDER BY created_at DESC, version_id LIMIT 1",
+            (str(track_location_id or ""), str(layout_id or ""))).fetchone()
+        return self._row_to_track_model_version(r) if r else None
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a

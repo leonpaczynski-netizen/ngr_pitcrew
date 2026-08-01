@@ -145,7 +145,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v35 (Program 3 dynamic strategy): adds immutable strategy_revisions (parent-chained; only latest active)
 #     + race_state_snapshots (persisted at lap completion / material trigger). Two standalone additive
 #     tables; no existing table touched, no backfill (runtime population is Phase G). Idempotent.
-DB_VERSION: int = 35
+# v36 (Program 3 spec/version registries): adds car_spec_revisions (a car's spec/BoP as it applied at an
+#     event) + track_model_versions (approved track-model versions). Two standalone additive tables; no
+#     existing table touched, no disk scan (registration deferred to Phase C/E). Idempotent.
+DB_VERSION: int = 36
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
