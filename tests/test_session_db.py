@@ -242,10 +242,12 @@ def test_schema_version_is_v10(db):
     # Reconciled for lap-record integrity: 29 → 30 (_migrate_v30 dedupes duplicate
     # (session_id, lap_num) rows, adds the unique index, and repairs total_laps drift).
     # Reconciled for spin detection: 30 → 31 (_migrate_v31 adds lap_records.spin_count).
+    # Reconciled for Program 3 canonical identity: 31 → 32 (_migrate_v32 adds the additive
+    # UUIDv7 uuid column + ordering-preserving backfill to the core identity tables).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 31
+    assert version == DB_VERSION == 32
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

@@ -132,7 +132,11 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v29 (event_id evidence re-key): backfills event_preparation_cycles.event_id from events.name
 #     and sessions.event_id from the bound cycle's event_id, so recorded runs match a cycle by the
 #     stable integer event_id rather than fragile track/car text. Best-effort. Idempotent.
-DB_VERSION: int = 31
+# v32 (Program 3 canonical identity): adds an additive uuid (UUIDv7) column to each core identity
+#     table (events, sessions, setups, setup_snapshots, lap_records, setup_lineage, cars,
+#     ai_interactions) and backfills existing rows with time-ordered ids so ORDER BY uuid == original
+#     chronology. Integer PKs retained (dual-key transition); config_id untouched. Additive. Idempotent.
+DB_VERSION: int = 32
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

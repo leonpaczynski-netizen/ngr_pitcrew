@@ -1140,6 +1140,22 @@ def ms_to_str(ms: int) -> str:
     return f"{m}:{s:06.3f}"
 
 
+def _iso_to_ms(value) -> int:
+    """Parse a stored ISO timestamp into unix milliseconds; 0 if unparseable.
+
+    Used by the v32 identity backfill to order rows chronologically. Tolerant of
+    'Z' suffixes, a space separator and naive timestamps — only the relative
+    ordering within a single table matters, and the migration further guarantees
+    a strictly-increasing sequence, so a parse miss (→ 0) never breaks ordering."""
+    if not value:
+        return 0
+    s = str(value).strip().replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(s).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
 def _json_loads_list(v) -> list:
     if isinstance(v, (list, tuple)):
         return list(v)
@@ -1347,6 +1363,90 @@ class SessionDB:
             self._migrate_v31()
             self._conn.execute("PRAGMA user_version = 31")
             self._conn.commit()
+        # --- Program 3 (Canonical Event Spine) migrations begin at v32 ---
+        if 0 < version < 32:
+            # One-time safety snapshot of an EXISTING user DB before the first
+            # Program 3 migration mutates it. Fresh DBs (version 0) have nothing
+            # to protect and are skipped.
+            self._backup_before_program3()
+        if version < 32:
+            self._migrate_v32()
+            self._conn.execute("PRAGMA user_version = 32")
+            self._conn.commit()
+
+    def _backup_before_program3(self) -> None:
+        """Write a one-time ``<db>.pre_v32.bak`` snapshot before the v32 identity
+        migration runs (Program 3, decision 2026-08-01). Uses SQLite's online
+        backup API so it is WAL-safe. Best-effort: never overwrites an existing
+        backup and never blocks startup on failure."""
+        try:
+            bak = f"{self._path}.pre_v32.bak"
+            if self._path == ":memory:" or os.path.exists(bak):
+                return
+            dest = sqlite3.connect(bak)
+            try:
+                self._conn.backup(dest)
+            finally:
+                dest.close()
+        except Exception:
+            pass  # a failed backup must never block the app from starting
+
+    def _migrate_v32(self) -> None:
+        """Program 3 Phase B — canonical UUIDv7 identity (schema v32).
+
+        Adds an additive ``uuid TEXT`` column to each core identity table and
+        backfills every existing row with a time-ordered UUIDv7, generated from
+        the row's own timestamp (strictly increasing per batch) so that
+        ``ORDER BY uuid`` reproduces the original ``(timestamp, id)`` chronology.
+        The INTEGER primary keys are RETAINED — this is the transitional dual-key
+        step: no consumer query is repointed here, ``config_id`` is untouched, and
+        the ~50 legacy ``ORDER BY id`` reads keep working unchanged. A partial
+        UNIQUE index (uuid IS NOT NULL) enforces uniqueness while tolerating rows
+        created before the insert paths are wired to mint a uuid. Duplicate-column
+        / IF NOT EXISTS guarded, backfill touches only NULL-uuid rows ⇒ idempotent."""
+        from data.ids import backfill_id
+        # (table, timestamp column) — None ⇒ order by the autoincrement id.
+        specs = (
+            ("events", "created_at"),
+            ("sessions", "date_utc"),
+            ("setups", "created_at"),
+            ("setup_snapshots", "captured_at"),
+            ("lap_records", None),
+            ("setup_lineage", "ts"),
+            ("cars", None),
+            ("ai_interactions", "timestamp"),
+        )
+        for table, ts_col in specs:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN uuid TEXT")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+            if ts_col:
+                rows = self._conn.execute(
+                    f"SELECT id, {ts_col} FROM {table} "
+                    f"WHERE uuid IS NULL OR uuid = '' ORDER BY {ts_col}, id"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    f"SELECT id, NULL FROM {table} "
+                    f"WHERE uuid IS NULL OR uuid = '' ORDER BY id"
+                ).fetchall()
+            prev_ms = 0
+            updates = []
+            for rid, raw_ts in rows:
+                ms = _iso_to_ms(raw_ts)
+                if ms <= prev_ms:
+                    ms = prev_ms + 1
+                prev_ms = ms
+                updates.append((backfill_id(ms), rid))
+            if updates:
+                self._conn.executemany(
+                    f"UPDATE {table} SET uuid = ? WHERE id = ?", updates)
+            self._conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uuid "
+                f"ON {table}(uuid) WHERE uuid IS NOT NULL"
+            )
 
     def _migrate_v31(self) -> None:
         """Add lap_records.spin_count (schema v31). A sustained large yaw rotation (a spin,
