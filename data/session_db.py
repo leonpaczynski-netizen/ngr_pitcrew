@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from statistics import mean as _mean
 from typing import Optional, TYPE_CHECKING
 
+from data.ids import new_id, backfill_id
+
 if TYPE_CHECKING:
     from telemetry.recorder import LapStats, TelemetryFrame
 
@@ -1389,6 +1391,97 @@ class SessionDB:
             self._migrate_v33()
             self._conn.execute("PRAGMA user_version = 33")
             self._conn.commit()
+        if version < 34:
+            self._migrate_v34()
+            self._conn.execute("PRAGMA user_version = 34")
+            self._conn.commit()
+
+    def _migrate_v34(self) -> None:
+        """Program 3 Phase B — planned session vs actual run + stint (schema v34).
+
+        Introduces the distinction Program 3 is built around: a PLANNED session (an
+        event_preparation_activities row) can be executed as several ACTUAL runs
+        (a failed connection, a clean four-lap run, a six-lap comparison) that must
+        stay distinct instead of being merged by name/type. Adds:
+          * session_runs — one row per actual execution (uuid run_id), linked to its
+            plan (activity_id), the recorded sessions row, event and cycle.
+          * stints — one row per stint within a run (uuid stint_id).
+          * lap_records.session_run_id / .stint_id cross-ref columns.
+        Backfills each existing sessions row to exactly ONE completed session_run with
+        a single default stint, binding to a plan where an activity-session link
+        exists. Purely additive; no live writer is repointed here (Phase C/E). Only
+        sessions without a run are backfilled ⇒ idempotent."""
+        from data.ids import backfill_id, new_id
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS session_runs (
+            run_id          TEXT PRIMARY KEY,
+            session_plan_id TEXT    NOT NULL DEFAULT '',
+            session_id      INTEGER NOT NULL DEFAULT 0,
+            session_uuid    TEXT    NOT NULL DEFAULT '',
+            event_id        INTEGER NOT NULL DEFAULT 0,
+            cycle_id        TEXT    NOT NULL DEFAULT '',
+            session_type    TEXT    NOT NULL DEFAULT '',
+            status          TEXT    NOT NULL DEFAULT 'complete',
+            started_at      TEXT    NOT NULL DEFAULT '',
+            ended_at        TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_runs_plan ON session_runs(session_plan_id);
+        CREATE INDEX IF NOT EXISTS idx_session_runs_session ON session_runs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_session_runs_event ON session_runs(event_id);
+        CREATE TABLE IF NOT EXISTS stints (
+            stint_id       TEXT PRIMARY KEY,
+            session_run_id TEXT    NOT NULL DEFAULT '',
+            stint_index    INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_stints_run ON stints(session_run_id);
+        """)
+        for col in ("session_run_id", "stint_id"):
+            try:
+                self._conn.execute(f"ALTER TABLE lap_records ADD COLUMN {col} TEXT")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        # Backfill: one completed run (+ one stint) per not-yet-migrated session.
+        try:
+            sessions = self._conn.execute(
+                "SELECT id, uuid, event_id, session_type, date_utc FROM sessions "
+                "WHERE id NOT IN (SELECT session_id FROM session_runs) "
+                "ORDER BY date_utc, id").fetchall()
+        except Exception:
+            return
+        prev_ms = 0
+        for sid, suuid, eid, stype, date_utc in sessions:
+            ms = _iso_to_ms(date_utc)
+            if ms <= prev_ms:
+                ms = prev_ms + 1
+            prev_ms = ms
+            run_id = backfill_id(ms)
+            plan_id, cyc = "", ""
+            try:
+                bind = self._conn.execute(
+                    "SELECT activity_id, cycle_id FROM event_preparation_activity_sessions "
+                    "WHERE session_id=? LIMIT 1", (str(sid),)).fetchone()
+                if bind:
+                    plan_id, cyc = str(bind[0] or ""), str(bind[1] or "")
+            except Exception:
+                pass
+            self._conn.execute(
+                "INSERT INTO session_runs (run_id, session_plan_id, session_id, session_uuid, "
+                "event_id, cycle_id, session_type, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?, 'complete', ?)",
+                (run_id, plan_id, int(sid), str(suuid or ""), int(eid or 0), cyc,
+                 str(stype or ""), str(date_utc or "")))
+            stint_id = new_id()
+            self._conn.execute(
+                "INSERT INTO stints (stint_id, session_run_id, stint_index, created_at) "
+                "VALUES (?,?,0,?)", (stint_id, run_id, str(date_utc or "")))
+            self._conn.execute(
+                "UPDATE lap_records SET session_run_id=?, stint_id=? "
+                "WHERE session_id=? AND (session_run_id IS NULL OR session_run_id='')",
+                (run_id, stint_id, int(sid)))
+        self._conn.commit()
 
     def _migrate_v33(self) -> None:
         """Program 3 Phase B — event-programme identity becomes a UUID (schema v33).
@@ -6605,6 +6698,66 @@ class SessionDB:
         if row is None:
             return None
         return self.get_preparation_cycle(row[0])
+
+    # ---- session runs / stints (Program 3 Phase B, v34) ------------------
+    def create_session_run(self, *, session_plan_id: str = "", session_id: int = 0,
+                           session_uuid: str = "", event_id: int = 0, cycle_id: str = "",
+                           session_type: str = "", status: str = "recording",
+                           started_at: str = "", created_at: str = "") -> str:
+        """Create one ACTUAL run of a planned session and return its uuid run_id.
+        Every call is a DISTINCT run — a failed run and a successful run of the same
+        plan are never merged. The caller starts or resumes an identified run; a new
+        telemetry recording must not silently reuse a previous run."""
+        run_id = new_id()
+        self._conn.execute(
+            "INSERT INTO session_runs (run_id, session_plan_id, session_id, session_uuid, "
+            "event_id, cycle_id, session_type, status, started_at, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (run_id, str(session_plan_id or ""), int(session_id or 0), str(session_uuid or ""),
+             int(event_id or 0), str(cycle_id or ""), str(session_type or ""),
+             str(status or "recording"), str(started_at or ""),
+             str(created_at or started_at or "")))
+        self._conn.commit()
+        return run_id
+
+    def get_session_run(self, run_id: str) -> "dict | None":
+        r = self._conn.execute(
+            "SELECT run_id, session_plan_id, session_id, session_uuid, event_id, cycle_id, "
+            "session_type, status, started_at, ended_at, created_at FROM session_runs "
+            "WHERE run_id=?", (str(run_id or ""),)).fetchone()
+        if not r:
+            return None
+        keys = ("run_id", "session_plan_id", "session_id", "session_uuid", "event_id",
+                "cycle_id", "session_type", "status", "started_at", "ended_at", "created_at")
+        return dict(zip(keys, r))
+
+    def get_runs_for_plan(self, session_plan_id: str) -> list:
+        """All actual runs of one planned session, in creation order."""
+        rows = self._conn.execute(
+            "SELECT run_id FROM session_runs WHERE session_plan_id=? ORDER BY created_at, run_id",
+            (str(session_plan_id or ""),)).fetchall()
+        return [self.get_session_run(r[0]) for r in rows]
+
+    def get_run_for_session(self, session_id: int) -> "dict | None":
+        r = self._conn.execute(
+            "SELECT run_id FROM session_runs WHERE session_id=? ORDER BY created_at, run_id LIMIT 1",
+            (int(session_id or 0),)).fetchone()
+        return self.get_session_run(r[0]) if r else None
+
+    def set_session_run_status(self, run_id: str, status: str, ended_at: str = "") -> None:
+        self._conn.execute(
+            "UPDATE session_runs SET status=?, ended_at=? WHERE run_id=?",
+            (str(status or ""), str(ended_at or ""), str(run_id or "")))
+        self._conn.commit()
+
+    def add_stint(self, session_run_id: str, stint_index: int = 0, created_at: str = "") -> str:
+        stint_id = new_id()
+        self._conn.execute(
+            "INSERT INTO stints (stint_id, session_run_id, stint_index, created_at) "
+            "VALUES (?,?,?,?)",
+            (stint_id, str(session_run_id or ""), int(stint_index or 0), str(created_at or "")))
+        self._conn.commit()
+        return stint_id
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a

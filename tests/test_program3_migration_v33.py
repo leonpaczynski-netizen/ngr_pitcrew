@@ -36,7 +36,7 @@ def _seed_v32_cycle(path: str, slug: str = "cycle-round-4-fuji",
 
 def test_fresh_db_reaches_v33_with_legacy_column(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 33
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 33
     cols = {r[1] for r in db._conn.execute("PRAGMA table_info(event_preparation_cycles)")}
     assert "legacy_cycle_id" in cols
 
@@ -92,7 +92,7 @@ def test_migration_idempotent_no_rekey(tmp_path):
     db2 = SessionDB(path)
     cid_2 = db2._conn.execute("SELECT cycle_id FROM event_preparation_cycles").fetchone()[0]
     assert cid_1 == cid_2  # a re-open must NOT mint a second uuid
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == 33
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] >= 33
 
 
 def test_upsert_new_cycle_with_uuid_roundtrips(tmp_path):

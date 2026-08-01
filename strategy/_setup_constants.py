@@ -139,7 +139,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v33 (Program 3 event-programme identity): replaces the event_preparation_cycles.cycle_id slug with an
 #     opaque UUIDv7 (cascaded onto the two child tables), preserving the old slug in legacy_cycle_id.
 #     Cycle reuse is now keyed by event_id (get_cycle_by_event), not a re-derived slug. Idempotent.
-DB_VERSION: int = 33
+# v34 (Program 3 planned-vs-actual run): adds session_runs (one row per actual execution of a planned
+#     session/activity) + stints, plus lap_records.session_run_id/.stint_id. Backfills each existing
+#     session to one completed run with a single stint. Purely additive; no live writer repointed. Idempotent.
+DB_VERSION: int = 34
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
