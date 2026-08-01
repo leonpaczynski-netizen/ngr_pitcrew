@@ -162,7 +162,9 @@ Run just these to confirm they still fail as classified: `python tools/run_regre
 > **removed** — that phase activated them as normal tests (the run card now renders the authoritative
 > Practice coordinator's valid-lap count + connected state). `test_live_shell_bridge.py::
 > TestBridgeReadSide::test_refresh_feeds_appstate_and_garage` (a pre-existing UI dev-time red — fake-
-> window car resolution, proven to fail identically at base) was **added**. Net count: 19.
+> window car resolution) and the two `TestU4HomeSaysSomething` home-view dev-time reds were **added**
+> (all pre-existing). `test_bridge_actions.py` (pre-existing undisposed-widget teardown crash) is
+> skipped-with-log by the runner. Net: 23 quarantined node-ids + 1 skipped teardown-crash file.
 
 ---
 

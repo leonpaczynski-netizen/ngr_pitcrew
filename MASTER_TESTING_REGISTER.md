@@ -8,9 +8,12 @@
 > `test_live_practice_safety.py` (5: authors no setup/strategy/pit/PTT, Qt/DB/clock-free). **The two
 > quarantined V5 recording tests are ACTIVATED and pass** (run card renders the authoritative
 > coordinator's valid-lap count + connected); **`test_refresh_feeds_appstate_and_garage` (pre-existing
-> UI red, car resolution) newly quarantined** (proven to fail identically without this change).
-> `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged (2 additive `SessionDB` helpers). Safety suite green.
-> Hardware UAT `docs/LIVE_ACTIVATION_1_UAT.md` — all live items NOT TESTED. Quarantine now 19 items.
+> UI red, car resolution) + the two `TestU4HomeSaysSomething` home-view dev-time reds newly
+> quarantined** (all pre-existing, unrelated to recording); `test_bridge_actions.py` (pre-existing
+> undisposed-widget teardown crash — tests pass, process aborts at exit) is skipped-with-log by the
+> runner. `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged (2 additive `SessionDB` helpers). Safety suite
+> green. Hardware UAT `docs/LIVE_ACTIVATION_1_UAT.md` — all live items NOT TESTED. Quarantine: 23
+> node-ids + 1 skipped teardown-crash file.
 
 > **PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01).** Branch
 > `maint/program3.1-regression-baseline-2026-08-01`. Maintenance/certification only — **0 production
