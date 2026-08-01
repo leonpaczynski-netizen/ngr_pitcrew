@@ -15,10 +15,18 @@ fed every tick). **The two quarantined V5 recording tests are ACTIVATED and pass
 `test_refresh_feeds_appstate_and_garage` + `TestU4HomeSaysSomething` (pre-existing UI reds) newly
 quarantined; `test_bridge_actions` teardown-crasher skipped-with-log.** New modules:
 `strategy/live_practice_activation.py`, `strategy/live_practice_runtime.py`,
-`ui/live_practice_db_port.py`, `ui/components/live_diagnostics.py`. `DB_VERSION=40` + RULE_ENGINE 46.0
-unchanged (2 additive DB helpers only). PR **#105** open. **STOPPED at the hardware-UAT gate —
-`docs/LIVE_ACTIVATION_1_UAT.md`; live certification NOT TESTED. Remaining before merge: on-hardware
-engineer-choreography verification + the UAT sign-off.** _(Program 3.1 section below stands.)_
+`ui/live_practice_db_port.py`, `ui/components/live_diagnostics.py`,
+`strategy/practice_engineer_choreography.py`. **Practice Engineer choreography DONE** (§7 — the 6
+message types brief/recording/progress/invalid-lap/sufficient/conclusion, edge-driven + anti-chatter,
+built + wired into the bridge voice + verified offline incl. an end-to-end session walk). `DB_VERSION=40`
++ RULE_ENGINE 46.0 unchanged (2 additive DB helpers only). PR **#105** open. **STOPPED at the
+hardware-UAT gate — `docs/LIVE_ACTIVATION_1_UAT.md`; live certification NOT TESTED.**
+**⚠ ONE RUNTIME GAP REMAINS before hardware UAT can exercise any of this:** nothing in the live GT7
+telemetry path yet CALLS `coordinator.activate()/telemetry_connected()/on_lap()/complete()` — the
+coordinator, choreographer and diagnostics panel are all built + verified but currently driven only by
+tests. The final step is wiring real telemetry events (session start/connect, each completed lap,
+session end, disconnect/reconnect) to the coordinator so the pipeline fires live. _(Program 3.1 section
+below stands.)_
 
 ## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01)
 Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
