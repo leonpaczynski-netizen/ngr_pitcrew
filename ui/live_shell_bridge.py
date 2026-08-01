@@ -2715,8 +2715,8 @@ class LiveShellBridge(QObject):
             if lp is None:
                 return
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
-            from strategy.live_engineer_session import (
-                normalise_session_mode, session_engineer_call)
+            from strategy.live_engineer_session import normalise_session_mode
+            from strategy.engineer_orchestrator import EngineerContext, orchestrate
             connected = self._connected()
             # The session type gates EVERYTHING that follows. Only an ACTUAL RACE gets the
             # race strategy state, the adaptive pit decision, the pit plan and the "race"
@@ -2770,13 +2770,22 @@ class LiveShellBridge(QObject):
                         except Exception:
                             self._live_audio_view = None
                     audio_view = self._live_audio_view
-            # Session-type-aware engineer: in practice/qualifying the engineer talks
-            # feel and one-lap pace, not race strategy — like a real engineer adjusting
-            # to the session. Race defers to the strategy engine (override "").
+            # Session-type-aware engineer via the single Engineer Orchestrator (Phase E):
+            # it resolves the mode and returns ONE coordinated line — practice/qualifying
+            # talk feel + one-lap pace (never race strategy), race defers to the strategy
+            # engine (""). Behaviour matches the previous session_engineer_call (the
+            # orchestrator is a parity-tested superset); it is the seam through which the
+            # qualifying state machine + live practice brief are activated next. Track
+            # modelling keeps its own voice path, so the engineer LINE is computed as before
+            # (track_modelling_active left False here) and speaking is gated below.
             _last_s, _best_s = self._live_last_best_lap_s()
-            _eng_call = session_engineer_call(
-                _sess, connected=connected, lap_count=self._live_lap_count(),
-                last_lap_s=_last_s, best_lap_s=_best_s)
+            _eng_call = orchestrate(EngineerContext(
+                live_session_mode=self._live_session_mode,
+                race_phase=self._live_race_phase,
+                connected=connected,
+                lap_count=self._live_lap_count(),
+                last_lap_s=_last_s, best_lap_s=_best_s,
+            )).line
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
                 race_phase=self._live_race_phase,
