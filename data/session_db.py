@@ -1411,6 +1411,48 @@ class SessionDB:
             self._migrate_v38()
             self._conn.execute("PRAGMA user_version = 38")
             self._conn.commit()
+        if version < 39:
+            self._migrate_v39()
+            self._conn.execute("PRAGMA user_version = 39")
+            self._conn.commit()
+
+    def _migrate_v39(self) -> None:
+        """Program 3 Phase F — PTT interaction audit trail (schema v39).
+
+        Every push-to-talk interaction is persisted with the exact context in force
+        (event / cycle / session_run / stint / lap / car / setup / strategy revision /
+        session type) plus the recognised intent, resolved action and response — so a
+        wrong response can be traced to speech recognition, intent, context, or
+        response construction. The raw transcript is DELIBERATELY NOT stored: the
+        push_to_talk domain's invariant is that raw transcripts never persist / never
+        enter a fingerprint, so there is no transcript column here. One standalone
+        additive table; nothing existing is touched. CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS ptt_interactions (
+            interaction_id       TEXT PRIMARY KEY,
+            event_id             INTEGER NOT NULL DEFAULT 0,
+            cycle_id             TEXT    NOT NULL DEFAULT '',
+            session_run_id       TEXT    NOT NULL DEFAULT '',
+            stint_id             TEXT    NOT NULL DEFAULT '',
+            lap_number           INTEGER NOT NULL DEFAULT 0,
+            car_id               INTEGER NOT NULL DEFAULT 0,
+            setup_snapshot_id    TEXT    NOT NULL DEFAULT '',
+            strategy_revision_id TEXT    NOT NULL DEFAULT '',
+            session_type         TEXT    NOT NULL DEFAULT '',
+            recognised_action    TEXT    NOT NULL DEFAULT '',
+            command_class        TEXT    NOT NULL DEFAULT '',
+            intent_confidence    REAL    NOT NULL DEFAULT 0.0,
+            ambiguous            INTEGER NOT NULL DEFAULT 0,
+            resolved_action      TEXT    NOT NULL DEFAULT '',
+            response             TEXT    NOT NULL DEFAULT '',
+            response_priority    TEXT    NOT NULL DEFAULT '',
+            fallback_state       TEXT    NOT NULL DEFAULT '',
+            created_at           TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_ptt_run ON ptt_interactions(session_run_id);
+        CREATE INDEX IF NOT EXISTS idx_ptt_event ON ptt_interactions(event_id);
+        """)
+        self._conn.commit()
 
     def _migrate_v38(self) -> None:
         """Program 3 Phase B — legacy-data classification + quarantine (schema v38).
@@ -7180,6 +7222,53 @@ class SessionDB:
         r = self._conn.execute(
             "SELECT legacy_class FROM sessions WHERE id=?", (int(session_id or 0),)).fetchone()
         return bool(r and r[0] in ("AMBIGUOUS", "ORPHANED"))
+
+    # ---- PTT interaction audit trail (v39) -------------------------------
+    _PTT_COLS = ("interaction_id, event_id, cycle_id, session_run_id, stint_id, lap_number, "
+                 "car_id, setup_snapshot_id, strategy_revision_id, session_type, "
+                 "recognised_action, command_class, intent_confidence, ambiguous, "
+                 "resolved_action, response, response_priority, fallback_state, created_at")
+
+    def record_ptt_interaction(self, rec: dict) -> str:
+        """Persist one PTT interaction with its context + intent + resolution. Returns
+        the interaction id. The raw transcript is never accepted or stored (invariant).
+        Best-effort — never raises; a failure returns ''."""
+        try:
+            r = dict(rec or {})
+            interaction_id = new_id()
+            self._conn.execute(
+                "INSERT INTO ptt_interactions (interaction_id, event_id, cycle_id, session_run_id, "
+                "stint_id, lap_number, car_id, setup_snapshot_id, strategy_revision_id, session_type, "
+                "recognised_action, command_class, intent_confidence, ambiguous, resolved_action, "
+                "response, response_priority, fallback_state, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (interaction_id, int(r.get("event_id") or 0), str(r.get("cycle_id") or ""),
+                 str(r.get("session_run_id") or ""), str(r.get("stint_id") or ""),
+                 int(r.get("lap_number") or 0), int(r.get("car_id") or 0),
+                 str(r.get("setup_snapshot_id") or ""), str(r.get("strategy_revision_id") or ""),
+                 str(r.get("session_type") or ""), str(r.get("recognised_action") or ""),
+                 str(r.get("command_class") or ""), float(r.get("intent_confidence") or 0.0),
+                 1 if r.get("ambiguous") else 0, str(r.get("resolved_action") or ""),
+                 str(r.get("response") or ""), str(r.get("response_priority") or ""),
+                 str(r.get("fallback_state") or ""), str(r.get("created_at") or "")))
+            self._conn.commit()
+            return interaction_id
+        except Exception:
+            return ""
+
+    def get_ptt_interactions(self, session_run_id: str = "", event_id: int = 0) -> list:
+        """PTT interactions for a run or event (audit trail), oldest first."""
+        clauses, params = [], []
+        if session_run_id:
+            clauses.append("session_run_id=?"); params.append(str(session_run_id))
+        if event_id:
+            clauses.append("event_id=?"); params.append(int(event_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT {self._PTT_COLS} FROM ptt_interactions{where} "
+            "ORDER BY created_at, interaction_id", params).fetchall()
+        keys = tuple(c.strip() for c in self._PTT_COLS.split(","))
+        return [dict(zip(keys, r)) for r in rows]
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a

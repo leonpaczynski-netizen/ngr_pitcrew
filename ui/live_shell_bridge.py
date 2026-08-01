@@ -427,6 +427,37 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _record_ptt_interaction(self, *, resolved_action: str = "", recognised_action: str = "",
+                                command_class: str = "", intent_confidence: float = 0.0,
+                                ambiguous: bool = False, response: str = "",
+                                fallback_state: str = "") -> None:
+        """Best-effort persist of a PTT interaction with the active context (Phase F /
+        §19), so a wrong response is traceable. The raw transcript is NEVER stored
+        (push_to_talk invariant). Never raises."""
+        db = getattr(self, "_db", None)
+        if db is None or not hasattr(db, "record_ptt_interaction"):
+            return
+        try:
+            import datetime as _dt
+            from strategy.ptt_interaction import PttInteractionRecord
+            cfg = self._config if isinstance(self._config, dict) else {}
+            rec = PttInteractionRecord(
+                cycle_id=str(cfg.get("active_cycle_id") or ""),
+                lap_number=int(self._live_lap_count() or 0),
+                session_type=str(self._live_session_mode or ""),
+                recognised_action=str(recognised_action or resolved_action or ""),
+                command_class=str(command_class or ""),
+                intent_confidence=float(intent_confidence or 0.0),
+                ambiguous=bool(ambiguous),
+                resolved_action=str(resolved_action or ""),
+                response=str(response or ""),
+                fallback_state=str(fallback_state or ""),
+                created_at=_dt.datetime.now().isoformat(timespec="seconds"),
+            )
+            db.record_ptt_interaction(rec.as_dict())
+        except Exception:
+            pass
+
     def _on_voice_strategy_ack(self, action: str) -> None:
         """Handle a PTT strategy acknowledgement on the Qt thread.
 
@@ -441,6 +472,11 @@ class LiveShellBridge(QObject):
         try:
             from strategy.adaptive_live_strategy import acknowledge_strategy
             from ui.shell_feed_adapters import live_plan_dict_from_candidate
+            # Program 3 (Phase F / §19): audit every strategy ack with its context —
+            # including a no-op "accept with nothing pending" (a wrong-context signal).
+            self._record_ptt_interaction(
+                resolved_action=str(action or ""), command_class="strategy_ack",
+                response=f"strategy ack: {action}")
             if action == "accept":
                 if not self._live_pending:
                     return  # nothing to accept — safe no-op
