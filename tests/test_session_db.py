@@ -242,10 +242,24 @@ def test_schema_version_is_v10(db):
     # Reconciled for lap-record integrity: 29 → 30 (_migrate_v30 dedupes duplicate
     # (session_id, lap_num) rows, adds the unique index, and repairs total_laps drift).
     # Reconciled for spin detection: 30 → 31 (_migrate_v31 adds lap_records.spin_count).
+    # Reconciled for Program 3 canonical identity: 31 → 32 (_migrate_v32 adds the additive
+    # UUIDv7 uuid column + ordering-preserving backfill to the core identity tables).
+    # Reconciled for Program 3 event-programme identity: 32 → 33 (_migrate_v33 replaces the
+    # event_preparation_cycles.cycle_id slug with a UUID, preserving the slug in legacy_cycle_id).
+    # Reconciled for Program 3 planned-vs-actual run: 33 → 34 (_migrate_v34 adds session_runs +
+    # stints and backfills one completed run per existing session).
+    # Reconciled for Program 3 dynamic strategy: 34 → 35 (_migrate_v35 adds immutable
+    # strategy_revisions + race_state_snapshots).
+    # Reconciled for Program 3 spec/version registries: 35 → 36 (_migrate_v36 adds
+    # car_spec_revisions + track_model_versions).
+    # Reconciled for Program 3 driver-profile versioning: 36 → 37 (_migrate_v37 adds
+    # driver_profile_versions with immutable history).
+    # Reconciled for Program 3 legacy classification: 37 → 38 (_migrate_v38 classifies legacy
+    # sessions + adds the read-only quarantine_records view).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 31
+    assert version == DB_VERSION == 38
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

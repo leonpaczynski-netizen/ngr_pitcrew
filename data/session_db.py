@@ -19,11 +19,14 @@ import json
 import os
 import sqlite3
 import threading
+import uuid
 import zlib
 from dataclasses import asdict as _dc_asdict
 from datetime import datetime, timezone
 from statistics import mean as _mean
 from typing import Optional, TYPE_CHECKING
+
+from data.ids import new_id, backfill_id
 
 if TYPE_CHECKING:
     from telemetry.recorder import LapStats, TelemetryFrame
@@ -1140,6 +1143,33 @@ def ms_to_str(ms: int) -> str:
     return f"{m}:{s:06.3f}"
 
 
+def _iso_to_ms(value) -> int:
+    """Parse a stored ISO timestamp into unix milliseconds; 0 if unparseable.
+
+    Used by the v32 identity backfill to order rows chronologically. Tolerant of
+    'Z' suffixes, a space separator and naive timestamps — only the relative
+    ordering within a single table matters, and the migration further guarantees
+    a strictly-increasing sequence, so a parse miss (→ 0) never breaks ordering."""
+    if not value:
+        return 0
+    s = str(value).strip().replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(s).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _looks_like_uuid(value) -> bool:
+    """True if value parses as a UUID. Used by the v33 cycle-id migration to skip
+    rows already carrying a UUID (a fresh cycle or a re-run) — legacy slugs like
+    'cycle-round-4-fuji' never parse, so they are the ones remapped."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except Exception:
+        return False
+
+
 def _json_loads_list(v) -> list:
     if isinstance(v, (list, tuple)):
         return list(v)
@@ -1347,6 +1377,411 @@ class SessionDB:
             self._migrate_v31()
             self._conn.execute("PRAGMA user_version = 31")
             self._conn.commit()
+        # --- Program 3 (Canonical Event Spine) migrations begin at v32 ---
+        if 0 < version < 32:
+            # One-time safety snapshot of an EXISTING user DB before the first
+            # Program 3 migration mutates it. Fresh DBs (version 0) have nothing
+            # to protect and are skipped.
+            self._backup_before_program3()
+        if version < 32:
+            self._migrate_v32()
+            self._conn.execute("PRAGMA user_version = 32")
+            self._conn.commit()
+        if version < 33:
+            self._migrate_v33()
+            self._conn.execute("PRAGMA user_version = 33")
+            self._conn.commit()
+        if version < 34:
+            self._migrate_v34()
+            self._conn.execute("PRAGMA user_version = 34")
+            self._conn.commit()
+        if version < 35:
+            self._migrate_v35()
+            self._conn.execute("PRAGMA user_version = 35")
+            self._conn.commit()
+        if version < 36:
+            self._migrate_v36()
+            self._conn.execute("PRAGMA user_version = 36")
+            self._conn.commit()
+        if version < 37:
+            self._migrate_v37()
+            self._conn.execute("PRAGMA user_version = 37")
+            self._conn.commit()
+        if version < 38:
+            self._migrate_v38()
+            self._conn.execute("PRAGMA user_version = 38")
+            self._conn.commit()
+
+    def _migrate_v38(self) -> None:
+        """Program 3 Phase B — legacy-data classification + quarantine (schema v38).
+
+        Classifies every legacy sessions row by how reliably it can be placed in a
+        context, WITHOUT guessing it into the most-likely event:
+          * RESOLVED             — has a stable event_id link.
+          * RESOLVED_WITH_WARNING — event_id 0 but recoverable via an activity binding.
+          * AMBIGUOUS            — event_id 0 and no binding: cannot be deterministically
+                                    placed, so it is NOT assigned to any event.
+        Orphaned lap_records (session_id with no sessions row) are ORPHANED. A read-only
+        quarantine_records view surfaces AMBIGUOUS/ORPHANED for manual review; downstream
+        learning must never consume a quarantined row. Additive column + view; classifies
+        only unclassified rows ⇒ idempotent."""
+        try:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN legacy_class TEXT")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        # Order matters: RESOLVED, then WARNING (bound), then AMBIGUOUS (the rest).
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='RESOLVED' "
+            "WHERE event_id > 0 AND (legacy_class IS NULL OR legacy_class='')")
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='RESOLVED_WITH_WARNING' "
+            "WHERE (event_id IS NULL OR event_id=0) AND (legacy_class IS NULL OR legacy_class='') "
+            "AND EXISTS (SELECT 1 FROM event_preparation_activity_sessions b "
+            "            WHERE b.session_id = CAST(sessions.id AS TEXT))")
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='AMBIGUOUS' "
+            "WHERE (event_id IS NULL OR event_id=0) AND (legacy_class IS NULL OR legacy_class='')")
+        self._conn.executescript("""
+        CREATE VIEW IF NOT EXISTS quarantine_records AS
+            SELECT 'session' AS record_type, CAST(id AS TEXT) AS record_id, legacy_class AS reason
+              FROM sessions WHERE legacy_class IN ('AMBIGUOUS', 'ORPHANED')
+            UNION ALL
+            SELECT 'lap' AS record_type, CAST(id AS TEXT) AS record_id, 'ORPHANED' AS reason
+              FROM lap_records WHERE session_id NOT IN (SELECT id FROM sessions);
+        """)
+        self._conn.commit()
+
+    def _migrate_v37(self) -> None:
+        """Program 3 Phase B — driver-profile versioning with history (schema v37).
+
+        Replaces the mutating profile-version string (which the DB read ignored) with a
+        real, immutable, parent-chained version history: each row records its effective
+        date, prior version, the profile snapshot, the change-set from the prior version
+        and the reason, so historical recommendations stay traceable to the profile
+        version active at the time (never rewritten with the latest). Adds one additive
+        table and seeds a v1.0 snapshot from the existing user_profile singleton if one
+        exists. CREATE IF NOT EXISTS + seed-only-when-empty ⇒ idempotent."""
+        import json as _json
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS driver_profile_versions (
+            version_id       TEXT PRIMARY KEY,
+            prior_version_id TEXT    NOT NULL DEFAULT '',
+            version_label    TEXT    NOT NULL DEFAULT '',
+            effective_from   TEXT    NOT NULL DEFAULT '',
+            profile_json     TEXT    NOT NULL DEFAULT '{}',
+            changes_json     TEXT    NOT NULL DEFAULT '[]',
+            evidence_window  TEXT    NOT NULL DEFAULT '',
+            reason           TEXT    NOT NULL DEFAULT '',
+            is_current       INTEGER NOT NULL DEFAULT 1,
+            created_at       TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_driver_profile_ver_current
+            ON driver_profile_versions(is_current);
+        """)
+        # Seed v1.0 from the existing user_profile singleton, once.
+        try:
+            already = self._conn.execute(
+                "SELECT COUNT(*) FROM driver_profile_versions").fetchone()[0]
+            prof = self._conn.execute(
+                "SELECT name, driving_style_summary, setup_preferences, brake_bias_preference, "
+                "throttle_style, trail_braking_preference, stability_preference, "
+                "rotation_preference, updated_at FROM user_profile LIMIT 1").fetchone()
+            if not already and prof:
+                keys = ("name", "driving_style_summary", "setup_preferences", "brake_bias_preference",
+                        "throttle_style", "trail_braking_preference", "stability_preference",
+                        "rotation_preference", "updated_at")
+                snapshot = dict(zip(keys, prof))
+                self._conn.execute(
+                    "INSERT INTO driver_profile_versions (version_id, version_label, effective_from, "
+                    "profile_json, reason, is_current, created_at) VALUES (?,?,?,?,?,1,?)",
+                    (new_id(), "v1.0-baseline", str(snapshot.get("updated_at") or ""),
+                     _json.dumps(snapshot), "seeded from existing user_profile at v37 migration",
+                     str(snapshot.get("updated_at") or "")))
+        except Exception:
+            pass  # additive seed is best-effort — never block startup
+        self._conn.commit()
+
+    def _migrate_v36(self) -> None:
+        """Program 3 Phase B — car-spec & track-model version registries (schema v36).
+
+        First-class immutable versions for two things that previously had no version
+        identity: a car's spec/BoP as it applied at an event (car_spec_revisions) and an
+        approved track model (track_model_versions). Both let a lap trace to the exact
+        car spec and track-model version in force. Two standalone additive tables;
+        nothing existing is touched and no disk scan runs here (registering models from
+        data/track_models is deferred to Phase C/E). CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS car_spec_revisions (
+            spec_revision_id TEXT PRIMARY KEY,
+            car_id           INTEGER NOT NULL DEFAULT 0,
+            car_name         TEXT    NOT NULL DEFAULT '',
+            event_id         INTEGER NOT NULL DEFAULT 0,
+            bop_json         TEXT    NOT NULL DEFAULT '{}',
+            spec_json        TEXT    NOT NULL DEFAULT '{}',
+            label            TEXT    NOT NULL DEFAULT '',
+            created_at       TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_car_spec_car ON car_spec_revisions(car_id);
+        CREATE INDEX IF NOT EXISTS idx_car_spec_event ON car_spec_revisions(event_id);
+        CREATE TABLE IF NOT EXISTS track_model_versions (
+            version_id        TEXT PRIMARY KEY,
+            track_location_id TEXT    NOT NULL DEFAULT '',
+            layout_id         TEXT    NOT NULL DEFAULT '',
+            model_status      TEXT    NOT NULL DEFAULT '',
+            approved          INTEGER NOT NULL DEFAULT 0,
+            source_path       TEXT    NOT NULL DEFAULT '',
+            confidence        REAL    NOT NULL DEFAULT 0.0,
+            created_at        TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_track_model_scope
+            ON track_model_versions(track_location_id, layout_id);
+        """)
+        self._conn.commit()
+
+    def _migrate_v35(self) -> None:
+        """Program 3 Phase B — immutable strategy revisions + race-state snapshots
+        (schema v35). A material race event (fuel/pace deviation, rain, damage, missed
+        pit, penalty) never mutates the plan invisibly: it appends a NEW immutable
+        strategy_revisions row (parent-chained; only the latest is active) built from a
+        persisted race_state_snapshots row captured at lap completion or the trigger.
+        Two standalone additive tables; nothing existing is touched or backfilled —
+        runtime population is Phase G. CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS race_state_snapshots (
+            snapshot_id    TEXT PRIMARY KEY,
+            session_run_id TEXT    NOT NULL DEFAULT '',
+            event_id       INTEGER NOT NULL DEFAULT 0,
+            lap_number     INTEGER NOT NULL DEFAULT 0,
+            trigger        TEXT    NOT NULL DEFAULT '',
+            state_json     TEXT    NOT NULL DEFAULT '{}',
+            fingerprint    TEXT    NOT NULL DEFAULT '',
+            created_at     TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_race_snap_run ON race_state_snapshots(session_run_id);
+        CREATE INDEX IF NOT EXISTS idx_race_snap_event ON race_state_snapshots(event_id);
+        CREATE TABLE IF NOT EXISTS strategy_revisions (
+            revision_id            TEXT PRIMARY KEY,
+            parent_revision_id     TEXT    NOT NULL DEFAULT '',
+            event_id               INTEGER NOT NULL DEFAULT 0,
+            session_run_id         TEXT    NOT NULL DEFAULT '',
+            cycle_id               TEXT    NOT NULL DEFAULT '',
+            revision_index         INTEGER NOT NULL DEFAULT 1,
+            trigger                TEXT    NOT NULL DEFAULT '',
+            race_state_snapshot_id TEXT    NOT NULL DEFAULT '',
+            plan_json              TEXT    NOT NULL DEFAULT '{}',
+            reason                 TEXT    NOT NULL DEFAULT '',
+            confidence             REAL    NOT NULL DEFAULT 0.0,
+            communicated           INTEGER NOT NULL DEFAULT 0,
+            is_active              INTEGER NOT NULL DEFAULT 1,
+            created_at             TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_run ON strategy_revisions(session_run_id);
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_event ON strategy_revisions(event_id);
+        CREATE INDEX IF NOT EXISTS idx_strat_rev_parent ON strategy_revisions(parent_revision_id);
+        """)
+        self._conn.commit()
+
+    def _migrate_v34(self) -> None:
+        """Program 3 Phase B — planned session vs actual run + stint (schema v34).
+
+        Introduces the distinction Program 3 is built around: a PLANNED session (an
+        event_preparation_activities row) can be executed as several ACTUAL runs
+        (a failed connection, a clean four-lap run, a six-lap comparison) that must
+        stay distinct instead of being merged by name/type. Adds:
+          * session_runs — one row per actual execution (uuid run_id), linked to its
+            plan (activity_id), the recorded sessions row, event and cycle.
+          * stints — one row per stint within a run (uuid stint_id).
+          * lap_records.session_run_id / .stint_id cross-ref columns.
+        Backfills each existing sessions row to exactly ONE completed session_run with
+        a single default stint, binding to a plan where an activity-session link
+        exists. Purely additive; no live writer is repointed here (Phase C/E). Only
+        sessions without a run are backfilled ⇒ idempotent."""
+        from data.ids import backfill_id, new_id
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS session_runs (
+            run_id          TEXT PRIMARY KEY,
+            session_plan_id TEXT    NOT NULL DEFAULT '',
+            session_id      INTEGER NOT NULL DEFAULT 0,
+            session_uuid    TEXT    NOT NULL DEFAULT '',
+            event_id        INTEGER NOT NULL DEFAULT 0,
+            cycle_id        TEXT    NOT NULL DEFAULT '',
+            session_type    TEXT    NOT NULL DEFAULT '',
+            status          TEXT    NOT NULL DEFAULT 'complete',
+            started_at      TEXT    NOT NULL DEFAULT '',
+            ended_at        TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_runs_plan ON session_runs(session_plan_id);
+        CREATE INDEX IF NOT EXISTS idx_session_runs_session ON session_runs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_session_runs_event ON session_runs(event_id);
+        CREATE TABLE IF NOT EXISTS stints (
+            stint_id       TEXT PRIMARY KEY,
+            session_run_id TEXT    NOT NULL DEFAULT '',
+            stint_index    INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_stints_run ON stints(session_run_id);
+        """)
+        for col in ("session_run_id", "stint_id"):
+            try:
+                self._conn.execute(f"ALTER TABLE lap_records ADD COLUMN {col} TEXT")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        # Backfill: one completed run (+ one stint) per not-yet-migrated session.
+        try:
+            sessions = self._conn.execute(
+                "SELECT id, uuid, event_id, session_type, date_utc FROM sessions "
+                "WHERE id NOT IN (SELECT session_id FROM session_runs) "
+                "ORDER BY date_utc, id").fetchall()
+        except Exception:
+            return
+        prev_ms = 0
+        for sid, suuid, eid, stype, date_utc in sessions:
+            ms = _iso_to_ms(date_utc)
+            if ms <= prev_ms:
+                ms = prev_ms + 1
+            prev_ms = ms
+            run_id = backfill_id(ms)
+            plan_id, cyc = "", ""
+            try:
+                bind = self._conn.execute(
+                    "SELECT activity_id, cycle_id FROM event_preparation_activity_sessions "
+                    "WHERE session_id=? LIMIT 1", (str(sid),)).fetchone()
+                if bind:
+                    plan_id, cyc = str(bind[0] or ""), str(bind[1] or "")
+            except Exception:
+                pass
+            self._conn.execute(
+                "INSERT INTO session_runs (run_id, session_plan_id, session_id, session_uuid, "
+                "event_id, cycle_id, session_type, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?, 'complete', ?)",
+                (run_id, plan_id, int(sid), str(suuid or ""), int(eid or 0), cyc,
+                 str(stype or ""), str(date_utc or "")))
+            stint_id = new_id()
+            self._conn.execute(
+                "INSERT INTO stints (stint_id, session_run_id, stint_index, created_at) "
+                "VALUES (?,?,0,?)", (stint_id, run_id, str(date_utc or "")))
+            self._conn.execute(
+                "UPDATE lap_records SET session_run_id=?, stint_id=? "
+                "WHERE session_id=? AND (session_run_id IS NULL OR session_run_id='')",
+                (run_id, stint_id, int(sid)))
+        self._conn.commit()
+
+    def _migrate_v33(self) -> None:
+        """Program 3 Phase B — event-programme identity becomes a UUID (schema v33).
+
+        Replaces the human-readable event_preparation_cycles.cycle_id slug
+        (e.g. 'cycle-round-4-fuji') with an opaque UUIDv7, cascading the new id onto
+        the two child tables (event_preparation_activities and
+        event_preparation_activity_sessions). The old slug is preserved in a new
+        legacy_cycle_id column for audit/debugging. No config heal is needed:
+        main.py clears active_cycle_id in-memory on every launch, so the active
+        cycle is always re-minted through the create-or-reuse path (now keyed by
+        event_id) on the driver's next activation. Only rows whose cycle_id is not
+        already a UUID are remapped ⇒ idempotent."""
+        from data.ids import new_id
+        try:
+            self._conn.execute(
+                "ALTER TABLE event_preparation_cycles ADD COLUMN legacy_cycle_id TEXT")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        try:
+            rows = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles").fetchall()
+        except Exception:
+            return  # table absent on a very old DB — nothing to remap
+        for (old_cid,) in rows:
+            old = str(old_cid or "")
+            if not old or _looks_like_uuid(old):
+                continue  # already a UUID (fresh row / re-run) — leave it
+            new_cid = new_id()
+            self._conn.execute(
+                "UPDATE event_preparation_activities SET cycle_id=? WHERE cycle_id=?",
+                (new_cid, old))
+            self._conn.execute(
+                "UPDATE event_preparation_activity_sessions SET cycle_id=? WHERE cycle_id=?",
+                (new_cid, old))
+            self._conn.execute(
+                "UPDATE event_preparation_cycles SET cycle_id=?, legacy_cycle_id=? "
+                "WHERE cycle_id=?", (new_cid, old, old))
+        self._conn.commit()
+
+    def _backup_before_program3(self) -> None:
+        """Write a one-time ``<db>.pre_v32.bak`` snapshot before the v32 identity
+        migration runs (Program 3, decision 2026-08-01). Uses SQLite's online
+        backup API so it is WAL-safe. Best-effort: never overwrites an existing
+        backup and never blocks startup on failure."""
+        try:
+            bak = f"{self._path}.pre_v32.bak"
+            if self._path == ":memory:" or os.path.exists(bak):
+                return
+            dest = sqlite3.connect(bak)
+            try:
+                self._conn.backup(dest)
+            finally:
+                dest.close()
+        except Exception:
+            pass  # a failed backup must never block the app from starting
+
+    def _migrate_v32(self) -> None:
+        """Program 3 Phase B — canonical UUIDv7 identity (schema v32).
+
+        Adds an additive ``uuid TEXT`` column to each core identity table and
+        backfills every existing row with a time-ordered UUIDv7, generated from
+        the row's own timestamp (strictly increasing per batch) so that
+        ``ORDER BY uuid`` reproduces the original ``(timestamp, id)`` chronology.
+        The INTEGER primary keys are RETAINED — this is the transitional dual-key
+        step: no consumer query is repointed here, ``config_id`` is untouched, and
+        the ~50 legacy ``ORDER BY id`` reads keep working unchanged. A partial
+        UNIQUE index (uuid IS NOT NULL) enforces uniqueness while tolerating rows
+        created before the insert paths are wired to mint a uuid. Duplicate-column
+        / IF NOT EXISTS guarded, backfill touches only NULL-uuid rows ⇒ idempotent."""
+        from data.ids import backfill_id
+        # (table, timestamp column) — None ⇒ order by the autoincrement id.
+        specs = (
+            ("events", "created_at"),
+            ("sessions", "date_utc"),
+            ("setups", "created_at"),
+            ("setup_snapshots", "captured_at"),
+            ("lap_records", None),
+            ("setup_lineage", "ts"),
+            ("cars", None),
+            ("ai_interactions", "timestamp"),
+        )
+        for table, ts_col in specs:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN uuid TEXT")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+            if ts_col:
+                rows = self._conn.execute(
+                    f"SELECT id, {ts_col} FROM {table} "
+                    f"WHERE uuid IS NULL OR uuid = '' ORDER BY {ts_col}, id"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    f"SELECT id, NULL FROM {table} "
+                    f"WHERE uuid IS NULL OR uuid = '' ORDER BY id"
+                ).fetchall()
+            prev_ms = 0
+            updates = []
+            for rid, raw_ts in rows:
+                ms = _iso_to_ms(raw_ts)
+                if ms <= prev_ms:
+                    ms = prev_ms + 1
+                prev_ms = ms
+                updates.append((backfill_id(ms), rid))
+            if updates:
+                self._conn.executemany(
+                    f"UPDATE {table} SET uuid = ? WHERE id = ?", updates)
+            self._conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uuid "
+                f"ON {table}(uuid) WHERE uuid IS NOT NULL"
+            )
 
     def _migrate_v31(self) -> None:
         """Add lap_records.spin_count (schema v31). A sustained large yaw rotation (a spin,
@@ -3346,15 +3781,7 @@ class SessionDB:
             return {"ok": False, "phase": "assembly",
                     "reason": assembled.get("reason") or assembled.get("error"),
                     "assembly": assembled}
-        car_name = ""
-        try:
-            with self._lock:
-                crow = self._conn.execute(
-                    "SELECT name FROM cars WHERE id=?",
-                    (int(assembled["car_id"]),)).fetchone()
-            car_name = str(crow[0]) if crow is not None else ""
-        except Exception:
-            car_name = ""
+        car_name = self._car_name_for_packet_id(int(assembled["car_id"]))
         result = self.evaluate_setup_experiment(
             int(experiment_id),
             test_session_id=assembled["test_session_id"],
@@ -3381,6 +3808,33 @@ class SessionDB:
             }
         return result
 
+    def _car_name_for_packet_id(self, car_id: int) -> str:
+        """Resolve a car's display name from its GT7 packet car id.
+
+        Program 3 (Phase C6): `car_id` across the app is the GT7 packet id, NOT the
+        cars.id surrogate PK — so a `SELECT name FROM cars WHERE id=?` matched the wrong
+        row except by coincidence. Map the packet id via a recorded session instead
+        (sessions.car_id IS the packet id, sessions.car_name the name), falling back to
+        the legacy cars.id lookup, then ''."""
+        cid = int(car_id or 0)
+        if cid <= 0:
+            return ""
+        try:
+            with self._lock:
+                r = self._conn.execute(
+                    "SELECT car_name FROM sessions WHERE car_id=? AND car_name != '' "
+                    "ORDER BY id DESC LIMIT 1", (cid,)).fetchone()
+            if r and r[0]:
+                return str(r[0])
+        except Exception:
+            pass
+        try:
+            with self._lock:
+                r = self._conn.execute("SELECT name FROM cars WHERE id=?", (cid,)).fetchone()
+            return str(r[0]) if r else ""
+        except Exception:
+            return ""
+
     # ------------------------------------------------------------------
     # Working-window learning + experiment selection (Phase 5, v23)
     # ------------------------------------------------------------------
@@ -3392,14 +3846,7 @@ class SessionDB:
             return None, None
         cp = self._checkpoint_scope_row(str(exp.get("applied_checkpoint_id") or ""))
         car_id = int((cp or {}).get("car_id") or 0)
-        car_name = ""
-        try:
-            with self._lock:
-                crow = self._conn.execute(
-                    "SELECT name FROM cars WHERE id=?", (car_id,)).fetchone()
-            car_name = str(crow[0]) if crow is not None else ""
-        except Exception:
-            car_name = ""
+        car_name = self._car_name_for_packet_id(car_id)
         # discipline from the experiment's hypothesis/test protocol is not stored on
         # the row; derive from the checkpoint purpose where available.
         discipline = ""
@@ -6425,18 +6872,325 @@ class SessionDB:
             "INSERT OR IGNORE INTO event_preparation_activity_sessions "
             "(activity_id,session_id,cycle_id,created_at) VALUES (?,?,?,?)",
             (aid, sid, cid, str(created_at or "")))
+        # Program 3 (Phase C): link this session's run to the plan it was just bound to,
+        # so the run knows its session_plan_id (best-effort; only fills an unbound run).
+        try:
+            self._conn.execute(
+                "UPDATE session_runs SET session_plan_id=?, cycle_id=? "
+                "WHERE session_id=? AND (session_plan_id IS NULL OR session_plan_id='')",
+                (aid, cid, int(sid)))
+        except Exception:
+            pass
         self._conn.commit()
         return True
 
+    def get_cycle_by_event(self, event_id: int = 0, event_name: str = "") -> "dict | None":
+        """Find the single preparation cycle for an event — by stable event_id first
+        (Program 3: identity, never the display name), then by event_name as a
+        fallback. Since v33 replaced the derivable cycle_id slug with an opaque UUID,
+        this is how the create-or-reuse path stays idempotent (one cycle per event):
+        it locates the existing cycle to reuse its id instead of re-deriving it.
+        Returns the most-recent match, or None."""
+        eid = int(event_id or 0)
+        name = str(event_name or "").strip()
+        row = None
+        if eid > 0:
+            row = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles WHERE event_id=? "
+                "ORDER BY created_at DESC, cycle_id LIMIT 1", (eid,)).fetchone()
+        if row is None and name:
+            row = self._conn.execute(
+                "SELECT cycle_id FROM event_preparation_cycles WHERE event_name=? "
+                "ORDER BY created_at DESC, cycle_id LIMIT 1", (name,)).fetchone()
+        if row is None:
+            return None
+        return self.get_preparation_cycle(row[0])
+
+    # ---- session runs / stints (Program 3 Phase B, v34) ------------------
+    def create_session_run(self, *, session_plan_id: str = "", session_id: int = 0,
+                           session_uuid: str = "", event_id: int = 0, cycle_id: str = "",
+                           session_type: str = "", status: str = "recording",
+                           started_at: str = "", created_at: str = "") -> str:
+        """Create one ACTUAL run of a planned session and return its uuid run_id.
+        Every call is a DISTINCT run — a failed run and a successful run of the same
+        plan are never merged. The caller starts or resumes an identified run; a new
+        telemetry recording must not silently reuse a previous run."""
+        run_id = new_id()
+        self._conn.execute(
+            "INSERT INTO session_runs (run_id, session_plan_id, session_id, session_uuid, "
+            "event_id, cycle_id, session_type, status, started_at, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (run_id, str(session_plan_id or ""), int(session_id or 0), str(session_uuid or ""),
+             int(event_id or 0), str(cycle_id or ""), str(session_type or ""),
+             str(status or "recording"), str(started_at or ""),
+             str(created_at or started_at or "")))
+        self._conn.commit()
+        return run_id
+
+    def get_session_run(self, run_id: str) -> "dict | None":
+        r = self._conn.execute(
+            "SELECT run_id, session_plan_id, session_id, session_uuid, event_id, cycle_id, "
+            "session_type, status, started_at, ended_at, created_at FROM session_runs "
+            "WHERE run_id=?", (str(run_id or ""),)).fetchone()
+        if not r:
+            return None
+        keys = ("run_id", "session_plan_id", "session_id", "session_uuid", "event_id",
+                "cycle_id", "session_type", "status", "started_at", "ended_at", "created_at")
+        return dict(zip(keys, r))
+
+    def get_runs_for_plan(self, session_plan_id: str) -> list:
+        """All actual runs of one planned session, in creation order."""
+        rows = self._conn.execute(
+            "SELECT run_id FROM session_runs WHERE session_plan_id=? ORDER BY created_at, run_id",
+            (str(session_plan_id or ""),)).fetchall()
+        return [self.get_session_run(r[0]) for r in rows]
+
+    def get_run_for_session(self, session_id: int) -> "dict | None":
+        r = self._conn.execute(
+            "SELECT run_id FROM session_runs WHERE session_id=? ORDER BY created_at, run_id LIMIT 1",
+            (int(session_id or 0),)).fetchone()
+        return self.get_session_run(r[0]) if r else None
+
+    def set_session_run_status(self, run_id: str, status: str, ended_at: str = "") -> None:
+        self._conn.execute(
+            "UPDATE session_runs SET status=?, ended_at=? WHERE run_id=?",
+            (str(status or ""), str(ended_at or ""), str(run_id or "")))
+        self._conn.commit()
+
+    def add_stint(self, session_run_id: str, stint_index: int = 0, created_at: str = "") -> str:
+        stint_id = new_id()
+        self._conn.execute(
+            "INSERT INTO stints (stint_id, session_run_id, stint_index, created_at) "
+            "VALUES (?,?,?,?)",
+            (stint_id, str(session_run_id or ""), int(stint_index or 0), str(created_at or "")))
+        self._conn.commit()
+        return stint_id
+
+    # ---- race-state snapshots + immutable strategy revisions (v35) --------
+    def append_race_state_snapshot(self, *, session_run_id: str = "", event_id: int = 0,
+                                   lap_number: int = 0, trigger: str = "", state_json: str = "{}",
+                                   fingerprint: str = "", created_at: str = "") -> str:
+        """Persist one immutable race-state snapshot (at lap completion or a material
+        trigger). Append-only — snapshots are never updated."""
+        snapshot_id = new_id()
+        self._conn.execute(
+            "INSERT INTO race_state_snapshots (snapshot_id, session_run_id, event_id, lap_number, "
+            "trigger, state_json, fingerprint, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (snapshot_id, str(session_run_id or ""), int(event_id or 0), int(lap_number or 0),
+             str(trigger or ""), str(state_json or "{}"), str(fingerprint or ""),
+             str(created_at or "")))
+        self._conn.commit()
+        return snapshot_id
+
+    def get_snapshots_for_run(self, session_run_id: str) -> list:
+        rows = self._conn.execute(
+            "SELECT snapshot_id, session_run_id, event_id, lap_number, trigger, state_json, "
+            "fingerprint, created_at FROM race_state_snapshots WHERE session_run_id=? "
+            "ORDER BY lap_number, created_at, snapshot_id", (str(session_run_id or ""),)).fetchall()
+        keys = ("snapshot_id", "session_run_id", "event_id", "lap_number", "trigger",
+                "state_json", "fingerprint", "created_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def append_strategy_revision(self, *, session_run_id: str = "", event_id: int = 0,
+                                 cycle_id: str = "", trigger: str = "", plan_json: str = "{}",
+                                 reason: str = "", confidence: float = 0.0,
+                                 race_state_snapshot_id: str = "", communicated: bool = False,
+                                 created_at: str = "") -> str:
+        """Append a NEW immutable strategy revision for a race run and make it the active
+        one. The plan is never mutated in place: this parent-chains onto the prior active
+        revision, deactivates it, and increments the revision index. Historical revisions
+        stay queryable; only the latest accepted revision is active."""
+        prior = self.get_active_strategy_revision(session_run_id)
+        parent_id = prior["revision_id"] if prior else ""
+        index = (int(prior["revision_index"]) + 1) if prior else 1
+        if prior:
+            self._conn.execute(
+                "UPDATE strategy_revisions SET is_active=0 WHERE revision_id=?",
+                (prior["revision_id"],))
+        revision_id = new_id()
+        self._conn.execute(
+            "INSERT INTO strategy_revisions (revision_id, parent_revision_id, event_id, "
+            "session_run_id, cycle_id, revision_index, trigger, race_state_snapshot_id, plan_json, "
+            "reason, confidence, communicated, is_active, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+            (revision_id, parent_id, int(event_id or 0), str(session_run_id or ""),
+             str(cycle_id or ""), index, str(trigger or ""), str(race_state_snapshot_id or ""),
+             str(plan_json or "{}"), str(reason or ""), float(confidence or 0.0),
+             1 if communicated else 0, str(created_at or "")))
+        self._conn.commit()
+        return revision_id
+
+    def _row_to_strategy_revision(self, r) -> dict:
+        keys = ("revision_id", "parent_revision_id", "event_id", "session_run_id", "cycle_id",
+                "revision_index", "trigger", "race_state_snapshot_id", "plan_json", "reason",
+                "confidence", "communicated", "is_active", "created_at")
+        return dict(zip(keys, r))
+
+    _STRAT_REV_COLS = ("revision_id, parent_revision_id, event_id, session_run_id, cycle_id, "
+                       "revision_index, trigger, race_state_snapshot_id, plan_json, reason, "
+                       "confidence, communicated, is_active, created_at")
+
+    def get_strategy_revisions(self, session_run_id: str) -> list:
+        """All revisions for a race run, oldest first — the full auditable history."""
+        rows = self._conn.execute(
+            f"SELECT {self._STRAT_REV_COLS} FROM strategy_revisions WHERE session_run_id=? "
+            "ORDER BY revision_index, created_at", (str(session_run_id or ""),)).fetchall()
+        return [self._row_to_strategy_revision(r) for r in rows]
+
+    def get_active_strategy_revision(self, session_run_id: str) -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._STRAT_REV_COLS} FROM strategy_revisions "
+            "WHERE session_run_id=? AND is_active=1 ORDER BY revision_index DESC LIMIT 1",
+            (str(session_run_id or ""),)).fetchone()
+        return self._row_to_strategy_revision(r) if r else None
+
+    # ---- car-spec & track-model version registries (v36) -----------------
+    def add_car_spec_revision(self, *, car_id: int = 0, car_name: str = "", event_id: int = 0,
+                              bop_json: str = "{}", spec_json: str = "{}", label: str = "",
+                              created_at: str = "") -> str:
+        spec_revision_id = new_id()
+        self._conn.execute(
+            "INSERT INTO car_spec_revisions (spec_revision_id, car_id, car_name, event_id, "
+            "bop_json, spec_json, label, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (spec_revision_id, int(car_id or 0), str(car_name or ""), int(event_id or 0),
+             str(bop_json or "{}"), str(spec_json or "{}"), str(label or ""), str(created_at or "")))
+        self._conn.commit()
+        return spec_revision_id
+
+    def get_car_spec_revisions(self, car_id: int = 0, event_id: int = 0) -> list:
+        clauses, params = [], []
+        if car_id:
+            clauses.append("car_id=?"); params.append(int(car_id))
+        if event_id:
+            clauses.append("event_id=?"); params.append(int(event_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            "SELECT spec_revision_id, car_id, car_name, event_id, bop_json, spec_json, label, "
+            f"created_at FROM car_spec_revisions{where} ORDER BY created_at, spec_revision_id",
+            params).fetchall()
+        keys = ("spec_revision_id", "car_id", "car_name", "event_id", "bop_json", "spec_json",
+                "label", "created_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def register_track_model_version(self, *, track_location_id: str = "", layout_id: str = "",
+                                     model_status: str = "", approved: bool = False,
+                                     source_path: str = "", confidence: float = 0.0,
+                                     created_at: str = "") -> str:
+        version_id = new_id()
+        self._conn.execute(
+            "INSERT INTO track_model_versions (version_id, track_location_id, layout_id, "
+            "model_status, approved, source_path, confidence, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (version_id, str(track_location_id or ""), str(layout_id or ""), str(model_status or ""),
+             1 if approved else 0, str(source_path or ""), float(confidence or 0.0),
+             str(created_at or "")))
+        self._conn.commit()
+        return version_id
+
+    def _row_to_track_model_version(self, r) -> dict:
+        keys = ("version_id", "track_location_id", "layout_id", "model_status", "approved",
+                "source_path", "confidence", "created_at")
+        return dict(zip(keys, r))
+
+    _TMV_COLS = ("version_id, track_location_id, layout_id, model_status, approved, source_path, "
+                 "confidence, created_at")
+
+    def get_track_model_versions(self, track_location_id: str, layout_id: str = "") -> list:
+        rows = self._conn.execute(
+            f"SELECT {self._TMV_COLS} FROM track_model_versions WHERE track_location_id=? "
+            "AND layout_id=? ORDER BY created_at, version_id",
+            (str(track_location_id or ""), str(layout_id or ""))).fetchall()
+        return [self._row_to_track_model_version(r) for r in rows]
+
+    def get_approved_track_model_version(self, track_location_id: str,
+                                         layout_id: str = "") -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._TMV_COLS} FROM track_model_versions WHERE track_location_id=? "
+            "AND layout_id=? AND approved=1 ORDER BY created_at DESC, version_id LIMIT 1",
+            (str(track_location_id or ""), str(layout_id or ""))).fetchone()
+        return self._row_to_track_model_version(r) if r else None
+
+    # ---- driver-profile versioning (v37) ---------------------------------
+    _DPV_COLS = ("version_id, prior_version_id, version_label, effective_from, profile_json, "
+                 "changes_json, evidence_window, reason, is_current, created_at")
+
+    def _row_to_driver_profile_version(self, r) -> dict:
+        keys = ("version_id", "prior_version_id", "version_label", "effective_from",
+                "profile_json", "changes_json", "evidence_window", "reason", "is_current",
+                "created_at")
+        return dict(zip(keys, r))
+
+    def append_driver_profile_version(self, *, version_label: str = "", effective_from: str = "",
+                                      profile_json: str = "{}", changes_json: str = "[]",
+                                      evidence_window: str = "", reason: str = "",
+                                      created_at: str = "") -> str:
+        """Append a NEW immutable driver-profile version and make it current. Parent-chains
+        onto the prior current version; the prior stays intact and queryable so historical
+        recommendations remain traceable to the profile that was active at the time."""
+        prior = self.get_current_driver_profile_version()
+        prior_id = prior["version_id"] if prior else ""
+        if prior:
+            self._conn.execute(
+                "UPDATE driver_profile_versions SET is_current=0 WHERE version_id=?",
+                (prior["version_id"],))
+        version_id = new_id()
+        self._conn.execute(
+            "INSERT INTO driver_profile_versions (version_id, prior_version_id, version_label, "
+            "effective_from, profile_json, changes_json, evidence_window, reason, is_current, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,1,?)",
+            (version_id, prior_id, str(version_label or ""), str(effective_from or ""),
+             str(profile_json or "{}"), str(changes_json or "[]"), str(evidence_window or ""),
+             str(reason or ""), str(created_at or "")))
+        self._conn.commit()
+        return version_id
+
+    def get_driver_profile_versions(self) -> list:
+        """Full driver-profile version history, oldest first."""
+        rows = self._conn.execute(
+            f"SELECT {self._DPV_COLS} FROM driver_profile_versions "
+            "ORDER BY created_at, version_id").fetchall()
+        return [self._row_to_driver_profile_version(r) for r in rows]
+
+    def get_current_driver_profile_version(self) -> "dict | None":
+        r = self._conn.execute(
+            f"SELECT {self._DPV_COLS} FROM driver_profile_versions "
+            "WHERE is_current=1 ORDER BY created_at DESC, version_id LIMIT 1").fetchone()
+        return self._row_to_driver_profile_version(r) if r else None
+
+    # ---- legacy classification / quarantine (v38) ------------------------
+    def get_legacy_classification_report(self) -> dict:
+        """Counts of legacy sessions by classification + orphaned lap count. The migration
+        report for Program 3 §27 — ambiguous rows are quarantined, never guessed."""
+        counts = {}
+        for cls in ("RESOLVED", "RESOLVED_WITH_WARNING", "AMBIGUOUS", "ORPHANED"):
+            counts[cls] = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE legacy_class=?", (cls,)).fetchone()[0]
+        orphan_laps = self._conn.execute(
+            "SELECT COUNT(*) FROM lap_records WHERE session_id NOT IN "
+            "(SELECT id FROM sessions)").fetchone()[0]
+        return {"sessions": counts, "orphaned_laps": orphan_laps,
+                "quarantined": counts["AMBIGUOUS"] + counts["ORPHANED"] + orphan_laps}
+
+    def get_quarantined_records(self) -> list:
+        """The read-only quarantine set (AMBIGUOUS/ORPHANED). Learning must not consume these."""
+        rows = self._conn.execute(
+            "SELECT record_type, record_id, reason FROM quarantine_records").fetchall()
+        return [{"record_type": r[0], "record_id": r[1], "reason": r[2]} for r in rows]
+
+    def is_session_quarantined(self, session_id) -> bool:
+        r = self._conn.execute(
+            "SELECT legacy_class FROM sessions WHERE id=?", (int(session_id or 0),)).fetchone()
+        return bool(r and r[0] in ("AMBIGUOUS", "ORPHANED"))
+
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
-        """Read one preparation cycle (SELECT-only)."""
+        """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a
+        lookup by the pre-v33 'cycle-...' id still resolves via legacy_cycle_id."""
         import json as _json
         r = self._conn.execute(
             "SELECT cycle_id,event_id,event_name,series,round_label,driver_id,team,car,track,layout,"
             "prep_open_date,official_quali_date,official_race_date,format_profile_id,disciplines_json,"
             "championship_objective,context_digest,gt7_version,explicit_state,setup_lock_json,"
-            "strategy_final_json FROM event_preparation_cycles WHERE cycle_id=?",
-            (str(cycle_id or ""),)).fetchone()
+            "strategy_final_json FROM event_preparation_cycles WHERE cycle_id=? OR legacy_cycle_id=?",
+            (str(cycle_id or ""), str(cycle_id or ""))).fetchone()
         if not r:
             return None
         try:
@@ -7991,12 +8745,13 @@ class SessionDB:
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO sessions
-                       (car_id, car_name, config_id, track, session_type, date_utc, event_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (car_id, car_name, config_id, track, session_type, date_utc, event_id, uuid)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     car_id, car_name, config_id, track, session_type,
                     datetime.now(timezone.utc).isoformat(),
                     event_id,
+                    new_id(),   # Program 3 (Phase C): stamp new sessions with canonical identity
                 ),
             )
             sid = cur.lastrowid
@@ -8006,7 +8761,38 @@ class SessionDB:
             sid, car_id=car_id, track=track, session_type=session_type,
             config_id=config_id, event_id=event_id, layout_id=layout_id,
             driver_id=driver_id, gt7_version=gt7_version)
+        # Program 3 (Phase C): open the canonical session_run for this recording so new
+        # telemetry flows into the run spine. Best-effort — never affects session creation.
+        self._attach_session_run(
+            sid, event_id=event_id, session_type=session_type, config_id=config_id)
         return sid
+
+    def _attach_session_run(self, session_id, *, event_id=0, session_type="",
+                            config_id="") -> None:
+        """Create the canonical session_run (+ its opening stint) for a newly opened
+        recording session, so new laps trace to an actual run. Idempotent per session
+        (skips if a run already exists) and best-effort — a failure never blocks
+        recording. The run starts unbound to a plan; bind_session_to_activity links it
+        to its planned activity when the driver records the run."""
+        try:
+            if self.get_run_for_session(int(session_id)) is not None:
+                return
+            srow = self._conn.execute(
+                "SELECT uuid FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+            suuid = srow[0] if srow else ""
+            cyc = ""
+            if int(event_id or 0) > 0:
+                c = self.get_cycle_by_event(int(event_id))
+                cyc = (c or {}).get("cycle_id", "") if c else ""
+            now = datetime.now(timezone.utc).isoformat()
+            run_id = self.create_session_run(
+                session_id=int(session_id), session_uuid=str(suuid or ""),
+                event_id=int(event_id or 0), cycle_id=str(cyc or ""),
+                session_type=str(session_type or ""), status="recording",
+                started_at=now, created_at=now)
+            self.add_stint(run_id, stint_index=0, created_at=now)
+        except Exception:
+            pass  # additive; recording never depends on the run spine
 
     def _attach_session_context(
         self, session_id, *, car_id, track, session_type, config_id, event_id,
@@ -8139,6 +8925,26 @@ class SessionDB:
                 ),
             )
             lap_record_id = cur.lastrowid or 0
+
+            # Program 3 (Phase C): stamp the lap with its canonical identity + run/stint,
+            # so every lap traces to a stable id and an actual run. Best-effort; direct SQL
+            # (we already hold the lock). A missing run just leaves those cross-refs empty.
+            try:
+                r = self._conn.execute(
+                    "SELECT run_id FROM session_runs WHERE session_id=? "
+                    "ORDER BY created_at, run_id LIMIT 1", (session_id,)).fetchone()
+                if r:
+                    st = self._conn.execute(
+                        "SELECT stint_id FROM stints WHERE session_run_id=? "
+                        "ORDER BY stint_index, created_at LIMIT 1", (r[0],)).fetchone()
+                    self._conn.execute(
+                        "UPDATE lap_records SET uuid=?, session_run_id=?, stint_id=? WHERE id=?",
+                        (new_id(), r[0], (st[0] if st else ""), lap_record_id))
+                else:
+                    self._conn.execute(
+                        "UPDATE lap_records SET uuid=? WHERE id=?", (new_id(), lap_record_id))
+            except Exception:
+                pass
 
             # Keep total_laps equal to the actual number of lap rows rather than an
             # increment counter (which drifted when a lap was written twice). Derived

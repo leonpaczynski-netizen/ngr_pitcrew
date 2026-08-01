@@ -71,6 +71,11 @@ class _FakeDB:
     def get_preparation_cycle(self, cid):
         return dict(self._existing) if self._existing else None
 
+    def get_cycle_by_event(self, event_id=0, event_name=""):
+        # v33: the event-planner reuse path finds the existing cycle by event, not a
+        # re-derived slug. This fake has a single cycle, so return it if present.
+        return dict(self._existing) if self._existing else None
+
     def upsert_preparation_cycle(self, cycle):
         self.upserted = cycle
 

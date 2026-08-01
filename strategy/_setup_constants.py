@@ -132,7 +132,29 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v29 (event_id evidence re-key): backfills event_preparation_cycles.event_id from events.name
 #     and sessions.event_id from the bound cycle's event_id, so recorded runs match a cycle by the
 #     stable integer event_id rather than fragile track/car text. Best-effort. Idempotent.
-DB_VERSION: int = 31
+# v32 (Program 3 canonical identity): adds an additive uuid (UUIDv7) column to each core identity
+#     table (events, sessions, setups, setup_snapshots, lap_records, setup_lineage, cars,
+#     ai_interactions) and backfills existing rows with time-ordered ids so ORDER BY uuid == original
+#     chronology. Integer PKs retained (dual-key transition); config_id untouched. Additive. Idempotent.
+# v33 (Program 3 event-programme identity): replaces the event_preparation_cycles.cycle_id slug with an
+#     opaque UUIDv7 (cascaded onto the two child tables), preserving the old slug in legacy_cycle_id.
+#     Cycle reuse is now keyed by event_id (get_cycle_by_event), not a re-derived slug. Idempotent.
+# v34 (Program 3 planned-vs-actual run): adds session_runs (one row per actual execution of a planned
+#     session/activity) + stints, plus lap_records.session_run_id/.stint_id. Backfills each existing
+#     session to one completed run with a single stint. Purely additive; no live writer repointed. Idempotent.
+# v35 (Program 3 dynamic strategy): adds immutable strategy_revisions (parent-chained; only latest active)
+#     + race_state_snapshots (persisted at lap completion / material trigger). Two standalone additive
+#     tables; no existing table touched, no backfill (runtime population is Phase G). Idempotent.
+# v36 (Program 3 spec/version registries): adds car_spec_revisions (a car's spec/BoP as it applied at an
+#     event) + track_model_versions (approved track-model versions). Two standalone additive tables; no
+#     existing table touched, no disk scan (registration deferred to Phase C/E). Idempotent.
+# v37 (Program 3 driver-profile versioning): adds driver_profile_versions — an immutable, parent-chained
+#     version history (effective date, prior version, snapshot, change-set) replacing the ignored version
+#     string; seeds v1.0 from the existing user_profile singleton. Additive, seed-once. Idempotent.
+# v38 (Program 3 legacy classification): classifies legacy sessions RESOLVED / RESOLVED_WITH_WARNING /
+#     AMBIGUOUS (never guessed into an event) via an additive legacy_class column, and adds a read-only
+#     quarantine_records view surfacing AMBIGUOUS + ORPHANED laps. Additive. Idempotent.
+DB_VERSION: int = 38
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

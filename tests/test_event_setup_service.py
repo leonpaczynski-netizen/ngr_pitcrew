@@ -25,15 +25,38 @@ class _DB:
     def upsert_event(self, row):
         for i, e in enumerate(self.events):
             if e["name"] == row["name"]:
-                self.events[i] = dict(row)
-                return e.get("id", self.next_id)
+                merged = dict(row)
+                merged["id"] = e.get("id", self.next_id)
+                self.events[i] = merged
+                return merged["id"]
         row = dict(row)
         row["id"] = self.next_id
+        self.next_id += 1          # distinct id per event (mirrors real autoincrement)
         self.events.append(row)
-        return self.next_id
+        return row["id"]
 
     def get_preparation_cycle(self, cycle_id):
-        return dict(self.cycles[cycle_id]) if cycle_id in self.cycles else None
+        for c in self.cycles.values():
+            if c.get("cycle_id") == cycle_id or c.get("legacy_cycle_id") == cycle_id:
+                return dict(c)
+        return None
+
+    def get_cycle_by_event(self, event_id=0, event_name=""):
+        """Mirror SessionDB.get_cycle_by_event: find one cycle by stable event_id
+        first, then by event_name. This is how cycle reuse stays idempotent now that
+        cycle_id is an opaque UUID (v33)."""
+        eid = int(event_id or 0)
+        name = str(event_name or "")
+        match = None
+        if eid > 0:
+            for c in self.cycles.values():
+                if int(c.get("event_id") or 0) == eid:
+                    match = c
+        if match is None and name:
+            for c in self.cycles.values():
+                if str(c.get("event_name") or "") == name:
+                    match = c
+        return dict(match) if match else None
 
     def upsert_preparation_cycle(self, cycle):
         self.cycles[cycle["cycle_id"]] = dict(cycle)
@@ -133,9 +156,11 @@ class TestSaveAndActivate:
         db = _DB()
         svc, cfg = self._svc(db)
         result = svc.save_and_activate(_draft())
-        assert result.cycle_id == "cycle-gr-enduro-rd2"
-        assert cfg["active_cycle_id"] == "cycle-gr-enduro-rd2"
-        assert db.cycles["cycle-gr-enduro-rd2"]["car"] == "Porsche Cayman GT4"
+        # cycle_id is now an opaque UUID (v33), not a derivable slug.
+        import uuid as _uuid
+        assert _uuid.UUID(result.cycle_id).version == 7
+        assert cfg["active_cycle_id"] == result.cycle_id
+        assert db.cycles[result.cycle_id]["car"] == "Porsche Cayman GT4"
 
     def test_activating_twice_never_makes_two_cycles(self):
         db = _DB()
@@ -150,11 +175,14 @@ class TestSaveAndActivate:
         # again, so it is reopened (its recorded runs then register as evidence). This
         # is not the SILENT/passive reopen the doctrine guards against — save_and_activate
         # only runs on the user's explicit event-picker action.
+        # The existing cycle is found by event_name (Program 3: identity, not a
+        # re-derived slug); its id is reused, so reopening keeps the same cycle.
         db = _DB(cycles={"cycle-gr-enduro-rd2": {
-            "cycle_id": "cycle-gr-enduro-rd2", "explicit_state": "complete",
-            "created_at": "2026-01-01T00:00:00"}})
+            "cycle_id": "cycle-gr-enduro-rd2", "event_name": "GR Enduro Rd2",
+            "explicit_state": "complete", "created_at": "2026-01-01T00:00:00"}})
         svc, _cfg = self._svc(db)
-        svc.save_and_activate(_draft())
+        result = svc.save_and_activate(_draft())
+        assert result.cycle_id == "cycle-gr-enduro-rd2"          # reused, not re-minted
         assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == ""
         # History (created_at) is preserved — reopening, not recreating.
         assert db.cycles["cycle-gr-enduro-rd2"]["created_at"] == "2026-01-01T00:00:00"
@@ -171,12 +199,12 @@ class TestFinishEvent:
     def test_finishing_marks_the_cycle_complete_and_clears_the_active_slot(self):
         db = _DB()
         svc, cfg = self._svc(db)
-        svc.save_and_activate(_draft())
-        assert cfg.get("active_cycle_id") == "cycle-gr-enduro-rd2"
+        cid = svc.save_and_activate(_draft()).cycle_id
+        assert cfg.get("active_cycle_id") == cid
 
         result = svc.complete_active_event()
         assert result.ok is True
-        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] == "complete"
+        assert db.cycles[cid]["explicit_state"] == "complete"
         # The active slot is cleared → the Command Centre reports no active event.
         assert "active_event_id" not in cfg
         assert "active_cycle_id" not in cfg
@@ -184,9 +212,9 @@ class TestFinishEvent:
     def test_finishing_preserves_the_cycle_identity(self):
         db = _DB()
         svc, _cfg = self._svc(db)
-        svc.save_and_activate(_draft())
+        cid = svc.save_and_activate(_draft()).cycle_id
         svc.complete_active_event()
-        row = db.cycles["cycle-gr-enduro-rd2"]
+        row = db.cycles[cid]
         # The existing fields survive — completing does not blank the event's identity.
         assert row["car"] == "Porsche Cayman GT4"
         assert row["track"] == "Watkins Glen International"
@@ -203,9 +231,9 @@ class TestFinishEvent:
         from strategy.active_cycle_resolution import _TERMINAL_CYCLE_STATES
         db = _DB()
         svc, _cfg = self._svc(db)
-        svc.save_and_activate(_draft())
+        cid = svc.save_and_activate(_draft()).cycle_id
         svc.complete_active_event()
-        assert db.cycles["cycle-gr-enduro-rd2"]["explicit_state"] in _TERMINAL_CYCLE_STATES
+        assert db.cycles[cid]["explicit_state"] in _TERMINAL_CYCLE_STATES
 
     def test_the_working_config_core_is_fanned_out(self):
         svc, cfg = self._svc()
