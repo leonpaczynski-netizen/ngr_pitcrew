@@ -69,7 +69,8 @@ class SessionDbLivePracticePort:
                 self._session_id = adopt
             else:
                 self._session_id = int(self._db.open_session(
-                    _int(idn.get("car_id")), _norm(idn.get("track")), "Practice",
+                    _int(idn.get("car_id")), _norm(idn.get("track")),
+                    (_norm(idn.get("session_type")).title() or "Practice"),
                     car_name=_norm(idn.get("car_name")), config_id=_norm(idn.get("config_id")),
                     event_id=_int(idn.get("event_id")),
                     layout_id=_norm(idn.get("layout_id")),
