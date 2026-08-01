@@ -427,6 +427,27 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _active_session_run_id(self) -> str:
+        """The canonical run_id of the session currently being recorded, or ''."""
+        try:
+            sid = self._live_session_id()
+            if sid and self._db is not None and hasattr(self._db, "get_run_for_session"):
+                return str((self._db.get_run_for_session(sid) or {}).get("run_id") or "")
+        except Exception:
+            pass
+        return ""
+
+    def _active_event_id(self) -> int:
+        """The stable event_id of the active preparation cycle, or 0."""
+        try:
+            cfg = self._config if isinstance(self._config, dict) else {}
+            cid = str(cfg.get("active_cycle_id") or "")
+            if cid and self._db is not None and hasattr(self._db, "get_preparation_cycle"):
+                return int((self._db.get_preparation_cycle(cid) or {}).get("event_id") or 0)
+        except Exception:
+            pass
+        return 0
+
     def _record_ptt_interaction(self, *, resolved_action: str = "", recognised_action: str = "",
                                 command_class: str = "", intent_confidence: float = 0.0,
                                 ambiguous: bool = False, response: str = "",
@@ -442,7 +463,9 @@ class LiveShellBridge(QObject):
             from strategy.ptt_interaction import PttInteractionRecord
             cfg = self._config if isinstance(self._config, dict) else {}
             rec = PttInteractionRecord(
+                event_id=self._active_event_id(),
                 cycle_id=str(cfg.get("active_cycle_id") or ""),
+                session_run_id=self._active_session_run_id(),
                 lap_number=int(self._live_lap_count() or 0),
                 session_type=str(self._live_session_mode or ""),
                 recognised_action=str(recognised_action or resolved_action or ""),
@@ -455,6 +478,40 @@ class LiveShellBridge(QObject):
                 created_at=_dt.datetime.now().isoformat(timespec="seconds"),
             )
             db.record_ptt_interaction(rec.as_dict())
+        except Exception:
+            pass
+
+    def _record_strategy_revision_on_accept(self, plan: dict) -> None:
+        """Program 3 (Phase G / §16-17): an accepted replan is a material change, so
+        snapshot the triggering race state and append a NEW IMMUTABLE strategy revision
+        referencing it. Advisory only — this RECORDS the accepted plan (already shown via
+        _live_accepted_plan); it executes nothing and mutates no live plan. Best-effort;
+        never raises."""
+        db = getattr(self, "_db", None)
+        if db is None or not hasattr(db, "append_strategy_revision"):
+            return
+        try:
+            import json as _json
+            import datetime as _dt
+            run_id = self._active_session_run_id()
+            event_id = self._active_event_id()
+            cfg = self._config if isinstance(self._config, dict) else {}
+            cycle_id = str(cfg.get("active_cycle_id") or "")
+            now = _dt.datetime.now().isoformat(timespec="seconds")
+            snap_id = ""
+            try:
+                if hasattr(db, "append_race_state_snapshot"):
+                    snap_id = db.append_race_state_snapshot(
+                        session_run_id=run_id, event_id=event_id,
+                        lap_number=int(self._live_lap_count() or 0), trigger="ptt_accept",
+                        state_json=_json.dumps(self._live_decision or {})[:8000], created_at=now)
+            except Exception:
+                snap_id = ""
+            db.append_strategy_revision(
+                session_run_id=run_id, event_id=event_id, cycle_id=cycle_id,
+                trigger="ptt_accept", plan_json=_json.dumps(plan or {}),
+                reason="driver accepted the replan via PTT", confidence=0.0,
+                race_state_snapshot_id=snap_id, communicated=True, created_at=now)
         except Exception:
             pass
 
@@ -490,6 +547,7 @@ class LiveShellBridge(QObject):
                 plan = live_plan_dict_from_candidate(candidate)
                 if plan:
                     self._live_accepted_plan = plan
+                    self._record_strategy_revision_on_accept(plan)
                 # Ensure the engine has the approved plan's stints so PTT can answer
                 # "when do I pit" — the replan candidate is advisory-only and carries
                 # no Stint-compatible data, so we reinforce the approved plan stints.
