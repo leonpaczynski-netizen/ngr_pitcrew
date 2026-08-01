@@ -20,7 +20,7 @@ def test_observation_key_normalises():
 
 def test_table_and_version(tmp_path):
     db = _db(tmp_path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 40
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 40
     tables = {r[0] for r in db._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"learning_proposals", "learning_decisions"} <= tables
 

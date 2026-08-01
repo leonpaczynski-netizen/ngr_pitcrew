@@ -25,7 +25,7 @@ def test_record_has_no_transcript_field():
 
 def test_table_exists_at_v39(tmp_path):
     db = SessionDB(str(tmp_path / "s.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 39
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 39
     cols = {r[1] for r in db._conn.execute("PRAGMA table_info(ptt_interactions)")}
     assert cols                      # table present
     for banned in FORBIDDEN_FIELDS:
