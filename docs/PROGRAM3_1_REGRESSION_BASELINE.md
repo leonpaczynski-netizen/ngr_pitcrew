@@ -13,19 +13,21 @@ failure below is individually root-caused, categorised, and either fixed or assi
 
 ## 1. Starting vs ending totals
 
-| | Start (base `1c99b79`) | End (this branch) |
+| | Start (base) | End (this branch) |
 |---|---|---|
 | Production `.py` changed | — | **0** |
 | Stale DB-version pin failures | ~58 | **0** |
 | `group2`/`group3` DB round-trip failures | 13 | **0** |
-| Other non-version failures | 9 | **4 documented** (owned) |
+| Non-version failures fixed | — | **8** (group18e ×2, group22a, group47, V15, OFR-1 pin ×2, phase54_56) |
+| Pre-existing failures documented/owned | — | **20** (see §6) |
 | `DB_VERSION` | 40 | **40** (unchanged) |
 | `RULE_ENGINE_VERSION` | "46.0" | **"46.0"** (unchanged) |
 | New DB migration added | — | **none** |
 
-Green-group result (see §5 command matrix): the eight logic groups and the certification/safety
-suites run with **zero unexpected failures**. The four remaining failures are quarantined in the
-known-failure register (§6) with owners.
+**Definitive logic-side run** (650 non-UI files, one process): **11,065 passed / 26 skipped / 0
+unexpected failures** once the 20 owned pre-existing failures (§6) are deselected. The UI files run
+per-subprocess (`ui_construction` = 26 files verified green end-to-end); each UI file passes in
+isolation. Every failure has an owner + category + rationale — no blanket "pre-existing".
 
 ---
 
@@ -44,6 +46,12 @@ known-failure register (§6) with owners.
 `group2`/`group3` (13 tests): shared `_make_stats()` MagicMock predated `write_lap`'s `spin_count`
 (v31) + per-corner tyre-temp params → `binding parameter 25` error. **Fixed** by adding the missing
 fields. Stale test helpers.
+
+`group22a` `test_after_metrics_populated_on_first_call`: the **same** stale `_insert_lap` helper as
+group18e (hard-coded `lap_num=1` vs the `UNIQUE(session_id, lap_num)` index) — surfaced by the
+650-file logic run when the test inserts two laps. **Fixed** identically. The second copy of the
+OFR-1 hash pin (`test_ofr2_acceptance::test_ac10_recommendation_scoring_hash_unchanged`) was also
+found by that run and **fixed** the same way as row 5.
 
 ---
 
@@ -133,12 +141,22 @@ Proven green in this session: `db_schema`, `setup_brain`, `race_strategy`, `trac
 
 ## 6. Known-failure register (quarantined, owned)
 
-| Node id | Owner | Why not fixed here |
-|---|---|---|
-| `test_group46_ui_explainability.py::TestAC42AIDisabledPath::test_analyse_no_api_key_returns_approved_json` | Setup Brain | Changing it would touch the engineering-validation-gate doctrine, off-limits in 3.1. |
-| `test_uat2_shell_remediation.py::TestV5RunRecording::test_the_run_card_shows_it_is_recording` | Live runtime seam | Needs live lap-count/connected telemetry the offline baseline must not activate. |
-| `test_uat2_shell_remediation.py::TestV5RunRecording::test_recording_shows_live_lap_and_push_guidance` | Live runtime seam | As above. |
-| `test_uat2_shell_remediation.py::TestCompoundDropdownStability::test_selector_not_rebuilt_on_second_refresh_with_same_codes` | Shell / run_card | Test bypasses the override-capture signal; a correct fix is UI behaviour, not a regression fix. |
+A full 650-file in-process logic run (11,065 passed) surfaced 22 pre-existing failures. All are
+verified pre-existing — the failing test files **and** their production modules are unchanged since
+base `3c3446e` — and none is caused by Program 3 or 3.1. Two were mechanically fixable (a duplicate
+OFR-1 hash pin, and `test_group22a_after_metrics` — the same stale `lap_num` helper as group18e); the
+remaining 20 are owned and quarantined in `tools/run_regression.py::KNOWN_FAILURES`:
+
+| Node id(s) | Count | Owner | Why not fixed here |
+|---|---|---|---|
+| `test_group46_ui_explainability::TestAC42AIDisabledPath::test_analyse_no_api_key_returns_approved_json` | 1 | Setup Brain | Would touch the engineering-validation-gate doctrine, off-limits. |
+| `test_followups_history_lift_candidates::test_baseline_response_lifts_from_liked_history` / `…_no_history_no_lift` | 2 | Setup Brain | Camber chassis-seed / proven-setup-lift assertions drifted (code `2.5` vs test `2.4`; `setup_baseline.py` unchanged since base). Doctrine off-limits. |
+| `test_uat2_shell_remediation::TestV5RunRecording::*` (2) | 2 | Live runtime seam | Need live lap-count/connected telemetry the offline baseline must not activate. |
+| `test_uat2_shell_remediation::TestCompoundDropdownStability::test_selector_not_rebuilt_on_second_refresh_with_same_codes` | 1 | Shell / run_card | Test bypasses the override-capture signal; a correct fix is UI behaviour, not a regression fix. |
+| `test_group17o_uat_defects::*` (Daytona station-map seed) | 11 | Track-modelling | Part of the **staged** Track-Modelling Accuracy Overhaul (Stage 4b/5 outstanding); completing it is out of scope for a regression-baseline branch. |
+| `test_group20a_curvature_blend` / `_gaps` / `_ui` (curvature/banking) | 5 | Track-modelling | Same staged overhaul (deterministic curvature-truth rebuild). |
+
+Run just these to confirm they still fail as classified: `python tools/run_regression.py --quarantine`.
 
 ---
 

@@ -337,15 +337,20 @@ class TestAC10OFR1Untouched:
         )
 
     def test_ac10_recommendation_scoring_hash_unchanged(self):
-        """Byte-hash guard for recommendation_scoring.py (OFR-1 non-collision)."""
+        """Content-hash guard for recommendation_scoring.py (OFR-1 non-collision).
+
+        LF-normalised so the tripwire tests CONTENT, stable across CRLF/LF checkouts. Re-frozen
+        at the reviewed baseline after merged commit 4084e1c ("detect a spin…", DB v31) legitimately
+        added 2 lines; the original pin (0fbd7d07c0dfc23c) predated that change.
+        """
         import hashlib
         path = REPO / "data" / "recommendation_scoring.py"
-        data = path.read_bytes()
+        data = path.read_bytes().replace(b"\r\n", b"\n")
         actual = hashlib.sha256(data).hexdigest()[:16]
-        EXPECTED = "0fbd7d07c0dfc23c"
+        EXPECTED = "a77d33fc5e57bcd6"
         assert actual == EXPECTED, (
-            f"data/recommendation_scoring.py byte-hash changed (OFR-1 non-collision). "
-            f"Expected {EXPECTED!r}, got {actual!r}"
+            f"data/recommendation_scoring.py content changed (OFR-1 non-collision). "
+            f"Expected {EXPECTED!r}, got {actual!r}. If intended and reviewed, re-freeze the pin."
         )
 
 

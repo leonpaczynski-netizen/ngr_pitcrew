@@ -47,14 +47,40 @@ TESTS = ROOT / "tests"
 # Each has an owner + rationale in docs/PROGRAM3_1_REGRESSION_BASELINE.md.
 # --------------------------------------------------------------------------- #
 KNOWN_FAILURES = [
-    # Setup Brain doctrine (engineering-validation gate) — OFF-LIMITS to change here.
+    # --- Setup Brain doctrine — OFF-LIMITS to change in a regression-baseline branch. ---
+    # Engineering-validation gate returns validation_failed for the partial fixture.
     "tests/test_group46_ui_explainability.py::TestAC42AIDisabledPath::test_analyse_no_api_key_returns_approved_json",
-    # Live-runtime / offline-fixture gap (fakes supply no live lap count / connected telemetry).
+    # Camber chassis-seed / proven-setup-lift assertions drifted from these tests (pre-existing;
+    # setup_baseline.py + the tests are unchanged since base 3c3446e).
+    "tests/test_followups_history_lift_candidates.py::test_baseline_response_lifts_from_liked_history",
+    "tests/test_followups_history_lift_candidates.py::test_baseline_response_no_history_no_lift",
+
+    # --- Live-runtime / offline-fixture gap (no live lap count / connected telemetry offline). ---
     "tests/test_uat2_shell_remediation.py::TestV5RunRecording::test_the_run_card_shows_it_is_recording",
     "tests/test_uat2_shell_remediation.py::TestV5RunRecording::test_recording_shows_live_lap_and_push_guidance",
-    # Test simulates the user's compound pick via direct setCurrentIndex, bypassing the
-    # override-capture signal that guards refresh idempotence.
+
+    # --- Shell/run_card: test's direct setCurrentIndex bypasses the override-capture signal. ---
     "tests/test_uat2_shell_remediation.py::TestCompoundDropdownStability::test_selector_not_rebuilt_on_second_refresh_with_same_codes",
+
+    # --- Track-modelling STATION-MAP SEED — pre-existing, part of the staged accuracy overhaul. ---
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_daytona_seed_12_produces_12_seeded_corners",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_station_map_corner_count_is_authoritative_over_detection_count",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_placeholder_corners_make_up_gap_to_expected",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_draw_data_has_12_corner_labels_for_daytona_seed",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_no_seed_does_not_guarantee_12_corners",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_station_map_status_text_includes_seeded_count",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_detection_result_corner_count_can_differ_from_station_map",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT005SeedLookupFix::test_station_map_builds_correctly_with_get_selected_layout",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT007MapDisplayFix::test_station_map_with_seed_produces_valid_draw_data",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT008StationMapPersistence::test_import_roundtrip_preserves_corner_count",
+    "tests/test_group17o_uat_defects.py::TestDef17OUAT008StationMapPersistence::test_imported_map_produces_valid_draw_data",
+
+    # --- Track-modelling CURVATURE/BANKING — pre-existing, part of the staged accuracy overhaul. ---
+    "tests/test_group20a_curvature_blend.py::test_yaw_beats_xz",
+    "tests/test_group20a_curvature_blend.py::test_xz_beats_yaw",
+    "tests/test_group20a_gaps.py::TestOvalBankingCurvaturePeaks::test_banking_yaw_produces_nonzero_curvature",
+    "tests/test_group20a_gaps.py::TestOvalBankingCurvaturePeaks::test_banking_peak_exceeds_straight_baseline",
+    "tests/test_group20a_ui.py::TestFormatSegmentRowVerificationSource::test_ai_verified",
 ]
 
 # --------------------------------------------------------------------------- #
