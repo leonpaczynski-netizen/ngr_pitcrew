@@ -107,6 +107,17 @@ class LiveShellBridge(QObject):
         #: reason (surfaced when recording is blocked by unresolved context).
         self._live_practice_session_id = 0
         self._live_practice_block = ""
+        #: The authoritative live Qualifying recording coordinator (Live Activation 2). None until
+        #: an explicit, fully-resolved Qualifying activation opens a canonical run; while set it is
+        #: the source of truth for the live qualifying phase + personal best. It reuses the SAME
+        #: generic lifecycle as Practice, composed with the qualifying phase machine.
+        self._live_qualifying = None
+        self._live_qualifying_session_id = 0
+        self._live_qualifying_block = ""
+        #: Previous telemetry on-track flag, for detecting the qualifying pit-exit (out-lap) and
+        #: box edges; and the phase the qualifying engineer last spoke, for phase-edge anti-chatter.
+        self._qual_on_track_prev = None
+        self._qual_spoken_phase = ""
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -631,6 +642,7 @@ class LiveShellBridge(QObject):
         # render, so the recording label, diagnostics header and engineer voice all read the
         # freshly-reconciled state this tick.
         self._drive_live_practice()
+        self._drive_live_qualifying()
         self._feed_garage()
         self._feed_shift_strategy()
         self._feed_practice()
@@ -1095,6 +1107,266 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    # ---- telemetry → coordinator driving (Live Activation 2 — Qualifying) ---- #
+    #: Preparation-activity types that are driven as a live QUALIFYING session. Symmetric with
+    #: _PRACTICE_ACTIVITY_TYPES: the open run's activity decides the session, so the practice and
+    #: qualifying coordinators are mutually exclusive (one open run has exactly one activity type).
+    _QUALIFYING_ACTIVITY_TYPES = frozenset({"qualifying_simulation", "qualifying"})
+
+    def _live_on_track(self):
+        """Latest telemetry on-track flag (True on-track, False in pit/garage, None unknown).
+
+        Read-only. The only telemetry signal the qualifying driving needs beyond completed laps:
+        its False→True edge is the pit-exit (out-lap), its True→False edge is the box."""
+        try:
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is not None and hasattr(tracker, "live_on_track"):
+                return tracker.live_on_track
+        except Exception:
+            pass
+        return None
+
+    def _live_qualifying_context(self, live_session_id) -> dict:
+        """Resolve the full canonical context for the current live Qualifying recording, ADOPTING
+        the open telemetry session. The planned session type comes from the persisted qualifying
+        activity — never from GT7. Missing required fields stay empty, so the gate blocks honestly.
+
+        Identical resolution to ``_live_practice_context`` except the planned session type is
+        ``Qualifying`` (for a qualifying activity), and the discipline read is qualifying."""
+        ctx = {"live_session_id": int(live_session_id or 0)}
+        try:
+            run = self._runs.open_run() or {}
+            atype = str(run.get("activity_type") or "").lower()
+            ctx["planned_session_type"] = (
+                "Qualifying" if atype in self._QUALIFYING_ACTIVITY_TYPES else "")
+            ctx["session_plan_id"] = str(run.get("activity_id") or "")
+            cid = self._runs.active_cycle_id()
+            ctx["event_programme_id"] = cid
+            cyc = self._db.get_preparation_cycle(cid) if (self._db and cid) else None
+            event_id = int((cyc or {}).get("event_id") or 0)
+            ctx["event_id"] = str(event_id or "")
+            car_id = 0
+            try:
+                if hasattr(self._window, "_current_car_id"):
+                    car_id = int(self._window._current_car_id() or 0)
+            except Exception:
+                car_id = 0
+            ctx["car_id"] = str(car_id or "")
+            try:
+                specs = self._db.get_car_spec_revisions(car_id, event_id) or []
+                ctx["car_spec_revision_id"] = str((specs[-1].get("spec_revision_id") if specs else "") or "")
+            except Exception:
+                ctx["car_spec_revision_id"] = ""
+            try:
+                dpv = self._db.get_current_driver_profile_version() or {}
+                ctx["driver_profile_version_id"] = str(dpv.get("version_id") or "")
+            except Exception:
+                ctx["driver_profile_version_id"] = ""
+            ecx = {}
+            try:
+                ecx = self._db.get_engineering_context_for_source("session", int(live_session_id)) or {}
+                ctx["context_revision_id"] = str(ecx.get("fingerprint") or "")
+            except Exception:
+                ctx["context_revision_id"] = ""
+            try:
+                tloc = str(ecx.get("track_location_id") or "")
+                lay = str(ecx.get("layout_id") or "")
+                tmv = self._db.get_approved_track_model_version(tloc, lay)
+                ctx["track_model_version_id"] = str((tmv or {}).get("version_id") or "")
+            except Exception:
+                ctx["track_model_version_id"] = ""
+            try:
+                # Qualifying always runs on the qualifying setup sheet.
+                ctx["setup_snapshot_id"] = str(
+                    self._setups.applied_setup_snapshot_id("qualifying") or "")
+            except Exception:
+                ctx["setup_snapshot_id"] = ""
+        except Exception:
+            pass
+        return ctx
+
+    def _start_live_qualifying(self, live_session_id):
+        """Activate an authoritative Qualifying run adopting the live telemetry session. On a
+        blocked gate nothing is created and the exact reason is stored for the UI."""
+        try:
+            from strategy.live_qualifying_runtime import LiveQualifyingCoordinator
+            from ui.live_practice_db_port import SessionDbLivePracticePort
+            sid = int(live_session_id or 0)
+            port = SessionDbLivePracticePort(self._db, lambda: self._live_qualifying_context(sid))
+            co = LiveQualifyingCoordinator(port)
+            act = co.activate()
+            if not act.ok:
+                self._live_qualifying = None
+                self._live_qualifying_block = act.reason
+                return act
+            self._live_qualifying = co
+            self._live_qualifying_session_id = sid
+            self._live_qualifying_block = ""
+            self._qual_on_track_prev = None
+            self._qual_spoken_phase = ""
+            co.telemetry_connected()
+            return act
+        except Exception:
+            return None
+
+    def _feed_new_laps_to_qualifying_coordinator(self, live_session_id) -> None:
+        """Feed DB laps the qualifying coordinator has not seen yet (lap_num > last_finalised)
+        through the gate + phase machine, so the authoritative phase + personal best track
+        reality. Never raises."""
+        try:
+            lq = self._live_qualifying
+            if lq is None or self._db is None:
+                return
+            laps = self._db.get_session_laps(int(live_session_id)) or []
+            for row in sorted(laps, key=lambda r: int(r.get("lap_num") or 0)):
+                ln = int(row.get("lap_num") or 0)
+                if ln <= int(lq.last_finalised_lap):
+                    continue
+                # Timing validity is the lap guard's verdict (out/pit/zero-time). GT7 track-limits
+                # deletions are not captured per-lap in the DB yet, so a deleted flying lap can
+                # only be sourced once that capture exists — the domain machine already handles it.
+                lq.on_lap(session_run_id=lq.run_id, event_id=lq.event_id, lap_number=ln,
+                          lap_time_ms=int(row.get("lap_time_ms") or 0),
+                          is_out_lap=bool(row.get("is_out_lap")),
+                          is_pit_lap=bool(row.get("is_pit_lap")), telemetry_complete=True)
+        except Exception:
+            pass
+
+    def _drive_live_qualifying(self) -> None:
+        """Reconcile the authoritative Qualifying coordinator with live telemetry each refresh.
+        Additive + defensive: acts only while a qualifying activity + telemetry are present. The
+        app decides the session (the planned qualifying activity); telemetry supplies the connect,
+        the pit-exit/box edges (on-track flag) and the completed laps — never the session type."""
+        try:
+            from strategy.live_practice_activation import LiveRunState
+            lq = getattr(self, "_live_qualifying", None)
+            connected = self._connected()
+            live_sid = self._live_session_id()
+
+            # (1) Activation — a qualifying activity is open, telemetry is live, context resolves.
+            if lq is None or lq.state in (LiveRunState.COMPLETED, LiveRunState.ABANDONED):
+                run = self._runs.open_run()
+                atype = str((run or {}).get("activity_type") or "").lower()
+                if (connected and live_sid > 0 and run is not None
+                        and atype in self._QUALIFYING_ACTIVITY_TYPES):
+                    self._start_live_qualifying(live_sid)
+                return
+
+            # Only reconcile a run WE started from telemetry (tracked adopted-session id).
+            if int(getattr(self, "_live_qualifying_session_id", 0)) <= 0:
+                return
+
+            # (2) Connection transitions (identical to Practice).
+            if not connected and lq.state == LiveRunState.RECORDING:
+                lq.telemetry_lost()
+            elif connected and lq.state == LiveRunState.STARTING:
+                lq.telemetry_connected()
+            elif connected and lq.state == LiveRunState.DISCONNECTED:
+                if live_sid == int(getattr(self, "_live_qualifying_session_id", 0)):
+                    lq.telemetry_connected()
+
+            # (3) Qualifying phase edges + newly completed laps, only while actively recording.
+            if lq.state == LiveRunState.RECORDING:
+                self._drive_qualifying_phase_edges(lq)
+                self._feed_new_laps_to_qualifying_coordinator(
+                    int(getattr(self, "_live_qualifying_session_id", live_sid)))
+        except Exception:
+            pass
+
+    def _drive_qualifying_phase_edges(self, lq) -> None:
+        """Translate the telemetry on-track flag into the qualifying phase machine's pit-exit and
+        box events. False→True (left the pits) starts a new attempt's out-lap; True→False (back in
+        the box) returns to preparation. Unknown (no telemetry) leaves the phase untouched."""
+        try:
+            cur = self._live_on_track()
+            if cur is None:
+                return
+            prev = self._qual_on_track_prev
+            if cur and prev is not True:
+                # Went (or already) on track — begin the out-lap for this attempt. pit_exit only
+                # advances while recording and (re)sets OUT_LAP, so a spurious repeat is harmless.
+                lq.pit_exit()
+            elif prev is True and not cur:
+                lq.box()
+            self._qual_on_track_prev = bool(cur)
+        except Exception:
+            pass
+
+    def live_qualifying_diagnostics(self) -> dict:
+        """Authoritative live-Qualifying identity + recording state for the diagnostics header
+        (Live Activation 2). Session-type-aware: it carries the qualifying phase + personal best
+        so the shared panel can render a qualifying-appropriate summary. Never raises."""
+        lq = getattr(self, "_live_qualifying", None)
+        if lq is None:
+            return {"active": False, "recording_state": "not_started"}
+        try:
+            idn = dict(getattr(lq, "identity", {}) or {})
+            state = getattr(lq, "state", None)
+            best_ms = int(getattr(lq, "best_lap_ms", 0) or 0)
+            return {
+                "active": True,
+                "recording_state": state.value if state is not None else "",
+                "session_run_id": getattr(lq, "run_id", ""),
+                "stint_id": getattr(lq, "stint_id", ""),
+                "connected": bool(lq.is_recording),
+                "session_type": idn.get("session_type", "qualifying") or "qualifying",
+                "best_lap_ms": best_ms,
+                "qualifying_phase": getattr(lq, "phase", ""),
+                "attempt": int(getattr(lq, "attempt", 0) or 0),
+                # A qualifying summary tracks the best flying lap + phase, not a valid-lap count.
+                "headline": self._qualifying_diag_headline(best_ms, getattr(lq, "phase", ""),
+                                                           int(getattr(lq, "attempt", 0) or 0)),
+                "event_id": idn.get("event_id", ""),
+                "event_programme_id": idn.get("event_programme_id", ""),
+                "session_plan_id": idn.get("session_plan_id", ""),
+                "car_id": idn.get("car_id", ""),
+                "car_spec_revision_id": idn.get("car_spec_revision_id", ""),
+                "setup_snapshot_id": idn.get("setup_snapshot_id", ""),
+                "context_revision_id": idn.get("context_revision_id", ""),
+                "driver_profile_version_id": idn.get("driver_profile_version_id", ""),
+                "track_model_version_id": idn.get("track_model_version_id", ""),
+            }
+        except Exception:
+            return {"active": False, "recording_state": "not_started"}
+
+    @staticmethod
+    def _qualifying_diag_headline(best_ms: int, phase: str, attempt: int) -> str:
+        """Driver-facing one-line qualifying summary: best flying lap + current phase."""
+        best = f"{best_ms / 1000.0:.3f}" if best_ms and best_ms > 0 else "—"
+        ph = str(phase or "").replace("_", " ")
+        head = f"Best {best}"
+        if ph:
+            head += f" · {ph}"
+        if attempt:
+            head += f" · attempt {attempt}"
+        return head
+
+    def _speak_qualifying_engineer(self) -> "object":
+        """Speak the qualifying engineer's phase-appropriate cue on each phase EDGE (§7 analogue).
+        Anti-chatter: the line is spoken once when the phase changes, silent between. Returns the
+        line (or "") so tests can inspect it. Never raises."""
+        try:
+            lq = getattr(self, "_live_qualifying", None)
+            if lq is None or not lq.is_recording:
+                return ""
+            phase = str(lq.phase or "")
+            if phase == getattr(self, "_qual_spoken_phase", ""):
+                return ""
+            self._qual_spoken_phase = phase
+            # Recall the driver's practice reference on the prep/out-lap where it helps.
+            _last_s, best_s = self._live_last_best_lap_s()
+            practice_best_ms = int(best_s * 1000) if best_s else 0
+            line = lq.cue(practice_best_ms=practice_best_ms)
+            if not line:
+                return ""
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "announce"):
+                from voice.announcer import Priority
+                announcer.announce(line, Priority.MEDIUM, "qualifying_engineer")
+            return line
+        except Exception:
+            return ""
+
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
         try:
@@ -1168,6 +1440,14 @@ class LiveShellBridge(QObject):
             lp = getattr(self, "_live_practice", None)
             if lp is not None and int(getattr(self, "_live_practice_session_id", 0)) == int(sid or 0):
                 lp.complete()
+        except Exception:
+            pass
+        # Same finalisation for an authoritative live Qualifying run (Live Activation 2), so it
+        # becomes history and can never silently re-activate.
+        try:
+            lq = getattr(self, "_live_qualifying", None)
+            if lq is not None and int(getattr(self, "_live_qualifying_session_id", 0)) == int(sid or 0):
+                lq.complete()
         except Exception:
             pass
         decision = self._runs.record_run(sid)
@@ -1314,6 +1594,10 @@ class LiveShellBridge(QObject):
                 softest_label=target_name, current_label=current_name, wet=is_wet))
         except Exception:
             pass
+        # Qualifying Engineer (Live Activation 2): speak the phase-appropriate cue on each phase
+        # edge (prep → out-lap → flying → PB/deleted → cooldown). Silent between edges; only
+        # while an authoritative live qualifying run owns the voice.
+        self._speak_qualifying_engineer()
 
     def _qualifying_tyre_state(self):
         """(target_code, current_code, target_name, current_name, is_wet) for the
@@ -3075,10 +3359,14 @@ class LiveShellBridge(QObject):
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
                 return
-            # Live Activation 1 (§9): refresh the authoritative Practice-recording diagnostics
-            # header every tick, whatever the session mode.
+            # Live Activation 1/2 (§9): refresh the authoritative recording diagnostics header
+            # every tick, whatever the session mode. A live Qualifying run owns the header while
+            # active (its phase + personal best); otherwise the Practice diagnostics show.
             if hasattr(lp, "set_diagnostics"):
-                lp.set_diagnostics(self.live_practice_diagnostics())
+                _q = getattr(self, "_live_qualifying", None)
+                lp.set_diagnostics(
+                    self.live_qualifying_diagnostics() if (_q is not None and _q.is_recording)
+                    else self.live_practice_diagnostics())
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             from strategy.live_engineer_session import normalise_session_mode
             from strategy.engineer_orchestrator import EngineerContext, orchestrate
@@ -3158,8 +3446,11 @@ class LiveShellBridge(QObject):
                 engineer_override=_eng_call))
             # Speak it once per new lap (not every 750ms tick) so the engineer's voice
             # tracks the session without chattering — but stay silent during a track-model
-            # capture so the track-modelling callout is the only voice the driver hears.
-            if not self._track_modelling_active():
+            # capture so the track-modelling callout is the only voice the driver hears, and
+            # while an authoritative live Qualifying run owns the voice (its phase cue speaks
+            # instead, from _feed_qualifying) so the two engineers never talk over each other.
+            _q = getattr(self, "_live_qualifying", None)
+            if not self._track_modelling_active() and not (_q is not None and _q.is_recording):
                 self._maybe_speak_engineer(_eng_call)
             # Only an actual race shows a pit plan. In practice/qualifying, pass an empty
             # dict so no race-plan card lingers on the wall.
