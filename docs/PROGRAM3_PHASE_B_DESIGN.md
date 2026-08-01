@@ -1,8 +1,24 @@
 # Program 3 — Phase B Design: Canonical Identity, Migration Plan & Legacy Classification
 
-**Status:** DESIGN — for review before any `data/session_db.py` change.
-**Branch:** `feat/program3-spine-2026-08-01` · **Baseline:** DB v31, Rule-Engine 46.0.
+**Status:** ✅ LANDED (v32–v38). Branch `feat/program3-spine-2026-08-01`, DB **v31 → v38**.
 **Precursors:** [Phase A audit](PROGRAM3_PHASE_A_AUDIT.md) + UUID blast-radius inventory.
+
+**Landed sequence** (the design's v32–v36 was split into finer, independently-reviewable commits):
+| Ver | Commit | What |
+|---|---|---|
+| v32 | `7331727` | UUIDv7 identity columns + ordering-preserving backfill on 8 core tables |
+| v33 | `2518ed5` | event-programme `cycle_id` slug → UUID (+ `legacy_cycle_id`, `get_cycle_by_event`) |
+| v34 | `63175d0` | planned `session_plan` vs actual `session_run` + `stints` |
+| v35 | `5003e11` | immutable `strategy_revisions` + `race_state_snapshots` |
+| v36 | `b0abcf5` | `car_spec_revisions` + `track_model_versions` |
+| v37 | `c4083aa` | `driver_profile_versions` (immutable history) |
+| v38 | `d9364a6` | legacy `RESOLVED/…/AMBIGUOUS` classification + `quarantine_records` view |
+
+All additive + idempotent; integer PKs retained (dual-key); `config_id` untouched; **no live writer repointed** (that is Phase C). Deferred items in §8 remain for Phase C.
+
+---
+
+_Original design (as reviewed) follows._
 
 ---
 
