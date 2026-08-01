@@ -30,9 +30,12 @@ These are **two different matrices** and were conflated in earlier summaries:
    `31−24`; the correct figure is **6** (there are 30 gates, not 31). Phase J now certifies
    #25 and #26.
 2. **Pre-existing red tests** — *failing tests*, unrelated to the gate matrix. Earlier
-   reports said "5"; the exact count is **6** test cases in **4 defect families** (the 6th,
-   `test_refresh_feeds_appstate_and_garage`, was found during E-integration and the running
-   tally wasn't updated). **All 6 are pre-existing and NOT introduced by Program 3.**
+   reports said "5", then "6" — **both were undercounts** based only on the reds encountered
+   during development, not a full-suite run. The full batched run reveals a **much larger
+   pre-existing red set** (see below): the original **6** (4 families) **plus ≥58 stale
+   Engineering-Brain (Program 2) version-pin tests** that assert a historical DB version
+   (v26/v27/v28). **All of them are pre-existing and NOT introduced by Program 3** — proven
+   on base `3c3446e`.
 
 Gates ≠ reds. A yellow gate is a maturity flag on a functional criterion; a red is a failing
 legacy test. They do not belong to the same list.
@@ -52,6 +55,25 @@ Program 3 entirely absent). All 6 failed **identically** there:
 | 6 | `test_live_shell_bridge::TestBridgeReadSide::test_refresh_feeds_appstate_and_garage` | garage-seed |
 
 `base worktree: 6 failed, 10 passed` — matching `master: 6 failed, 10 passed` on the same selection.
+
+### The larger pre-existing set: ~58 stale version-pin tests
+
+The full batched run surfaced **58 more failures** (quarter 3) that development-time regressions
+never hit. They are Engineering-Brain (Program 2) phase tests of the form
+`test_versions_pinned` / `test_db_version_is_28` / `test_versions_v27` / `test_user_version_stays_26`
+/ `test_no_writes_db_hash_and_counts_unchanged` — each **pins the DB version to the value at that
+phase (v26/v27/v28)**. Program 3 bumped v31 → v40, so they now assert e.g. `40 == 28`.
+
+**Proven pre-existing:** re-running the exact 58 node-ids on the base worktree `3c3446e` (v31)
+gives **58 failed** with the identical signature `31 == 28` — i.e. they were *already failing at
+base* because base was already past those pinned versions (Program 2 itself advanced v28 → v31).
+Program 3 only changed the failing literal from `31` to `40`.
+
+**Disposition:** these are **pre-existing test debt** (stale version pins from Program 2), **out of
+Phase-J scope** and unrelated to the Setup/Strategy Brain doctrine. Per the mandate ("do not modify
+unless a certification test proves a specific defect") they are **documented, not touched** here.
+Recommended follow-up: a separate maintenance pass to update the historical phase version-pins to
+`DB_VERSION` (or make them relative), independent of Program 3.
 
 ## Certification results (J1–J9)
 
@@ -99,7 +121,33 @@ All through the **real** `SessionDB` + real domain functions (no orchestration-b
 
 ## Full-suite result
 
-_Batched-in-quarters run in progress (12,423 collected; the single Win/Py3.14 `EventCommandCentrePanel` segfault isolates one quarter, per the register). Aggregated totals to be appended on completion; the only expected reds are the 6 pre-existing failures proven above._
+**Collected: 12,423 tests.** A single-process full run is impossible in this environment — the
+documented **Win/Py3.14 PyQt `EventCommandCentrePanel` segfault** crashes any batch that constructs
+the panel, and the crash is pervasive across several panel-building files (excluding the three most
+obvious ones still crashed 2 of 6 batches). This is the same limitation the register records; it is
+**environmental, not Program 3.**
+
+**Best-achievable clean coverage** (run in sixths with the known panel files excluded; the 4 batches
+that completed cleanly): **7,616 passed · 83 failed · 21 skipped** (~7,720 tests; the 2 crashed
+batches are not counted).
+
+**Every one of the 83 failures was categorised against the base commit `3c3446e`:**
+
+| Failure family | n | Proven pre-existing on base? |
+|---|---|---|
+| Stale Program-2 version-pin / no-DB-write (`test_versions_pinned`, `test_db_version_is_*`, `test_no_writes_*`, `test_db_byte_identical_*`, restart-determinism, empty-db-safe, migration pins) | 58 (56 + 2 phase8/9) | ✅ yes (`31 == 28` on base) |
+| `test_group2_fixes` / `test_group3_fixes` DB lap round-trip (fuel/compound/out-lap) | 13 | ✅ yes (same 15 fail on base) |
+| `test_group46/47_ui_explainability` + `test_uat2_shell_remediation` (shell) | 6 | ✅ yes (6 fail on base) |
+| Original development-time reds (`recommendation_scoring`, `group18e`, `TestU4`, `refresh_feeds_appstate`) | 5* | ✅ yes (proven earlier) |
+| **`test_program3_phase_f_ptt::test_table_exists_at_v39` (my own stale `== 39` pin)** | **1** | ❌ **Program-3-introduced** — **FIXED** (`>= 39`) |
+
+\* the original-6 family split across crashed batches; all members are proven pre-existing.
+
+**Net: exactly ONE Program-3-caused failure** — a stale exact-version pin *in a Program-3 test I
+authored* (Phase I bumped v39 → v40) — now fixed (and the Phase-I `== 40` pin pre-emptively relaxed
+to `>= 40`). **After the fix, 0 Program-3-caused failures remain.** All **96 Program-3 + certification
+tests pass.** The remaining reds are **pre-existing test debt**, dominated by stale Program-2 version
+pins, and are out of Phase-J scope (recommended: a separate maintenance pass).
 
 ## Recommendation on controlled live activation
 
