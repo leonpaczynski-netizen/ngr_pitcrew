@@ -276,6 +276,45 @@ class LiveShellBridge(QObject):
             self._live_session_mode = None
         self.refresh()
 
+    def dispatch(self, command) -> None:
+        """Single typed-command entry point (Program 3 §10).
+
+        A page or test issues a typed ``shell_commands.Command``; this routes it to
+        the canonical operation. ADDITIVE — the existing widget→signal→bridge-slot
+        wiring is unchanged, so this introduces the typed, auditable surface (and the
+        seam where a command can later be context-stamped/validated) without churning
+        the working handlers. A command whose underlying operation is not yet built,
+        or does not map cleanly onto an existing handler, raises NotImplementedError
+        naming the reason — it is NEVER silently swallowed nor forced onto a
+        semantically-different handler."""
+        from ui import shell_commands as _cmd
+        if isinstance(command, _cmd.SelectEvent):
+            self._on_activate_event(command.event_name or command.event_id)
+        elif isinstance(command, _cmd.StartSessionRun):
+            self._on_start_run()
+        elif isinstance(command, _cmd.CompleteSessionRun):
+            self._on_record_run()
+        elif isinstance(command, _cmd.RecordDriverFeedback):
+            self._on_feedback(dict(command.feedback or {}))
+        elif isinstance(command, _cmd.ApplySetup):
+            # ApplySetup(setup_snapshot_id) does not map onto _on_apply(field_values),
+            # which applies AI field values, not a snapshot by id — routing it there
+            # would be semantically wrong. Applying a snapshot by id lands in Phase E.
+            raise NotImplementedError(
+                "ApplySetup by snapshot id is delivered in Phase E (the existing "
+                "apply path takes field values, not a snapshot id)")
+        elif isinstance(command, (_cmd.SelectSession, _cmd.ResumeSessionRun,
+                                  _cmd.StartTelemetryCapture, _cmd.CompleteLap,
+                                  _cmd.ReportRaceIncident)):
+            raise NotImplementedError(
+                f"{type(command).__name__} is delivered in a later phase "
+                f"(session orchestration / dynamic strategy)")
+        elif isinstance(command, (_cmd.AcceptLearningProposal, _cmd.RejectLearningProposal)):
+            raise NotImplementedError(
+                f"{type(command).__name__} is delivered in Phase I (cross-event learning)")
+        else:
+            raise TypeError(f"unknown shell command: {command!r}")
+
     def _wire_actions(self) -> None:
         """Route Garage Apply/Revert/Analyse + Settings save through the classic services."""
         try:
