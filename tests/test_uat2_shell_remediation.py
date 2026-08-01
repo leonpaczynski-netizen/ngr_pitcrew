@@ -355,6 +355,17 @@ class TestV5RunRecording:
         assert "end the run on a clean lap" in guidance.lower()
         assert "Push:" in guidance
 
+    def test_diagnostics_expose_the_authoritative_identity(self, wired):
+        # Live Activation 1 §9: the diagnostics header reads the authoritative run identity.
+        _shell, _win, _db, bridge = wired
+        assert bridge.live_practice_diagnostics()["active"] is False
+        bridge._live_practice = _recording_coordinator(valid_laps=4)
+        d = bridge.live_practice_diagnostics()
+        assert d["active"] and d["recording_state"] == "recording"
+        assert d["session_run_id"] == "run-1" and d["session_type"] == "practice"
+        assert d["event_id"] == "42" and d["session_plan_id"] == "plan-1"
+        assert d["valid_lap_count"] == 4 and d["connected"] is True
+
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
         bridge._last_guidance_view = _view()

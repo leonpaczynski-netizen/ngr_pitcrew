@@ -858,6 +858,37 @@ class LiveShellBridge(QObject):
                 pass
         return self._live_lap_count(), self._connected()
 
+    def live_practice_diagnostics(self) -> dict:
+        """Authoritative live-Practice identity + recording state for the diagnostics header
+        (Live Activation 1 §9). Safe when no authoritative run is active. Never raises."""
+        lp = getattr(self, "_live_practice", None)
+        if lp is None:
+            return {"active": False, "recording_state": "not_started"}
+        try:
+            idn = dict(getattr(lp, "identity", {}) or {})
+            laps, connected = self._authoritative_recording_progress()
+            state = getattr(lp, "state", None)
+            return {
+                "active": True,
+                "recording_state": state.value if state is not None else "",
+                "session_run_id": getattr(lp, "run_id", ""),
+                "stint_id": getattr(lp, "stint_id", ""),
+                "valid_lap_count": laps,
+                "connected": connected,
+                "session_type": idn.get("session_type", ""),
+                "event_id": idn.get("event_id", ""),
+                "event_programme_id": idn.get("event_programme_id", ""),
+                "session_plan_id": idn.get("session_plan_id", ""),
+                "car_id": idn.get("car_id", ""),
+                "car_spec_revision_id": idn.get("car_spec_revision_id", ""),
+                "setup_snapshot_id": idn.get("setup_snapshot_id", ""),
+                "context_revision_id": idn.get("context_revision_id", ""),
+                "driver_profile_version_id": idn.get("driver_profile_version_id", ""),
+                "track_model_version_id": idn.get("track_model_version_id", ""),
+            }
+        except Exception:
+            return {"active": False, "recording_state": "not_started"}
+
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
         try:
