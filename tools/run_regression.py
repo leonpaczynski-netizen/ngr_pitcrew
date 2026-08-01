@@ -55,12 +55,14 @@ KNOWN_FAILURES = [
     "tests/test_followups_history_lift_candidates.py::test_baseline_response_lifts_from_liked_history",
     "tests/test_followups_history_lift_candidates.py::test_baseline_response_no_history_no_lift",
 
-    # --- Live-runtime / offline-fixture gap (no live lap count / connected telemetry offline). ---
-    "tests/test_uat2_shell_remediation.py::TestV5RunRecording::test_the_run_card_shows_it_is_recording",
-    "tests/test_uat2_shell_remediation.py::TestV5RunRecording::test_recording_shows_live_lap_and_push_guidance",
+    # (Live Activation 1 activated the two V5 recording tests — the run card now renders the
+    #  authoritative coordinator's valid-lap count + connected state; they are normal tests.)
 
     # --- Shell/run_card: test's direct setCurrentIndex bypasses the override-capture signal. ---
     "tests/test_uat2_shell_remediation.py::TestCompoundDropdownStability::test_selector_not_rebuilt_on_second_refresh_with_same_codes",
+    # --- Pre-existing UI dev-time red: fake-window car resolution in _feed_appstate (st.car
+    #     empty vs 'GT-R'); unrelated to live recording. Fails identically at base 6eae459. ---
+    "tests/test_live_shell_bridge.py::TestBridgeReadSide::test_refresh_feeds_appstate_and_garage",
 
     # --- Track-modelling STATION-MAP SEED — pre-existing, part of the staged accuracy overhaul. ---
     "tests/test_group17o_uat_defects.py::TestDef17OUAT003DaytonaCornerCount::test_daytona_seed_12_produces_12_seeded_corners",

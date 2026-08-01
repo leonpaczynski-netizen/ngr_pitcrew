@@ -213,6 +213,34 @@ def _view(headline="Build setup_base evidence"):
             "recent_learning": [], "fingerprint": "fp"}
 
 
+def _recording_coordinator(valid_laps=9):
+    """A real LivePracticeCoordinator that has authoritatively activated a Practice run and
+    recorded ``valid_laps`` valid laps — the source of truth the run card renders from."""
+    from strategy.live_practice_runtime import LivePracticeCoordinator
+
+    class _Port:
+        def resolve_activation_context(self):
+            return {"planned_session_type": "Practice", "event_programme_id": "cyc-1",
+                    "event_id": "42", "session_plan_id": "plan-1", "car_id": "333",
+                    "car_spec_revision_id": "spec-1", "driver_profile_version_id": "drv-1",
+                    "context_revision_id": "ctx-1"}
+
+        def create_run(self, identity):
+            return "run-1", "stint-1"
+
+        def persist_lap(self, **kw):
+            pass
+
+        def set_run_status(self, *a):
+            pass
+
+    co = LivePracticeCoordinator(_Port())
+    assert co.activate().ok and co.telemetry_connected()
+    for i in range(valid_laps):
+        co.on_lap(session_run_id="run-1", event_id="42", lap_number=i + 1, lap_time_ms=90000)
+    return co
+
+
 # --------------------------------------------------------------------------- tests
 class TestV1Gt7FieldOrder:
     def test_changed_fields_read_in_gt7_menu_order(self, wired):
@@ -304,17 +332,22 @@ class TestV5RunRecording:
         assert shell.current_destination() == "live_pit_wall"
 
     def test_the_run_card_shows_it_is_recording(self, wired):
+        # Live Activation 1: the live valid-lap count + connected state come from the
+        # AUTHORITATIVE Practice coordinator that owns the recording (not a raw session count).
         shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=9)
         bridge._last_guidance_view = _view()
         shell.run_card.start_requested.emit()
         assert shell.run_card.is_recording() is True
         assert "RECORDING" in shell.run_card._recording.text()
         assert "9 laps so far" in shell.run_card._recording.text()
+        assert "GAME NOT CONNECTED" not in shell.run_card._recording.text()
 
     def test_recording_shows_live_lap_and_push_guidance(self, wired):
-        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard
-        # to push. setup_base targets "5–8" laps; the fake session reports 9 → "plenty".
+        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard to
+        # push. setup_base targets "5–8" laps; the coordinator reports 9 valid → "plenty".
         shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=9)
         bridge._last_guidance_view = _view()
         shell.run_card.start_requested.emit()
         guidance = shell.run_card._run_guidance.text()

@@ -94,6 +94,10 @@ class LiveShellBridge(QObject):
         #: does in a run ever reaches the event programme, so the engineer never moves.
         from ui.practice_run_recorder import PracticeRunRecorder
         self._runs = PracticeRunRecorder(db=db, config=self._config)
+        #: The authoritative live Practice recording coordinator (Live Activation 1). None
+        #: until an explicit, fully-resolved Practice activation opens a canonical session run;
+        #: while set it is the source of truth for the live valid-lap count + connected state.
+        self._live_practice = None
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -645,10 +649,13 @@ class LiveShellBridge(QObject):
             # the run is being captured and knows it still has to be ended to count.
             run = self._runs.open_run()
             if run:
-                laps_done = self._live_lap_count()
+                # When an AUTHORITATIVE live Practice run owns the recording (Live Activation
+                # 1), its coordinator is the source of truth for the live valid-lap count and
+                # the connected state; otherwise fall back to the session-derived count.
+                laps_done, connected = self._authoritative_recording_progress()
                 from strategy.run_brief import lap_progress_note
                 rc.set_recording(str(run.get("title") or "Practice run"),
-                                 laps_done, connected=self._connected(),
+                                 laps_done, connected=connected,
                                  lap_note=lap_progress_note(card.target_laps, laps_done),
                                  push=card.push_level)
             else:
@@ -835,6 +842,21 @@ class LiveShellBridge(QObject):
             return int(self._db.count_valid_laps(self._live_session_id())) if self._db else 0
         except Exception:
             return 0
+
+    def _authoritative_recording_progress(self) -> "tuple":
+        """(valid_lap_count, connected) from the authoritative live Practice coordinator when
+        one owns the recording (Live Activation 1); otherwise the session-derived count + the
+        telemetry connection. Never raises."""
+        lp = getattr(self, "_live_practice", None)
+        if lp is not None:
+            try:
+                from strategy.live_practice_activation import LiveRunState
+                if lp.state in (LiveRunState.RECORDING, LiveRunState.PAUSED,
+                                LiveRunState.DISCONNECTED):
+                    return int(lp.valid_lap_count), bool(lp.is_recording)
+            except Exception:
+                pass
+        return self._live_lap_count(), self._connected()
 
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
