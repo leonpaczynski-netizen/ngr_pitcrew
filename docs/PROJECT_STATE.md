@@ -1,5 +1,16 @@
 # GT7 VR Dashboard — Project State
 
+> **PROGRAM 3 LIVE ACTIVATION 1 — Practice recording (2026-08-01, IN PROGRESS).** Branch
+> `live/program3-activation1-practice-recording-2026-08-01` (off `master @ ffd6bcf`; Program 3.1
+> merged). First production telemetry seam through the canonical spine — **Practice only**.
+> Authoritative activation gate + session-run lifecycle FSM + lap guard + reconnect/event-switch
+> rules + real-`SessionDB` port (one canonical run bound to the plan, laps stamped with run+stint) +
+> bridge authoritative recording render + diagnostics accessor; all offline-tested. The two V5
+> recording tests are activated + pass. `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged (additive DB
+> helpers only). **Stopped at the hardware-UAT gate (`docs/LIVE_ACTIVATION_1_UAT.md`); live cert NOT
+> TESTED.** Qualifying / broader PTT / race-strategy snapshots / replanning remain inert. _(Program 3.1
+> note below stands.)_
+
 > **PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01).** Branch
 > `maint/program3.1-regression-baseline-2026-08-01` (off `master @ 1c99b79`, Program 3 J/K merged).
 > Maintenance/certification only — **0 production `.py` changed**, `DB_VERSION=40` + RULE_ENGINE 46.0

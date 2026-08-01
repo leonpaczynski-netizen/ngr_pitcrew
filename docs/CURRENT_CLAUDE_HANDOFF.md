@@ -1,6 +1,37 @@
 # Current Claude Handoff
 
-## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01) — CURRENT TOP OF TREE
+## PROGRAM 3 LIVE ACTIVATION 1 — Practice recording + engineer (2026-08-01) — CURRENT TOP OF TREE
+Branch `live/program3-activation1-practice-recording-2026-08-01` off `master @ ffd6bcf` (Program 3.1
+merged via PR #104). **First production telemetry seam through the canonical event spine — Practice
+ONLY.** Delivered + tested offline: authoritative activation gate (full canonical context + planned
+`session_type==PRACTICE`, never inferred; blocks with the exact missing requirement), session-run
+lifecycle FSM (NOT_STARTED→…→COMPLETED/ABANDONED; terminal never reopens; reconnect = resume-same-run
+or explicit-new, never "latest session"), lap-completion guard (rejects not-recording/stale-run/other-
+event/duplicate/reset/zero-length; records pit/out/incomplete as invalid-with-reasons), event-switch
+guard, real-`SessionDB` port (one canonical run bound to the plan, laps stamped with run+stint),
+bridge renders the authoritative recording count+connected, diagnostics accessor + **collapsible
+diagnostics-panel UI** (`ui/components/live_diagnostics.py`, embedded at the foot of the Live Pit Wall,
+fed every tick). **The two quarantined V5 recording tests are ACTIVATED and pass;
+`test_refresh_feeds_appstate_and_garage` + `TestU4HomeSaysSomething` (pre-existing UI reds) newly
+quarantined; `test_bridge_actions` teardown-crasher skipped-with-log.** New modules:
+`strategy/live_practice_activation.py`, `strategy/live_practice_runtime.py`,
+`ui/live_practice_db_port.py`, `ui/components/live_diagnostics.py`,
+`strategy/practice_engineer_choreography.py`. **Practice Engineer choreography DONE** (§7 — the 6
+message types brief/recording/progress/invalid-lap/sufficient/conclusion, edge-driven + anti-chatter,
+built + wired into the bridge voice + verified offline incl. an end-to-end session walk). `DB_VERSION=40`
++ RULE_ENGINE 46.0 unchanged (2 additive DB helpers only). PR **#105** open. **Telemetry → coordinator driving DONE** (`_drive_live_practice`, reconciled each
+refresh): activation adopts the dispatcher's telemetry session as one canonical run bound to the
+PLANNED activity (session type from the plan, never GT7), feeds completed laps through the gate, handles
+disconnect/reconnect, finalises on record; blocks honestly on unresolved context. End-to-end offline
+test with a real SessionDB + fake telemetry window. **The full pipeline now fires live** (recording
+label + diagnostics header + engineer choreography), driven by real telemetry. **STOPPED at the
+hardware-UAT gate — `docs/LIVE_ACTIVATION_1_UAT.md`; live certification NOT TESTED** (the remaining
+validation is the driver on GT7/PSVR2). All canonical identity fields now resolve, including the
+optional `track_model_version_id` (approved track-model for the session's track/layout) and
+`setup_snapshot_id` (the setup on the car for the practised discipline, via
+`SetupService.applied_setup_snapshot_id`). _(Program 3.1 section below stands.)_
+
+## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01)
 Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
 + K `#103` merged). **Maintenance/certification only: 0 production `.py` changed, `DB_VERSION=40` +
 `RULE_ENGINE_VERSION="46.0"` unchanged, no migration, `config_id`/fan-out goldens untouched.** Replaces

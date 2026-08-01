@@ -94,6 +94,19 @@ class LiveShellBridge(QObject):
         #: does in a run ever reaches the event programme, so the engineer never moves.
         from ui.practice_run_recorder import PracticeRunRecorder
         self._runs = PracticeRunRecorder(db=db, config=self._config)
+        #: The authoritative live Practice recording coordinator (Live Activation 1). None
+        #: until an explicit, fully-resolved Practice activation opens a canonical session run;
+        #: while set it is the source of truth for the live valid-lap count + connected state.
+        self._live_practice = None
+        #: The Practice Engineer's message choreographer (§7). Edge-driven: it speaks the brief,
+        #: recording confirmation, progress, invalid-lap feedback, sufficiency and conclusion once
+        #: each, and stays silent between — anti-chatter is structural.
+        from strategy.practice_engineer_choreography import PracticeEngineerVoice
+        self._practice_voice = PracticeEngineerVoice()
+        #: The live telemetry session the coordinator adopted, and the last activation block
+        #: reason (surfaced when recording is blocked by unresolved context).
+        self._live_practice_session_id = 0
+        self._live_practice_block = ""
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -614,6 +627,10 @@ class LiveShellBridge(QObject):
         # Keep the live runtime's practice mode in step with the selected discipline, so
         # the shift beep uses the right (qualifying vs race) RPM for the session.
         self._push_practice_mode(self._discipline)
+        # Drive the authoritative Practice coordinator from live telemetry BEFORE the surfaces
+        # render, so the recording label, diagnostics header and engineer voice all read the
+        # freshly-reconciled state this tick.
+        self._drive_live_practice()
         self._feed_garage()
         self._feed_shift_strategy()
         self._feed_practice()
@@ -645,16 +662,22 @@ class LiveShellBridge(QObject):
             # the run is being captured and knows it still has to be ended to count.
             run = self._runs.open_run()
             if run:
-                laps_done = self._live_lap_count()
+                # When an AUTHORITATIVE live Practice run owns the recording (Live Activation
+                # 1), its coordinator is the source of truth for the live valid-lap count and
+                # the connected state; otherwise fall back to the session-derived count.
+                laps_done, connected = self._authoritative_recording_progress()
                 from strategy.run_brief import lap_progress_note
                 rc.set_recording(str(run.get("title") or "Practice run"),
-                                 laps_done, connected=self._connected(),
+                                 laps_done, connected=connected,
                                  lap_note=lap_progress_note(card.target_laps, laps_done),
                                  push=card.push_level)
             else:
                 rc.set_recording("")
         except Exception:
             pass
+        # Practice Engineer choreography (§7): speak the brief / confirmation / progress /
+        # invalid-lap / sufficiency / conclusion on their edges. Silent between edges.
+        self._speak_practice_engineer()
         self._feed_run_review()
         # Compound selector on the run card — separate try block so a failure here does
         # not blank the run card itself.
@@ -836,6 +859,242 @@ class LiveShellBridge(QObject):
         except Exception:
             return 0
 
+    def _authoritative_recording_progress(self) -> "tuple":
+        """(valid_lap_count, connected) from the authoritative live Practice coordinator when
+        one owns the recording (Live Activation 1); otherwise the session-derived count + the
+        telemetry connection. Never raises."""
+        lp = getattr(self, "_live_practice", None)
+        if lp is not None:
+            try:
+                from strategy.live_practice_activation import LiveRunState
+                if lp.state in (LiveRunState.RECORDING, LiveRunState.PAUSED,
+                                LiveRunState.DISCONNECTED):
+                    return int(lp.valid_lap_count), bool(lp.is_recording)
+            except Exception:
+                pass
+        return self._live_lap_count(), self._connected()
+
+    def live_practice_diagnostics(self) -> dict:
+        """Authoritative live-Practice identity + recording state for the diagnostics header
+        (Live Activation 1 §9). Safe when no authoritative run is active. Never raises."""
+        lp = getattr(self, "_live_practice", None)
+        if lp is None:
+            return {"active": False, "recording_state": "not_started"}
+        try:
+            idn = dict(getattr(lp, "identity", {}) or {})
+            laps, connected = self._authoritative_recording_progress()
+            state = getattr(lp, "state", None)
+            return {
+                "active": True,
+                "recording_state": state.value if state is not None else "",
+                "session_run_id": getattr(lp, "run_id", ""),
+                "stint_id": getattr(lp, "stint_id", ""),
+                "valid_lap_count": laps,
+                "connected": connected,
+                "session_type": idn.get("session_type", ""),
+                "event_id": idn.get("event_id", ""),
+                "event_programme_id": idn.get("event_programme_id", ""),
+                "session_plan_id": idn.get("session_plan_id", ""),
+                "car_id": idn.get("car_id", ""),
+                "car_spec_revision_id": idn.get("car_spec_revision_id", ""),
+                "setup_snapshot_id": idn.get("setup_snapshot_id", ""),
+                "context_revision_id": idn.get("context_revision_id", ""),
+                "driver_profile_version_id": idn.get("driver_profile_version_id", ""),
+                "track_model_version_id": idn.get("track_model_version_id", ""),
+            }
+        except Exception:
+            return {"active": False, "recording_state": "not_started"}
+
+    def _practice_engineer_phase(self):
+        """Build the engineer's phase snapshot from the authoritative coordinator + the current
+        objective's brief (§7). Returns an empty phase when no run is active."""
+        from strategy.practice_engineer_choreography import EngineerPhase
+        lp = getattr(self, "_live_practice", None)
+        if lp is None:
+            return EngineerPhase()
+        try:
+            view = self._last_guidance_view if isinstance(self._last_guidance_view, dict) else {}
+            headline = str((view.get("next_action") or {}).get("headline") or "")
+            from strategy.practice_run_recording import domain_from_objective_headline
+            from strategy.run_brief import brief_for_domain, _target_lap_bounds
+            domain = domain_from_objective_headline(headline)
+            brief = brief_for_domain(domain) if domain else None
+            target_laps = brief.target_laps if brief is not None else ""
+            lo, _hi = _target_lap_bounds(target_laps) if target_laps else (0, 0)
+            return EngineerPhase(
+                run_state=lp.state.value, valid_laps=int(lp.valid_lap_count),
+                invalid_laps=int(lp.invalid_lap_count), invalid_reason=lp.last_invalid_reason,
+                target_min=int(lo or 0), target_laps=target_laps,
+                objective=domain or headline)
+        except Exception:
+            return EngineerPhase(run_state=getattr(getattr(lp, "state", None), "value", "not_started"))
+
+    def _speak_practice_engineer(self) -> "object":
+        """Observe the current phase and speak the engineer's message if the choreographer emits
+        one on this edge (§7). Anti-chatter is inherited — no edge, no speech. Returns the message
+        (or None) so callers/tests can inspect it. Never raises."""
+        try:
+            voice = getattr(self, "_practice_voice", None)
+            if voice is None:
+                return None
+            msg = voice.observe(self._practice_engineer_phase())
+            if msg is None or not msg.text:
+                return msg
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "announce"):
+                from voice.announcer import Priority
+                pri = {"high": Priority.HIGH, "medium": Priority.MEDIUM,
+                       "low": Priority.LOW}.get(msg.priority.value, Priority.MEDIUM)
+                announcer.announce(msg.text, pri, "practice_engineer")
+            return msg
+        except Exception:
+            return None
+
+    # ---- telemetry → coordinator driving (Live Activation 1) -------------- #
+    #: Preparation-activity types that are driven as a live PRACTICE session (everything the
+    #: event programme plans except a qualifying simulation, which is out of scope this phase).
+    _PRACTICE_ACTIVITY_TYPES = frozenset({
+        "baseline_practice", "setup_experiment", "coaching_run", "tyre_test", "fuel_test",
+        "free_practice", "long_race_run", "strategy_validation_run", "final_setup_confirmation",
+    })
+
+    def _live_practice_context(self, live_session_id) -> dict:
+        """Resolve the full canonical context for the current live Practice recording, ADOPTING
+        the open telemetry session. The planned session type comes from the persisted activity —
+        never from GT7. Missing required fields stay empty, so the gate blocks honestly."""
+        ctx = {"live_session_id": int(live_session_id or 0)}
+        try:
+            run = self._runs.open_run() or {}
+            atype = str(run.get("activity_type") or "").lower()
+            ctx["planned_session_type"] = "Practice" if atype in self._PRACTICE_ACTIVITY_TYPES else ""
+            ctx["session_plan_id"] = str(run.get("activity_id") or "")
+            cid = self._runs.active_cycle_id()
+            ctx["event_programme_id"] = cid
+            cyc = self._db.get_preparation_cycle(cid) if (self._db and cid) else None
+            event_id = int((cyc or {}).get("event_id") or 0)
+            ctx["event_id"] = str(event_id or "")
+            car_id = 0
+            try:
+                if hasattr(self._window, "_current_car_id"):
+                    car_id = int(self._window._current_car_id() or 0)
+            except Exception:
+                car_id = 0
+            ctx["car_id"] = str(car_id or "")
+            try:
+                specs = self._db.get_car_spec_revisions(car_id, event_id) or []
+                ctx["car_spec_revision_id"] = str((specs[-1].get("spec_revision_id") if specs else "") or "")
+            except Exception:
+                ctx["car_spec_revision_id"] = ""
+            try:
+                dpv = self._db.get_current_driver_profile_version() or {}
+                ctx["driver_profile_version_id"] = str(dpv.get("version_id") or "")
+            except Exception:
+                ctx["driver_profile_version_id"] = ""
+            ecx = {}
+            try:
+                ecx = self._db.get_engineering_context_for_source("session", int(live_session_id)) or {}
+                ctx["context_revision_id"] = str(ecx.get("fingerprint") or "")
+            except Exception:
+                ctx["context_revision_id"] = ""
+            # Optional (where available): the approved track-model version for THIS session's
+            # track/layout (reuse the engineering context we already resolved), and the setup
+            # currently on the car for the practised discipline.
+            try:
+                tloc = str(ecx.get("track_location_id") or "")
+                lay = str(ecx.get("layout_id") or "")
+                tmv = self._db.get_approved_track_model_version(tloc, lay)
+                ctx["track_model_version_id"] = str((tmv or {}).get("version_id") or "")
+            except Exception:
+                ctx["track_model_version_id"] = ""
+            try:
+                ctx["setup_snapshot_id"] = str(
+                    self._setups.applied_setup_snapshot_id(self._discipline) or "")
+            except Exception:
+                ctx["setup_snapshot_id"] = ""
+        except Exception:
+            pass
+        return ctx
+
+    def _start_live_practice(self, live_session_id):
+        """Activate an authoritative Practice run adopting the live telemetry session. On a
+        blocked gate nothing is created and the exact reason is stored for the UI."""
+        try:
+            from strategy.live_practice_runtime import LivePracticeCoordinator
+            from ui.live_practice_db_port import SessionDbLivePracticePort
+            sid = int(live_session_id or 0)
+            port = SessionDbLivePracticePort(self._db, lambda: self._live_practice_context(sid))
+            co = LivePracticeCoordinator(port)
+            act = co.activate()
+            if not act.ok:
+                self._live_practice = None
+                self._live_practice_block = act.reason
+                return act
+            self._live_practice = co
+            self._live_practice_session_id = sid
+            self._live_practice_block = ""
+            self._practice_voice.reset()
+            co.telemetry_connected()
+            return act
+        except Exception:
+            return None
+
+    def _feed_new_laps_to_coordinator(self, live_session_id) -> None:
+        """Feed DB laps the coordinator has not seen yet (lap_num > last_finalised) through the
+        gate, so the authoritative valid-lap count + choreography track reality. Never raises."""
+        try:
+            lp = self._live_practice
+            if lp is None or self._db is None:
+                return
+            laps = self._db.get_session_laps(int(live_session_id)) or []
+            for row in sorted(laps, key=lambda r: int(r.get("lap_num") or 0)):
+                ln = int(row.get("lap_num") or 0)
+                if ln <= int(lp.last_finalised_lap):
+                    continue
+                lp.on_lap(session_run_id=lp.run_id, event_id=lp.event_id, lap_number=ln,
+                          lap_time_ms=int(row.get("lap_time_ms") or 0),
+                          is_out_lap=bool(row.get("is_out_lap")),
+                          is_pit_lap=bool(row.get("is_pit_lap")), telemetry_complete=True)
+        except Exception:
+            pass
+
+    def _drive_live_practice(self) -> None:
+        """Reconcile the authoritative Practice coordinator with live telemetry each refresh.
+        Additive + defensive: acts only while a practice activity + telemetry are present. The app
+        decides the session (planned activity); telemetry only supplies connect + completed laps."""
+        try:
+            from strategy.live_practice_activation import LiveRunState
+            lp = getattr(self, "_live_practice", None)
+            connected = self._connected()
+            live_sid = self._live_session_id()
+
+            # (1) Activation — a practice activity is open, telemetry is live, context resolves.
+            if lp is None or lp.state in (LiveRunState.COMPLETED, LiveRunState.ABANDONED):
+                if connected and live_sid > 0 and self._runs.open_run() is not None:
+                    self._start_live_practice(live_sid)
+                return
+
+            # Only reconcile a run WE started from telemetry (tracked adopted-session id). A
+            # coordinator set directly (preview/test) is left untouched.
+            if int(getattr(self, "_live_practice_session_id", 0)) <= 0:
+                return
+
+            # (2) Connection transitions.
+            if not connected and lp.state == LiveRunState.RECORDING:
+                lp.telemetry_lost()
+            elif connected and lp.state == LiveRunState.STARTING:
+                lp.telemetry_connected()
+            elif connected and lp.state == LiveRunState.DISCONNECTED:
+                if live_sid == int(getattr(self, "_live_practice_session_id", 0)):
+                    lp.telemetry_connected()        # same telemetry session → resume the run
+                # a DIFFERENT session cannot silently adopt this run — it stays disconnected
+                # until the driver records or discards it (an explicit new run then activates).
+
+            # (3) Feed any newly completed laps.
+            if lp.state == LiveRunState.RECORDING:
+                self._feed_new_laps_to_coordinator(int(getattr(self, "_live_practice_session_id", live_sid)))
+        except Exception:
+            pass
+
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
         try:
@@ -903,6 +1162,14 @@ class LiveShellBridge(QObject):
         """Bind the completed telemetry session to the open run — the ONE explicit
         action that turns laps into event evidence."""
         sid = self._live_session_id()
+        # Finalise the authoritative session run (COMPLETING → COMPLETED) so it becomes history
+        # and can never silently re-activate. Best-effort; the activity binding below is separate.
+        try:
+            lp = getattr(self, "_live_practice", None)
+            if lp is not None and int(getattr(self, "_live_practice_session_id", 0)) == int(sid or 0):
+                lp.complete()
+        except Exception:
+            pass
         decision = self._runs.record_run(sid)
         if not decision.ok:
             self._run_status(decision.reason or "Could not record the run.")
@@ -2808,6 +3075,10 @@ class LiveShellBridge(QObject):
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
                 return
+            # Live Activation 1 (§9): refresh the authoritative Practice-recording diagnostics
+            # header every tick, whatever the session mode.
+            if hasattr(lp, "set_diagnostics"):
+                lp.set_diagnostics(self.live_practice_diagnostics())
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             from strategy.live_engineer_session import normalise_session_mode
             from strategy.engineer_orchestrator import EngineerContext, orchestrate

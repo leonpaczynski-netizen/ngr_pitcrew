@@ -213,6 +213,34 @@ def _view(headline="Build setup_base evidence"):
             "recent_learning": [], "fingerprint": "fp"}
 
 
+def _recording_coordinator(valid_laps=9):
+    """A real LivePracticeCoordinator that has authoritatively activated a Practice run and
+    recorded ``valid_laps`` valid laps — the source of truth the run card renders from."""
+    from strategy.live_practice_runtime import LivePracticeCoordinator
+
+    class _Port:
+        def resolve_activation_context(self):
+            return {"planned_session_type": "Practice", "event_programme_id": "cyc-1",
+                    "event_id": "42", "session_plan_id": "plan-1", "car_id": "333",
+                    "car_spec_revision_id": "spec-1", "driver_profile_version_id": "drv-1",
+                    "context_revision_id": "ctx-1"}
+
+        def create_run(self, identity):
+            return "run-1", "stint-1"
+
+        def persist_lap(self, **kw):
+            pass
+
+        def set_run_status(self, *a):
+            pass
+
+    co = LivePracticeCoordinator(_Port())
+    assert co.activate().ok and co.telemetry_connected()
+    for i in range(valid_laps):
+        co.on_lap(session_run_id="run-1", event_id="42", lap_number=i + 1, lap_time_ms=90000)
+    return co
+
+
 # --------------------------------------------------------------------------- tests
 class TestV1Gt7FieldOrder:
     def test_changed_fields_read_in_gt7_menu_order(self, wired):
@@ -304,23 +332,103 @@ class TestV5RunRecording:
         assert shell.current_destination() == "live_pit_wall"
 
     def test_the_run_card_shows_it_is_recording(self, wired):
+        # Live Activation 1: the live valid-lap count + connected state come from the
+        # AUTHORITATIVE Practice coordinator that owns the recording (not a raw session count).
         shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=9)
         bridge._last_guidance_view = _view()
         shell.run_card.start_requested.emit()
         assert shell.run_card.is_recording() is True
         assert "RECORDING" in shell.run_card._recording.text()
         assert "9 laps so far" in shell.run_card._recording.text()
+        assert "GAME NOT CONNECTED" not in shell.run_card._recording.text()
 
     def test_recording_shows_live_lap_and_push_guidance(self, wired):
-        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard
-        # to push. setup_base targets "5–8" laps; the fake session reports 9 → "plenty".
+        # UAT-8: mid-run the driver wants to know if they have enough laps and how hard to
+        # push. setup_base targets "5–8" laps; the coordinator reports 9 valid → "plenty".
         shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=9)
         bridge._last_guidance_view = _view()
         shell.run_card.start_requested.emit()
         guidance = shell.run_card._run_guidance.text()
         assert shell.run_card._run_guidance.isHidden() is False
         assert "end the run on a clean lap" in guidance.lower()
         assert "Push:" in guidance
+
+    def test_diagnostics_expose_the_authoritative_identity(self, wired):
+        # Live Activation 1 §9: the diagnostics header reads the authoritative run identity.
+        _shell, _win, _db, bridge = wired
+        assert bridge.live_practice_diagnostics()["active"] is False
+        bridge._live_practice = _recording_coordinator(valid_laps=4)
+        d = bridge.live_practice_diagnostics()
+        assert d["active"] and d["recording_state"] == "recording"
+        assert d["session_run_id"] == "run-1" and d["session_type"] == "practice"
+        assert d["event_id"] == "42" and d["session_plan_id"] == "plan-1"
+        assert d["valid_lap_count"] == 4 and d["connected"] is True
+
+    def test_feed_live_pushes_diagnostics_into_the_pit_wall_panel(self, wired):
+        # §9 end-to-end: the bridge feeds the authoritative diagnostics to the pit-wall panel.
+        shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=5)
+        bridge._feed_live()
+        panel = shell.live_page._diag
+        assert "RECORDING" in panel._state_pill.text()
+        assert panel._values["session_run_id"].text() == "run-1"
+        assert panel._laps.text() == "5 valid laps"
+
+    def test_practice_engineer_choreography_speaks_on_edges(self, wired):
+        # §7 end-to-end: stepping the authoritative coordinator drives the engineer's messages
+        # through the bridge, one per edge (brief → recording → … → conclusion), silent between.
+        from strategy.live_practice_runtime import LivePracticeCoordinator
+
+        class _Port:
+            def resolve_activation_context(self):
+                return {"planned_session_type": "Practice", "event_programme_id": "cyc-1",
+                        "event_id": "42", "session_plan_id": "plan-1", "car_id": "333",
+                        "car_spec_revision_id": "spec-1", "driver_profile_version_id": "drv-1",
+                        "context_revision_id": "ctx-1"}
+
+            def create_run(self, identity):
+                return "run-1", "stint-1"
+
+            def persist_lap(self, **kw):
+                pass
+
+            def set_run_status(self, *a):
+                pass
+
+        _shell, _win, _db, bridge = wired
+        bridge._last_guidance_view = _view()             # setup_base → target 5–8 (target_min=5)
+        co = LivePracticeCoordinator(_Port())
+        bridge._live_practice = co
+
+        cues = []
+
+        def step(fn):
+            fn()
+            m = bridge._speak_practice_engineer()
+            if m is not None:
+                cues.append(m.cue.value)
+
+        step(lambda: co.activate())                       # → BRIEF
+        step(lambda: co.telemetry_connected())            # → RECORDING_CONFIRMED
+        step(lambda: None)                                # pure tick → silent
+        for i in range(4):
+            step(lambda i=i: co.on_lap(session_run_id="run-1", event_id="42",
+                                       lap_number=i + 1, lap_time_ms=90000))   # PROGRESS ×4
+        step(lambda: co.on_lap(session_run_id="run-1", event_id="42",
+                               lap_number=5, lap_time_ms=90000))               # 5th valid → SUFFICIENT
+        step(lambda: co.on_lap(session_run_id="run-1", event_id="42", lap_number=6,
+                               lap_time_ms=120000, is_pit_lap=True))           # → INVALID_LAP
+        step(lambda: co.complete())                       # → CONCLUSION
+
+        assert "brief" in cues
+        assert "recording_confirmed" in cues
+        assert "sufficient" in cues
+        assert "invalid_lap" in cues
+        assert "conclusion" in cues
+        assert cues.count("conclusion") == 1              # exactly once
+        assert None not in cues                           # the pure tick added nothing
 
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
