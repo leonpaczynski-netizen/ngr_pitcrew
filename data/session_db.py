@@ -7053,6 +7053,29 @@ class SessionDB:
         self._conn.commit()
         return stint_id
 
+    def bind_run_to_plan(self, run_id: str, session_plan_id: str) -> None:
+        """Bind an already-open canonical run to its planned session (Live Activation 1).
+        Additive, existing column; leaves other runs untouched. Never raises."""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE session_runs SET session_plan_id=? WHERE run_id=?",
+                    (str(session_plan_id or ""), str(run_id or "")))
+                self._conn.commit()
+        except Exception:
+            pass
+
+    def first_stint_id(self, session_run_id: str) -> str:
+        """The opening stint of a run (Live Activation 1). Returns '' when none."""
+        try:
+            with self._lock:
+                r = self._conn.execute(
+                    "SELECT stint_id FROM stints WHERE session_run_id=? "
+                    "ORDER BY stint_index, created_at LIMIT 1", (str(session_run_id or ""),)).fetchone()
+            return str(r[0]) if r else ""
+        except Exception:
+            return ""
+
     # ---- race-state snapshots + immutable strategy revisions (v35) --------
     def append_race_state_snapshot(self, *, session_run_id: str = "", event_id: int = 0,
                                    lap_number: int = 0, trigger: str = "", state_json: str = "{}",
