@@ -990,13 +990,27 @@ class LiveShellBridge(QObject):
                 ctx["driver_profile_version_id"] = str(dpv.get("version_id") or "")
             except Exception:
                 ctx["driver_profile_version_id"] = ""
+            ecx = {}
             try:
                 ecx = self._db.get_engineering_context_for_source("session", int(live_session_id)) or {}
                 ctx["context_revision_id"] = str(ecx.get("fingerprint") or "")
             except Exception:
                 ctx["context_revision_id"] = ""
-            ctx["setup_snapshot_id"] = ""          # optional (where available) — future slice
-            ctx["track_model_version_id"] = ""     # optional (where available)
+            # Optional (where available): the approved track-model version for THIS session's
+            # track/layout (reuse the engineering context we already resolved), and the setup
+            # currently on the car for the practised discipline.
+            try:
+                tloc = str(ecx.get("track_location_id") or "")
+                lay = str(ecx.get("layout_id") or "")
+                tmv = self._db.get_approved_track_model_version(tloc, lay)
+                ctx["track_model_version_id"] = str((tmv or {}).get("version_id") or "")
+            except Exception:
+                ctx["track_model_version_id"] = ""
+            try:
+                ctx["setup_snapshot_id"] = str(
+                    self._setups.applied_setup_snapshot_id(self._discipline) or "")
+            except Exception:
+                ctx["setup_snapshot_id"] = ""
         except Exception:
             pass
         return ctx

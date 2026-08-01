@@ -521,3 +521,23 @@ class SetupService:
             return str(active.label()), bool(active.is_active_on_car)
         except Exception:
             return "", False
+
+    def applied_setup_snapshot_id(self, discipline: str = "race") -> str:
+        """A stable id for the setup currently ON THE CAR (setup_id + revision), or "" when none.
+        Used as the live recording's setup_snapshot_id (Live Activation 1). Never raises."""
+        d = normalise_discipline(discipline)
+        inp = self.inputs()
+        if self._authority is None or not inp.is_known:
+            return ""
+        try:
+            from data.setup_state_authority import SetupIdentity
+            active = self._authority.active_setup(
+                SetupIdentity(car=inp.car, track=inp.track, layout_id=inp.layout),
+                PURPOSE.get(d, "Race"))
+            if active is None:
+                return ""
+            sid = str(getattr(active, "setup_id", "") or "")
+            rev = int(getattr(active, "revision", 0) or 0)
+            return f"{sid}::rev{rev}" if sid else ""
+        except Exception:
+            return ""

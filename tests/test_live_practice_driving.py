@@ -145,6 +145,32 @@ def test_missing_context_blocks_activation_with_reason(qapp, tmp_path):
         _dispose(shell, qapp)
 
 
+def test_optional_fields_populate_when_available(qapp, tmp_path):
+    db, live_sid = _seed_db(tmp_path)
+    win = _FakeWindow(live_sid, car_id=333, connected=True)
+    shell, b = _bridge(qapp, db, win)
+    try:
+        # the session's engineering context keys the approved track model by track+layout
+        ecx = db.get_engineering_context_for_source("session", live_sid) or {}
+        tloc, lay = ecx.get("track_location_id", ""), ecx.get("layout_id", "")
+        vid = db.register_track_model_version(
+            track_location_id=tloc, layout_id=lay, model_status="approved", approved=True)
+        # setup_snapshot_id comes from the setup service (the setup on the car)
+        b._setups.applied_setup_snapshot_id = lambda d=None: "setup-baseline::rev2"
+
+        ctx = b._live_practice_context(live_sid)
+        assert ctx["track_model_version_id"] == vid
+        assert ctx["setup_snapshot_id"] == "setup-baseline::rev2"
+
+        # and both flow into the activated run's diagnostics
+        b._drive_live_practice()
+        d = b.live_practice_diagnostics()
+        assert d["track_model_version_id"] == vid
+        assert d["setup_snapshot_id"] == "setup-baseline::rev2"
+    finally:
+        _dispose(shell, qapp)
+
+
 def test_record_finalises_the_run(qapp, tmp_path):
     db, live_sid = _seed_db(tmp_path)
     win = _FakeWindow(live_sid, car_id=333, connected=True)
