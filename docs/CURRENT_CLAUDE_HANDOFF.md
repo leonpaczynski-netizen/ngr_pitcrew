@@ -1,5 +1,17 @@
 # Current Claude Handoff
 
+## PROGRAM 3 — Canonical Event Spine (2026-08-01) — CURRENT TOP OF TREE
+Phases **A–J complete**. A (audit) → I (cross-event learning) merged to `master` via PRs
+#98–#101 (tip `4654063`; DB **v31 → v40**; RULE_ENGINE 46.0 unchanged). **Phase J
+certification COMPLETE** on branch `cert/program3-phase-j-2026-08-01`: **43 certification
+tests (J1–J9) green, 0 defects**, no Setup/Strategy Brain doctrine changed; gates #25–26
+certified; **GO for controlled live activation**. The **6 pre-existing red tests (4 families)**
+are proven on base `3c3446e` (NOT Program-3-caused). Full detail: `docs/PROGRAM3_STATE.md`
++ `docs/PROGRAM3_PHASE_J_CERTIFICATION.md`.
+**Next = Phase K** (live GT7/PSVR2 on-hardware UAT + the 7 golden scenarios). Proposed
+activation order: Practice → Qualifying → PTT → per-lap snapshots → broader strategy triggers.
+_(The UI-rebuild notes below are superseded by the Program-3 spine.)_
+
 ## UI REBUILD — branch `ui-rebuild-ngr-pit-crew` (2026-07-22, current focus)
 Full NGR Pit Crew UI rebuild off master `d79a5eb` (UI-only; DB v28 / RULE_ENGINE 46.0 unchanged). New `PitCrewShell` (guided event-programme journey) is the DEFAULT surface; classic UI via `NGR_CLASSIC_UI=1` / Settings → "Open classic tools". Built over unchanged canonical domain models; `LiveShellBridge` feeds it from real MainWindow services and routes Garage Apply/Revert through the classic gated path. 37 commits; **182 new UI tests green**; runtime files untouched; **not merged**. Preview: `python preview_new_shell.py`. **Outstanding:** live-rig verification of Apply-to-car; rebuild of the editable classic surfaces (Setup Builder form, Track Modelling, Event Planner, full Settings) then their retirement; physical/PSVR2/voice UAT. Full report: `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`; plan/architecture/audit/UAT docs `docs/NGR_PIT_CREW_UI_*.md`.
 

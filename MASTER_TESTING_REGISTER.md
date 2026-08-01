@@ -1,5 +1,22 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **PROGRAM 3 — Canonical Event Spine (2026-08-01): Phases A–J.** ~150 new Program-3 tests + **43
+> Phase-J certification tests (J1–J9)**, all green. DB **v31 → v40**; migrations additive/idempotent;
+> no golden fixtures edited (`config_id` + fan-out allowlist untouched); `TestLiveSafety` (advisory-only)
+> + safety-guard + config-id-golden suites green post-Program-3. **Phase J: 0 code defects found**
+> (one over-strict cert assertion corrected — a test fix, not a code change). **Full suite: 12,423
+> collected.** A single-process run is impossible here (Win/Py3.14 `EventCommandCentrePanel` PyQt
+> segfault, pervasive & environmental). Best clean coverage (sixths, panel files excluded, 4 of 6
+> batches clean): **7,616 passed / 83 failed / 21 skipped**. **Every failure categorised against base
+> `3c3446e`: 82 pre-existing** (dominated by ~58 STALE Program-2 phase version-pin tests that assert
+> historical DB versions v26/v27/v28 — already failing at base as `31==28`; plus group2/group3 DB
+> round-trip, group46/47 + uat2 shell, and the original dev-time reds). **Exactly 1 Program-3-caused
+> failure** — a stale `==39` pin in a Program-3 test I authored (Phase I bumped v39→v40) — **FIXED**
+> (`>=39`). After the fix, **0 Program-3-caused failures**; all 96 Program-3+cert tests pass. Full
+> categorisation table in `docs/PROGRAM3_PHASE_J_CERTIFICATION.md`. Recommended follow-up: refresh the
+> stale Program-2 version-pins. RULE_ENGINE 46.0 unchanged. _(The UI-rebuild note below
+> is superseded.)_
+
 > **UI REBUILD (branch `ui-rebuild-ngr-pit-crew`, 2026-07-22):** 23 new test files, **182 new UI-rebuild tests pass together, 0 failures** (view-model/state/component/shell/bridge + safety tests: strategy exposes no setup-apply, live issues no command, Garage Apply routes only through the classic gated path, shown==applied). **Full batched regression: 9,945 passed, 0 rebuild-caused failures.** The 1 "failed" + 1 crashed batch are the **pre-existing Win/Py3.14 PyQt segfault** on `EventCommandCentrePanel` under pytest — confirmed by reproducing the identical crash on clean master `d79a5eb` in an isolated worktree (panel constructs fine outside pytest; rebuild changes are not in its path). No golden fixtures edited. DB v28 / RULE_ENGINE 46.0 unchanged. See `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`.
 
 

@@ -1,9 +1,10 @@
 # Program 3 — Canonical Event Spine: Implementation State
 
-**Status:** Phases A–I implemented and merged to `master`. J (brain certification) and
-K (golden end-to-end UAT) remain and require the fully-assembled system + live
-GT7/PSVR2 testing. This document is the §32 completion record and closes gate #30
-(documentation reflects actual implementation).
+**Status:** Phases A–I implemented and merged to `master`. **Phase J (certification)
+complete** — see `docs/PROGRAM3_PHASE_J_CERTIFICATION.md` (43 cert tests, 0 defects,
+GO for controlled live activation). K (golden end-to-end UAT) remains and requires the
+fully-assembled system + live GT7/PSVR2 testing. This document is the §32 completion
+record and closes gate #30 (documentation reflects actual implementation).
 
 **Baseline at start:** `master` `3c3446e`, DB v31, Rule-Engine 46.0.
 **Now:** DB **v40**, Rule-Engine 46.0. All Program-3 work landed via PRs #98, #99, #100
@@ -85,11 +86,11 @@ deterministic/offline/advisory doctrine held; runtime race-prep data never commi
 | 22 | Exact context outranks transferable learning | ✅ (I model) |
 | 23 | Rejected learning doesn't influence future recs | ✅ (suppression) |
 | 24 | Ambiguous legacy evidence quarantined | ✅ (v38) |
-| 25 | Setup Brain gets only correctly scoped evidence | 🟡 → Phase J |
-| 26 | Race Strategy gets only correctly scoped evidence | 🟡 → Phase J |
+| 25 | Setup Brain gets only correctly scoped evidence | ✅ (certified Phase J: J6) |
+| 26 | Race Strategy gets only correctly scoped evidence | ✅ (certified Phase J: J7) |
 | 27 | Apply + safety gates unchanged | ✅ |
 | 28 | New migrations + tests pass | ✅ |
-| 29 | Existing regressions green | ✅ (5 pre-existing reds pre-date Program 3) |
+| 29 | Existing regressions green | ✅ (6 pre-existing reds in 4 families, all pre-date Program 3 — proven on base 3c3446e; see Phase J cert) |
 | 30 | Docs reflect implementation | ✅ (this document) |
 
 ---
@@ -105,7 +106,7 @@ landed blind because they can only be validated in a real session:
 
 ## Remaining phases
 
-- **J — Brain certification:** certify the Setup Brain + Race Strategy Brain receive only correctly-scoped evidence from the repaired spine (gates #25–26). Property/metamorphic tests per §29; several learning-side ones are already covered by the Phase-I suites.
+- **J — Brain certification: ✅ COMPLETE** (`docs/PROGRAM3_PHASE_J_CERTIFICATION.md`; 43 cert tests, 0 defects; gates #25–26 certified; GO for controlled live activation).
 - **K — End-to-end UAT + docs:** the seven golden UAT scenarios (§30) against the assembled stack, plus your on-hardware GT7/PSVR2 testing.
 
 ## Pre-existing test reds (NOT introduced by Program 3)
