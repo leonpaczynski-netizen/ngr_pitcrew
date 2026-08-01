@@ -79,6 +79,8 @@ class LivePracticeDiagnosticsPanel(QFrame):
         # -- header row (always visible) ------------------------------------ #
         head = QHBoxLayout()
         head.setSpacing(_t.SPACE_SM)
+        #: The header title, session-type-aware (Practice / Qualifying); _on_toggle reuses it.
+        self._diag_title = "LIVE PRACTICE DIAGNOSTICS"
         self._toggle = QPushButton("▸  LIVE PRACTICE DIAGNOSTICS")
         self._toggle.setCheckable(True)
         self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -147,7 +149,7 @@ class LivePracticeDiagnosticsPanel(QFrame):
         self._values[key] = val
 
     def _on_toggle(self, on: bool) -> None:
-        self._toggle.setText(("▾" if on else "▸") + "  LIVE PRACTICE DIAGNOSTICS")
+        self._toggle.setText(("▾" if on else "▸") + f"  {self._diag_title}")
         self._body.setVisible(on)
 
     def is_expanded(self) -> bool:
@@ -162,14 +164,25 @@ class LivePracticeDiagnosticsPanel(QFrame):
             tone, glyph = _STATE_TONE.get(state, ("neutral", "○"))
             self._state_pill.set_status(state.replace("_", " ").upper(), tone, glyph)
 
+            # Session-type-aware header title (Live Activation 1 = Practice, 2 = Qualifying).
+            is_qual = str(d.get("session_type") or "").lower() == "qualifying"
+            self._diag_title = "LIVE QUALIFYING DIAGNOSTICS" if is_qual else "LIVE PRACTICE DIAGNOSTICS"
+            self._toggle.setText(("▾" if self._toggle.isChecked() else "▸") + f"  {self._diag_title}")
+
             if active:
                 connected = bool(d.get("connected"))
                 self._conn_pill.set_status(
                     "LIVE" if connected else "NO SIGNAL",
                     "success" if connected else "danger",
                     "●" if connected else "○")
-                laps = d.get("valid_lap_count", 0)
-                self._laps.setText(f"{laps} valid lap{'s' if laps != 1 else ''}")
+                # A qualifying summary tracks the best flying lap + phase (a supplied headline);
+                # a practice summary counts valid laps. Fall back to the lap count either way.
+                headline = str(d.get("headline") or "")
+                if headline:
+                    self._laps.setText(headline)
+                else:
+                    laps = d.get("valid_lap_count", 0)
+                    self._laps.setText(f"{laps} valid lap{'s' if laps != 1 else ''}")
                 self._laps.setVisible(True)
                 self._empty.setVisible(False)
                 for key, lblwidget in self._values.items():

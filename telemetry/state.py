@@ -294,6 +294,22 @@ class RaceStateTracker:
         return self._phase == RacePhase.IN_PIT
 
     @property
+    def live_on_track(self) -> "bool | None":
+        """Latest GT7 on-track flag, or None when no packet has arrived (read-only).
+
+        True while the car is on the circuit surface, False while it is in the pit/garage
+        or menu. Used only to detect the qualifying out-lap (pit-exit) and box edges — it
+        applies nothing, writes nothing, and creates no pit event.
+        """
+        p = self._prev
+        if p is None:
+            return None
+        try:
+            return bool(p.car_on_track)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @property
     def live_world_position(self) -> "tuple | None":
         """Latest GT7 world position (x, y, z) + speed_kph, or None (read-only; Group 56).
 

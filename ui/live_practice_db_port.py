@@ -106,10 +106,16 @@ class SessionDbLivePracticePort:
         the run + stint automatically. Best-effort — never raises into the caller."""
         reasons = set(invalid_reasons or ())
         try:
+            ctx = self._resolve() or {}
+            # Session-type-agnostic: stamp the lap with the resolved session type (Practice /
+            # Qualifying) so the same port serves both live activations. Defaults to Practice
+            # when unresolved, keeping the practice path byte-identical.
+            stype = (_norm(ctx.get("planned_session_type")) or _norm(ctx.get("session_type"))).title() \
+                or "Practice"
             self._db.write_lap(
                 self._session_id, int(lap_number), int(lap_time_ms), 0.0, None,
-                event_id=_int((self._resolve() or {}).get("event_id")),
-                session_type="Practice",
+                event_id=_int(ctx.get("event_id")),
+                session_type=stype,
                 is_out_lap=("out_lap" in reasons), is_pit_lap=("pit_lap" in reasons))
         except Exception:
             pass
