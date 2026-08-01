@@ -3781,15 +3781,7 @@ class SessionDB:
             return {"ok": False, "phase": "assembly",
                     "reason": assembled.get("reason") or assembled.get("error"),
                     "assembly": assembled}
-        car_name = ""
-        try:
-            with self._lock:
-                crow = self._conn.execute(
-                    "SELECT name FROM cars WHERE id=?",
-                    (int(assembled["car_id"]),)).fetchone()
-            car_name = str(crow[0]) if crow is not None else ""
-        except Exception:
-            car_name = ""
+        car_name = self._car_name_for_packet_id(int(assembled["car_id"]))
         result = self.evaluate_setup_experiment(
             int(experiment_id),
             test_session_id=assembled["test_session_id"],
@@ -3816,6 +3808,33 @@ class SessionDB:
             }
         return result
 
+    def _car_name_for_packet_id(self, car_id: int) -> str:
+        """Resolve a car's display name from its GT7 packet car id.
+
+        Program 3 (Phase C6): `car_id` across the app is the GT7 packet id, NOT the
+        cars.id surrogate PK — so a `SELECT name FROM cars WHERE id=?` matched the wrong
+        row except by coincidence. Map the packet id via a recorded session instead
+        (sessions.car_id IS the packet id, sessions.car_name the name), falling back to
+        the legacy cars.id lookup, then ''."""
+        cid = int(car_id or 0)
+        if cid <= 0:
+            return ""
+        try:
+            with self._lock:
+                r = self._conn.execute(
+                    "SELECT car_name FROM sessions WHERE car_id=? AND car_name != '' "
+                    "ORDER BY id DESC LIMIT 1", (cid,)).fetchone()
+            if r and r[0]:
+                return str(r[0])
+        except Exception:
+            pass
+        try:
+            with self._lock:
+                r = self._conn.execute("SELECT name FROM cars WHERE id=?", (cid,)).fetchone()
+            return str(r[0]) if r else ""
+        except Exception:
+            return ""
+
     # ------------------------------------------------------------------
     # Working-window learning + experiment selection (Phase 5, v23)
     # ------------------------------------------------------------------
@@ -3827,14 +3846,7 @@ class SessionDB:
             return None, None
         cp = self._checkpoint_scope_row(str(exp.get("applied_checkpoint_id") or ""))
         car_id = int((cp or {}).get("car_id") or 0)
-        car_name = ""
-        try:
-            with self._lock:
-                crow = self._conn.execute(
-                    "SELECT name FROM cars WHERE id=?", (car_id,)).fetchone()
-            car_name = str(crow[0]) if crow is not None else ""
-        except Exception:
-            car_name = ""
+        car_name = self._car_name_for_packet_id(car_id)
         # discipline from the experiment's hypothesis/test protocol is not stored on
         # the row; derive from the checkpoint purpose where available.
         discipline = ""
