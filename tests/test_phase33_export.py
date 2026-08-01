@@ -1,4 +1,5 @@
 """Phase 33 — assurance-chain export tests: completeness, provenance, determinism, integrity."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1
 import copy
 import json
 
@@ -102,7 +103,7 @@ def test_negative_only_and_fully_assured_exports_are_valid():
 
 def test_export_carries_db_and_rule_versions():
     exp = synthetic_export()
-    assert exp["manifest"]["db_schema_version"] == 26
+    assert exp["manifest"]["db_schema_version"] == 26  # echoed from synthetic_context, not the live DB version
     assert exp["manifest"]["rule_engine_version"] == "46.0"
 
 
@@ -136,5 +137,5 @@ def test_real_export_determinism_and_no_db_write(tmp_path):
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
     assert e1["content_fingerprint"] == e2["content_fingerprint"]
-    assert uv == 28
+    assert uv == DB_VERSION
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0   # no DB write

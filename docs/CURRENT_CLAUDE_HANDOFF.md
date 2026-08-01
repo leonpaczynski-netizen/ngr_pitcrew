@@ -1,6 +1,20 @@
 # Current Claude Handoff
 
-## PROGRAM 3 — Canonical Event Spine (2026-08-01) — CURRENT TOP OF TREE
+## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01) — CURRENT TOP OF TREE
+Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
++ K `#103` merged). **Maintenance/certification only: 0 production `.py` changed, `DB_VERSION=40` +
+`RULE_ENGINE_VERSION="46.0"` unchanged, no migration, `config_id`/fan-out goldens untouched.** Replaces
+the earlier "6 pre-existing reds" undercount with a fully individually-classified matrix. Done: ~58
+stale DB-version pins classified into 5 categories + fixed (phase suite **3184 passed / 0 version
+failures**); group2/3, group18e, group47, uat2-V15, OFR-1 recommendation_scoring pin all fixed; the
+**PyQt `EventCommandCentrePanel` crash root-caused with EVIDENCE** (undisposed top-level widget →
+teardown-order crash on Win/Py3.14, NOT a product defect — single-file crasher fixed by widget
+disposal); new **`tools/run_regression.py`** (12 stable groups, UI one-file-per-subprocess) + a 4-item
+known-failure register (AC42 Setup-Brain doctrine; V5 ×2 live/fixture; CompoundDropdown override-signal
+bypass). **Do NOT activate live seams from this branch.** Full report:
+`docs/PROGRAM3_1_REGRESSION_BASELINE.md`. _(The Program-3 section below stands.)_
+
+## PROGRAM 3 — Canonical Event Spine (2026-08-01)
 Phases **A–J complete**. A (audit) → I (cross-event learning) merged to `master` via PRs
 #98–#101 (tip `4654063`; DB **v31 → v40**; RULE_ENGINE 46.0 unchanged). **Phase J
 certification COMPLETE** on branch `cert/program3-phase-j-2026-08-01`: **43 certification

@@ -1,4 +1,5 @@
 """Phases 33-35 — query-shape tests: chain once, no lower entries, zero extra reads, constant count."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1
 import hashlib
 
 from data.session_db import SessionDB
@@ -107,7 +108,7 @@ def test_no_db_writes_and_hash_unchanged(tmp_path):
                                                   now_date="2026-07-10", **KW)
     db.build_assurance_review_package_report(baseline=None, applied_setup=applied(),
                                              now_date="2026-07-10", **KW)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv0 == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv0 == DB_VERSION
     db.close()
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 

@@ -4,6 +4,7 @@ No mutation; no Apply/approve/freeze/complete/execute/schedule authority; no AI/
 libraries/optimisation; no new write (DB stays v26); completion stays Phase-18-governed; unlike
 contexts never merged; every field explained (source).
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 
 import pytest
@@ -66,7 +67,7 @@ def test_unlike_contexts_never_merged():
 def test_db_version_unchanged_and_no_write(tmp_path):
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(str(tmp_path / "s.db"))
     v0 = db._conn.execute("PRAGMA user_version").fetchone()[0]
     reg0 = db._conn.execute(
@@ -78,7 +79,7 @@ def test_db_version_unchanged_and_no_write(tmp_path):
         "SELECT COUNT(*) FROM engineering_campaign_registry").fetchone()[0] == reg0 == 0
     assert db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0] == dev0 == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == DB_VERSION
     db.close()
 
 

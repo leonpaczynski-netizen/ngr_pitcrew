@@ -35,7 +35,7 @@ def test_new_domain_modules_are_qt_free():
 
 
 def test_versions_pinned():
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"  # no new migration, no rule change
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"  # no new migration, no rule change
 
 
 def test_no_new_migration_added_by_slice():

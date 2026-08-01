@@ -3,6 +3,7 @@
 No duplicate Apply / Experiment / Outcome / Reconciliation / Prediction-Calibration; no
 automatic setup changes; no DB writes except through the existing lifecycle; read-only.
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 
 import pytest
@@ -67,11 +68,11 @@ def test_no_new_domain_experiment_model():
 def test_db_version_and_rule_engine_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_engineering_lifecycle(car="Porsche 911 RSR", track="Fuji")
     db.build_experiment_execution({}, car="Porsche 911 RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     db.close()
 
 

@@ -1,5 +1,12 @@
 # Program 3 — Canonical Event Spine: Implementation State
 
+> **Program 3.1 follow-on (2026-08-01):** J (`#102`) + K (`#103`) are now merged (`master @ 1c99b79`).
+> A maintenance branch `maint/program3.1-regression-baseline-2026-08-01` restored the offline regression
+> baseline — every failure individually classified (the "6 pre-existing reds" figure here is superseded
+> by the full matrix), ~58 stale DB-version pins fixed, the PyQt segfault root-caused with evidence
+> (undisposed-widget teardown, not a product defect), and `tools/run_regression.py` (12 stable groups)
+> added. `DB_VERSION=40` + RULE_ENGINE 46.0 still unchanged. See `docs/PROGRAM3_1_REGRESSION_BASELINE.md`.
+
 **Status:** Phases A–I implemented and merged to `master`. **Phase J (certification)
 complete** — `docs/PROGRAM3_PHASE_J_CERTIFICATION.md` (43 cert tests, 0 defects). **Phase K
 automated golden UAT complete** — `docs/PROGRAM3_PHASE_K_GOLDEN_UAT.md` (7 golden scenarios +

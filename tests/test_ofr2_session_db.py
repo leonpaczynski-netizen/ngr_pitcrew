@@ -226,13 +226,19 @@ class TestGetSessionLapsLatest:
 # ---------------------------------------------------------------------------
 
 class TestOFR1NonCollision:
-    EXPECTED_HASH = "0fbd7d07c0dfc23c"
+    # Content hash of data/recommendation_scoring.py, LF-normalised. Re-frozen at the reviewed
+    # baseline after merged commit 4084e1c ("fix(laps): detect a spin and stop reporting the lap
+    # as clean (DB v31)") legitimately added 2 lines; the original pin (0fbd7d07c0dfc23c) predated
+    # that change. The hash is computed on LF-normalised bytes so the tripwire tests CONTENT and is
+    # stable across CRLF/LF checkouts (git core.autocrlf rewrites line endings on Windows).
+    EXPECTED_HASH = "a77d33fc5e57bcd6"
 
     def test_recommendation_scoring_byte_unchanged(self):
         path = ROOT / "data" / "recommendation_scoring.py"
-        data = path.read_bytes()
+        data = path.read_bytes().replace(b"\r\n", b"\n")   # line-ending-robust content hash
         actual = hashlib.sha256(data).hexdigest()[:16]
         assert actual == self.EXPECTED_HASH, (
-            f"data/recommendation_scoring.py was modified (OFR-1 non-collision breach). "
-            f"Expected sha256[:16]={self.EXPECTED_HASH}, got {actual}"
+            f"data/recommendation_scoring.py content changed (OFR-1 non-collision breach). "
+            f"Expected sha256[:16]={self.EXPECTED_HASH}, got {actual}. If the change was intended "
+            f"and reviewed, re-freeze this pin and note the commit."
         )

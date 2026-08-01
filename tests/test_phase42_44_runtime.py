@@ -1,4 +1,5 @@
 """Phase 42-44 — runtime verification: real temp DB, immutability, determinism."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1
 import hashlib
 import os
 
@@ -22,7 +23,7 @@ def test_db_byte_identical_before_after_runtime_report(tmp_path):
                                      now_monotonic=1.0, **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 28
+    assert uv == DB_VERSION
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 
@@ -56,4 +57,4 @@ def test_user_version_stays_26(tmp_path):
                                      now_monotonic=1.0, **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 28
+    assert uv == DB_VERSION

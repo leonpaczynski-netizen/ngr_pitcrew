@@ -3,6 +3,7 @@
 No setup/experiment/outcome/calibration mutation; no Apply path; no hidden optimisation
 (dimensions + weights are visible); no AI; no DB writes; no duplicate lifecycle/scoring.
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 
 import pytest
@@ -58,10 +59,10 @@ def test_optimises_learning_not_lap_time():
 def test_db_version_and_rule_engine_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(":memory:")
     db.build_experiment_portfolio(car="Porsche 911 RSR", track="Fuji")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     db.close()
 
 
@@ -75,7 +76,7 @@ def test_runtime_writes_nothing(tmp_path):
     after = db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0]
     assert before == after == 0 and db._conn.execute(
-        "PRAGMA user_version").fetchone()[0] == v0 == 28
+        "PRAGMA user_version").fetchone()[0] == v0 == DB_VERSION
     db.close()
 
 

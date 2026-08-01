@@ -1,4 +1,5 @@
 """Phase 15 — safety & frozen-contract tests (Section 27)."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 
 import pytest

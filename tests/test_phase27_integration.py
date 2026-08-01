@@ -4,6 +4,7 @@ Phase 22 built at most once via the shared knowledge chain; Phase 23/24/25/26 Se
 never called; in-memory reuse; constant query count vs event count (no N+1); renderer zero DB
 access; no writes; DB hash / table counts / user_version unchanged.
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import hashlib
 
 from data.session_db import SessionDB
@@ -124,7 +125,7 @@ def test_no_writes_db_hash_and_counts_unchanged(tmp_path):
     counts_after = {t: db._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                     for t in counts_before}
     assert counts_after == counts_before
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv_before == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == uv_before == DB_VERSION
     db.close()
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h_before
 

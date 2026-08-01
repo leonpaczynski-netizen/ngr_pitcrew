@@ -4,6 +4,7 @@ No setup writes / experiment / campaign creation; no Apply / optimiser / schedul
 network / random / wall-clock; no migration / DB mutation / persistence; no setup values in the
 playbook; _setup_constants unchanged; runtime state unchanged.
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 import json
 
@@ -85,7 +86,7 @@ def test_playbook_contains_no_setup_field_values():
 def test_db_version_unchanged_and_no_write(tmp_path):
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(str(tmp_path / "s.db"))
     v0 = db._conn.execute("PRAGMA user_version").fetchone()[0]
     reg0 = db._conn.execute(
@@ -98,7 +99,7 @@ def test_db_version_unchanged_and_no_write(tmp_path):
         "SELECT COUNT(*) FROM engineering_campaign_registry").fetchone()[0] == reg0 == 0
     assert db._conn.execute(
         "SELECT COUNT(*) FROM engineering_development_records").fetchone()[0] == dev0 == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == DB_VERSION
     db.close()
 
 

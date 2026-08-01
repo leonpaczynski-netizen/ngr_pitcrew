@@ -1,5 +1,23 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01).** Branch
+> `maint/program3.1-regression-baseline-2026-08-01`. Maintenance/certification only — **0 production
+> `.py` files changed**, `DB_VERSION=40` + `RULE_ENGINE_VERSION="46.0"` unchanged, no new migration,
+> `config_id`/fan-out goldens untouched. The register **no longer relies on a blanket "pre-existing"
+> statement** — every failure is individually root-caused. Remediated: **~58 stale DB-version pins**
+> (v26/v27/v28) classified into 5 categories and fixed correctly (not blanket `>=`; 2 echoed-fixture
+> over-reaches reverted) → phase suite **3184 passed / 0 version failures**; **group2/group3** stale
+> `_make_stats` (13); **group18e** stale lap_num helper; **group47** relocated wiring scrape;
+> **uat2 V15** stale wording; **OFR-1 recommendation_scoring** byte-pin (CRLF + merged `4084e1c`) →
+> LF-robust + re-frozen. **PyQt `EventCommandCentrePanel` crash root-caused WITH EVIDENCE** (undisposed
+> top-level widgets → undefined teardown order on Win/Py3.14 = 0xC0000409/0xC0000005; NOT a product
+> defect; single-file crasher fixed by widget disposal). New **`tools/run_regression.py`** — 12 stable
+> groups (logic in-process, UI one-file-per-subprocess) + coverage backstops + a 4-item known-failure
+> register (AC42 = Setup-Brain doctrine; V5 ×2 = live-runtime/fixture gap; CompoundDropdown =
+> override-signal bypass). Full report: `docs/PROGRAM3_1_REGRESSION_BASELINE.md`. _(Program-3 J/K note
+> below stands; the "single-process run impossible / segfault environmental" phrasing there is
+> superseded by the evidence-based §4 of the 3.1 report.)_
+
 > **PROGRAM 3 — Canonical Event Spine (2026-08-01): Phases A–J.** ~150 new Program-3 tests + **43
 > Phase-J certification tests (J1–J9)**, all green. DB **v31 → v40**; migrations additive/idempotent;
 > no golden fixtures edited (`config_id` + fan-out allowlist untouched); `TestLiveSafety` (advisory-only)

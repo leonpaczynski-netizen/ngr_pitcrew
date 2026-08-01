@@ -1,4 +1,5 @@
 """Phase 36-38 — runtime verification: real temp DB, determinism, DB immutability, no write."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1
 import hashlib
 import os
 
@@ -24,7 +25,7 @@ def test_db_byte_identical_before_and_after_brief(tmp_path):
     r = db.build_race_engineer_team_brief(applied_setup=applied(), now_date="2026-07-10", **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert r["ok"] and uv == 28
+    assert r["ok"] and uv == DB_VERSION
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 

@@ -3,6 +3,7 @@
 Property / metamorphic / consistency / determinism / safety for the core knowledge
 authority. No migration, no decisions, no mutation.
 """
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 
 import pytest
@@ -114,4 +115,4 @@ def test_no_migration_needed():
     from strategy._setup_constants import DB_VERSION
     from data.session_db import SessionDB
     db = SessionDB(":memory:")
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
