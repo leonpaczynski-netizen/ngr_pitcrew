@@ -1415,6 +1415,51 @@ class SessionDB:
             self._migrate_v39()
             self._conn.execute("PRAGMA user_version = 39")
             self._conn.commit()
+        if version < 40:
+            self._migrate_v40()
+            self._conn.execute("PRAGMA user_version = 40")
+            self._conn.commit()
+
+    def _migrate_v40(self) -> None:
+        """Program 3 Phase I — learning proposals + decisions (schema v40).
+
+        Cross-event learning is never silently promoted: a candidate is raised as a
+        learning_proposals row (observation + applicability scope + confidence +
+        evidence + source), and the driver's accept/reject/edit/defer is recorded as an
+        immutable learning_decisions row that sets the proposal's status. A rejected
+        proposal is retained as rejected (never re-raised without new evidence, never an
+        active prior). Two standalone additive tables; the applicability_scope is stored
+        as text so the workflow is independent of the (deferred) archetype-vs-fingerprint
+        model decision. CREATE IF NOT EXISTS ⇒ idempotent."""
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS learning_proposals (
+            proposal_id           TEXT PRIMARY KEY,
+            observation           TEXT    NOT NULL DEFAULT '',
+            observation_key       TEXT    NOT NULL DEFAULT '',
+            applicability_scope   TEXT    NOT NULL DEFAULT '',
+            proposed_layer        TEXT    NOT NULL DEFAULT '',
+            confidence            REAL    NOT NULL DEFAULT 0.0,
+            evidence_json         TEXT    NOT NULL DEFAULT '[]',
+            source_event_id       INTEGER NOT NULL DEFAULT 0,
+            source_session_run_id TEXT    NOT NULL DEFAULT '',
+            status                TEXT    NOT NULL DEFAULT 'proposed',
+            created_at            TEXT    NOT NULL DEFAULT '',
+            updated_at            TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_learn_prop_status ON learning_proposals(status);
+        CREATE INDEX IF NOT EXISTS idx_learn_prop_key ON learning_proposals(observation_key);
+        CREATE INDEX IF NOT EXISTS idx_learn_prop_event ON learning_proposals(source_event_id);
+        CREATE TABLE IF NOT EXISTS learning_decisions (
+            decision_id  TEXT PRIMARY KEY,
+            proposal_id  TEXT    NOT NULL DEFAULT '',
+            decision     TEXT    NOT NULL DEFAULT '',
+            edited_scope TEXT    NOT NULL DEFAULT '',
+            note         TEXT    NOT NULL DEFAULT '',
+            decided_at   TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_learn_dec_proposal ON learning_decisions(proposal_id);
+        """)
+        self._conn.commit()
 
     def _migrate_v39(self) -> None:
         """Program 3 Phase F — PTT interaction audit trail (schema v39).
@@ -7309,6 +7354,120 @@ class SessionDB:
             }
         except Exception:
             return {"event_id": int(event_id or 0), "findings": []}
+
+    # ---- learning proposals + decisions (v40; Program 3 Phase I) ----------
+    _LEARN_COLS = ("proposal_id, observation, observation_key, applicability_scope, proposed_layer, "
+                   "confidence, evidence_json, source_event_id, source_session_run_id, status, "
+                   "created_at, updated_at")
+
+    def _row_to_learning_proposal(self, r) -> dict:
+        keys = tuple(c.strip() for c in self._LEARN_COLS.split(","))
+        return dict(zip(keys, r))
+
+    def is_learning_suppressed(self, observation: str, applicability_scope: str = "") -> bool:
+        """True if an equivalent proposal was previously REJECTED — so it must not be
+        re-raised without materially new evidence (gate #23)."""
+        try:
+            from strategy.learning_proposal import observation_key, LearningStatus
+            key = observation_key(observation, applicability_scope)
+            r = self._conn.execute(
+                "SELECT 1 FROM learning_proposals WHERE observation_key=? AND status=? LIMIT 1",
+                (key, LearningStatus.REJECTED.value)).fetchone()
+            return bool(r)
+        except Exception:
+            return False
+
+    def propose_learning(self, *, observation: str, applicability_scope: str = "",
+                         proposed_layer: str = "", confidence: float = 0.0,
+                         evidence_json: str = "[]", source_event_id: int = 0,
+                         source_session_run_id: str = "", created_at: str = "",
+                         allow_if_previously_rejected: bool = False) -> str:
+        """Raise a candidate learning as a proposal. Suppressed (returns '') if an
+        equivalent proposal was previously rejected, unless allow_if_previously_rejected
+        (i.e. materially new evidence). Never raises."""
+        try:
+            from strategy.learning_proposal import observation_key, LearningStatus
+            key = observation_key(observation, applicability_scope)
+            if not allow_if_previously_rejected and self.is_learning_suppressed(
+                    observation, applicability_scope):
+                return ""  # rejected learning is not re-proposed without new evidence
+            proposal_id = new_id()
+            self._conn.execute(
+                "INSERT INTO learning_proposals (proposal_id, observation, observation_key, "
+                "applicability_scope, proposed_layer, confidence, evidence_json, source_event_id, "
+                "source_session_run_id, status, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (proposal_id, str(observation or ""), key, str(applicability_scope or ""),
+                 str(proposed_layer or ""), float(confidence or 0.0), str(evidence_json or "[]"),
+                 int(source_event_id or 0), str(source_session_run_id or ""),
+                 LearningStatus.PROPOSED.value, str(created_at or ""), str(created_at or "")))
+            self._conn.commit()
+            return proposal_id
+        except Exception:
+            return ""
+
+    def decide_learning(self, proposal_id: str, decision: str, *, edited_scope: str = "",
+                        note: str = "", decided_at: str = "") -> str:
+        """Record the driver's accept / reject / edit / defer on a proposal (immutable
+        decision log) and set the proposal's status. Edit also updates the scope. Returns
+        the decision id, or '' on a bad input. Never raises."""
+        try:
+            from strategy.learning_proposal import LearningDecision, LearningStatus
+            pid = str(proposal_id or "")
+            d = str(decision or "").strip().lower()
+            valid = {x.value for x in LearningDecision}
+            if not pid or d not in valid:
+                return ""
+            status = {
+                LearningDecision.ACCEPT.value: LearningStatus.ACCEPTED.value,
+                LearningDecision.REJECT.value: LearningStatus.REJECTED.value,
+                LearningDecision.EDIT.value: LearningStatus.EDITED.value,
+                LearningDecision.DEFER.value: LearningStatus.DEFERRED.value,
+            }[d]
+            decision_id = new_id()
+            self._conn.execute(
+                "INSERT INTO learning_decisions (decision_id, proposal_id, decision, edited_scope, "
+                "note, decided_at) VALUES (?,?,?,?,?,?)",
+                (decision_id, pid, d, str(edited_scope or ""), str(note or ""), str(decided_at or "")))
+            if d == LearningDecision.EDIT.value and edited_scope:
+                from strategy.learning_proposal import observation_key
+                obs = self._conn.execute(
+                    "SELECT observation FROM learning_proposals WHERE proposal_id=?", (pid,)).fetchone()
+                new_key = observation_key(obs[0] if obs else "", edited_scope)
+                self._conn.execute(
+                    "UPDATE learning_proposals SET status=?, applicability_scope=?, "
+                    "observation_key=?, updated_at=? WHERE proposal_id=?",
+                    (status, str(edited_scope), new_key, str(decided_at or ""), pid))
+            else:
+                self._conn.execute(
+                    "UPDATE learning_proposals SET status=?, updated_at=? WHERE proposal_id=?",
+                    (status, str(decided_at or ""), pid))
+            self._conn.commit()
+            return decision_id
+        except Exception:
+            return ""
+
+    def get_learning_proposals(self, status: str = "", source_event_id: int = 0) -> list:
+        clauses, params = [], []
+        if status:
+            clauses.append("status=?"); params.append(str(status))
+        if source_event_id:
+            clauses.append("source_event_id=?"); params.append(int(source_event_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT {self._LEARN_COLS} FROM learning_proposals{where} "
+            "ORDER BY created_at, proposal_id", params).fetchall()
+        return [self._row_to_learning_proposal(r) for r in rows]
+
+    def get_active_learning_priors(self) -> list:
+        """Accepted / accepted-with-edit learning — the only learning that may influence
+        a future event (rejected + deferred + proposed are excluded)."""
+        from strategy.learning_proposal import ACTIVE_PRIOR_STATUSES
+        qmarks = ",".join("?" for _ in ACTIVE_PRIOR_STATUSES)
+        rows = self._conn.execute(
+            f"SELECT {self._LEARN_COLS} FROM learning_proposals WHERE status IN ({qmarks}) "
+            "ORDER BY created_at, proposal_id", tuple(ACTIVE_PRIOR_STATUSES)).fetchall()
+        return [self._row_to_learning_proposal(r) for r in rows]
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a
