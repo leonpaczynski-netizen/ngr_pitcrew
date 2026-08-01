@@ -1,6 +1,23 @@
 # Current Claude Handoff
 
-## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01) — CURRENT TOP OF TREE
+## PROGRAM 3 LIVE ACTIVATION 1 — Practice recording + engineer (2026-08-01) — CURRENT TOP OF TREE
+Branch `live/program3-activation1-practice-recording-2026-08-01` off `master @ ffd6bcf` (Program 3.1
+merged via PR #104). **First production telemetry seam through the canonical event spine — Practice
+ONLY.** Delivered + tested offline: authoritative activation gate (full canonical context + planned
+`session_type==PRACTICE`, never inferred; blocks with the exact missing requirement), session-run
+lifecycle FSM (NOT_STARTED→…→COMPLETED/ABANDONED; terminal never reopens; reconnect = resume-same-run
+or explicit-new, never "latest session"), lap-completion guard (rejects not-recording/stale-run/other-
+event/duplicate/reset/zero-length; records pit/out/incomplete as invalid-with-reasons), event-switch
+guard, real-`SessionDB` port (one canonical run bound to the plan, laps stamped with run+stint),
+bridge renders the authoritative recording count+connected, diagnostics accessor. **The two quarantined
+V5 recording tests are ACTIVATED and pass; `test_refresh_feeds_appstate_and_garage` (pre-existing UI
+red) newly quarantined.** New modules: `strategy/live_practice_activation.py`,
+`strategy/live_practice_runtime.py`, `ui/live_practice_db_port.py`. `DB_VERSION=40` + RULE_ENGINE 46.0
+unchanged (2 additive DB helpers only). **STOPPED at the hardware-UAT gate — `docs/LIVE_ACTIVATION_1_UAT.md`;
+live certification NOT TESTED. Remaining polish before merge: full diagnostics-panel UI + on-hardware
+engineer-choreography verification.** _(Program 3.1 section below stands.)_
+
+## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01)
 Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
 + K `#103` merged). **Maintenance/certification only: 0 production `.py` changed, `DB_VERSION=40` +
 `RULE_ENGINE_VERSION="46.0"` unchanged, no migration, `config_id`/fan-out goldens untouched.** Replaces

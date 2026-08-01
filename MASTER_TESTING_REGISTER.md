@@ -1,5 +1,17 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **PROGRAM 3 LIVE ACTIVATION 1 (2026-08-01, branch `live/program3-activation1-practice-recording-2026-08-01`).**
+> First production telemetry seam — Practice recording — through the canonical spine. **~40 new offline
+> tests** across `test_live_practice_activation.py` (22: gate/FSM/reconnect/lap/switch),
+> `test_live_practice_wired_sim.py` (5: full §12 orchestration), `test_live_practice_db_port.py` (3:
+> real-`SessionDB` persistence — one run bound to plan, laps stamped run+stint, no cross-event write),
+> `test_live_practice_safety.py` (5: authors no setup/strategy/pit/PTT, Qt/DB/clock-free). **The two
+> quarantined V5 recording tests are ACTIVATED and pass** (run card renders the authoritative
+> coordinator's valid-lap count + connected); **`test_refresh_feeds_appstate_and_garage` (pre-existing
+> UI red, car resolution) newly quarantined** (proven to fail identically without this change).
+> `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged (2 additive `SessionDB` helpers). Safety suite green.
+> Hardware UAT `docs/LIVE_ACTIVATION_1_UAT.md` — all live items NOT TESTED. Quarantine now 19 items.
+
 > **PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01).** Branch
 > `maint/program3.1-regression-baseline-2026-08-01`. Maintenance/certification only — **0 production
 > `.py` files changed**, `DB_VERSION=40` + `RULE_ENGINE_VERSION="46.0"` unchanged, no new migration,

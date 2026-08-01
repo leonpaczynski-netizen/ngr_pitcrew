@@ -1,5 +1,13 @@
 # Program 3 — Canonical Event Spine: Implementation State
 
+> **Live Activation 1 (2026-08-01):** the first production telemetry seam through this spine —
+> live GT7 **Practice** recording against an explicitly active planned session, under one canonical
+> `session_run`, with the Practice Engineer on that same authoritative context. Branch
+> `live/program3-activation1-practice-recording-2026-08-01`. Authoritative activation gate + lifecycle
+> FSM + lap/reconnect/event-switch rules + real-`SessionDB` port, all offline-tested; the two V5
+> recording tests activated. `DB_VERSION=40`/RULE_ENGINE 46.0 unchanged. Stopped at the hardware-UAT
+> gate (`docs/LIVE_ACTIVATION_1_UAT.md`); live cert NOT TESTED. Qualifying/PTT/strategy-snapshots inert.
+
 > **Program 3.1 follow-on (2026-08-01):** J (`#102`) + K (`#103`) are now merged (`master @ 1c99b79`).
 > A maintenance branch `maint/program3.1-regression-baseline-2026-08-01` restored the offline regression
 > baseline — every failure individually classified (the "6 pre-existing reds" figure here is superseded
