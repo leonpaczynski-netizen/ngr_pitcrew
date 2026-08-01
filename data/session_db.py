@@ -7270,6 +7270,46 @@ class SessionDB:
         keys = tuple(c.strip() for c in self._PTT_COLS.split(","))
         return [dict(zip(keys, r)) for r in rows]
 
+    # ---- event debrief aggregation (v-spine read model; Program 3 Phase H) ----
+    def get_session_runs_for_event(self, event_id: int) -> list:
+        rows = self._conn.execute(
+            "SELECT run_id FROM session_runs WHERE event_id=? ORDER BY created_at, run_id",
+            (int(event_id or 0),)).fetchall()
+        return [self.get_session_run(r[0]) for r in rows]
+
+    def get_strategy_revisions_for_event(self, event_id: int) -> list:
+        rows = self._conn.execute(
+            f"SELECT {self._STRAT_REV_COLS} FROM strategy_revisions WHERE event_id=? "
+            "ORDER BY revision_index, created_at", (int(event_id or 0),)).fetchall()
+        return [self._row_to_strategy_revision(r) for r in rows]
+
+    def build_event_debrief_for_event(self, event_id: int) -> dict:
+        """Assemble the pure, provenance-typed event debrief from the spine (read-only).
+        Returns a plain dict (findings tagged measured_fact / deterministic_inference /
+        driver_report / unresolved) so the UI needs no domain import. Never raises."""
+        try:
+            from strategy.event_debrief import build_event_debrief
+            eid = int(event_id or 0)
+            track = ""
+            try:
+                r = self._conn.execute("SELECT track FROM events WHERE id=?", (eid,)).fetchone()
+                track = str(r[0]) if r else ""
+            except Exception:
+                track = ""
+            debrief = build_event_debrief(
+                event_id=eid, track=track,
+                session_runs=self.get_session_runs_for_event(eid),
+                strategy_revisions=self.get_strategy_revisions_for_event(eid),
+                ptt_interactions=self.get_ptt_interactions(event_id=eid),
+                quarantined=self.get_quarantined_records())
+            return {
+                "event_id": debrief.event_id, "car": debrief.car, "track": debrief.track,
+                "findings": [{"text": f.text, "provenance": f.provenance.value, "section": f.section}
+                             for f in debrief.findings],
+            }
+        except Exception:
+            return {"event_id": int(event_id or 0), "findings": []}
+
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a
         lookup by the pre-v33 'cycle-...' id still resolves via legacy_cycle_id."""
