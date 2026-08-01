@@ -58,6 +58,7 @@ OPTIONAL_CONTEXT: Tuple[str, ...] = (
 )
 
 PRACTICE = "practice"
+QUALIFYING = "qualifying"
 
 
 class ActivationVerdict(str, Enum):
@@ -79,26 +80,29 @@ class LivePracticeActivation:
         return self.verdict == ActivationVerdict.ACTIVATED
 
 
-def resolve_live_practice_activation(
+def resolve_live_activation(
     context: Optional[Mapping],
     *,
     planned_session_type: str,
+    required_type: str,
 ) -> LivePracticeActivation:
-    """Decide whether the resolved ``context`` authorises a live Practice recording.
+    """Decide whether the resolved ``context`` authorises a live recording of ``required_type``
+    (``PRACTICE`` or ``QUALIFYING``).
 
     ``planned_session_type`` MUST come from the persisted planned session — never from the
     page, a packet, history, the last row, a cached mode, a button or PTT. It is the only
     session-type input this function trusts.
     """
     ctx = context if isinstance(context, Mapping) else {}
+    rt = _norm(required_type).lower()
 
-    # Session type is authoritative and checked first — a non-Practice plan can never be
-    # activated as Practice, regardless of how complete the rest of the context is.
-    if _norm(planned_session_type).lower() != PRACTICE:
+    # Session type is authoritative and checked first — a plan of the wrong type can never be
+    # activated as this type, regardless of how complete the rest of the context is.
+    if _norm(planned_session_type).lower() != rt:
         return LivePracticeActivation(
             verdict=ActivationVerdict.BLOCKED_WRONG_SESSION_TYPE,
-            reason=f"Planned session type is {_norm(planned_session_type) or 'unknown'!r}, not Practice — "
-                   f"a live Practice recording cannot start.")
+            reason=f"Planned session type is {_norm(planned_session_type) or 'unknown'!r}, not "
+                   f"{rt.title()} — a live {rt.title()} recording cannot start.")
 
     missing = tuple(f for f in REQUIRED_CONTEXT if not _present(ctx.get(f)))
     if missing:
@@ -108,13 +112,29 @@ def resolve_live_practice_activation(
             missing=missing)
 
     identity = {f: _norm(ctx.get(f)) for f in REQUIRED_CONTEXT}
-    identity["session_type"] = PRACTICE
+    identity["session_type"] = rt
     for f in OPTIONAL_CONTEXT:                       # present-if-known, honest when absent
         identity[f] = _norm(ctx.get(f))
     return LivePracticeActivation(
         verdict=ActivationVerdict.ACTIVATED,
-        reason="Authoritative Practice context resolved.",
+        reason=f"Authoritative {rt.title()} context resolved.",
         identity=identity)
+
+
+def resolve_live_practice_activation(
+    context: Optional[Mapping], *, planned_session_type: str,
+) -> LivePracticeActivation:
+    """Authoritative gate for a live PRACTICE recording (see resolve_live_activation)."""
+    return resolve_live_activation(
+        context, planned_session_type=planned_session_type, required_type=PRACTICE)
+
+
+def resolve_live_qualifying_activation(
+    context: Optional[Mapping], *, planned_session_type: str,
+) -> LivePracticeActivation:
+    """Authoritative gate for a live QUALIFYING recording (see resolve_live_activation)."""
+    return resolve_live_activation(
+        context, planned_session_type=planned_session_type, required_type=QUALIFYING)
 
 
 # --------------------------------------------------------------------------- #
