@@ -9,13 +9,16 @@ lifecycle FSM (NOT_STARTED→…→COMPLETED/ABANDONED; terminal never reopens; 
 or explicit-new, never "latest session"), lap-completion guard (rejects not-recording/stale-run/other-
 event/duplicate/reset/zero-length; records pit/out/incomplete as invalid-with-reasons), event-switch
 guard, real-`SessionDB` port (one canonical run bound to the plan, laps stamped with run+stint),
-bridge renders the authoritative recording count+connected, diagnostics accessor. **The two quarantined
-V5 recording tests are ACTIVATED and pass; `test_refresh_feeds_appstate_and_garage` (pre-existing UI
-red) newly quarantined.** New modules: `strategy/live_practice_activation.py`,
-`strategy/live_practice_runtime.py`, `ui/live_practice_db_port.py`. `DB_VERSION=40` + RULE_ENGINE 46.0
-unchanged (2 additive DB helpers only). **STOPPED at the hardware-UAT gate — `docs/LIVE_ACTIVATION_1_UAT.md`;
-live certification NOT TESTED. Remaining polish before merge: full diagnostics-panel UI + on-hardware
-engineer-choreography verification.** _(Program 3.1 section below stands.)_
+bridge renders the authoritative recording count+connected, diagnostics accessor + **collapsible
+diagnostics-panel UI** (`ui/components/live_diagnostics.py`, embedded at the foot of the Live Pit Wall,
+fed every tick). **The two quarantined V5 recording tests are ACTIVATED and pass;
+`test_refresh_feeds_appstate_and_garage` + `TestU4HomeSaysSomething` (pre-existing UI reds) newly
+quarantined; `test_bridge_actions` teardown-crasher skipped-with-log.** New modules:
+`strategy/live_practice_activation.py`, `strategy/live_practice_runtime.py`,
+`ui/live_practice_db_port.py`, `ui/components/live_diagnostics.py`. `DB_VERSION=40` + RULE_ENGINE 46.0
+unchanged (2 additive DB helpers only). PR **#105** open. **STOPPED at the hardware-UAT gate —
+`docs/LIVE_ACTIVATION_1_UAT.md`; live certification NOT TESTED. Remaining before merge: on-hardware
+engineer-choreography verification + the UAT sign-off.** _(Program 3.1 section below stands.)_
 
 ## PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01)
 Branch `maint/program3.1-regression-baseline-2026-08-01` off `master @ 1c99b79` (Program 3 J `#102`
