@@ -133,9 +133,22 @@ class LivePitWall(QWidget):
         self._plan_card.add(self._plan_stops)
         self._plan_card.setVisible(False)
         lay.addWidget(self._plan_card)
+
+        # Live Activation 1 (§9): the authoritative Practice recording diagnostics — collapsed by
+        # default so the PSVR2 view stays immersive, expandable during UAT to read every id.
+        from ui.components.live_diagnostics import LivePracticeDiagnosticsPanel
+        self._diag = LivePracticeDiagnosticsPanel()
+        lay.addWidget(self._diag)
         lay.addStretch(1)
 
         self.set_state(LivePitWallVM())
+
+    def set_diagnostics(self, d) -> None:
+        """Forward the authoritative live-Practice diagnostics to the panel. Never raises."""
+        try:
+            self._diag.set_diagnostics(d)
+        except Exception:
+            pass
 
     def show_plan(self, plan: dict) -> None:
         """Show the approved race plan the driver is racing to (empty dict hides it)."""

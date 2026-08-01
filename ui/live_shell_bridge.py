@@ -2861,6 +2861,10 @@ class LiveShellBridge(QObject):
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
                 return
+            # Live Activation 1 (§9): refresh the authoritative Practice-recording diagnostics
+            # header every tick, whatever the session mode.
+            if hasattr(lp, "set_diagnostics"):
+                lp.set_diagnostics(self.live_practice_diagnostics())
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             from strategy.live_engineer_session import normalise_session_mode
             from strategy.engineer_orchestrator import EngineerContext, orchestrate

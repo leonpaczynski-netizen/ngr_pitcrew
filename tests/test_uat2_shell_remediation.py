@@ -366,6 +366,16 @@ class TestV5RunRecording:
         assert d["event_id"] == "42" and d["session_plan_id"] == "plan-1"
         assert d["valid_lap_count"] == 4 and d["connected"] is True
 
+    def test_feed_live_pushes_diagnostics_into_the_pit_wall_panel(self, wired):
+        # §9 end-to-end: the bridge feeds the authoritative diagnostics to the pit-wall panel.
+        shell, _win, _db, bridge = wired
+        bridge._live_practice = _recording_coordinator(valid_laps=5)
+        bridge._feed_live()
+        panel = shell.live_page._diag
+        assert "RECORDING" in panel._state_pill.text()
+        assert panel._values["session_run_id"].text() == "run-1"
+        assert panel._laps.text() == "5 valid laps"
+
     def test_ending_the_run_binds_the_session(self, wired):
         shell, _win, db, bridge = wired
         bridge._last_guidance_view = _view()
