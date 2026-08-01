@@ -157,7 +157,7 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v39 (Program 3 PTT audit trail): adds ptt_interactions — every push-to-talk interaction stamped with its
 #     context (event/cycle/run/stint/lap/car/setup/strategy) + intent + resolved action + response, so a
 #     wrong response is traceable. NO raw-transcript column (push_to_talk invariant). Additive. Idempotent.
-DB_VERSION: int = 39
+DB_VERSION: int = 40
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.
