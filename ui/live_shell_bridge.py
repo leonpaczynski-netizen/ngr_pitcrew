@@ -427,6 +427,94 @@ class LiveShellBridge(QObject):
         except Exception:
             pass
 
+    def _active_session_run_id(self) -> str:
+        """The canonical run_id of the session currently being recorded, or ''."""
+        try:
+            sid = self._live_session_id()
+            if sid and self._db is not None and hasattr(self._db, "get_run_for_session"):
+                return str((self._db.get_run_for_session(sid) or {}).get("run_id") or "")
+        except Exception:
+            pass
+        return ""
+
+    def _active_event_id(self) -> int:
+        """The stable event_id of the active preparation cycle, or 0."""
+        try:
+            cfg = self._config if isinstance(self._config, dict) else {}
+            cid = str(cfg.get("active_cycle_id") or "")
+            if cid and self._db is not None and hasattr(self._db, "get_preparation_cycle"):
+                return int((self._db.get_preparation_cycle(cid) or {}).get("event_id") or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _record_ptt_interaction(self, *, resolved_action: str = "", recognised_action: str = "",
+                                command_class: str = "", intent_confidence: float = 0.0,
+                                ambiguous: bool = False, response: str = "",
+                                fallback_state: str = "") -> None:
+        """Best-effort persist of a PTT interaction with the active context (Phase F /
+        §19), so a wrong response is traceable. The raw transcript is NEVER stored
+        (push_to_talk invariant). Never raises."""
+        db = getattr(self, "_db", None)
+        if db is None or not hasattr(db, "record_ptt_interaction"):
+            return
+        try:
+            import datetime as _dt
+            from strategy.ptt_interaction import PttInteractionRecord
+            cfg = self._config if isinstance(self._config, dict) else {}
+            rec = PttInteractionRecord(
+                event_id=self._active_event_id(),
+                cycle_id=str(cfg.get("active_cycle_id") or ""),
+                session_run_id=self._active_session_run_id(),
+                lap_number=int(self._live_lap_count() or 0),
+                session_type=str(self._live_session_mode or ""),
+                recognised_action=str(recognised_action or resolved_action or ""),
+                command_class=str(command_class or ""),
+                intent_confidence=float(intent_confidence or 0.0),
+                ambiguous=bool(ambiguous),
+                resolved_action=str(resolved_action or ""),
+                response=str(response or ""),
+                fallback_state=str(fallback_state or ""),
+                created_at=_dt.datetime.now().isoformat(timespec="seconds"),
+            )
+            db.record_ptt_interaction(rec.as_dict())
+        except Exception:
+            pass
+
+    def _record_strategy_revision_on_accept(self, plan: dict) -> None:
+        """Program 3 (Phase G / §16-17): an accepted replan is a material change, so
+        snapshot the triggering race state and append a NEW IMMUTABLE strategy revision
+        referencing it. Advisory only — this RECORDS the accepted plan (already shown via
+        _live_accepted_plan); it executes nothing and mutates no live plan. Best-effort;
+        never raises."""
+        db = getattr(self, "_db", None)
+        if db is None or not hasattr(db, "append_strategy_revision"):
+            return
+        try:
+            import json as _json
+            import datetime as _dt
+            run_id = self._active_session_run_id()
+            event_id = self._active_event_id()
+            cfg = self._config if isinstance(self._config, dict) else {}
+            cycle_id = str(cfg.get("active_cycle_id") or "")
+            now = _dt.datetime.now().isoformat(timespec="seconds")
+            snap_id = ""
+            try:
+                if hasattr(db, "append_race_state_snapshot"):
+                    snap_id = db.append_race_state_snapshot(
+                        session_run_id=run_id, event_id=event_id,
+                        lap_number=int(self._live_lap_count() or 0), trigger="ptt_accept",
+                        state_json=_json.dumps(self._live_decision or {})[:8000], created_at=now)
+            except Exception:
+                snap_id = ""
+            db.append_strategy_revision(
+                session_run_id=run_id, event_id=event_id, cycle_id=cycle_id,
+                trigger="ptt_accept", plan_json=_json.dumps(plan or {}),
+                reason="driver accepted the replan via PTT", confidence=0.0,
+                race_state_snapshot_id=snap_id, communicated=True, created_at=now)
+        except Exception:
+            pass
+
     def _on_voice_strategy_ack(self, action: str) -> None:
         """Handle a PTT strategy acknowledgement on the Qt thread.
 
@@ -441,6 +529,11 @@ class LiveShellBridge(QObject):
         try:
             from strategy.adaptive_live_strategy import acknowledge_strategy
             from ui.shell_feed_adapters import live_plan_dict_from_candidate
+            # Program 3 (Phase F / §19): audit every strategy ack with its context —
+            # including a no-op "accept with nothing pending" (a wrong-context signal).
+            self._record_ptt_interaction(
+                resolved_action=str(action or ""), command_class="strategy_ack",
+                response=f"strategy ack: {action}")
             if action == "accept":
                 if not self._live_pending:
                     return  # nothing to accept — safe no-op
@@ -454,6 +547,7 @@ class LiveShellBridge(QObject):
                 plan = live_plan_dict_from_candidate(candidate)
                 if plan:
                     self._live_accepted_plan = plan
+                    self._record_strategy_revision_on_accept(plan)
                 # Ensure the engine has the approved plan's stints so PTT can answer
                 # "when do I pit" — the replan candidate is advisory-only and carries
                 # no Stint-compatible data, so we reinforce the approved plan stints.
@@ -2715,8 +2809,8 @@ class LiveShellBridge(QObject):
             if lp is None:
                 return
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
-            from strategy.live_engineer_session import (
-                normalise_session_mode, session_engineer_call)
+            from strategy.live_engineer_session import normalise_session_mode
+            from strategy.engineer_orchestrator import EngineerContext, orchestrate
             connected = self._connected()
             # The session type gates EVERYTHING that follows. Only an ACTUAL RACE gets the
             # race strategy state, the adaptive pit decision, the pit plan and the "race"
@@ -2770,13 +2864,22 @@ class LiveShellBridge(QObject):
                         except Exception:
                             self._live_audio_view = None
                     audio_view = self._live_audio_view
-            # Session-type-aware engineer: in practice/qualifying the engineer talks
-            # feel and one-lap pace, not race strategy — like a real engineer adjusting
-            # to the session. Race defers to the strategy engine (override "").
+            # Session-type-aware engineer via the single Engineer Orchestrator (Phase E):
+            # it resolves the mode and returns ONE coordinated line — practice/qualifying
+            # talk feel + one-lap pace (never race strategy), race defers to the strategy
+            # engine (""). Behaviour matches the previous session_engineer_call (the
+            # orchestrator is a parity-tested superset); it is the seam through which the
+            # qualifying state machine + live practice brief are activated next. Track
+            # modelling keeps its own voice path, so the engineer LINE is computed as before
+            # (track_modelling_active left False here) and speaking is gated below.
             _last_s, _best_s = self._live_last_best_lap_s()
-            _eng_call = session_engineer_call(
-                _sess, connected=connected, lap_count=self._live_lap_count(),
-                last_lap_s=_last_s, best_lap_s=_best_s)
+            _eng_call = orchestrate(EngineerContext(
+                live_session_mode=self._live_session_mode,
+                race_phase=self._live_race_phase,
+                connected=connected,
+                lap_count=self._live_lap_count(),
+                last_lap_s=_last_s, best_lap_s=_best_s,
+            )).line
             lp.set_state(live_pit_wall_vm_from_state(
                 state, connected=connected, audio_view=audio_view,
                 race_phase=self._live_race_phase,
