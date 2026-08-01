@@ -151,7 +151,10 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v37 (Program 3 driver-profile versioning): adds driver_profile_versions — an immutable, parent-chained
 #     version history (effective date, prior version, snapshot, change-set) replacing the ignored version
 #     string; seeds v1.0 from the existing user_profile singleton. Additive, seed-once. Idempotent.
-DB_VERSION: int = 37
+# v38 (Program 3 legacy classification): classifies legacy sessions RESOLVED / RESOLVED_WITH_WARNING /
+#     AMBIGUOUS (never guessed into an event) via an additive legacy_class column, and adds a read-only
+#     quarantine_records view surfacing AMBIGUOUS + ORPHANED laps. Additive. Idempotent.
+DB_VERSION: int = 38
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

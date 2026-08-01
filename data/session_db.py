@@ -1407,6 +1407,50 @@ class SessionDB:
             self._migrate_v37()
             self._conn.execute("PRAGMA user_version = 37")
             self._conn.commit()
+        if version < 38:
+            self._migrate_v38()
+            self._conn.execute("PRAGMA user_version = 38")
+            self._conn.commit()
+
+    def _migrate_v38(self) -> None:
+        """Program 3 Phase B — legacy-data classification + quarantine (schema v38).
+
+        Classifies every legacy sessions row by how reliably it can be placed in a
+        context, WITHOUT guessing it into the most-likely event:
+          * RESOLVED             — has a stable event_id link.
+          * RESOLVED_WITH_WARNING — event_id 0 but recoverable via an activity binding.
+          * AMBIGUOUS            — event_id 0 and no binding: cannot be deterministically
+                                    placed, so it is NOT assigned to any event.
+        Orphaned lap_records (session_id with no sessions row) are ORPHANED. A read-only
+        quarantine_records view surfaces AMBIGUOUS/ORPHANED for manual review; downstream
+        learning must never consume a quarantined row. Additive column + view; classifies
+        only unclassified rows ⇒ idempotent."""
+        try:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN legacy_class TEXT")
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        # Order matters: RESOLVED, then WARNING (bound), then AMBIGUOUS (the rest).
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='RESOLVED' "
+            "WHERE event_id > 0 AND (legacy_class IS NULL OR legacy_class='')")
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='RESOLVED_WITH_WARNING' "
+            "WHERE (event_id IS NULL OR event_id=0) AND (legacy_class IS NULL OR legacy_class='') "
+            "AND EXISTS (SELECT 1 FROM event_preparation_activity_sessions b "
+            "            WHERE b.session_id = CAST(sessions.id AS TEXT))")
+        self._conn.execute(
+            "UPDATE sessions SET legacy_class='AMBIGUOUS' "
+            "WHERE (event_id IS NULL OR event_id=0) AND (legacy_class IS NULL OR legacy_class='')")
+        self._conn.executescript("""
+        CREATE VIEW IF NOT EXISTS quarantine_records AS
+            SELECT 'session' AS record_type, CAST(id AS TEXT) AS record_id, legacy_class AS reason
+              FROM sessions WHERE legacy_class IN ('AMBIGUOUS', 'ORPHANED')
+            UNION ALL
+            SELECT 'lap' AS record_type, CAST(id AS TEXT) AS record_id, 'ORPHANED' AS reason
+              FROM lap_records WHERE session_id NOT IN (SELECT id FROM sessions);
+        """)
+        self._conn.commit()
 
     def _migrate_v37(self) -> None:
         """Program 3 Phase B — driver-profile versioning with history (schema v37).
@@ -7090,6 +7134,31 @@ class SessionDB:
             f"SELECT {self._DPV_COLS} FROM driver_profile_versions "
             "WHERE is_current=1 ORDER BY created_at DESC, version_id LIMIT 1").fetchone()
         return self._row_to_driver_profile_version(r) if r else None
+
+    # ---- legacy classification / quarantine (v38) ------------------------
+    def get_legacy_classification_report(self) -> dict:
+        """Counts of legacy sessions by classification + orphaned lap count. The migration
+        report for Program 3 §27 — ambiguous rows are quarantined, never guessed."""
+        counts = {}
+        for cls in ("RESOLVED", "RESOLVED_WITH_WARNING", "AMBIGUOUS", "ORPHANED"):
+            counts[cls] = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE legacy_class=?", (cls,)).fetchone()[0]
+        orphan_laps = self._conn.execute(
+            "SELECT COUNT(*) FROM lap_records WHERE session_id NOT IN "
+            "(SELECT id FROM sessions)").fetchone()[0]
+        return {"sessions": counts, "orphaned_laps": orphan_laps,
+                "quarantined": counts["AMBIGUOUS"] + counts["ORPHANED"] + orphan_laps}
+
+    def get_quarantined_records(self) -> list:
+        """The read-only quarantine set (AMBIGUOUS/ORPHANED). Learning must not consume these."""
+        rows = self._conn.execute(
+            "SELECT record_type, record_id, reason FROM quarantine_records").fetchall()
+        return [{"record_type": r[0], "record_id": r[1], "reason": r[2]} for r in rows]
+
+    def is_session_quarantined(self, session_id) -> bool:
+        r = self._conn.execute(
+            "SELECT legacy_class FROM sessions WHERE id=?", (int(session_id or 0),)).fetchone()
+        return bool(r and r[0] in ("AMBIGUOUS", "ORPHANED"))
 
     def get_preparation_cycle(self, cycle_id: str) -> "dict | None":
         """Read one preparation cycle (SELECT-only). Tolerant of a legacy slug: a

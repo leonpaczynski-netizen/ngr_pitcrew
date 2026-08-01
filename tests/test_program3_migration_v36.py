@@ -7,7 +7,7 @@ from data.session_db import SessionDB
 
 def test_tables_exist(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 36
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 36
     tables = {r[0] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"car_spec_revisions", "track_model_versions"} <= tables

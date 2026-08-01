@@ -40,7 +40,7 @@ def _seed_v33(path: str) -> None:
 
 def test_fresh_db_has_run_and_stint_tables(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 34
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 34
     tables = {r[0] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"session_runs", "stints"} <= tables

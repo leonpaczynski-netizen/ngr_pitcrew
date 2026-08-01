@@ -9,7 +9,7 @@ from data.session_db import SessionDB, _DDL
 
 def test_table_exists(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 37
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] >= 37
     tables = {r[0] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "driver_profile_versions" in tables

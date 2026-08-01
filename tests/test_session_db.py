@@ -254,10 +254,12 @@ def test_schema_version_is_v10(db):
     # car_spec_revisions + track_model_versions).
     # Reconciled for Program 3 driver-profile versioning: 36 → 37 (_migrate_v37 adds
     # driver_profile_versions with immutable history).
+    # Reconciled for Program 3 legacy classification: 37 → 38 (_migrate_v38 classifies legacy
+    # sessions + adds the read-only quarantine_records view).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 37
+    assert version == DB_VERSION == 38
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):
