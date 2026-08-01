@@ -1,5 +1,16 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **PROGRAM 3 — Canonical Event Spine (2026-08-01): Phases A–J.** ~150 new Program-3 tests + **43
+> Phase-J certification tests (J1–J9)**, all green. DB **v31 → v40**; migrations additive/idempotent;
+> no golden fixtures edited (`config_id` + fan-out allowlist untouched); `TestLiveSafety` (advisory-only)
+> + safety-guard + config-id-golden suites green post-Program-3. **Phase J: 0 code defects found**
+> (one over-strict cert assertion corrected — a test fix, not a code change). **Full suite: 12,423
+> collected;** batched-in-quarters result recorded in `docs/PROGRAM3_PHASE_J_CERTIFICATION.md`
+> (the only reds are **6 pre-existing failures in 4 families, proven on base `3c3446e`** with Program 3
+> absent — recommendation_scoring hash-pin, two `test_group18e`, two `TestU4HomeSaysSomething`,
+> `test_refresh_feeds_appstate_and_garage`). RULE_ENGINE 46.0 unchanged. _(The UI-rebuild note below
+> is superseded.)_
+
 > **UI REBUILD (branch `ui-rebuild-ngr-pit-crew`, 2026-07-22):** 23 new test files, **182 new UI-rebuild tests pass together, 0 failures** (view-model/state/component/shell/bridge + safety tests: strategy exposes no setup-apply, live issues no command, Garage Apply routes only through the classic gated path, shown==applied). **Full batched regression: 9,945 passed, 0 rebuild-caused failures.** The 1 "failed" + 1 crashed batch are the **pre-existing Win/Py3.14 PyQt segfault** on `EventCommandCentrePanel` under pytest — confirmed by reproducing the identical crash on clean master `d79a5eb` in an isolated worktree (panel constructs fine outside pytest; rebuild changes are not in its path). No golden fixtures edited. DB v28 / RULE_ENGINE 46.0 unchanged. See `docs/NGR_PIT_CREW_UI_REBUILD_COMPLETION.md`.
 
 
