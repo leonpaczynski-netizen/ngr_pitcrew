@@ -36,3 +36,7 @@ api_key.txt
 voice/piper_models/
 *.onnx
 *.onnx.json
+
+# Data wipe quarantine (2026-08-02) — corrupt event/car/track linkage
+_quarantine_*/
+.last_quarantine_path
