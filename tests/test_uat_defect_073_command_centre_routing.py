@@ -128,9 +128,18 @@ def test_command_centre_panel_wraps_body_in_a_scroll_area():
         from PyQt6.QtWidgets import QApplication, QScrollArea
     except Exception:
         pytest.skip("PyQt6 not available")
-    QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
     from ui.event_command_centre_panel import EventCommandCentrePanel
     p = EventCommandCentrePanel()
-    assert isinstance(p._body_scroll, QScrollArea)
-    assert p._body_scroll.widgetResizable() is True
-    assert p._body_scroll.widget() is p._body
+    try:
+        assert isinstance(p._body_scroll, QScrollArea)
+        assert p._body_scroll.widgetResizable() is True
+        assert p._body_scroll.widget() is p._body
+    finally:
+        # Dispose the top-level widget deterministically while the QApplication event loop is
+        # still alive. A bare, unparented widget left for interpreter-shutdown finalisation is
+        # torn down in an undefined order on Windows/Py3.14 and aborts the process with
+        # 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) — a test-teardown artifact, not a defect.
+        p.close()
+        p.deleteLater()
+        app.processEvents()

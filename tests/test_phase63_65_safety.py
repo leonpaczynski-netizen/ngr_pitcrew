@@ -56,7 +56,7 @@ def test_no_cloud_recognition_in_ports():
 
 
 def test_versions_pinned_and_no_new_migration():
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     src = (_ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
     assert f"_migrate_v{DB_VERSION + 1}" not in src
 

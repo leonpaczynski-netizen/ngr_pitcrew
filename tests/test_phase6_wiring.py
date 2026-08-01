@@ -1,5 +1,6 @@
 """Engineering-Brain Phase 6 — runtime wiring + threading + architecture safety."""
 from __future__ import annotations
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 
 from pathlib import Path
 

@@ -1,4 +1,5 @@
 """Phases 33-35 — runtime verification: real temp DB + temp export dir, end-to-end determinism."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1
 import hashlib
 import json
 import os
@@ -40,7 +41,7 @@ def test_db_byte_identical_before_and_after_export_and_compare(tmp_path):
                                              now_date="2026-07-10", **KW)
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 28
+    assert uv == DB_VERSION
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 
@@ -149,7 +150,7 @@ def test_dashboard_export_end_to_end_off_thread_no_db_mutation(app, tmp_path):
     assert os.path.exists(os.path.join(dest, "package_manifest.json"))
     uv = db._conn.execute("PRAGMA user_version").fetchone()[0]
     db.close()
-    assert uv == 28
+    assert uv == DB_VERSION
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0   # export did not mutate the DB
 
 

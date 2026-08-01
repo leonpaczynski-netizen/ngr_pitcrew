@@ -1,4 +1,5 @@
 """Phase 42-44 — safety: pure modules, no AI/keys/writes/voice, frozen Apply gate, DB v26."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import ast
 
 import strategy.material_context as m_mc
@@ -71,7 +72,7 @@ def test_no_ai_no_apply_no_voice_in_session_db_entries():
 
 def test_versions_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
 
 
 def test_advisory_advisories_are_read_only():

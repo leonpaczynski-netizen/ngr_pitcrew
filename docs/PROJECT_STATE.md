@@ -1,5 +1,16 @@
 # GT7 VR Dashboard — Project State
 
+> **PROGRAM 3.1 — Regression Baseline Restoration (2026-08-01).** Branch
+> `maint/program3.1-regression-baseline-2026-08-01` (off `master @ 1c99b79`, Program 3 J/K merged).
+> Maintenance/certification only — **0 production `.py` changed**, `DB_VERSION=40` + RULE_ENGINE 46.0
+> unchanged, no migration, goldens untouched. Every regression failure is now individually root-caused
+> (no blanket "pre-existing"): ~58 stale DB-version pins classified into 5 categories + fixed; group2/3,
+> group18e, group47, uat2-V15, OFR-1 recommendation_scoring pin fixed; the PyQt `EventCommandCentrePanel`
+> crash root-caused **with evidence** as an undisposed-widget teardown artifact (not a product defect,
+> single-file crasher fixed). New `tools/run_regression.py` (12 stable groups; UI per-subprocess) + a
+> 4-item known-failure register. Report: `docs/PROGRAM3_1_REGRESSION_BASELINE.md`. _(Program-3 note below
+> stands.)_
+
 > **PROGRAM 3 — Canonical Event Spine (2026-08-01): Phases A–J COMPLETE.** One authoritative
 > event / session-plan / session-run / stint / lap identity now flows through the DB, UI,
 > telemetry, engineer, strategy, debrief and learning systems. Merged to `master` via PRs #98–#101

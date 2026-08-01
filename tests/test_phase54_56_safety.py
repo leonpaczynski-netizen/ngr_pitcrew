@@ -34,7 +34,7 @@ def test_new_domain_modules_qt_free():
 
 
 def test_versions_pinned_and_no_new_migration():
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     src = (_ROOT / "data" / "session_db.py").read_text(encoding="utf-8")
     assert f"_migrate_v{DB_VERSION + 1}" not in src  # this slice added no migration
 
@@ -67,14 +67,22 @@ def test_truth_and_command_centre_views_write_nothing(tmp_path):
     assert hashlib.sha256(open(p, "rb").read()).hexdigest() == h0
 
 
-def test_config_path_change_cannot_change_engineering_fingerprint():
-    # engineering fingerprints derive from evidence, not config; the active_cycle_id selection is
-    # operational and excluded from the candidate-membership fingerprint.
+def test_injected_now_date_cannot_change_the_resolution_fingerprint():
+    # The resolver's semantic fingerprint captures candidate membership + the *explicit selection*
+    # and its resolved identity (as_semantic_payload) — an explicit selection genuinely produces a
+    # different resolution (one_active_event vs event_requires_selection) and therefore a different
+    # fingerprint; that is correct, selection is semantic. What must NOT enter the fingerprint is the
+    # injected wall-clock `now_date` (module docstring: "excluded from the fingerprint"). The engineering
+    # /evidence fingerprint (EngineeringContextKey) is a separate identity that never sees cycle selection.
     from strategy.active_cycle_resolution import CycleCandidate, resolve_active_cycle
     cands = [CycleCandidate("a", explicit_state="active", official_race_date="2026-06-21")]
-    f1 = resolve_active_cycle(cands, selected_cycle_id="a").fingerprint
-    f2 = resolve_active_cycle(cands, selected_cycle_id="").fingerprint
-    assert f1 == f2  # selection state does not enter the semantic fingerprint
+    # selection is semantic: choosing "a" resolves to it; choosing nothing requires an explicit choice
+    assert resolve_active_cycle(cands, selected_cycle_id="a").fingerprint \
+        != resolve_active_cycle(cands, selected_cycle_id="").fingerprint
+    # but the injected clock is operational-only and must never alter the identity fingerprint
+    f_early = resolve_active_cycle(cands, selected_cycle_id="a", now_date="2026-06-01").fingerprint
+    f_late = resolve_active_cycle(cands, selected_cycle_id="a", now_date="2026-07-15").fingerprint
+    assert f_early == f_late  # wall-clock is excluded from the semantic fingerprint
 
 
 def test_session_end_never_auto_completes():

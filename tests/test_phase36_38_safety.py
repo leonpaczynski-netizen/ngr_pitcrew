@@ -1,4 +1,5 @@
 """Phase 36-38 — safety boundaries: pure, offline, read-only, no AI, no setup values, no mutation."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import ast
 import os
 
@@ -66,4 +67,4 @@ def test_brief_declares_not_a_setup_or_certification():
 
 def test_runtime_immutability_versions_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"

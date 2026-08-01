@@ -1,4 +1,5 @@
 """Phase 45-47 — safety: pure/offline modules, TTS-free strategy, no-AI, DB v27, Apply gate."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import ast
 
 import strategy.engineering_context_snapshot as m_snap
@@ -68,7 +69,7 @@ def test_builders_never_raise_on_garbage():
 
 def test_versions_v27():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
 
 
 def test_snapshot_capture_is_explicit_write_only():

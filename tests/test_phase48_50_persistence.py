@@ -20,12 +20,12 @@ def _tables(db):
 # --- migration -------------------------------------------------------------
 
 def test_db_version_is_28():
-    assert DB_VERSION == 28
+    assert DB_VERSION >= 28
 
 
 def test_fresh_db_creates_v28_tables(tmp_path):
     db = SessionDB(str(tmp_path / "fresh.db"))
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     t = _tables(db)
     assert {"event_preparation_cycles", "event_preparation_activities",
             "event_preparation_activity_sessions"} <= t
@@ -40,7 +40,7 @@ def test_migrate_from_legacy_v27(tmp_path):
     db._conn.execute("DROP TABLE IF EXISTS event_preparation_activity_sessions")
     db._conn.execute("PRAGMA user_version = 27"); db._conn.commit(); db.close()
     db2 = SessionDB(p)
-    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == 28
+    assert db2._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
     assert "event_preparation_cycles" in _tables(db2)
     db2.close()
 
@@ -49,7 +49,7 @@ def test_repeated_startup_idempotent(tmp_path):
     p = str(tmp_path / "repeat.db")
     for _ in range(3):
         db = SessionDB(p)
-        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == 28
+        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == DB_VERSION
         db.close()
 
 

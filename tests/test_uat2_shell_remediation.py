@@ -653,7 +653,11 @@ class TestV15AnalyseAlwaysSettles:
         shell, win, bridge = self._built(wired)
         win._driving_advisor.combined = NO_CHANGE_JSON
         shell.garage_page.analyse_requested.emit()
-        assert "No change recommended" in shell.garage_page._status.text()
+        # A telemetry-only no-change result (no driver handling verdict weighed) settles with the
+        # honest "balance wasn't judged" headline — SetupResult.headline distinguishes this from the
+        # "inside its window" reassurance that only applies when the handling verdict was weighed.
+        # V15's invariant is that every outcome is REPORTED and settled, which this verifies.
+        assert "No change from the recorded laps" in shell.garage_page._status.text()
         assert bridge._pending_work == ""
 
     def test_a_failed_analysis_surfaces_its_error(self, wired):

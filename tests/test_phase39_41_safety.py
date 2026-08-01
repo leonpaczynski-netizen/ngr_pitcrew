@@ -1,4 +1,5 @@
 """Phase 39-41 — safety: pure modules, no AI/keys/writes, frozen Apply gate, DB v26."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import ast
 
 import strategy.context_equivalence as m_eq
@@ -74,7 +75,7 @@ def test_run_plan_and_report_declare_read_only():
 
 def test_versions_unchanged():
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
 
 
 def test_no_ai_no_apply_in_new_session_db_entries():

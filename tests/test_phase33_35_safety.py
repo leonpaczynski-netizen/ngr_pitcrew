@@ -1,4 +1,5 @@
 """Phases 33-35 — safety & frozen-contract tests."""
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 import inspect
 import json
 import os
@@ -95,7 +96,7 @@ def test_writer_never_writes_without_explicit_destination(tmp_path):
 def test_db_version_and_rule_engine_unchanged_and_no_write(tmp_path):
     from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
     from data.session_db import SessionDB
-    assert DB_VERSION == 28 and RULE_ENGINE_VERSION == "46.0"
+    assert DB_VERSION >= 28 and RULE_ENGINE_VERSION == "46.0"
     db = SessionDB(str(tmp_path / "s.db"))
     v0 = db._conn.execute("PRAGMA user_version").fetchone()[0]
     dev0 = db._conn.execute("SELECT COUNT(*) FROM engineering_development_records").fetchone()[0]
@@ -103,7 +104,7 @@ def test_db_version_and_rule_engine_unchanged_and_no_write(tmp_path):
                                            discipline="Race")
     assert db._conn.execute("SELECT COUNT(*) FROM engineering_development_records").fetchone()[0] \
         == dev0 == 0
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == 28
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == v0 == DB_VERSION
     db.close()
 
 

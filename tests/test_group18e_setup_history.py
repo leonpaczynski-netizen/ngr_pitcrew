@@ -44,13 +44,20 @@ def _insert_session(db: SessionDB, car_id: int = 1, track: str = "Sardegna") -> 
 
 def _insert_lap(db: SessionDB, session_id: int, lap_time_ms: int, fuel_used: float = 1.5) -> None:
     with db._lock:
+        # lap_num must be distinct per lap: the lap-integrity dedupe migration added a
+        # UNIQUE(session_id, lap_num) index, so the original hard-coded lap_num=1 now
+        # collides on the second insert. Derive the next lap number for this session.
+        next_lap = db._conn.execute(
+            "SELECT COALESCE(MAX(lap_num), 0) + 1 FROM lap_records WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
         db._conn.execute(
             """INSERT INTO lap_records
                (session_id, car_id, track, lap_num, lap_time_ms, fuel_used,
                 lock_up_count, wheelspin_count, brake_consistency_m,
                 max_speed_kmh, avg_throttle_pct, avg_brake_pct, compound)
-               VALUES (?,1,'Sardegna',1,?,?,0,0,0.0,200.0,60.0,20.0,'')""",
-            (session_id, lap_time_ms, fuel_used),
+               VALUES (?,1,'Sardegna',?,?,?,0,0,0.0,200.0,60.0,20.0,'')""",
+            (session_id, next_lap, lap_time_ms, fuel_used),
         )
         db._conn.commit()
 

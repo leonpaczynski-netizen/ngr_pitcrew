@@ -42,6 +42,12 @@ def _make_stats():
     stats.max_lat_g = 0.0
     stats.off_track_count = 0
     stats.tyre_temp_avg = 0.0
+    # fields added to write_lap after this helper was written (schema v31 + per-corner temps):
+    stats.spin_count = 0
+    stats.tyre_temp_fl_avg = 0.0
+    stats.tyre_temp_fr_avg = 0.0
+    stats.tyre_temp_rl_avg = 0.0
+    stats.tyre_temp_rr_avg = 0.0
     stats.lock_up_positions = []
     stats.wheelspin_positions = []
     stats.oversteer_positions = []

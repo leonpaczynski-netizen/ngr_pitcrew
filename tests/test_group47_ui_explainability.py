@@ -126,10 +126,12 @@ class TestBackendWiring:
         )
         assert "format_learning_outcome_explanation" in src
 
-    def test_dashboard_records_group47_evidence(self):
-        import ui.dashboard as dash
-        src = inspect.getsource(dash)
-        # The scoring pass wires the Group 47 verification into record_learning_outcome.
-        assert "_verify_change_outcome" in src
+    def test_scoring_pass_records_group47_evidence(self):
+        # The scoring pass that wires the Group 47 verification into record_learning_outcome
+        # lives in the services layer (services.setup_learning), not ui.dashboard — the dashboard
+        # only imports the helper. Scrape the module that actually performs the wiring.
+        import services.setup_learning as sl
+        src = inspect.getsource(sl)
+        assert "verify_change_outcome" in src
         assert "outcome_kind=" in src
         assert "target_issue=" in src

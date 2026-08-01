@@ -4,6 +4,7 @@ Porsche 911 RSR '17 @ Fuji Full Course. Each scenario drives review_and_learn
 (review → learn → residual snapshot → multi-symptom plan) with persisted evidence.
 """
 from __future__ import annotations
+from strategy._setup_constants import DB_VERSION  # Program 3.1: canonical current version
 
 import dataclasses
 from pathlib import Path
