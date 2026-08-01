@@ -53,6 +53,7 @@ class TransferVerdict(str, enum.Enum):
     SUPPRESSED_BY_MORE_SPECIFIC = "suppressed_by_more_specific"
     EXCLUDED_LOW_CONFIDENCE = "excluded_low_confidence"
     EXCLUDED_CONTEXT_MISSING = "excluded_context_missing"
+    EXCLUDED_CONTEXT_MISMATCH = "excluded_context_mismatch"   # prior's exact context != target's
 
 
 @dataclass(frozen=True)
@@ -99,10 +100,20 @@ def evaluate_learning_transfer(
                                     f"confidence {conf:.2f} below threshold {confidence_threshold:.2f}")
 
         for key in _LAYER_REQUIRES.get(layer, ()):
-            if not tgt.get(key):
+            tv = tgt.get(key)
+            if not tv:
                 return LearningTransfer(
                     obs, layer, TransferVerdict.EXCLUDED_CONTEXT_MISSING, 0.0,
                     f"target lacks '{key}' required by the {layer} layer")
+            # When the prior names its exact context value for this key, the target must
+            # MATCH it — an exact-car/track learning must not transfer to a different
+            # car/track. When the prior omits the value, presence is sufficient.
+            pv = (prior or {}).get(key)
+            if pv not in (None, "") and str(pv) != str(tv):
+                return LearningTransfer(
+                    obs, layer, TransferVerdict.EXCLUDED_CONTEXT_MISMATCH, 0.0,
+                    f"prior's {key}={pv!r} != target's {tv!r} — exact-context learning "
+                    "does not transfer to a different context")
 
         if more_specific_contradiction:
             return LearningTransfer(

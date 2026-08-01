@@ -63,6 +63,21 @@ def test_layer_rank_order():
     assert layer_rank("unknown-layer") >= layer_rank("global_driver")
 
 
+def test_exact_context_value_mismatch_excludes_transfer():
+    # a car-specific prior for car 333 must NOT transfer to a different car (999)
+    prior = {"observation": "stable braking", "proposed_layer": "car_specific",
+             "confidence": 0.8, "car_id": 333}
+    assert evaluate_learning_transfer(prior, {"car_id": 999}).verdict == \
+        TransferVerdict.EXCLUDED_CONTEXT_MISMATCH
+    # ... but DOES apply when the car matches
+    assert evaluate_learning_transfer(prior, {"car_id": 333}).verdict == \
+        TransferVerdict.APPLIES_EXACT
+    # when the prior omits the value, presence is sufficient (back-compat)
+    prior_noval = {"observation": "x", "proposed_layer": "car_specific", "confidence": 0.8}
+    assert evaluate_learning_transfer(prior_noval, {"car_id": 999}).verdict == \
+        TransferVerdict.APPLIES_EXACT
+
+
 def test_never_raises_on_garbage():
     assert evaluate_learning_transfer(None, None) is not None          # type: ignore
     assert rank_priors_for_target(None, None) == []                    # type: ignore

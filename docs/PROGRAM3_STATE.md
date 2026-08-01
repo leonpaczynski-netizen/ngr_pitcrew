@@ -1,10 +1,11 @@
 # Program 3 — Canonical Event Spine: Implementation State
 
 **Status:** Phases A–I implemented and merged to `master`. **Phase J (certification)
-complete** — see `docs/PROGRAM3_PHASE_J_CERTIFICATION.md` (43 cert tests, 0 defects,
-GO for controlled live activation). K (golden end-to-end UAT) remains and requires the
-fully-assembled system + live GT7/PSVR2 testing. This document is the §32 completion
-record and closes gate #30 (documentation reflects actual implementation).
+complete** — `docs/PROGRAM3_PHASE_J_CERTIFICATION.md` (43 cert tests, 0 defects). **Phase K
+automated golden UAT complete** — `docs/PROGRAM3_PHASE_K_GOLDEN_UAT.md` (7 golden scenarios +
+restart/recovery, 8/8 green). The **only remaining work is the driver's controlled live
+GT7/PSVR2 activation + on-hardware UAT** (activation order + per-step checks in the Phase-K
+doc). This document is the §32 completion record and closes gate #30.
 
 **Baseline at start:** `master` `3c3446e`, DB v31, Rule-Engine 46.0.
 **Now:** DB **v40**, Rule-Engine 46.0. All Program-3 work landed via PRs #98, #99, #100
