@@ -2,7 +2,7 @@
 
 from strategy.qualifying_state_machine import (
     QualifyingPhase, QualifyingState, on_pit_exit, on_lap_completed, on_cooldown,
-    on_box, qualifying_cue,
+    on_box, qualifying_cue, qualifying_tyre_warmup,
 )
 
 
@@ -78,3 +78,44 @@ def test_box_returns_to_preparation():
 def test_never_raises_on_garbage():
     assert qualifying_cue(QualifyingState.initial(), practice_best_ms=None) is not None  # type: ignore
     assert on_lap_completed(QualifyingState.initial(), None).phase is not None  # type: ignore
+
+
+# --- out-lap tyre warm-up guidance (Live Activation 2 enhancement) --------------
+
+def _tyres(fl="cold", fr="cold", rl="cold", rr="cold"):
+    return {"fl": fl, "fr": fr, "rl": rl, "rr": rr}
+
+
+def test_out_lap_cue_prompts_optimal_window():
+    cue = qualifying_cue(QualifyingState(phase=QualifyingPhase.OUT_LAP))
+    low = cue.lower()
+    assert "optimal" in low and ("heat" in low or "temp" in low)
+
+
+def test_warmup_cold_building_ready_progression():
+    assert qualifying_tyre_warmup(_tyres())[0] == "cold"
+    assert qualifying_tyre_warmup(_tyres("warming", "warming", "optimal", "warming"))[0] == "building"
+    assert qualifying_tyre_warmup(_tyres("optimal", "optimal", "optimal", "optimal"))[0] == "ready"
+
+
+def test_warmup_ready_line_says_up_to_temp():
+    status, line = qualifying_tyre_warmup(_tyres("optimal", "optimal", "optimal", "optimal"))
+    assert status == "ready" and "up to temp" in line.lower()
+
+
+def test_warmup_overheating_backs_off():
+    status, line = qualifying_tyre_warmup(_tyres("hot", "optimal", "optimal", "optimal"))
+    assert status == "hot" and ("ease" in line.lower() or "cook" in line.lower())
+    # overheating on any corner wins even over an otherwise-ready set
+    assert qualifying_tyre_warmup(_tyres("overheating", "optimal", "optimal", "optimal"))[0] == "hot"
+
+
+def test_warmup_unknown_is_silent():
+    assert qualifying_tyre_warmup({}) == ("", "")
+    assert qualifying_tyre_warmup(None) == ("", "")
+
+
+def test_warmup_accepts_enum_values():
+    from telemetry.state import TyreState
+    states = {c: TyreState.OPTIMAL for c in ("fl", "fr", "rl", "rr")}
+    assert qualifying_tyre_warmup(states)[0] == "ready"

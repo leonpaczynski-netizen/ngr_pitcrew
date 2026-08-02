@@ -219,6 +219,46 @@ def test_record_finalises_the_qualifying_run(qapp, tmp_path):
         _dispose(shell, qapp)
 
 
+def test_qualifying_out_lap_tyre_warmup_updates(qapp, tmp_path):
+    """During the out-lap the engineer gives ongoing tyre-temp guidance, speaking only when the
+    warm-up status changes (cold → building → up-to-temp) — never every tick."""
+    db, live_sid = _seed_db(tmp_path)
+    spoken: list = []
+
+    class _Announcer:
+        def announce(self, text, priority, source):
+            spoken.append(text)
+
+    win = _FakeWindow(live_sid, car_id=333, connected=True, on_track=False)
+    win._announcer = _Announcer()
+    shell, b = _bridge(qapp, db, win)
+    try:
+        b._drive_live_qualifying()                       # preparation
+        # not on the out-lap yet → no tyre guidance
+        win._tracker.tyre_states = {c: "cold" for c in ("fl", "fr", "rl", "rr")}
+        assert b._speak_qualifying_tyre_warmup() == ""
+
+        win._tracker.live_on_track = True
+        b._drive_live_qualifying()                       # out-lap
+        # cold tyres → prompt to build heat
+        line = b._speak_qualifying_tyre_warmup()
+        assert "cold" in line.lower()
+        # same status again → silent (anti-chatter)
+        assert b._speak_qualifying_tyre_warmup() == ""
+
+        # temps come up → a fresh "coming up" update
+        win._tracker.tyre_states = {"fl": "warming", "fr": "warming", "rl": "optimal", "rr": "warming"}
+        assert b._speak_qualifying_tyre_warmup()
+
+        # into the window → "up to temp, this is your lap"
+        win._tracker.tyre_states = {c: "optimal" for c in ("fl", "fr", "rl", "rr")}
+        ready = b._speak_qualifying_tyre_warmup()
+        assert "up to temp" in ready.lower()
+        assert any("up to temp" in t.lower() for t in spoken)
+    finally:
+        _dispose(shell, qapp)
+
+
 def test_qualifying_engineer_speaks_on_phase_edges(qapp, tmp_path):
     db, live_sid = _seed_db(tmp_path)
     spoken: list = []

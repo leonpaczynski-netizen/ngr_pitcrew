@@ -96,6 +96,47 @@ def on_box(state: QualifyingState) -> QualifyingState:
 
 # --- cue (the engineer's line for the current phase) ---------------------------
 
+#: Overall out-lap tyre-warmup status → the engineer's line. Ordered by urgency: overheating first
+#: (back off), then ready (go), then still-cold, then building. "" = no readable temps yet.
+_WARMUP_LINES = {
+    "hot": "Careful — you're cooking the tyres. Ease off and let them settle before the lap.",
+    "ready": "Tyres are up to temp and in the window — this is your lap. Go.",
+    "cold": "Tyres are still cold — weave and work the brakes to get heat into them.",
+    "building": "Temps are coming up — keep working them, almost in the window.",
+}
+
+
+def qualifying_tyre_warmup(tyre_states) -> "tuple[str, str]":
+    """Summarise the four corner tyre states into an out-lap warm-up status + the engineer's line.
+
+    ``tyre_states`` is a mapping corner→state (a ``TyreState`` enum or its string value:
+    cold/warming/optimal/hot/overheating). Deterministic, offline, never raises. Returns
+    ``(status, line)`` where status is one of hot/ready/building/cold/'' (unknown → no line), so the
+    caller can speak only on a genuine status change (anti-chatter) as the out-lap brings temps up.
+    """
+    try:
+        vals = []
+        if isinstance(tyre_states, dict):
+            vals = list(tyre_states.values())
+        elif tyre_states is not None:
+            vals = list(tyre_states)
+        states = [str(getattr(v, "value", v) or "").strip().lower() for v in vals]
+        states = [s for s in states if s]
+        if not states:
+            return "", ""
+        if any(s in ("hot", "overheating") for s in states):
+            status = "hot"
+        elif all(s == "optimal" for s in states):
+            status = "ready"
+        elif any(s == "cold" for s in states):
+            status = "cold"
+        else:                                    # a mix of warming / optimal, none cold, none hot
+            status = "building"
+        return status, _WARMUP_LINES.get(status, "")
+    except Exception:
+        return "", ""
+
+
 def qualifying_cue(state: QualifyingState, *, practice_best_ms: int = 0) -> str:
     """The engineer's minimal, phase-appropriate line. Flying-lap feedback is
     deliberately terse (non-distracting); invalidation and viability are always
@@ -109,8 +150,8 @@ def qualifying_cue(state: QualifyingState, *, practice_best_ms: int = 0) -> str:
             return ("Focus — this is one lap. When you're ready, head out for your "
                     "out-lap." + ref)
         if p == QualifyingPhase.OUT_LAP:
-            return ("Out-lap — build tyre temperature and keep it clean. Your flying "
-                    "lap is next.")
+            return ("Out-lap — get heat into the tyres and aim for the optimal window before the "
+                    "line. Weave and work the brakes to build temperature; your flying lap is next.")
         if p == QualifyingPhase.FLYING_LAP:
             return "This is your lap — commit."  # minimal, non-distracting
         if p == QualifyingPhase.LAP_COMPLETE:

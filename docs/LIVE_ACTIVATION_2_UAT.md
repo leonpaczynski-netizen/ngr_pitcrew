@@ -53,7 +53,8 @@ or infer Qualifying from telemetry.
 | # | Step | Expected | Result |
 |---|------|----------|--------|
 | 1.1 | With telemetry live + the qualifying activity open, stay in the garage | One canonical Session Run ID appears; Recording State = recording; phase = preparation; engineer: "Focus — this is one lap…" | ☐ NOT TESTED |
-| 1.2 | Leave the pits (go on track) | Phase → out-lap; attempt = 1; engineer: "Out-lap — build tyre temperature…" | ☐ NOT TESTED |
+| 1.2 | Leave the pits (go on track) | Phase → out-lap; attempt = 1; engineer prompts to build heat into the tyres toward the optimal window | ☐ NOT TESTED |
+| 1.2a | Work the tyres up during the out-lap | Ongoing tyre-temp updates as the temps rise (cold → coming up → **up to temp**); spoken only on a status change, ending with "tyres are up to temp — this is your lap"; a warning if you overheat them | ☐ NOT TESTED |
 | 1.3 | Complete the out-lap (cross the line) | Phase → flying lap; engineer terse: "This is your lap — commit." | ☐ NOT TESTED |
 | 1.4 | Complete the flying lap | Phase → lap-complete; header shows **Best <time>**; if it's your fastest, engineer: "Personal best, <time>…" | ☐ NOT TESTED |
 | 1.5 | Cool down, then box | Phase → preparation | ☐ NOT TESTED |

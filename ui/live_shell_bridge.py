@@ -118,6 +118,9 @@ class LiveShellBridge(QObject):
         #: box edges; and the phase the qualifying engineer last spoke, for phase-edge anti-chatter.
         self._qual_on_track_prev = None
         self._qual_spoken_phase = ""
+        #: The overall out-lap tyre warm-up status last spoken (cold/building/ready/hot), so the
+        #: engineer updates only on a genuine change as temps rise — not every tick.
+        self._qual_tyre_status_prev = ""
         #: The authoritative live Race recording coordinator (Live Activation 3). None until an
         #: explicit, fully-resolved Race activation opens a canonical run against a coherent race
         #: plan; while set it is the source of truth for the live lap total, pit stops and race
@@ -1951,6 +1954,38 @@ class LiveShellBridge(QObject):
         except Exception:
             return ""
 
+    def _speak_qualifying_tyre_warmup(self) -> "object":
+        """Give ongoing OUT-LAP tyre-temperature guidance so the driver brings the tyres into the
+        optimal window before the flying lap. Reads the live per-corner tyre states from the tracker
+        and speaks only when the overall warm-up status CHANGES (cold → building → up-to-temp / too
+        hot), so it updates as the temps rise without chattering. Silent outside the out-lap and when
+        no live qualifying run owns the voice. Returns the spoken line (or "") for tests. Never
+        raises."""
+        try:
+            lq = getattr(self, "_live_qualifying", None)
+            if lq is None or not lq.is_recording or str(lq.phase or "") != "out_lap":
+                # Leaving the out-lap re-arms the warm-up, so the next attempt announces afresh.
+                self._qual_tyre_status_prev = ""
+                return ""
+            tracker = getattr(self._window, "_tracker", None)
+            states = getattr(tracker, "tyre_states", None) if tracker is not None else None
+            from strategy.qualifying_state_machine import qualifying_tyre_warmup
+            status, line = qualifying_tyre_warmup(states)
+            if not status or status == getattr(self, "_qual_tyre_status_prev", ""):
+                return ""
+            self._qual_tyre_status_prev = status
+            if not line:
+                return ""
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "announce"):
+                from voice.announcer import Priority
+                # "Up to temp — go" and "you're cooking them" are the actionable ones → HIGH.
+                pri = Priority.HIGH if status in ("ready", "hot") else Priority.MEDIUM
+                announcer.announce(line, pri, "qualifying_engineer")
+            return line
+        except Exception:
+            return ""
+
     def _live_last_best_lap_s(self) -> "tuple":
         """(last_lap_s, best_lap_s) from the live lap logger, or (None, None)."""
         try:
@@ -2204,6 +2239,10 @@ class LiveShellBridge(QObject):
         # edge (prep → out-lap → flying → PB/deleted → cooldown). Silent between edges; only
         # while an authoritative live qualifying run owns the voice.
         self._speak_qualifying_engineer()
+        # During the OUT-LAP, give ongoing tyre-temperature guidance so the driver brings the tyres
+        # into the optimal window before the flying lap — spoken only when the warm-up status
+        # changes (cold → building → up-to-temp), never every tick.
+        self._speak_qualifying_tyre_warmup()
 
     def _qualifying_tyre_state(self):
         """(target_code, current_code, target_name, current_name, is_wet) for the
