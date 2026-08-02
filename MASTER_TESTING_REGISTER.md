@@ -1,5 +1,27 @@
 # GT7 VR Dashboard — Master Testing Register
 
+> **PROGRAM 3 LIVE ACTIVATION 3 (2026-08-02, branch `live-activation-3-race-certification`).**
+> Third production telemetry seam — the event **Race** — through the canonical spine, plus the
+> controlled race-day certification foundation. **103 new offline tests** (7 files):
+> `test_live_race_activation.py` (26: race gate + config-id plan-coherence guard + race engineer
+> phase machine), `test_live_race_runtime.py` (15: `LiveRaceCoordinator` — gate/plan-mismatch/lap/
+> reconnect/complete), `test_live_race_driving.py` (12: bridge `_drive_live_race` end-to-end over a
+> real SessionDB + fake telemetry, incl. reconnect-no-duplicate-laps, PTT + cert build), `test_live_race_integrity.py`
+> (16: post-session integrity audit + bridge quarantine/promote gate), `test_race_ptt_answers.py`
+> (19: bounded PTT answers from canonical state, honest unknowns), `test_race_certification.py` (14:
+> stage state machine + verdict rules + additive store + export round-trip), `test_race_certification_ui.py`
+> (5: guided panel VM + emit + bridge flow incl. simulated-cannot-certify). Registered in
+> `tools/run_regression.py` (logic → `program3_spine`; QApplication files → `integration_sim`).
+> **Regression:** logic groups PASS (db_schema, setup_brain, eng_brain_p2 [205 files], program3_spine
+> incl. new race logic, voice_ptt, safety_invariants); UI live_pit_wall 17 + shell bridge/shell 53
+> (1 pre-existing quarantined red deselected). **Pre-existing reds proven IDENTICAL on base `607fdc6`:**
+> race_strategy 18 failed/7 errors + track_modelling 2 failed — all from the 2026-08-02 learned-data
+> wipe removing shipped reference-path/track-model assets (group57/58/59 + `reference_path_layout_identity`);
+> untouched by this phase. **Zero new failures.** `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged; no
+> migration; runtime data untouched. Hardware UAT `docs/LIVE_ACTIVATION_3_UAT.md` — all live items
+> NOT TESTED (physical gates cannot auto-pass; a Certified verdict is impossible while any mandatory
+> hardware gate is NOT_TESTED).
+
 > **PROGRAM 3 LIVE ACTIVATION 1 (2026-08-01, branch `live/program3-activation1-practice-recording-2026-08-01`).**
 > First production telemetry seam — Practice recording — through the canonical spine. **~40 new offline
 > tests** across `test_live_practice_activation.py` (22: gate/FSM/reconnect/lap/switch),

@@ -1,5 +1,21 @@
 # GT7 VR Dashboard — Project State
 
+> **PROGRAM 3 LIVE ACTIVATION 3 — Race recording + certification (2026-08-02, CODE-READY FOR
+> HARDWARE UAT).** Branch `live-activation-3-race-certification` (off clean `master @ 607fdc6`; LA1
+> #105 + LA2 #106 merged). Third production telemetry seam — the event **Race** — plus the guided
+> race-day certification foundation. Extends the shared LA1/LA2 activation spine: race activation gate
+> + race-plan config-id coherence guard + `LiveRaceCoordinator` (generic FSM + race engineer phase
+> machine driven from the EXISTING `RacePhase`/`PitPhase` vocabulary) + bridge `_drive_live_race` +
+> deterministic advisory strategy relay + bounded PTT from canonical state + post-session integrity
+> audit (quarantines an invalid session from learning promotion, never deletes) + guided certification
+> panel (physical gates pass only on MANUAL evidence; JSON+MD export). **103 new offline tests pass;
+> zero new regression failures** (the race_strategy/track_modelling reds are pre-existing, from the
+> 2026-08-02 data wipe, identical on base). `DB_VERSION=40` + RULE_ENGINE 46.0 unchanged; **no
+> migration; additive files only; runtime data untouched.** **Stopped at the hardware-UAT gate
+> (`docs/LIVE_ACTIVATION_3_UAT.md`); live cert NOT TESTED** — GT7/PSVR2/voice/PTT physical items must
+> be recorded by the driver; a Certified verdict is impossible while any mandatory hardware gate is
+> NOT_TESTED. _(LA1 note below stands.)_
+
 > **PROGRAM 3 LIVE ACTIVATION 1 — Practice recording (2026-08-01, IN PROGRESS).** Branch
 > `live/program3-activation1-practice-recording-2026-08-01` (off `master @ ffd6bcf`; Program 3.1
 > merged). First production telemetry seam through the canonical spine — **Practice only**.
