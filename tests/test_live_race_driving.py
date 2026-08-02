@@ -255,6 +255,33 @@ def test_race_ptt_answers_from_bridge(qapp, tmp_path):
         _dispose(shell, qapp)
 
 
+def test_build_race_certification_from_bridge(qapp, tmp_path):
+    from strategy.race_certification import CertVerdict
+    db, live_sid = _seed_db(tmp_path)
+    win = _FakeWindow(live_sid, car_id=333, connected=True, phase="racing")
+    win._config_path = str(tmp_path / "config.json")
+    shell, b = _bridge(qapp, db, win)
+    try:
+        b._drive_live_race()
+        report = b.build_race_certification("league-r3")
+        # versions + identity auto-captured; physical gates stay uncertified → NOT Certified.
+        payload = report.as_json_payload()
+        assert payload["evidence"]["db_version"] == 40
+        assert payload["evidence"]["rule_engine_version"] == "46.0"
+        assert report.verdict != CertVerdict.CERTIFIED
+        # environment/build auto-passed (non-physical, automated)
+        env = next(s for s in report.stages if s.spec.key == "environment_build")
+        assert env.effective_state.value == "pass"
+        # a physical gate is still not tested
+        race = next(s for s in report.stages if s.spec.key == "live_race")
+        assert race.effective_state.value == "not_tested"
+        # persist to the store beside config
+        jpath = b.save_race_certification("2026-08-02-league-r3", report)
+        assert jpath and "race_certifications" in jpath
+    finally:
+        _dispose(shell, qapp)
+
+
 def test_race_engineer_speaks_on_phase_edges(qapp, tmp_path):
     db, live_sid = _seed_db(tmp_path)
     spoken: list = []

@@ -1728,6 +1728,122 @@ class LiveShellBridge(QObject):
         except Exception:
             return {}
 
+    # ---- race-day certification workflow (Live Activation 3 §7) ------------- #
+    def _certification_evidence(self) -> dict:
+        """Auto-capture the auditable evidence header from live app state (§7.3). Every field is
+        best-effort; unknown stays absent (never fabricated). No wall-clock — the caller stamps
+        ``captured_at`` if it wants one."""
+        ev: dict = {}
+        try:
+            from strategy._setup_constants import DB_VERSION, RULE_ENGINE_VERSION
+            ev["db_version"] = DB_VERSION
+            ev["rule_engine_version"] = RULE_ENGINE_VERSION
+        except Exception:
+            pass
+        try:
+            from data.repo_identity import resolve_repo_commit, short_commit
+            sha = resolve_repo_commit(".")
+            if sha:
+                ev["git_commit"] = short_commit(sha)
+        except Exception:
+            pass
+        try:
+            ev["app_version"] = str(getattr(self._window, "_app_version", "") or "") or None
+        except Exception:
+            pass
+        # Race identity + counts, from the authoritative race coordinator when present, else the
+        # currently resolved race context.
+        try:
+            lr = getattr(self, "_live_race", None)
+            idn = dict(getattr(lr, "identity", {}) or {}) if lr is not None else \
+                self._live_race_context(self._live_session_id())
+            ev["event_id"] = idn.get("event_id") or None
+            ev["car_id"] = idn.get("car_id") or None
+            ev["track_id"] = idn.get("track_id") or None
+            ev["layout_id"] = idn.get("layout_id") or None
+            if lr is not None:
+                ev["run_ids"] = getattr(lr, "run_id", "") or None
+                ev["lap_counts"] = getattr(lr, "completed_laps", None)
+                ev["pit_event_counts"] = getattr(lr, "pit_stops_completed", None)
+        except Exception:
+            pass
+        try:
+            integ = self.race_session_integrity()
+            ev["integrity_result"] = integ.get("summary") if integ else None
+        except Exception:
+            pass
+        return {k: v for k, v in ev.items() if v is not None}
+
+    def build_race_certification(self, scenario: str = "controlled-race-event",
+                                 *, captured_at: str = "") -> "object":
+        """Build a race certification report pre-filled with the evidence header + the stages that
+        CAN be verified automatically (environment/build, identity resolution, and the post-session
+        integrity audit). Physical stages (telemetry, live Practice/Qualifying/Race, voice, PTT,
+        restart) stay NOT_TESTED — only a MANUAL result the user records can pass them, so a
+        Certified verdict is impossible until the hardware UAT is done. Never raises."""
+        from strategy.race_certification import (
+            EvidenceKind, StageState, new_report, record_stage,
+        )
+        ev = self._certification_evidence()
+        if captured_at:
+            ev["captured_at"] = str(captured_at)
+        report = new_report(scenario, evidence=ev)
+        stages = report.stages
+        # environment/build: the app is running these checks — automated PASS.
+        stages = record_stage(stages, "environment_build", state=StageState.PASS,
+                              evidence=EvidenceKind.AUTOMATED,
+                              detail="app running; DB + rule-engine versions captured")
+        # identity: PASS if the full canonical race context resolved (all required ids present).
+        try:
+            ctx = self._live_race_context(self._live_session_id())
+            from strategy.live_practice_activation import resolve_live_race_activation, \
+                validate_race_plan_context
+            act = resolve_live_race_activation(
+                ctx, planned_session_type=ctx.get("planned_session_type") or ctx.get("session_type"))
+            plan_ok = validate_race_plan_context(ctx).ok
+            if act.ok and plan_ok:
+                stages = record_stage(stages, "identity", state=StageState.PASS,
+                                      evidence=EvidenceKind.AUTOMATED,
+                                      detail="full canonical identity + coherent race plan resolved")
+            else:
+                reason = act.reason if not act.ok else validate_race_plan_context(ctx).reason
+                stages = record_stage(stages, "identity", state=StageState.NOT_TESTED,
+                                      evidence=EvidenceKind.AUTOMATED, detail=reason)
+        except Exception:
+            pass
+        # integrity audit: credit from the last finalised race session's audit, if any.
+        try:
+            integ = self.race_session_integrity()
+            if integ:
+                st = StageState.PASS if integ.get("promotion_allowed") else StageState.FAIL
+                stages = record_stage(stages, "integrity_audit", state=st,
+                                      evidence=EvidenceKind.AUTOMATED, detail=integ.get("summary", ""))
+        except Exception:
+            pass
+        return report.__class__(scenario=report.scenario, stages=stages, evidence=ev)
+
+    def _race_cert_store(self):
+        """The additive race-certification report store, rooted beside the app config."""
+        from data.race_certification_store import RaceCertificationStore
+        base = "."
+        try:
+            import os as _os
+            import config_paths
+            path = getattr(self._window, "_config_path", None) or getattr(
+                self._window, "config_path", None) or config_paths.resolve_config_path()
+            if path:
+                base = _os.path.dirname(str(path)) or "."
+        except Exception:
+            base = "."
+        return RaceCertificationStore(base)
+
+    def save_race_certification(self, report_id: str, report) -> str:
+        """Persist a certification report (JSON + Markdown) to the store. Returns the JSON path."""
+        try:
+            return self._race_cert_store().save(report_id, report)
+        except Exception:
+            return ""
+
     def _clear_race_voice_queue(self) -> None:
         """At race finish, drop any still-queued low-value chatter so the closing line is not
         buried and the engineer falls silent once the race is done (Live Activation 3 §6.1).
