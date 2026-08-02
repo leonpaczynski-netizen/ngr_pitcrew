@@ -141,6 +141,10 @@ class LiveShellBridge(QObject):
         self._last_race_integrity = None
         #: The last race PTT answer spoken, for the REPEAT command.
         self._last_race_ptt_answer = ""
+        #: The active race-day certification report (None until the user starts one). Held here so
+        #: the guided panel's manual results accumulate and the verdict recomputes each edit.
+        self._race_cert_report = None
+        self._wire_certification_panel()
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -1843,6 +1847,69 @@ class LiveShellBridge(QObject):
             return self._race_cert_store().save(report_id, report)
         except Exception:
             return ""
+
+    def _wire_certification_panel(self) -> None:
+        """Connect the guided certification panel's intents to the bridge. Defensive — the panel
+        only exists on the live page in the new shell. Never raises."""
+        try:
+            panel = getattr(getattr(self._shell, "live_page", None), "certification", None)
+            if panel is None:
+                return
+            panel.refresh_requested.connect(self.start_race_certification)
+            panel.stage_recorded.connect(self._on_cert_stage_recorded)
+            panel.export_requested.connect(self._on_cert_export)
+        except Exception:
+            pass
+
+    def start_race_certification(self) -> None:
+        """(Re)build the certification report from current app state (auto stages + evidence) and
+        show it in the guided panel. The user then records the physical results. Never raises."""
+        try:
+            self._race_cert_report = self.build_race_certification()
+            self._feed_certification()
+        except Exception:
+            pass
+
+    def _on_cert_stage_recorded(self, key: str, state: str, evidence: str) -> None:
+        """Apply a user-recorded manual result to the held report and refresh the panel + verdict."""
+        try:
+            if self._race_cert_report is None:
+                self._race_cert_report = self.build_race_certification()
+            from strategy.race_certification import record_stage
+            stages = record_stage(self._race_cert_report.stages, str(key),
+                                  state=str(state), evidence=str(evidence or "manual"))
+            self._race_cert_report = self._race_cert_report.__class__(
+                scenario=self._race_cert_report.scenario, stages=stages,
+                evidence=self._race_cert_report.evidence)
+            self._feed_certification()
+        except Exception:
+            pass
+
+    def _on_cert_export(self, fmt: str) -> None:
+        """Export the held report (JSON + Markdown are always written together to the store)."""
+        try:
+            if self._race_cert_report is None:
+                return
+            ev = self._race_cert_report.evidence if isinstance(
+                self._race_cert_report.evidence, dict) else {}
+            rid = "race-cert-" + (str(ev.get("event_id") or "event")) + "-" + (
+                str(ev.get("git_commit") or "build"))
+            path = self.save_race_certification(rid, self._race_cert_report)
+            self._run_status(f"Certification exported ({str(fmt)}): {path}" if path
+                             else "Could not export the certification report.")
+        except Exception:
+            pass
+
+    def _feed_certification(self) -> None:
+        """Push the held certification report to the guided panel (hides it when none). Never raises."""
+        try:
+            lp = getattr(self._shell, "live_page", None)
+            if lp is None or not hasattr(lp, "set_certification"):
+                return
+            lp.set_certification(
+                self._race_cert_report.as_json_payload() if self._race_cert_report is not None else {})
+        except Exception:
+            pass
 
     def _clear_race_voice_queue(self) -> None:
         """At race finish, drop any still-queued low-value chatter so the closing line is not
