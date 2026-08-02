@@ -236,6 +236,25 @@ def test_record_finalises_the_race_run(qapp, tmp_path):
         _dispose(shell, qapp)
 
 
+def test_race_ptt_answers_from_bridge(qapp, tmp_path):
+    db, live_sid = _seed_db(tmp_path)
+    win = _FakeWindow(live_sid, car_id=333, connected=True, phase="racing")
+    shell, b = _bridge(qapp, db, win)
+    try:
+        b._drive_live_race()
+        # A bounded intent returns an honest answer (may be "unknown" with the minimal fake tracker),
+        # never an exception; an unsupported intent is honestly refused.
+        ans = b.answer_race_ptt("fuel")
+        assert isinstance(ans, str) and ans
+        refusal = b.answer_race_ptt("what's the airspeed of a swallow")
+        assert "only answer" in refusal.lower()
+        # repeat echoes the previous answer
+        laps_ans = b.answer_race_ptt("laps_remaining")
+        assert b.answer_race_ptt("repeat") == laps_ans
+    finally:
+        _dispose(shell, qapp)
+
+
 def test_race_engineer_speaks_on_phase_edges(qapp, tmp_path):
     db, live_sid = _seed_db(tmp_path)
     spoken: list = []

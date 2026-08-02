@@ -139,6 +139,8 @@ class LiveShellBridge(QObject):
         #: A session that fails the audit is quarantined — finalised as history but not promoted to
         #: trusted event evidence (learning), never deleted.
         self._last_race_integrity = None
+        #: The last race PTT answer spoken, for the REPEAT command.
+        self._last_race_ptt_answer = ""
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -1671,6 +1673,51 @@ class LiveShellBridge(QObject):
             return audit_race_session(run=run or {}, laps=laps, expected=expected)
         except Exception:
             return None
+
+    def _build_canonical_race_state(self):
+        """Build the current canonical live race state from the tracker (same source as the pit
+        wall), or None. Read-only; never raises. Sourcing plan attrs from the window mirrors
+        _feed_live so the PTT answer reads exactly what the surface shows."""
+        try:
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is None or getattr(tracker, "race_type", None) is None:
+                return None
+            from strategy.canonical_live_race_state import build_canonical_live_race_state
+            return build_canonical_live_race_state(
+                tracker,
+                elapsed_s=getattr(self._window, "_live_race_elapsed_s", None),
+                telemetry_fresh=self._connected(),
+                fuel_per_lap_plan=getattr(self._window, "_live_fuel_plan", None),
+                lap_time_plan_s=getattr(self._window, "_live_pace_plan_s", None),
+                recent_fuel_burn_samples=getattr(self._window, "_live_fuel_samples", None),
+                recent_clean_lap_times_s=getattr(self._window, "_live_clean_lap_times", None),
+                pit_loss_s=getattr(self._window, "_live_pit_loss_s", None),
+                driver_reports=getattr(self._window, "_live_driver_reports", None))
+        except Exception:
+            return None
+
+    def answer_race_ptt(self, intent) -> str:
+        """Answer ONE bounded race PTT intent from the current canonical race state (Live Activation
+        3 §6.2). The answer is sourced from live state, never stale UI text; unknown evidence yields
+        an honest "I don't have that", and an unsupported intent an honest refusal. Never raises."""
+        try:
+            from strategy.race_ptt_answers import answer_race_query
+            state = self._build_canonical_race_state()
+            # Carry the authoritative best lap from the race coordinator, if one is recording.
+            lr = getattr(self, "_live_race", None)
+            if state is not None and lr is not None:
+                try:
+                    best_ms = int(getattr(lr, "best_lap_ms", 0) or 0)
+                    if best_ms > 0:
+                        object.__setattr__(state, "best_lap_s", best_ms / 1000.0)
+                except Exception:
+                    pass
+            text, _supported = answer_race_query(
+                intent, state, last_answer=getattr(self, "_last_race_ptt_answer", ""))
+            self._last_race_ptt_answer = text
+            return text
+        except Exception:
+            return ""
 
     def race_session_integrity(self) -> dict:
         """The last race session's integrity audit as a plain dict, for the certification workflow
