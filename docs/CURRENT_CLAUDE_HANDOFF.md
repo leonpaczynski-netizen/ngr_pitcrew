@@ -1,6 +1,58 @@
 # Current Claude Handoff
 
-## PROGRAM 3 LIVE ACTIVATION 1 — Practice recording + engineer (2026-08-01) — CURRENT TOP OF TREE
+## PROGRAM 3 LIVE ACTIVATION 3 — Race recording + certification (2026-08-02) — CURRENT TOP OF TREE
+
+Branch `live-activation-3-race-certification` off clean `master @ 607fdc6` (LA1 #105 + LA2 #106
+merged). **Third production telemetry seam through the canonical event spine — the event RACE —
+plus the controlled race-day certification foundation.** `DB_VERSION=40` + `RULE_ENGINE 46.0`
+unchanged; **no migration; additive files only; user runtime data untouched.**
+
+**Phase objective:** production-ready Live Race activation (consumes the existing canonical
+race-state path; deterministic, offline, advisory-only; correct event/car/track/layout/session/run
+identity; trustworthy fuel/pace/pit/strategy; phase-aware voice + bounded PTT; survives telemetry
+interruption + restart; persists against the correct canonical identities) + an auditable
+certification record for the manual GT7 + PSVR2 UAT. **End-state: code-ready for hardware UAT — NOT
+hardware-certified.**
+
+**Architectural decisions:** extend the shared Practice/Qualifying activation spine, never rebuild.
+Race has no second physical phase machine — the new race engineer machine consumes the EXISTING
+`telemetry.state.RacePhase` + `canonical_live_race_state.PitPhase` vocabulary via
+`events_from_race_signals`. Strategy stays in the existing deterministic replan pipeline
+(advisory-only; the engineer only relays it). Certification is a report, not a schema change
+(additive JSON+MD store beside config). Physical gates can only pass on MANUAL evidence.
+
+**Files added:** `strategy/race_engineer_state_machine.py`, `strategy/live_race_runtime.py`
+(`LiveRaceCoordinator`), `strategy/live_race_integrity.py`, `strategy/race_ptt_answers.py`,
+`strategy/race_certification.py`, `data/race_certification_store.py`,
+`ui/components/race_certification_panel.py`, and 7 test files.
+**Files changed:** `strategy/live_practice_activation.py` (`RACE` + `resolve_live_race_activation`
++ `validate_race_plan_context` incl. config_id axis), `ui/live_shell_bridge.py` (race context /
+`_start_live_race` / `_drive_live_race` / phase edges / diagnostics / engineer voice / integrity
+gate + finalised-session guard / PTT accessor / certification build+store+wiring),
+`ui/components/live_pit_wall.py` (embed cert panel + race diagnostics), `ui/components/live_diagnostics.py`
+(race title/headline), `tools/run_regression.py` (register the new tests).
+
+**Tests run (exact):** new race suite **103 passed** (7 files). Regression logic groups PASS:
+db_schema, setup_brain, eng_brain_p2 (205 files), program3_spine (incl. new race logic), voice_ptt,
+safety_invariants. UI: live_pit_wall 17, shell bridge + shell 53 (1 pre-existing quarantined red
+deselected). **Pre-existing reds, proven IDENTICAL on base `607fdc6`:** race_strategy 18 failed /
+7 errors + track_modelling 2 failed — all from the 2026-08-02 learned-data wipe removing shipped
+reference-path/track-model assets (group57/58/59 + `reference_path_layout_identity`); my changes
+touch none of that code. **Zero new failures.**
+
+**Unresolved defects:** none introduced. The pre-existing reference-path/track-model reds are a
+data-state artifact of the deliberate 2026-08-02 wipe (re-record the models to clear), not a code
+defect and out of scope here.
+
+**Physical UAT status: NOT TESTED.** GT7, PSVR2, physical voice/TTS and physical PTT/mic remain
+untested until the driver records them. Full manual procedure: `docs/LIVE_ACTIVATION_3_UAT.md`.
+
+**Next action:** run the controlled GT7 + PSVR2 event in `docs/LIVE_ACTIVATION_3_UAT.md`, record
+each physical stage in the Race-Day Certification panel, export the JSON+MD report, and decide the
+verdict. Do NOT label the system race-day certified while any mandatory hardware gate is NOT_TESTED.
+GO for beginning physical certification. _(LA1/LA2 sections below stand.)_
+
+## PROGRAM 3 LIVE ACTIVATION 1 — Practice recording + engineer (2026-08-01)
 Branch `live/program3-activation1-practice-recording-2026-08-01` off `master @ ffd6bcf` (Program 3.1
 merged via PR #104). **First production telemetry seam through the canonical event spine — Practice
 ONLY.** Delivered + tested offline: authoritative activation gate (full canonical context + planned

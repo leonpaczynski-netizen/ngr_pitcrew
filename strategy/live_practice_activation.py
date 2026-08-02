@@ -59,6 +59,7 @@ OPTIONAL_CONTEXT: Tuple[str, ...] = (
 
 PRACTICE = "practice"
 QUALIFYING = "qualifying"
+RACE = "race"
 
 
 class ActivationVerdict(str, Enum):
@@ -135,6 +136,91 @@ def resolve_live_qualifying_activation(
     """Authoritative gate for a live QUALIFYING recording (see resolve_live_activation)."""
     return resolve_live_activation(
         context, planned_session_type=planned_session_type, required_type=QUALIFYING)
+
+
+def resolve_live_race_activation(
+    context: Optional[Mapping], *, planned_session_type: str,
+) -> LivePracticeActivation:
+    """Authoritative gate for a live RACE recording (see resolve_live_activation).
+
+    Race is the highest-stakes discipline: the same canonical identity requirement applies,
+    and — as with Practice/Qualifying — the planned session type is authoritative and never
+    inferred from GT7 (which auto-classifies any multi-car lobby as a race). Race-specific
+    plan/identity coherence (the race plan must belong to THIS event/car/track/layout) is a
+    SEPARATE guard — see ``validate_race_plan_context`` — so activation blocks with a distinct,
+    honest reason for a mis-scoped plan rather than a vague "incomplete context"."""
+    return resolve_live_activation(
+        context, planned_session_type=planned_session_type, required_type=RACE)
+
+
+# --------------------------------------------------------------------------- #
+# A2. Race-plan / identity coherence guard (Live Activation 3)
+# --------------------------------------------------------------------------- #
+
+class RacePlanContextVerdict(str, Enum):
+    OK = "ok"
+    MISSING_PLAN = "missing_plan"
+    MISSING_IDENTITY = "missing_identity"
+    MISMATCH = "mismatch"
+
+
+@dataclass(frozen=True)
+class RacePlanContextDecision:
+    verdict: RacePlanContextVerdict
+    reason: str = ""
+    mismatched: Tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.verdict == RacePlanContextVerdict.OK
+
+
+#: Identity axes a race plan is bound to. A plan authored for another event/car/track/layout
+#: must never drive a live race — that is how stale Practice/Qualifying work or a plan copied
+#: from another weekend would silently corrupt the persisted race.
+_RACE_PLAN_IDENTITY_AXES: Tuple[Tuple[str, str, str], ...] = (
+    ("event_id", "plan_event_id", "event"),
+    ("car_id", "plan_car_id", "car"),
+    ("track_id", "plan_track_id", "track"),
+    ("layout_id", "plan_layout_id", "layout"),
+    # config_id = sha256("{track}|{car}|{length_key}") — the single identity a persisted race plan
+    # reliably carries, so it is the strongest runtime coherence check (a plan copied from another
+    # car/track weekend differs here even when the event/layout ids are absent from the plan).
+    ("config_id", "plan_config_id", "car/track configuration"),
+)
+
+
+def validate_race_plan_context(context: Optional[Mapping]) -> RacePlanContextDecision:
+    """Confirm the active race plan belongs to the live race's own event/car/track/layout.
+
+    Deterministic, offline, never raises. The ``context`` carries both the live identity
+    (``event_id``/``car_id``/``track_id``/``layout_id``) and the plan's own bound identity
+    (``plan_event_id`` …). A plan with a resolved id that disagrees on ANY axis is a MISMATCH
+    (the exact axes are named). Unknown-vs-known is treated conservatively: a plan axis that is
+    absent is not a contradiction (the plan is simply unscoped there), but a live identity axis
+    that is absent while the plan asserts one is a MISMATCH — unknown live identity must never be
+    silently accepted as matching. A missing ``race_plan_id`` is reported distinctly so the UI can
+    say "no race plan" rather than "mismatch"."""
+    ctx = context if isinstance(context, Mapping) else {}
+    if not _present(ctx.get("race_plan_id")):
+        return RacePlanContextDecision(
+            RacePlanContextVerdict.MISSING_PLAN,
+            "No active race plan is bound to this race — approve a race plan for this event first.")
+    mismatched: list = []
+    for live_key, plan_key, label in _RACE_PLAN_IDENTITY_AXES:
+        plan_val = ctx.get(plan_key)
+        if not _present(plan_val):
+            continue  # the plan is not scoped to this axis — not a contradiction
+        live_val = ctx.get(live_key)
+        if not _present(live_val) or _norm(live_val) != _norm(plan_val):
+            mismatched.append(label)
+    if mismatched:
+        return RacePlanContextDecision(
+            RacePlanContextVerdict.MISMATCH,
+            "The active race plan was built for a different "
+            + "/".join(mismatched) + " — it cannot drive this race.",
+            mismatched=tuple(mismatched))
+    return RacePlanContextDecision(RacePlanContextVerdict.OK, "Race plan matches this event context.")
 
 
 # --------------------------------------------------------------------------- #

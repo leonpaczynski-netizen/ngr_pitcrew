@@ -139,6 +139,12 @@ class LivePitWall(QWidget):
         from ui.components.live_diagnostics import LivePracticeDiagnosticsPanel
         self._diag = LivePracticeDiagnosticsPanel()
         lay.addWidget(self._diag)
+        # Live Activation 3 (§7-8): the guided race-day certification workflow — hidden until a
+        # certification is started, so it never clutters the normal driving surface.
+        from ui.components.race_certification_panel import RaceCertificationPanel
+        self.certification = RaceCertificationPanel()
+        self.certification.setVisible(False)
+        lay.addWidget(self.certification)
         lay.addStretch(1)
 
         self.set_state(LivePitWallVM())
@@ -147,6 +153,16 @@ class LivePitWall(QWidget):
         """Forward the authoritative live-Practice diagnostics to the panel. Never raises."""
         try:
             self._diag.set_diagnostics(d)
+        except Exception:
+            pass
+
+    def set_certification(self, payload) -> None:
+        """Show/refresh the race-day certification workflow (empty/None hides it). Never raises."""
+        try:
+            has = bool(payload)
+            self.certification.setVisible(has)
+            if has:
+                self.certification.set_report(payload)
         except Exception:
             pass
 

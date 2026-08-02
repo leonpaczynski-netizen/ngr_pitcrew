@@ -164,9 +164,12 @@ class LivePracticeDiagnosticsPanel(QFrame):
             tone, glyph = _STATE_TONE.get(state, ("neutral", "○"))
             self._state_pill.set_status(state.replace("_", " ").upper(), tone, glyph)
 
-            # Session-type-aware header title (Live Activation 1 = Practice, 2 = Qualifying).
-            is_qual = str(d.get("session_type") or "").lower() == "qualifying"
-            self._diag_title = "LIVE QUALIFYING DIAGNOSTICS" if is_qual else "LIVE PRACTICE DIAGNOSTICS"
+            # Session-type-aware header title (LA1 = Practice, LA2 = Qualifying, LA3 = Race).
+            stype = str(d.get("session_type") or "").lower()
+            self._diag_title = {
+                "qualifying": "LIVE QUALIFYING DIAGNOSTICS",
+                "race": "LIVE RACE DIAGNOSTICS",
+            }.get(stype, "LIVE PRACTICE DIAGNOSTICS")
             self._toggle.setText(("▾" if self._toggle.isChecked() else "▸") + f"  {self._diag_title}")
 
             if active:
