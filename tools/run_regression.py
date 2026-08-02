@@ -128,7 +128,10 @@ GROUPS: list[dict] = [
     {"name": "program3_spine", "isolated": False, "patterns": [
         "tests/test_program3_*.py", "tests/test_learning_*.py",
         "tests/test_event_debrief*.py", "tests/test_engineer_*.py",
-        "tests/test_qualifying*.py", "tests/test_practice_brief*.py"]},
+        "tests/test_qualifying*.py", "tests/test_practice_brief*.py",
+        # Live Activation 3 (Race) — logic files (UI files are auto-excluded and run isolated).
+        "tests/test_live_race_*.py", "tests/test_race_ptt_answers.py",
+        "tests/test_race_certification.py"]},
     {"name": "track_modelling", "isolated": False, "patterns": [
         "tests/test_track_model*.py", "tests/test_track_library*.py",
         "tests/test_station_map*.py", "tests/test_curvature*.py",
@@ -162,7 +165,10 @@ GROUPS: list[dict] = [
     {"name": "integration_sim", "isolated": True, "patterns": [
         "tests/test_full_event_simulation.py", "tests/test_home_*.py",
         "tests/test_live_race_engineer_*.py", "tests/test_uat_running_setup.py",
-        "tests/test_uat_track_reapproval_pitloss.py"]},
+        "tests/test_uat_track_reapproval_pitloss.py",
+        # Live Activation 3 (Race) — QApplication-constructing files (run one-per-subprocess).
+        "tests/test_live_race_driving.py", "tests/test_live_race_integrity.py",
+        "tests/test_race_certification_ui.py"]},
 ]
 
 PYTEST_BASE = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "--tb=line"]
