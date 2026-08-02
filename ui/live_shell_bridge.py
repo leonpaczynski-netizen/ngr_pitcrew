@@ -131,6 +131,14 @@ class LiveShellBridge(QObject):
         self._race_prev_race_phase = None
         self._race_prev_pit_phase = None
         self._race_spoken_phase = ""
+        #: A finalised race telemetry session must never silently re-open as a new authoritative run
+        #: on the next refresh (the race activity may still be open + telemetry still live). This
+        #: records the just-finalised session so the driving loop does not re-activate it.
+        self._live_race_finalised_session_id = 0
+        #: The last finalised race session's post-session integrity audit (Live Activation 3 §5.2).
+        #: A session that fails the audit is quarantined — finalised as history but not promoted to
+        #: trusted event evidence (learning), never deleted.
+        self._last_race_integrity = None
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -1497,8 +1505,10 @@ class LiveShellBridge(QObject):
             if lr is None or lr.state in (LiveRunState.COMPLETED, LiveRunState.ABANDONED):
                 run = self._runs.open_run()
                 atype = str((run or {}).get("activity_type") or "").lower()
+                # Never re-open a session we already finalised (recorded or quarantined) as a new run.
                 if (connected and live_sid > 0 and run is not None
-                        and atype in self._RACE_ACTIVITY_TYPES):
+                        and atype in self._RACE_ACTIVITY_TYPES
+                        and live_sid != int(getattr(self, "_live_race_finalised_session_id", 0))):
                     self._start_live_race(live_sid)
                 return
 
@@ -1637,6 +1647,40 @@ class LiveShellBridge(QObject):
         except Exception:
             return ""
 
+    def _audit_race_session(self, lr, sid):
+        """Run the post-session race integrity audit for the coordinator ``lr`` over session ``sid``.
+        Read-only; returns a RaceSessionIntegrityReport (or None on failure). Never raises."""
+        try:
+            from strategy.live_race_integrity import audit_race_session
+            run = None
+            try:
+                run = self._db.get_run_for_session(int(sid)) if self._db else None
+            except Exception:
+                run = None
+            laps = []
+            try:
+                laps = self._db.get_session_laps(int(sid)) or [] if self._db else []
+            except Exception:
+                laps = []
+            idn = dict(getattr(lr, "identity", {}) or {})
+            expected = {
+                "event_id": idn.get("event_id", ""), "car_id": idn.get("car_id", ""),
+                "track_id": idn.get("track_id", ""), "layout_id": idn.get("track_model_version_id", "")
+                or idn.get("layout_id", ""), "session_type": "race",
+            }
+            return audit_race_session(run=run or {}, laps=laps, expected=expected)
+        except Exception:
+            return None
+
+    def race_session_integrity(self) -> dict:
+        """The last race session's integrity audit as a plain dict, for the certification workflow
+        and the diagnostics inspection area. Empty when no race run has been finalised. Never raises."""
+        try:
+            report = getattr(self, "_last_race_integrity", None)
+            return report.as_payload() if report is not None else {}
+        except Exception:
+            return {}
+
     def _clear_race_voice_queue(self) -> None:
         """At race finish, drop any still-queued low-value chatter so the closing line is not
         buried and the engineer falls silent once the race is done (Live Activation 3 §6.1).
@@ -1762,11 +1806,24 @@ class LiveShellBridge(QObject):
             pass
         # Same finalisation for an authoritative live Race run (Live Activation 3): COMPLETING →
         # COMPLETED closes the run + reaches the terminal FINISHED phase (queued voice is cleared).
+        # Then a post-session integrity audit gates promotion to trusted event evidence — a session
+        # with a blocker (invalid/placeholder identity, wrong session type, duplicate/orphan laps,
+        # contradictory car/track) is QUARANTINED: finalised as history but not promoted, never
+        # deleted or rewritten, with the exact reason surfaced for review.
         try:
             lr = getattr(self, "_live_race", None)
             if lr is not None and int(getattr(self, "_live_race_session_id", 0)) == int(sid or 0):
+                report = self._audit_race_session(lr, int(sid or 0))
+                self._last_race_integrity = report
                 lr.complete()
+                self._live_race_finalised_session_id = int(sid or 0)
                 self._clear_race_voice_queue()
+                if report is not None and not report.promotion_allowed:
+                    self._run_status("Race held for review — not promoted to event evidence. "
+                                     + report.summary)
+                    self._feed_run_review()
+                    self.refresh()
+                    return
         except Exception:
             pass
         decision = self._runs.record_run(sid)
