@@ -118,6 +118,19 @@ class LiveShellBridge(QObject):
         #: box edges; and the phase the qualifying engineer last spoke, for phase-edge anti-chatter.
         self._qual_on_track_prev = None
         self._qual_spoken_phase = ""
+        #: The authoritative live Race recording coordinator (Live Activation 3). None until an
+        #: explicit, fully-resolved Race activation opens a canonical run against a coherent race
+        #: plan; while set it is the source of truth for the live lap total, pit stops and race
+        #: phase. It reuses the SAME generic lifecycle as Practice/Qualifying, composed with the
+        #: race engineer phase machine.
+        self._live_race = None
+        self._live_race_session_id = 0
+        self._live_race_block = ""
+        #: Previous canonical race/pit phase signals (for detecting race-phase edges), and the race
+        #: phase the race engineer last spoke, for phase-edge anti-chatter.
+        self._race_prev_race_phase = None
+        self._race_prev_pit_phase = None
+        self._race_spoken_phase = ""
         # Event create/edit/activate, headless — no classic Event Planner involved.
         from services.event_setup import EventSetupService
         self._events = EventSetupService(
@@ -643,6 +656,7 @@ class LiveShellBridge(QObject):
         # freshly-reconciled state this tick.
         self._drive_live_practice()
         self._drive_live_qualifying()
+        self._drive_live_race()
         self._feed_garage()
         self._feed_shift_strategy()
         self._feed_practice()
@@ -1341,6 +1355,302 @@ class LiveShellBridge(QObject):
             head += f" · attempt {attempt}"
         return head
 
+    # ---- telemetry → coordinator driving (Live Activation 3 — Race) ---------- #
+    #: The official (climax) RACE activity. Symmetric with the practice/qualifying activity sets:
+    #: the open run's activity type decides the session, so the three coordinators are mutually
+    #: exclusive (one open run has exactly one activity type). The race-development activities
+    #: (long_race_run / strategy_validation_run) stay PRACTICE recordings — they are practice, not
+    #: the event race — so only the "race" activity drives an authoritative Race recording.
+    _RACE_ACTIVITY_TYPES = frozenset({"race"})
+
+    def _live_race_context(self, live_session_id) -> dict:
+        """Resolve the full canonical context for the current live Race recording, ADOPTING the open
+        telemetry session. The planned session type comes from the persisted RACE activity — never
+        from GT7 (which auto-classifies any multi-car lobby as a race). Missing required fields stay
+        empty so the gate blocks honestly, and the active race plan's identity is carried so the
+        race-plan coherence guard can reject a plan built for another event/car/track."""
+        ctx = {"live_session_id": int(live_session_id or 0)}
+        try:
+            run = self._runs.open_run() or {}
+            atype = str(run.get("activity_type") or "").lower()
+            ctx["planned_session_type"] = "Race" if atype in self._RACE_ACTIVITY_TYPES else ""
+            ctx["session_plan_id"] = str(run.get("activity_id") or "")
+            cid = self._runs.active_cycle_id()
+            ctx["event_programme_id"] = cid
+            cyc = self._db.get_preparation_cycle(cid) if (self._db and cid) else None
+            event_id = int((cyc or {}).get("event_id") or 0)
+            ctx["event_id"] = str(event_id or "")
+            car_id = 0
+            try:
+                if hasattr(self._window, "_current_car_id"):
+                    car_id = int(self._window._current_car_id() or 0)
+            except Exception:
+                car_id = 0
+            ctx["car_id"] = str(car_id or "")
+            try:
+                specs = self._db.get_car_spec_revisions(car_id, event_id) or []
+                ctx["car_spec_revision_id"] = str((specs[-1].get("spec_revision_id") if specs else "") or "")
+            except Exception:
+                ctx["car_spec_revision_id"] = ""
+            try:
+                dpv = self._db.get_current_driver_profile_version() or {}
+                ctx["driver_profile_version_id"] = str(dpv.get("version_id") or "")
+            except Exception:
+                ctx["driver_profile_version_id"] = ""
+            ecx = {}
+            try:
+                ecx = self._db.get_engineering_context_for_source("session", int(live_session_id)) or {}
+                ctx["context_revision_id"] = str(ecx.get("fingerprint") or "")
+            except Exception:
+                ctx["context_revision_id"] = ""
+            # Live identity axes the race-plan guard compares against.
+            tloc = str(ecx.get("track_location_id") or "")
+            lay = str(ecx.get("layout_id") or "")
+            ctx["track_id"] = tloc
+            ctx["layout_id"] = lay
+            ctx["config_id"] = str(ecx.get("config_id") or "")
+            try:
+                tmv = self._db.get_approved_track_model_version(tloc, lay)
+                ctx["track_model_version_id"] = str((tmv or {}).get("version_id") or "")
+            except Exception:
+                ctx["track_model_version_id"] = ""
+            try:
+                # Race always runs on the race setup sheet.
+                ctx["setup_snapshot_id"] = str(self._setups.applied_setup_snapshot_id("race") or "")
+            except Exception:
+                ctx["setup_snapshot_id"] = ""
+            # The active race plan + its own bound identity (for the coherence guard). A plan that
+            # records no identity of its own is treated as unscoped — the guard cannot prove a
+            # mismatch and does not block; a plan whose config/car/track disagrees is rejected.
+            try:
+                plan = self._approved_strategy() or {}
+                ctx["race_plan_id"] = str(plan.get("candidate_id") or "")
+                ctx["race_plan_revision_id"] = str(plan.get("revision_id") or plan.get("approved_at") or "")
+                ctx["plan_event_id"] = str(plan.get("event_id") or "")
+                ctx["plan_car_id"] = str(plan.get("car_id") or "")
+                ctx["plan_track_id"] = str(plan.get("track_id") or plan.get("track_location_id") or "")
+                ctx["plan_layout_id"] = str(plan.get("layout_id") or "")
+                ctx["plan_config_id"] = str(plan.get("config_id") or "")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return ctx
+
+    def _start_live_race(self, live_session_id):
+        """Activate an authoritative Race run adopting the live telemetry session. On a blocked gate
+        (wrong session, incomplete context, or a mis-scoped race plan) nothing is created and the
+        exact reason is stored for the UI."""
+        try:
+            from strategy.live_race_runtime import LiveRaceCoordinator
+            from ui.live_practice_db_port import SessionDbLivePracticePort
+            sid = int(live_session_id or 0)
+            port = SessionDbLivePracticePort(self._db, lambda: self._live_race_context(sid))
+            co = LiveRaceCoordinator(port)
+            act = co.activate()
+            if not act.ok:
+                self._live_race = None
+                self._live_race_block = act.reason
+                return act
+            self._live_race = co
+            self._live_race_session_id = sid
+            self._live_race_block = ""
+            self._race_prev_race_phase = None
+            self._race_prev_pit_phase = None
+            self._race_spoken_phase = ""
+            co.telemetry_connected()
+            return act
+        except Exception:
+            return None
+
+    def _feed_new_laps_to_race_coordinator(self, live_session_id) -> None:
+        """Feed DB laps the race coordinator has not seen yet (lap_num > last_finalised) through the
+        gate + race phase machine, so the authoritative lap/pit totals track reality. Never raises."""
+        try:
+            lr = self._live_race
+            if lr is None or self._db is None:
+                return
+            laps = self._db.get_session_laps(int(live_session_id)) or []
+            for row in sorted(laps, key=lambda r: int(r.get("lap_num") or 0)):
+                ln = int(row.get("lap_num") or 0)
+                if ln <= int(lr.last_finalised_lap):
+                    continue
+                lr.on_lap(session_run_id=lr.run_id, event_id=lr.event_id, lap_number=ln,
+                          lap_time_ms=int(row.get("lap_time_ms") or 0),
+                          is_out_lap=bool(row.get("is_out_lap")),
+                          is_pit_lap=bool(row.get("is_pit_lap")), telemetry_complete=True)
+        except Exception:
+            pass
+
+    def _drive_live_race(self) -> None:
+        """Reconcile the authoritative Race coordinator with live telemetry each refresh. Additive +
+        defensive: acts only while a RACE activity + telemetry are present. The app decides the
+        session (the planned race activity); telemetry supplies the connect, the race/pit phase edges
+        and the completed laps — never the session type."""
+        try:
+            from strategy.live_practice_activation import LiveRunState
+            lr = getattr(self, "_live_race", None)
+            connected = self._connected()
+            live_sid = self._live_session_id()
+
+            # (1) Activation — a race activity is open, telemetry is live, context resolves.
+            if lr is None or lr.state in (LiveRunState.COMPLETED, LiveRunState.ABANDONED):
+                run = self._runs.open_run()
+                atype = str((run or {}).get("activity_type") or "").lower()
+                if (connected and live_sid > 0 and run is not None
+                        and atype in self._RACE_ACTIVITY_TYPES):
+                    self._start_live_race(live_sid)
+                return
+
+            # Only reconcile a run WE started from telemetry (tracked adopted-session id).
+            if int(getattr(self, "_live_race_session_id", 0)) <= 0:
+                return
+
+            # (2) Connection transitions (identical to Practice/Qualifying).
+            if not connected and lr.state == LiveRunState.RECORDING:
+                lr.telemetry_lost()
+            elif connected and lr.state == LiveRunState.STARTING:
+                lr.telemetry_connected()
+            elif connected and lr.state == LiveRunState.DISCONNECTED:
+                if live_sid == int(getattr(self, "_live_race_session_id", 0)):
+                    lr.telemetry_connected()
+
+            # (3) Race/pit phase edges + newly completed laps, only while actively recording.
+            if lr.state == LiveRunState.RECORDING:
+                self._drive_race_phase_edges(lr)
+                self._feed_new_laps_to_race_coordinator(
+                    int(getattr(self, "_live_race_session_id", live_sid)))
+        except Exception:
+            pass
+
+    def _drive_race_phase_edges(self, lr) -> None:
+        """Translate the canonical race-state signals (RacePhase + PitPhase from the tracker) into
+        the race engineer machine's events. Edge-based: an unchanged signal yields no event, so the
+        machine only advances on a genuine transition. Never raises."""
+        try:
+            from strategy.race_engineer_state_machine import events_from_race_signals
+            tracker = getattr(self._window, "_tracker", None)
+            if tracker is None:
+                return
+            rp = getattr(getattr(tracker, "phase", None), "value", None) or getattr(tracker, "phase", None)
+            pit = None
+            try:
+                pit = getattr(getattr(tracker, "pit_phase", None), "value", None)
+            except Exception:
+                pit = None
+            events = events_from_race_signals(
+                self._race_prev_race_phase, rp,
+                prev_pit_phase=self._race_prev_pit_phase, pit_phase=pit)
+            for ev in events:
+                lr.apply_race_event(ev)
+            self._race_prev_race_phase = rp
+            self._race_prev_pit_phase = pit
+        except Exception:
+            pass
+
+    def live_race_diagnostics(self) -> dict:
+        """Authoritative live-Race identity + recording state for the diagnostics header (Live
+        Activation 3). Session-type-aware: it carries the race phase, completed laps, pit stops and
+        running best lap so the shared panel renders a race-appropriate summary. Never raises."""
+        lr = getattr(self, "_live_race", None)
+        if lr is None:
+            return {"active": False, "recording_state": "not_started"}
+        try:
+            idn = dict(getattr(lr, "identity", {}) or {})
+            state = getattr(lr, "state", None)
+            best_ms = int(getattr(lr, "best_lap_ms", 0) or 0)
+            completed = int(getattr(lr, "completed_laps", 0) or 0)
+            stops = int(getattr(lr, "pit_stops_completed", 0) or 0)
+            return {
+                "active": True,
+                "recording_state": state.value if state is not None else "",
+                "session_run_id": getattr(lr, "run_id", ""),
+                "stint_id": getattr(lr, "stint_id", ""),
+                "connected": bool(lr.is_recording),
+                "session_type": idn.get("session_type", "race") or "race",
+                "best_lap_ms": best_ms,
+                "completed_laps": completed,
+                "pit_stops_completed": stops,
+                "race_phase": getattr(lr, "phase", ""),
+                "headline": self._race_diag_headline(best_ms, getattr(lr, "phase", ""), completed, stops),
+                "event_id": idn.get("event_id", ""),
+                "event_programme_id": idn.get("event_programme_id", ""),
+                "session_plan_id": idn.get("session_plan_id", ""),
+                "car_id": idn.get("car_id", ""),
+                "car_spec_revision_id": idn.get("car_spec_revision_id", ""),
+                "setup_snapshot_id": idn.get("setup_snapshot_id", ""),
+                "context_revision_id": idn.get("context_revision_id", ""),
+                "driver_profile_version_id": idn.get("driver_profile_version_id", ""),
+                "track_model_version_id": idn.get("track_model_version_id", ""),
+                "race_plan_id": idn.get("race_plan_id", ""),
+                "race_plan_revision_id": idn.get("race_plan_revision_id", ""),
+            }
+        except Exception:
+            return {"active": False, "recording_state": "not_started"}
+
+    @staticmethod
+    def _race_diag_headline(best_ms: int, phase: str, completed: int, stops: int) -> str:
+        """Driver-facing one-line race summary: lap total + phase + best lap + stops."""
+        best = f"{best_ms / 1000.0:.3f}" if best_ms and best_ms > 0 else "—"
+        ph = str(phase or "").replace("_", " ")
+        head = f"Lap {completed}"
+        if ph:
+            head += f" · {ph}"
+        head += f" · best {best}"
+        if stops:
+            head += f" · {stops} stop{'s' if stops != 1 else ''}"
+        return head
+
+    def _speak_race_engineer(self) -> "object":
+        """Speak the race engineer's phase-appropriate cue on each phase EDGE (Live Activation 3 §6).
+        Anti-chatter: the line is spoken once when the race phase changes (grid → lights-out → pit
+        entry/exit → finish), silent between. On a settled-racing edge it may relay the deterministic
+        strategy advisory verbatim (the machine authors no strategy of its own). Returns the line (or
+        "") so tests can inspect it. Never raises."""
+        try:
+            lr = getattr(self, "_live_race", None)
+            if lr is None or not lr.is_recording:
+                return ""
+            phase = str(lr.phase or "")
+            if phase == getattr(self, "_race_spoken_phase", ""):
+                return ""
+            self._race_spoken_phase = phase
+            # On the racing edge, relay the current deterministic strategy advisory if one is
+            # pending (never fabricated — only what the replan pipeline already produced this lap).
+            advisory = ""
+            try:
+                if phase == "racing" and getattr(self, "_live_pending", False):
+                    decision = getattr(self, "_live_decision", {}) or {}
+                    advisory = str(decision.get("driver_message") or "")
+            except Exception:
+                advisory = ""
+            line = lr.cue(advisory=advisory)
+            if not line:
+                return ""
+            announcer = getattr(self._window, "_announcer", None)
+            if announcer is not None and hasattr(announcer, "announce"):
+                from voice.announcer import Priority
+                # Pit/finish cues are HIGH (safety/closure); mid-race presence is MEDIUM.
+                pri = Priority.HIGH if phase in ("pit_entry", "in_pit", "finished") else Priority.MEDIUM
+                announcer.announce(line, pri, "race_engineer")
+            return line
+        except Exception:
+            return ""
+
+    def _clear_race_voice_queue(self) -> None:
+        """At race finish, drop any still-queued low-value chatter so the closing line is not
+        buried and the engineer falls silent once the race is done (Live Activation 3 §6.1).
+        Best-effort across the known announcer/voice surfaces; never raises."""
+        try:
+            announcer = getattr(self._window, "_announcer", None)
+            for name in ("clear", "clear_queue", "flush", "cancel_all", "on_session_end", "reset"):
+                fn = getattr(announcer, name, None)
+                if callable(fn):
+                    fn()
+                    break
+        except Exception:
+            pass
+
     def _speak_qualifying_engineer(self) -> "object":
         """Speak the qualifying engineer's phase-appropriate cue on each phase EDGE (§7 analogue).
         Anti-chatter: the line is spoken once when the phase changes, silent between. Returns the
@@ -1448,6 +1758,15 @@ class LiveShellBridge(QObject):
             lq = getattr(self, "_live_qualifying", None)
             if lq is not None and int(getattr(self, "_live_qualifying_session_id", 0)) == int(sid or 0):
                 lq.complete()
+        except Exception:
+            pass
+        # Same finalisation for an authoritative live Race run (Live Activation 3): COMPLETING →
+        # COMPLETED closes the run + reaches the terminal FINISHED phase (queued voice is cleared).
+        try:
+            lr = getattr(self, "_live_race", None)
+            if lr is not None and int(getattr(self, "_live_race_session_id", 0)) == int(sid or 0):
+                lr.complete()
+                self._clear_race_voice_queue()
         except Exception:
             pass
         decision = self._runs.record_run(sid)
@@ -3359,14 +3678,19 @@ class LiveShellBridge(QObject):
             lp = getattr(self._shell, "live_page", None)
             if lp is None:
                 return
-            # Live Activation 1/2 (§9): refresh the authoritative recording diagnostics header
-            # every tick, whatever the session mode. A live Qualifying run owns the header while
-            # active (its phase + personal best); otherwise the Practice diagnostics show.
+            # Live Activation 1/2/3 (§9): refresh the authoritative recording diagnostics header
+            # every tick, whatever the session mode. Whichever discipline currently owns the live
+            # recording owns the header — a live Race run (its lap total + phase + pit stops), else a
+            # live Qualifying run (its phase + personal best), else the Practice diagnostics.
             if hasattr(lp, "set_diagnostics"):
                 _q = getattr(self, "_live_qualifying", None)
-                lp.set_diagnostics(
-                    self.live_qualifying_diagnostics() if (_q is not None and _q.is_recording)
-                    else self.live_practice_diagnostics())
+                _r = getattr(self, "_live_race", None)
+                if _r is not None and _r.is_recording:
+                    lp.set_diagnostics(self.live_race_diagnostics())
+                elif _q is not None and _q.is_recording:
+                    lp.set_diagnostics(self.live_qualifying_diagnostics())
+                else:
+                    lp.set_diagnostics(self.live_practice_diagnostics())
             from ui.shell_feed_adapters import live_pit_wall_vm_from_state
             from strategy.live_engineer_session import normalise_session_mode
             from strategy.engineer_orchestrator import EngineerContext, orchestrate
@@ -3447,11 +3771,18 @@ class LiveShellBridge(QObject):
             # Speak it once per new lap (not every 750ms tick) so the engineer's voice
             # tracks the session without chattering — but stay silent during a track-model
             # capture so the track-modelling callout is the only voice the driver hears, and
-            # while an authoritative live Qualifying run owns the voice (its phase cue speaks
-            # instead, from _feed_qualifying) so the two engineers never talk over each other.
+            # while an authoritative live Qualifying OR Race run owns the voice (its phase cue
+            # speaks instead) so the engineers never talk over each other.
             _q = getattr(self, "_live_qualifying", None)
-            if not self._track_modelling_active() and not (_q is not None and _q.is_recording):
+            _r = getattr(self, "_live_race", None)
+            _q_owns = _q is not None and _q.is_recording
+            _r_owns = _r is not None and _r.is_recording
+            if not self._track_modelling_active() and not _q_owns and not _r_owns:
                 self._maybe_speak_engineer(_eng_call)
+            # The race engineer speaks its phase-edge cue (grid / lights-out / pit / finish),
+            # relaying the deterministic strategy advisory on the racing edge — Live Activation 3 §6.
+            if _r_owns and not self._track_modelling_active():
+                self._speak_race_engineer()
             # Only an actual race shows a pit plan. In practice/qualifying, pass an empty
             # dict so no race-plan card lingers on the wall.
             if hasattr(lp, "show_plan"):
