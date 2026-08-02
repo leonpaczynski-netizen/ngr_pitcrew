@@ -85,6 +85,17 @@ def test_plan_context_mismatch_each_axis(axis, label):
     assert label in d.mismatched
 
 
+def test_plan_config_id_mismatch_blocks():
+    # The strongest runtime axis: the plan's config_id (track|car|length) disagrees with the live one.
+    d = validate_race_plan_context(_race_ctx(config_id="abc1234567", plan_config_id="zzz9999999"))
+    assert d.verdict == RacePlanContextVerdict.MISMATCH
+    assert "car/track configuration" in d.mismatched
+
+
+def test_matching_config_id_passes():
+    assert validate_race_plan_context(_race_ctx(config_id="abc1234567", plan_config_id="abc1234567")).ok
+
+
 def test_plan_axis_unknown_is_not_a_contradiction():
     # The plan not being scoped to an axis is fine (unscoped, not conflicting).
     assert validate_race_plan_context(_race_ctx(plan_track_id="", plan_layout_id="")).ok

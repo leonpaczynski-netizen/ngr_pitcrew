@@ -183,6 +183,10 @@ _RACE_PLAN_IDENTITY_AXES: Tuple[Tuple[str, str, str], ...] = (
     ("car_id", "plan_car_id", "car"),
     ("track_id", "plan_track_id", "track"),
     ("layout_id", "plan_layout_id", "layout"),
+    # config_id = sha256("{track}|{car}|{length_key}") — the single identity a persisted race plan
+    # reliably carries, so it is the strongest runtime coherence check (a plan copied from another
+    # car/track weekend differs here even when the event/layout ids are absent from the plan).
+    ("config_id", "plan_config_id", "car/track configuration"),
 )
 
 
