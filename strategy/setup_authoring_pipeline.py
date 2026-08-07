@@ -377,6 +377,7 @@ def build_enriched_baseline(inputs: BaselineInputs, *, profile=None) -> Enriched
         proven_gearbox=proven_gearbox or None,
         anchor_seed_overrides=anchor_seeds or None,
         anchor_tiers=anchor_tiers or None,
+        field_steps=(car_model.steps() if car_model is not None else None),
     )
     setup_fields = dict(raw_data.get("setup_fields") or {})
 
@@ -398,6 +399,16 @@ def build_enriched_baseline(inputs: BaselineInputs, *, profile=None) -> Enriched
             track_name=inputs.track_name, proven_fields=proven_seeds or None)
         synthesis = synthesize_setup(context)
         synthesis_primary = reconcile_synthesis_primary(setup_fields, synthesis, context)
+        if synthesis_primary.get("overrides") and car_model is not None:
+            # Synthesis picks values inside the working window using the field's display
+            # precision; snap them onto the car's real increment so it never authors a
+            # number the slider cannot reach (defect A7).
+            snapped = {}
+            for f, v in synthesis_primary["overrides"].items():
+                spec = car_model.spec(f)
+                snapped[f] = spec.snap(v) if spec is not None else v
+            synthesis_primary = dict(synthesis_primary)
+            synthesis_primary["overrides"] = snapped
         if synthesis_primary.get("overrides"):
             _apply_overrides(raw_data, synthesis_primary["overrides"],
                              synthesis_primary.get("provenance") or {},

@@ -2715,6 +2715,15 @@ class DrivingAdvisor:
             for _t in _tiers.values():
                 _tier_counts[_t] = _tier_counts.get(_t, 0) + 1
             _resp["field_tiers"] = _tiers
+            # The per-field (min, max, step) model, so the form binds its spinboxes to
+            # the car rather than to hard-coded constants (defect A7 — the form capped
+            # ballast at 150 while the range table said 200, and hard-coded every
+            # setSingleStep). Also carries the legal range and the preference window
+            # SEPARATELY: they were the same object, which is the root of several bad
+            # values, because anything that walked "half the window" walked half a
+            # generic slider.
+            if _car_model is not None:
+                _resp["parameter_model"] = _car_model.as_json()
             _resp["tier_summary"] = {
                 "counts": _tier_counts,
                 "headline": (_anchor_set.headline()

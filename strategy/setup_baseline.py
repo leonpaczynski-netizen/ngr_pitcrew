@@ -196,6 +196,39 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _snap_to_step(field: str, value: float, ranges: dict,
+                  field_steps: "dict | None") -> float:
+    """Snap an authored value onto the field's real GT7 increment.
+
+    UAT 2026-08-07 defect A7 — no step model existed anywhere. ``_round_for_field``
+    applies a fixed decimal precision globally (springs to 1dp, toe to 2dp, integers
+    for the rest), which is a reasonable *display* convention and has nothing to do
+    with what the GT7 slider can actually land on. A car whose ride-height slider moves
+    in 5mm steps was being handed 52mm, a value the driver cannot dial in.
+
+    The grid is anchored at the field's legal minimum so a snapped value is always
+    reachable from the bottom of the slider. Steps derived from the app's own precision
+    are marked "assumed" by the parameter model and are numerically identical to
+    ``_round_for_field``, so this is a no-op until a real per-car capture supplies a
+    genuine increment — which is exactly the intent: do nothing until we know something.
+    """
+    step = (field_steps or {}).get(field)
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return _round_for_field(field, value)
+    if step <= 0:
+        return _round_for_field(field, value)
+
+    rng = (ranges or {}).get(field)
+    lo = float(rng[0]) if rng and len(rng) == 2 else 0.0
+    snapped = lo + round((float(value) - lo) / step) * step
+    if rng and len(rng) == 2:
+        snapped = _clamp(snapped, float(rng[0]), float(rng[1]))
+    # Kill binary float dust (0.1 * 3 = 0.30000000000000004) at the field's precision.
+    return _round_for_field(field, snapped)
+
+
 def _clamp_to_range(field: str, value: float, ranges: dict) -> float:
     """Clamp into the field's legal range without re-placing it by intent."""
     rng = (ranges or {}).get(field)
@@ -562,6 +595,7 @@ def build_baseline_setup(
     proven_gearbox: "dict | None" = None,
     anchor_seed_overrides: "dict | None" = None,
     anchor_tiers: "dict | None" = None,
+    field_steps: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -836,7 +870,7 @@ def build_baseline_setup(
         if _proven_seeded and not is_biased and _num_close(to_val, base_val):
             to_val = base_val
         else:
-            to_val = _round_for_field(field, to_val)
+            to_val = _snap_to_step(field, to_val, ranges, field_steps)
         seed_rounded = _round_for_field(field, base_val)
 
         # Group 46: compute value WITHOUT session bias to detect session_changed.
