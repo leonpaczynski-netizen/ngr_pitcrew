@@ -2593,250 +2593,53 @@ class DrivingAdvisor:
         }, ensure_ascii=False)
 
         try:
-            # Step 0: the car parameter model (UAT 2026-08-07 defects A5, A7) — the
-            # per-field legal range, preference window, anchor and step for this car.
-            # There is deliberately only ONE range model: the archetype bands sit
-            # inside GENERIC_DEFAULTS, so nothing here widens what the caller resolved
-            # and the validator's own resolve_ranges call still agrees with it.
-            _car_model = None
-            try:
-                from data.car_parameter_model import resolve_parameter_model
-                _car_model = resolve_parameter_model(car_name, drivetrain=drivetrain)
-                # Drivetrain is resolved from data/car_drivetrains.json when the caller
-                # did not supply one — defect A5, the classic form's "Auto-detect"
-                # resolved to "" and the whole engineering layer ran drivetrain-blind.
-                if not drivetrain and _car_model.drivetrain:
-                    drivetrain = _car_model.drivetrain
-            except Exception:
-                _car_model = None
-
-            # Step 1: build driver profile (Phase 3: evolved from observed driving)
-            _profile, _profile_evolution = _resolve_driver_profile(self._db)
-
-            # Step 2: build the baseline raw_data dict
-            # Group 45: wire session_type, tyre_wear_multiplier, car_class through
-            # Group 46: also wire duration_mins through for session bias classification
-            # Phase 9 baseline lift: seed personal-fit geometry (camber/toe) from the
-            # driver's STRONG proven history so the from-scratch base starts from a
-            # validated value, not a neutral guess. Strong-scope only. Group 64: the
-            # lift set now includes the proven LSD triplet (a personal-fit starting
-            # window); aero / brakes / gearing / ride height are still never lifted.
-            _seed_overrides = {}
-            _bl_prior: dict = {}
-            if historical_setups:
-                try:
-                    from strategy.setup_history_intelligence import (
-                        find_historical_setups, build_historical_prior,
-                        build_baseline_seed_overrides,
-                    )
-                    _bl_matches = find_historical_setups(
-                        car_name, track_name, layout_id, session_type,
-                        historical_setups, car_category=car_class,
-                    )
-                    _bl_prior = build_historical_prior(_bl_matches)
-                    _seed_overrides = build_baseline_seed_overrides(_bl_prior)
-                except Exception:
-                    _seed_overrides = {}
-                    _bl_prior = {}
-
-            # Proven-setup library: a vetted COMPLETE setup for this exact car+track+
-            # discipline. When one exists it becomes the from-scratch starting point
-            # (the deterministic equivalent of recalling a known-good setup), taking
-            # precedence over the generic seeds and the personal-history lift. Matched by
-            # display car+track name, so it is robust to the layout_id plumbing. The rule
-            # engine still refines it from telemetry.
-            _proven_seeds: dict = {}
-            _proven_gearbox: dict = {}
-            try:
-                from strategy.proven_setup_library import (
-                    find_proven_setup, split_seed_and_gearbox,
-                )
-                _proven_fields = find_proven_setup(car_name, track_name, session_type)
-                if _proven_fields:
-                    _proven_seeds, _proven_gearbox = split_seed_and_gearbox(_proven_fields)
-            except Exception:
-                _proven_seeds, _proven_gearbox = {}, {}
-
-            # Engineering-reasoning layer (audit: docs/AUDIT_setup_brain_engineer_evolution.md).
-            # Build a vehicle model from the car specs and reason over vehicle + track +
-            # objective + driver into coupled directional intents (gearing to the straight,
-            # ride-height for elevation, ARB balance, RR rear-stability, etc.). Flows through
-            # the SAME clamp/validate pipeline; degrades to no-op if anything is missing.
-            _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
-            _chassis_seeds: dict = {}
-            _driver_fit_reasoning = None
-            try:
-                from strategy.setup_engineering import (
-                    build_vehicle_model, derive_engineering_intents, resolve_car_specs,
-                    coupling_report, derive_chassis_seeds, derive_spring_frequencies,
-                )
-                from strategy.setup_authoring import objective_from_session_type
-                _specs = resolve_car_specs(car_name)
-                _vehicle = build_vehicle_model(car_name, drivetrain or "", num_gears, _specs)
-                _objective = objective_from_session_type(session_type).value
-                _corner_profile = None
-                try:
-                    from strategy.corner_profile import (
-                        load_reviewed_segments, build_corner_profile,
-                    )
-                    _loc = getattr(track_profile, "track_location_id", "") or ""
-                    _lay = getattr(track_profile, "layout_id", "") or layout_id or ""
-                    _segs = load_reviewed_segments(_loc, _lay)
-                    if _segs:
-                        _corner_profile = build_corner_profile(_segs)
-                except Exception:
-                    _corner_profile = None
-                _eng_plan = derive_engineering_intents(
-                    _vehicle, track_profile, _objective, _profile,
-                    corner_profile=_corner_profile)
-                _eng_bias = _eng_plan.bias()
-                _eng_lean = _eng_plan.final_drive_lean
-                _eng_reasoning = _eng_plan.as_json()
-                _eng_reasoning["coupling"] = coupling_report(_eng_plan)
-                # Car/objective-specific seeds for the fields the intent layer does not
-                # shape (dampers/camber/toe), so they differ per car instead of coming
-                # out at a flat constant for every car.
-                _chassis_seeds = derive_chassis_seeds(_vehicle, _objective)
-                # Physics-based spring frequency targets — car class + weight dist + track + objective.
-                # Resolves front weight distribution: override arg (from UI, pct→fraction) → per-car
-                # data file → drivetrain prior.  Mutation stays inside this try block so the existing
-                # except resets _chassis_seeds = {} on any failure, keeping the neutral fallback safe.
-                # Pass only the explicit UI override (pct→fraction) or None.
-                # derive_spring_frequencies resolves the car-data file itself when the
-                # arg is None, so the source label ("override" vs "car data") is set
-                # correctly inside that function — no double-resolve here.
-                _front_wd = (front_weight_dist_override / 100.0) if front_weight_dist_override else None
-                _spring_freq = derive_spring_frequencies(
-                    _vehicle, _objective, track_profile, _front_wd,
-                    ballast_kg=ballast_kg, ballast_position=ballast_position,
-                )
-                # UAT 2026-08-07 defect A9 — derive_spring_frequencies returns the flat
-                # NEUTRAL_SEEDS constants with an "insufficient data ... neutral
-                # fallback" reason when the car has no weight/category/drivetrain data,
-                # and those values were still written here and then labelled
-                # "engineered for car + track + objective". That is a provenance lie,
-                # and it is also strictly worse than the class anchor. Take the spring
-                # model only when it actually modelled something.
-                if "insufficient data" not in str(_spring_freq.front_reason).lower() \
-                        and "neutral fallback" not in str(_spring_freq.front_reason).lower():
-                    _chassis_seeds["springs_front"] = _spring_freq.front_hz
-                if "insufficient data" not in str(_spring_freq.rear_reason).lower() \
-                        and "neutral fallback" not in str(_spring_freq.rear_reason).lower():
-                    _chassis_seeds["springs_rear"] = _spring_freq.rear_hz
-            except Exception:
-                _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
-                _chassis_seeds = {}
-            # Evidence-scaled driver fit: tailor the neutral base toward the driver's
-            # stated style IN PROPORTION to how far each seed sits from their window.
-            try:
-                from strategy.driver_fit import (
-                    derive_driver_fit, driver_fit_bias, driver_fit_reasoning,
-                )
-                from strategy.setup_baseline import NEUTRAL_SEEDS
-                # A proven-history seed already IS the driver's validated preference —
-                # don't nudge those fields again (that would double-count and overshoot).
-                _df_intents = [i for i in derive_driver_fit(_profile, NEUTRAL_SEEDS, ranges)
-                               if i.field not in (_seed_overrides or {})]
-                for _dff, _dfd in driver_fit_bias(_df_intents).items():
-                    _eng_bias[_dff] = _eng_bias.get(_dff, 0.0) + _dfd
-                if _df_intents:
-                    _driver_fit_reasoning = driver_fit_reasoning(_profile, _df_intents)
-            except Exception:
-                _driver_fit_reasoning = None
-
-            # UAT 2026-08-07 defect A1 — resolve where every field STARTS before
-            # authoring anything: proven setup for this car+track+discipline, then the
-            # same car proven elsewhere, then its captured GT7 stock value, then the
-            # class position. Only when all four are absent is a field left on a legal
-            # midpoint, and it is labelled as such rather than presented as a decision.
-            _anchor_set = None
-            _anchor_seeds: dict = {}
-            try:
-                from strategy.setup_anchor import resolve_anchor, TIER_GENERIC
-                from strategy.setup_authoring import objective_from_session_type
-                _anchor_set = resolve_anchor(
-                    car_name, track_name,
-                    objective_from_session_type(session_type).value,
-                    ranges=ranges, history_prior=_bl_prior or {},
-                    proven_fields=_proven_seeds or None,
-                    drivetrain=drivetrain, parameter_model=_car_model)
-                # A GENERIC anchor is the midpoint of a legal range — the absence of a
-                # position. Seeding from it would just relabel the old behaviour, so
-                # those fields keep the existing neutral seed and say so.
-                _anchor_seeds = {f: a.value for f, a in _anchor_set.anchors.items()
-                                 if a.tier != TIER_GENERIC}
-            except Exception:
-                _anchor_set = None
-                _anchor_seeds = {}
-
-            _raw_data = build_baseline_setup(
-                car_name, ranges, drivetrain, num_gears,
-                _profile, allowed_tuning, tuning_locked,
-                session_type=session_type,
-                tyre_wear_multiplier=tyre_wear_multiplier,
-                car_class=car_class,
-                duration_mins=duration_mins,
-                track_profile=track_profile,
-                historical_seed_overrides=_seed_overrides,
-                engineering_bias=_eng_bias,
-                final_drive_lean=_eng_lean,
-                chassis_seed_overrides=_chassis_seeds,
-                proven_seed_overrides=_proven_seeds,
-                proven_gearbox=_proven_gearbox,
-                anchor_seed_overrides=_anchor_seeds or None,
+            # Steps 0-3b: the ONE from-scratch authoring path (UAT 2026-08-07
+            # defect A6). This used to be ~245 lines of enrichment inlined here —
+            # proven library, personal history, engineering intents, chassis seeds,
+            # the spring-frequency model, driver fit, the anchor, the canonical
+            # context and confidence-gated synthesis — which meant the OTHER two
+            # authors of "the same" base setup (setup_authoring.author_full_field_plan,
+            # which fills the Base/Quali/Race comparison table, and setup_builder_ui)
+            # could not reach any of it. That is why the comparison table disagreed
+            # with the sheet that got applied. All three now compose the same
+            # function, so they agree by construction rather than by coincidence.
+            #
+            # It also replaces the nine silent `except Exception: pass` blocks that
+            # used to wrap these layers (defect A10): every layer that fails or has
+            # nothing to contribute now records a degradation, surfaced below.
+            from strategy.setup_authoring_pipeline import (
+                BaselineInputs, build_enriched_baseline,
             )
 
-            # Step 3: neutral_setup = the proposed setup_fields (no delta
-            # from seed — the baseline IS the proposed setup)
-            _neutral_setup = dict(_raw_data.get("setup_fields") or {})
+            # Step 1: driver profile (Phase 3: evolved from observed driving). Resolved
+            # here rather than inside the pipeline because it needs the DB handle.
+            _profile, _profile_evolution = _resolve_driver_profile(self._db)
 
-            # Step 3b: setup_synthesis as PRIMARY author (confidence-gated). Build the
-            # canonical engineering context + complete-setup synthesis ONCE here, and
-            # where the synthesis has strong track-shaping evidence for a NON-proven
-            # handling field, let its coupled best-candidate value author that field
-            # (proven personal values are never overridden). The merged values flow
-            # through the SAME validation + Apply gate below. Best-effort: any failure
-            # leaves the deterministic baseline exactly as it was. _ctx/_synth are
-            # reused by the surfaces block later so nothing is computed twice.
-            _ctx = None
-            _synth = None
-            _synth_primary = None
-            try:
-                from strategy.setup_engineering_context import (
-                    build_setup_engineering_context,
-                )
-                from strategy.setup_authoring import objective_from_session_type
-                from strategy.setup_synthesis import (
-                    synthesize_setup, reconcile_synthesis_primary,
-                )
-                _ctx = build_setup_engineering_context(
-                    car=car_name,
-                    objective=objective_from_session_type(session_type).value,
-                    ranges=ranges, drivetrain=drivetrain or "", num_gears=num_gears,
-                    profile=_profile, allowed_tuning=allowed_tuning,
-                    tuning_locked=tuning_locked, track_profile=track_profile,
-                    corner_profile=_corner_profile, history_prior=_bl_prior or {},
-                    duration_mins=duration_mins,
-                    tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
-                    # UAT 2026-08-07 defect A3 — the proven-library seeds were applied
-                    # to the baseline and then never handed to the context, so
-                    # WorkingWindow.preferred stayed None for every field and the
-                    # "never override a proven value" guard in
-                    # reconcile_synthesis_primary could not fire. Verified: the vetted
-                    # RSR-at-Monza race entry was matched, seeded, then overwritten.
-                    track_name=track_name, proven_fields=_proven_seeds or None)
-                _synth = synthesize_setup(_ctx)
-                _synth_primary = reconcile_synthesis_primary(
-                    _neutral_setup, _synth, _ctx)
-                if _synth_primary.get("overrides"):
-                    _apply_synthesis_primary(
-                        _raw_data, _synth_primary["overrides"],
-                        _synth_primary["provenance"])
-                    _neutral_setup = dict(_raw_data.get("setup_fields") or {})
-            except Exception:
-                _ctx = None
-                _synth = None
-                _synth_primary = None
+            _enriched = build_enriched_baseline(BaselineInputs(
+                car=car_name, ranges=ranges, session_type=session_type,
+                drivetrain=drivetrain, num_gears=num_gears,
+                allowed_tuning=allowed_tuning, tuning_locked=tuning_locked,
+                car_class=car_class, duration_mins=duration_mins,
+                tyre_wear_multiplier=tyre_wear_multiplier,
+                track_profile=track_profile, track_name=track_name,
+                layout_id=layout_id, historical_setups=historical_setups,
+                front_weight_dist_override=front_weight_dist_override,
+                ballast_kg=ballast_kg, ballast_position=ballast_position,
+            ), profile=_profile)
+
+            _raw_data = _enriched.raw_data
+            _neutral_setup = dict(_enriched.setup_fields)
+            _car_model = _enriched.car_model
+            _ctx = _enriched.context
+            _synth = _enriched.synthesis
+            _synth_primary = _enriched.synthesis_primary
+            _anchor_set = _enriched.anchor_set
+            _eng_reasoning = _enriched.engineering_reasoning
+            _driver_fit_reasoning = _enriched.driver_fit_reasoning
+            _bl_prior = _enriched.history_prior
+            _proven_seeds = _enriched.proven_seeds
+            _corner_profile = _enriched.corner_profile
+            drivetrain = _enriched.resolved_drivetrain or drivetrain
 
             # Step 4: engineering validation
             # Pass empty diagnosis and event_ctx (no telemetry — by design).
@@ -2889,6 +2692,38 @@ class DrivingAdvisor:
             }
             _resp["protected_fields"] = []
             _resp["rule_engine_version"] = RULE_ENGINE_VERSION
+
+            # UAT 2026-08-07 defect A10 — fail loud. Nine enrichment layers used to be
+            # wrapped in `except Exception: pass`, so a run where the driver profile,
+            # history, proven library, chassis seeds and spring model had ALL failed
+            # was indistinguishable in the response from a fully-enriched run. The
+            # response now carries what was lost and what was used instead, separating
+            # a layer that broke (worth investigating) from one that simply had no data
+            # yet (expected, and not the app's fault).
+            _resp["degradations"] = _enriched.degradation_json()
+            _deg_headline = _resp["degradations"].get("headline") or ""
+            if _enriched.degradations is not None and _enriched.degradations.failed:
+                _resp["validation_warnings"] = list(
+                    _resp.get("validation_warnings") or []) + [_deg_headline]
+
+            # Per-field provenance tiers (defect A9). PROVEN > TRANSFERRED > STOCK >
+            # ENGINEERED > ARCHETYPE > GENERIC. The Garage colours a field by this, and
+            # only ENGINEERED and above may be described as engineered for this car.
+            _tiers = {c.get("field"): str(c.get("tier") or "GENERIC")
+                      for c in (_raw_data.get("changes") or []) if c.get("field")}
+            _tier_counts: dict = {}
+            for _t in _tiers.values():
+                _tier_counts[_t] = _tier_counts.get(_t, 0) + 1
+            _resp["field_tiers"] = _tiers
+            _resp["tier_summary"] = {
+                "counts": _tier_counts,
+                "headline": (_anchor_set.headline()
+                             if _anchor_set is not None and hasattr(_anchor_set, "headline")
+                             else ""),
+                "archetype": getattr(_anchor_set, "archetype", ""),
+                "is_archetype_only": bool(
+                    getattr(_anchor_set, "is_archetype_only", True)),
+            }
 
             # UAT 2026-08-07 defect A8 — do not launder low confidence into "approved".
             # build_baseline_setup reports confidence.overall = "low" for a from-scratch

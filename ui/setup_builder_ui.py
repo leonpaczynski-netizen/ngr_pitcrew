@@ -2259,14 +2259,23 @@ class SetupBuilderMixin:
                 if _qv:
                     cols.append({"name": "quali", "label": "Quali setup",
                                  "source": "your Qualifying form", "values": _qv})
-            # From-scratch base — pure generator (no AI, no Qt); num_gears read here.
+            # From-scratch base — the ONE authoring path (UAT 2026-08-07 defect A6).
+            # This was the third place that authored "the same" base setup, with the
+            # barest inputs of the three: no proven library, no history, no chassis
+            # seeds, no spring model, no anchor. It now composes the same pipeline the
+            # advisor and the comparison table use, so all three agree.
             try:
-                from strategy.setup_baseline import build_baseline_setup as _bbs
-                from strategy.setup_driver_profile import build_driver_profile as _bdp
                 from strategy.setup_ranges import resolve_ranges as _rr
+                from strategy.setup_authoring_pipeline import (
+                    BaselineInputs as _BI, build_enriched_baseline as _bes,
+                )
                 _ng = int(self._setup_num_gears.value()) if hasattr(self, "_setup_num_gears") else 0
-                _base = _bbs(car_name, _rr(car_name), drivetrain or "", _ng,
-                             _bdp(), allowed, locked, track_profile=track_profile)
+                _base = _bes(_BI(
+                    car=car_name, ranges=_rr(car_name), drivetrain=drivetrain or "",
+                    num_gears=_ng, allowed_tuning=allowed, tuning_locked=locked,
+                    track_profile=track_profile,
+                    track_name=getattr(track_profile, "track_name", "") or "",
+                )).raw_data
                 _bf = _base.get("setup_fields") or {}
                 if _bf:
                     cols.append({"name": "base", "label": "Base (from scratch)",

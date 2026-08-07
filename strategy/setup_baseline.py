@@ -347,6 +347,8 @@ def _build_gearbox_changes(
             to_val=_fd_val,
             label=_fd_label,
             alignment="neutral",
+            tier=("PROVEN" if _fd_proven is not None
+                  else ("ENGINEERED" if final_drive_lean else "GENERIC")),
         ))
 
     # gear ratios
@@ -368,6 +370,7 @@ def _build_gearbox_changes(
                 to_val=_ratio,
                 label=_LABEL_MIDPOINT,
                 alignment="neutral",
+                tier="GENERIC",
             ))
         return changes
 
@@ -405,6 +408,7 @@ def _build_gearbox_changes(
             to_val=ratio,
             label=_LABEL_PROVEN if _proven_gear[idx] else _LABEL_MIDPOINT,
             alignment="neutral",
+            tier="PROVEN" if _proven_gear[idx] else "GENERIC",
         ))
 
     return changes
@@ -418,6 +422,7 @@ def _make_change_dict(
     alignment: str,
     session_influence: str = "",
     car_drivetrain_influence: str = "",
+    tier: str = "GENERIC",
 ) -> dict:
     """Build a change dict in plan_to_raw_data / AI-response shape.
 
@@ -445,6 +450,10 @@ def _make_change_dict(
         "driver_style_alignment": alignment,
         # Group 45 explainability fields
         "source_label": label,          # label IS the source description for baseline changes
+        # UAT 2026-08-07 defect A9 — machine-readable provenance strength:
+        # PROVEN > TRANSFERRED > STOCK > ENGINEERED > ARCHETYPE > GENERIC. Only
+        # ENGINEERED and above may be presented as engineered for this car.
+        "tier": tier,
         "session_influence": session_influence,
         "car_drivetrain_influence": car_drivetrain_influence,
         "pack": "",                     # baseline changes have no rule pack
@@ -552,6 +561,7 @@ def build_baseline_setup(
     proven_seed_overrides: "dict | None" = None,
     proven_gearbox: "dict | None" = None,
     anchor_seed_overrides: "dict | None" = None,
+    anchor_tiers: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -876,6 +886,24 @@ def build_baseline_setup(
             label = _LABEL_NEUTRAL
             alignment = "neutral"
 
+        # UAT 2026-08-07 defect A9 — the per-field provenance TIER. The label above is
+        # prose for the driver; this is the machine-readable strength of the evidence
+        # the value rests on, and it is what the Garage colours a field by and what
+        # gates the phrase "engineered for car + track + objective". It is decided by
+        # what the value was SEEDED from, not by whether a bias later nudged it: a
+        # driver-profile nudge on top of a class default does not make the result
+        # personal knowledge.
+        if _proven_seeded:
+            tier = "PROVEN"
+        elif _hist_seeded:
+            tier = "PROVEN"          # the lift is strong-scope only (same car+track)
+        elif field in _eng_fields:
+            tier = "ENGINEERED"
+        elif _anchor_seeded:
+            tier = str((anchor_tiers or {}).get(field) or "ARCHETYPE")
+        else:
+            tier = "GENERIC"
+
         # Group 46: honest session_influence per change (brief contract):
         # - session known + field changed numerically by session bias → real session text
         # - session known, field is profile-biased but session did not change it numerically →
@@ -908,6 +936,7 @@ def build_baseline_setup(
             to_val=to_val,
             label=label,
             alignment=alignment,
+            tier=tier,
             session_influence=_ch_session_influence,
             car_drivetrain_influence="",
         )
