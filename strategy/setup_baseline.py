@@ -111,6 +111,12 @@ _LABEL_PROVEN     = "seeded from the proven-setup library"
 # Provenance for a value shaped by the engineering-reasoning layer (vehicle + track
 # + objective coupling) — an engineer's directional call, not a neutral default.
 _LABEL_ENGINEERING = "engineered for car + track + objective"
+# Provenance for a value that came from the car's class archetype (UAT 2026-08-07
+# defect A1/A9). This is a real engineering position — a Gr.3 starting where Gr.3 cars
+# start — but it is NOT engineered for this specific car, and it must never borrow the
+# _LABEL_ENGINEERING wording. It is what an unmapped car runs until a GT7 capture
+# lands for it.
+_LABEL_ANCHOR = "class starting point (no captured data for this car)"
 
 # When a neutral seed lands within this fraction of either end of a car's
 # resolved range, it is treated as boundary-hugging and re-placed by intent.
@@ -188,6 +194,22 @@ def _round_for_field(field: str, value: float) -> float:
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value into [lo, hi]."""
     return max(lo, min(hi, value))
+
+
+def _clamp_to_range(field: str, value: float, ranges: dict) -> float:
+    """Clamp into the field's legal range without re-placing it by intent."""
+    rng = (ranges or {}).get(field)
+    if not rng or len(rng) != 2:
+        return value
+    return _clamp(value, float(rng[0]), float(rng[1]))
+
+
+def _num_close(a, b, tol: float = 1e-9) -> bool:
+    """True when two numbers are equal to within float dust."""
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except (TypeError, ValueError):
+        return False
 
 
 def _place_seed_in_range(field: str, seed: float, ranges: dict) -> "tuple[float, bool]":
@@ -281,6 +303,18 @@ def _build_gearbox_changes(
     _gear_lo, _gear_hi = _GRR
     _fd_lo, _fd_hi = _FDR
     _pg = proven_gearbox or {}
+
+    # UAT 2026-08-07 defect A3/A4 — a proven gearbox carries its own gear count. The
+    # shell reads num_gears from car_specs.json, which has that key for NO car, so it
+    # always arrives here as 0; the early return below then shipped the proven FINAL
+    # DRIVE with none of the six proven ratios attached. A vetted gear set tells us
+    # exactly how many gears the car has, so trust it over the missing spec.
+    _proven_gear_count = 0
+    for _i in range(1, 7):
+        if _pg.get(f"gear_{_i}") is not None:
+            _proven_gear_count = _i
+    if _proven_gear_count > 0:
+        num_gears = max(int(num_gears or 0), _proven_gear_count)
 
     # UAT 2026-08-07 defect A4 — never author a final drive with no ratios attached.
     # The gear count is read from data/car_specs.json, which carries `num_gears` for
@@ -517,6 +551,7 @@ def build_baseline_setup(
     chassis_seed_overrides: "dict | None" = None,
     proven_seed_overrides: "dict | None" = None,
     proven_gearbox: "dict | None" = None,
+    anchor_seed_overrides: "dict | None" = None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -679,6 +714,20 @@ def build_baseline_setup(
 
         seed = NEUTRAL_SEEDS[field]
 
+        # UAT 2026-08-07 defect A1 — anchor, never a flat constant. NEUTRAL_SEEDS is
+        # one set of numbers for all 579 cars in the game: 80mm ride height and 3.5/3.0
+        # springs whether the car is an LMP1 or a kei van, and camber 1.0 front against
+        # 1.5 rear, which is backwards for anything that turns. The anchor is this
+        # car's class position (or its captured GT7 stock value, or a proven value).
+        # Everything below still stacks on top in the same order as before.
+        _anchor_seeded = False
+        if anchor_seed_overrides and field in anchor_seed_overrides:
+            try:
+                seed = float(anchor_seed_overrides[field])
+                _anchor_seeded = True
+            except (TypeError, ValueError):
+                pass
+
         # Car/objective-specific chassis seed (dampers/camber/toe) — replaces the flat
         # neutral constant so these fields differ by car and by race vs qualifying
         # instead of coming out identical for every car. A proven-history override
@@ -737,7 +786,14 @@ def build_baseline_setup(
         # Map the (possibly ride-height-pre-adjusted) seed into the car's range,
         # preserving engineering intent instead of clamping to a boundary. For
         # generic-range cars and wide-range fields this returns the seed unchanged.
-        base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
+        # UAT 2026-08-07 defect A3 — a value from the proven library is NOT a generic
+        # seed that needs re-placing off a boundary; it is a number the driver has
+        # validated on track. The boundary guard was quietly moving the vetted 63mm
+        # rear ride height to 62.57. Clamp it for safety, re-place it never.
+        if _proven_seeded:
+            base_val, seed_adjusted = _clamp_to_range(field, float(seed), ranges), False
+        else:
+            base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
 
         # Compute value WITH combined bias (profile + session). A proven-library seed is a
         # COMPLETE vetted setup that already encodes the driver's preference, so profile/
@@ -763,7 +819,14 @@ def build_baseline_setup(
 
         # Round to natural precision. "from" mirrors the authored base (from-scratch
         # baseline: from == to for non-biased fields), not the pre-mapping seed.
-        to_val = _round_for_field(field, to_val)
+        # UAT 2026-08-07 defect A3 — a proven value that nothing moved must come out
+        # byte-identical. _round_for_field snaps springs to one decimal, which silently
+        # turned the vetted 3.35 Hz in data/proven_setups.json into 3.4. A curated
+        # setup is the strongest evidence in the system; rounding it is not our call.
+        if _proven_seeded and not is_biased and _num_close(to_val, base_val):
+            to_val = base_val
+        else:
+            to_val = _round_for_field(field, to_val)
         seed_rounded = _round_for_field(field, base_val)
 
         # Group 46: compute value WITHOUT session bias to detect session_changed.
@@ -798,6 +861,11 @@ def build_baseline_setup(
         elif is_biased:
             label = _LABEL_BIASED
             alignment = "aligned"
+        elif _anchor_seeded:
+            # The class starting point. A real position, but not one derived for this
+            # car — labelled so the Garage can say which fields are class defaults.
+            label = _LABEL_ANCHOR
+            alignment = "neutral"
         elif seed_adjusted:
             label = _LABEL_CAR_RANGE
             alignment = "neutral"

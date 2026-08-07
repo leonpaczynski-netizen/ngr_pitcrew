@@ -20,17 +20,26 @@ from typing import Any
 # Gearbox params (final_drive, gear_ratios, transmission_max_speed_kmh,
 # shift_rpm) are intentionally excluded — they are not range-managed.
 # ---------------------------------------------------------------------------
+# UAT 2026-08-07 defect A7 — two of these bounds were narrower than values already
+# run in GT7, so they vetoed the correct answer rather than bounding a wrong one:
+#   * ride height floored at 60mm, while every vetted Porsche RSR setup in
+#     data/proven_setups.json runs 55 and the curated Cayman GT4 window reaches 45;
+#   * ARB capped at 7, while all four curated cars in data/car_setup_ranges.json use 10.
+# Both are corrected below from that evidence. Aero is deliberately NOT touched: its
+# (0, 1000) tuple is used as an identity check by setup_diagnosis's
+# _aero_range_is_generic guard, and widening it would change analyse-path behaviour
+# that Phase 1 is not fixing.
 GENERIC_DEFAULTS: dict[str, tuple] = {
-    "ride_height_front":      (60,   200),
-    "ride_height_rear":       (60,   200),
+    "ride_height_front":      (45,   200),
+    "ride_height_rear":       (45,   200),
     "springs_front":          (1.00, 20.00),
     "springs_rear":           (1.00, 20.00),
     "dampers_front_comp":     (1,    100),
     "dampers_front_ext":      (1,    100),
     "dampers_rear_comp":      (1,    100),
     "dampers_rear_ext":       (1,    100),
-    "arb_front":              (1,    7),
-    "arb_rear":               (1,    7),
+    "arb_front":              (1,    10),
+    "arb_rear":               (1,    10),
     "camber_front":           (0.0, 6.0),
     "camber_rear":            (0.0, 6.0),
     "toe_front":              (-2.00, 2.00),

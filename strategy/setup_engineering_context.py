@@ -41,14 +41,47 @@ _TIER_SAME_CAR = 3        # <= this = same car (other track) — a valid startin
 
 @dataclass(frozen=True)
 class WorkingWindow:
-    """A field's working range with evidence — not a single forced value."""
+    """A field's working range with evidence — not a single forced value.
+
+    ``low``/``high`` are the LEGAL range (the safety clamp). ``pref_low``/``pref_high``
+    are the engineering PREFERENCE band, which is normally much narrower — UAT
+    2026-08-07 defect A1/A7: the two used to be the same object, so anything that
+    walked "half the window" walked half of a generic slider and landed at 13.4Hz
+    springs. ``anchor`` is where the field starts when there is no proven value; see
+    ``strategy.setup_anchor``.
+    """
     field: str
     low: float
     high: float
-    preferred: Optional[float]     # centre of the window (proven value, or None)
+    preferred: Optional[float]     # proven value for this field, or None
     sources: tuple                 # evidence provenance, precedence-ordered
     confidence: str                # high / medium / low / none
     locked: bool = False           # event forbids tuning this field
+    anchor: Optional[float] = None       # starting position (proven > stock > class)
+    anchor_tier: str = ""                # PROVEN / TRANSFERRED / STOCK / ARCHETYPE / GENERIC
+    window_low: Optional[float] = None   # preference band; None = fall back to legal
+    window_high: Optional[float] = None
+
+    @property
+    def pref_low(self) -> float:
+        return self.low if self.window_low is None else self.window_low
+
+    @property
+    def pref_high(self) -> float:
+        return self.high if self.window_high is None else self.window_high
+
+    @property
+    def centre(self) -> float:
+        """The reference point every candidate moves away from.
+
+        Proven value first, then the resolved anchor, and only as a last resort the
+        legal midpoint — which is the absence of an engineering position, not one.
+        """
+        if self.preferred is not None:
+            return float(self.preferred)
+        if self.anchor is not None:
+            return float(self.anchor)
+        return (self.low + self.high) / 2.0
 
     def contains(self, v: float) -> bool:
         try:
@@ -59,7 +92,9 @@ class WorkingWindow:
     def as_json(self) -> dict:
         return {"field": self.field, "low": self.low, "high": self.high,
                 "preferred": self.preferred, "sources": list(self.sources),
-                "confidence": self.confidence, "locked": self.locked}
+                "confidence": self.confidence, "locked": self.locked,
+                "anchor": self.anchor, "anchor_tier": self.anchor_tier,
+                "window": [self.pref_low, self.pref_high]}
 
 
 # Fraction of a field's legal span used as the half-width of a proven-value window.
@@ -81,6 +116,7 @@ def build_working_window(
     *,
     locked: bool = False,
     current_value: Optional[float] = None,
+    anchor=None,
 ) -> Optional[WorkingWindow]:
     """Assemble one field's working window through evidence precedence.
 
@@ -101,6 +137,23 @@ def build_working_window(
         return WorkingWindow(field, cv, cv, cv, ("2. event restriction — locked",),
                              "n/a", locked=True)
 
+    # UAT 2026-08-07 defect A1 — the anchor (strategy.setup_anchor) supplies the
+    # starting position and the preference band for every field. Without it the window
+    # was the whole legal range at low confidence and the centre was its midpoint.
+    a_val = getattr(anchor, "value", None)
+    a_tier = str(getattr(anchor, "tier", "") or "")
+    a_lo = getattr(anchor, "window_low", None)
+    a_hi = getattr(anchor, "window_high", None)
+    if a_lo is None or a_hi is None:
+        a_lo, a_hi = lo, hi
+    # The anchor resolved the legal clamp already (caller ranges unioned with the class
+    # band, with a real GT7 capture taking precedence over both). Adopt it, or the
+    # generic 60mm ride-height floor clamps the Gr.3 anchor of 55 straight back up.
+    _al, _ah = getattr(anchor, "legal_low", None), getattr(anchor, "legal_high", None)
+    if _al is not None and _ah is not None and _ah > _al:
+        lo, hi = float(_al), float(_ah)
+        span = hi - lo
+
     pd = (history_prior or {}).get(field)
     proven = None
     tier = None
@@ -120,30 +173,51 @@ def build_working_window(
         conf = "high" if tier <= _TIER_STRONG else "medium"
         prov_label = ("3. proven same-car same/similar-track" if tier <= _TIER_STRONG
                       else "4. proven same-car (other track)")
+        # A proven value narrows the legal clamp itself — it always did, and that is
+        # correct: the strongest evidence there is should bound the search.
         return WorkingWindow(
             field, round(w_lo, 3), round(w_hi, 3), round(proven, 3),
             ("1. legal range", f"{prov_label}: {proven:g}" + (f" ({source})" if source else ""),
              "narrowed toward your proven value"),
-            conf)
+            conf,
+            anchor=round(proven, 3), anchor_tier=a_tier or "PROVEN",
+            window_low=round(w_lo, 3), window_high=round(w_hi, 3))
 
-    # No strong proven value → the whole legal range, low confidence.
-    return WorkingWindow(field, round(lo, 3), round(hi, 3), None,
-                         ("1. legal range", "8. generic conservative fallback"),
-                         "low")
+    # No proven value → the legal range stays the clamp, but the PREFERENCE band and
+    # the starting position come from the anchor. Confidence tracks the anchor's tier:
+    # a class default is honest evidence of a starting point, a legal midpoint is not.
+    conf = "low"
+    sources = ("1. legal range", "8. generic conservative fallback")
+    if a_val is not None and a_tier:
+        conf = "medium" if a_tier in ("STOCK", "TRANSFERRED") else "low"
+        sources = ("1. legal range",
+                   f"anchor ({a_tier.lower()}): {a_val:g}"
+                   + (f" — {getattr(anchor, 'source', '')}"
+                      if getattr(anchor, "source", "") else ""))
+    return WorkingWindow(field, round(lo, 3), round(hi, 3), None, sources, conf,
+                         anchor=(round(a_val, 3) if a_val is not None else None),
+                         anchor_tier=a_tier,
+                         window_low=round(float(a_lo), 3),
+                         window_high=round(float(a_hi), 3))
 
 
 def build_working_windows(
     ranges: dict, history_prior: dict, *,
-    locked_fields=None, current_setup=None,
+    locked_fields=None, current_setup=None, anchor_set=None,
 ) -> dict:
-    """field -> WorkingWindow for every field with a legal range."""
+    """field -> WorkingWindow for every field with a legal range.
+
+    ``anchor_set`` is a ``strategy.setup_anchor.AnchorSet``; when absent every window
+    falls back to the legal range and its midpoint, which is the pre-A1 behaviour.
+    """
     locked = {f for f in (locked_fields or ())}
     setup = current_setup or {}
     out: dict = {}
     for field in (ranges or {}):
         w = build_working_window(
             field, ranges, history_prior,
-            locked=field in locked, current_value=_num(setup.get(field)))
+            locked=field in locked, current_value=_num(setup.get(field)),
+            anchor=(anchor_set.get(field) if anchor_set is not None else None))
         if w is not None:
             out[field] = w
     return out
@@ -213,6 +287,7 @@ class SetupEngineeringContext:
     track_confidence: dict         # per-capability
     feedback: dict                 # current vs historical
     missing_evidence: tuple
+    anchor_set: object = None      # strategy.setup_anchor.AnchorSet (or None)
 
     def window(self, field: str) -> Optional[WorkingWindow]:
         return self.working_windows.get(field)
@@ -231,6 +306,8 @@ class SetupEngineeringContext:
             "working_windows": {f: w.as_json() for f, w in self.working_windows.items()},
             "missing_evidence": list(self.missing_evidence),
             "evidence_precedence": list(EVIDENCE_PRECEDENCE),
+            "anchors": (self.anchor_set.as_json()
+                        if hasattr(self.anchor_set, "as_json") else None),
         }
 
 
@@ -256,6 +333,8 @@ def build_setup_engineering_context(
     required_compounds: tuple = (),
     car_class: str = "",
     car_specs: Optional[dict] = None,
+    track_name: str = "",
+    proven_fields: Optional[dict] = None,
 ) -> SetupEngineeringContext:
     """Build the canonical context ONCE from the shared builders. Degrades honestly on
     any missing input (never raises)."""
@@ -286,8 +365,36 @@ def build_setup_engineering_context(
         except Exception:
             locked_fields = set()
 
+    # UAT 2026-08-07 defects A1 + A3 — resolve every field's starting position before
+    # building the windows. `proven_fields` is the vetted complete setup for this exact
+    # car + track + discipline; it used to be seeded into the baseline and then never
+    # reach the context, so `WorkingWindow.preferred` stayed None and the guard in
+    # reconcile_synthesis_primary that is supposed to protect a proven value could
+    # never fire. Passing it here is what makes that guard real.
+    anchor_set = None
+    try:
+        from strategy.setup_anchor import resolve_anchor
+        anchor_set = resolve_anchor(
+            car, track_name or getattr(track_profile, "track_name", "") or "",
+            str(objective), ranges=ranges, history_prior=history_prior,
+            proven_fields=proven_fields, car_specs=car_specs, drivetrain=drivetrain)
+    except Exception:
+        anchor_set = None
+
+    # A proven field enters the history prior at the strongest tier so the window
+    # narrows around it and synthesis treats it as the primary author.
+    if proven_fields:
+        merged_prior = dict(history_prior)
+        for _f, _v in (proven_fields or {}).items():
+            if _num(_v) is None:
+                continue
+            merged_prior[_f] = {"value": float(_v), "tier": 1,
+                                "source": "proven-setup library"}
+        history_prior = merged_prior
+
     windows = build_working_windows(
-        ranges, history_prior, locked_fields=locked_fields, current_setup=current_setup)
+        ranges, history_prior, locked_fields=locked_fields,
+        current_setup=current_setup, anchor_set=anchor_set)
     track_conf = track_confidence_by_capability(track_profile, corner_profile)
     fb = feedback_state(diagnosis, history_prior)
 
@@ -310,5 +417,5 @@ def build_setup_engineering_context(
         required_compounds=tuple(required_compounds or ()), car_class=car_class,
         current_setup=current_setup, diagnosis=diagnosis, history_prior=history_prior,
         working_windows=windows, track_confidence=track_conf, feedback=fb,
-        missing_evidence=tuple(missing),
+        missing_evidence=tuple(missing), anchor_set=anchor_set,
     )

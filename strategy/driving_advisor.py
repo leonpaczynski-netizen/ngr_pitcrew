@@ -2593,6 +2593,23 @@ class DrivingAdvisor:
         }, ensure_ascii=False)
 
         try:
+            # Step 0: the car parameter model (UAT 2026-08-07 defects A5, A7) — the
+            # per-field legal range, preference window, anchor and step for this car.
+            # There is deliberately only ONE range model: the archetype bands sit
+            # inside GENERIC_DEFAULTS, so nothing here widens what the caller resolved
+            # and the validator's own resolve_ranges call still agrees with it.
+            _car_model = None
+            try:
+                from data.car_parameter_model import resolve_parameter_model
+                _car_model = resolve_parameter_model(car_name, drivetrain=drivetrain)
+                # Drivetrain is resolved from data/car_drivetrains.json when the caller
+                # did not supply one — defect A5, the classic form's "Auto-detect"
+                # resolved to "" and the whole engineering layer ran drivetrain-blind.
+                if not drivetrain and _car_model.drivetrain:
+                    drivetrain = _car_model.drivetrain
+            except Exception:
+                _car_model = None
+
             # Step 1: build driver profile (Phase 3: evolved from observed driving)
             _profile, _profile_evolution = _resolve_driver_profile(self._db)
 
@@ -2693,8 +2710,19 @@ class DrivingAdvisor:
                     _vehicle, _objective, track_profile, _front_wd,
                     ballast_kg=ballast_kg, ballast_position=ballast_position,
                 )
-                _chassis_seeds["springs_front"] = _spring_freq.front_hz
-                _chassis_seeds["springs_rear"]  = _spring_freq.rear_hz
+                # UAT 2026-08-07 defect A9 — derive_spring_frequencies returns the flat
+                # NEUTRAL_SEEDS constants with an "insufficient data ... neutral
+                # fallback" reason when the car has no weight/category/drivetrain data,
+                # and those values were still written here and then labelled
+                # "engineered for car + track + objective". That is a provenance lie,
+                # and it is also strictly worse than the class anchor. Take the spring
+                # model only when it actually modelled something.
+                if "insufficient data" not in str(_spring_freq.front_reason).lower() \
+                        and "neutral fallback" not in str(_spring_freq.front_reason).lower():
+                    _chassis_seeds["springs_front"] = _spring_freq.front_hz
+                if "insufficient data" not in str(_spring_freq.rear_reason).lower() \
+                        and "neutral fallback" not in str(_spring_freq.rear_reason).lower():
+                    _chassis_seeds["springs_rear"] = _spring_freq.rear_hz
             except Exception:
                 _eng_bias, _eng_lean, _eng_reasoning = {}, 0.0, None
                 _chassis_seeds = {}
@@ -2716,6 +2744,31 @@ class DrivingAdvisor:
             except Exception:
                 _driver_fit_reasoning = None
 
+            # UAT 2026-08-07 defect A1 — resolve where every field STARTS before
+            # authoring anything: proven setup for this car+track+discipline, then the
+            # same car proven elsewhere, then its captured GT7 stock value, then the
+            # class position. Only when all four are absent is a field left on a legal
+            # midpoint, and it is labelled as such rather than presented as a decision.
+            _anchor_set = None
+            _anchor_seeds: dict = {}
+            try:
+                from strategy.setup_anchor import resolve_anchor, TIER_GENERIC
+                from strategy.setup_authoring import objective_from_session_type
+                _anchor_set = resolve_anchor(
+                    car_name, track_name,
+                    objective_from_session_type(session_type).value,
+                    ranges=ranges, history_prior=_bl_prior or {},
+                    proven_fields=_proven_seeds or None,
+                    drivetrain=drivetrain, parameter_model=_car_model)
+                # A GENERIC anchor is the midpoint of a legal range — the absence of a
+                # position. Seeding from it would just relabel the old behaviour, so
+                # those fields keep the existing neutral seed and say so.
+                _anchor_seeds = {f: a.value for f, a in _anchor_set.anchors.items()
+                                 if a.tier != TIER_GENERIC}
+            except Exception:
+                _anchor_set = None
+                _anchor_seeds = {}
+
             _raw_data = build_baseline_setup(
                 car_name, ranges, drivetrain, num_gears,
                 _profile, allowed_tuning, tuning_locked,
@@ -2730,6 +2783,7 @@ class DrivingAdvisor:
                 chassis_seed_overrides=_chassis_seeds,
                 proven_seed_overrides=_proven_seeds,
                 proven_gearbox=_proven_gearbox,
+                anchor_seed_overrides=_anchor_seeds or None,
             )
 
             # Step 3: neutral_setup = the proposed setup_fields (no delta
@@ -2763,7 +2817,14 @@ class DrivingAdvisor:
                     tuning_locked=tuning_locked, track_profile=track_profile,
                     corner_profile=_corner_profile, history_prior=_bl_prior or {},
                     duration_mins=duration_mins,
-                    tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class)
+                    tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
+                    # UAT 2026-08-07 defect A3 — the proven-library seeds were applied
+                    # to the baseline and then never handed to the context, so
+                    # WorkingWindow.preferred stayed None for every field and the
+                    # "never override a proven value" guard in
+                    # reconcile_synthesis_primary could not fire. Verified: the vetted
+                    # RSR-at-Monza race entry was matched, seeded, then overwritten.
+                    track_name=track_name, proven_fields=_proven_seeds or None)
                 _synth = synthesize_setup(_ctx)
                 _synth_primary = reconcile_synthesis_primary(
                     _neutral_setup, _synth, _ctx)
@@ -2903,7 +2964,8 @@ class DrivingAdvisor:
                         tuning_locked=tuning_locked, track_profile=track_profile,
                         corner_profile=_corner_profile, history_prior=_bl_prior or {},
                         duration_mins=duration_mins,
-                        tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class)
+                        tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
+                        track_name=track_name, proven_fields=_proven_seeds or None)
                 _resp["engineering_context"] = _ctx.as_json()
                 # Phase 3: complete setup synthesis — target handling model → scored
                 # full-field candidates from the working windows → the best for the

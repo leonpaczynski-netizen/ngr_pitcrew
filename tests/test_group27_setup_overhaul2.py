@@ -399,20 +399,28 @@ class TestFixA_NormaliseChanges:
     """FIX A AC2 — _normalise_changes enriches each change with field + to_clamped."""
 
     def test_out_of_range_to_is_clamped_via_ranges(self):
-        """Change with arb_front='15' but range (1,7) → to_clamped=7, to='15' preserved."""
+        """Change with an out-of-range arb_front → to_clamped hits the ceiling, raw
+        'to' preserved.
+
+        UAT 2026-08-07 defect A7: the generic ARB ceiling was 7 while all four curated
+        cars in data/car_setup_ranges.json use 10, so it vetoed legal values. It is now
+        10. The clamping behaviour this test covers is unchanged — the assertion reads
+        the ceiling from GENERIC_DEFAULTS rather than hard-coding it again.
+        """
         from strategy.driving_advisor import _normalise_changes
         from strategy.setup_ranges import GENERIC_DEFAULTS
 
-        changes = [{"setting": "Front ARB", "field": "arb_front", "from": "4", "to": 15, "why": "test"}]
-        # arb_front generic range is (1, 7)
+        ceiling = GENERIC_DEFAULTS["arb_front"][1]
+        changes = [{"setting": "Front ARB", "field": "arb_front", "from": "4",
+                    "to": ceiling + 8, "why": "test"}]
         result = _normalise_changes(changes, setup_fields={}, car_name="")
 
         assert len(result) == 1
         ch = result[0]
         assert ch["field"] == "arb_front", f"field must be 'arb_front', got {ch['field']!r}"
-        assert ch["to"] == 15, f"raw 'to' must be preserved as 15, got {ch['to']!r}"
-        assert ch["to_clamped"] == 7, (
-            f"to_clamped must be clamped to range max 7, got {ch['to_clamped']!r}"
+        assert ch["to"] == ceiling + 8, f"raw 'to' must be preserved, got {ch['to']!r}"
+        assert ch["to_clamped"] == ceiling, (
+            f"to_clamped must be clamped to range max {ceiling}, got {ch['to_clamped']!r}"
         )
 
     def test_to_clamped_matches_setup_fields_when_present(self):

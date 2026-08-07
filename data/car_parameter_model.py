@@ -41,9 +41,15 @@ _CAPTURE_PATH = _DATA_DIR / "car_gt7_ranges.json"
 
 # Tier names, strongest first. Mirrors the per-field provenance tiers the Garage shows.
 TIER_CAPTURED = "captured"
+TIER_CURATED = "curated"          # a hand-entered per-car entry in car_setup_ranges.json
 TIER_ARCHETYPE = "archetype"
 TIER_GENERIC = "generic"
 TIER_ASSUMED = "assumed"          # step sizes only — app precision, not GT7 truth
+
+#: Tiers that describe THIS car rather than its class. The class archetype may widen a
+#: generic bound but must never widen one of these — a per-car entry is more specific
+#: than a class default even when it is only a preference window.
+_CAR_SPECIFIC_TIERS = frozenset({TIER_CAPTURED, TIER_CURATED})
 
 #: GT7 files its Gr.B rally cars under the Gr.4 category in car_specs.json, so the
 #: category alone cannot identify them. They are detected by name instead.
@@ -352,8 +358,14 @@ def resolve_parameter_model(
         lo_gen, hi_gen = float(gen_bounds[0]), float(gen_bounds[1])
         cur = legal.get(field, (lo_gen, hi_gen))
         legal_low, legal_high = float(cur[0]), float(cur[1])
-        legal_tier = TIER_GENERIC
-        sources: list = []
+        # A bound that differs from the global table is a per-car entry someone curated
+        # for THIS car in car_setup_ranges.json. It is a preference window wearing range
+        # semantics (defect A7, unpicked in chunk 5) but it is still car-specific, so it
+        # outranks the class archetype and must not be widened by it.
+        legal_tier = (TIER_CURATED
+                      if (legal_low, legal_high) != (lo_gen, hi_gen)
+                      else TIER_GENERIC)
+        sources: list = ["curated per-car range"] if legal_tier == TIER_CURATED else []
 
         # --- legal range: a capture is the only thing that can override the clamp ---
         cr = cap_ranges.get(field) if isinstance(cap_ranges.get(field), dict) else None
@@ -384,26 +396,16 @@ def resolve_parameter_model(
         if w_hi < w_lo:
             w_lo, w_hi = w_hi, w_lo
 
-        # --- widen the legal clamp to contain the window, never narrow it ---
-        # GENERIC_DEFAULTS is a hand-written global guess, and it is demonstrably
-        # narrower than values already run in GT7: its ride-height floor is 60mm while
-        # the vetted Porsche RSR setups in data/proven_setups.json run 55, its ARB
-        # ceiling is 7 while all four curated cars use 10, and its aero ceiling is 1000
-        # while the curated Porsche 963 window reaches 1200. Clamping the archetype to
-        # it would silently veto the correct answer — exactly defect A7. So the clamp
-        # is the UNION of the generic bound and the archetype's evidence-calibrated
-        # band. GENERIC_DEFAULTS itself is left untouched: several tests pin its exact
-        # tuples and setup_diagnosis keys an "is this range generic?" guard off them.
-        if window_tier == TIER_ARCHETYPE and legal_tier != TIER_CAPTURED:
-            if w_lo < legal_low or w_hi > legal_high:
-                legal_low = min(legal_low, w_lo)
-                legal_high = max(legal_high, w_hi)
-                legal_tier = TIER_ARCHETYPE
-                sources.append("clamp widened to the class band")
-        else:
-            # A real capture is authoritative: clip the archetype window into it.
-            w_lo = max(legal_low, min(legal_high, w_lo))
-            w_hi = max(legal_low, min(legal_high, w_hi))
+        # --- clip the class window into the legal clamp ---
+        # The archetype bands are authored to sit inside GENERIC_DEFAULTS (which was
+        # itself corrected for defect A7 — its 60mm ride-height floor and ARB ceiling
+        # of 7 were both narrower than values already run in GT7). Clipping here is a
+        # guard, not a routine narrowing; it does real work only against a car-specific
+        # legal range, which is MORE specific than the class and rightly wins.
+        w_lo = max(legal_low, min(legal_high, w_lo))
+        w_hi = max(legal_low, min(legal_high, w_hi))
+        if w_hi < w_lo:
+            w_lo = w_hi = legal_low
 
         # --- anchor: captured stock value beats the archetype position ---
         anchor = _num(cap_stock.get(field))

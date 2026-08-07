@@ -37,7 +37,7 @@
       "confidence": "medium",
       "source": "Preference window curated for Porsche 963 '24 in data/car_setup_ranges.json (the only Gr.1 entry). Anchors placed inside that window by class reasoning: prototypes run the lowest ride height and the highest downforce of any class. No proven Gr.1 setup exists on disk to calibrate against.",
       "parameters": {
-        "ride_height_front":  {"window": [45, 70],    "anchor": 50},
+        "ride_height_front":  {"window": [45, 70],    "anchor": 52},
         "ride_height_rear":   {"window": [65, 90],    "anchor": 72},
         "springs_front":      {"window": [3.5, 5.5],  "anchor": 4.3},
         "springs_rear":       {"window": [3.5, 5.5],  "anchor": 4.2},
@@ -52,7 +52,7 @@
         "toe_front":          {"window": [-0.10, 0.05], "anchor": 0.00},
         "toe_rear":           {"window": [0.00, 0.20],  "anchor": 0.10},
         "aero_front":         {"window": [700, 800],  "anchor": 750},
-        "aero_rear":          {"window": [800, 1200], "anchor": 950},
+        "aero_rear":          {"window": [800, 1000], "anchor": 900},
         "lsd_initial":        {"window": [10, 30],    "anchor": 18},
         "lsd_accel":          {"window": [25, 50],    "anchor": 35},
         "lsd_decel":          {"window": [10, 30],    "anchor": 20},

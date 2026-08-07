@@ -151,15 +151,33 @@ def test_gr3_springs_land_in_the_class_band():
 
 def test_no_archetype_anchor_is_pinned_to_a_legal_extreme():
     """A value sitting on its own legal boundary is a clamp artefact, not an
-    engineering position (the old path pinned aero_rear to 800/800)."""
+    engineering position (the old path pinned aero_rear to 800/800).
+
+    Fields whose bounds come from car-specific data are exempt: the vetted Porsche
+    RSR runs 55mm front, and its curated range floors at exactly 55, so the anchor
+    landing on that floor is the right answer rather than a clamp artefact.
+    """
     for car in (GR1_CAR, GR3_CAR, GR4_CAR, ROAD_CAR):
         m = resolve_parameter_model(car)
         for field in ("aero_front", "aero_rear", "springs_front", "springs_rear",
                       "ride_height_front", "ride_height_rear"):
             s = m.spec(field)
+            if s.legal_tier in ("curated", TIER_CAPTURED):
+                assert s.legal_low <= s.anchor <= s.legal_high, f"{car}.{field}"
+                continue
             assert s.legal_low < s.anchor < s.legal_high, (
                 f"{car}.{field}: anchor {s.anchor} pinned to legal "
                 f"{s.legal_low}..{s.legal_high}")
+
+
+def test_curated_per_car_range_is_not_widened_by_the_class_archetype():
+    """A per-car entry is more specific than a class default even when it is only a
+    preference window. The Gr.3 band floors at 50mm, but the RSR's own curated entry
+    says 55 — and every vetted RSR setup runs 55, so the class must not override it."""
+    s = resolve_parameter_model("Porsche 911 RSR (991) '17").spec("ride_height_front")
+    assert (s.legal_low, s.legal_high) == (55, 80)
+    assert s.legal_tier == "curated"
+    assert s.window_low >= 55
 
 
 # ---------------------------------------------------------------------------
@@ -174,27 +192,47 @@ def test_window_is_strictly_narrower_than_legal_for_shaped_fields():
         assert s.window_span < s.legal_span, field
 
 
-def test_legal_clamp_is_widened_not_narrowed_by_the_archetype():
-    """GENERIC_DEFAULTS floors ride height at 60mm and caps ARB at 7, but the vetted
-    RSR runs 55mm and all four curated cars use ARB 10. The clamp must widen to admit
-    the class band, never veto it."""
+def test_generic_bounds_admit_values_already_run_in_gt7():
+    """UAT 2026-08-07 defect A7. The generic table used to floor ride height at 60mm
+    while every vetted Porsche RSR setup runs 55, and cap ARB at 7 while all four
+    curated cars use 10 — bounds that vetoed the correct answer instead of bounding a
+    wrong one. Both were corrected from that evidence."""
     from strategy.setup_ranges import GENERIC_DEFAULTS
-    m = resolve_parameter_model(GR3_CAR)
-    rh = m.spec("ride_height_front")
-    assert rh.legal_low <= 55 < GENERIC_DEFAULTS["ride_height_front"][0]
-    assert rh.legal_tier == TIER_ARCHETYPE
-    arb = m.spec("arb_front")
-    assert arb.legal_high >= 8 > GENERIC_DEFAULTS["arb_front"][1]
+    assert GENERIC_DEFAULTS["ride_height_front"][0] <= 45
+    assert GENERIC_DEFAULTS["ride_height_rear"][0] <= 45
+    assert GENERIC_DEFAULTS["arb_front"][1] >= 10
+    assert GENERIC_DEFAULTS["arb_rear"][1] >= 10
 
 
-def test_generic_defaults_table_is_not_mutated():
-    """The widening happens per resolved model. Several tests and setup_diagnosis's
-    _aero_range_is_generic guard key off the exact GENERIC_DEFAULTS tuples."""
+def test_aero_generic_tuple_is_left_alone():
+    """setup_diagnosis keys its _aero_range_is_generic guard off the exact (0, 1000)
+    tuple. Widening it would change analyse-path behaviour Phase 1 is not fixing."""
     from strategy.setup_ranges import GENERIC_DEFAULTS
-    resolve_parameter_model(GR3_CAR)
-    assert GENERIC_DEFAULTS["ride_height_front"] == (60, 200)
-    assert GENERIC_DEFAULTS["arb_front"] == (1, 7)
     assert GENERIC_DEFAULTS["aero_front"] == (0, 1000)
+    assert GENERIC_DEFAULTS["aero_rear"] == (0, 1000)
+
+
+def test_there_is_only_one_range_model():
+    """Every archetype band must sit inside the generic clamp, so the parameter model
+    never has to widen what a caller resolved. Two disagreeing range models is what
+    made the validator reject the generator's own 52mm ride height as out of range."""
+    from strategy.setup_ranges import GENERIC_DEFAULTS
+    data = json.loads((_DATA / "car_archetypes.json").read_text(encoding="utf-8"))
+    for key, arch in data["archetypes"].items():
+        for field, spec in arch["parameters"].items():
+            g_lo, g_hi = GENERIC_DEFAULTS[field]
+            w_lo, w_hi = spec["window"]
+            assert g_lo <= w_lo and w_hi <= g_hi, (
+                f"{key}.{field}: window {w_lo}..{w_hi} escapes generic {g_lo}..{g_hi}")
+
+
+def test_resolved_legal_range_matches_resolve_ranges_for_an_unmapped_car():
+    """The model must not disagree with the table the validator reads."""
+    from strategy.setup_ranges import resolve_ranges
+    m = resolve_parameter_model(GR3_CAR)
+    for field, (lo, hi) in resolve_ranges(GR3_CAR).items():
+        s = m.spec(field)
+        assert (s.legal_low, s.legal_high) == (lo, hi), field
 
 
 def test_legal_ranges_shape_matches_resolve_ranges():
