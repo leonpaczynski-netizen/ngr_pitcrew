@@ -469,6 +469,20 @@ class SetupWorkspace(QWidget):
         act.addStretch(1)
         lay.addLayout(act)
 
+        # UAT 2026-08-07 defect B6 — "I heard X, I did Y", for every item the driver
+        # reported. This record has always existed; in the classic UI it rendered
+        # inside a COLLAPSED <details>, and the new shell could not show it at all.
+        # It is deliberately not behind the "Why these changes" toggle: an
+        # acknowledgement the driver has to go looking for is not an acknowledgement.
+        self._ack = QLabel("")
+        self._ack.setWordWrap(True)
+        self._ack.setStyleSheet(
+            f"color: {_t.TEXT}; background: {_t.CARBON_RAISED}; "
+            f"border-left: 3px solid {_t.NGR_GREEN}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 6px 10px; font-size: {_t.FS_LABEL}pt;")
+        self._ack.setVisible(False)
+        lay.addWidget(self._ack)
+
         self._why = QLabel("")
         self._why.setWordWrap(True)
         self._why.setStyleSheet(f"color: {_t.TEXT_DIM}; font-size: {_t.FS_CAPTION}pt;")
@@ -489,6 +503,7 @@ class SetupWorkspace(QWidget):
         active_setup: str = "", saved: bool = False, applied: bool = False,
         validated: bool = False, setup_values: Optional[dict] = None,
         lineage_nodes=None, comparisons=None, has_recorded_run: bool = True,
+        feedback_dispositions=None, degraded_reason: str = "",
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
@@ -512,6 +527,12 @@ class SetupWorkspace(QWidget):
             tuple(sorted((setup_values or {}).keys())), _rows_fp,
             tuple(str(n) for n in (lineage_nodes or ())),
             tuple(str(c) for c in (comparisons or ())),
+            # Defect B6 — the acknowledgement is part of what the driver sees, so it
+            # must take part in the re-render skip. Without it, a new set of
+            # dispositions on an otherwise-identical recommendation is silently
+            # dropped, which is the same disappearing act in a new place.
+            tuple(sorted(str(d) for d in (feedback_dispositions or ()))),
+            str(degraded_reason or ""),
         )
         if fingerprint == getattr(self, "_last_reco_fp", None):
             return
@@ -520,6 +541,7 @@ class SetupWorkspace(QWidget):
         self._vm = vm
         self._lineage.set_nodes(lineage_nodes or ())
         self._compare.set_comparisons(comparisons or ())
+        self._set_acknowledgement(feedback_dispositions, degraded_reason)
         self._selector.set_discipline(discipline)
         self._note.setText(DISCIPLINE_NOTE.get(discipline, ""))
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
@@ -836,6 +858,37 @@ class SetupWorkspace(QWidget):
 
     def _on_gearbox(self, checked: bool):
         self._gearbox.setVisible(bool(checked))
+
+    #: How each disposition state reads to the driver.
+    _ACK_STATE_TEXT = {
+        "addressed": "Acted on",
+        "deferred": "Heard, not changed",
+        "strategy": "Strategy, not setup",
+        "preserved": "Left alone deliberately",
+    }
+
+    def _set_acknowledgement(self, dispositions, degraded_reason: str = "") -> None:
+        """Render what was done with everything the driver reported (defect B6)."""
+        lines: list = []
+        if degraded_reason:
+            lines.append(
+                f"⚠ This analysis ran on PARTIAL evidence — {degraded_reason}. Your "
+                f"notes were still weighed; treat any “no change” as unproven.")
+        for d in (dispositions or ()):
+            try:
+                state = str(d.get("state") or "")
+                lines.append(
+                    f"• {d.get('feedback')} — "
+                    f"{self._ACK_STATE_TEXT.get(state, state)}: {d.get('detail') or ''}")
+            except Exception:
+                continue
+        if not lines:
+            self._ack.setText("")
+            self._ack.setVisible(False)
+            return
+        head = "What I did with what you told me:" if dispositions else ""
+        self._ack.setText("\n".join(([head] if head else []) + lines))
+        self._ack.setVisible(True)
 
     def _on_car_data(self, checked: bool) -> None:
         """Show or hide the GT7 car-data capture page (UAT 2026-08-07 defect A7)."""

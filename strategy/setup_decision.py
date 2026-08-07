@@ -164,9 +164,23 @@ def arbitrate_setup_decision(
       * the Phase-2 experiment lifecycle (transitions) — data/session_db.py;
       * the Phase-3 outcome status (evidence judgement) — strategy/setup_experiment_outcome.py;
       * the Phase-4 driver-facing decision state — strategy/setup_decision_status.resolve_setup_decision.
-    This arbiter is not promoted; its evidence-precedence field logic is superseded
-    by the Phase 1–4 spine and remains dormant (no live caller — enforced by
-    tests/test_engine_wiring_status.py and tests/test_phase4_setup_decision.py).
+
+    UAT 2026-08-07 defect B11 — CORRECTION TO THE ABOVE. The claim that this module's
+    "evidence-precedence field logic is superseded by the Phase 1–4 spine" does not
+    survive reading the successor. ``resolve_setup_decision`` composes recommendation
+    status, experiment lifecycle and outcome status into ONE driver-facing state; it
+    never reads driver feedback at all. This module answers a different question:
+    when telemetry and the driver DISAGREE about the same axis, which wins? That is
+    what ``EvidenceTier`` encodes (LATEST_DRIVER_FEEDBACK outranking CROSS_SESSION and
+    PROVEN_HISTORY), and nothing in the live path does it.
+
+    Phase 2 closed the feedback loop WITHOUT this: feedback now reaches the diagnosis
+    natively, drives the rule engine, and comes back as a per-item disposition. What
+    remains uncovered is only the conflict case. Promoting this arbiter would make it a
+    new authority able to override telemetry-driven changes, which is a deliberate
+    design decision with real consequences and not something to switch on quietly — so
+    it stays dormant, and this note says why rather than claiming a supersession that
+    did not happen. Its render dataclasses ARE live (ui/setup_advice_render).
 
     ``proposed_changes`` — iterable of dicts/objects with a ``field`` (and
     optional ``delta``). ``persistence_results`` — Sprint 5 IssuePersistenceResult

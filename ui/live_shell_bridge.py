@@ -3007,10 +3007,19 @@ class LiveShellBridge(QObject):
             label, applied = self._setups.active_setup(self._discipline)
             from ui.setup_recommendation_vm import build_recommendation_vm
             vm = self._recommendation_vm()
+            # Defect B6 — the "I heard X, I did Y" record for the SHOWN discipline.
+            # Only the analysis that belongs to this sheet may speak for it.
+            _res = self._last_analysis
+            _own = _res is not None and getattr(_res, "discipline", "") == self._discipline
             gp.set_recommendation(
                 vm if vm is not None else build_recommendation_vm({}),
                 discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
+                feedback_dispositions=(
+                    list(getattr(_res, "feedback_dispositions", ()) or ()) if _own else []),
+                degraded_reason=(
+                    str(getattr(_res, "diagnosis_degraded_reason", "") or "")
+                    if _own and getattr(_res, "diagnosis_degraded", False) else ""),
                 lineage_nodes=self._lineage_nodes(label),
                 has_recorded_run=self._has_recorded_run(),
             )

@@ -346,3 +346,149 @@ def test_the_feedback_form_can_actually_reset(qapp_form):
     assert form.current_feedback()
     form.reset()
     assert form.current_feedback() == {}
+
+
+# ---------------------------------------------------------------------------
+# B10 — the learning loop that could never fire from real data
+# ---------------------------------------------------------------------------
+def test_the_learning_loop_reads_classic_form_wording():
+    """It matched the bare word "understeer" while the classic form wrote "Too much
+    understeer", so every row from that surface scored as neither. Combined with the
+    rows mostly never being written (B1/B4/B5), the loop could not fire at all."""
+    from strategy.driver_profile_evolution import _row_signals
+    assert _row_signals({"corner_entry": "Too much understeer"}) == (True, False)
+    assert _row_signals({"exit_stability": "Rear loose on throttle"}) == (False, True)
+
+
+def test_the_learning_loop_reads_mangled_classic_keys():
+    from strategy.driver_profile_evolution import _row_signals
+    assert _row_signals({"mid-corner": "Pushes wide"}) == (True, False)
+
+
+def test_a_corroborated_tendency_now_evolves_the_profile():
+    """This is load-bearing: the fabricated preference flags were deleted in Phase 1
+    (defect A9), so profile evolution is the ONLY thing that can populate a driver
+    profile now."""
+    from strategy.driver_profile_evolution import evolve_profile, observe_feedback
+    from strategy.setup_driver_profile import build_driver_profile
+    base = build_driver_profile()
+    assert not base.prefers_front_bite, "premise changed: the base profile now asserts a style"
+
+    rows = [{"corner_entry": "Too much understeer"}] * 4
+    evolved, rationale = evolve_profile(base, observe_feedback(rows))
+    assert evolved.prefers_front_bite is True
+    assert rationale and "4 of the last 4" in rationale[0]
+
+
+def test_uncorroborated_feedback_does_not_move_the_profile():
+    """Style is a slow-moving property — one session must not rewrite it."""
+    from strategy.driver_profile_evolution import evolve_profile, observe_feedback
+    from strategy.setup_driver_profile import build_driver_profile
+    base = build_driver_profile()
+    evolved, rationale = evolve_profile(
+        base, observe_feedback([{"corner_entry": "Too much understeer"}]))
+    assert evolved == base
+    assert rationale == []
+
+
+def test_row_signals_never_raise_on_junk():
+    from strategy.driver_profile_evolution import _row_signals
+    for junk in ({}, {"corner_entry": None}, {"corner_entry": object()}):
+        assert _row_signals(junk) == (False, False)
+
+
+# ---------------------------------------------------------------------------
+# B6 rendering — the acknowledgement is visible, not buried
+# ---------------------------------------------------------------------------
+def test_the_garage_renders_the_acknowledgement(qapp):
+    from ui.components.setup_workspace import SetupWorkspace
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    w = SetupWorkspace()
+    w.set_recommendation(build_recommendation_vm({}), feedback_dispositions=[
+        {"feedback": "Mid-corner understeer", "state": "addressed",
+         "detail": "Change(s) applied: arb_front."},
+        {"feedback": "Mid-corner oversteer", "state": "deferred",
+         "detail": "No safe rule-based change."}])
+    text = w._ack.text()
+    assert "What I did with what you told me" in text
+    assert "Mid-corner understeer" in text and "Acted on" in text
+    assert "Mid-corner oversteer" in text and "Heard, not changed" in text
+
+
+def test_the_acknowledgement_is_not_behind_the_why_toggle(qapp):
+    """In the classic UI it rendered inside a COLLAPSED <details>. An acknowledgement
+    the driver has to go looking for is not an acknowledgement."""
+    from ui.components.setup_workspace import SetupWorkspace
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    w = SetupWorkspace()
+    w.set_recommendation(build_recommendation_vm({}), feedback_dispositions=[
+        {"feedback": "X", "state": "addressed", "detail": "y"}])
+    assert w._ack is not w._why
+    assert w._explain.isChecked() is False
+    assert w._ack.text()
+
+
+def test_a_degraded_diagnosis_is_shown_to_the_driver(qapp):
+    from ui.components.setup_workspace import SetupWorkspace
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    w = SetupWorkspace()
+    w.set_recommendation(build_recommendation_vm({}),
+                         degraded_reason="ValueError: bad lap")
+    assert "PARTIAL evidence" in w._ack.text()
+
+
+def test_nothing_reported_means_no_acknowledgement_box(qapp):
+    from ui.components.setup_workspace import SetupWorkspace
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    w = SetupWorkspace()
+    w.set_recommendation(build_recommendation_vm({}))
+    assert w._ack.text() == ""
+
+
+def test_the_acknowledgement_takes_part_in_the_rerender_skip(qapp):
+    """The Garage repaints every 750ms and skips identical renders. Without the
+    dispositions in the fingerprint, a new set on an otherwise-identical
+    recommendation is silently dropped — the same disappearing act in a new place."""
+    from ui.components.setup_workspace import SetupWorkspace
+    from ui.setup_recommendation_vm import build_recommendation_vm
+    w = SetupWorkspace()
+    vm = build_recommendation_vm({})
+    w.set_recommendation(vm, feedback_dispositions=[
+        {"feedback": "A", "state": "addressed", "detail": "x"}])
+    assert "A" in w._ack.text()
+    w.set_recommendation(vm, feedback_dispositions=[
+        {"feedback": "B", "state": "deferred", "detail": "y"}])
+    assert "B" in w._ack.text()
+
+
+def test_the_bridge_only_shows_the_acknowledgement_for_its_own_sheet():
+    """A race analysis must not speak for the qualifying sheet."""
+    import inspect
+
+    from ui.live_shell_bridge import LiveShellBridge
+    src = inspect.getsource(LiveShellBridge._feed_garage)
+    assert "feedback_dispositions" in src
+    assert 'getattr(_res, "discipline", "") == self._discipline' in src
+
+
+# ---------------------------------------------------------------------------
+# B11 — the arbiter's deprecation note claimed a supersession that did not happen
+# ---------------------------------------------------------------------------
+def test_the_successor_does_not_weigh_driver_feedback():
+    """resolve_setup_decision composes lifecycle/outcome status into one driver-facing
+    state; it never reads feedback. So it did NOT supersede the arbiter's job, which is
+    deciding who wins when telemetry and the driver disagree."""
+    import inspect
+
+    from strategy.setup_decision_status import resolve_setup_decision
+    params = inspect.signature(resolve_setup_decision).parameters
+    assert not any("feedback" in p for p in params)
+
+
+def test_the_arbiter_states_why_it_stays_dormant():
+    import inspect
+
+    import strategy.setup_decision as sd
+    doc = inspect.getdoc(sd.arbitrate_setup_decision) or ""
+    assert "B11" in doc
+    assert "conflict" in doc.lower()
