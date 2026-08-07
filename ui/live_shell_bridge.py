@@ -2861,8 +2861,11 @@ class LiveShellBridge(QObject):
     def _form_for_discipline(self, discipline: str = ""):
         """The classic setup form that owns this discipline's values.
 
-        The domain has exactly two editable sheets — Race and Qualifying. The initial
-        setup build FILLS both; it is an action, not a third sheet.
+        The classic shell has exactly two forms, Race and Qualifying, and it is being
+        retired — so Base (added to the new shell for UAT 2026-08-07) maps onto the Race
+        form here rather than growing a third classic form. The Base SHEET is real and
+        separate in strategy.setup_sheet; this is only about which legacy widget holds
+        the values.
         """
         d = (discipline or self._discipline or "race").lower()
         attr = "_qual_form" if d == "qualifying" else "_race_form"
@@ -3592,10 +3595,16 @@ class LiveShellBridge(QObject):
     def _on_discipline(self, discipline: str) -> None:
         """Remember the selected discipline and re-feed the Garage for it."""
         d = str(discipline or "").lower()
-        if d not in ("qualifying", "race"):
+        if d not in ("base", "qualifying", "race"):
             d = "race"
         self._discipline = d
-        self._push_practice_mode(d)
+        # UAT 2026-08-07 — Base is INERT for the live runtime. Selecting a discipline
+        # tab already mutates the live session type (defect C5, a Phase 3 fix), and
+        # adding a third tab would have made that worse: opening the Garage to build a
+        # base setup would have asserted a discipline the driver is not running. Base
+        # is the anchor, not a session, so it pushes nothing.
+        if d != "base":
+            self._push_practice_mode(d)
         # Selecting the qualifying sheet applies the qualifying tyre rule to it (softest
         # dry / rain tyre), so the setup sheet is always on the right compound. Guarded to
         # an authored sheet + only-when-different inside the helper, so no churn.

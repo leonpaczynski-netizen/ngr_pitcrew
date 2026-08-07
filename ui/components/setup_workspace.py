@@ -40,10 +40,14 @@ except Exception:  # pragma: no cover - defensive
         return ()
 
 
-#: The two sheets the domain actually has. There is no third "Base" sheet — the
-#: baseline build FILLS these two, so a Base tab could only ever mirror the Race one.
-#: It is an ACTION ("Build initial setup"), not a discipline.
-DISCIPLINES = (("race", "Race"), ("qualifying", "Qualifying"))
+#: The three sheets. UAT 2026-08-07: this used to be two, on the reasoning that the
+#: baseline build FILLS Race and Qualifying so a Base tab could only mirror Race. That
+#: reasoning had the dependency backwards. Base is the ANCHOR — the platform the car is
+#: learned on — and Race and Qualifying are explained DELTAS from it. Without it there
+#: is nowhere for a base setup to live, no way to see what a discipline actually
+#: changed, and the driver has to build a base setup on a tab labelled with a
+#: discipline they are not running.
+DISCIPLINES = (("base", "Base"), ("qualifying", "Qualifying"), ("race", "Race"))
 
 
 class SetupDisciplineSelector(QWidget):
@@ -103,6 +107,9 @@ class SetupDisciplineSelector(QWidget):
 #: What each discipline IS, in the driver's words — shown under the selector so the
 #: three tabs are never three identical-looking sheets with no explanation.
 DISCIPLINE_NOTE = {
+    "base": ("Base is the platform you learn the car on — balanced, no discipline bias. "
+             "Qualifying and Race are deltas from this, so get it right first and the "
+             "other two inherit it."),
     "qualifying": ("Qualifying is the one-lap tune: peak grip for a single hot lap, "
                    "tyre life and fuel are not the priority."),
     "race": ("Race is the stint tune: consistent pace over a full stint, tyre life and "

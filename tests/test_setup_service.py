@@ -83,22 +83,32 @@ _COMBINED_NO_CHANGE = json.dumps({
 
 
 class TestBuildInitialSetup:
-    def test_both_sheets_are_authored(self, tmp_path):
+    def test_all_three_sheets_are_authored(self, tmp_path):
+        """UAT 2026-08-07 — Base is authored FIRST and as its own sheet: it is the
+        anchor the other two are deltas from, so building them without it left the
+        anchor implicit and unviewable."""
         svc, store = _svc(tmp_path, _Advisor(baseline=_BASELINE_OK))
         result = svc.build_initial_setup()
         assert result.ok is True
-        assert result.built == ("race", "qualifying")
+        assert result.built == ("base", "race", "qualifying")
+        assert "Base sheet ✓" in result.headline
         assert "Race sheet ✓" in result.headline and "Qualifying sheet ✓" in result.headline
         scope = scope_key("Porsche Cayman GT4", "Watkins Glen International", "long_course")
-        assert store.get(scope, "race").get("arb_front") == 6.0
-        assert store.get(scope, "qualifying").get("arb_front") == 6.0
+        for discipline in ("base", "race", "qualifying"):
+            assert store.get(scope, discipline).get("arb_front") == 6.0
 
     def test_each_sheet_is_generated_for_its_own_purpose(self, tmp_path):
         advisor = _Advisor(baseline=_BASELINE_OK)
         svc, _store = _svc(tmp_path, advisor)
         svc.build_initial_setup()
         purposes = [c["session_type"] for c in advisor.baseline_calls]
-        assert purposes == ["Race Setup", "Qualifying Setup"]
+        assert purposes == ["Practice Setup", "Race Setup", "Qualifying Setup"]
+
+    def test_base_is_authored_before_the_disciplines(self, tmp_path):
+        advisor = _Advisor(baseline=_BASELINE_OK)
+        svc, _store = _svc(tmp_path, advisor)
+        svc.build_initial_setup()
+        assert advisor.baseline_calls[0]["session_type"].startswith("Practice")
 
     def test_a_sheet_that_fails_is_reported_not_implied(self, tmp_path):
         """The exact doubt UAT raised: did Qualifying actually build?"""

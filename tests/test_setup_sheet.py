@@ -116,15 +116,30 @@ class TestMerge:
 
 
 class TestDisciplines:
-    def test_there_are_exactly_two(self):
-        assert DISCIPLINES == ("race", "qualifying")
+    # UAT 2026-08-07 — BASE became a first-class sheet. It had been left out on the
+    # reasoning that the baseline build fills Race and Qualifying so a third sheet
+    # would only mirror one of them; that has the dependency backwards. Base is the
+    # ANCHOR the car is learned on and the other two are deltas from it, so without it
+    # a base setup has nowhere to live and no discipline delta is visible.
+    def test_base_is_a_first_class_sheet(self):
+        assert set(DISCIPLINES) == {"base", "race", "qualifying"}
 
     def test_each_maps_to_an_authority_purpose(self):
-        assert PURPOSE == {"race": "Race", "qualifying": "Qualifying"}
+        assert PURPOSE == {"base": "Practice", "race": "Race",
+                           "qualifying": "Qualifying"}
 
-    def test_anything_unknown_falls_back_to_race(self):
-        assert normalise_discipline("base") == "race"
+    def test_base_maps_to_practice_so_it_carries_no_discipline_bias(self):
+        """The anchor must not lean toward either discipline — that is what makes the
+        other two readable as deltas from it."""
+        assert PURPOSE["base"] == "Practice"
+
+    def test_base_is_now_recognised_rather_than_coerced_to_race(self):
+        assert normalise_discipline("base") == "base"
+        assert normalise_discipline("Base") == "base"
+
+    def test_anything_unknown_still_falls_back_to_race(self):
         assert normalise_discipline(None) == "race"
+        assert normalise_discipline("nonsense") == "race"
         assert normalise_discipline("Qualifying") == "qualifying"
 
 

@@ -201,11 +201,19 @@ def empty_sheet() -> SetupSheet:
     return sheet_from_dict({})
 
 
-#: The two disciplines that have a sheet. There is no third.
-DISCIPLINES: Tuple[str, ...] = ("race", "qualifying")
+#: The disciplines that have a sheet. UAT 2026-08-07: BASE was added as a first-class
+#: sheet. It had been left out on the reasoning that the baseline build fills Race and
+#: Qualifying so a third sheet would only mirror one of them — but that has the
+#: dependency backwards. Base is the ANCHOR the car is learned on, and the other two
+#: are explained deltas from it; without it a base setup has nowhere to live and there
+#: is no way to see what a discipline actually changed.
+DISCIPLINES: Tuple[str, ...] = ("base", "race", "qualifying")
 
-#: Discipline -> the purpose string the setup authority and the advisor use.
-PURPOSE: Dict[str, str] = {"race": "Race", "qualifying": "Qualifying"}
+#: Discipline -> the purpose string the setup authority and the advisor use. Base maps
+#: to "Practice" because that is the session it is driven in, and because it must NOT
+#: carry a discipline bias — that is the whole point of an anchor.
+PURPOSE: Dict[str, str] = {"base": "Practice", "race": "Race",
+                           "qualifying": "Qualifying"}
 
 
 def normalise_discipline(value) -> str:

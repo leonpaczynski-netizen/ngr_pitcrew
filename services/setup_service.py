@@ -104,6 +104,22 @@ class BaselineResult:
     reason: str = ""
     built: Tuple[str, ...] = field(default_factory=tuple)     # disciplines actually written
     failed: Dict[str, str] = field(default_factory=dict)      # discipline -> why
+    #: UAT 2026-08-07 — what each discipline CHANGED from the Base anchor:
+    #: {discipline: {field: (base_value, discipline_value)}}. Base is the platform;
+    #: Race and Qualifying are deltas from it, and a delta nobody can see is
+    #: indistinguishable from no delta at all — which is what the UAT reported when
+    #: the three sheets looked identical.
+    deltas_from_base: Dict[str, Dict[str, tuple]] = field(default_factory=dict)
+
+    def delta_summary(self, discipline: str) -> str:
+        """One line naming what this discipline actually changed."""
+        d = (self.deltas_from_base or {}).get(str(discipline).lower()) or {}
+        if not d:
+            return f"{str(discipline).capitalize()} is identical to Base."
+        names = ", ".join(sorted(d)[:6])
+        more = f" and {len(d) - 6} more" if len(d) > 6 else ""
+        return (f"{str(discipline).capitalize()} changes {len(d)} field"
+                f"{'s' if len(d) != 1 else ''} from Base: {names}{more}.")
 
     @property
     def headline(self) -> str:
@@ -257,17 +273,22 @@ class SetupService:
         if self._advisor is None:
             return BaselineResult(reason="The setup engine is not available.")
 
-        built, failed, sheets = [], {}, {}
-        for discipline in ("race", "qualifying"):
+        built, failed, sheets, authored = [], {}, {}, {}
+        # UAT 2026-08-07 — Base is authored FIRST and as its own sheet. It is the anchor
+        # the car is learned on; Race and Qualifying are deltas from it, so building
+        # them without ever building it left the anchor implicit and unviewable.
+        for discipline in ("base", "race", "qualifying"):
             ok, values, why = self._generate_baseline(inp, discipline)
             if ok:
                 sheets[discipline] = self.sheet(discipline, inp).merge(values)
+                authored[discipline] = dict(values)
                 built.append(discipline)
             else:
                 failed[discipline] = why
         if sheets:
             self._store.set_many(inp.scope, sheets)
         return BaselineResult(ok=bool(built), built=tuple(built), failed=failed,
+                              deltas_from_base=_deltas_from_base(authored),
                               reason="" if built else "No sheet could be built.")
 
     def _generate_baseline(self, inp: SetupInputs, discipline: str) -> Tuple[bool, dict, str]:
@@ -541,3 +562,33 @@ class SetupService:
             return f"{sid}::rev{rev}" if sid else ""
         except Exception:
             return ""
+
+
+def _deltas_from_base(authored: dict) -> dict:
+    """{discipline: {field: (base_value, value)}} for every field a discipline moved.
+
+    UAT 2026-08-07 — Base is the anchor and the other two are deltas from it. Computing
+    them here means the Garage can SHOW what qualifying actually changed rather than
+    presenting three sheets that look the same and asking the driver to trust that they
+    differ. A field missing from Base is not reported as a delta: that is an absence,
+    not a change.
+    """
+    base = (authored or {}).get("base") or {}
+    if not base:
+        return {}
+    out: dict = {}
+    for discipline, values in (authored or {}).items():
+        if discipline == "base" or not isinstance(values, dict):
+            continue
+        moved: dict = {}
+        for field, value in values.items():
+            if field not in base:
+                continue
+            try:
+                if abs(float(base[field]) - float(value)) > 1e-9:
+                    moved[field] = (base[field], value)
+            except (TypeError, ValueError):
+                if base[field] != value:
+                    moved[field] = (base[field], value)
+        out[discipline] = moved
+    return out
