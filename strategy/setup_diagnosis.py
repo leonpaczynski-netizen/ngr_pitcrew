@@ -150,6 +150,25 @@ _FEEL_VOCABULARY: dict[str, list[str]] = {
         "washes wide", "washes out", "won't rotate", "mid understeer",
         "mid-corner understeer", "apex understeer", "understeer mid",
     ],
+    # UAT 2026-08-07 defect B7 — three states the driver can report that the brain
+    # had NO representation for at all, so the complaint vanished between the dropdown
+    # and the diagnosis. They are recorded here so nothing reported disappears; they
+    # deliberately have no _FEEDBACK_ADDRESSING_FIELDS entry, because inventing a lever
+    # for them would be worse than admitting there is not one yet. Mid-corner oversteer
+    # in particular must NOT route to rear_loose_on_exit: that is a different corner
+    # phase and its fix would be applied at the wrong moment.
+    "mid_corner_oversteer": [
+        "mid-corner oversteer", "mid corner oversteer", "oversteer mid",
+        "loose through the corner", "loose mid-corner",
+    ],
+    "exit_understeer": [
+        "exit understeer", "understeer on exit", "pushes on exit",
+        "won't take the throttle", "power understeer",
+    ],
+    "gearing_too_short": [
+        "gearing too short", "gears too short", "hitting the limiter",
+        "bouncing off the limiter", "runs out of gear",
+    ],
     # Driver is happy with turn-in / entry balance — suppress turn-in changes.
     "entry_balance_good": [
         "good balance", "balance is good", "good turn-in", "good turn in",
@@ -414,10 +433,14 @@ def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]
         elif entry == "neutral":
             flags["entry_balance_good"] = True
 
-        # Mid-corner balance: understeer -> mid_corner_understeer.
-        # (mid-corner OVERSTEER has no dedicated flag -> intentionally unmapped.)
-        if _fb_val(feedback, "mid_corner") in _FB_BALANCE_UNDERSTEER:
+        # Mid-corner balance. Defect B7: mid-corner OVERSTEER used to be dropped
+        # entirely ("no dedicated flag"). It now has one — reported, not treated,
+        # because the honest answer is that there is no safe lever for it yet.
+        mid = _fb_val(feedback, "mid_corner")
+        if mid in _FB_BALANCE_UNDERSTEER:
             flags["mid_corner_understeer"] = True
+        elif mid in _FB_BALANCE_OVERSTEER:
+            flags["mid_corner_oversteer"] = True
 
         # Exit balance: oversteer -> rear_loose_on_exit; the strong grade adds snap.
         # (exit power-understeer has no flag -> intentionally unmapped.)
@@ -426,6 +449,9 @@ def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]
             flags["rear_loose_on_exit"] = True
         if exit_bal == "strong oversteer":
             flags["snap_oversteer_exit"] = True
+        # Defect B7: exit power-understeer was dropped entirely.
+        if exit_bal in _FB_BALANCE_UNDERSTEER:
+            flags["exit_understeer"] = True
 
         # Rotation: poor rotation IS the car refusing to rotate = mid understeer.
         if _fb_val(feedback, "rotation") in _FB_SCALE_LOW:
@@ -444,6 +470,11 @@ def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]
         gear = _fb_val(feedback, "gear_choice")
         if gear == "too long":
             flags["gearing_too_long"] = True
+        elif gear in ("too short", "short"):
+            # Defect B7: "telemetry detects it" was the reason for dropping this, but
+            # telemetry is not always present and the driver's report is evidence in
+            # its own right. Recorded; no lever invented.
+            flags["gearing_too_short"] = True
         elif gear == "about right":
             flags["gearbox_good"] = True
 
@@ -845,6 +876,9 @@ _FEEDBACK_LABELS: dict[str, str] = {
     "braking_instability":   "Rear lock / instability under braking",
     "lsd_feel_wrong":        "LSD feels wrong / not hooking up at the apex",
     "gearing_too_long":      "Sixth gear not fully used (gearing too long)",
+    "gearing_too_short":     "Hitting the limiter (gearing too short)",
+    "mid_corner_oversteer":  "Mid-corner oversteer (loose through the corner)",
+    "exit_understeer":       "Exit understeer (pushes on power)",
     "fuel_use_high":         "High fuel use",
 }
 _FEEDBACK_ADDRESSING_FIELDS: dict[str, frozenset] = {
@@ -1967,7 +2001,8 @@ def _build_deterministic_fallback(
     }
 
 
-def _build_setup_diagnosis_conservative() -> dict:
+def _build_setup_diagnosis_conservative(feedback: "dict | None" = None,
+                                        error: str = "") -> dict:
     """Return a fully-keyed conservative diagnosis dict for use when
     build_setup_diagnosis encounters an unexpected exception.
 
@@ -1975,8 +2010,30 @@ def _build_setup_diagnosis_conservative() -> dict:
     default to their most permissive safe state (bands are 'minor'/'low',
     no aero-near-min, gearbox preserved), rather than an empty dict that
     makes every rule silently pass with undefined data.
+
+    UAT 2026-08-07 defect B3 — this used to ship ``driver_feel_flags: {}`` as well, so
+    one bad value anywhere in the telemetry aggregation turned a driver's fourteen
+    answers into an all-clear: they saw "no change recommended" and there was no error
+    on screen, in the response or in the log. Two things change that:
+
+    * the driver's own answers are RE-DERIVED here. They come from
+      ``driver_feel_flags_from_feedback``, a direct dict lookup that never raises and
+      does not touch the telemetry aggregation that just failed — so a failure in the
+      lap maths can no longer erase what the driver told us;
+    * the result is stamped ``diagnosis_degraded`` with the reason, so every layer
+      above can say the analysis ran on partial evidence instead of implying the car
+      is fine.
     """
+    flags: dict = {}
+    try:
+        flags = driver_feel_flags_from_feedback(feedback)
+    except Exception:
+        flags = {}
     return {
+        # Set FIRST so the literal below cannot silently overwrite them.
+        "diagnosis_degraded": True,
+        "diagnosis_degraded_reason": (
+            error or "the telemetry aggregation failed"),
         "avg_bottoming":              0.0,
         "bottoming_band":             "minor",
         "avg_wheelspin":              0.0,
@@ -1994,7 +2051,7 @@ def _build_setup_diagnosis_conservative() -> dict:
         "aero_front_near_min":        False,
         "aero_rear_value":            0.0,
         "aero_rear_near_min":         False,
-        "driver_feel_flags":          {},
+        "driver_feel_flags":          flags,
         "wheelspin_by_gear":          None,
         "bog_by_gear":                None,  # Group 46: conservative = None
         "lockups_by_gear":            None,
@@ -2072,12 +2129,31 @@ def build_setup_diagnosis(
     returns a conservative fully-keyed dict (via _build_setup_diagnosis_conservative)
     rather than raising or returning {}.
     """
+    # UAT 2026-08-07 defects B5 + B7 — normalise the capture surface's keys AND its
+    # wording before anything reads them. The classic form emits "mid-corner" where
+    # every reader wants "mid_corner", and says "Too much understeer" where the brain
+    # matches "understeer"; both mismatches silently discarded real complaints. Doing
+    # it HERE rather than only at the DB boundary means any capture surface works,
+    # including ones that do not exist yet.
     try:
-        return _build_setup_diagnosis_inner(
+        from data.session_db import normalise_feedback, normalise_feedback_values
+        if feedback:
+            feedback = normalise_feedback_values(normalise_feedback(feedback))
+    except Exception:
+        pass
+
+    try:
+        result = _build_setup_diagnosis_inner(
             laps, setup, car_name, event_ctx, feeling, location_confidence, feedback
         )
-    except Exception:
-        return _build_setup_diagnosis_conservative()
+    except Exception as exc:
+        # Defect B3 — degrade loudly and KEEP the driver's answers; never convert a
+        # reported problem into an all-clear.
+        return _build_setup_diagnosis_conservative(
+            feedback, f"{type(exc).__name__}: {exc}")
+    result.setdefault("diagnosis_degraded", False)
+    result.setdefault("diagnosis_degraded_reason", "")
+    return result
 
 
 def _build_setup_diagnosis_inner(

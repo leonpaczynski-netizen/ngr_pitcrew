@@ -2046,6 +2046,10 @@ class LiveShellBridge(QObject):
         if not plan.ok:
             self._run_status(plan.reason or "Could not start the run.")
             return
+        # A new run is a new piece of evidence — the previous run's handling verdict
+        # must not carry into it (defect B8).
+        if not plan.reused:
+            self._clear_feedback("a new run is open")
         self._run_status("Run open — drive it, then come back and press “End run & record”."
                          if not plan.reused else "That run is already open.")
         self.refresh()
@@ -2108,6 +2112,10 @@ class LiveShellBridge(QObject):
         # Clear the tyre-test override — the run is now bound and its compound tag is
         # fixed; subsequent runs start fresh from the sheet compound.
         self._test_compound_override = None
+        # This run now needs its OWN handling verdict. Anything still held from the
+        # previous run describes a different run on a possibly different setup, and
+        # carrying it here is what let a stale verdict drive the next analysis (B8).
+        self._clear_feedback("this run needs its own notes")
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -2122,6 +2130,8 @@ class LiveShellBridge(QObject):
         # so the next run should start from the sheet compound again.
         self._test_compound_override = None
         ok = self._runs.discard_run()
+        if ok:
+            self._clear_feedback("the run was discarded")
         self._run_status("Run discarded — nothing was recorded against the event."
                          if ok else "There was no open run to discard.")
         self.refresh()
@@ -3608,6 +3618,10 @@ class LiveShellBridge(QObject):
         d = str(discipline or "").lower()
         if d not in ("base", "qualifying", "race"):
             d = "race"
+        if d != getattr(self, "_discipline", d):
+            # Feedback is about a run on ONE discipline's setup; a race verdict must
+            # not silently drive a qualifying analysis (defect B8).
+            self._clear_feedback(f"you switched to the {d} setup")
         self._discipline = d
         # UAT 2026-08-07 — Base is INERT for the live runtime. Selecting a discipline
         # tab already mutates the live session type (defect C5, a Phase 3 fix), and
@@ -3642,6 +3656,8 @@ class LiveShellBridge(QObject):
         qualifying.
         """
         self._live_session_mode = "qualifying"
+        if getattr(self, "_discipline", "") != "qualifying":
+            self._clear_feedback("qualifying has begun")
         self._discipline = "qualifying"
         # Reflect the switch in the Garage's own selector so the two never disagree.
         try:
@@ -4369,11 +4385,64 @@ class LiveShellBridge(QObject):
         # traction, kerbs); only the free-text notes go through the text path. Without
         # this the brain sees telemetry symptoms only, so an understeer felt by the
         # driver on a car with clean telemetry would falsely read "inside its window".
-        feedback = dict(getattr(self, "_last_feedback", None) or {})
+        feedback = self._current_feedback()
         notes = str(feedback.get("notes") or "").strip()
         self._spawn(lambda: self._analysis_done.emit(self._setups.analyse(
             discipline, feeling=notes, feedback=feedback or None,
             live_corner_aggregates=self._live_corner_aggregates())))
+
+    def _clear_feedback(self, why: str) -> None:
+        """Drop the driver's handling verdict at a run or discipline boundary.
+
+        UAT 2026-08-07 defect B8: ``_last_feedback`` was never cleared by start-run,
+        record-run, discard-run, a discipline change or Begin Qualifying, so a
+        qualifying analysis could quietly reuse a verdict the driver gave about a
+        practice run on a different setup. Feedback is evidence about ONE run on ONE
+        setup; carrying it past that boundary is not continuity, it is contamination.
+
+        The form is cleared too, otherwise the next run starts with the previous run's
+        answers already filled in and the driver has to notice and undo them.
+        """
+        if not getattr(self, "_last_feedback", None):
+            self._reset_feedback_form()
+            return
+        self._last_feedback = {}
+        self._reset_feedback_form()
+        self._run_status(
+            f"Handling notes cleared — {why}. Note how THIS run felt before analysing.")
+
+    def _reset_feedback_form(self) -> None:
+        try:
+            form = getattr(self._shell, "feedback_form", None)
+            if form is not None and hasattr(form, "reset"):
+                form.reset()
+        except Exception:
+            pass
+
+    def _current_feedback(self) -> dict:
+        """The driver's handling verdict as it stands RIGHT NOW.
+
+        UAT 2026-08-07 defect B2: Analyse read ``self._last_feedback``, which is only
+        written when the driver presses "Submit feedback". Fill in all fourteen
+        dropdowns, navigate to the Garage and press Analyse without that click and
+        100% of it was ignored — and the headline then blamed missing evidence rather
+        than the missing press, so the driver had no way to tell what had happened.
+
+        The live form is read first and the last submitted dict is the fallback, so
+        unsubmitted answers count and a submitted verdict still survives navigating
+        away from the form.
+        """
+        live: dict = {}
+        try:
+            form = getattr(self._shell, "feedback_form", None)
+            if form is not None and hasattr(form, "current_feedback"):
+                live = {k: v for k, v in (form.current_feedback() or {}).items()
+                        if str(v).strip()}
+        except Exception:
+            live = {}
+        merged = dict(getattr(self, "_last_feedback", None) or {})
+        merged.update(live)          # what is on screen now wins
+        return merged
 
     def _live_corner_aggregates(self) -> list:
         """Live per-corner telemetry, when the host runs an aggregator ([] otherwise)."""

@@ -740,6 +740,39 @@ def _severity_scaled_delta(
     return scaled, (scaled / base_delta if base_delta else 1.0), level
 
 
+def _record_suppression(rejected: list, rule, reason: str, detail: str) -> None:
+    """Record a rule that WOULD have fired but was suppressed.
+
+    UAT 2026-08-07 defect B9 — a protected field, an event tuning lock, a
+    contraindication or a delta that rounds to zero all returned silently, so a driver
+    who reported a problem saw no change and no reason. "Nothing to do" and "there was
+    something to do but I was not allowed to do it" are completely different answers,
+    and the second is actionable: it says unlock a tuning category, or that a safety
+    invariant is deliberately holding the line.
+
+    Preconditions-not-met is deliberately NOT recorded: a rule that does not apply is
+    not a suppression, and logging every one would bury the four that matter.
+    """
+    rejected.append(SetupChangeIntent(
+        field=rule.field,
+        delta=0.0,
+        from_value=None,
+        to_value=None,
+        symptom=rule.symptom,
+        evidence=[],
+        rule_id=rule.rule_id,
+        rationale=f"SUPPRESSED ({reason}) — {detail}",
+        rejected_alternatives=[],
+        risk=rule.risk,
+        confidence=rule.base_confidence,
+        driver_style_alignment=DriverStyleAlignment.neutral,
+        source_label="suppressed rule",
+        session_influence="",
+        car_drivetrain_influence="",
+        pack=rule.pack,
+    ))
+
+
 def _process_rule(
     rule: SetupRule,
     diagnosis: dict,
@@ -850,14 +883,22 @@ def _process_rule(
 
     # --- Evaluate contraindications ---
     if _eval_contraindications(rule.contraindications, diagnosis):
-        return  # rule suppressed
+        _record_suppression(rejected, rule, "contraindicated",
+                            "the evidence contradicts this change; making it would "
+                            "risk causing the opposite problem")
+        return
 
     # --- Skip if field is protected ---
     if rule.field in protected_fields:
+        _record_suppression(rejected, rule, "field protected",
+                            f"{rule.field} is held by a safety invariant, so this "
+                            f"correction cannot be made through it")
         return
 
     # --- Allowed-tuning gate ---
     if allowed_fields is not None and rule.field not in allowed_fields:
+        _record_suppression(rejected, rule, "locked by the event",
+                            f"the event rules do not permit tuning {rule.field}")
         return
 
     # --- Gear count gating ---
@@ -869,7 +910,10 @@ def _process_rule(
     # --- Resolve delta ---
     delta = resolve_delta(rule.delta_fn, setup, ranges, diagnosis)
     if delta == 0.0:
-        return  # no-op
+        _record_suppression(rejected, rule, "already at the limit",
+                            f"{rule.field} cannot move further in that direction "
+                            f"within its legal range")
+        return
 
     # --- Cold-start aggression (data-maturity weighting) ---
     # While the setup has little recorded data the driver's feedback is the best signal,

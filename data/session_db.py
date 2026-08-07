@@ -427,6 +427,73 @@ FEEDBACK_KEY_ALIASES: dict[str, str] = {
     "fuel-use": "fuel_use",
 }
 
+#: Classic-dashboard display label -> canonical feedback key (UAT 2026-08-07 B5).
+#: Stated, never derived: deriving it from the label produced "mid-corner" and
+#: "rear_under_braking" while every reader wants "mid_corner" and "rear_braking".
+FEEDBACK_LABEL_KEYS: dict[str, str] = {
+    "Corner Entry": "corner_entry",
+    "Mid-Corner": "mid_corner",
+    "Exit Stability": "exit_stability",
+    "Rear Under Braking": "rear_braking",
+    "Tyre Condition": "tyre_condition",
+    "Fuel Use": "fuel_use",
+}
+
+#: Capture-surface wording -> the vocabulary the setup brain actually reads
+#: (UAT 2026-08-07 defect B7). The classic form says "Too much understeer" where the
+#: brain matches "understeer", and several states had no mapping at all, so specific
+#: complaints were swallowed in silence. Keys are lower-cased raw values.
+FEEDBACK_VALUE_ALIASES: dict[str, str] = {
+    # classic balance wording
+    "too much understeer": "understeer",
+    "too much oversteer": "oversteer",
+    "good balance": "neutral",
+    "good rotation": "neutral",
+    "good traction": "good",
+    "pushes wide": "understeer",
+    "too much rotation": "oversteer",
+    "snaps on lift-off": "strong oversteer",
+    "rear loose on throttle": "oversteer",
+    "rear unstable under braking": "oversteer",
+    "stable but sluggish": "understeer",
+    "poor traction": "poor",
+    "steps out": "oversteer",
+    "locks up rear": "oversteer",
+    "stable": "neutral",
+    "fine": "good",
+    "on target": "good",
+    "higher than expected": "high",
+    "lower than expected": "low",
+    # states the register found unmapped on the new-shell form
+    "mid-corner oversteer": "oversteer",
+    "exit understeer": "understeer",
+    "too short": "short",
+    "too long": "long",
+}
+
+#: Fields whose values go through FEEDBACK_VALUE_ALIASES. Free text is left alone.
+_FEEDBACK_VALUE_FIELDS: frozenset = frozenset({
+    "corner_entry", "mid_corner", "exit_stability", "rear_braking",
+    "traction", "rotation", "drive_out", "straight_line", "gear_choice",
+    "tyre_condition", "fuel_use", "braking_confidence", "kerb_behaviour",
+})
+
+
+def normalise_feedback_values(feedback: dict | None) -> dict:
+    """Rewrite capture-surface wording into the brain's vocabulary. Never raises.
+
+    Unmapped values pass through untouched — a state nobody has taught the brain is
+    reported as-is rather than silently becoming something else.
+    """
+    out: dict = {}
+    for key, value in (feedback or {}).items():
+        if key in _FEEDBACK_VALUE_FIELDS and isinstance(value, str):
+            out[key] = FEEDBACK_VALUE_ALIASES.get(value.strip().lower(), value)
+        else:
+            out[key] = value
+    return out
+
+
 #: Every column ``write_feedback`` will persist, in insert order.
 FEEDBACK_COLUMNS: tuple[str, ...] = (
     "corner_entry", "mid_corner", "exit_stability", "rear_braking",

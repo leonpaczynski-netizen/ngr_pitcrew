@@ -68,6 +68,32 @@ class AnalysisResult:
     status: str = ""
     raw: str = ""
     weighed_feeling: bool = False   # did the analysis include the driver's handling verdict?
+    #: UAT 2026-08-07 defect B6 — "I heard X, I did Y", one entry per thing the driver
+    #: reported. build_feedback_dispositions has produced exactly this record all
+    #: along; AnalysisResult never extracted it, so the new shell structurally could
+    #: not show it and the only rendering was in the classic UI inside a collapsed
+    #: <details>. Nothing the driver reported is allowed to disappear silently.
+    feedback_dispositions: Tuple[dict, ...] = field(default_factory=tuple)
+    #: UAT 2026-08-07 defect B3 — the diagnosis fell back to a conservative all-clear
+    #: on any internal error. True means this analysis ran on partial evidence.
+    diagnosis_degraded: bool = False
+    diagnosis_degraded_reason: str = ""
+
+    @property
+    def acknowledgement(self) -> str:
+        """What was done with what the driver reported, in one line."""
+        if not self.feedback_dispositions:
+            return ""
+        by_state: dict = {}
+        for d in self.feedback_dispositions:
+            by_state.setdefault(str(d.get("state") or "?"), []).append(
+                str(d.get("feedback") or ""))
+        bits = []
+        for state in ("addressed", "deferred", "strategy", "preserved"):
+            names = by_state.get(state)
+            if names:
+                bits.append(f"{state}: {', '.join(n for n in names if n)}")
+        return "  ·  ".join(bits)
 
     @property
     def has_recommendation(self) -> bool:
@@ -81,6 +107,13 @@ class AnalysisResult:
         if self.has_recommendation:
             n = len(self.changes)
             return f"{n} change{'s' if n != 1 else ''} recommended."
+        if self.diagnosis_degraded:
+            # Defect B3 — never let a failed diagnosis read as a clean bill of health.
+            return ("Analysis ran on PARTIAL evidence — the telemetry read failed"
+                    + (f" ({self.diagnosis_degraded_reason})"
+                       if self.diagnosis_degraded_reason else "")
+                    + ". Your handling notes were still weighed. Treat any "
+                      "'no change' below as unproven.")
         if self.validation_errors:
             return "No change recommended — " + "; ".join(self.validation_errors[:2])
         if self.reason:
@@ -378,7 +411,13 @@ class SetupService:
             validation_errors=tuple(_norm(e) for e in
                                     (data.get("validation_errors") or ()) if _norm(e)),
             status=_norm(data.get("recommendation_status")), raw=_norm(payload),
-            weighed_feeling=_weighed)
+            weighed_feeling=_weighed,
+            feedback_dispositions=tuple(
+                d for d in (data.get("feedback_dispositions") or ())
+                if isinstance(d, Mapping)),
+            diagnosis_degraded=bool((data.get("diagnosis") or {}).get("diagnosis_degraded")),
+            diagnosis_degraded_reason=_norm(
+                (data.get("diagnosis") or {}).get("diagnosis_degraded_reason")))
 
     # ---- apply / revert ---------------------------------------------------
     def apply(self, discipline: str, fields: Optional[Mapping]) -> SetupOutcome:

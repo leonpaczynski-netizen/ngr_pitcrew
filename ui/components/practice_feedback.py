@@ -180,5 +180,25 @@ class StructuredFeedbackForm(QWidget):
             fb["notes"] = notes
         return fb
 
+    def reset(self) -> None:
+        """Clear every answer, ready for the next run.
+
+        UAT 2026-08-07 defect B8 — feedback is evidence about ONE run on ONE setup. The
+        bridge drops its held verdict at a run or discipline boundary; without clearing
+        the form too, the next run opens with the previous run's answers already filled
+        in and the driver has to notice and undo them, which is a worse failure than
+        starting blank.
+        """
+        self._overall_value = ""
+        for key in getattr(self, "_overall_buttons", {}):
+            try:
+                self._overall_buttons[key].setChecked(False)
+            except Exception:
+                pass
+        for combo in self._combos.values():
+            combo.setCurrentIndex(0)
+        self._corners.setCurrentIndex(0)
+        self._notes.clear()
+
     def _on_submit(self) -> None:
         self.submitted.emit(self.current_feedback())
