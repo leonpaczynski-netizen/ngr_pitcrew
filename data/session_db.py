@@ -458,7 +458,6 @@ FEEDBACK_VALUE_ALIASES: dict[str, str] = {
     "stable but sluggish": "understeer",
     "poor traction": "poor",
     "steps out": "oversteer",
-    "locks up rear": "oversteer",
     "stable": "neutral",
     "fine": "good",
     "on target": "good",

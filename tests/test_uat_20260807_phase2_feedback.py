@@ -492,3 +492,32 @@ def test_the_arbiter_states_why_it_stays_dormant():
     doc = inspect.getdoc(sd.arbitrate_setup_decision) or ""
     assert "B11" in doc
     assert "conflict" in doc.lower()
+
+
+# ---------------------------------------------------------------------------
+# B5/B7 — the destroyed dropdown also needed a consumer
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("value,flag", [
+    ("Steps out", "rear_loose_under_braking"),
+    ("Locks up rear", "braking_instability"),
+])
+def test_the_rear_under_braking_dropdown_now_does_something(value, flag):
+    """This is the field B5 was destroying on every write. It had NO consumer either,
+    so fixing the key alone would have persisted the data and still done nothing."""
+    d = build_setup_diagnosis([], {}, "X", {}, None,
+                              feedback={"rear_under_braking": value})
+    assert d["driver_feel_flags"][flag] is True
+
+
+def test_a_rear_lock_is_not_read_as_a_slide():
+    """"Locks up rear" is a lock, not a loose rear — different mechanism, different
+    lever. Aliasing it to oversteer would send it to the wrong fix."""
+    d = build_setup_diagnosis([], {}, "X", {}, None,
+                              feedback={"rear_under_braking": "Locks up rear"})
+    assert d["driver_feel_flags"]["rear_loose_under_braking"] is False
+
+
+def test_a_stable_rear_reports_no_problem():
+    d = build_setup_diagnosis([], {}, "X", {}, None,
+                              feedback={"rear_under_braking": "Stable"})
+    assert not any(d["driver_feel_flags"].values())

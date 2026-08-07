@@ -453,6 +453,18 @@ def driver_feel_flags_from_feedback(feedback: "dict | None") -> "dict[str, bool]
         if exit_bal in _FB_BALANCE_UNDERSTEER:
             flags["exit_understeer"] = True
 
+        # Rear under braking. UAT 2026-08-07 defect B5/B7 — this dropdown had NO
+        # consumer at all, so fixing the key mangling that destroyed it on every write
+        # would have persisted the data and still done nothing with it. It maps onto
+        # the existing brake-phase flag: same axis, same corner phase, and it already
+        # has levers (lsd_decel, brake_bias). "Locks up rear" is a lock, not a slide,
+        # so it routes to braking instability rather than to a loose rear.
+        rear_brake = _fb_val(feedback, "rear_braking")
+        if rear_brake in _FB_BALANCE_OVERSTEER:
+            flags["rear_loose_under_braking"] = True
+        elif rear_brake in ("locks up rear", "lockup", "locking"):
+            flags["braking_instability"] = True
+
         # Rotation: poor rotation IS the car refusing to rotate = mid understeer.
         if _fb_val(feedback, "rotation") in _FB_SCALE_LOW:
             flags["mid_corner_understeer"] = True
