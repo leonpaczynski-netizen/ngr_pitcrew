@@ -387,6 +387,72 @@ _V16_ALTER_COLUMNS: list[tuple[str, str]] = [
     ("driver_feedback", "phase       TEXT NOT NULL DEFAULT ''"),
 ]
 
+# v41: UAT 2026-08-07 defect B4 — the driver_feedback table could hold only 7 of the
+# 14 fields the Practice Review form captures, so traction, rotation, braking
+# confidence, drive-out, straight-line, kerb behaviour, bottoming, gear choice and
+# overall confidence were silently discarded on every write. Additive TEXT columns,
+# duplicate-column guard follows the v14 pattern.
+_V41_ALTER_COLUMNS: list[tuple[str, str]] = [
+    ("driver_feedback", "braking_confidence TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "traction           TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "rotation           TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "drive_out          TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "straight_line      TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "kerb_behaviour     TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "bottoming          TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "gear_choice        TEXT NOT NULL DEFAULT ''"),
+    ("driver_feedback", "overall_confidence TEXT NOT NULL DEFAULT ''"),
+]
+
+#: Canonical driver_feedback column for each key a capture surface may emit.
+#: UAT 2026-08-07 defects B4/B5 — the new shell's StructuredFeedbackForm and the
+#: classic dashboard form use different key spellings from the table, and the
+#: classic form's label-to-key mangling produces ``mid-corner`` (hyphen) and
+#: ``rear_under_braking``, neither of which any reader looked for. Everything is
+#: funnelled through one alias map so a capture surface can never again lose a
+#: field by naming it differently.
+FEEDBACK_KEY_ALIASES: dict[str, str] = {
+    # new shell (ui/components/practice_feedback.py FEEDBACK_FIELDS)
+    "overall": "vs_previous",
+    "fuel_behaviour": "fuel_use",
+    "confidence": "overall_confidence",
+    "corners": "corner",
+    # classic dashboard label mangling (ui/dashboard.py _build_driver_feedback_form)
+    "mid-corner": "mid_corner",
+    "rear_under_braking": "rear_braking",
+    "rear-under-braking": "rear_braking",
+    "corner-entry": "corner_entry",
+    "exit-stability": "exit_stability",
+    "tyre-condition": "tyre_condition",
+    "fuel-use": "fuel_use",
+}
+
+#: Every column ``write_feedback`` will persist, in insert order.
+FEEDBACK_COLUMNS: tuple[str, ...] = (
+    "corner_entry", "mid_corner", "exit_stability", "rear_braking",
+    "tyre_condition", "fuel_use", "notes", "vs_previous", "corner", "phase",
+    "braking_confidence", "traction", "rotation", "drive_out", "straight_line",
+    "kerb_behaviour", "bottoming", "gear_choice", "overall_confidence",
+)
+
+
+def normalise_feedback(feedback: dict | None) -> dict:
+    """Map any capture surface's keys onto the canonical driver_feedback columns.
+
+    Unknown keys are preserved untouched so callers that read the raw dict (the
+    diagnosis pipeline reads ``mid_corner``/``traction``/… directly) keep working;
+    only aliases are rewritten. An alias never overwrites an already-canonical key.
+    """
+    out: dict = {}
+    for key, value in (feedback or {}).items():
+        canonical = FEEDBACK_KEY_ALIASES.get(str(key), str(key))
+        if canonical in out and not str(value or "").strip():
+            continue
+        if canonical in out and str(out[canonical] or "").strip():
+            continue
+        out[canonical] = value
+    return out
+
 # v15: Engineering-Brain Phase 1 — closed-loop setup lineage.
 # A dedicated, ADDITIVE table (touches no existing table) recording each applied
 # setup as a node derived from a PARENT node by a set of field changes, with the
@@ -1419,6 +1485,25 @@ class SessionDB:
             self._migrate_v40()
             self._conn.execute("PRAGMA user_version = 40")
             self._conn.commit()
+        if version < 41:
+            self._migrate_v41()
+            self._conn.execute("PRAGMA user_version = 41")
+            self._conn.commit()
+
+    def _migrate_v41(self) -> None:
+        """UAT 2026-08-07 defect B4 — widen driver_feedback to the full capture set.
+
+        Nine additive TEXT columns so the Practice Review form's traction, rotation,
+        braking confidence, drive-out, straight-line, kerb behaviour, bottoming, gear
+        choice and overall confidence are stored instead of silently dropped. Existing
+        rows backfill via DEFAULT ''. Duplicate-column guard follows the v14 pattern.
+        """
+        for table, col_def in _V41_ALTER_COLUMNS:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _migrate_v40(self) -> None:
         """Program 3 Phase I — learning proposals + decisions (schema v40).
@@ -10181,31 +10266,25 @@ class SessionDB:
         rating: str = "",
     ) -> int:
         submitted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # UAT 2026-08-07 defects B4/B5 — normalise every capture surface's key
+        # spelling onto the canonical columns first, then persist the FULL set.
+        # Previously 9 of the 14 captured fields had no column and two classic-form
+        # fields were mis-keyed, so they were dropped on every single write.
+        fb = normalise_feedback(feedback)
+        _cols = ", ".join(FEEDBACK_COLUMNS)
+        _marks = ",".join("?" * len(FEEDBACK_COLUMNS))
         with self._lock:
             cur = self._conn.execute(
-                """INSERT INTO driver_feedback
+                f"""INSERT INTO driver_feedback
                        (session_id, lap_num, submitted_at,
-                        corner_entry, mid_corner, exit_stability,
-                        rear_braking, tyre_condition, fuel_use,
-                        notes, config_id, setup_id, rating,
-                        vs_previous, corner, phase)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        config_id, setup_id, rating, {_cols})
+                   VALUES (?,?,?,?,?,?,{_marks})""",
                 (
                     session_id, lap_num, submitted_at,
-                    feedback.get("corner_entry", ""),
-                    feedback.get("mid_corner", ""),
-                    feedback.get("exit_stability", ""),
-                    feedback.get("rear_braking", ""),
-                    feedback.get("tyre_condition", ""),
-                    feedback.get("fuel_use", ""),
-                    feedback.get("notes", ""),
                     config_id,
                     int(setup_id or 0),
                     rating or "",
-                    # Phase 7: directional outcome vs the previous setup + optional corner.
-                    feedback.get("vs_previous", ""),
-                    feedback.get("corner", ""),
-                    feedback.get("phase", ""),
+                    *(str(fb.get(col, "") or "") for col in FEEDBACK_COLUMNS),
                 ),
             )
             self._conn.commit()

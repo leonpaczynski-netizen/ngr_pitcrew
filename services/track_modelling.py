@@ -114,6 +114,15 @@ class TrackModellingService:
         """
         station_map = self._session.artefact("station_map")
         if station_map is None:
+            # UAT 2026-08-07 defect D3: an ALREADY-APPROVED track has no in-memory
+            # station-map artefact — select_track clears the artefact dict and
+            # refresh_disk_readiness only restores ``model_active``. Without a disk
+            # fallback this refused with "Approve the track model before mapping the
+            # pit lane" for every approved track, which made pit-lane mapping
+            # structurally impossible after an app restart. The map RENDERER already
+            # falls back to disk; the mapper now does the same.
+            station_map = self._load_station_map_from_disk()
+        if station_map is None:
             return TrackActionResult(action="map_pit_lane", session=self._session,
                                      reason="Approve the track model before mapping the pit lane.")
         laps = list(pit_laps) if isinstance(pit_laps, (list, tuple)) else [pit_laps]
@@ -139,6 +148,25 @@ class TrackModellingService:
         self._session = self._session.with_artefact("station_map", station_map)
         return TrackActionResult(ok=True, action="map_pit_lane", session=self._session,
                                  reason="Pit lane mapped — the track model is complete.")
+
+    def _load_station_map_from_disk(self):
+        """The accepted station map for the selected layout, or None.
+
+        Read-only recovery path for :meth:`map_pit_lane` (UAT 2026-08-07 defect D3).
+        Never raises — a missing or unreadable file simply yields None and the caller
+        falls back to asking the driver to approve the model first.
+        """
+        try:
+            from data.track_station_map import (
+                find_station_map_path, import_station_map_json)
+            path = find_station_map_path(
+                str(getattr(self._session, "location_id", "") or ""),
+                str(getattr(self._session, "layout_id", "") or ""))
+            if path is None:
+                return None
+            return import_station_map_json(path)
+        except Exception:
+            return None
 
     # ---- write ------------------------------------------------------------
     def select_track(self, location_id: str, layout_id: str) -> TrackActionResult:

@@ -256,10 +256,13 @@ def test_schema_version_is_v10(db):
     # driver_profile_versions with immutable history).
     # Reconciled for Program 3 legacy classification: 37 → 38 (_migrate_v38 classifies legacy
     # sessions + adds the read-only quarantine_records view).
+    # Reconciled for UAT 2026-08-07 defect B4: 40 → 41 (_migrate_v41 widens
+    # driver_feedback to the full 14-field Practice Review capture set — nine fields
+    # had no column and were dropped on every write).
     # The test name is kept stable to not disrupt git blame.
     from strategy._setup_constants import DB_VERSION
     version = db._conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == DB_VERSION == 40
+    assert version == DB_VERSION == 41
 
 
 def test_driver_feedback_has_setup_id_and_rating_columns(db):

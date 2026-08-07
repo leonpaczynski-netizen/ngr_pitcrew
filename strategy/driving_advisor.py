@@ -2829,6 +2829,32 @@ class DrivingAdvisor:
             _resp["protected_fields"] = []
             _resp["rule_engine_version"] = RULE_ENGINE_VERSION
 
+            # UAT 2026-08-07 defect A8 — do not launder low confidence into "approved".
+            # build_baseline_setup reports confidence.overall = "low" for a from-scratch
+            # baseline (no telemetry, neutral physics defaults), but the lifecycle status
+            # is computed only from validation failures — and the two structural warnings
+            # a full-field baseline always raises are filtered out just above. The result
+            # was a 30-field, never-validated setup arriving as status "approved" with
+            # zero warnings, which renders NO banner at all and enables Apply. The status
+            # is now the weaker of the two: a low-confidence baseline can be approved, but
+            # it must say so.
+            _conf_block = _raw_data.get("confidence")
+            _conf_overall = ""
+            if isinstance(_conf_block, dict):
+                _conf_overall = str(_conf_block.get("overall", "") or "").lower()
+            if _conf_overall == "low" and _resp["recommendation_status"] == "approved":
+                _conf_reason = ""
+                if isinstance(_conf_block, dict):
+                    _conf_reason = str(_conf_block.get("reason", "") or "")
+                _resp["recommendation_status"] = "approved_with_warnings"
+                _resp["validation_warnings"] = list(
+                    _resp.get("validation_warnings") or []) + [
+                    "Low-confidence baseline"
+                    + (f" ({_conf_reason})" if _conf_reason else "")
+                    + " — these are starting points, not a validated setup. Run practice "
+                      "on them before qualifying.",
+                ]
+
             # Phase 7: qualifying-discipline surface — on a qualifying baseline the
             # applied deltas ARE the quali bias, so the brief is exactly accurate.
             try:

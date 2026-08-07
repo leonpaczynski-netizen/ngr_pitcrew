@@ -152,11 +152,17 @@ def build_working_windows(
 def track_confidence_by_capability(track_profile, corner_profile) -> dict:
     """Report the track model's usefulness PER capability, not as one flag."""
     trustworthy = bool(getattr(track_profile, "trustworthy", False)) if track_profile else False
+    measured = bool(getattr(track_profile, "measured", False)) if track_profile else False
     cp_available = bool(getattr(corner_profile, "available", False)) if corner_profile else False
     cp_conf = str(getattr(corner_profile, "confidence", "none")) if corner_profile else "none"
     return {
         # Enough geometry (lap length + corners) to shape aero/gearing/support.
-        "setup_shaping": "medium" if trustworthy else "none",
+        # UAT 2026-08-07 defect A2: this returned "medium" — which passes the
+        # synthesis-primary gate — for a track SEED (a hand-entered length and an
+        # expected corner count). A seed is enough to nudge aero; it is nowhere near
+        # enough to authorise replacing the engineered baseline. "high" now requires a
+        # measured, accepted model; a seed is "low" and shapes advisories only.
+        "setup_shaping": "high" if measured else ("low" if trustworthy else "none"),
         # Reviewed per-corner segments to shape corner-specific demands.
         "corner_detail": (cp_conf if cp_available else "none"),
         # Whether a trustworthy geometry model exists at all.

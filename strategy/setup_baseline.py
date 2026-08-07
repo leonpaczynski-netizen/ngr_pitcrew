@@ -282,6 +282,16 @@ def _build_gearbox_changes(
     _fd_lo, _fd_hi = _FDR
     _pg = proven_gearbox or {}
 
+    # UAT 2026-08-07 defect A4 — never author a final drive with no ratios attached.
+    # The gear count is read from data/car_specs.json, which carries `num_gears` for
+    # NO car, so the default runtime path always arrived here with num_gears == 0 and
+    # shipped `final_drive: 4.25` (the midpoint of a GLOBAL constant range) with zero
+    # gear ratios. That silently mismatches the car's stock gearing in the one
+    # direction the driver cannot diagnose from the sheet. With no gear count there is
+    # no gearbox to author: say nothing and leave the car's stock gearing alone.
+    if max(0, min(6, num_gears)) == 0 and not _pg.get("final_drive"):
+        return changes
+
     # final_drive (only if not locked). A proven-library value wins; otherwise the
     # engineering lean shifts it off the neutral midpoint toward longer (lower) or
     # shorter (higher) gearing.

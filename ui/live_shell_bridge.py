@@ -2518,7 +2518,15 @@ class LiveShellBridge(QObject):
         Restarts capture so the pit lap is recorded; the first completed lap from here is
         detected as the pit-lane lap (the car diverges from the racing line and rejoins)."""
         self._pit_lane_mode = True
-        self._pit_lane_baseline_laps = self._controller_lap_count()
+        # UAT 2026-08-07 defect D2: the baseline USED to be read here, BEFORE
+        # start_session() allocated a brand-new CalibrationSession with laps=[]. The
+        # gate in _try_map_pit_lane is `len(laps) <= baseline`, so a baseline of 5-7
+        # (carried over from the just-approved modelling session) meant the driver had
+        # to complete that many MORE laps before a single mapping attempt was made —
+        # and the pit lap they had just driven went with the discarded session. Read
+        # the baseline AFTER the restart so it reflects the new session's lap count
+        # (0). If the restart fails we keep counting against the existing session, so
+        # the baseline must then stay at its current value.
         try:
             ctrl = getattr(self._tracks, "_controller", None)
             sess = self._tracks.session
@@ -2526,6 +2534,7 @@ class LiveShellBridge(QObject):
                 ctrl.start_session(sess.location_id, sess.layout_id)
         except Exception:
             pass
+        self._pit_lane_baseline_laps = self._controller_lap_count()
         self._tm_status = ("Track approved. Now take one lap through the pit lane — in at "
                            "the pit entry, down the lane and back out — and I'll map it. A "
                            "drive-through is enough; you don't need to stop. That completes "
@@ -4495,17 +4504,86 @@ class LiveShellBridge(QObject):
         # Keep the driver's handling verdict so the next Analyse can weigh it
         # (the Garage "Analyse" otherwise sees telemetry symptoms only).
         self._last_feedback = dict(feedback or {})
-        try:
-            window = self._window
-            for name in ("record_driver_feedback", "_record_driver_feedback", "save_driver_feedback"):
-                fn = getattr(window, name, None)
-                if callable(fn):
-                    fn(dict(feedback or {}))
-                    break
-        except Exception:
-            pass
+        self._persist_feedback(feedback)
         self._feed_outcome(feedback)
         self.refresh()
+
+    def _persist_feedback(self, feedback: dict) -> bool:
+        """Write the driver's feedback to the session DB. Returns True on success.
+
+        UAT 2026-08-07 defect B1: this used to probe the window for
+        ``record_driver_feedback`` / ``_record_driver_feedback`` / ``save_driver_feedback``
+        inside a bare ``except: pass``. None of those three methods exists in production
+        code — only in a test stub — so every piece of feedback submitted in the new
+        shell lived solely in ``self._last_feedback`` and died with the process. Nothing
+        reached the ``driver_feedback`` table, so the profile-evolution loop, the
+        failed-direction lockout and the rollback prompt could never arm.
+
+        The write is attributed to the RECORDED run being reviewed (not the live
+        session), because that is the run the driver is giving feedback on. Failures are
+        surfaced on the status line rather than swallowed.
+        """
+        fb = dict(feedback or {})
+        if not fb:
+            return False
+        if self._db is None or not hasattr(self._db, "write_feedback"):
+            self._run_status("Feedback captured for this analysis but NOT saved — "
+                             "no session database is attached.")
+            return False
+        try:
+            sid = int(self._review_session_id() or 0) or int(self._live_session_id() or 0)
+            setup_id = 0
+            try:
+                setup_id = int(self._db.get_dominant_setup_id(sid) or 0) if sid else 0
+            except Exception:
+                setup_id = 0
+            config_id = ""
+            try:
+                fn = getattr(self._window, "_active_config_id", None)
+                config_id = str(fn() or "") if callable(fn) else ""
+            except Exception:
+                config_id = ""
+            self._db.write_feedback(
+                session_id=sid,
+                lap_num=self._live_lap_count(),
+                feedback=fb,
+                config_id=config_id,
+                setup_id=setup_id,
+                rating="",
+            )
+        except Exception as exc:
+            self._run_status(f"Feedback could not be saved: {exc}")
+            return False
+        # A directional better/worse call stamps the latest setup-lineage node, which is
+        # what arms rollback and the failed-direction lockout. Best effort, but reported.
+        self._stamp_lineage_outcome(fb)
+        return True
+
+    def _stamp_lineage_outcome(self, feedback: dict) -> None:
+        """Record a better/unchanged/worse verdict against the latest lineage node."""
+        verdict_src = str((feedback or {}).get("overall")
+                          or (feedback or {}).get("vs_previous") or "").strip()
+        if not verdict_src or self._db is None:
+            return
+        try:
+            from strategy.setup_lineage import vs_previous_to_verdict
+            verdict = vs_previous_to_verdict(verdict_src)
+            if not verdict:
+                return
+            car_id = 0
+            if hasattr(self._window, "_current_car_id"):
+                car_id = int(self._window._current_car_id() or 0)
+            if car_id <= 0:
+                return
+            ev = (self._window._build_event_context()
+                  if hasattr(self._window, "_build_event_context") else None)
+            track = str(getattr(ev, "track", "") or "")
+            layout = str(getattr(ev, "layout_id", "") or "")
+            self._db.record_latest_lineage_outcome(
+                car_id, track, layout, verdict,
+                int(self._review_session_id() or 0))
+        except Exception:
+            pass
 
     def _feed_outcome(self, feedback=None) -> None:
         """Reconcile the reviewed run with the driver's feedback onto the Outcome page."""

@@ -156,11 +156,26 @@ def test_thin_track_leaves_baseline_unchanged():
     assert not sp.get("applied")
 
 
+def test_seed_only_track_does_not_authorise_synthesis_primary():
+    """UAT 2026-08-07 defect A2 — a track SEED must not overwrite the engineered setup.
+
+    ``trustworthy`` only means "lap length and a corner count exist"; before this fix
+    that was enough to open the synthesis-primary gate, so a hand-entered seed
+    authorised replacing physics-derived values with a walk from the midpoint of the
+    generic legal range. A measured model is now required.
+    """
+    tp = SimpleNamespace(trustworthy=True, measured=False, straight_fraction=0.25,
+                         corner_density_per_km=5.0)
+    sp = (_baseline(tp).get("synthesis_primary") or {})
+    assert not sp.get("applied")
+    assert "too low" in str(sp.get("reason", ""))
+
+
 def test_trustworthy_track_makes_synthesis_primary_and_passes_gate():
     from strategy._setup_constants import APPROVED_STATUSES
     from strategy.setup_ranges import resolve_ranges
     from tests.test_group63_setup_brain_uat2 import _CAR
-    tp = SimpleNamespace(trustworthy=True, straight_fraction=0.25,
+    tp = SimpleNamespace(trustworthy=True, measured=True, straight_fraction=0.25,
                          corner_density_per_km=5.0)
     d = _baseline(tp)
     sp = d.get("synthesis_primary") or {}

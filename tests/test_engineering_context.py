@@ -73,10 +73,17 @@ def test_build_working_windows_covers_all_range_fields():
 def test_track_confidence_by_capability():
     none = track_confidence_by_capability(None, None)
     assert none["setup_shaping"] == "none" and none["geometry"] == "none"
-    tp = SimpleNamespace(trustworthy=True)
     cp = SimpleNamespace(available=True, confidence="medium")
-    full = track_confidence_by_capability(tp, cp)
-    assert full["setup_shaping"] == "medium" and full["geometry"] == "high"
+    # UAT 2026-08-07 defect A2: a track SEED (length + expected corner count, no
+    # measured model) is trustworthy enough to nudge aero but must NOT reach the
+    # confidence that authorises synthesis-primary to overwrite the engineered setup.
+    seed_only = track_confidence_by_capability(
+        SimpleNamespace(trustworthy=True, measured=False), cp)
+    assert seed_only["setup_shaping"] == "low" and seed_only["geometry"] == "high"
+    # A measured, accepted model is the only thing that earns "high".
+    full = track_confidence_by_capability(
+        SimpleNamespace(trustworthy=True, measured=True), cp)
+    assert full["setup_shaping"] == "high" and full["geometry"] == "high"
     assert full["corner_detail"] == "medium"
 
 

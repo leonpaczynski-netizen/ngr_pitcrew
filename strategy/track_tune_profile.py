@@ -49,6 +49,13 @@ class TrackTuneProfile:
     aero_bias_reason: str = ""
     characteristics: List[TrackCharacteristic] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    #: True only when BOTH lap length and corner count came from an ACCEPTED,
+    #: measured track model — not from the static track seed. ``trustworthy`` says
+    #: "there is enough geometry to shape a tune"; ``measured`` says "that geometry
+    #: was observed on this layout". UAT 2026-08-07 defect A2: synthesis-primary was
+    #: gated on ``trustworthy`` alone, so a seed's length + expected-corner-count was
+    #: enough to authorise overwriting the engineered baseline.
+    measured: bool = False
 
     def summary(self) -> str:
         if not self.trustworthy:
@@ -136,6 +143,11 @@ def build_track_tune_profile(
                                      straight_fraction is not None))
 
     trustworthy = bool(lap_len and corners)
+    # Measured = both headline geometry values came from the accepted model.
+    measured = bool(trustworthy and lap_src == "accepted_model" and c_src == "accepted_model")
+    if trustworthy and not measured:
+        notes.append("Track geometry is from the static track seed, not a measured "
+                     "model — shaping stays advisory until this layout is modelled.")
 
     # Aero bias — the headline shaping. Straight-heavy circuits trim drag; very
     # corner-dense circuits can carry more aero; otherwise neutral. Unknown → neutral.
@@ -161,6 +173,6 @@ def build_track_tune_profile(
         trustworthy=trustworthy, lap_length_m=lap_len, corner_count=corners,
         corner_density_per_km=corner_density, longest_straight_m=straight,
         straight_fraction=straight_fraction, elevation_change_m=elev,
-        aero_bias=aero_bias, aero_bias_reason=reason,
+        aero_bias=aero_bias, aero_bias_reason=reason, measured=measured,
         characteristics=chars, notes=notes,
     )

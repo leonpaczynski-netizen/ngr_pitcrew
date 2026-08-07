@@ -695,14 +695,24 @@ class TestExplainabilityKeys:
 # ---------------------------------------------------------------------------
 
 class TestBaselineWarningFilter:
-    """Clean baseline must yield status='approved' and empty validation_warnings.
+    """A clean baseline must be APPLYABLE, and must disclose its own confidence.
+
+    Original contract: the two structural warnings a full-field from-scratch baseline
+    always raises ("is a no-op", "too many changes") are artifacts and must not block
+    it. That still holds — every assertion below requires an APPROVED_STATUSES value.
+
+    Amended by UAT 2026-08-07 defect A8: filtering those artifacts left the response
+    with zero warnings AND status "approved", which renders no banner at all, so a
+    30-field, never-validated, ``confidence.overall == "low"`` baseline presented
+    exactly like a telemetry-backed, validated recommendation. The baseline is still
+    approved; it now says out loud that it is a starting point.
 
     Also verifies that blocking failures are never filtered out.
     """
 
-    def test_neutral_baseline_status_is_approved(self):
-        """A clean neutral-profile baseline (FR, 6 gears, no locking) must return
-        recommendation_status == 'approved' — NOT 'approved_with_warnings'."""
+    def test_neutral_baseline_is_approved_but_discloses_low_confidence(self):
+        """A clean neutral-profile baseline (FR, 6 gears, no locking) is applyable,
+        and carries the low-confidence disclosure rather than a silent all-clear."""
         advisor = _make_advisor()
         ranges = resolve_ranges("")
         result = advisor.build_baseline_setup_response(
@@ -710,13 +720,17 @@ class TestBaselineWarningFilter:
             num_gears=6, allowed_tuning=None, tuning_locked=False,
         )
         data = json.loads(result)
-        assert data["recommendation_status"] == "approved", (
-            f"Expected 'approved', got {data['recommendation_status']!r}. "
+        assert data["recommendation_status"] in APPROVED_STATUSES, (
+            f"Baseline must stay applyable, got {data['recommendation_status']!r}. "
             f"validation_warnings={data.get('validation_warnings')}"
         )
+        assert data["recommendation_status"] == "approved_with_warnings"
+        assert any("low-confidence baseline" in w.lower()
+                   for w in data["validation_warnings"])
 
-    def test_neutral_baseline_validation_warnings_empty(self):
-        """A clean neutral-profile baseline must have validation_warnings == []."""
+    def test_neutral_baseline_raises_no_structural_artifact_warnings(self):
+        """The artifact filter still does its job: the ONLY warning is the
+        confidence disclosure — no "is a no-op" / "too many changes" noise."""
         advisor = _make_advisor()
         ranges = resolve_ranges("")
         result = advisor.build_baseline_setup_response(
@@ -724,12 +738,12 @@ class TestBaselineWarningFilter:
             num_gears=6, allowed_tuning=None, tuning_locked=False,
         )
         data = json.loads(result)
-        assert data["validation_warnings"] == [], (
-            f"Expected [], got: {data['validation_warnings']}"
-        )
+        residue = [w for w in data["validation_warnings"]
+                   if "low-confidence baseline" not in w.lower()]
+        assert residue == [], f"Expected no artifact warnings, got: {residue}"
 
-    def test_awd_neutral_baseline_status_is_approved(self):
-        """AWD car (even more fields) must also yield 'approved'."""
+    def test_awd_neutral_baseline_is_approved(self):
+        """AWD car (even more fields) must also stay applyable."""
         advisor = _make_advisor()
         ranges = resolve_ranges("")
         result = advisor.build_baseline_setup_response(
@@ -737,8 +751,10 @@ class TestBaselineWarningFilter:
             num_gears=6, allowed_tuning=None, tuning_locked=False,
         )
         data = json.loads(result)
-        assert data["recommendation_status"] == "approved"
-        assert data["validation_warnings"] == []
+        assert data["recommendation_status"] in APPROVED_STATUSES
+        residue = [w for w in data["validation_warnings"]
+                   if "low-confidence baseline" not in w.lower()]
+        assert residue == []
 
     def test_filter_only_removes_warning_severity_not_blocking(self):
         """_filter_baseline_artifact_warnings must NEVER remove a blocking failure."""
