@@ -34,14 +34,20 @@ class TestNativeFlags:
     def test_mid_corner(self):
         assert _on({"mid_corner": "Understeer"}) == {"mid_corner_understeer"}
         # mid-corner oversteer has no dedicated flag -> nothing (never mis-fires)
-        assert _on({"mid_corner": "Oversteer"}) == set()
+        # UAT 2026-08-07 defect B7 — mid-corner OVERSTEER used to map to nothing,
+        # so the complaint vanished between the dropdown and the diagnosis. It now has
+        # a flag and is reported back as DEFERRED. It deliberately gets no addressing
+        # field and must NOT reach rear_loose_on_exit: that is a different corner
+        # phase and its fix would land at the wrong moment.
+        assert _on({"mid_corner": "Oversteer"}) == {"mid_corner_oversteer"}
 
     def test_exit_balance(self):
         assert _on({"exit_stability": "Oversteer"}) == {"rear_loose_on_exit"}
         assert _on({"exit_stability": "Strong oversteer"}) == {
             "rear_loose_on_exit", "snap_oversteer_exit"}
         # exit power-understeer has no flag -> nothing
-        assert _on({"exit_stability": "Understeer"}) == set()
+        # Defect B7 — exit power-understeer was dropped entirely; now reported.
+        assert _on({"exit_stability": "Understeer"}) == {"exit_understeer"}
 
     def test_rotation_low_is_understeer(self):
         assert _on({"rotation": "Poor"}) == {"mid_corner_understeer"}
@@ -60,7 +66,9 @@ class TestNativeFlags:
     def test_gearing(self):
         assert _on({"gear_choice": "Too long"}) == {"gearing_too_long"}
         assert _on({"gear_choice": "About right"}) == {"gearbox_good"}
-        assert _on({"gear_choice": "Too short"}) == set()
+        # Defect B7 — "telemetry detects it" was the reason for dropping this, but
+        # telemetry is not always present and the driver's report is evidence too.
+        assert _on({"gear_choice": "Too short"}) == {"gearing_too_short"}
 
     def test_fuel(self):
         assert _on({"fuel_behaviour": "Worse than expected"}) == {"fuel_use_high"}

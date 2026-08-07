@@ -117,10 +117,14 @@ def test_selecting_base_does_not_push_a_session_mode():
     pushed: list = []
 
     class _Stub:
+        # Phase 2 (defect B8) made _on_discipline drop any stale handling verdict, so
+        # the stub carries that collaborator too.
         _discipline = "race"
+        _last_feedback: dict = {}
         _push_practice_mode = lambda self, d: pushed.append(d)
         _apply_qualifying_compound = lambda self: None
         _feed_garage = lambda self: None
+        _clear_feedback = lambda self, why: None
         _shell = None
 
     stub = _Stub()
@@ -137,9 +141,11 @@ def test_selecting_a_real_discipline_still_pushes_its_mode(discipline):
 
     class _Stub:
         _discipline = "base"
+        _last_feedback: dict = {}
         _push_practice_mode = lambda self, d: pushed.append(d)
         _apply_qualifying_compound = lambda self: None
         _feed_garage = lambda self: None
+        _clear_feedback = lambda self, why: None
         _shell = None
 
     stub = _Stub()
@@ -152,9 +158,11 @@ def test_an_unknown_discipline_still_falls_back_to_race():
 
     class _Stub:
         _discipline = "base"
+        _last_feedback: dict = {}
         _push_practice_mode = lambda self, d: None
         _apply_qualifying_compound = lambda self: None
         _feed_garage = lambda self: None
+        _clear_feedback = lambda self, why: None
         _shell = None
 
     stub = _Stub()
