@@ -394,6 +394,8 @@ class LiveShellBridge(QObject):
                     gp.lock_requested.connect(self._on_lock_setup)
                 if hasattr(gp, "car_ranges_requested"):
                     gp.car_ranges_requested.connect(self._on_car_ranges)
+                if hasattr(gp, "car_data_captured"):
+                    gp.car_data_captured.connect(self._on_car_data_captured)
                 if hasattr(gp, "gearing_changed"):
                     gp.gearing_changed.connect(self._on_gearing_changed)
                 if hasattr(gp, "ballast_changed"):
@@ -2979,6 +2981,15 @@ class LiveShellBridge(QObject):
             # form seeded first it would shadow the driver's last-applied setup on reopen.
             self._seed_from_last_applied()
             self._seed_sheets()
+            # Keep the GT7 car-data capture page pointed at the active car so opening
+            # it never asks "which car?" (UAT 2026-08-07 defect A7).
+            try:
+                panel = getattr(gp, "car_data_capture", None)
+                car = str(self._setups.inputs().car or "")
+                if panel is not None and car and getattr(panel, "_car", "") != car:
+                    panel.set_car(car)
+            except Exception:
+                pass
             sheet = self._setups.sheet(self._discipline)
             # A defaults-only sheet is NOT a setup. Passing it would present numbers
             # nobody authored as though they were the driver's own.
@@ -3898,6 +3909,24 @@ class LiveShellBridge(QObject):
         if outcome.ok:
             self._mirror_to_classic(self._discipline)
         self._garage_status(outcome.reason or "Gearing updated.")
+        self.refresh()
+
+    def _on_car_data_captured(self, car_name: str) -> None:
+        """The driver typed in real GT7 data for a car (UAT 2026-08-07 defect A7).
+
+        Nothing is re-authored automatically — an existing setup is not silently
+        rewritten under the driver, which is the same rule the rest of the Garage
+        follows. The Garage is refreshed and told what changed, so the next Build or
+        Analyse uses the real numbers instead of the class archetype.
+        """
+        try:
+            from data.car_parameter_model import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
+        self._garage_status(
+            f"Saved GT7 data for {car_name}. Rebuild the setup to use it — nothing was "
+            f"changed on the current sheet.")
         self.refresh()
 
     def _on_car_ranges(self) -> None:

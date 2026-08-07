@@ -137,7 +137,8 @@ class SetupWorkspace(QWidget):
     front_weight_dist_changed = pyqtSignal(int)  # driver entered front weight distribution %
     save_front_weight_dist_requested = pyqtSignal()  # save current % front to the car library
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
-    car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
+    car_ranges_requested = pyqtSignal()          # legacy: open the classic ranges editor
+    car_data_captured = pyqtSignal(str)          # the driver saved real GT7 data for a car
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
     ballast_changed = pyqtSignal(dict)           # {ballast_kg, ballast_position}
     regulation_changed = pyqtSignal(dict)        # {weight_kg, power_hp} — series BOP override
@@ -407,6 +408,14 @@ class SetupWorkspace(QWidget):
         self.shift_strategy_view = ShiftStrategyView()
         self._stack.addWidget(self.shift_strategy_view)
 
+        # Page 5 — car data capture (UAT 2026-08-07 defect A7). The engineering brain
+        # has no real data for any car in the game, so every setup rests on a class
+        # archetype until the driver types in what GT7 actually shows for their car.
+        from ui.components.car_data_capture import CarDataCapturePanel
+        self.car_data_capture = CarDataCapturePanel()
+        self.car_data_capture.capture_saved.connect(self.car_data_captured)
+        self._stack.addWidget(self.car_data_capture)
+
         # NOTE: The Transmission entry (gear ratios, final drive, top speed) is now
         # embedded in the Full setup sheet (page 1) as an editable section in the right
         # column of GT7SettingsSheet, so the driver can enter gear values without
@@ -448,8 +457,14 @@ class SetupWorkspace(QWidget):
         act.addWidget(self._applied_in_game)
         act.addWidget(self._explain)
         act.addWidget(self._gearbox_btn)
-        self._ranges_btn = SecondaryActionButton("Set car min/max ranges…")
-        self._ranges_btn.clicked.connect(lambda: self.car_ranges_requested.emit())
+        # UAT 2026-08-07 defect A7 — this used to open the classic CarRangesDialog,
+        # which writes TUNING PREFERENCE windows into a file the rest of the app reads
+        # as GT7 slider limits. Right idea, wrong semantics. It now opens the capture
+        # panel, which records what GT7 actually shows and keeps the legal range, the
+        # preference window and the step as separate things.
+        self._ranges_btn = SecondaryActionButton("Record this car's GT7 data…")
+        self._ranges_btn.setCheckable(True)
+        self._ranges_btn.toggled.connect(self._on_car_data)
         act.addWidget(self._ranges_btn)
         act.addStretch(1)
         lay.addLayout(act)
@@ -821,6 +836,20 @@ class SetupWorkspace(QWidget):
 
     def _on_gearbox(self, checked: bool):
         self._gearbox.setVisible(bool(checked))
+
+    def _on_car_data(self, checked: bool) -> None:
+        """Show or hide the GT7 car-data capture page (UAT 2026-08-07 defect A7)."""
+        if checked:
+            self._last_stack_index = self._stack.currentIndex()
+            self._stack.setCurrentWidget(self.car_data_capture)
+        else:
+            self._stack.setCurrentIndex(getattr(self, "_last_stack_index", 0))
+
+    def show_car_data_capture(self, car_name: str = "") -> None:
+        """Open the capture page for a car (used by the nav wiring and by tests)."""
+        if car_name:
+            self.car_data_capture.set_car(car_name)
+        self._ranges_btn.setChecked(True)
 
     def show_shift_strategy_tab(self) -> None:
         """Switch the Garage view to the Shift Strategy sub-tab."""

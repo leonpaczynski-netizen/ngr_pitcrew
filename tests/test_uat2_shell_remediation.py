@@ -1660,10 +1660,14 @@ class TestCarRangesBridgeWiring:
         bridge._on_car_ranges()
         assert len(opened) == 1   # dialog was attempted once with the car name
 
-    def test_ranges_button_exists_on_workspace(self, wired):
+    def test_car_data_button_exists_on_workspace(self, wired):
+        """UAT 2026-08-07 defect A7 — the button now opens the GT7 capture panel
+        rather than the classic ranges dialog, which wrote tuning PREFERENCE windows
+        into a file the rest of the app reads as slider LIMITS."""
         shell, _win, _db, _bridge = wired
         assert hasattr(shell.garage_page, "_ranges_btn")
-        assert "ranges" in shell.garage_page._ranges_btn.text().lower()
+        assert "gt7 data" in shell.garage_page._ranges_btn.text().lower()
+        assert hasattr(shell.garage_page, "car_data_capture")
 
 
 # ---------------------------------------------------------------------------
