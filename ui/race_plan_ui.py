@@ -381,7 +381,8 @@ class RacePlanMixin:
         try:
             from strategy.setup_driver_profile import build_driver_profile
             _p = build_driver_profile()
-            rear_fragile = bool(_p.prefers_rear_stability or _p.dislikes_snap_exit)
+            from strategy.setup_driver_profile import rear_traction_fragile
+            rear_fragile = rear_traction_fragile(_p)
         except Exception:
             rear_fragile = False
 

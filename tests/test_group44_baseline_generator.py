@@ -211,7 +211,13 @@ class TestFieldCoverage:
         "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6",
     }
 
-    def _result(self):
+    #: UAT 2026-08-07 defect A4 — a gearbox is now authored only from evidence, so
+    #: full-field coverage has to SUPPLY that evidence. Without it the seven gearbox
+    #: fields are correctly absent, which is asserted separately below.
+    PROVEN_GEARBOX = {"final_drive": 4.0, "gear_1": 2.98, "gear_2": 2.14,
+                      "gear_3": 1.66, "gear_4": 1.33, "gear_5": 1.09, "gear_6": 0.905}
+
+    def _result(self, proven_gearbox="default"):
         ranges = resolve_ranges("")
         profile = _neutral_profile()
         return build_baseline_setup(
@@ -222,7 +228,14 @@ class TestFieldCoverage:
             profile=profile,
             allowed_tuning=None,
             tuning_locked=False,
+            proven_gearbox=(self.PROVEN_GEARBOX if proven_gearbox == "default"
+                            else proven_gearbox),
         )
+
+    def test_gearbox_fields_absent_without_evidence(self):
+        """The other half of the contract: no evidence, no gearbox, no silent midpoint."""
+        sf = self._result(proven_gearbox=None)["setup_fields"]
+        assert not ({"final_drive"} | {f"gear_{i}" for i in range(1, 7)}) & set(sf)
 
     def test_all_33_fields_in_setup_fields(self):
         result = self._result()
@@ -269,52 +282,75 @@ class TestGearboxAlgorithm:
         result = build_baseline_setup("", ranges, drivetrain, n, profile, None, False)
         return result["setup_fields"]
 
-    def test_6_gears_strictly_decreasing(self):
-        sf = self._gears(6)
-        ratios = [sf[f"gear_{i}"] for i in range(1, 7)]
-        for i in range(len(ratios) - 1):
-            assert ratios[i] > ratios[i + 1], (
-                f"gear_{i+1}={ratios[i]} not > gear_{i+2}={ratios[i+1]}"
-            )
+    # UAT 2026-08-07 defect A4, Phase 1 chunk 6 — this class used to assert the
+    # GEOMETRIC SPREAD: a strictly-decreasing sequence from two global constants,
+    # identical for every car in the game, plus a final drive at the midpoint of a
+    # global range. Knowing a car has six gears says nothing about what those six
+    # ratios should be, and a gearbox is the one part of a setup a driver cannot judge
+    # by feel from the sheet — so a plausible-looking wrong answer there is worse than
+    # no answer. The spread is gone; these now assert the contract that replaced it.
 
-    def test_6_gears_within_range(self):
-        sf = self._gears(6)
-        lo, hi = _GEAR_RATIO_RANGE
-        for i in range(1, 7):
-            v = sf[f"gear_{i}"]
-            assert lo <= v <= hi, f"gear_{i}={v} outside [{lo}, {hi}]"
-
-    def test_3_gears_strictly_decreasing(self):
-        sf = self._gears(3)
-        for i in range(1, 3):
-            assert sf[f"gear_{i}"] > sf[f"gear_{i+1}"]
-
-    def test_1_gear_authored(self):
-        sf = self._gears(1)
-        assert "gear_1" in sf
-        for i in range(2, 7):
-            assert f"gear_{i}" not in sf
+    def test_no_gearbox_is_authored_without_evidence(self):
+        """No car in the repository has a redline or stock ratios until a GT7 capture
+        supplies them, so this is the normal outcome today, by design."""
+        for n in (1, 3, 6, 10):
+            sf = self._gears(n)
+            for i in range(1, 8):
+                assert f"gear_{i}" not in sf, f"{n} gears: gear_{i} authored with no evidence"
+            assert "final_drive" not in sf, f"{n} gears: final drive authored with no evidence"
 
     def test_0_gears_no_gear_keys(self):
         sf = self._gears(0)
         for i in range(1, 7):
             assert f"gear_{i}" not in sf
 
-    def test_cap_at_6_for_large_n(self):
-        sf = self._gears(10)
-        for i in range(1, 7):
-            assert f"gear_{i}" in sf
-        assert "gear_7" not in sf
+    def test_the_plan_says_what_is_missing_and_what_to_do(self):
+        """Authoring nothing is only acceptable if it is actionable."""
+        ranges = resolve_ranges("")
+        raw = build_baseline_setup("", ranges, "FR", 6, _neutral_profile(), None, False)
+        plan = raw["gearbox_plan"]
+        assert plan["authored"] is False
+        assert set(plan["missing"]) == {"redline_rpm", "stock_ratios", "longest_straight_m"}
+        assert "stock gearing" in plan["advice"]
+        assert "Capture" in plan["advice"]
 
-    def test_final_drive_within_range(self):
-        sf = self._gears(6)
+    def test_a_proven_gear_set_is_authored_verbatim(self):
+        """The one case with real evidence: a vetted gear set for this car at this
+        track is the strongest thing there is, and it is used exactly."""
+        proven = {"final_drive": 4.0, "gear_1": 2.98, "gear_2": 2.14, "gear_3": 1.66,
+                  "gear_4": 1.33, "gear_5": 1.09, "gear_6": 0.905}
+        raw = build_baseline_setup("", resolve_ranges(""), "FR", 0, _neutral_profile(),
+                                   None, False, proven_gearbox=proven)
+        sf = raw["setup_fields"]
+        for field, value in proven.items():
+            assert sf[field] == pytest.approx(value), field
+        assert raw["gearbox_plan"]["authored"] is True
+
+    def test_a_proven_gear_set_stays_strictly_decreasing(self):
+        raw = build_baseline_setup(
+            "", resolve_ranges(""), "FR", 0, _neutral_profile(), None, False,
+            proven_gearbox={f"gear_{i}": r for i, r in enumerate(
+                [2.98, 2.14, 1.66, 1.33, 1.09, 0.905], start=1)})
+        sf = raw["setup_fields"]
+        ratios = [sf[f"gear_{i}"] for i in range(1, 7)]
+        for i in range(len(ratios) - 1):
+            assert ratios[i] > ratios[i + 1]
+
+    def test_a_proven_gear_set_stays_within_the_legal_ratio_range(self):
+        lo, hi = _GEAR_RATIO_RANGE
+        raw = build_baseline_setup(
+            "", resolve_ranges(""), "FR", 0, _neutral_profile(), None, False,
+            proven_gearbox={"gear_1": 99.0, "gear_2": 0.001})
+        sf = raw["setup_fields"]
+        assert lo <= sf["gear_1"] <= hi
+        assert lo <= sf["gear_2"] <= hi
+
+    def test_a_proven_final_drive_stays_within_range(self):
         lo, hi = _FINAL_DRIVE_RANGE
-        assert lo <= sf["final_drive"] <= hi
-
-    def test_final_drive_is_midpoint(self):
-        sf = self._gears(6)
-        expected_mid = round((_FINAL_DRIVE_RANGE[0] + _FINAL_DRIVE_RANGE[1]) / 2.0, 4)
-        assert sf["final_drive"] == pytest.approx(expected_mid, abs=0.001)
+        raw = build_baseline_setup(
+            "", resolve_ranges(""), "FR", 0, _neutral_profile(), None, False,
+            proven_gearbox={"final_drive": 99.0})
+        assert lo <= raw["setup_fields"]["final_drive"] <= hi
 
 
 # ---------------------------------------------------------------------------
@@ -617,11 +653,17 @@ class TestBuildBaselineSetupResponse:
         assert ch_map["arb_rear"]["to_clamped"] == NEUTRAL_SEEDS["arb_rear"] - 1
 
     def test_awd_6gear_response_has_all_33_fields(self):
+        # UAT 2026-08-07 defect A4 — the gearbox is authored only from evidence, so
+        # this uses the car+track that HAS a vetted gear set in the proven library.
+        # An unmapped car correctly omits those seven fields (covered in
+        # TestFieldCoverage.test_gearbox_fields_absent_without_evidence).
         advisor = _make_advisor()
-        ranges = resolve_ranges("")
+        car = "Porsche 911 RSR '17"
+        ranges = resolve_ranges(car)
         result = advisor.build_baseline_setup_response(
-            car_name="", ranges=ranges, drivetrain="AWD",
+            car_name=car, ranges=ranges, drivetrain="AWD",
             num_gears=6, allowed_tuning=None, tuning_locked=False,
+            session_type="Race", track_name="Autodromo Nazionale Monza",
         )
         data = json.loads(result)
         expected = {

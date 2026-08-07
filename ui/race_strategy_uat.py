@@ -145,7 +145,8 @@ def _rear_fragile_from_profile() -> bool:
     try:
         from strategy.setup_driver_profile import build_driver_profile
         p = build_driver_profile()
-        return bool(p.prefers_rear_stability or p.dislikes_snap_exit)
+        from strategy.setup_driver_profile import rear_traction_fragile
+        return rear_traction_fragile(p)
     except Exception:
         return True
 

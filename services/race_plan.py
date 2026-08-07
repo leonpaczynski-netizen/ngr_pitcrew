@@ -185,7 +185,10 @@ class RacePlanService:
         try:
             from strategy.setup_driver_profile import build_driver_profile
             profile = build_driver_profile()
-            rear_fragile = bool(profile.prefers_rear_stability or profile.dislikes_snap_exit)
+            # UAT 2026-08-07 defect A9 — one shared rule, and "no evidence" takes
+            # the conservative side rather than silently dropping rear protection.
+            from strategy.setup_driver_profile import rear_traction_fragile
+            rear_fragile = rear_traction_fragile(profile)
         except Exception:
             rear_fragile = False
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field as _dc_field
 from pathlib import Path
 from typing import Optional
 
@@ -244,6 +244,10 @@ class CarParameterModel:
     redline_rpm: Optional[float]   # None = unknown
     captured_fields: tuple         # fields with real GT7 data
     parameters: dict               # field -> ParameterSpec
+    #: Captured stock gear ratios, "gear_1".."gear_6" -> ratio. Empty until captured.
+    #: The shape of a manufacturer's gearbox encodes more about the engine than
+    #: anything the app can derive, so it is adjusted, never replaced (defect A4).
+    stock_ratios: dict = _dc_field(default_factory=dict)
 
     @property
     def has_capture(self) -> bool:
@@ -285,6 +289,7 @@ class CarParameterModel:
             "has_capture": self.has_capture,
             "is_archetype_only": self.is_archetype_only,
             "captured_fields": list(self.captured_fields),
+            "stock_ratios": dict(self.stock_ratios),
             "parameters": {f: s.as_json() for f, s in self.parameters.items()},
         }
 
@@ -351,6 +356,14 @@ def resolve_parameter_model(
     except (TypeError, ValueError):
         num_gears = 0
     redline = _num(cap.get("redline_rpm"))
+
+    # Captured stock gear ratios live alongside the other stock values but are not
+    # range-managed fields, so they are collected separately.
+    stock_ratios: dict = {}
+    for _i in range(1, 7):
+        _r = _num(cap_stock.get(f"gear_{_i}"))
+        if _r is not None:
+            stock_ratios[f"gear_{_i}"] = _r
 
     params: dict = {}
     captured: list = []
@@ -454,6 +467,7 @@ def resolve_parameter_model(
         redline_rpm=redline,
         captured_fields=tuple(sorted(set(captured))),
         parameters=params,
+        stock_ratios=stock_ratios,
     )
 
 

@@ -197,23 +197,39 @@ def test_no_gear_count_authors_no_gearbox_at_all():
     """
     from strategy.setup_baseline import _build_gearbox_changes
 
-    assert _build_gearbox_changes(_ranges(), 0, set()) == []
+    changes, _plan = _build_gearbox_changes(_ranges(), 0, set())
+    assert changes == []
 
 
 def test_a_proven_final_drive_is_still_honoured_without_a_gear_count():
     from strategy.setup_baseline import _build_gearbox_changes
 
-    changes = _build_gearbox_changes(_ranges(), 0, set(),
-                                     proven_gearbox={"final_drive": 3.9})
+    changes, plan = _build_gearbox_changes(_ranges(), 0, set(),
+                                           proven_gearbox={"final_drive": 3.9})
     assert [c["field"] for c in changes] == ["final_drive"]
+    assert plan.authored is True
 
 
-def test_a_known_gear_count_still_authors_the_gearbox():
+def test_a_known_gear_count_alone_no_longer_authors_a_gearbox():
+    """SUPERSEDED BY PHASE 1 (defect A4, chunk 6) — deliberately inverted.
+
+    Phase 0 asserted that a known gear count still produced the full gearbox, because
+    at that point the only fix was stopping the ORPHAN final drive. Phase 1 removed the
+    thing it produced: a geometric spread identical for every car in the game,
+    3.800/2.558/1.722/1.159/0.780/0.525 and a final drive of 4.25, derived from two
+    global constants with no reference to the engine, the redline or the track.
+
+    Knowing a car has six gears says nothing about what those six ratios should be. The
+    honest output is now no gearbox plus a specific list of the evidence that would
+    change that, so this asserts the new contract rather than being deleted.
+    """
     from strategy.setup_baseline import _build_gearbox_changes
 
-    fields = [c["field"] for c in _build_gearbox_changes(_ranges(), 6, set())]
-    assert "final_drive" in fields
-    assert fields.count("gear_1") == 1 and "gear_6" in fields
+    changes, plan = _build_gearbox_changes(_ranges(), 6, set())
+    assert changes == []
+    assert plan.authored is False
+    assert set(plan.missing) == {"redline_rpm", "stock_ratios", "longest_straight_m"}
+    assert "stock gearing" in plan.advice
 
 
 # --------------------------------------------------------------------------- A8

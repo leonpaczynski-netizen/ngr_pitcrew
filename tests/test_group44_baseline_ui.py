@@ -405,81 +405,56 @@ class TestAllValuesWithinRanges:
 # ===========================================================================
 
 class TestGearboxViaResponse:
-    """Gearbox tests via build_baseline_setup_response to confirm the full path."""
+    """Gearbox behaviour via build_baseline_setup_response — the full path.
+
+    UAT 2026-08-07 defect A4, Phase 1 chunk 6: this class used to assert a
+    strictly-decreasing ratio set for 4, 5 and 6 gears. Those ratios were the same
+    geometric spread for every car in the game, derived from two global constants with
+    no reference to the engine, the redline or the track. Knowing a car has five gears
+    says nothing about what those five ratios should be, and a gearbox is the one part
+    of a setup a driver cannot judge by feel from the sheet. The spread is gone; these
+    assert what replaced it.
+    """
+
+    def _response_for(self, num_gears: int, car: str = "", track: str = "") -> dict:
+        advisor = _make_advisor()
+        ranges = resolve_ranges(car)
+        return json.loads(advisor.build_baseline_setup_response(
+            car_name=car, ranges=ranges, drivetrain="FR",
+            num_gears=num_gears, allowed_tuning=None, tuning_locked=False,
+            session_type="Race", track_name=track,
+        ))
 
     def _setup_fields_for(self, num_gears: int) -> dict:
-        advisor = _make_advisor()
-        ranges = resolve_ranges("")
-        result = json.loads(advisor.build_baseline_setup_response(
-            car_name="", ranges=ranges, drivetrain="FR",
-            num_gears=num_gears, allowed_tuning=None, tuning_locked=False,
-        ))
-        return result["setup_fields"]
+        return self._response_for(num_gears)["setup_fields"]
 
-    def test_4_gears_strictly_decreasing(self):
-        sf = self._setup_fields_for(4)
-        ratios = [sf.get(f"gear_{i}") for i in range(1, 5)]
-        assert all(r is not None for r in ratios), f"AC4 FAIL: gears 1-4 not all present; sf={list(sf)}"
-        for i in range(len(ratios) - 1):
-            assert ratios[i] > ratios[i + 1], (
-                f"AC4 FAIL: gear_{i+1}={ratios[i]} not > gear_{i+2}={ratios[i+1]}"
-            )
+    def test_no_gearbox_authored_without_evidence(self):
+        for n in (1, 4, 5, 6):
+            sf = self._setup_fields_for(n)
+            present = [f for f in ("final_drive", *(f"gear_{i}" for i in range(1, 8)))
+                       if f in sf]
+            assert not present, f"num_gears={n} authored {present} with no evidence"
 
     def test_4_gears_gear_5_absent(self):
-        sf = self._setup_fields_for(4)
-        assert "gear_5" not in sf, (
-            f"AC4 FAIL: gear_5 must be absent for a 4-gear car; found in sf={list(sf)}"
-        )
+        assert "gear_5" not in self._setup_fields_for(4)
 
-    def test_5_gears_strictly_decreasing(self):
-        sf = self._setup_fields_for(5)
-        ratios = [sf.get(f"gear_{i}") for i in range(1, 6)]
-        assert all(r is not None for r in ratios), f"AC4 FAIL: gears 1-5 not all present; sf={list(sf)}"
-        for i in range(len(ratios) - 1):
-            assert ratios[i] > ratios[i + 1], (
-                f"AC4 FAIL: gear_{i+1}={ratios[i]} not > gear_{i+2}={ratios[i+1]}"
-            )
+    def test_the_response_says_why_and_what_to_capture(self):
+        plan = self._response_for(6)["gearbox_plan"]
+        assert plan["authored"] is False
+        assert plan["missing"]
+        assert "stock gearing" in plan["advice"]
 
-    def test_5_gears_gear_6_absent(self):
-        sf = self._setup_fields_for(5)
-        assert "gear_6" not in sf, (
-            f"AC4 FAIL: gear_6 must be absent for a 5-gear car; found in sf={list(sf)}"
-        )
-
-    def test_6_gears_strictly_decreasing(self):
-        sf = self._setup_fields_for(6)
+    def test_a_proven_gear_set_is_authored_in_full_and_decreasing(self):
+        """The one case with real evidence still produces a complete gearbox."""
+        sf = self._response_for(
+            6, car="Porsche 911 RSR '17",
+            track="Autodromo Nazionale Monza")["setup_fields"]
         ratios = [sf.get(f"gear_{i}") for i in range(1, 7)]
-        assert all(r is not None for r in ratios), f"AC4 FAIL: gears 1-6 not all present; sf={list(sf)}"
+        assert all(r is not None for r in ratios), f"proven gear set missing; sf={list(sf)}"
         for i in range(len(ratios) - 1):
-            assert ratios[i] > ratios[i + 1], (
-                f"AC4 FAIL: gear_{i+1}={ratios[i]} not > gear_{i+2}={ratios[i+1]}"
-            )
+            assert ratios[i] > ratios[i + 1]
+        assert sf.get("final_drive") is not None
 
-    def test_6_gears_gear_7_absent(self):
-        sf = self._setup_fields_for(6)
-        assert "gear_7" not in sf, (
-            f"AC4 FAIL: gear_7 must never be authored (>6 is not canonical)"
-        )
-
-    def test_num_gears_1_only_gear_1_present(self):
-        sf = self._setup_fields_for(1)
-        assert "gear_1" in sf, "AC4 FAIL: gear_1 must be present for num_gears=1"
-        for i in range(2, 7):
-            assert f"gear_{i}" not in sf, (
-                f"AC4 FAIL: gear_{i} must be absent for num_gears=1"
-            )
-
-    def test_num_gears_0_no_gear_keys(self):
-        sf = self._setup_fields_for(0)
-        for i in range(1, 7):
-            assert f"gear_{i}" not in sf, (
-                f"AC4 FAIL: gear_{i} must be absent for num_gears=0"
-            )
-
-
-# ===========================================================================
-# AC5 — transmission_max_speed_kmh absent at every stage
-# ===========================================================================
 
 class TestTransmissionMaxSpeedAbsent:
     """transmission_max_speed_kmh must not appear anywhere in the output."""

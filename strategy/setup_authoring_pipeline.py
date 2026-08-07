@@ -378,7 +378,15 @@ def build_enriched_baseline(inputs: BaselineInputs, *, profile=None) -> Enriched
         anchor_seed_overrides=anchor_seeds or None,
         anchor_tiers=anchor_tiers or None,
         field_steps=(car_model.steps() if car_model is not None else None),
+        car_model=car_model,
     )
+    plan = raw_data.get("gearbox_plan") or {}
+    if not plan.get("authored") and plan.get("missing"):
+        deg.note_absent(
+            "gearbox", "gearbox evidence",
+            "no gear ratios or final drive were authored — "
+            + ", ".join(str(m) for m in plan["missing"]) + " unknown",
+            str(plan.get("advice") or "keep the stock gearing"))
     setup_fields = dict(raw_data.get("setup_fields") or {})
 
     # ---- canonical context + confidence-gated synthesis --------------------------

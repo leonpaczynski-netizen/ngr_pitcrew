@@ -54,6 +54,34 @@ class DriverProfile(NamedTuple):
     race_values_consistency: bool
 
 
+def rear_traction_fragile(profile=None) -> bool:
+    """Should race strategy PROTECT rear traction for this driver?
+
+    UAT 2026-08-07 defect A9. Five places used to answer this with
+    ``bool(p.prefers_rear_stability or p.dislikes_snap_exit)``, two of them on the live
+    race-plan path. Both flags were fabricated — substring-matched out of a hardcoded
+    prose constant, hence True for every user — so removing the fabrication flipped all
+    five from "protect the rear" to "do not", silently turning a conservative safety
+    default into a permissive one.
+
+    An ABSENT profile and a profile that positively says the rear is robust are not the
+    same statement, and only the second justifies dropping the protection. With no
+    learned style evidence this answers True, which is what every one of those five
+    call sites already did in its own exception branch.
+
+    Never raises.
+    """
+    try:
+        if profile is None:
+            profile = build_driver_profile()
+        if getattr(profile, "prefers_rear_stability", False) or \
+                getattr(profile, "dislikes_snap_exit", False):
+            return True
+        return not getattr(profile, "style_tags", None)
+    except Exception:
+        return True
+
+
 def build_driver_profile() -> DriverProfile:
     """Return the driver profile.
 
