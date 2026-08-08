@@ -7876,11 +7876,48 @@ class SessionDB:
             now_date=now_date, objective=objective, readiness=readiness, progress=progress)
 
         # per-discipline convergence from evidence confidence (exact confirming samples)
+        #
+        # UAT 2026-08-07 defect C10 — the ladder was fed a synthetic input:
+        # `outstanding_experiments=0` was hardcoded, so a discipline with three
+        # experiments still open read as having nothing outstanding and could report
+        # itself converged. `has_final_confirmation` was never set at all. A convergence
+        # state assembled from constants is not a measurement, and this one gated the
+        # Lock button.
+        #
+        # Both are now counted from the experiments actually recorded. An experiment is
+        # OUTSTANDING while it is anywhere between released-for-apply and reviewed;
+        # draft is not outstanding (nothing has been committed to the car) and the
+        # terminal states are self-evidently not.
+        _OUTSTANDING_EXPERIMENT_STATES = frozenset({
+            "ready_for_apply", "applied", "test_in_progress", "ready_for_review"})
+        try:
+            # Scoped to the sessions this cycle actually owns — setup_experiments has
+            # no event_id column, so the cycle's bound sessions are the join.
+            _exp_rows = self._conn.execute(
+                "SELECT e.status, COUNT(*) FROM setup_experiments e "
+                "WHERE CAST(e.session_id AS TEXT) IN ("
+                "  SELECT b.session_id FROM event_preparation_activity_sessions b "
+                "  WHERE b.cycle_id = ?) "
+                "GROUP BY e.status",
+                (str(cycle_id or ""),)).fetchall()
+            _outstanding = sum(int(c or 0) for st, c in _exp_rows
+                               if str(st or "").strip().lower()
+                               in _OUTSTANDING_EXPERIMENT_STATES)
+            _completed = sum(int(c or 0) for st, c in _exp_rows
+                             if str(st or "").strip().lower() == "completed")
+        except Exception:
+            # An unreadable experiment table must not read as "nothing outstanding" —
+            # that is the exact failure this defect is about. Report it as unknown by
+            # holding one notional outstanding item so convergence cannot be claimed.
+            _outstanding, _completed = 1, 0
+
         def _conv(disc, domain):
             de = evidence.domain(domain)
             confirming = de.exact_samples if de else 0
-            inp = DisciplineConvergenceInput(discipline=disc, confirming_samples=confirming,
-                                             outstanding_experiments=0)
+            inp = DisciplineConvergenceInput(
+                discipline=disc, confirming_samples=confirming,
+                outstanding_experiments=_outstanding,
+                has_final_confirmation=bool(_completed and not _outstanding))
             return build_setup_convergence(inp).state.value
 
         setup = {"base": _conv(SetupDiscipline.BASE, EvidenceDomain.SETUP_BASE),

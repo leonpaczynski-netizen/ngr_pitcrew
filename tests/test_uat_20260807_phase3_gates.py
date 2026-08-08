@@ -406,3 +406,109 @@ def test_free_practice_does_not_credit_the_base_setup_domain():
     obj = _objective_after(4, PreparationActivityType.FREE_PRACTICE)
     assert obj.domain == "setup_base", (
         "free practice must not silently satisfy the base-setup domain")
+
+
+# ---------------------------------------------------------------------------
+# C8 — the import that never resolved, so the real planner never ran
+# ---------------------------------------------------------------------------
+def test_the_real_test_sequence_planner_is_reached():
+    """`from strategy.setup_test_plan import build_test_plan` names a function that
+    does not exist and never has — the module exports build_test_sequence. The
+    ImportError was swallowed by a bare except, so every recommendation silently fell
+    through to a numbered fallback and a proper planner sat one correct import away."""
+    from ui.setup_recommendation_vm import _build_test_plan
+    changes = [
+        {"field": "arb_front", "delta": 1, "from": 5, "to": 6,
+         "symptom": "mid_corner_understeer", "setting": "ARB Front"},
+        {"field": "aero_rear", "delta": -20, "from": 620, "to": 600,
+         "symptom": "high_speed_stability", "setting": "Aero Rear"},
+    ]
+    steps = _build_test_plan({"diagnosis": {}}, changes)
+    joined = " ".join(steps)
+    assert "Roll back" in joined, "the real planner supplies a rollback per stage"
+    assert "one change at a time" in joined.lower()
+
+
+def test_the_planner_orders_one_change_at_a_time():
+    from ui.setup_recommendation_vm import _build_test_plan
+    changes = [{"field": f, "delta": 1, "from": 1, "to": 2, "setting": f}
+               for f in ("arb_front", "aero_rear", "toe_rear")]
+    steps = _build_test_plan({}, changes)
+    assert steps[0].startswith("1.") and steps[1].startswith("2.")
+
+
+def test_the_fallback_survives_for_a_recommendation_with_no_deltas():
+    """A recommendation with no per-change deltas genuinely has no sequence to build."""
+    from ui.setup_recommendation_vm import _build_test_plan
+    steps = _build_test_plan({}, [{"field": "x", "delta": 0, "setting": "X"}])
+    assert steps and "run 3 clean laps" in steps[0]
+
+
+def test_the_named_function_actually_exists_now():
+    import strategy.setup_test_plan as mod
+    assert hasattr(mod, "build_test_sequence")
+    assert not hasattr(mod, "build_test_plan"), (
+        "if this ever appears, check which one the VM imports")
+
+
+# ---------------------------------------------------------------------------
+# C10 — the convergence ladder was fed constants
+# ---------------------------------------------------------------------------
+def _cycle_with_experiments(statuses):
+    db = _db_with_activity()
+    sid = _session_with_laps(db, clean=6)
+    db.bind_session_to_activity("a1", str(sid), cycle_id="c1")
+    for i, st in enumerate(statuses):
+        db._conn.execute(
+            "INSERT INTO setup_experiments (session_id,status,idempotency_key,created_at) "
+            "VALUES (?,?,?,'')", (str(sid), st, f"k{i}"))
+    db._conn.commit()
+    return db
+
+
+def test_outstanding_experiments_are_counted_not_hardcoded():
+    """`outstanding_experiments=0` was hardcoded, so a discipline with three
+    experiments still open read as having nothing outstanding — and this gated the
+    Lock button."""
+    db = _cycle_with_experiments(["test_in_progress", "applied"])
+    rows = [(r[0], r[1]) for r in db._conn.execute(
+        "SELECT e.status, COUNT(*) FROM setup_experiments e "
+        "WHERE CAST(e.session_id AS TEXT) IN ("
+        "  SELECT b.session_id FROM event_preparation_activity_sessions b "
+        "  WHERE b.cycle_id=?) GROUP BY e.status", ("c1",))]
+    outstanding = {"ready_for_apply", "applied", "test_in_progress", "ready_for_review"}
+    assert sum(c for s, c in rows if s in outstanding) == 2
+
+
+def test_a_draft_experiment_is_not_outstanding():
+    """Nothing has been committed to the car yet."""
+    db = _cycle_with_experiments(["draft"])
+    rows = [(r[0], r[1]) for r in db._conn.execute(
+        "SELECT e.status, COUNT(*) FROM setup_experiments e "
+        "WHERE CAST(e.session_id AS TEXT) IN ("
+        "  SELECT b.session_id FROM event_preparation_activity_sessions b "
+        "  WHERE b.cycle_id=?) GROUP BY e.status", ("c1",))]
+    outstanding = {"ready_for_apply", "applied", "test_in_progress", "ready_for_review"}
+    assert sum(c for s, c in rows if s in outstanding) == 0
+
+
+def test_the_convergence_inputs_are_no_longer_constants():
+    import inspect
+
+    from data.session_db import SessionDB
+    src = inspect.getsource(SessionDB.build_event_preparation_report)
+    # Read CODE, not comments — the comment explaining the fix quotes the old literal.
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "outstanding_experiments=0" not in code
+    assert "outstanding_experiments=_outstanding" in code
+    assert "has_final_confirmation=" in code
+
+
+def test_an_unreadable_experiment_table_does_not_read_as_converged():
+    """The exact failure this defect is about: a missing signal defaulting to the
+    permissive answer."""
+    import inspect
+
+    from data.session_db import SessionDB
+    src = inspect.getsource(SessionDB.build_event_preparation_report)
+    assert "_outstanding, _completed = 1, 0" in src

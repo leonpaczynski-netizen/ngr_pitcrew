@@ -246,11 +246,34 @@ def build_recommendation_vm(
 
 
 def _build_test_plan(data: dict, approved: list) -> List[str]:
+    """The controlled one-change-at-a-time test programme for a recommendation.
+
+    UAT 2026-08-07 defect C8 — this imported ``build_test_plan`` from
+    ``strategy.setup_test_plan``, which does not exist and never has: the module
+    exports ``build_test_sequence``. The ImportError was swallowed by the bare
+    ``except``, so the real planner was NEVER reached and every recommendation silently
+    fell through to the numbered fallback below. A module that produces a proper test
+    sequence — ordered by axis, with a success criterion, a rollback and an isolation
+    warning for adjacent changes on the same balance axis — was sitting one correct
+    import away for the app's whole life.
+
+    The fallback is kept, because a recommendation with no per-change deltas genuinely
+    has no sequence to build; it is now the exception rather than the only path.
+    """
     try:
-        from strategy.setup_test_plan import build_test_plan  # type: ignore
-        plan = build_test_plan(data)
-        if plan:
-            return [str(s) for s in plan]
+        from strategy.setup_test_plan import build_test_sequence
+        seq = build_test_sequence(list(approved or ()), data.get("diagnosis") or None)
+        if seq is not None and not seq.is_empty():
+            steps = []
+            for stage in seq.stages:
+                line = (f"{stage.order}. {stage.change_summary} — "
+                        f"{stage.success_criterion} Roll back: {stage.rollback}")
+                if stage.isolate_note:
+                    line += f"  ⚠ {stage.isolate_note}"
+                steps.append(line)
+            if seq.note:
+                steps.append(seq.note)
+            return steps
     except Exception:
         pass
     # Deterministic fallback: one validation step per changed field, in order.
