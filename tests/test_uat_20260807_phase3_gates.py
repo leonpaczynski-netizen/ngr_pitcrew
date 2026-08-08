@@ -512,3 +512,50 @@ def test_an_unreadable_experiment_table_does_not_read_as_converged():
     from data.session_db import SessionDB
     src = inspect.getsource(SessionDB.build_event_preparation_report)
     assert "_outstanding, _completed = 1, 0" in src
+
+
+def test_the_gate_only_blocks_on_domains_the_transition_depends_on():
+    """Scoping matters as much as the gate. A first version blocked on all NINE
+    readiness dimensions, which would have demanded fuel, strategy and coaching
+    evidence before you could go QUALIFYING. Nine blockers on every attempt is not a
+    gate, it is a formality the driver learns to click through — the exact failure
+    C11 describes."""
+    from strategy.weekend_gate import REQUIRED_DOMAINS
+    rows = [(name, "missing", "") for name in
+            ("base_setup", "qualifying_setup", "race_setup", "tyre_evidence",
+             "fuel_evidence", "driver_coaching", "race_pace", "strategy_evidence",
+             "consistency")]
+    v = evaluate_weekend_transition(
+        WeekendTransition.BEGIN_QUALIFYING, readiness=rows,
+        setup_applied=True, driver_comfortable=True)
+    blocked = {b.key.split(":", 1)[-1] for b in v.blockers if b.key.startswith("readiness:")}
+    assert blocked == set(REQUIRED_DOMAINS["begin_qualifying"])
+
+
+def test_a_domain_outside_the_set_is_warned_about_not_hidden():
+    """Not required is not the same as not worth saying."""
+    v = evaluate_weekend_transition(
+        WeekendTransition.BEGIN_QUALIFYING,
+        readiness=[("fuel_evidence", "missing", "")],
+        setup_applied=True, driver_comfortable=True)
+    assert v.allowed is True
+    assert any("Fuel evidence" in w for w in v.warnings)
+
+
+def test_a_race_needs_more_than_a_qualifying_lap_does():
+    from strategy.weekend_gate import REQUIRED_DOMAINS
+    quali = set(REQUIRED_DOMAINS["begin_qualifying"])
+    race = set(REQUIRED_DOMAINS["start_race"])
+    assert "fuel_evidence" in race and "fuel_evidence" not in quali
+    assert "strategy_evidence" in race and "strategy_evidence" not in quali
+    assert "qualifying_setup" in quali and "qualifying_setup" not in race
+
+
+def test_every_required_domain_is_a_real_readiness_dimension():
+    """A required name that no readiness row ever carries would silently never block."""
+    from strategy.preparation_evidence import _DOMAIN_TO_READINESS
+    from strategy.weekend_gate import REQUIRED_DOMAINS
+    known = set(_DOMAIN_TO_READINESS.values())
+    for transition, names in REQUIRED_DOMAINS.items():
+        unknown = set(names) - known
+        assert not unknown, f"{transition} requires unknown dimension(s): {unknown}"

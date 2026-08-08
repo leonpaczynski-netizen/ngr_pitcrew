@@ -42,6 +42,27 @@ class WeekendTransition(str, Enum):
     START_RACE = "start_race"
 
 
+#: Which readiness dimensions each transition actually DEPENDS on.
+#:
+#: Scoping matters as much as the gate itself. The Command Centre reports nine
+#: dimensions, and a first version of this module blocked on all of them — which would
+#: have demanded fuel, strategy and coaching evidence before you could go QUALIFYING.
+#: Nine blockers on every attempt is not a gate; it is a formality the driver learns to
+#: click through, which is exactly the failure C11 describes. A dimension outside the
+#: set is still reported, as a warning, so nothing is hidden — it just does not stop a
+#: transition it has no bearing on.
+#:
+#: Names are the readiness dimension keys from preparation_evidence._DOMAIN_TO_READINESS.
+REQUIRED_DOMAINS = {
+    # Qualifying is one lap on a known car: you need a settled base, a qualifying
+    # setup to run, tyre behaviour you have actually measured, and enough repeatability
+    # that the lap means something.
+    "begin_qualifying": ("base_setup", "qualifying_setup", "tyre_evidence", "consistency"),
+    # A race adds everything that only matters over a distance.
+    "start_race": ("base_setup", "race_setup", "tyre_evidence", "fuel_evidence",
+                   "race_pace", "strategy_evidence"),
+}
+
 #: Readiness levels that genuinely satisfy a domain. UAT 2026-08-07 defect C4 — the
 #: readiness mapping blocked only on the literal string "missing", so "developing" (one
 #: sample) and "unknown" (no idea) both read as good enough to go qualifying.
@@ -154,16 +175,22 @@ def evaluate_weekend_transition(
                 "build it in the Garage, then press “I've entered this in GT7”"))
 
         # --- evidence domains (C4) -----------------------------------------------
+        required = REQUIRED_DOMAINS.get(transition.value, ())
         for entry in (readiness or ()):
             name, level, note = _level_of(entry)
             if not name:
                 continue
-            if not _is_satisfied(level):
-                lvl = str(level or "").strip().lower() or "unknown"
+            if _is_satisfied(level):
+                continue
+            lvl = str(level or "").strip().lower() or "unknown"
+            text = f"{name.replace('_', ' ').capitalize()} is {lvl}"
+            if name in required:
                 blockers.append(GateBlocker(
-                    f"readiness:{name}",
-                    f"{name.replace('_', ' ').capitalize()} is {lvl}",
+                    f"readiness:{name}", text,
                     (note or "run the practice this area asks for")))
+            else:
+                # Reported, not enforced: it has no bearing on THIS transition.
+                warnings.append(f"{text} (not required for this session).")
 
         # --- per-compound tyre coverage (C6) -------------------------------------
         # This was computed correctly and consumed by a progress label. It also
