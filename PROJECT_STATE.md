@@ -1,5 +1,19 @@
 # GT7 Pit Crew Project State
 
+> **⚠ ACCURACY NOTE — 8 August 2026 (UAT 2026-08-07 defect E3).**
+> The "Current Mode" and "Repository / Build Status" below were last updated on
+> **2026-07-14** and describe the CLASSIC tab layout the driver no longer sees. The app
+> now ships the NGR Pit Crew shell: eleven nav destinations (Home, Programme, Garage,
+> Practice, Qualifying, Race Strategy, Live Pit Wall, Debrief, Track Model, Engineering
+> Library, Settings) and **no tab bar**. Anything below describing a tab describes the
+> retiring shell.
+>
+> For the current state of the 6 August UAT remediation see
+> [docs/UAT_2026-08-07_DEFECT_REGISTER.md](docs/UAT_2026-08-07_DEFECT_REGISTER.md)
+> (the diagnosis) and
+> [docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md](docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md)
+> (what has to be proven on hardware before any of it counts).
+
 ## Current Mode
 Architecture Stabilisation Mode.
 

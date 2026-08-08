@@ -167,3 +167,17 @@ def test_the_old_scripts_are_marked_superseded(name):
 def test_the_supersession_says_why(name):
     text = (_ROOT / name).read_text(encoding="utf-8")[:1200]
     assert "tab" in text.lower(), "the reason (tab navigation) is not stated"
+
+
+# ---------------------------------------------------------------------------
+# E3's other half — the project docs that also describe a UI that is gone
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name", ["PROJECT_STATE.md", "REQUIREMENTS.md"])
+def test_the_stale_project_docs_carry_an_accuracy_note(name):
+    """They describe the classic tab layout the driver no longer sees. Rewriting either
+    wholesale is out of proportion to the value; leaving them unmarked is how someone
+    acts on stale content, which is exactly how the UAT scripts rotted."""
+    head = (_ROOT / name).read_text(encoding="utf-8")[:1600]
+    assert "ACCURACY NOTE" in head
+    assert "no tab bar" in head
+    assert "UAT_2026-08-07" in head
