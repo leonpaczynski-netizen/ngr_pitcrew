@@ -204,9 +204,31 @@ def _resolve(patterns: list[str], already: set[str], *, exclude: set[str] | None
     return files
 
 
+#: Longest a single pytest invocation may run before it is treated as hung.
+#: The slowest legitimate group (logic_backstop, 262 files) takes under 2 minutes;
+#: 15 is generous for the largest while still bounded.
+GROUP_TIMEOUT_S = 900
+
+
 def _run(cmd: list[str]) -> tuple[int, str]:
+    """Run one pytest invocation, bounded.
+
+    There was NO timeout here. subprocess.run drains the pipes correctly, so this was
+    not a pipe deadlock — but a child pytest that HANGS (the same Qt teardown family on
+    Win/Py3.14 that intermittently segfaults) made the parent wait on it forever. The
+    whole suite then sat at zero CPU with an empty output file, which is indistinguishable
+    from "still running" unless you go and measure the CPU. That cost several hours of
+    waiting on runs that were never going to finish.
+
+    A hung file is now reported as a TIMEOUT failure and the suite carries on, so one
+    stuck file costs one group's result instead of the entire run.
+    """
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    p = subprocess.run(cmd, cwd=str(ROOT), env=env, capture_output=True, text=True)
+    try:
+        p = subprocess.run(cmd, cwd=str(ROOT), env=env, capture_output=True,
+                           text=True, timeout=GROUP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return 124, f"TIMEOUT after {GROUP_TIMEOUT_S}s — treated as a failure, not a pass"
     tail = (p.stdout or "").strip().splitlines()
     last = tail[-1] if tail else ""
     return p.returncode, last
@@ -282,10 +304,10 @@ def main(argv: list[str]) -> int:
     for g in ordered if not selected else [g for g in ordered if g in groups]:
         r = run_group(g, already)
         status = "PASS" if r["ok"] else "FAIL"
-        print(f"[{status}] {r['name']:20s} files={r['files']}")
+        print(f"[{status}] {r['name']:20s} files={r['files']}", flush=True)
         for f, code, last in r["detail"]:
             if code != 0:
-                print(f"        exit={code}  {f}  :: {last}")
+                print(f"        exit={code}  {f}  :: {last}", flush=True)
         overall_ok = overall_ok and r["ok"]
 
     # Backstops: any test file not owned by a named group still runs, so nothing is silently
@@ -297,18 +319,18 @@ def main(argv: list[str]) -> int:
         if rest_ui:
             r = run_group({"name": "ui_backstop", "isolated": True,
                            "patterns": rest_ui}, set())
-            print(f"[{'PASS' if r['ok'] else 'FAIL'}] {'ui_backstop':20s} files={r['files']}")
+            print(f"[{'PASS' if r['ok'] else 'FAIL'}] {'ui_backstop':20s} files={r['files']}", flush=True)
             for f, code, last in r["detail"]:
                 if code != 0:
-                    print(f"        exit={code}  {f}  :: {last}")
+                    print(f"        exit={code}  {f}  :: {last}", flush=True)
             overall_ok = overall_ok and r["ok"]
         if rest_logic:
             r = run_group({"name": "logic_backstop", "isolated": False,
                            "patterns": rest_logic}, set())
-            print(f"[{'PASS' if r['ok'] else 'FAIL'}] {'logic_backstop':20s} files={r['files']}")
+            print(f"[{'PASS' if r['ok'] else 'FAIL'}] {'logic_backstop':20s} files={r['files']}", flush=True)
             for f, code, last in r["detail"]:
                 if code != 0:
-                    print(f"        exit={code}  {f}  :: {last}")
+                    print(f"        exit={code}  {f}  :: {last}", flush=True)
             overall_ok = overall_ok and r["ok"]
 
     print(f"\n{'ALL GREEN' if overall_ok else 'FAILURES PRESENT'}  ({time.time()-t0:.0f}s)")
