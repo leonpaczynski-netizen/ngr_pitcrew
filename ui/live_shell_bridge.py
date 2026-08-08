@@ -3652,6 +3652,78 @@ class LiveShellBridge(QObject):
             pass
         self._feed_garage()
 
+    # ---- weekend transition gate (UAT 2026-08-07 C1/C4/C6/C7/C11) ---------
+    def _weekend_gate(self, transition):
+        """Evaluate one weekend transition against the evidence actually recorded.
+
+        Composes what the reporters already compute — readiness levels, per-compound
+        tyre coverage, whether the setup is confirmed on the car, the driver's own
+        comfort verdict — into one verdict. The pure modules keep reporting; THIS is
+        where the app refuses.
+        """
+        from strategy.weekend_gate import evaluate_weekend_transition
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, Mapping) else {}
+        try:
+            required, sampled = self._tyre_compound_coverage()
+        except Exception:
+            required, sampled = (), ()
+        try:
+            _label, applied = self._setups.active_setup(self._discipline)
+        except Exception:
+            _label, applied = "", False
+        return evaluate_weekend_transition(
+            transition,
+            readiness=view.get("readiness") or [],
+            required_compounds=required, sampled_compounds=sampled,
+            setup_applied=bool(applied), setup_label=str(_label or ""),
+            driver_comfortable=self._driver_comfort(),
+            convergence_state=str((view.get("convergence") or {}).get("state") or ""))
+
+    def _driver_comfort(self):
+        """The driver's own "am I happy with this setup" verdict, or None if unasked.
+
+        UAT 2026-08-07 defect C7 — no such gate existed anywhere in the app
+        (`grep -i comfortab` over the non-test tree returned only CSS comments). It is
+        read from the handling verdict the driver already gives in Review rather than
+        adding a second thing to fill in: an explicit better/worse call on the setup IS
+        the comfort statement. None means never asked, which is NOT the same as happy.
+        """
+        fb = dict(getattr(self, "_last_feedback", None) or {})
+        verdict = str(fb.get("overall") or fb.get("vs_previous") or "").strip().lower()
+        if not verdict:
+            return None
+        if any(t in verdict for t in ("better", "good", "happy", "confident")):
+            return True
+        if any(t in verdict for t in ("worse", "bad", "unhappy", "no confidence")):
+            return False
+        return None
+
+    def _confirm_override(self, verdict, title: str) -> bool:
+        """Ask the driver to proceed on incomplete preparation — NAMING what is missing.
+
+        Defect C11: the Start Race check was documented "never hard-stop" and proceeded
+        on a bare Yes/No listing only stage names. The app stays advisory — it will not
+        stop anyone driving — but consent has to be informed, and the override is
+        recorded so the laps are never mistaken for a properly prepared session.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        answer = QMessageBox.warning(
+            self._shell, title, verdict.confirmation_prompt(),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            self._run_status(f"{title} held — {verdict.headline} Nothing was changed.")
+            return False
+        self._last_gate_override = {
+            "transition": verdict.transition.value,
+            "skipped": [b.key for b in verdict.blockers],
+            "detail": [b.message for b in verdict.blockers],
+        }
+        self._run_status(
+            f"{title} started on INCOMPLETE preparation — skipped: "
+            + "; ".join(b.message for b in verdict.blockers))
+        return True
+
     def _on_begin_qualifying(self) -> None:
         """Actually ENTER qualifying — not just show the pit wall.
 
@@ -3664,6 +3736,14 @@ class LiveShellBridge(QObject):
         still confirms it in-game — but everything the app controls now reflects
         qualifying.
         """
+        # Defect C4 — this handler contained ZERO validation; the only defence was a
+        # disabled button whose readiness mapping treated developing/adequate/strong/
+        # unknown alike as non-blocking, so only the literal string "missing" stopped
+        # anything. The transition is now earned or explicitly overridden.
+        from strategy.weekend_gate import WeekendTransition
+        _verdict = self._weekend_gate(WeekendTransition.BEGIN_QUALIFYING)
+        if not _verdict.allowed and not self._confirm_override(_verdict, "Begin Qualifying"):
+            return
         self._live_session_mode = "qualifying"
         if getattr(self, "_discipline", "") != "qualifying":
             self._clear_feedback("qualifying has begun")
@@ -3693,18 +3773,15 @@ class LiveShellBridge(QObject):
         any stage is still open the driver is warned and can confirm; then the app KNOWS
         it is racing and commits the race setup, race shift RPM, and the approved plan.
         """
-        ready, blockers = self._race_readiness()
-        if not ready and blockers:
-            from PyQt6.QtWidgets import QMessageBox
-            body = ("Some stages are not complete yet:\n\n  •  "
-                    + "\n  •  ".join(blockers)
-                    + "\n\nStart the race anyway?")
-            answer = QMessageBox.warning(
-                self._shell, "Start Race", body,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+        # UAT 2026-08-07 defect C11 — the old prompt listed stage NAMES and nothing
+        # about what any of them means, and the readiness list behind it was documented
+        # as "never hard-stop". The same gate that guards qualifying now guards the
+        # race, and the confirmation enumerates exactly what is being skipped. The
+        # stage-level blockers are still surfaced, as warnings alongside it.
+        from strategy.weekend_gate import WeekendTransition
+        _verdict = self._weekend_gate(WeekendTransition.START_RACE)
+        if not _verdict.allowed and not self._confirm_override(_verdict, "Start Race"):
+            return
         self._enter_race()
 
     def _enter_race(self) -> None:
@@ -3765,13 +3842,24 @@ class LiveShellBridge(QObject):
             # multi-car lobby as a RACE. A baseline practice run then fired "Race started."
             # and framed the pit wall as a live race. Forcing the override keeps a plain
             # practice run a PRACTICE session end-to-end.
+            # UAT 2026-08-07 defect C5 — the SESSION TYPE may only be declared by an
+            # explicit live session, never by which Garage tab is open. `is_qual` above
+            # falls back to the selected discipline, and refresh() pushes this every
+            # 750ms, so simply LOOKING at the qualifying sheet to build a setup silently
+            # converted the live session to Qualifying — and there was no Practice tab
+            # to look at instead. Browsing a setup is not a declaration of intent.
+            #
+            # The shift-beep refs above still follow the discipline (which RPM to beep
+            # at is a property of the setup being tested, not of the session), but the
+            # tracker only hears an explicitly declared session.
+            declared = str(getattr(self, "_live_session_mode", "") or "").lower()
             tracker = getattr(self._window, "_tracker", None)
             if tracker is not None and hasattr(tracker, "set_session_type_override"):
                 try:
                     from telemetry.state import SessionType
                     tracker.set_session_type_override(
-                        SessionType.QUALIFYING if is_qual
-                        else SessionType.RACE if is_race
+                        SessionType.QUALIFYING if declared == "qualifying"
+                        else SessionType.RACE if declared == "race"
                         else SessionType.PRACTICE)
                 except Exception:
                     pass

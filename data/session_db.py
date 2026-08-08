@@ -427,6 +427,14 @@ FEEDBACK_KEY_ALIASES: dict[str, str] = {
     "fuel-use": "fuel_use",
 }
 
+#: Clean laps a bound telemetry session must carry before it counts as ONE complete
+#: evidence sample for a preparation domain (UAT 2026-08-07 defect C3). Before this the
+#: rule was `total_laps > 0`, so a single installation lap satisfied a whole domain —
+#: which is how one practice session came to satisfy an entire preparation programme.
+#: Matches strategy.setup_maturity's existing definition of a usable "qualifying run";
+#: a lap is not a run, and an out-lap is not a lap.
+MIN_EVIDENCE_CLEAN_LAPS = 5
+
 #: Classic-dashboard display label -> canonical feedback key (UAT 2026-08-07 B5).
 #: Stated, never derived: deriving it from the label produced "mid-corner" and
 #: "rear_under_braking" while every reader wants "mid_corner" and "rear_braking".
@@ -7106,6 +7114,19 @@ class SessionDB:
             r = self._conn.execute(
                 "SELECT cycle_id FROM event_preparation_activities WHERE activity_id=?", (aid,)).fetchone()
             cid = str(r[0]) if r else ""
+        # UAT 2026-08-07 defect C3 — one on-track run is one piece of evidence. The
+        # table is keyed (activity_id, session_id), so nothing stopped the SAME
+        # telemetry session binding to a second and third activity, and each binding
+        # then counted as an independent sample: one outing could satisfy the base,
+        # race and qualifying domains at once. A session already bound elsewhere in
+        # this cycle is refused rather than silently multiplied. Re-binding a session
+        # to the SAME activity stays idempotent (INSERT OR IGNORE below).
+        _bound = self._conn.execute(
+            "SELECT activity_id FROM event_preparation_activity_sessions "
+            "WHERE cycle_id=? AND session_id=? AND activity_id<>?",
+            (cid, sid, aid)).fetchone()
+        if _bound:
+            return False
         self._conn.execute(
             "INSERT OR IGNORE INTO event_preparation_activity_sessions "
             "(activity_id,session_id,cycle_id,created_at) VALUES (?,?,?,?)",
@@ -7685,19 +7706,44 @@ class SessionDB:
 
     def get_practice_sessions_for_cycle(self, cycle_id: str) -> list:
         """All telemetry sessions bound to any activity in one cycle, with their activity type and lap
-        count (SELECT-only, single bounded JOIN — constant query count regardless of session count).
-        This is the event-scoped Practice query the flat sessions.event_id column never provided."""
+        counts (SELECT-only, single bounded JOIN — constant query count regardless of session count).
+        This is the event-scoped Practice query the flat sessions.event_id column never provided.
+
+        UAT 2026-08-07 defect C3 — two counting faults lived here.
+
+        ``total_laps`` counts EVERY lap including out-laps and pit laps, and the caller
+        treated ``laps > 0`` as a complete evidence sample. One installation lap
+        therefore satisfied a whole evidence domain. ``clean_laps`` is now returned
+        alongside it, counted the same way every other query in this file counts a real
+        lap (``lap_time_ms > 0 AND is_pit_lap = 0 AND is_out_lap = 0``), so the caller
+        can apply a floor.
+
+        The binding table is keyed ``(activity_id, session_id)``, so ONE telemetry
+        session may bind to several activities and this query returned one row per
+        binding. A single on-track run recorded against the base, race and qualifying
+        activities became three independent samples and satisfied all three domains.
+        ``bound_activity_count`` reports the fan-out so the caller can count the run
+        once; the row order is stable so which activity is treated as primary is
+        deterministic rather than incidental.
+        """
         rows = self._conn.execute(
             "SELECT b.session_id, b.activity_id, a.activity_type, s.total_laps, s.track, "
-            "       s.car_name, s.event_id "
+            "       s.car_name, s.event_id, "
+            "       (SELECT COUNT(*) FROM lap_records lr "
+            "         WHERE lr.session_id = s.id AND lr.lap_time_ms > 0 "
+            "           AND lr.is_pit_lap = 0 AND lr.is_out_lap = 0) AS clean_laps, "
+            "       (SELECT COUNT(*) FROM event_preparation_activity_sessions b2 "
+            "         WHERE b2.cycle_id = b.cycle_id AND b2.session_id = b.session_id) "
+            "         AS bound_activity_count "
             "FROM event_preparation_activity_sessions b "
             "JOIN event_preparation_activities a ON a.activity_id = b.activity_id "
             "LEFT JOIN sessions s ON CAST(s.id AS TEXT) = b.session_id "
-            "WHERE b.cycle_id = ? ORDER BY b.session_id",
+            "WHERE b.cycle_id = ? ORDER BY b.session_id, b.activity_id",
             (str(cycle_id or ""),)).fetchall()
         return [{"session_id": r[0], "activity_id": r[1], "activity_type": r[2],
                  "total_laps": int(r[3] or 0), "track": r[4] or "", "car_name": r[5] or "",
-                 "event_id": int(r[6] or 0)}
+                 "event_id": int(r[6] or 0), "clean_laps": int(r[7] or 0),
+                 "bound_activity_count": int(r[8] or 0)}
                 for r in rows]
 
     def build_event_preparation_report(self, cycle_id: str, memory_context_key: str = "",
@@ -7771,9 +7817,24 @@ class SessionDB:
         ctrack = (cyc_row["track"] or "").strip().lower()
         ccar = (cyc_row["car"] or "").strip().lower()
         cev = int(cyc_row["event_id"] or 0)
+        # UAT 2026-08-07 defect C3 — count each on-track RUN once, and only when it
+        # actually produced usable laps.
+        #
+        # A telemetry session may be bound to more than one activity (the binding table
+        # is keyed (activity_id, session_id)), and this loop produced one sample per
+        # BINDING. One run recorded against the base, race and qualifying activities
+        # became three independent samples and satisfied all three evidence domains
+        # from a single outing. The first binding by stable sort order stays the
+        # evidence-bearing one; the rest are recorded as duplicates so the fan-out is
+        # visible rather than silently multiplying the evidence.
         samples = []
+        _seen_sessions: set = set()
         for s in sess_rows:
             laps = int(s["total_laps"] or 0)
+            clean = int(s.get("clean_laps") or 0)
+            _sid = str(s["session_id"])
+            _duplicate = _sid in _seen_sessions
+            _seen_sessions.add(_sid)
             sev = int(s.get("event_id") or 0)
             s_track = (s["track"] or "").strip().lower()
             s_car = (s["car_name"] or "").strip().lower()
@@ -7794,9 +7855,15 @@ class SessionDB:
                     compat = EvidenceCompatibility.INCOMPATIBLE
                 elif ccar and s_car and s_car != ccar:
                     compat = EvidenceCompatibility.INCOMPATIBLE
+            # A lap is not a run. `laps > 0` counted an installation lap or a single
+            # out-lap as a COMPLETE evidence sample for a domain, which is how one
+            # practice session came to satisfy a whole preparation programme. The floor
+            # is the project's existing definition of a usable run (MIN_EVIDENCE_CLEAN_LAPS).
+            _enough = clean >= MIN_EVIDENCE_CLEAN_LAPS
             samples.append(PracticeEvidenceSample(
-                session_id=str(s["session_id"]), activity_id=s["activity_id"],
-                activity_type=_atype(s["activity_type"]), is_valid=laps > 0, valid_laps=laps,
+                session_id=_sid, activity_id=s["activity_id"],
+                activity_type=_atype(s["activity_type"]),
+                is_valid=bool(_enough and not _duplicate), valid_laps=clean,
                 compatibility=compat))
 
         evidence = build_cumulative_evidence(samples)
