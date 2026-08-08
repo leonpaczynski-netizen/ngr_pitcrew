@@ -90,10 +90,15 @@ def test_a_real_pit_lane_offset_is_detected():
     assert t.length_m >= 200
 
 
-def test_the_threshold_is_tighter_than_the_old_constant():
+def test_the_mapper_and_the_detector_use_the_same_threshold():
+    """A post-Phase-4 self-audit found the two had drifted: this module carried the
+    corrected 12 m while data.track_station_map — the detector the MAPPING path
+    actually calls — still used 60 m, so the fix was in the module nothing called.
+    They now share one value, and this fails if they ever separate again."""
     from data.track_station_map import _PIT_LANE_THRESHOLD_M
-    assert DIVERGENCE_THRESHOLD_M < _PIT_LANE_THRESHOLD_M
+    assert _PIT_LANE_THRESHOLD_M == DIVERGENCE_THRESHOLD_M
     assert 10 <= DIVERGENCE_THRESHOLD_M <= 15
+    assert DIVERGENCE_THRESHOLD_M != 60.0, "the old copied constant is back"
 
 
 def test_a_wide_line_is_not_a_pit_lane():

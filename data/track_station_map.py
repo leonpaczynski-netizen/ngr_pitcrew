@@ -620,7 +620,25 @@ def build_track_station_map(
 # Pit lane boundary detection (Group 21B)
 # ---------------------------------------------------------------------------
 
-_PIT_LANE_THRESHOLD_M: float = 60.0   # matches track_map_matching.PIT_DISTANCE_THRESHOLD_M
+# UAT 2026-08-07 defect D6. This was 60 m "to match
+# track_map_matching.PIT_DISTANCE_THRESHOLD_M" — a constant that answers a different
+# question (is this sample so far off the map that matching should give up?). Real pit
+# lanes run 15-30 m from the racing line, so a correct traversal produced no detection
+# at all and the driver saw "I couldn't see the pit lane on that lap" after driving it.
+#
+# The value is imported from data.pit_lane_detection so the mapper and the lap-level
+# detector cannot drift apart: a self-audit after Phase 4 found exactly that drift —
+# the new module carried the corrected threshold while THIS function, the one the
+# mapping path actually calls, still used 60.
+def _default_pit_threshold() -> float:
+    try:
+        from data.pit_lane_detection import DIVERGENCE_THRESHOLD_M
+        return float(DIVERGENCE_THRESHOLD_M)
+    except Exception:
+        return 12.0
+
+
+_PIT_LANE_THRESHOLD_M: float = _default_pit_threshold()
 
 
 def _xz_dist_to_nearest_station(x: float, z: float, stations: List[StationPoint]) -> Tuple[float, float]:
