@@ -346,3 +346,63 @@ def test_the_shift_beep_still_follows_the_selected_discipline():
                           "_push_active_compound": lambda self, d: None})()
     LiveShellBridge._push_practice_mode(stub, "qualifying")
     assert window._practice_is_qual_ref[0] is True
+
+
+# ---------------------------------------------------------------------------
+# C2 / C9 — depth before breadth, and one number on screen
+# ---------------------------------------------------------------------------
+def _objective_after(n, activity_type=None):
+    from strategy.event_preparation_cycle import PreparationActivityType
+    from strategy.preparation_evidence import (
+        EvidenceCompatibility, PracticeEvidenceSample, build_cumulative_evidence,
+        to_objective,
+    )
+    at = activity_type or PreparationActivityType.BASELINE_PRACTICE
+    samples = [PracticeEvidenceSample(
+        session_id=str(i), activity_id="a", activity_type=at, is_valid=True,
+        valid_laps=6, compatibility=EvidenceCompatibility.EXACT) for i in range(n)]
+    return to_objective(build_cumulative_evidence(samples))
+
+
+@pytest.mark.parametrize("n", [0, 1, 2])
+def test_a_domain_is_not_retired_after_one_sample(n):
+    """One sample lifted a domain from NONE to EMERGING so it stopped being the
+    globally weakest, and the engine moved straight to the next untouched one.
+    Runtime-verified in the register: setup_qualifying was nominated THIRD from every
+    starting configuration, before base or race had been established."""
+    assert _objective_after(n).domain == "setup_base"
+
+
+def test_the_engine_moves_on_once_the_domain_is_covered():
+    """Depth-first must not mean stuck."""
+    assert _objective_after(3).domain != "setup_base"
+
+
+def test_the_coverage_threshold_matches_what_the_map_shows_the_driver():
+    """The programme map told the driver three runs to cover a domain while the
+    objective engine moved off after one. Two authorities disagreeing about the same
+    number is worse than either being wrong."""
+    from strategy.preparation_evidence import (
+        COVERED_CONFIDENCE, _CONFIDENCE_ORDER, _confidence_from,
+    )
+    from strategy.programme_map import TARGET_ADEQUATE
+    reached = _confidence_from(TARGET_ADEQUATE, 0, False)
+    assert _CONFIDENCE_ORDER.index(reached) >= _CONFIDENCE_ORDER.index(COVERED_CONFIDENCE)
+    assert _CONFIDENCE_ORDER.index(_confidence_from(TARGET_ADEQUATE - 1, 0, False)) \
+        < _CONFIDENCE_ORDER.index(COVERED_CONFIDENCE)
+
+
+def test_priority_order_still_decides_which_domain_comes_first():
+    """Depth-first changes WHEN the engine moves on, not the engineering sequence."""
+    from strategy.preparation_evidence import _OBJECTIVE_PRIORITY, EvidenceDomain
+    assert _OBJECTIVE_PRIORITY[0] is EvidenceDomain.SETUP_BASE
+    assert _objective_after(0).domain == "setup_base"
+
+
+def test_free_practice_does_not_credit_the_base_setup_domain():
+    """Working a domain means running the activity that produces its evidence — free
+    practice laps are race pace and consistency, not base-setup evidence."""
+    from strategy.event_preparation_cycle import PreparationActivityType
+    obj = _objective_after(4, PreparationActivityType.FREE_PRACTICE)
+    assert obj.domain == "setup_base", (
+        "free practice must not silently satisfy the base-setup domain")

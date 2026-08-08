@@ -218,17 +218,34 @@ def test_report_accumulates_evidence_and_stays_context_safe(tmp_path):
                                     "activity_type": "setup_experiment", "order_index": 0})
     db.upsert_preparation_activity({"activity_id": "coach", "cycle_id": "cyc-1",
                                     "activity_type": "coaching_run", "order_index": 1})
-    # two valid on-context experiment sessions
-    for _ in range(2):
-        sid = db.open_session(car_id=1, track="Fuji", session_type="Practice", car_name="Porsche 911 RSR")
-        db._conn.execute("UPDATE sessions SET total_laps=8 WHERE CAST(id AS TEXT)=?", (str(sid),))
+    # UAT 2026-08-07 defect C3 — a session's evidence weight now comes from its CLEAN
+    # LAP RECORDS, not from a total_laps figure written straight onto the row. This
+    # fixture used to set total_laps=8 with no lap_records at all; under the clean-lap
+    # floor that is a session with zero usable laps, which is the right answer. The
+    # laps are written properly so the test still exercises what it means to —
+    # membership and context-safety — rather than the floor.
+    #
+    # Each session also needs its OWN activity: one telemetry session may no longer
+    # bind to several activities (one run is one piece of evidence).
+    def _drive(track):
+        sid = db.open_session(car_id=1, track=track, session_type="Practice",
+                              car_name="Porsche 911 RSR")
+        for lap in range(1, 9):
+            db.write_lap(session_id=sid, lap_num=lap, lap_time_ms=100_000,
+                         fuel_used=2.0, stats=None)
         db._conn.commit()
-        db.bind_session_to_activity("exp", sid, "cyc-1")
-    # an OFF-context session (wrong track) bound to the same activity -> must not strengthen exact setup
-    off = db.open_session(car_id=1, track="Spa", session_type="Practice", car_name="Porsche 911 RSR")
-    db._conn.execute("UPDATE sessions SET total_laps=8 WHERE CAST(id AS TEXT)=?", (str(off),))
-    db._conn.commit()
-    db.bind_session_to_activity("exp", off, "cyc-1")
+        return sid
+
+    for i in range(2):
+        db.upsert_preparation_activity({"activity_id": f"exp{i}", "cycle_id": "cyc-1",
+                                        "activity_type": "setup_experiment",
+                                        "order_index": i})
+        db.bind_session_to_activity(f"exp{i}", _drive("Fuji"), "cyc-1")
+    # an OFF-context session (wrong track) -> must not strengthen exact setup evidence
+    db.upsert_preparation_activity({"activity_id": "exp_off", "cycle_id": "cyc-1",
+                                    "activity_type": "setup_experiment",
+                                    "order_index": 2})
+    db.bind_session_to_activity("exp_off", _drive("Spa"), "cyc-1")
 
     rep = db.build_event_preparation_report("cyc-1", now_date="2026-06-10")
     assert rep["ok"] is True

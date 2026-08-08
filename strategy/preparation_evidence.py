@@ -339,7 +339,14 @@ _DOMAIN_TO_PHASE = {
     EvidenceDomain.CONSISTENCY: PreparationPhase.DRIVER_DEVELOPMENT,
 }
 
-# deterministic priority order for recommending the next objective (weakest-required-first)
+#: The confidence a domain must reach before the objective engine moves off it
+#: (UAT 2026-08-07 defects C2/C9). MODERATE is 3 exact samples, which is exactly what
+#: the programme map shows the driver as the target for covering a domain
+#: (programme_map.TARGET_ADEQUATE). The two must not disagree.
+COVERED_CONFIDENCE = ConfidenceLevel.MODERATE
+
+# deterministic priority order for recommending the next objective (highest-priority
+# UNCOVERED domain first — depth before breadth, see to_objective)
 _OBJECTIVE_PRIORITY = (
     EvidenceDomain.SETUP_BASE, EvidenceDomain.SETUP_RACE, EvidenceDomain.SETUP_QUALIFYING,
     EvidenceDomain.TYRE_MODEL, EvidenceDomain.FUEL_MODEL, EvidenceDomain.RACE_PACE,
@@ -351,12 +358,31 @@ _OBJECTIVE_PRIORITY = (
 def to_objective(evidence: CumulativePreparationEvidence) -> PreparationObjective:
     """Recommend the next engineering objective: the highest-priority domain with the weakest evidence.
     Deterministic; never fabricates certainty — a fully-mature picture yields a confirmation objective."""
+    # UAT 2026-08-07 defects C2 + C9 — DEPTH before breadth.
+    #
+    # This used to rank by confidence first: `(_CONFIDENCE_ORDER.index(conf), priority)`,
+    # picking the globally weakest domain. One sample lifts a domain from NONE to
+    # EMERGING, so it stopped being the weakest and the engine immediately moved on to
+    # the next untouched one — retiring a domain after a single run. Runtime-verified
+    # in the register: `setup_qualifying` was nominated as the THIRD objective from
+    # every starting configuration, before base or race had been established.
+    #
+    # It also contradicted the programme map on screen, which tells the driver a domain
+    # takes THREE runs to cover (TARGET_ADEQUATE) while the objective engine moved off
+    # after one. Two authorities disagreeing about the same number is worse than either
+    # being wrong.
+    #
+    # The rule is now: work the highest-priority domain that is not yet COVERED, and
+    # stay on it until it is. Only when everything in the priority order is covered does
+    # the engine fall through to confirmation. Priority order is unchanged, so which
+    # domain comes first is still the documented engineering sequence.
     ranked = []
     for d in _OBJECTIVE_PRIORITY:
         conf = evidence.confidence(d)
-        ranked.append((_CONFIDENCE_ORDER.index(conf), _OBJECTIVE_PRIORITY.index(d), d, conf))
+        covered = _CONFIDENCE_ORDER.index(conf) >= _CONFIDENCE_ORDER.index(COVERED_CONFIDENCE)
+        ranked.append((1 if covered else 0, _OBJECTIVE_PRIORITY.index(d), d, conf))
     ranked.sort(key=lambda t: (t[0], t[1]))
-    _idx, _pri, weakest, conf = ranked[0]
+    _covered, _pri, weakest, conf = ranked[0]
     if conf in (ConfidenceLevel.MODERATE, ConfidenceLevel.STRONG):
         return PreparationObjective(
             headline="Confirm and protect the current best-known setup",
