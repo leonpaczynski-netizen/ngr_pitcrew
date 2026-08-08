@@ -60,7 +60,15 @@ def test_coach_message_tracks_state():
     not_enough = assess_capture_convergence([_lap(4000.0)])
     assert "keep going" in convergence_coach_message(not_enough).lower()
     done = assess_capture_convergence([_lap(4000.0), _lap(4001.0), _lap(3999.0)])
-    assert "box this lap" in convergence_coach_message(done).lower()
+    # UAT 2026-08-07 defects D1/D8 — the wording changed deliberately. "Box this lap"
+    # used to mean "press the Stop recording button", which is unreachable in VR, and
+    # the only telemetry detector needed a 3-second stop in RACING phase that Time
+    # Trial never reaches. Boxing is now detected from sustained pit-lane speed, so the
+    # message tells the driver to drive into the pit lane and says there is nothing to
+    # press. Assert the INTENT rather than a phrase the fix had to change.
+    _done_msg = convergence_coach_message(done).lower()
+    assert "box" in _done_msg and "pit lane" in _done_msg
+    assert "nothing to press" in _done_msg
 
 
 class TestLapModellingCallout:
