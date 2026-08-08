@@ -404,7 +404,9 @@ def build_enriched_baseline(inputs: BaselineInputs, *, profile=None) -> Enriched
             history_prior=history_prior, duration_mins=inputs.duration_mins,
             tyre_wear_multiplier=inputs.tyre_wear_multiplier,
             car_class=inputs.car_class, current_setup=inputs.current_setup,
-            track_name=inputs.track_name, proven_fields=proven_seeds or None)
+            track_name=inputs.track_name, proven_fields=proven_seeds or None,
+            # Resolved once above — recomputing it here doubled the cost of every build.
+            anchor_set=anchor_set)
         synthesis = synthesize_setup(context)
         synthesis_primary = reconcile_synthesis_primary(setup_fields, synthesis, context)
         if synthesis_primary.get("overrides") and car_model is not None:

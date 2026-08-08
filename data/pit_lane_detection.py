@@ -67,8 +67,98 @@ class PitLaneTraversal:
                 "reason": self.reason}
 
 
+#: Side length of a spatial-index cell, in metres. Chosen so a query has to examine
+#: only the 3x3 block around a point: any station nearer than the cell size is
+#: guaranteed to be in that block. 50 m keeps the block small on a 5 km circuit while
+#: comfortably exceeding the divergence distances this module cares about.
+_GRID_M: float = 50.0
+
+
+class _StationIndex:
+    """Uniform grid over the station XZ positions.
+
+    The nearest-station search is the whole cost of this module: a 90-second lap at
+    60 Hz against a 5 km centreline is 27 million distance computations, which measured
+    at ~1.7 seconds per detection and used to run on the Qt thread (defect D9). Bucketing
+    the stations makes each query examine a few dozen candidates instead of five
+    thousand, and the answer is identical — this is an index, not an approximation.
+
+    Built once per detection call and thrown away; the cost is one pass over the
+    stations, which is negligible beside the query loop it replaces.
+    """
+
+    __slots__ = ("_cells", "_pts", "_max_ring")
+
+    def __init__(self, stations: Sequence) -> None:
+        self._cells: dict = {}
+        self._pts: list = []
+        for s in stations:
+            try:
+                x, z, m = float(s.x), float(s.z), float(s.station_m)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            idx = len(self._pts)
+            self._pts.append((x, z, m))
+            self._cells.setdefault(
+                (int(x // _GRID_M), int(z // _GRID_M)), []).append(idx)
+        # The widest ring that could still reach an unexamined cell, measured from the
+        # index's own extent. A fixed cap here would be a CORRECTNESS bug rather than a
+        # slow path: a query far outside the track would stop expanding before reaching
+        # any station and report "no station anywhere", which is a different answer from
+        # the linear search rather than a slower route to the same one.
+        if self._cells:
+            gxs = [c[0] for c in self._cells]
+            gzs = [c[1] for c in self._cells]
+            self._max_ring = max(max(gxs) - min(gxs), max(gzs) - min(gzs)) + 1
+        else:
+            self._max_ring = 0
+
+    def __bool__(self) -> bool:
+        return bool(self._pts)
+
+    def nearest(self, x: float, z: float) -> "tuple[float, float]":
+        """(distance, station_m) of the nearest station, or (inf, 0.0)."""
+        cells = self._cells
+        if not cells:
+            return (float("inf"), 0.0)
+        cx, cz = int(x // _GRID_M), int(z // _GRID_M)
+        best_d = float("inf")
+        best_m = 0.0
+        pts = self._pts
+        # Distance from the query cell to the furthest occupied cell, so the loop is
+        # guaranteed to terminate having examined every station rather than at an
+        # arbitrary cap.
+        gxs = [c[0] for c in cells]
+        gzs = [c[1] for c in cells]
+        limit = max(max(abs(cx - min(gxs)), abs(cx - max(gxs))),
+                    max(abs(cz - min(gzs)), abs(cz - max(gzs)))) + 1
+        ring = 1
+        while ring <= limit:
+            for gx in range(cx - ring, cx + ring + 1):
+                for gz in range(cz - ring, cz + ring + 1):
+                    for i in cells.get((gx, gz), ()):
+                        px, pz, pm = pts[i]
+                        dx = x - px
+                        dz = z - pz
+                        d = dx * dx + dz * dz   # squared; sqrt once at the end
+                        if d < best_d:
+                            best_d = d
+                            best_m = pm
+            # A hit inside the searched block is only provably nearest once the block
+            # extends at least as far as the hit itself. Widen until that holds.
+            if best_d <= (ring * _GRID_M) ** 2:
+                break
+            ring += 1
+        return (math.sqrt(best_d) if best_d < float("inf") else float("inf"), best_m)
+
+
 def _nearest(x: float, z: float, stations: Sequence) -> "tuple[float, float]":
-    """(distance, station_m) of the nearest station in the XZ plane."""
+    """(distance, station_m) of the nearest station in the XZ plane.
+
+    Linear reference implementation. Kept because it is the thing ``_StationIndex`` is
+    tested against — an index that silently disagrees with the obvious answer is worse
+    than the slow loop it replaced.
+    """
     best_d = float("inf")
     best_m = 0.0
     for s in stations:
@@ -101,6 +191,9 @@ def detect_pit_lane_traversal(
 
         step = max(1, int(stride or 1))
         pts = list(samples)[::step]
+        index = _StationIndex(stations)
+        if not index:
+            return PitLaneTraversal(reason="no samples or no station map")
 
         run_start_idx: Optional[int] = None
         run_entry_m = 0.0
@@ -110,7 +203,7 @@ def detect_pit_lane_traversal(
 
         for idx, s in enumerate(pts):
             try:
-                dist, station_m = _nearest(float(s.x), float(s.z), stations)
+                dist, station_m = index.nearest(float(s.x), float(s.z))
             except (AttributeError, TypeError, ValueError):
                 continue
 

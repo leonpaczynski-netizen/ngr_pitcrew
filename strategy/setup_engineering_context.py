@@ -335,6 +335,7 @@ def build_setup_engineering_context(
     car_specs: Optional[dict] = None,
     track_name: str = "",
     proven_fields: Optional[dict] = None,
+    anchor_set=None,
 ) -> SetupEngineeringContext:
     """Build the canonical context ONCE from the shared builders. Degrades honestly on
     any missing input (never raises)."""
@@ -371,13 +372,18 @@ def build_setup_engineering_context(
     # reach the context, so `WorkingWindow.preferred` stayed None and the guard in
     # reconcile_synthesis_primary that is supposed to protect a proven value could
     # never fire. Passing it here is what makes that guard real.
-    anchor_set = None
+    # An already-resolved anchor set is reused rather than recomputed. The from-scratch
+    # pipeline resolves the car parameter model and the anchor once and threads them
+    # through; before this they were resolved a SECOND time here, so every build paid
+    # for both twice — measured at 2 of the 4 resolve_parameter_model calls per build.
     try:
         from strategy.setup_anchor import resolve_anchor
-        anchor_set = resolve_anchor(
-            car, track_name or getattr(track_profile, "track_name", "") or "",
-            str(objective), ranges=ranges, history_prior=history_prior,
-            proven_fields=proven_fields, car_specs=car_specs, drivetrain=drivetrain)
+        if anchor_set is None:
+                anchor_set = resolve_anchor(
+                car, track_name or getattr(track_profile, "track_name", "") or "",
+                str(objective), ranges=ranges, history_prior=history_prior,
+                proven_fields=proven_fields, car_specs=car_specs,
+                drivetrain=drivetrain)
     except Exception:
         anchor_set = None
 

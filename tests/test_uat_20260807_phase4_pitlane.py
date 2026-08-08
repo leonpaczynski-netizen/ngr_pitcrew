@@ -331,3 +331,51 @@ def test_the_result_is_applied_on_the_qt_thread():
     from ui.live_shell_bridge import LiveShellBridge
     assert hasattr(LiveShellBridge, "_on_pit_map_done")
     assert hasattr(LiveShellBridge, "_pit_map_done")
+
+
+# ---------------------------------------------------------------------------
+# Optimisation — the index must be an index, not an approximation
+# ---------------------------------------------------------------------------
+def test_the_station_index_agrees_with_the_linear_search_everywhere():
+    """The nearest-station scan was the whole cost of this module (~1.7s per detection
+    on a 5km circuit). Bucketing it is only legitimate if the answer is identical — an
+    index that silently disagrees is worse than the slow loop it replaced."""
+    import random
+
+    from data.pit_lane_detection import _StationIndex, _nearest
+    stations = _stations()
+    index = _StationIndex(stations)
+    random.seed(11)
+    for _ in range(300):
+        x = random.uniform(-_R - 200, _R + 200)
+        z = random.uniform(-_R - 200, _R + 200)
+        got, want = index.nearest(x, z), _nearest(x, z, stations)
+        assert got[0] == pytest.approx(want[0]), f"distance differs at ({x:.0f},{z:.0f})"
+        assert got[1] == want[1], f"station differs at ({x:.0f},{z:.0f})"
+
+
+def test_the_index_finds_a_point_far_outside_the_track():
+    """The search widens until the block provably contains the nearest station.
+
+    Only the DISTANCE is compared. The centre of a circular track is exactly
+    equidistant from every station, so which one is named is a tie the two
+    implementations may legitimately break differently — the distance is the answer
+    that matters, and it must be identical.
+    """
+    from data.pit_lane_detection import _StationIndex, _nearest
+    stations = _stations()
+    index = _StationIndex(stations)
+    for probe in ((0.0, 0.0), (5000.0, 5000.0), (-9000.0, 120.0)):
+        assert index.nearest(*probe)[0] == pytest.approx(_nearest(*probe, stations)[0])
+
+
+def test_the_index_survives_junk_stations():
+    from data.pit_lane_detection import _StationIndex
+    index = _StationIndex([object(), _St(0, 1.0, 2.0)])
+    assert bool(index) is True
+    assert index.nearest(1.0, 2.0)[1] == 0
+
+
+def test_an_empty_station_set_is_not_usable():
+    from data.pit_lane_detection import _StationIndex
+    assert bool(_StationIndex([])) is False
