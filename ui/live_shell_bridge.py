@@ -50,6 +50,9 @@ class LiveShellBridge(QObject):
     _analysis_done = pyqtSignal(object)
     _baseline_done = pyqtSignal(object)
     _plan_done = pyqtSignal(object)
+    #: Pit-lane mapping runs off-thread (UAT 2026-08-07 defect D9) — the result comes
+    #: back here so the session state and the status line are touched on the Qt thread.
+    _pit_map_done = pyqtSignal(object)
     #: PTT strategy acknowledgement — emitted by the voice listener thread and
     #: dispatched on the Qt thread so the slot can safely call refresh().
     _voice_strategy_ack = pyqtSignal(str)
@@ -232,6 +235,13 @@ class LiveShellBridge(QObject):
         self._last_analysis = None
         self._analysis_done.connect(self._on_analysis_done)
         self._baseline_done.connect(self._on_baseline_done)
+        self._pit_map_done.connect(self._on_pit_map_done)
+        #: True while an off-thread pit-lane mapping attempt is in flight.
+        self._pit_map_pending = False
+        #: Consecutive 750ms ticks the car has held pit-lane speed (defect D1).
+        self._box_ticks = 0
+        #: Whether the track model has converged — the state in which "box" is expected.
+        self._tm_converged = False
         #: Last Event Command Centre view — the run planner reads the current objective
         #: from it so a started run carries the purpose the engineer actually asked for.
         self._last_guidance_view = None
@@ -2486,7 +2496,19 @@ class LiveShellBridge(QObject):
             # Evaluate the recorded laps once, then both SPEAK the engineer's per-lap call
             # (once per new lap) and show it on the page.
             lap_results = self._track_lap_results(session)
+            # Whether the model has converged — the state in which the app says "box
+            # this lap", and therefore the only state in which slowing down should be
+            # read as boxing (defect D1).
+            try:
+                from data.track_convergence import assess_capture_convergence
+                self._tm_converged = bool(
+                    assess_capture_convergence(lap_results).converged)
+            except Exception:
+                self._tm_converged = False
             self._voice_track_modelling(session, lap_results)
+            # The physical box the driver has just performed, rather than the button
+            # they cannot reach in VR.
+            self._auto_box_if_converged()
             page.set_session(session,
                              laps_captured=self._track_laps_captured(),
                              corners=self._track_corners(session),
@@ -2552,6 +2574,72 @@ class LiveShellBridge(QObject):
                            "drive-through is enough; you don't need to stop. That completes "
                            "the model.")
 
+    # ---- boxing, detected rather than clicked (UAT 2026-08-07 D1/D8) ------
+    #: Sustained speed below this, while recording, reads as pit-lane running rather
+    #: than a slow corner. GT7 pit limiters sit at 60 km/h (50 at some circuits); a
+    #: genuine slow hairpin is taken above 70. 65 separates them without needing the
+    #: track's own limiter value, which the app does not have.
+    _BOX_SPEED_KMH = 65.0
+    #: How long the car must hold that speed. A hairpin is over in about a second; the
+    #: pit lane is several. Held in ticks of the 750ms refresh.
+    _BOX_TICKS = 5
+
+    def _detect_box(self) -> bool:
+        """Has the driver just driven into the pit lane? (UAT 2026-08-07 defect D1.)
+
+        "Box this lap" is what the app says when the track model has converged, and in
+        that sentence "box" meant PRESS THE STOP RECORDING BUTTON. ``stop_capture`` had
+        exactly one caller — a widget click — and no telemetry path reached it. In VR
+        the driver cannot press it, so the flow could not advance: the physical pit stop
+        was a no-op, the pit lap scored as usable, convergence still held, and the same
+        callout fired again on the next clean lap. That is the loop the UAT reported.
+
+        The obvious detector is unavailable here: ``telemetry.state`` only recognises a
+        pit stop from refuelling or a 3-second stop below 10 km/h **in RACING phase**,
+        and track modelling runs in Time Trial where that phase never occurs (defect
+        D8) — so the app's own instruction ("a drive-through is enough, you don't need
+        to stop") is unsatisfiable by the only detector it had. Sustained pit-lane speed
+        needs no phase, no refuelling and no stop, so it detects the drive-through the
+        app actually asks for.
+        """
+        speed = None
+        for attr in ("_last_packet", "last_packet"):
+            p = getattr(self._window, attr, None)
+            if p is not None:
+                try:
+                    speed = float(getattr(p, "speed_kmh", None))
+                except (TypeError, ValueError):
+                    speed = None
+                if speed is not None:
+                    break
+        if speed is None:
+            return False
+        if speed <= 0.0:
+            # Stationary in the garage/menus is not boxing.
+            self._box_ticks = 0
+            return False
+        if speed < self._BOX_SPEED_KMH:
+            self._box_ticks = int(getattr(self, "_box_ticks", 0)) + 1
+        else:
+            self._box_ticks = 0
+        return self._box_ticks >= self._BOX_TICKS
+
+    def _auto_box_if_converged(self) -> None:
+        """Finish the capture when the driver boxes, without needing the button.
+
+        Only fires once the model has actually converged — the app has said "box this
+        lap" — so slowing for any other reason mid-capture cannot end the session early.
+        """
+        if getattr(self, "_pit_lane_mode", False):
+            return                      # already past capture, mapping the lane
+        if not getattr(self, "_tm_converged", False):
+            return
+        if not self._detect_box():
+            return
+        self._box_ticks = 0
+        self._track_status("Box detected — finishing the track model.")
+        self._on_track_action("stop_capture")
+
     def _try_map_pit_lane(self) -> None:
         """While mapping the pit lane, detect it from the completed out-lap(s).
 
@@ -2561,20 +2649,42 @@ class LiveShellBridge(QObject):
         simply misses once), so the driver isn't forced to pit on a specific lap."""
         if not self._pit_lane_mode:
             return
+        if getattr(self, "_pit_map_pending", False):
+            return                       # an attempt is already running off-thread
         try:
             ctrl = getattr(self._tracks, "_controller", None)
             laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
             if len(laps) <= self._pit_lane_baseline_laps:
                 return                                   # no new lap completed yet
             self._pit_lane_baseline_laps = len(laps)     # one attempt per new lap
-            result = self._tracks.map_pit_lane(laps[-2:])  # stitch the last two laps
-            if result.ok:
+            # UAT 2026-08-07 defect D9 — map_pit_lane is O(samples x stations): a
+            # 90-second lap at 60 Hz against a 5 km centreline is roughly 27 million
+            # distance computations in pure Python, and this ran SYNCHRONOUSLY on the Qt
+            # thread inside a 750 ms timer, wrapped in a bare except. A slow attempt
+            # froze the UI mid-session and a failing one was indistinguishable from a
+            # no-op. It now runs on the worker the bridge already uses for the setup
+            # engine, and the result comes back on the Qt thread.
+            snapshot = list(laps[-2:])                   # stitch the last two laps
+            self._pit_map_pending = True
+            self._spawn(lambda: self._pit_map_done.emit(
+                self._tracks.map_pit_lane(snapshot)))
+        except Exception:
+            self._pit_map_pending = False
+
+    def _on_pit_map_done(self, result) -> None:
+        """Apply a pit-lane mapping attempt that ran off the Qt thread (defect D9)."""
+        self._pit_map_pending = False
+        try:
+            if getattr(result, "ok", False):
                 self._pit_lane_mode = False
+                ctrl = getattr(self._tracks, "_controller", None)
                 if ctrl is not None and hasattr(ctrl, "stop_session"):
                     ctrl.stop_session()
             # A miss (car hasn't been through the pit yet) leaves us in mapping mode to
             # try the next lap; either way surface the engineer's message.
-            self._tm_status = result.reason or self._tm_status
+            self._tm_status = getattr(result, "reason", "") or self._tm_status
+            if self._tm_status:
+                self._track_status(self._tm_status)
         except Exception:
             pass
 

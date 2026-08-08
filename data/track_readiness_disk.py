@@ -49,6 +49,34 @@ def _station_map_present(loc: str, lay: str) -> bool:
         return False
 
 
+def _pit_lane_present(loc: str, lay: str) -> bool:
+    """Has the pit lane been mapped for this layout, on disk?
+
+    UAT 2026-08-07 defect D4 — the outstanding pit-lane step lived ONLY in
+    ``_pit_lane_mode``, an in-memory flag on the bridge, so it was lost on restart and
+    an approved-but-unmapped track looked finished. Confirmed on the driver's own disk:
+    the Monza model carries ``"accepted": true`` beside ``"pit_lane": null``. It is
+    read from the station map (where modelling writes it) OR the track library (where
+    the live engineer reads it), because either one present means the lane is mapped.
+    """
+    try:
+        from data.track_station_map import (
+            find_station_map_path, import_station_map_json)
+        path = find_station_map_path(loc, lay)
+        if path is not None:
+            sm = import_station_map_json(str(path))
+            if getattr(sm, "pit_lane", None):
+                return True
+    except Exception:
+        pass
+    try:
+        from data.track_library import load_track_pit_lane
+        block = load_track_pit_lane(loc, lay)
+        return bool(block and block.get("segments"))
+    except Exception:
+        return False
+
+
 def _reviewed_present(loc: str, lay: str) -> bool:
     try:
         from data.track_model_resolver import find_reviewed_models_for_layout
@@ -89,6 +117,7 @@ def audit_track_assets_on_disk(location_id: str, layout_id: str) -> SimpleNamesp
     accepted = _accepted_model_present(loc, lay) if (loc and lay) else False
     station = _station_map_present(loc, lay) if (loc and lay) else False
     reviewed = _reviewed_present(loc, lay) if (loc and lay) else False
+    pit_lane = _pit_lane_present(loc, lay) if (loc and lay) else False
     seed_cl, seed_win, seed_len, seed_meta = (
         _seed_geometry(loc, lay) if (loc and lay) else (False, False, False, False)
     )
@@ -102,6 +131,9 @@ def audit_track_assets_on_disk(location_id: str, layout_id: str) -> SimpleNamesp
         reference_path_point_count=ref_points,
         station_map_available=station,
         reviewed_model_available=reviewed,
+        #: Defect D4 — the pit lane is part of on-disk readiness, so an
+        #: approved-but-unmapped track no longer reads as finished after a restart.
+        pit_lane_available=pit_lane,
         seed_geometry_available=seed_cl,
         seed_corner_windows_available=seed_win,
         seed_lap_length_available=seed_len,

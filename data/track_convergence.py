@@ -145,8 +145,8 @@ def lap_modelling_callout(results) -> str:
         conv = assess_capture_convergence(rows)
         if _quality_str(last) == "usable":
             if conv.converged:
-                return ("Good lap — that's enough. Box this lap and drive through the pit "
-                        "lane to finish the model.")
+                return ("Good lap — that's enough. Box this lap: drive into the pit "
+                        "lane and I'll finish the model — nothing to press.")
             remaining = max(1, MIN_USABLE_LAPS - conv.usable_laps)
             s = "s" if remaining != 1 else ""
             return (f"Good lap — that's {conv.usable_laps} clean. "
@@ -166,9 +166,16 @@ def convergence_coach_message(result: ConvergenceResult) -> str:
     if not isinstance(result, ConvergenceResult):
         return ""
     if result.converged:
-        return ("Track data is complete and consistent — box this lap and I'll approve "
-                "the model, then take one lap through the pit lane to map it "
-                "(a drive-through is enough — no need to stop).")
+        # UAT 2026-08-07 defects D1/D8 — "box this lap" used to mean "press the Stop
+        # recording button", which is unreachable in VR, and the only telemetry pit
+        # detector needed a 3-second stop in RACING phase that Time Trial never
+        # reaches. Boxing is now detected from sustained pit-lane speed, so the
+        # instruction and the detector finally describe the same act. Say that
+        # explicitly: the driver should not be hunting for a button.
+        return ("Track data is complete and consistent — just box. Drive into the pit "
+                "lane and I'll finish the model automatically, then take one lap "
+                "through the lane so I can map it (a drive-through is enough — no need "
+                "to stop, and nothing to press).")
     if result.usable_laps < MIN_USABLE_LAPS:
         need = MIN_USABLE_LAPS - result.usable_laps
         return (f"{result.usable_laps} clean lap{'s' if result.usable_laps != 1 else ''} "
