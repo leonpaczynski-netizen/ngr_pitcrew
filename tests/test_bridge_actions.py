@@ -68,7 +68,7 @@ def wired(qapp):
     ctrl = PitCrewController()
     shell = PitCrewShell(ctrl)
     win = _Win()
-    bridge = LiveShellBridge(shell, ctrl, window=win, config={})
+    bridge = LiveShellBridge(shell, ctrl, window=win, config={}, confirm=lambda *_a, **_k: True)
     return shell, win, bridge
 
 

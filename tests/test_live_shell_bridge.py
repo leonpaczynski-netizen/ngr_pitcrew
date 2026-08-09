@@ -238,7 +238,14 @@ class TestLiveSessionMode:
         win._practice_is_qual_ref = [False]
         win._live_mode_ref = ["Race"]
         win._announcer = _Announcer()
-        b = LiveShellBridge(shell, ctrl, window=win, config=_config())
+        # UAT 2026-08-07 Phase 3 put a readiness GATE in front of Begin Qualifying, and
+        # this fixture has no recorded evidence, so the gate correctly refuses. These
+        # tests are about what happens once qualifying IS entered — the shift-beep RPM,
+        # the compound, the announcer — so they take the override explicitly, which is
+        # what a driver choosing to qualify on thin preparation does. The gate itself is
+        # covered in test_uat_20260807_phase3_gates.py.
+        b = LiveShellBridge(shell, ctrl, window=win, config=_config(),
+                            confirm=lambda *_a, **_k: True)
         b.refresh()
         return shell, win, b
 

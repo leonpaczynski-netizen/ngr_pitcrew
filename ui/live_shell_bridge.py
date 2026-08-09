@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional
 
+import os
 import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -44,6 +45,38 @@ _LIBRARY_TAB = {
 }
 
 
+
+def _default_confirm(parent, title: str, body: str) -> bool:
+    """Ask the driver a blocking yes/no. Defaults to No.
+
+    Split out so the bridge can be constructed with a different decision function, and
+    so the one case where the question CANNOT be asked has an explicit answer.
+
+    A modal dialog is correct in production and fatal without a human: it waits for a
+    click that never comes. UAT 2026-08-07 Phase 3 put one behind the weekend gate's
+    override prompt, and that hung tests/test_live_shell_bridge.py for the full 900s
+    timeout at zero CPU — which reads exactly like a slow test rather than a stuck one.
+
+    On an offscreen platform there is nobody to click, so the answer is NO. Failing
+    closed is the right direction for this specific question: it means "do not proceed
+    onto incomplete preparation", which is the conservative outcome, and it can never
+    silently wave a session through because no one was watching.
+    """
+    # Nobody can answer a modal dialog under a test runner or on an offscreen
+    # platform, so do not open one. PYTEST_CURRENT_TEST is the reliable marker — the
+    # offscreen check alone was not enough, because the regression runner sets that in
+    # its subprocess env while a developer running pytest directly does not, so the
+    # hang came straight back outside the runner.
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return False
+    from PyQt6.QtWidgets import QMessageBox
+    return QMessageBox.warning(
+        parent, title, body,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+
 class LiveShellBridge(QObject):
     #: Emitted from the setup workers so results are handled on the Qt thread —
     #: a worker must never touch a widget.
@@ -58,7 +91,7 @@ class LiveShellBridge(QObject):
     _voice_strategy_ack = pyqtSignal(str)
 
     def __init__(self, shell, controller, window=None, config=None, db=None,
-                 *, refresh_ms: int = 750, parent=None, spawn=None):
+                 *, refresh_ms: int = 750, parent=None, spawn=None, confirm=None):
         super().__init__(parent)
         #: How long-running setup work is started. INJECTABLE: the engine is synchronous
         #: by design and only this bridge decides where it runs. Tests pass an inline
@@ -66,6 +99,13 @@ class LiveShellBridge(QObject):
         #: process, and inline keeps the assertions deterministic.
         self._spawn = spawn or (
             lambda fn: threading.Thread(target=fn, daemon=True).start())
+        #: How a blocking yes/no confirmation is asked. INJECTABLE for the same reason
+        #: as ``spawn``: the default is a MODAL QMessageBox, which waits for a human
+        #: forever. A headless run has no human, so the weekend gate's override prompt
+        #: hung tests/test_live_shell_bridge.py indefinitely — at zero CPU, which reads
+        #: exactly like a slow test rather than a stuck one. Tests inject a decision;
+        #: production gets the dialog.
+        self._confirm = confirm or _default_confirm
         self._shell = shell
         self._controller = controller
         self._window = window
@@ -3816,14 +3856,10 @@ class LiveShellBridge(QObject):
         stop anyone driving — but consent has to be informed, and the override is
         recorded so the laps are never mistaken for a properly prepared session.
         """
-        from PyQt6.QtWidgets import QMessageBox
-        answer = QMessageBox.warning(
-            self._shell, title, verdict.confirmation_prompt(),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self._confirm(self._shell, title, verdict.confirmation_prompt()):
             self._run_status(f"{title} held — {verdict.headline} Nothing was changed.")
             return False
+
         self._last_gate_override = {
             "transition": verdict.transition.value,
             "skipped": [b.key for b in verdict.blockers],
@@ -5133,18 +5169,20 @@ class LiveShellBridge(QObject):
         neighbouring "switch"/"create" controls — so it confirms first, mirroring the
         Start Race warning.
         """
+        # Routed through the injectable confirm seam so a headless run never blocks on a
+        # modal nobody can answer, and so a FAILURE to ask does not become permission:
+        # the old `except Exception: pass` fell through to _finish_active_event(), so a
+        # dialog that raised silently finished the event unconfirmed — the destructive
+        # direction, from the branch that exists to be careful.
         try:
-            from PyQt6.QtWidgets import QMessageBox
-            answer = QMessageBox.warning(
+            confirmed = bool(self._confirm(
                 self._shell, "Finish event",
                 "Finish and close this event? Preparation for it stops and it is no "
-                "longer the active event.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+                "longer the active event."))
         except Exception:
-            pass
+            confirmed = False
+        if not confirmed:
+            return
         self._finish_active_event()
 
     def _finish_active_event(self) -> None:
