@@ -87,35 +87,18 @@ def _build_inner(db, event_id: int, *, car: str, track: str, layout_id: str) -> 
     raw_proposals = db.get_owner_proposals_for_event(event_id)
     proposals = [p for p in (raw_proposals or [])]
 
-    # --- Unresolved riders ---
-    # Proposals with status="unresolved" are the unresolved riders.
-    # Separate them into two lists for the spec (the UI may show them differently).
-    unresolved_riders = [
-        {
-            "parameter": p.get("parameter", ""),
-            "feedback_direction": p.get("direction", ""),
-            "discipline": p.get("discipline", ""),
-            "session_run_id": p.get("session_run_id", ""),
-            "baseline_revision": p.get("baseline_revision", 0),
-            "note": (
-                f"Unresolved: telemetry and feedback oppose each other on "
-                f"{p.get('parameter', '?')} ({p.get('discipline', '?')}). "
-                "Requires explicit resolution."
-            ),
-            "evidence_sources": p.get("evidence_sources") or [],
-            "event_id": event_id,
-        }
-        for p in proposals if str(p.get("status", "")) == "unresolved"
-    ]
+    # --- Unresolved riders (C1/I5 fix) ---
+    # B9 riders (feedback at 5+ laps on fields telemetry is SILENT on) are fetched
+    # from the dedicated owner_baseline_riders table, NOT filtered from proposals.
+    # Proposals with status="unresolved" are B11 contradictions (telemetry and
+    # feedback oppose each other on the SAME field) — a structurally different concept
+    # that remains in the proposals list with its status intact.
+    unresolved_riders = db.get_owner_riders_for_event(event_id)
 
-    # Suppressed changes: these are stored separately via the rule engine's
-    # rejected_candidates.  Since proposals are re-derived per session on the
-    # fly (the writer doesn't persist SuppressedChange objects separately),
-    # we surface them from the proposals where they were previously captured.
-    # For now we leave suppressed_changes empty — the arbiter's output is not
-    # persisted verbatim, only the proposals.  A future schema can add a
-    # separate table if needed; for the export we leave this field as-is.
-    suppressed_changes: list = []
+    # --- Suppressed changes (C3 fix) ---
+    # B16 suppressed changes are fetched from the dedicated
+    # owner_baseline_suppressed_changes table.  Nothing silently disappears.
+    suppressed_changes = db.get_suppressed_changes_for_event(event_id)
 
     # --- Session evidence ---
     session_runs = db.get_session_runs_for_event(event_id)

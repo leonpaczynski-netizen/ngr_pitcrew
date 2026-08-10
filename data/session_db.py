@@ -1567,6 +1567,86 @@ class SessionDB:
             self._migrate_v42()
             self._conn.execute("PRAGMA user_version = 42")
             self._conn.commit()
+        if version < 43:
+            self._migrate_v43()
+            self._conn.execute("PRAGMA user_version = 43")
+            self._conn.commit()
+
+    def _migrate_v43(self) -> None:
+        """v43: amend v42 tables and add three new ones.  All operations idempotent.
+
+        1. ALTER TABLE owner_baseline_proposals ADD COLUMN provenance — existing databases
+           at v42 are missing this column; the ALTER is wrapped in a try/except so it is a
+           no-op when the column already exists (e.g. a fresh DB that ran v42 then v43 in the
+           same migration pass, or a developer DB that already has the column from testing).
+
+        2. owner_baseline_riders  — B9/Correction-2 unresolved riders (structurally distinct
+           from B11 contradictions which live in owner_baseline_proposals with
+           status="unresolved").  CREATE IF NOT EXISTS ⇒ idempotent.
+
+        3. owner_baseline_suppressed_changes — B16 changes the rule engine withheld.  The
+           doctrine "nothing silently disappears" requires these to reach the export.
+
+        4. owner_baseline_evidence_flags — R2 / M3: records that evidence was collected for a
+           session where no owner baseline had been entered.  Replaces the in-memory
+           _no_baseline_sessions flag in the recorder.
+        """
+        # Idempotent column addition: each ALTER is individually guarded so a partial
+        # migration (e.g. interrupted at column 1) can safely re-run.
+        for _col_sql in [
+            "ALTER TABLE owner_baseline_proposals ADD COLUMN provenance TEXT NOT NULL DEFAULT ''",
+        ]:
+            try:
+                self._conn.execute(_col_sql)
+                self._conn.commit()
+            except Exception:
+                pass  # column already exists → silently skip
+
+        self._conn.executescript("""
+        CREATE TABLE IF NOT EXISTS owner_baseline_riders (
+            rider_id          TEXT PRIMARY KEY,
+            event_id          INTEGER NOT NULL DEFAULT 0,
+            session_run_id    TEXT    NOT NULL DEFAULT '',
+            discipline        TEXT    NOT NULL DEFAULT '',
+            parameter         TEXT    NOT NULL DEFAULT '',
+            feedback_direction TEXT   NOT NULL DEFAULT '',
+            baseline_revision INTEGER NOT NULL DEFAULT 0,
+            note              TEXT    NOT NULL DEFAULT '',
+            evidence_sources_json TEXT NOT NULL DEFAULT '[]',
+            created_at        TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_owner_rider_event
+            ON owner_baseline_riders (event_id);
+        CREATE INDEX IF NOT EXISTS idx_owner_rider_session
+            ON owner_baseline_riders (session_run_id);
+
+        CREATE TABLE IF NOT EXISTS owner_baseline_suppressed_changes (
+            change_id         TEXT PRIMARY KEY,
+            event_id          INTEGER NOT NULL DEFAULT 0,
+            session_run_id    TEXT    NOT NULL DEFAULT '',
+            discipline        TEXT    NOT NULL DEFAULT '',
+            parameter         TEXT    NOT NULL DEFAULT '',
+            reason            TEXT    NOT NULL DEFAULT '',
+            ratchet_locked    INTEGER NOT NULL DEFAULT 0,
+            feedback_recorded INTEGER NOT NULL DEFAULT 0,
+            baseline_revision INTEGER NOT NULL DEFAULT 0,
+            created_at        TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_owner_suppressed_event
+            ON owner_baseline_suppressed_changes (event_id);
+
+        CREATE TABLE IF NOT EXISTS owner_baseline_evidence_flags (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id       INTEGER NOT NULL DEFAULT 0,
+            discipline     TEXT    NOT NULL DEFAULT '',
+            session_run_id TEXT    NOT NULL DEFAULT '',
+            flagged_at     TEXT    NOT NULL DEFAULT '',
+            UNIQUE (event_id, discipline, session_run_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_owner_evidence_flag_event
+            ON owner_baseline_evidence_flags (event_id);
+        """)
+        self._conn.commit()
 
     def _migrate_v42(self) -> None:
         """Owner-baseline feature — owner_baselines + owner_baseline_proposals (schema v42).
@@ -10727,25 +10807,45 @@ class SessionDB:
     # Owner baselines (v42 — schema migration _migrate_v42)
     # ------------------------------------------------------------------
 
+    # Canonical field-name aliases: some capture forms use the UI/GT7 name rather than
+    # the rule-engine canonical name.  We canonicalize once at the DB boundary so every
+    # downstream consumer (rule engine, export, validation) always sees the canonical name.
+    # I1: brake_bias_front (UI/GT7) → brake_bias (rule engine canonical).
+    _OWNER_BASELINE_FIELD_ALIASES: "dict[str, str]" = {
+        "brake_bias_front": "brake_bias",
+    }
+
     def save_owner_baseline(self, event_id: int, discipline: str, setup_dict: dict) -> int:
         """Save or update an owner-entered baseline for one discipline. Atomic.
 
+        v43 additions (I1, I4):
+        - Canonicalizes field names at the DB boundary (``brake_bias_front`` →
+          ``brake_bias``) so the rule engine always sees canonical names.
+        - On re-entry (existing row), marks all proposals for the previous revision as
+          "stale" (A5 — originals preserved, surfaced as historical record).
+
         If no baseline exists for (event_id, discipline) a new row is created at
         revision 1. If one already exists the revision is incremented and the
-        setup_json is replaced — prior proposals tied to the old revision are NOT
-        deleted (they must be marked stale by the caller; A5). Returns the row id,
-        or 0 on failure. Never raises.
+        setup_json is replaced. Returns the row id, or 0 on failure. Never raises.
         """
         try:
+            # I1 — canonicalize field names before serialization.
+            canonical: dict = {}
+            for k, v in (setup_dict or {}).items():
+                canon_key = self._OWNER_BASELINE_FIELD_ALIASES.get(str(k), str(k))
+                canonical[canon_key] = v
+
             created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            setup_json = json.dumps(dict(setup_dict or {}), sort_keys=True,
+            setup_json = json.dumps(canonical, sort_keys=True,
                                     separators=(",", ":"), ensure_ascii=True)
+            eid = int(event_id or 0)
+            disc = str(discipline or "")
             with self._lock:
                 # Check for an existing row first (upsert-style to keep revision counter).
                 existing = self._conn.execute(
                     "SELECT id, baseline_revision FROM owner_baselines "
                     "WHERE event_id=? AND discipline=?",
-                    (int(event_id or 0), str(discipline or "")),
+                    (eid, disc),
                 ).fetchone()
                 if existing:
                     new_rev = int(existing[1] or 1) + 1
@@ -10754,6 +10854,15 @@ class SessionDB:
                         "created_at=? WHERE id=?",
                         (setup_json, new_rev, created_at, existing[0]),
                     )
+                    # I4 — mark proposals from the OLD revision as stale.
+                    # Inline the UPDATE here (we already hold the lock) rather than
+                    # calling mark_proposals_stale_for_revision which would re-acquire
+                    # it and deadlock.
+                    self._conn.execute(
+                        "UPDATE owner_baseline_proposals SET status='stale' "
+                        "WHERE event_id=? AND discipline=? AND baseline_revision < ?",
+                        (eid, disc, new_rev),
+                    )
                     self._conn.commit()
                     return int(existing[0])
                 else:
@@ -10761,7 +10870,7 @@ class SessionDB:
                         "INSERT INTO owner_baselines "
                         "(event_id, discipline, setup_json, baseline_revision, "
                         "created_at, provenance) VALUES (?,?,?,1,?,'OWNER_AUTHORED')",
-                        (int(event_id or 0), str(discipline or ""), setup_json, created_at),
+                        (eid, disc, setup_json, created_at),
                     )
                     self._conn.commit()
                     return int(cur.lastrowid or 0)
@@ -10834,15 +10943,21 @@ class SessionDB:
     ) -> "tuple[bool, str]":
         """Check one value against its ParameterSpec (A6).
 
+        v43 (I1): canonicalizes the field name before the lookup so that UI/GT7
+        field names (e.g. ``brake_bias_front``) are correctly validated against the
+        rule-engine parameter model (which knows only ``brake_bias``).
+
         Returns ``(ok, rejection_reason)``. When ``ok=False`` the reason string
         includes the legal [min, max, step] so the caller can surface it to the
         driver. NEVER silently snaps on owner entry — if the value is out of range
         the caller MUST reject it. Never raises.
         """
         try:
+            # I1 — canonicalize UI/GT7 field name before lookup.
+            canon_field = self._OWNER_BASELINE_FIELD_ALIASES.get(str(field), str(field))
             from data.car_parameter_model import resolve_parameter_model
             model = resolve_parameter_model(car)
-            spec = model.spec(field) if model else None
+            spec = model.spec(canon_field) if model else None
             if spec is None:
                 return True, ""  # unknown field — allow (no range to validate against)
             v = float(value)
@@ -10863,7 +10978,9 @@ class SessionDB:
 
     def save_owner_proposal(self, event_id: int, proposal: dict) -> str:
         """Persist one OwnerProposal dict. Returns the proposal_id, or '' on failure.
-        Never raises.
+
+        v43: includes the ``provenance`` column (C2 — must survive the DB round-trip
+        so the export can carry C19 provenance tags). Never raises.
         """
         try:
             pid = str(proposal.get("proposal_id") or new_id())
@@ -10878,8 +10995,8 @@ class SessionDB:
                     "(proposal_id, event_id, session_run_id, discipline, parameter, "
                     "direction, proposed_value, original_value, clipped, clip_stated_reason, "
                     "label, status, original_proposed_value, evidence_sources_json, "
-                    "baseline_revision, rejection_reason, updated_at, clean_laps) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "baseline_revision, rejection_reason, updated_at, clean_laps, provenance) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         pid,
                         int(proposal.get("event_id") or event_id or 0),
@@ -10900,6 +11017,7 @@ class SessionDB:
                         "",
                         updated_at,
                         int(proposal.get("clean_laps") or 0),
+                        str(proposal.get("provenance") or ""),  # C2 — v43
                     ),
                 )
                 self._conn.commit()
@@ -10909,7 +11027,7 @@ class SessionDB:
 
     def get_owner_proposals_for_event(self, event_id: int) -> list:
         """Return all proposals for an event, ordered by session then parameter.
-        Never raises.
+        v43: includes the ``provenance`` column (C2). Never raises.
         """
         try:
             with self._lock:
@@ -10917,7 +11035,7 @@ class SessionDB:
                     "SELECT proposal_id, event_id, session_run_id, discipline, parameter, "
                     "direction, proposed_value, original_value, clipped, clip_stated_reason, "
                     "label, status, original_proposed_value, evidence_sources_json, "
-                    "baseline_revision, rejection_reason, updated_at, clean_laps "
+                    "baseline_revision, rejection_reason, updated_at, clean_laps, provenance "
                     "FROM owner_baseline_proposals WHERE event_id=? "
                     "ORDER BY session_run_id, discipline, parameter",
                     (int(event_id or 0),),
@@ -10939,10 +11057,33 @@ class SessionDB:
                     "baseline_revision": r[14],
                     "rejection_reason": r[15], "updated_at": r[16],
                     "clean_laps": r[17],
+                    "provenance": r[18] if len(r) > 18 else "",  # C2 — v43
                 })
             return out
         except Exception:
             return []
+
+    def mark_proposals_stale_for_revision(
+        self, event_id: int, discipline: str, current_revision: int
+    ) -> int:
+        """Mark all proposals at revisions OLDER than current_revision as "stale" (I4/A5).
+
+        Called by ``save_owner_baseline`` when the driver re-enters the baseline for a
+        discipline (incrementing the revision).  Returns the number of rows updated.
+        Never raises.
+        """
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "UPDATE owner_baseline_proposals SET status='stale' "
+                    "WHERE event_id=? AND discipline=? AND baseline_revision < ?",
+                    (int(event_id or 0), str(discipline or ""),
+                     int(current_revision or 0)),
+                )
+                self._conn.commit()
+                return cur.rowcount or 0
+        except Exception:
+            return 0
 
     def update_proposal_status(
         self,
@@ -10953,13 +11094,13 @@ class SessionDB:
     ) -> bool:
         """Accept / reject / edit a single proposal (B12 advisory gate).
 
-        Allowed statuses: "accepted", "rejected", "edited".
+        Allowed statuses: "accepted", "rejected", "edited", "stale".
         When status=="edited" and edit_value is supplied, ``proposed_value`` is
         updated but ``original_proposed_value`` is left unchanged (A5 — original
         preserved). Returns True on success, False on bad input. Never raises.
         """
         try:
-            valid_statuses = {"accepted", "rejected", "edited", "proposed", "unresolved"}
+            valid_statuses = {"accepted", "rejected", "edited", "proposed", "unresolved", "stale"}
             pid = str(proposal_id or "")
             s = str(status or "").lower()
             if not pid or s not in valid_statuses:
@@ -11059,3 +11200,192 @@ class SessionDB:
             return frozenset(result)
         except Exception:
             return frozenset()
+
+    # ------------------------------------------------------------------
+    # Owner baseline riders (v43 — B9/Correction-1)
+    # ------------------------------------------------------------------
+
+    def save_owner_rider(self, event_id: int, rider: dict) -> str:
+        """Persist one UnresolvedRider dict to ``owner_baseline_riders``. Returns
+        the rider_id, or '' on failure. Never raises.
+
+        B9 riders (feedback at 5+ laps on fields telemetry is SILENT on) are
+        structurally different from B11 contradictions (proposals with
+        status="unresolved").  They live in their own table (C1/Correction-2).
+        """
+        try:
+            rid = str(rider.get("rider_id") or new_id())
+            evidence_json = json.dumps(
+                list(rider.get("evidence_sources") or []),
+                sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            )
+            created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO owner_baseline_riders "
+                    "(rider_id, event_id, session_run_id, discipline, parameter, "
+                    "feedback_direction, baseline_revision, note, "
+                    "evidence_sources_json, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        rid,
+                        int(rider.get("event_id") or event_id or 0),
+                        str(rider.get("session_run_id") or ""),
+                        str(rider.get("discipline") or ""),
+                        str(rider.get("parameter") or ""),
+                        str(rider.get("feedback_direction") or ""),
+                        int(rider.get("baseline_revision") or 0),
+                        str(rider.get("note") or ""),
+                        evidence_json,
+                        created_at,
+                    ),
+                )
+                self._conn.commit()
+            return rid
+        except Exception:
+            return ""
+
+    def get_owner_riders_for_event(self, event_id: int) -> list:
+        """Return all B9 unresolved riders for an event, ordered by discipline then parameter.
+        Never raises.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT rider_id, event_id, session_run_id, discipline, parameter, "
+                    "feedback_direction, baseline_revision, note, "
+                    "evidence_sources_json, created_at "
+                    "FROM owner_baseline_riders WHERE event_id=? "
+                    "ORDER BY discipline, parameter",
+                    (int(event_id or 0),),
+                ).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    evidence = json.loads(r[8] or "[]")
+                except Exception:
+                    evidence = []
+                out.append({
+                    "rider_id": r[0], "event_id": r[1], "session_run_id": r[2],
+                    "discipline": r[3], "parameter": r[4],
+                    "feedback_direction": r[5], "baseline_revision": r[6],
+                    "note": r[7], "evidence_sources": evidence, "created_at": r[9],
+                })
+            return out
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Owner baseline suppressed changes (v43 — B16/Correction-3)
+    # ------------------------------------------------------------------
+
+    def save_suppressed_change(self, event_id: int, change: dict) -> str:
+        """Persist one SuppressedChange dict to ``owner_baseline_suppressed_changes``.
+        Returns the change_id, or '' on failure. Never raises.
+
+        B16 suppressed changes are rule-engine candidates the arbiter chose NOT to
+        surface (e.g. rejected at the previous revision, or ratchet-locked).  The
+        doctrine is "nothing silently disappears": they must be exported so the
+        external Claude project can audit them (C3).
+        """
+        try:
+            cid = str(change.get("change_id") or new_id())
+            created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO owner_baseline_suppressed_changes "
+                    "(change_id, event_id, session_run_id, discipline, parameter, "
+                    "reason, ratchet_locked, feedback_recorded, "
+                    "baseline_revision, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        cid,
+                        int(change.get("event_id") or event_id or 0),
+                        str(change.get("session_run_id") or ""),
+                        str(change.get("discipline") or ""),
+                        str(change.get("parameter") or ""),
+                        str(change.get("reason") or ""),
+                        int(bool(change.get("ratchet_locked"))),
+                        int(bool(change.get("feedback_recorded"))),
+                        int(change.get("baseline_revision") or 0),
+                        created_at,
+                    ),
+                )
+                self._conn.commit()
+            return cid
+        except Exception:
+            return ""
+
+    def get_suppressed_changes_for_event(self, event_id: int) -> list:
+        """Return all B16 suppressed changes for an event, ordered by discipline then parameter.
+        Never raises.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT change_id, event_id, session_run_id, discipline, parameter, "
+                    "reason, ratchet_locked, feedback_recorded, "
+                    "baseline_revision, created_at "
+                    "FROM owner_baseline_suppressed_changes WHERE event_id=? "
+                    "ORDER BY discipline, parameter",
+                    (int(event_id or 0),),
+                ).fetchall()
+            out = []
+            for r in rows:
+                out.append({
+                    "change_id": r[0], "event_id": r[1], "session_run_id": r[2],
+                    "discipline": r[3], "parameter": r[4], "reason": r[5],
+                    "ratchet_locked": bool(r[6]), "feedback_recorded": bool(r[7]),
+                    "baseline_revision": r[8], "created_at": r[9],
+                })
+            return out
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Owner baseline evidence flags (v43 — R2/M3)
+    # ------------------------------------------------------------------
+
+    def mark_evidence_without_baseline(
+        self, event_id: int, discipline: str, session_run_id: str
+    ) -> bool:
+        """Record that evidence was collected for this event+discipline but no baseline
+        was entered yet (R2 flag — replaces the in-memory _no_baseline_sessions counter).
+
+        The flag is UNIQUE on (event_id, discipline, session_run_id) so calling this
+        method multiple times for the same session is safe. Returns True if a new row
+        was inserted (first time this session was flagged), False if the flag already
+        existed or on error. Never raises.
+        """
+        try:
+            flagged_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO owner_baseline_evidence_flags "
+                    "(event_id, discipline, session_run_id, flagged_at) VALUES (?,?,?,?)",
+                    (int(event_id or 0), str(discipline or ""),
+                     str(session_run_id or ""), flagged_at),
+                )
+                self._conn.commit()
+                changed = self._conn.execute("SELECT changes()").fetchone()[0]
+            return bool(changed)
+        except Exception:
+            return False
+
+    def get_evidence_without_baseline_disciplines(self, event_id: int) -> "list[str]":
+        """Return distinct disciplines for which evidence was flagged without a baseline
+        for this event (R2 — M3 DB-backed replacement for the in-memory counter).
+
+        Returns a sorted list of discipline strings, e.g. ``["qualifying", "race"]``.
+        Never raises.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT DISTINCT discipline FROM owner_baseline_evidence_flags "
+                    "WHERE event_id=? ORDER BY discipline",
+                    (int(event_id or 0),),
+                ).fetchall()
+            return [str(r[0]) for r in rows]
+        except Exception:
+            return []

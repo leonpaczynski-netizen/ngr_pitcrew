@@ -66,6 +66,17 @@ SCHEMA_KEY_ORDER: tuple = (
     "content_fingerprint",
 )
 
+# ---------------------------------------------------------------------------
+# M1: canonical fingerprint exclusion set.
+# Both the spec builder (below) and the writer (data/event_export_writer.py)
+# must exclude the SAME keys from their hash computation.  Define the set here
+# once and import it in the writer so the two never drift apart.
+# ---------------------------------------------------------------------------
+_FINGERPRINT_EXCLUDED_KEYS: frozenset = frozenset({
+    "content_fingerprint",  # excluded from its own computation (always)
+    "generated_at_human",   # timestamp must not affect the deterministic hash
+})
+
 # Windows-illegal path characters to strip from event_name in the filename.
 _ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 

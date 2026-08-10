@@ -165,7 +165,17 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     incremented on re-entry; provenance OWNER_AUTHORED) + owner_baseline_proposals (proposed
 #     parameter changes per session, per discipline, carrying label/status/clip/evidence). Two
 #     standalone additive tables; no existing table touched. Idempotent.
-DB_VERSION: int = 42
+# v43 (Owner-baseline fixes): amends v42 tables in place for any database already at v42.
+#     Adds owner_baseline_proposals.provenance column (C2 — provenance must survive the DB round
+#     trip for C19).  Adds three new tables:
+#     • owner_baseline_riders  — B9/Correction-2 unresolved riders (structurally distinct from B11
+#       contradictions which are proposals with status="unresolved").
+#     • owner_baseline_suppressed_changes — B16 changes the rule engine computed but withheld; the
+#       doctrine "nothing silently disappears" requires them to be exported.
+#     • owner_baseline_evidence_flags — tracks sessions where evidence was collected without a
+#       baseline entered (R2; replaces the in-memory _no_baseline_sessions counter in the recorder).
+#     All operations idempotent (CREATE IF NOT EXISTS; ALTER with per-column try/except guard).
+DB_VERSION: int = 43
 
 # Export format version — bumped when the external-file schema changes. Embedded as a
 # top-level field in every event export so the external Claude project can detect stale files.

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Tuple
 
 from strategy.assurance_chain_serialization import canonical_json, content_digest
+from strategy.event_export_spec import _FINGERPRINT_EXCLUDED_KEYS  # M1 — shared exclusion set
 
 EVENT_EXPORT_WRITER_VERSION = "event_export_writer_v1"
 
@@ -156,8 +157,11 @@ def write_event_export(
             embedded_fp: str = str(spec.get("content_fingerprint") or "")
             expected_fp_value = ""
             if embedded_fp.startswith("sha256:"):
-                # Re-derive: build the doc without the content_fingerprint key.
-                doc_for_fp = {k: v for k, v in spec.items() if k != "content_fingerprint"}
+                # Re-derive: build the doc excluding all fingerprint-excluded keys
+                # (M1: use the shared constant from event_export_spec so this set
+                # stays in sync with the spec builder's own exclusion set).
+                doc_for_fp = {k: v for k, v in spec.items()
+                              if k not in _FINGERPRINT_EXCLUDED_KEYS}
                 expected_fp_value = "sha256:" + content_digest(doc_for_fp)
                 if embedded_fp != expected_fp_value:
                     warnings: list = [

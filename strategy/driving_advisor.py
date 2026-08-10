@@ -2863,6 +2863,28 @@ class DrivingAdvisor:
                 )
 
                 def _mk_ctx(_obj):
+                    # C5 — fetch the owner-entered baseline for qualifying/race and
+                    # pass it as owner_baseline= so the OWNER_AUTHORED disposition
+                    # gate in author_full_field_plan fires on the wired production path.
+                    # (Tests that hand-construct SetupAuthoringContext directly are
+                    # unaffected; this is the ONLY production construction site.)
+                    _owner_bl = None
+                    try:
+                        _disc_val = getattr(_obj, "value", "")
+                        if (self._db is not None
+                                and _disc_val in ("race", "qualifying")):
+                            _eid = int(_event_ctx.get("id") or 0)
+                            if _eid:
+                                _bl_raw = self._db.get_owner_baseline(_eid, _disc_val)
+                                if _bl_raw:
+                                    # Strip the DB bookkeeping keys so the rule engine
+                                    # only sees genuine setup parameter keys.
+                                    _owner_bl = {
+                                        k: v for k, v in _bl_raw.items()
+                                        if k not in ("baseline_revision", "provenance")
+                                    }
+                    except Exception:
+                        _owner_bl = None
                     return SetupAuthoringContext(
                         car=car_name, objective=_obj, ranges=ranges,
                         drivetrain=drivetrain, num_gears=num_gears, profile=_profile,
@@ -2870,6 +2892,7 @@ class DrivingAdvisor:
                         track_profile=track_profile, history_prior=_bl_prior or None,
                         current_setup=None, duration_mins=duration_mins,
                         tyre_wear_multiplier=tyre_wear_multiplier, car_class=car_class,
+                        owner_baseline=_owner_bl,
                     )
 
                 _plans = author_discipline_setups(_mk_ctx)

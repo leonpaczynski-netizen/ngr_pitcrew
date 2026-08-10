@@ -261,6 +261,19 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         if pid:
             saved += 1
 
+    # --- 14. Persist B9 unresolved riders (C1/Correction-2) ---
+    # UnresolvedRider objects are structurally distinct from B11 contradiction
+    # proposals: they live in the owner_baseline_riders table, NOT in proposals.
+    for rider in unresolved:
+        db.save_owner_rider(event_id, rider.as_dict())
+
+    # --- 15. Persist B16 suppressed changes (C3) ---
+    # SuppressedChange objects are rule-engine candidates the arbiter suppressed
+    # (rejected at prior revision, ratchet-locked, etc.). Persisted so the export
+    # can surface them — nothing silently disappears.
+    for sc in suppressed:
+        db.save_suppressed_change(event_id, sc.as_dict())
+
     result.update({
         "ok": True,
         "proposals_saved": saved,
