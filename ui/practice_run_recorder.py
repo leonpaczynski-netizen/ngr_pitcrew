@@ -235,12 +235,19 @@ class PracticeRunRecorder:
             if baseline is None:
                 # Evidence collected, but owner has not entered a baseline.
                 # Surface this state to the UI; do NOT auto-generate (R2).
+                # M3: also persist the flag to the DB so it survives restarts.
                 self._no_baseline_sessions.append({
                     "session_id": int(session_id or 0),
                     "event_id": event_id,
                     "discipline": discipline,
                     "note": "evidence collected, no baseline",
                 })
+                if run_id and hasattr(self._db, "mark_evidence_without_baseline"):
+                    try:
+                        self._db.mark_evidence_without_baseline(
+                            event_id, discipline, run_id)
+                    except Exception:
+                        pass  # non-fatal; in-memory flag was already recorded
                 return
 
             # Spawn off-thread proposal generation. The thread is a daemon so it

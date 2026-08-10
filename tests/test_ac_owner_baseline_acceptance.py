@@ -1684,17 +1684,19 @@ class TestC5AdvisorSpy_A2:
         REAL public entry-point and asserts on what REAL code passes to
         SetupAuthoringContext — a revert to the old bug immediately breaks this test.
 
-    KNOWN PRODUCTION BUG (C5) — EXPECTED FAILURE:
-        build_baseline_setup_response._mk_ctx references _event_ctx as a free variable.
-        _event_ctx is NOT defined as a local of build_baseline_setup_response (it is
-        only assigned in build_combined_setup_response).  The NameError is caught by
+    THE C5 BUG THIS TEST CAUGHT (now FIXED — this test must stay green):
+        build_baseline_setup_response._mk_ctx referenced _event_ctx as a free variable.
+        _event_ctx was NOT defined as a local of build_baseline_setup_response (it is
+        only assigned in build_combined_setup_response).  The NameError was caught by
             ``except Exception: _owner_bl = None``
-        so owner_baseline=None is ALWAYS passed, and the OWNER_AUTHORED disposition
-        path in author_full_field_plan is never reached on the production path.
+        so owner_baseline=None was ALWAYS passed, and the OWNER_AUTHORED disposition
+        path in author_full_field_plan was never reached on the production path.
 
-        Fix (backend-builder): add
+        Fixed in driving_advisor.py by assigning
             _event_ctx = getattr(self, "_event_ctx", {})
-        before the _mk_ctx closure inside build_baseline_setup_response.
+        before the _mk_ctx closure, and by narrowing the blanket except so a failure
+        can no longer hide.  If this test ever fails again, that is a REAL regression —
+        it is not, and never was, an expected failure.
     """
 
     def test_build_baseline_passes_owner_baseline_to_authoring_context(
@@ -1702,7 +1704,7 @@ class TestC5AdvisorSpy_A2:
     ):
         """Spy on SetupAuthoringContext.__init__; assert owner_baseline= is non-None.
 
-        EXPECTED FAILURE until the C5 production bug is fixed (backend-builder).
+        Guards the fixed C5 bug. A failure here means a genuine regression.
         """
         from data.session_db import SessionDB
         from strategy.driving_advisor import DrivingAdvisor
@@ -1742,17 +1744,16 @@ class TestC5AdvisorSpy_A2:
         )
         db.close()
 
-        # PRODUCTION BUG (C5): assertion FAILS.
-        # _mk_ctx closure raises NameError on _event_ctx (not a local in
-        # build_baseline_setup_response); caught silently; owner_baseline=None always.
-        # Spy evidence: captured [None, None, None].
-        # A correct fix makes this green. A revert breaks it.
-        # Fix owner: backend-builder.
+        # C5 regression guard. This is GREEN and must stay green.
+        # The original bug: the _mk_ctx closure raised NameError on _event_ctx (not a
+        # local of build_baseline_setup_response), the blanket except swallowed it, and
+        # owner_baseline=None was passed every time — so an owner-entered baseline was
+        # silently overwritten by generated values. A revert breaks this test.
         assert any(bl is not None for bl in captured), (
-            f"C5 bug: build_baseline_setup_response always passes owner_baseline=None. "
+            f"C5 REGRESSION: build_baseline_setup_response passed owner_baseline=None. "
             f"Spy captured: {captured!r}. "
-            "Fix: '_event_ctx = getattr(self, \"_event_ctx\", {})' before _mk_ctx "
-            "in build_baseline_setup_response (driving_advisor.py)."
+            "Check '_event_ctx = getattr(self, \"_event_ctx\", {})' still precedes "
+            "_mk_ctx in build_baseline_setup_response (driving_advisor.py)."
         )
 
 

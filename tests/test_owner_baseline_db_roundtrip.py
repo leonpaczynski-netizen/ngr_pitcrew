@@ -464,21 +464,23 @@ class TestC5AdvisorSpy_IA:
         REAL public method and asserts on what the REAL code actually passes to
         SetupAuthoringContext.  A revert to the old bug immediately breaks this test.
 
-    KNOWN PRODUCTION BUG (C5) — EXPECTED FAILURE:
-        build_baseline_setup_response._mk_ctx references _event_ctx as a free variable.
-        _event_ctx is NOT defined as a local in build_baseline_setup_response — it is
+    THE C5 BUG THIS TEST CAUGHT (now FIXED — this test must stay green):
+        build_baseline_setup_response._mk_ctx referenced _event_ctx as a free variable.
+        _event_ctx was NOT defined as a local in build_baseline_setup_response — it is
         only assigned in build_combined_setup_response (line ~1549:
             _event_ctx = getattr(self, "_event_ctx", {})
         ).
-        The closure catches the resulting NameError via
+        The closure caught the resulting NameError via
             ``except Exception: _owner_bl = None``
-        so owner_baseline=None is ALWAYS passed to SetupAuthoringContext regardless of
-        whether a baseline exists in the DB.
-        Spy evidence: captured [None, None, None] rather than at least one non-None.
+        so owner_baseline=None was ALWAYS passed to SetupAuthoringContext regardless of
+        whether a baseline existed in the DB.
+        Spy evidence at the time: captured [None, None, None].
 
-        Fix (backend-builder): add
+        Fixed in driving_advisor.py by assigning
             _event_ctx = getattr(self, "_event_ctx", {})
-        before the _mk_ctx closure definition inside build_baseline_setup_response.
+        before the _mk_ctx closure definition, and by narrowing the blanket except so
+        a failure can no longer hide.  If this test ever fails again, that is a REAL
+        regression — it is not, and never was, an expected failure.
     """
 
     def test_build_baseline_setup_response_passes_owner_baseline_when_baseline_in_db(
@@ -486,9 +488,7 @@ class TestC5AdvisorSpy_IA:
     ):
         """Spy on SetupAuthoringContext.__init__; assert owner_baseline= is non-None.
 
-        EXPECTED FAILURE until the C5 production bug is fixed.
-        The spy captures [None, None, None] — the NameError on _event_ctx is caught
-        silently and owner_baseline defaults to None for every objective.
+        Guards the fixed C5 bug. A failure here means a genuine regression.
         """
         from strategy.driving_advisor import DrivingAdvisor
         from strategy.setup_ranges import resolve_ranges
@@ -526,18 +526,16 @@ class TestC5AdvisorSpy_IA:
             tuning_locked=False,
         )
 
-        # PRODUCTION BUG (C5): this assertion FAILS.
-        # _mk_ctx references _event_ctx which is not a local of build_baseline_setup_response.
-        # The NameError is caught by ``except Exception: _owner_bl = None``, so the spy
-        # captures [None, None, None] — never a real baseline dict.
-        # A revert would break this test; a correct fix would make it green.
-        # Fix owner: backend-builder.
+        # C5 regression guard. This is GREEN and must stay green.
+        # The original bug: _mk_ctx referenced _event_ctx, which was not a local of
+        # build_baseline_setup_response. The NameError was swallowed by a blanket
+        # ``except Exception: _owner_bl = None``, so the spy saw [None, None, None] and
+        # an owner-entered baseline was silently discarded. A revert breaks this test.
         assert any(bl is not None for bl in captured), (
-            f"C5 bug: build_baseline_setup_response always passes owner_baseline=None "
+            f"C5 REGRESSION: build_baseline_setup_response passed owner_baseline=None "
             f"to SetupAuthoringContext.__init__. Spy captured: {captured!r}. "
-            "Fix: add '_event_ctx = getattr(self, \"_event_ctx\", {})' before the "
-            "_mk_ctx closure inside build_baseline_setup_response "
-            "(driving_advisor.py). Owner: backend-builder."
+            "Check '_event_ctx = getattr(self, \"_event_ctx\", {})' still precedes the "
+            "_mk_ctx closure inside build_baseline_setup_response (driving_advisor.py)."
         )
 
 

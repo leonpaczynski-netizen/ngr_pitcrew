@@ -497,12 +497,27 @@ class TestEventExportPanel:
         from PyQt6.QtCore import QThread
         assert issubclass(_ExportWorker, QThread)
 
-    def test_overwrite_error_does_not_crash(self, qapp):
-        """The overwrite-confirmation path does not raise even with no parent window."""
+    def test_overwrite_confirm_seam_fails_closed_under_pytest(self, qapp):
+        """C4: the injectable confirm= seam returns False (no overwrite) when not injected.
+
+        This is the fix for the hung-test problem: without a seam the widget called
+        QMessageBox.question() directly, which has no human to answer it under pytest.
+        Now the default _default_overwrite_confirm checks PYTEST_CURRENT_TEST and
+        returns False immediately — the test runner never sees a blocking dialog.
+        """
+        from ui.event_export_panel import EventExportPanel, _default_overwrite_confirm
+        # _default_overwrite_confirm must return False under pytest (PYTEST_CURRENT_TEST is set).
+        assert _default_overwrite_confirm(None, "test.json", "/tmp") is False
+
+    def test_overwrite_injected_confirm_no_called(self, qapp):
+        """Injected confirm=lambda returning False → export is cancelled, not retried."""
         from ui.event_export_panel import EventExportPanel
-        from unittest.mock import patch, MagicMock
-        p = EventExportPanel()
+        run_calls = []
+        p = EventExportPanel(confirm=lambda parent, fname, dest: False)
         p.set_event(event_id=1, db=_FakeDB())
+        # Patch _run_export to detect if it gets called again.
+        original_run_export = p._run_export
+        p._run_export = lambda *a, **kw: run_calls.append((a, kw))
         result = {
             "ok": False,
             "filename": "test.json",
@@ -512,11 +527,25 @@ class TestEventExportPanel:
             "warnings": [],
             "errors": ["file already exists at destination: 'test.json' — pass allow_overwrite to replace"],
         }
-        with patch.object(type(p), "_run_export", return_value=None) as m_run, \
-             patch("PyQt6.QtWidgets.QMessageBox.question",
-                   return_value=0x00010000):  # No button value
-            p._on_export_done(result)
-            # QMessageBox shown (question called), no raise.
+        p._on_export_done(result)
+        assert not run_calls, "confirm=False must cancel the export, not call _run_export again"
+        assert "cancelled" in p._status.text().lower()
+
+    def test_overwrite_injected_confirm_yes_retries(self, qapp):
+        """Injected confirm=lambda returning True → _run_export called with allow_overwrite=True."""
+        from ui.event_export_panel import EventExportPanel
+        run_calls = []
+        p = EventExportPanel(confirm=lambda parent, fname, dest: True)
+        p.set_event(event_id=1, db=_FakeDB())
+        p._run_export = lambda dest, allow_overwrite=False: run_calls.append(allow_overwrite)
+        result = {
+            "ok": False, "filename": "test.json", "file_sha256": "",
+            "destination": "/tmp", "bytes_written": 0, "warnings": [],
+            "errors": ["file already exists at destination: 'test.json' — pass allow_overwrite to replace"],
+        }
+        p._on_export_done(result)
+        assert run_calls, "_run_export must be called when confirm returns True"
+        assert run_calls[0] is True, "_run_export must be called with allow_overwrite=True"
 
 
 # ---------------------------------------------------------------------------
@@ -638,3 +667,529 @@ class TestPracticeRunRecorderProposals:
         recorder = PracticeRunRecorder(db=_DBStub())
         recorder._trigger_owner_proposals(session_id=99, session_meta={})
         assert recorder.no_baseline_sessions() == []
+
+
+# ---------------------------------------------------------------------------
+# DB v43 — new getter wiring, suppressed changes, riders, stale proposals,
+# provenance, and modal seams (C4, I2, I3, M3)
+# ---------------------------------------------------------------------------
+
+def _make_proposals_host(qapp):
+    """Shared helper: return a QWidget with all SetupBuilderMixin proposal methods bound."""
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QLabel
+    import types
+    from ui.setup_builder_ui import SetupBuilderMixin
+
+    w = QWidget()
+    lay = QVBoxLayout(w)
+    group = QGroupBox("Proposals")
+    g_lay = QVBoxLayout(group)
+    proposals_layout = QVBoxLayout()
+    g_lay.addLayout(proposals_layout)
+    lay.addWidget(group)
+    w._proposals_group = group
+    w._proposals_layout = proposals_layout
+    w._lbl_race_baseline_status = QLabel()
+    w._lbl_qual_baseline_status = QLabel()
+    w._lbl_stale_baseline = QLabel()
+
+    for name in ("_refresh_proposals", "_build_proposal_row",
+                 "_build_actioned_proposal_row", "_build_rider_row",
+                 "_build_stale_proposal_row", "_build_suppressed_row",
+                 "_ask_resolve", "_ask_text_dialog",
+                 "_resolve_conflict", "_do_accept_proposal",
+                 "_do_reject_proposal", "_do_edit_proposal"):
+        fn = getattr(SetupBuilderMixin, name, None)
+        if fn:
+            setattr(w, name, types.MethodType(fn, w))
+    return w
+
+
+class TestV43RidersFromDedicatedGetter:
+    """Riders must be sourced from db.get_owner_riders_for_event, NOT from proposals."""
+
+    def test_riders_read_from_get_owner_riders_for_event(self, qapp):
+        """When db has get_owner_riders_for_event, riders come from it, not proposals."""
+        w = _make_proposals_host(qapp)
+        rider_data = [{
+            "rider_id": "r1", "event_id": 1, "session_run_id": "run-a",
+            "discipline": "race", "parameter": "arb_rear",
+            "feedback_direction": "increase", "baseline_revision": 1,
+            "note": "driver feedback, telemetry silent; never discarded",
+            "evidence_sources": ["exit oversteer"],
+            "created_at": "2026-08-10T00:00:00",
+        }]
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid): return []
+            def get_owner_riders_for_event(self, eid): return list(rider_data)
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        # The layout must have content (header + note + rider row + stretch).
+        count = w._proposals_layout.count()
+        assert count > 0, "proposals_layout must have rows after refresh with riders"
+
+    def test_rider_row_uses_feedback_direction_key(self, qapp):
+        """_build_rider_row uses 'feedback_direction' from v43 riders table."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QLabel
+        w = QWidget()
+        fn = SetupBuilderMixin._build_rider_row
+        w._build_rider_row = types.MethodType(fn, w)
+
+        rider = {
+            "parameter": "springs_rear",
+            "feedback_direction": "decrease",     # v43 key
+            "discipline": "qualifying",
+            "note": "driver says too stiff; never discarded",
+            "evidence_sources": [],
+        }
+        row_w = w._build_rider_row(rider)
+        all_text = " ".join(lbl.text() for lbl in row_w.findChildren(QLabel))
+        assert "decrease" in all_text, "feedback_direction value must appear in the rider row"
+
+
+class TestV43SuppressedChangesRendering:
+    """Suppressed changes (B16) must render non-empty from db.get_suppressed_changes_for_event."""
+
+    def test_suppressed_row_shows_parameter_and_reason(self, qapp):
+        """_build_suppressed_row renders the parameter and reason."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QLabel
+        w = QWidget()
+        fn = SetupBuilderMixin._build_suppressed_row
+        w._build_suppressed_row = types.MethodType(fn, w)
+
+        sc = {
+            "change_id": "sc1", "event_id": 1,
+            "parameter": "damper_bump_rear",
+            "discipline": "race",
+            "reason": "SUPPRESSED: movement cap hit — ratchet lockout in effect",
+            "ratchet_locked": True,
+            "feedback_recorded": True,
+            "baseline_revision": 1,
+        }
+        row_w = w._build_suppressed_row(sc)
+        all_text = " ".join(lbl.text() for lbl in row_w.findChildren(QLabel))
+        assert "damper bump rear" in all_text.lower(), "parameter must appear in suppressed row"
+        assert "ratchet" in all_text.lower(), "ratchet reason must appear"
+
+    def test_suppressed_section_populated_when_db_returns_data(self, qapp):
+        """When db returns suppressed changes, the layout has rows."""
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid): return []
+            def get_owner_riders_for_event(self, eid): return []
+            def get_suppressed_changes_for_event(self, eid):
+                return [{
+                    "change_id": "sc2", "event_id": 1,
+                    "parameter": "arb_rear", "discipline": "race",
+                    "reason": "movement cap hit",
+                    "ratchet_locked": True, "feedback_recorded": False,
+                    "baseline_revision": 1,
+                }]
+
+        w._refresh_proposals(_DB(), event_id=1)
+        assert w._proposals_layout.count() > 0, (
+            "proposals_layout must have rows when suppressed changes exist")
+
+
+class TestV43StaleProposalsRendering:
+    """Stale proposals (DB v43) must render in a visually distinct section."""
+
+    def test_stale_proposal_not_in_active_bucket(self, qapp):
+        """status='stale' proposals must NOT appear as active proposals."""
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+
+        stale_prop = {
+            "proposal_id": "stale-1", "event_id": 1, "session_run_id": "run-old",
+            "discipline": "race", "parameter": "camber_front",
+            "direction": "decrease", "proposed_value": -2.8,
+            "original_value": -2.5, "original_proposed_value": -2.8,
+            "label": "driver report only — no telemetry",
+            "status": "stale",   # the key status
+            "clipped": False, "clip_stated_reason": "",
+            "clean_laps": 2, "evidence_sources": [],
+            "baseline_revision": 1, "provenance": "DRIVER_REPORT",
+        }
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid): return [stale_prop]
+            def get_owner_riders_for_event(self, eid): return []
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        # The stale section header must be present — search the whole widget.
+        from PyQt6.QtWidgets import QLabel
+        labels = w.findChildren(QLabel)
+        all_text = " ".join(lbl.text() for lbl in labels)
+        assert "stale" in all_text.lower(), "stale section header must appear"
+
+    def test_stale_row_has_stale_badge(self, qapp):
+        """_build_stale_proposal_row must include a 'STALE' badge."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QLabel
+        w = QWidget()
+        fn = SetupBuilderMixin._build_stale_proposal_row
+        w._method = types.MethodType(fn, w)
+        prop = {
+            "parameter": "arb_front", "direction": "increase",
+            "proposed_value": 6.0, "original_value": 5.0,
+            "discipline": "race", "baseline_revision": 1,
+            "provenance": "DRIVER_REPORT", "status": "stale",
+        }
+        row_w = w._method(prop, {})
+        labels = row_w.findChildren(QLabel)
+        texts = [lbl.text() for lbl in labels]
+        assert "STALE" in texts, "stale row must have a STALE badge"
+
+
+class TestV43ProvenanceOnProposalRows:
+    """Proposals now carry provenance; it must appear on each row."""
+
+    def test_provenance_badge_appears_in_proposal_row(self, qapp):
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QLabel
+        w = QWidget()
+        fn = SetupBuilderMixin._build_proposal_row
+        w._build_proposal_row = types.MethodType(fn, w)
+        # Need action handler stubs.
+        for name in ("_resolve_conflict", "_do_accept_proposal",
+                     "_do_reject_proposal", "_do_edit_proposal",
+                     "_ask_resolve", "_ask_text_dialog"):
+            m = getattr(SetupBuilderMixin, name, None)
+            if m:
+                setattr(w, name, types.MethodType(m, w))
+
+        prop = {
+            "proposal_id": "p-prov", "parameter": "arb_front",
+            "direction": "increase", "proposed_value": 6.0,
+            "original_value": 5.0, "original_proposed_value": 6.0,
+            "label": "telemetry with driver corroboration",
+            "status": "proposed", "discipline": "race",
+            "clean_laps": 5, "evidence_sources": [],
+            "clipped": False, "clip_stated_reason": "",
+            "session_run_id": "run-prov",
+            "provenance": "MEASURED_FACT",
+        }
+        from strategy.owner_baseline_arbiter import LABEL_TEL_CORROBORATED
+        label_tone = {LABEL_TEL_CORROBORATED: "success"}
+        row_w = w._build_proposal_row(prop, label_tone, None)
+        labels = row_w.findChildren(QLabel)
+        texts = [lbl.text() for lbl in labels]
+        # provenance badge text is "MEASURED FACT" (underscores replaced with spaces)
+        assert any("MEASURED" in t for t in texts), (
+            "MEASURED_FACT provenance must appear in the proposal row")
+
+
+class TestV43ModalSeams:
+    """I2: the three modal seams must be injectable and fail-closed under pytest."""
+
+    def test_default_ask_resolve_returns_cancel_under_pytest(self):
+        """_default_ask_resolve returns 'cancel' (fail-closed) when PYTEST_CURRENT_TEST is set."""
+        from ui.setup_builder_ui import _default_ask_resolve
+        # PYTEST_CURRENT_TEST is already set because we are running under pytest.
+        result = _default_ask_resolve(None, "camber_front", "increase")
+        assert result == "cancel"
+
+    def test_default_ask_text_returns_empty_false_under_pytest(self):
+        """_default_ask_text returns ('', False) (fail-closed) when PYTEST_CURRENT_TEST is set."""
+        from ui.setup_builder_ui import _default_ask_text
+        text, ok = _default_ask_text(None, "title", "message")
+        assert ok is False
+        assert text == ""
+
+    def test_ask_resolve_injectable_via_instance_attr(self, qapp):
+        """SetupBuilderMixin._ask_resolve uses _resolve_conflict_fn when set."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget
+        w = QWidget()
+        w._ask_resolve = types.MethodType(SetupBuilderMixin._ask_resolve, w)
+        # Inject a seam that always returns "tel".
+        w._resolve_conflict_fn = lambda param, tel_dir: "tel"
+        result = w._ask_resolve("camber_front", "decrease")
+        assert result == "tel"
+
+    def test_ask_text_injectable_via_instance_attr(self, qapp):
+        """SetupBuilderMixin._ask_text_dialog uses _ask_text_fn when set."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget
+        w = QWidget()
+        w._ask_text_dialog = types.MethodType(SetupBuilderMixin._ask_text_dialog, w)
+        # Inject a seam that returns a fixed string.
+        w._ask_text_fn = lambda title, msg: ("test reason", True)
+        text, ok = w._ask_text_dialog("Reject proposal", "reason:")
+        assert ok is True
+        assert text == "test reason"
+
+    def test_resolve_conflict_unlocks_buttons_on_tel_choice(self, qapp):
+        """_resolve_conflict unlocks Accept/Reject when resolution is 'tel'."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QPushButton
+        w = QWidget()
+        for name in ("_resolve_conflict", "_ask_resolve", "_ask_text_dialog"):
+            m = getattr(SetupBuilderMixin, name, None)
+            if m:
+                setattr(w, name, types.MethodType(m, w))
+        # Inject seam: always resolve to "tel".
+        w._resolve_conflict_fn = lambda param, tel_dir: "tel"
+        accept_btn = QPushButton("Accept"); accept_btn.setEnabled(False)
+        reject_btn = QPushButton("Reject"); reject_btn.setEnabled(False)
+        w._resolve_conflict("pid", accept_btn, reject_btn, "increase", "arb_front", None)
+        assert accept_btn.isEnabled(), "Accept must be enabled after tel resolution"
+        assert reject_btn.isEnabled(), "Reject must be enabled after tel resolution"
+
+    def test_resolve_conflict_cancel_leaves_buttons_disabled(self, qapp):
+        """_resolve_conflict with 'cancel' result leaves Accept/Reject disabled."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QPushButton
+        w = QWidget()
+        for name in ("_resolve_conflict", "_ask_resolve", "_ask_text_dialog"):
+            m = getattr(SetupBuilderMixin, name, None)
+            if m:
+                setattr(w, name, types.MethodType(m, w))
+        # Inject seam: always cancel (default under pytest anyway).
+        w._resolve_conflict_fn = lambda param, tel_dir: "cancel"
+        accept_btn = QPushButton("Accept"); accept_btn.setEnabled(False)
+        reject_btn = QPushButton("Reject"); reject_btn.setEnabled(False)
+        w._resolve_conflict("pid", accept_btn, reject_btn, "increase", "arb_front", None)
+        assert not accept_btn.isEnabled(), "Accept must stay disabled after cancel"
+        assert not reject_btn.isEnabled(), "Reject must stay disabled after cancel"
+
+
+class TestV43M3PersistNoBaselineFlag:
+    """M3: the no-baseline flag must be persisted to DB, not held only in memory."""
+
+    def test_mark_evidence_without_baseline_called_when_no_baseline(self):
+        """When baseline is None, mark_evidence_without_baseline is called on the DB."""
+        import time
+        from ui.practice_run_recorder import PracticeRunRecorder
+
+        marked = []
+
+        class _DBStub:
+            def get_run_for_session(self, sid):
+                return {"event_id": 5, "run_id": "uuid-m3-test", "session_type": "Practice"}
+            def get_owner_baseline(self, event_id, discipline):
+                return None
+            def mark_evidence_without_baseline(self, event_id, discipline, session_run_id):
+                marked.append((event_id, discipline, session_run_id))
+                return True
+
+        recorder = PracticeRunRecorder(db=_DBStub())
+        recorder._trigger_owner_proposals(session_id=50, session_meta={"session_type": "Practice"})
+        assert marked, "mark_evidence_without_baseline must be called when baseline is None"
+        assert marked[0] == (5, "race", "uuid-m3-test")
+
+    def test_mark_not_called_when_baseline_exists(self):
+        """mark_evidence_without_baseline must NOT be called when baseline exists."""
+        import threading, time
+        from ui.practice_run_recorder import PracticeRunRecorder
+        import services.owner_baseline_service as svc
+
+        marked = []
+        original_run = svc.run_for_session
+        svc.run_for_session = lambda *a, **kw: None  # no-op
+
+        try:
+            class _DBStub:
+                def get_run_for_session(self, sid):
+                    return {"event_id": 6, "run_id": "uuid-m3-b", "session_type": "Practice"}
+                def get_owner_baseline(self, event_id, discipline):
+                    return {"ride_height_front": 80.0}  # baseline exists
+                def mark_evidence_without_baseline(self, event_id, discipline, session_run_id):
+                    marked.append((event_id, discipline))
+
+            recorder = PracticeRunRecorder(db=_DBStub())
+            recorder._trigger_owner_proposals(session_id=60, session_meta={"session_type": "Practice"})
+            # Give daemon thread a moment to run.
+            deadline = time.time() + 1.0
+            while any(t.is_alive() for t in recorder._proposal_threads) and time.time() < deadline:
+                time.sleep(0.05)
+        finally:
+            svc.run_for_session = original_run
+
+        assert not marked, "mark_evidence_without_baseline must NOT be called when baseline exists"
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 — _warn_invalid seam in SetupBuilderMixin._do_edit_proposal
+# ---------------------------------------------------------------------------
+
+class TestGap1WarnInvalidSeam:
+    """Gap 1: the except (ValueError, TypeError) path in _do_edit_proposal must
+    never open a bare QMessageBox under a test runner.
+
+    The fix is a _default_warn_invalid function (fail closed under
+    PYTEST_CURRENT_TEST) and a _warn_invalid instance method (injectable via
+    _warn_invalid_fn attribute), following the same shape as _default_ask_text.
+    """
+
+    def test_default_warn_invalid_fails_closed_under_pytest(self):
+        """_default_warn_invalid returns None without touching Qt under pytest."""
+        from ui.setup_builder_ui import _default_warn_invalid
+        # PYTEST_CURRENT_TEST is already set; must return None silently.
+        result = _default_warn_invalid(None, "not a number")
+        assert result is None, "_default_warn_invalid must be a no-op under pytest"
+
+    def test_warn_invalid_injectable_via_instance_attr(self, qapp):
+        """_warn_invalid delegates to _warn_invalid_fn when set on the instance."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget
+        w = QWidget()
+        w._warn_invalid = types.MethodType(SetupBuilderMixin._warn_invalid, w)
+        captured = []
+        w._warn_invalid_fn = lambda msg: captured.append(msg)
+        w._warn_invalid("not a number")
+        assert captured == ["not a number"], "_warn_invalid_fn must receive the message"
+
+    def test_do_edit_proposal_bad_input_calls_warn_invalid(self, qapp):
+        """When _ask_text_fn returns a non-numeric string, _warn_invalid is called
+        and the operation does not hang (no bare QMessageBox reached)."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QPushButton
+
+        class _FakeEditDB:
+            def get_run_for_session(self, sid): return None
+            def update_proposal_status(self, *a, **kw): return True
+
+        w = QWidget()
+        for name in ("_do_edit_proposal", "_ask_text_dialog", "_warn_invalid"):
+            m = getattr(SetupBuilderMixin, name, None)
+            if m:
+                setattr(w, name, types.MethodType(m, w))
+
+        # Inject seam: return a non-numeric string so float() raises ValueError.
+        w._ask_text_fn = lambda title, msg: ("not-a-number", True)
+        # Capture _warn_invalid calls to confirm the error path is reached.
+        warned = []
+        w._warn_invalid_fn = lambda msg: warned.append(msg)
+
+        row_widget = QPushButton("row")
+        # Must complete without hanging or raising.
+        w._do_edit_proposal("proposal-x", 5.0, 4.5, row_widget, _FakeEditDB())
+        assert warned, "_warn_invalid must be called when the entered value is not numeric"
+        assert "not" in warned[0].lower() or "valid" in warned[0].lower(), (
+            "warning message must mention the value is invalid")
+
+    def test_do_edit_proposal_valid_input_does_not_warn(self, qapp):
+        """When the user enters a valid number, _warn_invalid must NOT be called."""
+        from ui.setup_builder_ui import SetupBuilderMixin
+        import types
+        from PyQt6.QtWidgets import QWidget, QPushButton
+        import services.owner_baseline_service as svc
+
+        original_edit = getattr(svc, "edit_proposal", None)
+        svc.edit_proposal = lambda db, pid, val: None  # no-op
+
+        try:
+            w = QWidget()
+            for name in ("_do_edit_proposal", "_ask_text_dialog", "_warn_invalid"):
+                m = getattr(SetupBuilderMixin, name, None)
+                if m:
+                    setattr(w, name, types.MethodType(m, w))
+            # Inject seam: valid numeric string.
+            w._ask_text_fn = lambda title, msg: ("6.5", True)
+            warned = []
+            w._warn_invalid_fn = lambda msg: warned.append(msg)
+            row_widget = QPushButton("row")
+            w._do_edit_proposal("proposal-y", 5.0, 4.5, row_widget, object())
+            assert not warned, "_warn_invalid must NOT be called for a valid numeric input"
+        finally:
+            if original_edit is not None:
+                svc.edit_proposal = original_edit
+            elif hasattr(svc, "edit_proposal"):
+                del svc.edit_proposal
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 — dir_picker seam in EventExportPanel._on_export_clicked
+# ---------------------------------------------------------------------------
+
+class TestGap2DirPickerSeam:
+    """Gap 2: QFileDialog.getExistingDirectory in _on_export_clicked must not
+    be called bare — it blocks indefinitely under a test runner.
+
+    The fix is a _default_dir_picker function (fail closed = '' under
+    PYTEST_CURRENT_TEST) and a dir_picker= constructor parameter, following
+    the same pattern as confirm= / _default_overwrite_confirm.
+    """
+
+    def test_default_dir_picker_fails_closed_under_pytest(self):
+        """_default_dir_picker returns '' (fail-closed) when PYTEST_CURRENT_TEST is set."""
+        from ui.event_export_panel import _default_dir_picker
+        result = _default_dir_picker(None, "Choose folder", "")
+        assert result == "", "_default_dir_picker must return '' under pytest (fail closed)"
+
+    def test_dir_picker_parameter_accepted_by_constructor(self, qapp):
+        """EventExportPanel accepts dir_picker= without error."""
+        from ui.event_export_panel import EventExportPanel
+        called = []
+        panel = EventExportPanel(dir_picker=lambda parent, title, start: called.append(title) or "")
+        # Introspect that the callable was stored.
+        assert panel._dir_picker is not None
+
+    def test_on_export_clicked_uses_dir_picker_seam(self, qapp):
+        """_on_export_clicked calls self._dir_picker, not QFileDialog directly."""
+        from ui.event_export_panel import EventExportPanel
+
+        dirs_requested = []
+
+        class _FakeDB:
+            pass
+
+        def _pick(parent, title, start):
+            dirs_requested.append(title)
+            return ""   # simulate cancel
+
+        panel = EventExportPanel(dir_picker=_pick)
+        panel.set_event(1, car="RSR", track="Spa", db=_FakeDB())
+        # Trigger the click — must reach _dir_picker without touching QFileDialog.
+        panel._on_export_clicked()
+        assert dirs_requested, "_dir_picker must be called by _on_export_clicked"
+
+    def test_on_export_clicked_cancels_when_dir_picker_returns_empty(self, qapp):
+        """If dir_picker returns '', _on_export_clicked cancels (no export started)."""
+        from ui.event_export_panel import EventExportPanel
+
+        run_called = []
+
+        class _FakeDB:
+            pass
+
+        panel = EventExportPanel(dir_picker=lambda p, t, s: "")
+        panel.set_event(1, db=_FakeDB())
+        # Patch _run_export to detect if it was called.
+        original_run = panel._run_export
+        panel._run_export = lambda *a, **kw: run_called.append(True)
+        panel._on_export_clicked()
+        assert not run_called, "_run_export must NOT be called when dir_picker returns empty"
+
+    def test_on_export_clicked_proceeds_when_dir_picker_returns_path(self, qapp):
+        """If dir_picker returns a non-empty path, _run_export is called."""
+        from ui.event_export_panel import EventExportPanel
+
+        run_args = []
+
+        class _FakeDB:
+            pass
+
+        panel = EventExportPanel(dir_picker=lambda p, t, s: "/tmp/export_dest")
+        panel.set_event(1, db=_FakeDB())
+        panel._run_export = lambda dest, **kw: run_args.append(dest)
+        panel._on_export_clicked()
+        assert run_args == ["/tmp/export_dest"], (
+            "_run_export must be called with the directory returned by dir_picker")

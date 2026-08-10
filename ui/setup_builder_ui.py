@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import json as _json  # alias used in _display_setup_result (verbatim copy from dashboard.py)
+import os
 import time
 from pathlib import Path
 
@@ -833,6 +834,70 @@ def _engineering_brain_html(data: dict) -> str:
             f"{_str}</div>"
         )
     return html
+
+
+# ---------------------------------------------------------------------------
+# Injectable seams — blocking modal dialogs (I2 / project doctrine)
+#
+# A modal dialog is correct in production and fatal without a human: it waits
+# for a click that never comes.  PYTEST_CURRENT_TEST is the reliable guard.
+# Failing closed means: do not act (cancel the resolve, cancel the reject/edit).
+# Each function is also injectable at the instance level via a matching `_fn`
+# attribute, so tests can drive specific branches without any env-var tricks.
+# ---------------------------------------------------------------------------
+
+def _default_ask_resolve(parent, param: str, tel_direction: str) -> str:
+    """B11 resolve dialog.  Returns 'tel', 'feedback', or 'cancel'."""
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return "cancel"  # fail closed under test runner
+    from PyQt6.QtWidgets import QMessageBox
+    fb_dir = "decrease" if tel_direction == "increase" else "increase"
+    box = QMessageBox(parent)
+    box.setWindowTitle("Resolve conflict")
+    box.setText(
+        f"Telemetry and driver feedback OPPOSE each other on "
+        f"\"{param.replace('_', ' ')}\".\n\n"
+        f"Telemetry implies: {tel_direction}\n"
+        f"Driver feedback implies: {fb_dir}\n\n"
+        "Which direction do you want to act on? "
+        "(You can still Reject after choosing.)")
+    tel_btn = box.addButton(
+        f"Telemetry ({tel_direction})", QMessageBox.ButtonRole.AcceptRole)
+    fb_btn = box.addButton(
+        f"Driver feedback ({fb_dir})", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked == tel_btn:
+        return "tel"
+    if clicked == fb_btn:
+        return "feedback"
+    return "cancel"
+
+
+def _default_ask_text(parent, title: str, message: str) -> tuple:
+    """Generic one-line text entry.  Returns (text, ok_bool)."""
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return ("", False)  # fail closed under test runner
+    from PyQt6.QtWidgets import QInputDialog
+    return QInputDialog.getText(parent, title, message)
+
+
+def _default_warn_invalid(parent, message: str) -> None:
+    """Show a non-critical warning after the user enters a bad value.
+
+    The error path in _do_edit_proposal is only reachable via the _ask_text_fn
+    seam — a test that injects a non-numeric string would hit this path.  Without
+    the guard it hangs waiting for a QMessageBox click that never comes.  Fail
+    closed = do nothing (the operation already silently aborted).
+    """
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return   # fail closed — no dialog under a test runner
+    from PyQt6.QtWidgets import QMessageBox
+    QMessageBox.warning(parent, "Invalid value", message)
 
 
 class SetupBuilderMixin:
@@ -4933,7 +4998,15 @@ class SetupBuilderMixin:
             self._lbl_stale_baseline.setVisible(False)
 
     def _refresh_proposals(self, db, event_id: int) -> None:
-        """B10-B12, B16, C2: rebuild the proposals section from DB."""
+        """B10-B12, B16, C2 (DB v43): rebuild the proposals section from DB.
+
+        Sections rendered:
+          1. Active proposals  (status='proposed' or 'unresolved')
+          2. Stale proposals   (status='stale' — old-revision; visually distinct)
+          3. Actioned proposals (status='accepted'/'rejected'/'edited')
+          4. Suppressed changes (B16) — from get_suppressed_changes_for_event
+          5. Unresolved riders  (CORRECTION-2) — from get_owner_riders_for_event
+        """
         from ui import ngr_theme as t
         from ui.qt_layout_utils import clear_layout
 
@@ -4953,7 +5026,23 @@ class SetupBuilderMixin:
         except Exception:
             proposals = []
 
-        if not proposals:
+        # Fetch riders from the dedicated table (DB v43 — B9-RIDER).
+        riders: list = []
+        if hasattr(db, "get_owner_riders_for_event"):
+            try:
+                riders = db.get_owner_riders_for_event(event_id)
+            except Exception:
+                riders = []
+
+        # Fetch suppressed changes from the dedicated table (DB v43 — B16).
+        suppressed: list = []
+        if hasattr(db, "get_suppressed_changes_for_event"):
+            try:
+                suppressed = db.get_suppressed_changes_for_event(event_id)
+            except Exception:
+                suppressed = []
+
+        if not proposals and not riders and not suppressed:
             if proposals_group is not None:
                 proposals_group.setVisible(False)
             return
@@ -4976,13 +5065,16 @@ class SetupBuilderMixin:
         except Exception:
             _LABEL_TONE = {}
 
-        # Split proposals by status.
-        normal_props  = [p for p in proposals if str(p.get("status")) not in
-                         ("unresolved", "accepted", "rejected", "edited")]
-        accepted_props = [p for p in proposals if str(p.get("status")) == "accepted"]
-        rejected_props = [p for p in proposals if str(p.get("status")) == "rejected"]
-        edited_props   = [p for p in proposals if str(p.get("status")) == "edited"]
+        # Split proposals by status. 'stale' is excluded from active and actioned.
+        _ACTIONED = {"accepted", "rejected", "edited"}
+        _EXCLUDED = {"unresolved", "stale"} | _ACTIONED
+        normal_props     = [p for p in proposals if str(p.get("status")) not in
+                            _EXCLUDED]
+        accepted_props   = [p for p in proposals if str(p.get("status")) == "accepted"]
+        rejected_props   = [p for p in proposals if str(p.get("status")) == "rejected"]
+        edited_props     = [p for p in proposals if str(p.get("status")) == "edited"]
         unresolved_props = [p for p in proposals if str(p.get("status")) == "unresolved"]
+        stale_props      = [p for p in proposals if str(p.get("status")) == "stale"]
 
         lay = self._proposals_layout
 
@@ -4997,6 +5089,19 @@ class SetupBuilderMixin:
             for prop in active_props:
                 lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
 
+        # ---- Stale proposals (old-revision — visually distinct from active) ----
+        if stale_props:
+            stale_hdr = QLabel(
+                "Stale proposals  (baseline was updated after these were computed — "
+                "re-record a session to get fresh proposals)")
+            stale_hdr.setWordWrap(True)
+            stale_hdr.setStyleSheet(
+                f"color: {t.WARN}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
+                f"padding: 4px 0 2px 0;")
+            lay.addWidget(stale_hdr)
+            for prop in stale_props:
+                lay.addWidget(self._build_stale_proposal_row(prop, _LABEL_TONE))
+
         # ---- Already-actioned proposals (accepted / rejected / edited) ----
         actioned = accepted_props + rejected_props + edited_props
         if actioned:
@@ -5008,22 +5113,33 @@ class SetupBuilderMixin:
             for prop in actioned:
                 lay.addWidget(self._build_actioned_proposal_row(prop, _LABEL_TONE))
 
-        # ---- Suppressed changes (B16) — collapsed QGroupBox ----
-        # Suppressed changes are not persisted as rows in the current schema;
-        # they are present in the per-session arbiter output but not written to
-        # the DB. When the DB schema gains a dedicated table the section below
-        # will render them. For now, the section is structurally in place (not
-        # hidden) so the UI is never incomplete.
-        # (suppressed_changes table: future schema item.)
+        # ---- Suppressed changes (B16 — now persisted in DB v43) ----
+        # Nothing silently disappears: these are rule-engine candidates the arbiter
+        # withheld. Leon sees what was withheld and why.
+        if suppressed:
+            sc_hdr = QLabel("Suppressed changes  (engine candidates not surfaced)")
+            sc_hdr.setWordWrap(True)
+            sc_hdr.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
+                f"padding: 4px 0 2px 0;")
+            lay.addWidget(sc_hdr)
+            sc_note = QLabel(
+                "These parameters had rule-engine candidates that were withheld "
+                "(rejected at the same band, ratchet-locked, or both). "
+                "They are listed here and included in the export — B16 doctrine: "
+                "nothing disappears silently.")
+            sc_note.setWordWrap(True)
+            sc_note.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            lay.addWidget(sc_note)
+            for sc in suppressed:
+                lay.addWidget(self._build_suppressed_row(sc))
 
-        # ---- Unresolved riders (CORRECTION-2) — driver feedback at 5+ laps
-        # for params where telemetry is silent. No Accept/Reject — advisory. ----
-        # These are a subset of proposals with status="unresolved" that have
-        # no proposed_value direction from telemetry (the arbiter sets them as
-        # unresolved_riders; they appear here with a distinct heading).
-        # In the current DB schema they are embedded in the proposals table.
-        # Detect them: unresolved_riders have an empty label field.
-        riders = [p for p in unresolved_props if not str(p.get("label") or "")]
+        # ---- Unresolved riders (CORRECTION-2 / B9-RIDER — now from dedicated table) ----
+        # B9-RIDER items are driver feedback at 5+ clean laps about a parameter the
+        # telemetry is SILENT on. They are completely distinct from B11 contradictions
+        # (which have both telemetry AND feedback and are in the proposals list).
+        # NO Accept/Reject — there is no telemetry direction to act on.
         if riders:
             rider_hdr = QLabel("Unresolved riders  (driver feedback, no telemetry finding)")
             rider_hdr.setWordWrap(True)
@@ -5035,7 +5151,8 @@ class SetupBuilderMixin:
                 "These are driver feedback signals at 5+ clean laps for parameters "
                 "that telemetry produced no finding on. They are acknowledged here "
                 "and included in the export — they have NO Accept/Reject because "
-                "there is no telemetry direction to accept or reject.")
+                "there is no telemetry direction to act on.  Driver feedback is "
+                "never silently dropped.")
             rider_note.setWordWrap(True)
             rider_note.setStyleSheet(
                 f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
@@ -5077,6 +5194,9 @@ class SetupBuilderMixin:
         clip_reason = str(prop.get("clip_stated_reason") or "")
         session_id = str(prop.get("session_run_id") or "")[:8]
         proposal_id = str(prop.get("proposal_id") or "")
+        # C19 / DB v43: provenance tag (MEASURED_FACT / DETERMINISTIC_INFERENCE /
+        # DRIVER_REPORT / UNRESOLVED). Never blend these visually.
+        provenance = str(prop.get("provenance") or "")
 
         # Headline: parameter, direction, values
         top = QHBoxLayout()
@@ -5099,6 +5219,20 @@ class SetupBuilderMixin:
         disc_badge = QLabel(discipline)
         disc_badge.setStyleSheet(t.badge_qss("neutral"))
         top.addWidget(disc_badge)
+
+        # C19: provenance badge — MEASURED_FACT / DETERMINISTIC_INFERENCE /
+        # DRIVER_REPORT / UNRESOLVED.  Four distinct tones; never blended.
+        _PROV_TONE = {
+            "MEASURED_FACT":           "success",
+            "DETERMINISTIC_INFERENCE": "info",
+            "DRIVER_REPORT":           "warn",
+            "UNRESOLVED":              "danger",
+        }
+        if provenance:
+            prov_badge = QLabel(provenance.replace("_", " "))
+            prov_badge.setStyleSheet(t.badge_qss(_PROV_TONE.get(provenance, "neutral")))
+            top.addWidget(prov_badge)
+
         row_l.addLayout(top)
 
         # Clean laps and session context
@@ -5239,7 +5373,11 @@ class SetupBuilderMixin:
         return row_w
 
     def _build_rider_row(self, rider: dict) -> QWidget:
-        """CORRECTION-2: render one unresolved rider — NO Accept/Reject."""
+        """CORRECTION-2 / B9-RIDER: render one unresolved rider — NO Accept/Reject.
+
+        Accepts dicts from both the old proposals-embedded shape (key='direction')
+        and the new dedicated riders table (DB v43, key='feedback_direction').
+        """
         from ui import ngr_theme as t
         row_w = QWidget()
         row_w.setObjectName("ngrRiderRow")
@@ -5252,23 +5390,34 @@ class SetupBuilderMixin:
         row_l.setContentsMargins(8, 6, 8, 6)
         row_l.setSpacing(3)
         param = str(rider.get("parameter") or "")
-        direction = str(rider.get("direction") or "")
+        # 'feedback_direction' is the canonical key from the riders table (v43);
+        # 'direction' is a fallback for the old embedded-in-proposals shape.
+        direction = str(
+            rider.get("feedback_direction") or rider.get("direction") or "")
         evidence = list(rider.get("evidence_sources") or [])
-        laps = int(rider.get("clean_laps") or 0)
+        discipline = str(rider.get("discipline") or "")
+        note_text = str(rider.get("note") or "")
+        top = QHBoxLayout()
         param_lbl = QLabel(
-            f"<b>{param.replace('_', ' ')}</b>  ·  feedback direction: {direction}  "
-            f"·  {laps} clean lap(s)")
+            f"<b>{param.replace('_', ' ')}</b>  ·  feedback direction: {direction}")
         param_lbl.setStyleSheet(
             f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt;")
-        row_l.addWidget(param_lbl)
-        note_lbl = QLabel(
+        top.addWidget(param_lbl)
+        top.addStretch(1)
+        if discipline:
+            d_badge = QLabel(discipline)
+            d_badge.setStyleSheet(t.badge_qss("neutral"))
+            top.addWidget(d_badge)
+        row_l.addLayout(top)
+        desc = QLabel(
+            note_text if note_text else
             "Driver feedback exists for this parameter but telemetry produced no "
             "finding. Acknowledged here and included in the export. No Accept/Reject — "
             "there is no telemetry direction to act on.")
-        note_lbl.setWordWrap(True)
-        note_lbl.setStyleSheet(
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
             f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
-        row_l.addWidget(note_lbl)
+        row_l.addWidget(desc)
         if evidence:
             ev_lbl = QLabel("Evidence: " + " · ".join(str(e) for e in evidence[:3]))
             ev_lbl.setWordWrap(True)
@@ -5277,6 +5426,139 @@ class SetupBuilderMixin:
             row_l.addWidget(ev_lbl)
         return row_w
 
+    def _build_stale_proposal_row(self, prop: dict, label_tone: dict) -> QWidget:
+        """Compact read-only row for stale proposals (old-revision, DB v43).
+
+        Visually distinct from active proposals: muted background, STALE badge.
+        No Accept/Reject/Edit — the baseline changed, these proposals no longer
+        reflect the current baseline. Leon must re-record a session for fresh ones.
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrProposalRowStale")
+        row_w.setStyleSheet(
+            f"QWidget#ngrProposalRowStale {{ background: {t.CARBON}; "
+            f"border: 1px solid {t.HAIRLINE_SOFT}; "
+            f"border-left: 4px solid {t.HAIRLINE}; "
+            f"border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QHBoxLayout(row_w)
+        row_l.setContentsMargins(8, 4, 8, 4)
+        stale_badge = QLabel("STALE")
+        stale_badge.setStyleSheet(t.badge_qss("warn"))
+        row_l.addWidget(stale_badge)
+        param = str(prop.get("parameter") or "")
+        direction = str(prop.get("direction") or "")
+        proposed_val = prop.get("proposed_value")
+        discipline = str(prop.get("discipline") or "")
+        revision = int(prop.get("baseline_revision") or 0)
+        provenance = str(prop.get("provenance") or "")
+        val_str = (
+            f"  {direction}  → {proposed_val:g}"
+            if isinstance(proposed_val, (int, float)) else f"  {direction}")
+        param_lbl = QLabel(
+            f"{param.replace('_', ' ')}{val_str}  "
+            f"· {discipline} · rev {revision}")
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+        row_l.addWidget(param_lbl)
+        if provenance:
+            _PROV_TONE = {
+                "MEASURED_FACT": "success", "DETERMINISTIC_INFERENCE": "info",
+                "DRIVER_REPORT": "warn", "UNRESOLVED": "danger",
+            }
+            prov_badge = QLabel(provenance.replace("_", " "))
+            prov_badge.setStyleSheet(t.badge_qss(_PROV_TONE.get(provenance, "neutral")))
+            row_l.addWidget(prov_badge)
+        row_l.addStretch(1)
+        return row_w
+
+    def _build_suppressed_row(self, sc: dict) -> QWidget:
+        """B16 (DB v43): render one suppressed change — read-only, always shown.
+
+        Nothing silently disappears. Leon sees what the engine withheld and why.
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrSuppressedRow")
+        row_w.setStyleSheet(
+            f"QWidget#ngrSuppressedRow {{ background: {t.CARBON}; "
+            f"border: 1px solid {t.HAIRLINE_SOFT}; "
+            f"border-left: 4px solid {t.HAIRLINE}; "
+            f"border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QVBoxLayout(row_w)
+        row_l.setContentsMargins(8, 4, 8, 4)
+        row_l.setSpacing(2)
+        param = str(sc.get("parameter") or "")
+        reason = str(sc.get("reason") or "")
+        ratchet = bool(sc.get("ratchet_locked"))
+        feedback_recorded = bool(sc.get("feedback_recorded"))
+        discipline = str(sc.get("discipline") or "")
+        top = QHBoxLayout()
+        param_lbl = QLabel(f"<b>{param.replace('_', ' ')}</b>  · {discipline}")
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt;")
+        top.addWidget(param_lbl)
+        top.addStretch(1)
+        if ratchet:
+            rl_badge = QLabel("RATCHET LOCKED")
+            rl_badge.setStyleSheet(t.badge_qss("danger"))
+            top.addWidget(rl_badge)
+        if feedback_recorded:
+            fb_badge = QLabel("feedback recorded")
+            fb_badge.setStyleSheet(t.badge_qss("warn"))
+            top.addWidget(fb_badge)
+        row_l.addLayout(top)
+        if reason:
+            reason_lbl = QLabel(reason)
+            reason_lbl.setWordWrap(True)
+            reason_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(reason_lbl)
+        return row_w
+
+    # -- Injectable seams for blocking modal dialogs (I2 / project doctrine) -
+
+    def _ask_resolve(self, param: str, tel_direction: str) -> str:
+        """B11: injectable seam for the resolve-conflict dialog.
+
+        Returns 'tel', 'feedback', or 'cancel'.  Under a test runner
+        (PYTEST_CURRENT_TEST set) the default always returns 'cancel'
+        (fail-closed).  Tests can set ``self._resolve_conflict_fn`` to drive
+        a specific outcome without opening any modal.
+        """
+        fn = getattr(self, "_resolve_conflict_fn", None)
+        if fn is not None:
+            return fn(param, tel_direction)
+        return _default_ask_resolve(self, param, tel_direction)
+
+    def _ask_text_dialog(self, title: str, message: str) -> tuple:
+        """Generic one-line text entry — injectable seam for QInputDialog.getText.
+
+        Returns (text, ok_bool).  Under a test runner returns ('', False)
+        (fail-closed).  Tests can set ``self._ask_text_fn`` to drive a
+        specific outcome.
+        """
+        fn = getattr(self, "_ask_text_fn", None)
+        if fn is not None:
+            return fn(title, message)
+        return _default_ask_text(self, title, message)
+
+    def _warn_invalid(self, message: str) -> None:
+        """Show a non-critical warning after bad user input — injectable seam.
+
+        Gap 1 fix: the except (ValueError, TypeError) path in _do_edit_proposal
+        previously called QMessageBox.warning directly.  Under a test runner
+        (PYTEST_CURRENT_TEST set) any injected _ask_text_fn that returns a
+        non-numeric string would reach this path and hang on an unanswered
+        dialog.  The seam fails closed (no-op) under pytest; tests can inject
+        ``self._warn_invalid_fn`` to capture the message.
+        """
+        fn = getattr(self, "_warn_invalid_fn", None)
+        if fn is not None:
+            fn(message)
+            return
+        _default_warn_invalid(self, message)
+
     # -- Proposal action handlers (B12: individual, never auto-apply) -------
 
     def _resolve_conflict(self, proposal_id: str, accept_btn, reject_btn,
@@ -5284,27 +5566,10 @@ class SetupBuilderMixin:
         """B11: offer the owner a choice between telemetry and feedback directions.
 
         Only after an explicit choice do Accept and Reject become available.
+        Uses the injectable _ask_resolve seam — never opens a dialog under pytest.
         """
-        from PyQt6.QtWidgets import QMessageBox
-        from ui import ngr_theme as t
-        box = QMessageBox(self)
-        box.setWindowTitle("Resolve conflict")
-        box.setText(
-            f"Telemetry and driver feedback OPPOSE each other on "
-            f"\"{param.replace('_', ' ')}\".\n\n"
-            f"Telemetry implies: {tel_direction}\n"
-            f"Driver feedback implies: the opposite\n\n"
-            "Which direction do you want to act on? "
-            "(You can still Reject after choosing.)")
-        tel_btn = box.addButton(
-            f"Telemetry ({tel_direction})", QMessageBox.ButtonRole.AcceptRole)
-        fb_dir = "decrease" if tel_direction == "increase" else "increase"
-        fb_btn = box.addButton(
-            f"Driver feedback ({fb_dir})", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked in (tel_btn, fb_btn):
+        result = self._ask_resolve(param, tel_direction)
+        if result in ("tel", "feedback"):
             # Resolution made — unlock Accept/Reject for this row.
             accept_btn.setEnabled(True)
             reject_btn.setEnabled(True)
@@ -5325,13 +5590,15 @@ class SetupBuilderMixin:
             pass
 
     def _do_reject_proposal(self, proposal_id: str, row_widget, db) -> None:
-        """B12: reject one proposal with an optional reason."""
+        """B12: reject one proposal with an optional reason.
+
+        Uses the injectable _ask_text_dialog seam — never opens a dialog under pytest.
+        """
         if db is None:
             return
         try:
-            from PyQt6.QtWidgets import QInputDialog
-            reason, ok = QInputDialog.getText(
-                self, "Reject proposal", "Reason for rejection (optional):")
+            reason, ok = self._ask_text_dialog(
+                "Reject proposal", "Reason for rejection (optional):")
             if not ok:
                 return  # cancelled
             from services.owner_baseline_service import reject_proposal
@@ -5343,14 +5610,16 @@ class SetupBuilderMixin:
 
     def _do_edit_proposal(self, proposal_id: str, current_value,
                           original_value, row_widget, db) -> None:
-        """B12: edit a proposed value. Shows both original and edited values."""
+        """B12: edit a proposed value. Shows both original and edited values.
+
+        Uses the injectable _ask_text_dialog seam — never opens a dialog under pytest.
+        """
         if db is None:
             return
         try:
-            from PyQt6.QtWidgets import QInputDialog
             init_val = float(current_value or 0)
-            text, ok = QInputDialog.getText(
-                self, "Edit proposal value",
+            text, ok = self._ask_text_dialog(
+                "Edit proposal value",
                 f"Original proposed value: {init_val:g}\n"
                 f"Original baseline value: "
                 f"{float(original_value or 0):g}\n\n"
@@ -5364,8 +5633,8 @@ class SetupBuilderMixin:
             row_widget.setToolTip(
                 f"Edited: original proposed {init_val:g}, your value {edited:g}.")
         except (ValueError, TypeError):
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Invalid value",
-                                "The value you entered is not a valid number.")
+            # Gap 1 fix: use the injectable _warn_invalid seam (never a bare
+            # QMessageBox under a test runner — it would hang with no human).
+            self._warn_invalid("The value you entered is not a valid number.")
         except Exception:
             pass

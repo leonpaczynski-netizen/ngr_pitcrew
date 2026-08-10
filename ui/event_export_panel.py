@@ -17,15 +17,64 @@ deterministic content).
 """
 from __future__ import annotations
 
-from typing import Optional
+import os
+from typing import Callable, Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout, QWidget,
+    QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from ui import ngr_theme as _t
 from ui.components.buttons import PrimaryActionButton, SecondaryActionButton
+
+
+# ---------------------------------------------------------------------------
+# Injectable seam — overwrite confirmation (C4 / project doctrine)
+# ---------------------------------------------------------------------------
+
+def _default_overwrite_confirm(parent, filename: str, destination: str) -> bool:
+    """Ask the owner whether to overwrite an existing export file.
+
+    A modal dialog is correct in production and fatal without a human — it
+    blocks until a click that never arrives. The same hang bit this codebase
+    once already (900-second timeout, zero CPU). The fix is the same as
+    ui/live_shell_bridge._default_confirm: check PYTEST_CURRENT_TEST and
+    QT_QPA_PLATFORM before opening the dialog; fail closed (do NOT overwrite)
+    when either is set.
+
+    Injectable via the ``confirm=`` constructor parameter so tests can drive
+    the seam without ever touching the global QMessageBox class.
+    """
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return False   # fail closed — do not overwrite
+    from PyQt6.QtWidgets import QMessageBox
+    return QMessageBox.question(
+        parent,
+        "File already exists",
+        f"A file named \"{filename}\" already exists at the chosen destination.\n\n"
+        "Overwrite it?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    ) == QMessageBox.StandardButton.Yes
+
+
+def _default_dir_picker(parent, title: str, start_dir: str) -> str:
+    """Ask the owner to choose an export destination folder.
+
+    Gap 2 fix: QFileDialog.getExistingDirectory blocks until the owner dismisses
+    the system file-chooser — it hangs under a test runner with no human.  The
+    fix follows the same pattern as _default_overwrite_confirm: return the safe
+    closed value (empty string = cancelled) when PYTEST_CURRENT_TEST is set.
+
+    Injectable via the ``dir_picker=`` constructor parameter so tests can
+    supply a pre-set directory without touching global Qt state.
+    """
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return ""   # fail closed — no directory chosen
+    return QFileDialog.getExistingDirectory(parent, title, start_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +131,37 @@ class EventExportPanel(QWidget):
 
     Call :meth:`set_event` before the owner can export. The panel is inert
     while ``event_id == 0``.
+
+    Parameters
+    ----------
+    confirm:
+        Injectable seam for the overwrite-confirmation dialog. Signature::
+
+            confirm(parent, filename: str, destination: str) -> bool
+
+        Defaults to :func:`_default_overwrite_confirm` which checks
+        ``PYTEST_CURRENT_TEST`` and fails closed (no overwrite) under a test
+        runner. Pass a custom callable in tests to drive the seam explicitly.
+    dir_picker:
+        Injectable seam for the folder-chooser dialog (Gap 2 fix). Signature::
+
+            dir_picker(parent, title: str, start_dir: str) -> str
+
+        Returns the chosen directory path, or an empty string if cancelled.
+        Defaults to :func:`_default_dir_picker` which checks
+        ``PYTEST_CURRENT_TEST`` and fails closed (empty string) under a test
+        runner. Pass a custom callable in tests to supply a pre-set path.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, *,
+                 confirm: Optional[Callable] = None,
+                 dir_picker: Optional[Callable] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ngrEventExportPanel")
+        #: Injectable seam — see class docstring and _default_overwrite_confirm.
+        self._confirm: Callable = confirm if confirm is not None else _default_overwrite_confirm
+        #: Injectable seam — see class docstring and _default_dir_picker.
+        self._dir_picker: Callable = dir_picker if dir_picker is not None else _default_dir_picker
         self._event_id: int = 0
         self._car: str = ""
         self._track: str = ""
@@ -163,7 +238,7 @@ class EventExportPanel(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._status.setText("Export already in progress — wait for it to finish.")
             return
-        destination_dir = QFileDialog.getExistingDirectory(
+        destination_dir = self._dir_picker(
             self,
             "Choose export destination folder",
             self._last_destination_dir or "",
@@ -202,19 +277,12 @@ class EventExportPanel(QWidget):
         dest = str(result.get("destination") or self._last_destination_dir or "")
 
         # C21 overwrite guard: if the only error is "already exists at destination",
-        # ask for explicit confirmation before retrying.
+        # ask for explicit confirmation before retrying.  The confirmation call goes
+        # through self._confirm — an injectable seam (C4 / project doctrine).
         if not ok and errors:
             overwrite_error = any("already exists at destination" in e for e in errors)
             if overwrite_error:
-                choice = QMessageBox.question(
-                    self,
-                    "File already exists",
-                    f"A file named \"{filename}\" already exists at the chosen "
-                    f"destination.\n\nOverwrite it?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if choice == QMessageBox.StandardButton.Yes:
+                if self._confirm(self, filename, dest):
                     self._run_export(dest, allow_overwrite=True)
                 else:
                     self._status.setText("Export cancelled — file not overwritten.")
