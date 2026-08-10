@@ -78,6 +78,14 @@ CONTEXT_FIELDS: frozenset = frozenset({
 ALL_FIELDS: Tuple[str, ...] = tuple(_NUM_DEFAULTS) + tuple(_TEXT_DEFAULTS) + (
     "gear_ratios", "bop_race")
 
+#: The disciplines for which an owner-authored baseline can be entered (Race and
+#: Qualifying). ``base`` is deliberately absent: for owner-baseline events ``base``
+#: is never the anchor — Race and Qualifying are each their own independent anchor
+#: (owner decision R1). ``base`` stays in the ``DISCIPLINES`` tuple in the UI layer
+#: (``ui/components/setup_workspace.py``) for backward-compatibility with callers
+#: that already rely on it; no owner-baseline logic writes it.
+OWNER_BASELINE_DISCIPLINES: Tuple[str, ...] = ("race", "qualifying")
+
 
 def _num(value, default: float, decimals: int) -> float:
     try:

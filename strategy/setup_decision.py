@@ -12,6 +12,10 @@ and "engineering validation failed" together.
 Consumes the Sprint 5 cross-lap persistence verdicts (only PERSISTENT /
 CROSS_SESSION are eligible to author a change) and structured driver feedback.
 Authors no setup values itself, calls no AI, touches no Qt/DB/files.
+
+SUPERSEDED (owner-baseline feature, 2026-08-10): ``strategy.owner_baseline_arbiter``
+is the LIVE arbiter for events with an owner-authored baseline. This module is
+retained as dead code for the audit trail only — do not delete it.
 """
 from __future__ import annotations
 

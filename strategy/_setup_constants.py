@@ -161,7 +161,15 @@ HIGH_SUCCESS_RATE: float = 0.60
 #     braking_confidence, traction, rotation, drive_out, straight_line, kerb_behaviour, bottoming,
 #     gear_choice, overall_confidence. The table held 7 of the 14 captured fields, so nine of them were
 #     dropped on every write and the driver's report genuinely was discarded. Additive. Idempotent.
-DB_VERSION: int = 41
+# v42 (Owner-baseline feature): adds owner_baselines (one row per event × discipline, revision-
+#     incremented on re-entry; provenance OWNER_AUTHORED) + owner_baseline_proposals (proposed
+#     parameter changes per session, per discipline, carrying label/status/clip/evidence). Two
+#     standalone additive tables; no existing table touched. Idempotent.
+DB_VERSION: int = 42
+
+# Export format version — bumped when the external-file schema changes. Embedded as a
+# top-level field in every event export so the external Claude project can detect stale files.
+EXPORT_FORMAT_VERSION: str = "1.0"
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

@@ -40,6 +40,9 @@ from typing import Optional
 # Provenance tiers, strongest first. These are the same tier names the Garage shows
 # per field; ENGINEERED sits between TRANSFERRED and ARCHETYPE but is assigned by the
 # authoring layer (a physics model with real car data), not by anchor resolution.
+# OWNER_AUTHORED ranks above PROVEN: the driver entered this value themselves from
+# external preparation and it must NEVER be silently overwritten by any generated path.
+TIER_OWNER_AUTHORED = "OWNER_AUTHORED"
 TIER_PROVEN = "PROVEN"
 TIER_TRANSFERRED = "TRANSFERRED"
 TIER_STOCK = "STOCK"
@@ -48,7 +51,7 @@ TIER_GENERIC = "GENERIC"
 
 #: Tiers at or above which a field may carry the label "engineered for car + track +
 #: objective". ARCHETYPE and GENERIC may not — they are class defaults and fallbacks.
-ENGINEERED_OR_BETTER = frozenset({TIER_PROVEN, TIER_TRANSFERRED, TIER_STOCK})
+ENGINEERED_OR_BETTER = frozenset({TIER_OWNER_AUTHORED, TIER_PROVEN, TIER_TRANSFERRED, TIER_STOCK})
 
 #: Half-width of the band around a PROVEN/TRANSFERRED anchor, as a fraction of the
 #: legal span. Mirrors setup_engineering_context._WINDOW_HALF_FRAC so a proven value

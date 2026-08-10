@@ -87,6 +87,11 @@ def build_event_debrief(
     quarantined: Sequence[Mapping] = (),
     setups_used: Sequence[str] = (),
     unresolved_questions: Sequence[str] = (),
+    # Owner-baseline additions (empty defaults so ALL existing call sites are unaffected).
+    # Proposals and baselines are presented as DRIVER_REPORT or UNRESOLVED findings
+    # consistent with the provenance model — they are never merged with measured facts.
+    owner_baselines: "dict | None" = None,
+    proposals: "list | None" = None,
 ) -> EventDebrief:
     """Aggregate the event's spine into a provenance-typed debrief. Never raises."""
     out: list = []
@@ -149,6 +154,39 @@ def build_event_debrief(
         for q in (unresolved_questions or []):
             if _s(q):
                 add(_s(q), U, "setup_review")
+
+        # --- Owner-baseline summary (advisory; never merged with measured facts) ---
+        if owner_baselines:
+            entered = [d for d in ("race", "qualifying") if (owner_baselines or {}).get(d)]
+            if entered:
+                add(f"Owner baseline entered for: {', '.join(entered)}.", I, "setup_review")
+            else:
+                add("No owner baseline entered for this event.", I, "setup_review")
+
+        if proposals:
+            prop_list = list(proposals)
+            n_proposed = sum(1 for p in prop_list if _s((p or {}).get("status")) == "proposed")
+            n_accepted = sum(1 for p in prop_list if _s((p or {}).get("status")) == "accepted")
+            n_rejected = sum(1 for p in prop_list if _s((p or {}).get("status")) == "rejected")
+            n_unresolved = sum(1 for p in prop_list
+                               if _s((p or {}).get("status")) == "unresolved")
+            add(
+                f"{len(prop_list)} owner-baseline proposal(s): "
+                f"{n_proposed} proposed, {n_accepted} accepted, "
+                f"{n_rejected} rejected, {n_unresolved} unresolved.",
+                I, "setup_review",
+            )
+            # Unresolved contradictions are DRIVER_REPORT — never inferred.
+            for p in prop_list:
+                if _s((p or {}).get("status")) == "unresolved":
+                    param = _s((p or {}).get("parameter"))
+                    disc = _s((p or {}).get("discipline"))
+                    if param:
+                        add(
+                            f"Unresolved contradiction on {param} ({disc}): "
+                            f"telemetry and feedback oppose each other — requires explicit resolution.",
+                            DR, "setup_review",
+                        )
 
         return EventDebrief(event_id=int(event_id or 0), car=_s(car), track=_s(track),
                             findings=tuple(out))

@@ -41,6 +41,8 @@ class SetupObjective(Enum):
 class FieldDisposition(Enum):
     """Why each adjustable field holds the value it holds. Every field the car
     exposes receives exactly one of these — nothing is left unexplained."""
+    OWNER_AUTHORED = "OWNER_AUTHORED"              # entered directly by the driver from external prep;
+                                                   # supersedes ALL generated paths (precedence 0)
     AUTHORED = "AUTHORED"                          # deterministically engineered for the objective
     PRESERVED = "PRESERVED"                        # kept at the current/known-good value on purpose
     PROVEN_HISTORY_SEED = "PROVEN_HISTORY_SEED"    # seeded from the driver's proven same-car value
@@ -58,6 +60,7 @@ class FieldDisposition(Enum):
 # source must never silently overwrite a higher-confidence one. History informs a
 # starting window; track/discipline demands then adjust it.
 EVIDENCE_PRECEDENCE: tuple[str, ...] = (
+    "0. Owner-authored baseline (driver-entered from external preparation — supersedes all)",
     "1. Safety and legal constraints",
     "2. Car-adjustment ranges and installed-part availability",
     "3. Event restrictions (tuning permissions / BoP)",
@@ -97,6 +100,10 @@ class SetupAuthoringContext:
     refuel_rate: Optional[float] = None
     required_compounds: tuple = ()
     car_class: str = ""
+    # Owner-baseline gate (A2): when this dict is provided, any field it contains is
+    # OWNER_AUTHORED and must NOT be overwritten by any history / archetype / proven-library
+    # path. Existing callers that do not supply it get the old behaviour unchanged.
+    owner_baseline: Optional[dict] = None
 
     def session_type_str(self) -> str:
         """Map the objective to the ``session_type`` string the deterministic
@@ -307,6 +314,28 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
                 proven = float(pd.get("value"))
             except (TypeError, ValueError):
                 proven = None
+
+        # OWNER_AUTHORED gate (A2, precedence 0): a field the owner explicitly entered
+        # skips ALL generated paths — history / archetype / proven-library must never
+        # silently overwrite a value the driver sourced from external preparation.
+        if ctx.owner_baseline is not None and f in ctx.owner_baseline:
+            raw_v = ctx.owner_baseline[f]
+            try:
+                v = float(raw_v)
+            except (TypeError, ValueError):
+                v = raw_v
+            entries.append(FieldPlanEntry(
+                field=f,
+                value=v,
+                disposition=FieldDisposition.OWNER_AUTHORED,
+                source="owner-entered baseline",
+                objective_contribution="driver-entered from external preparation; "
+                                       "not modified by any generated path",
+                confidence="high",
+                proven_value=proven,
+                reason="owner-authored value supersedes all generated paths (precedence 0)",
+            ))
+            continue
 
         # Not adjustable: no car range AND not a computed gearbox field.
         _is_gearbox = f == "final_drive" or (f.startswith("gear_") and f != "gear_ratios")

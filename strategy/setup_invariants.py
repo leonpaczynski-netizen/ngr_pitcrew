@@ -24,12 +24,16 @@ from dataclasses import dataclass
 from typing import Optional
 
 from strategy.setup_anchor import (
-    TIER_ARCHETYPE, TIER_GENERIC, TIER_PROVEN, TIER_STOCK, TIER_TRANSFERRED,
+    TIER_ARCHETYPE, TIER_GENERIC, TIER_OWNER_AUTHORED,
+    TIER_PROVEN, TIER_STOCK, TIER_TRANSFERRED,
 )
 
 #: Provenance strength, strongest first. Only used to decide which side of a violated
-#: relationship gives way.
+#: relationship gives way. OWNER_AUTHORED is the strongest tier: a value entered
+#: directly by the driver (from external preparation) must never be moved to satisfy
+#: an invariant — the invariant is reported as a violation instead.
 _TIER_STRENGTH = {
+    TIER_OWNER_AUTHORED: 6,
     TIER_PROVEN: 5, TIER_TRANSFERRED: 4, "ENGINEERED": 3,
     TIER_STOCK: 3, TIER_ARCHETYPE: 2, TIER_GENERIC: 1, "": 0,
 }
