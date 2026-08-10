@@ -4998,14 +4998,21 @@ class SetupBuilderMixin:
             self._lbl_stale_baseline.setVisible(False)
 
     def _refresh_proposals(self, db, event_id: int) -> None:
-        """B10-B12, B16, C2 (DB v43): rebuild the proposals section from DB.
+        """B10-B12, B16 (DB v43): rebuild the proposals section from DB.
 
-        Sections rendered:
-          1. Active proposals  (status='proposed' or 'unresolved')
-          2. Stale proposals   (status='stale' — old-revision; visually distinct)
-          3. Actioned proposals (status='accepted'/'rejected'/'edited')
-          4. Suppressed changes (B16) — from get_suppressed_changes_for_event
-          5. Unresolved riders  (CORRECTION-2) — from get_owner_riders_for_event
+        Five mutually exclusive groups (each proposal appears in exactly one):
+          1. Active proposals  — status='proposed', label != LABEL_DRIVER_TEL_SILENT
+                                 (includes B11 contradictions, status='unresolved',
+                                  which share the section with Resolve gating)
+          2. Driver-report     — status='proposed', label == LABEL_DRIVER_TEL_SILENT
+                                 Full Accept/Reject/Edit; no telemetry affordance.
+          3. Stale proposals   — status='stale'; old-revision; no actions.
+          4. Actioned          — status='accepted'/'rejected'/'edited'; all labels.
+          5. Suppressed (B16)  — from get_suppressed_changes_for_event; no actions.
+
+        NOTE: get_owner_riders_for_event is DEPRECATED and no longer called.
+        LABEL_DRIVER_TEL_SILENT proposals are now ordinary proposals on the live
+        path — they carry a proposed_value and full Accept/Reject/Edit controls.
         """
         from ui import ngr_theme as t
         from ui.qt_layout_utils import clear_layout
@@ -5026,14 +5033,6 @@ class SetupBuilderMixin:
         except Exception:
             proposals = []
 
-        # Fetch riders from the dedicated table (DB v43 — B9-RIDER).
-        riders: list = []
-        if hasattr(db, "get_owner_riders_for_event"):
-            try:
-                riders = db.get_owner_riders_for_event(event_id)
-            except Exception:
-                riders = []
-
         # Fetch suppressed changes from the dedicated table (DB v43 — B16).
         suppressed: list = []
         if hasattr(db, "get_suppressed_changes_for_event"):
@@ -5042,7 +5041,7 @@ class SetupBuilderMixin:
             except Exception:
                 suppressed = []
 
-        if not proposals and not riders and not suppressed:
+        if not proposals and not suppressed:
             if proposals_group is not None:
                 proposals_group.setVisible(False)
             return
@@ -5051,34 +5050,59 @@ class SetupBuilderMixin:
             proposals_group.setVisible(True)
 
         # Import label constants — NEVER retype these strings (B10).
+        # LABEL_DRIVER_TEL_SILENT is the fifth label added in the source-separation fix;
+        # it arrives as an ordinary proposal with a proposed_value and full controls.
+        _driver_tel_silent_label: str = ""
         try:
             from strategy.owner_baseline_arbiter import (
                 LABEL_DRIVER_ONLY, LABEL_DRIVER_EARLY_TEL,
                 LABEL_TEL_CORROBORATED, LABEL_TEL_NO_FEEDBACK,
+                LABEL_DRIVER_TEL_SILENT,
             )
+            _driver_tel_silent_label = LABEL_DRIVER_TEL_SILENT
             _LABEL_TONE = {
-                LABEL_DRIVER_ONLY:       "warn",
-                LABEL_DRIVER_EARLY_TEL:  "info",
-                LABEL_TEL_CORROBORATED:  "success",
-                LABEL_TEL_NO_FEEDBACK:   "neutral",
+                LABEL_DRIVER_ONLY:        "warn",
+                LABEL_DRIVER_EARLY_TEL:   "info",
+                LABEL_TEL_CORROBORATED:   "success",
+                LABEL_TEL_NO_FEEDBACK:    "neutral",
+                LABEL_DRIVER_TEL_SILENT:  "warn",   # no corroboration affordance
             }
         except Exception:
             _LABEL_TONE = {}
 
-        # Split proposals by status. 'stale' is excluded from active and actioned.
+        # Split proposals into five mutually exclusive buckets.
+        # A proposal appears in EXACTLY ONE bucket — tested by the component tests.
         _ACTIONED = {"accepted", "rejected", "edited"}
         _EXCLUDED = {"unresolved", "stale"} | _ACTIONED
-        normal_props     = [p for p in proposals if str(p.get("status")) not in
-                            _EXCLUDED]
-        accepted_props   = [p for p in proposals if str(p.get("status")) == "accepted"]
-        rejected_props   = [p for p in proposals if str(p.get("status")) == "rejected"]
-        edited_props     = [p for p in proposals if str(p.get("status")) == "edited"]
+
+        # Bucket 1a — proposed, non-driver-silent (feeds active_props below)
+        normal_props = [
+            p for p in proposals
+            if str(p.get("status")) not in _EXCLUDED
+            and str(p.get("label") or "") != _driver_tel_silent_label
+        ]
+        # Bucket 1b — B11 contradictions (status=unresolved, any label)
         unresolved_props = [p for p in proposals if str(p.get("status")) == "unresolved"]
-        stale_props      = [p for p in proposals if str(p.get("status")) == "stale"]
+
+        # Bucket 2 — driver-report, telemetry silent (proposed only; after action → bucket 4)
+        driver_silent_props = [
+            p for p in proposals
+            if str(p.get("status")) not in _EXCLUDED
+            and str(p.get("label") or "") == _driver_tel_silent_label
+        ]
+
+        # Bucket 3 — stale (old-revision; no actions)
+        stale_props = [p for p in proposals if str(p.get("status")) == "stale"]
+
+        # Bucket 4 — actioned (all labels including LABEL_DRIVER_TEL_SILENT)
+        accepted_props = [p for p in proposals if str(p.get("status")) == "accepted"]
+        rejected_props = [p for p in proposals if str(p.get("status")) == "rejected"]
+        edited_props   = [p for p in proposals if str(p.get("status")) == "edited"]
 
         lay = self._proposals_layout
 
-        # ---- Active proposals (proposed / unresolved) ----
+        # ---- Group 1: Active proposals (telemetry + corroborated + normal labels) ----
+        # Includes B11 contradictions (unresolved) with Resolve gating.
         active_props = normal_props + unresolved_props
         if active_props:
             hdr = QLabel("Active proposals")
@@ -5087,6 +5111,28 @@ class SetupBuilderMixin:
                 f"font-weight: 700; padding: 4px 0 2px 0;")
             lay.addWidget(hdr)
             for prop in active_props:
+                lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
+
+        # ---- Group 2: Driver-report proposals (telemetry silent; full controls) ----
+        # These arrived as UnresolvedRiders on the old path. They now carry a
+        # proposed_value and Accept/Reject/Edit controls. NEVER show a corroboration
+        # badge here — provenance is always DRIVER_REPORT, never MEASURED_FACT.
+        if driver_silent_props:
+            dr_hdr = QLabel("Driver report  (telemetry silent on these parameters)")
+            dr_hdr.setWordWrap(True)
+            dr_hdr.setStyleSheet(
+                f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt; "
+                f"font-weight: 700; padding: 4px 0 2px 0;")
+            lay.addWidget(dr_hdr)
+            dr_note = QLabel(
+                "Driver feedback at 5+ clean laps for parameters where telemetry "
+                "produced no finding. Telemetry contributed nothing — these are "
+                "purely driver-reported. Accept, Reject, or Edit each one.")
+            dr_note.setWordWrap(True)
+            dr_note.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            lay.addWidget(dr_note)
+            for prop in driver_silent_props:
                 lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
 
         # ---- Stale proposals (old-revision — visually distinct from active) ----
@@ -5113,7 +5159,7 @@ class SetupBuilderMixin:
             for prop in actioned:
                 lay.addWidget(self._build_actioned_proposal_row(prop, _LABEL_TONE))
 
-        # ---- Suppressed changes (B16 — now persisted in DB v43) ----
+        # ---- Group 5: Suppressed changes (B16 — persisted in DB v43) ----
         # Nothing silently disappears: these are rule-engine candidates the arbiter
         # withheld. Leon sees what was withheld and why.
         if suppressed:
@@ -5134,31 +5180,6 @@ class SetupBuilderMixin:
             lay.addWidget(sc_note)
             for sc in suppressed:
                 lay.addWidget(self._build_suppressed_row(sc))
-
-        # ---- Unresolved riders (CORRECTION-2 / B9-RIDER — now from dedicated table) ----
-        # B9-RIDER items are driver feedback at 5+ clean laps about a parameter the
-        # telemetry is SILENT on. They are completely distinct from B11 contradictions
-        # (which have both telemetry AND feedback and are in the proposals list).
-        # NO Accept/Reject — there is no telemetry direction to act on.
-        if riders:
-            rider_hdr = QLabel("Unresolved riders  (driver feedback, no telemetry finding)")
-            rider_hdr.setWordWrap(True)
-            rider_hdr.setStyleSheet(
-                f"color: {t.WARN}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
-                f"padding: 4px 0 2px 0;")
-            lay.addWidget(rider_hdr)
-            rider_note = QLabel(
-                "These are driver feedback signals at 5+ clean laps for parameters "
-                "that telemetry produced no finding on. They are acknowledged here "
-                "and included in the export — they have NO Accept/Reject because "
-                "there is no telemetry direction to act on.  Driver feedback is "
-                "never silently dropped.")
-            rider_note.setWordWrap(True)
-            rider_note.setStyleSheet(
-                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
-            lay.addWidget(rider_note)
-            for rider in riders:
-                lay.addWidget(self._build_rider_row(rider))
 
         lay.addStretch(1)
 
@@ -5373,10 +5394,17 @@ class SetupBuilderMixin:
         return row_w
 
     def _build_rider_row(self, rider: dict) -> QWidget:
-        """CORRECTION-2 / B9-RIDER: render one unresolved rider — NO Accept/Reject.
+        """DEPRECATED — no longer called by _refresh_proposals.
+
+        The source-separation fix (2026-08-10) promoted LABEL_DRIVER_TEL_SILENT
+        proposals to ordinary proposals with a proposed_value and Accept/Reject/Edit.
+        The ``get_owner_riders_for_event`` DB getter is deprecated; the riders table
+        is no longer populated on the live path.  This method is kept so any
+        historical rider rows in old DBs can still be displayed if a caller explicitly
+        fetches them, but _refresh_proposals no longer does so.
 
         Accepts dicts from both the old proposals-embedded shape (key='direction')
-        and the new dedicated riders table (DB v43, key='feedback_direction').
+        and the riders table (DB v43, key='feedback_direction').
         """
         from ui import ngr_theme as t
         row_w = QWidget()
