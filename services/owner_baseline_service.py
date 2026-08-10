@@ -4,8 +4,12 @@ This module is the ONLY server-side entry point for the owner-baseline proposal
 pipeline (Part B). It:
 
   1. Fetches the session run, session meta, laps, feedback and owner baseline from DB.
-  2. Builds TWO setup diagnoses — one with all clean laps (telemetry) and one with
-     ``laps=[]`` (feedback only) — using the existing ``build_setup_diagnosis`` helper.
+  2. Builds TWO setup diagnoses, SEPARATED BY SOURCE — one from the clean laps with
+     no feedback (telemetry evidence only), one from the feedback with ``laps=[]``
+     (driver report only) — using the existing ``build_setup_diagnosis`` helper.
+     The separation is load-bearing: if feedback reaches both diagnoses, every
+     feedback-driven rule fires in both plans, so the arbiter reads agreement where
+     telemetry contributed nothing, and a contradiction (B11) can never arise.
   3. Calls ``run_rule_engine`` twice, passing the owner baseline as the ``setup=``
      argument both times (so the engine evaluates modifications to the owner's own values).
   4. Passes both plans to the pure arbiter (``build_owner_proposals``).
@@ -187,14 +191,22 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
     ranges = resolve_ranges(car_name)
     profile = build_driver_profile()
 
-    # --- 8. Build the telemetry diagnosis (full laps + feedback) ---
+    # --- 8. Build the telemetry diagnosis (laps ONLY — no feedback) ---
+    # feedback= is deliberately omitted. Passing it here used to contaminate this
+    # plan: a feedback-driven rule (e.g. B2b from mid_corner_understeer) fired in
+    # BOTH plans identically, so the arbiter saw agreement and labelled a purely
+    # driver-reported change LABEL_TEL_CORROBORATED / PROV_MEASURED_FACT — reporting
+    # the driver's own words back to him as measured data. It also made B11
+    # structurally unreachable: two plans built from overlapping inputs cannot
+    # disagree. The two diagnoses must be separated BY SOURCE for the weighting to
+    # mean anything.
     telemetry_diagnosis = build_setup_diagnosis(
         clean_ns,
         setup_for_engine,
         car_name,
         event_ctx,
-        feeling=None,  # structured feedback carries the signal
-        feedback=feedback_dict,
+        feeling=None,
+        feedback=None,  # source separation — telemetry evidence only
     )
 
     # --- 9. Build the feedback-only diagnosis (laps=[]) ---
@@ -261,10 +273,14 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         if pid:
             saved += 1
 
-    # --- 14. Persist B9 unresolved riders (C1/Correction-2) ---
-    # UnresolvedRider objects are structurally distinct from B11 contradiction
-    # proposals: they live in the owner_baseline_riders table, NOT in proposals.
-    for rider in unresolved:
+    # --- 14. Riders — DEPRECATED (B11 source-separation fix 2026-08-10) ---
+    # After the fix, the arbiter's band-2 second pass emits OwnerProposal objects
+    # (label=LABEL_DRIVER_TEL_SILENT) instead of UnresolvedRider objects.
+    # The `unresolved` list is always empty; the riders table is no longer written.
+    # The loop below is intentionally left as a no-op rather than removed so that
+    # callers which unpack (proposals, suppressed, unresolved) still compile.
+    # (DB method save_owner_rider is also marked deprecated in session_db.py.)
+    for rider in unresolved:  # always empty after the fix
         db.save_owner_rider(event_id, rider.as_dict())
 
     # --- 15. Persist B16 suppressed changes (C3) ---
