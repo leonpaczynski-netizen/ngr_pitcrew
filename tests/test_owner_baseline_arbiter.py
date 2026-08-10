@@ -302,10 +302,20 @@ def test_band2_feedback_opposes_status_unresolved():
     assert p.label == ""
 
 
-def test_band2_unresolved_rider_when_feedback_on_tel_silent_field():
-    """Correction 2: feedback at 5+ laps on a parameter telemetry is SILENT on → rider."""
+def test_band2_driver_tel_silent_when_feedback_on_tel_silent_field():
+    """B9-RIDER / B11 source-separation fix: feedback at 5+ laps on a parameter telemetry
+    is SILENT on must produce a DRIVER_TEL_SILENT OwnerProposal, NOT an UnresolvedRider.
+
+    After the 2026-08-10 source-separation fix:
+      - unresolved_riders is always an empty list (UnresolvedRider objects are never created).
+      - spring_rate_rear (feedback-only field) becomes an OwnerProposal with
+          label=LABEL_DRIVER_TEL_SILENT, provenance=PROV_DRIVER_REPORT, status="proposed".
+      - spring_rate_front (in both plans, same direction) is corroborated, not DRIVER_TEL_SILENT.
+    """
+    from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT, PROV_DRIVER_REPORT
+
     tel = _intent("spring_rate_front", +2, to_value=52)          # only proposes front
-    fb_front = _intent("spring_rate_front", +1, to_value=51)     # agrees → corroborated
+    fb_front = _intent("spring_rate_front", +1, to_value=51)     # agrees -> corroborated
     fb_rear = _intent("spring_rate_rear", -1, to_value=39)       # ONLY in feedback
 
     proposals, _, riders = build_owner_proposals(
@@ -321,12 +331,32 @@ def test_band2_unresolved_rider_when_feedback_on_tel_silent_field():
         suppression_keys=frozenset(),
     )
 
-    rider_params = {r.parameter for r in riders}
-    assert "spring_rate_rear" in rider_params, (
-        "feedback on a tel-silent field must produce an unresolved rider"
+    # After the fix: unresolved_riders is always empty.
+    assert riders == [], (
+        "unresolved_riders must be [] after the source-separation fix; "
+        f"got {riders!r}"
     )
-    assert "spring_rate_front" not in rider_params, (
-        "telemetry-addressed field must NOT become a rider"
+    # spring_rate_rear must appear as a DRIVER_TEL_SILENT proposal.
+    silent_params = {
+        p.parameter for p in proposals if p.label == LABEL_DRIVER_TEL_SILENT
+    }
+    assert "spring_rate_rear" in silent_params, (
+        "spring_rate_rear (feedback-only field) must produce a DRIVER_TEL_SILENT proposal; "
+        f"silent proposals: {silent_params!r}, all proposals: "
+        f"{[(p.parameter, p.label, p.provenance) for p in proposals]}"
+    )
+    # spring_rate_front is corroborated (same direction in both plans), not DRIVER_TEL_SILENT.
+    assert "spring_rate_front" not in silent_params, (
+        "spring_rate_front (addressed by telemetry plan) must NOT be DRIVER_TEL_SILENT"
+    )
+    # Verify provenance.
+    rear_proposal = next(p for p in proposals if p.parameter == "spring_rate_rear")
+    assert rear_proposal.provenance == PROV_DRIVER_REPORT, (
+        f"spring_rate_rear DRIVER_TEL_SILENT proposal must have provenance=PROV_DRIVER_REPORT; "
+        f"got {rear_proposal.provenance!r}"
+    )
+    assert rear_proposal.status == "proposed", (
+        f"DRIVER_TEL_SILENT proposal must have status='proposed'; got {rear_proposal.status!r}"
     )
 
 
