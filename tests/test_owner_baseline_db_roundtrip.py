@@ -452,140 +452,93 @@ class TestM3EvidenceWithoutBaselineFlags:
 # C5 — owner_baseline= gate fires on the DrivingAdvisor production path
 # ===========================================================================
 
-class TestC5ProductionPathOwnerBaselineGate:
-    """Verify that the _mk_ctx closure inside DrivingAdvisor fetches the owner
-    baseline from the DB and passes it to SetupAuthoringContext — i.e. that the
-    gate fires on the WIRED production path, not just on tests that hand-craft
-    the context.
+class TestC5AdvisorSpy_IA:
+    """I-A wiring: calls the REAL DrivingAdvisor.build_baseline_setup_response and
+    spies on SetupAuthoringContext.__init__ to verify that owner_baseline= is non-None
+    when a baseline has been saved to the DB.
 
-    Strategy: monkey-patch get_owner_baseline on a real SessionDB so we can
-    assert it was called, without needing a full DrivingAdvisor instantiation.
+    WHY THIS REPLACES TestC5ProductionPathOwnerBaselineGate:
+        The old class simulated what _mk_ctx does by extracting the closure body into
+        test code.  That means the test passed even when the production closure was
+        broken — it tested a copy, not the production path.  This replacement calls the
+        REAL public method and asserts on what the REAL code actually passes to
+        SetupAuthoringContext.  A revert to the old bug immediately breaks this test.
+
+    KNOWN PRODUCTION BUG (C5) — EXPECTED FAILURE:
+        build_baseline_setup_response._mk_ctx references _event_ctx as a free variable.
+        _event_ctx is NOT defined as a local in build_baseline_setup_response — it is
+        only assigned in build_combined_setup_response (line ~1549:
+            _event_ctx = getattr(self, "_event_ctx", {})
+        ).
+        The closure catches the resulting NameError via
+            ``except Exception: _owner_bl = None``
+        so owner_baseline=None is ALWAYS passed to SetupAuthoringContext regardless of
+        whether a baseline exists in the DB.
+        Spy evidence: captured [None, None, None] rather than at least one non-None.
+
+        Fix (backend-builder): add
+            _event_ctx = getattr(self, "_event_ctx", {})
+        before the _mk_ctx closure definition inside build_baseline_setup_response.
     """
 
-    def test_mk_ctx_calls_get_owner_baseline_for_race_objective(self, db, tmp_path):
-        """The _mk_ctx closure must call get_owner_baseline for a 'race' objective."""
-        from strategy.setup_authoring import SetupAuthoringContext, SetupObjective
+    def test_build_baseline_setup_response_passes_owner_baseline_when_baseline_in_db(
+        self, db, monkeypatch
+    ):
+        """Spy on SetupAuthoringContext.__init__; assert owner_baseline= is non-None.
+
+        EXPECTED FAILURE until the C5 production bug is fixed.
+        The spy captures [None, None, None] — the NameError on _event_ctx is caught
+        silently and owner_baseline defaults to None for every objective.
+        """
+        from strategy.driving_advisor import DrivingAdvisor
         from strategy.setup_ranges import resolve_ranges
-        from strategy.setup_driver_profile import build_driver_profile
+        from strategy.setup_authoring import SetupAuthoringContext
 
-        event_id = _seed_event(db)
+        event_id = _seed_event(db, "C5-advisor-spy")
         _seed_baseline(db, event_id, "race")
 
-        calls: list = []
-        _real_get = db.get_owner_baseline
+        class _Stub:
+            """Minimal stub: every attribute access returns a no-op callable."""
+            def __getattr__(self, name):
+                return lambda *a, **kw: None
 
-        def _spy(eid, disc):
-            calls.append((eid, disc))
-            return _real_get(eid, disc)
+        advisor = DrivingAdvisor(
+            recorder=_Stub(), tracker=_Stub(), config=_Stub(), db=db
+        )
+        advisor.set_event_context({"id": event_id, "track": "Monza"})
 
-        db.get_owner_baseline = _spy  # type: ignore[method-assign]
+        captured: list = []
+        _orig_init = SetupAuthoringContext.__init__
 
-        # Simulate what _mk_ctx does — extracted for unit testing without
-        # instantiating the full DrivingAdvisor.
-        _event_ctx = {"id": event_id, "track": "Monza"}
-        _obj = SetupObjective.RACE
-        car_name = "Porsche RSR"
-        ranges = resolve_ranges(car_name)
-        profile = build_driver_profile()
+        def _spy_init(ctx_self, *args, **kwargs):
+            captured.append(kwargs.get("owner_baseline"))
+            return _orig_init(ctx_self, *args, **kwargs)
 
-        _owner_bl = None
-        try:
-            disc_val = getattr(_obj, "value", "")
-            if db is not None and disc_val in ("race", "qualifying"):
-                eid = int(_event_ctx.get("id") or 0)
-                if eid:
-                    bl_raw = db.get_owner_baseline(eid, disc_val)
-                    if bl_raw:
-                        _owner_bl = {
-                            k: v for k, v in bl_raw.items()
-                            if k not in ("baseline_revision", "provenance")
-                        }
-        except Exception:
-            _owner_bl = None
+        monkeypatch.setattr(SetupAuthoringContext, "__init__", _spy_init)
 
-        ctx = SetupAuthoringContext(
-            car=car_name, objective=_obj, ranges=ranges,
-            drivetrain="rr", num_gears=6, profile=profile,
-            allowed_tuning=[], tuning_locked=False,
-            track_profile=None, history_prior=None,
-            current_setup=None, duration_mins=0,
-            tyre_wear_multiplier=None, car_class="",
-            owner_baseline=_owner_bl,
+        ranges = resolve_ranges("Porsche RSR")
+        advisor.build_baseline_setup_response(
+            car_name="Porsche RSR",
+            ranges=ranges,
+            drivetrain="RR",
+            num_gears=6,
+            allowed_tuning=None,
+            tuning_locked=False,
         )
 
-        assert ("race" in [c[1] for c in calls]), (
-            "get_owner_baseline must be called with discipline='race' (C5)"
+        # PRODUCTION BUG (C5): this assertion FAILS.
+        # _mk_ctx references _event_ctx which is not a local of build_baseline_setup_response.
+        # The NameError is caught by ``except Exception: _owner_bl = None``, so the spy
+        # captures [None, None, None] — never a real baseline dict.
+        # A revert would break this test; a correct fix would make it green.
+        # Fix owner: backend-builder.
+        assert any(bl is not None for bl in captured), (
+            f"C5 bug: build_baseline_setup_response always passes owner_baseline=None "
+            f"to SetupAuthoringContext.__init__. Spy captured: {captured!r}. "
+            "Fix: add '_event_ctx = getattr(self, \"_event_ctx\", {})' before the "
+            "_mk_ctx closure inside build_baseline_setup_response "
+            "(driving_advisor.py). Owner: backend-builder."
         )
-        assert ctx.owner_baseline is not None, (
-            "owner_baseline must be set on SetupAuthoringContext when a baseline exists (C5)"
-        )
-        # The bookkeeping keys must be stripped.
-        assert "baseline_revision" not in ctx.owner_baseline
-        assert "provenance" not in ctx.owner_baseline
-
-    def test_mk_ctx_leaves_owner_baseline_none_for_base_objective(self, db):
-        """The gate must NOT fire for the BASE objective."""
-        from strategy.setup_authoring import SetupObjective
-
-        event_id = _seed_event(db)
-        _seed_baseline(db, event_id, "race")
-
-        calls: list = []
-        _real_get = db.get_owner_baseline
-
-        def _spy(eid, disc):
-            calls.append((eid, disc))
-            return _real_get(eid, disc)
-
-        db.get_owner_baseline = _spy  # type: ignore[method-assign]
-
-        _event_ctx = {"id": event_id}
-        _obj = SetupObjective.BASE
-
-        _owner_bl = None
-        try:
-            disc_val = getattr(_obj, "value", "")
-            if db is not None and disc_val in ("race", "qualifying"):
-                eid = int(_event_ctx.get("id") or 0)
-                if eid:
-                    bl_raw = db.get_owner_baseline(eid, disc_val)
-                    if bl_raw:
-                        _owner_bl = {
-                            k: v for k, v in bl_raw.items()
-                            if k not in ("baseline_revision", "provenance")
-                        }
-        except Exception:
-            _owner_bl = None
-
-        assert not calls, "get_owner_baseline must NOT be called for BASE objective (C5)"
-        assert _owner_bl is None
-
-    def test_mk_ctx_leaves_owner_baseline_none_when_no_baseline_entered(self, db):
-        """When no baseline is entered for the event, owner_baseline must be None."""
-        from strategy.setup_authoring import SetupObjective
-
-        event_id = _seed_event(db)
-        # Deliberately do NOT seed any baseline.
-
-        _event_ctx = {"id": event_id}
-        _obj = SetupObjective.RACE
-
-        _owner_bl = None
-        try:
-            disc_val = getattr(_obj, "value", "")
-            if db is not None and disc_val in ("race", "qualifying"):
-                eid = int(_event_ctx.get("id") or 0)
-                if eid:
-                    bl_raw = db.get_owner_baseline(eid, disc_val)
-                    if bl_raw:
-                        _owner_bl = {
-                            k: v for k, v in bl_raw.items()
-                            if k not in ("baseline_revision", "provenance")
-                        }
-        except Exception:
-            _owner_bl = None
-
-        assert _owner_bl is None, "owner_baseline must be None when no baseline is in DB (C5)"
 
 
 # ===========================================================================

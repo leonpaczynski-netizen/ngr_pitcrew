@@ -2862,19 +2862,31 @@ class DrivingAdvisor:
                     objective_from_session_type, _OBJECTIVE_GENERIC_REASON,
                 )
 
+                # C5 — resolve the active event context BEFORE defining the closure.
+                # build_baseline_setup_response has no _event_ctx local (unlike
+                # build_combined_setup_response which assigns it at line ~1549).
+                # The closure must capture it from the enclosing scope as a local;
+                # referencing `_event_ctx` without this assignment is a NameError
+                # that the old bare `except Exception` was silently swallowing —
+                # causing owner_baseline=None on every call (A2 anti-clobber broken).
+                _event_ctx = getattr(self, "_event_ctx", {})
+
                 def _mk_ctx(_obj):
                     # C5 — fetch the owner-entered baseline for qualifying/race and
                     # pass it as owner_baseline= so the OWNER_AUTHORED disposition
                     # gate in author_full_field_plan fires on the wired production path.
-                    # (Tests that hand-construct SetupAuthoringContext directly are
-                    # unaffected; this is the ONLY production construction site.)
+                    # _event_ctx is resolved in the enclosing scope (above) via
+                    # getattr(self, "_event_ctx", {}) — not a local of this closure.
                     _owner_bl = None
-                    try:
-                        _disc_val = getattr(_obj, "value", "")
-                        if (self._db is not None
-                                and _disc_val in ("race", "qualifying")):
-                            _eid = int(_event_ctx.get("id") or 0)
-                            if _eid:
+                    _disc_val = getattr(_obj, "value", "")
+                    if self._db is not None and _disc_val in ("race", "qualifying"):
+                        _eid = int(_event_ctx.get("id") or 0)
+                        if _eid:
+                            try:
+                                # Expected failure mode: DB not available / record absent.
+                                # ONLY the DB call is wrapped; all other failures propagate
+                                # to the outer try block (Group-64) and are surfaced in the
+                                # response rather than silently discarded.
                                 _bl_raw = self._db.get_owner_baseline(_eid, _disc_val)
                                 if _bl_raw:
                                     # Strip the DB bookkeeping keys so the rule engine
@@ -2883,8 +2895,18 @@ class DrivingAdvisor:
                                         k: v for k, v in _bl_raw.items()
                                         if k not in ("baseline_revision", "provenance")
                                     }
-                    except Exception:
-                        _owner_bl = None
+                            except Exception as _e:
+                                # DB lookup failed — degrade open. Surface in warnings
+                                # so the response does NOT silently swallow the failure.
+                                try:
+                                    _resp["validation_warnings"] = list(
+                                        _resp.get("validation_warnings") or []
+                                    ) + [
+                                        f"Owner baseline fetch failed for discipline "
+                                        f"{_disc_val!r}: {type(_e).__name__}"
+                                    ]
+                                except Exception:
+                                    pass
                     return SetupAuthoringContext(
                         car=car_name, objective=_obj, ranges=ranges,
                         drivetrain=drivetrain, num_gears=num_gears, profile=_profile,
