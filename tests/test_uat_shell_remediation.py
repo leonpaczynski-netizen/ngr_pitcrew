@@ -202,9 +202,26 @@ class TestU1GarageDisciplineIsSticky:
         shell.garage_page._baseline.click()
         assert bridge._setups.sheet("race").is_authored is True
 
-    def test_there_is_no_base_discipline(self, wired):
+    def test_base_is_now_a_discipline_alongside_race_and_qualifying(self, wired):
+        """SUPERSEDED — deliberately inverted by UAT 2026-08-07 (Phase 1 chunk 8).
+
+        This asserted there was NO Base tab, on the reasoning that the baseline build
+        fills Race and Qualifying so a third tab could only mirror one of them. That
+        has the dependency backwards. Base is the ANCHOR the car is learned on and the
+        other two are explained deltas from it; without it there is nowhere for a base
+        setup to live, no way to see what a discipline actually changed, and the driver
+        has to build a base setup on a tab labelled with a discipline they are not
+        running.
+        """
         shell, _win, _bridge = wired
-        assert set(shell.garage_page._selector._buttons) == {"race", "qualifying"}
+        assert set(shell.garage_page._selector._buttons) == {
+            "base", "race", "qualifying"}
+
+    def test_selecting_base_does_not_assert_a_live_discipline(self, wired):
+        """Base is inert for the runtime — see test_uat_20260807_phase1_base_sheet."""
+        shell, _win, bridge = wired
+        shell.garage_page._selector._buttons["base"].click()
+        assert bridge._discipline == "base"
 
     def test_a_race_recommendation_is_not_shown_under_qualifying(self, wired):
         """A recommendation belongs to the sheet it was produced for; rendering it on

@@ -709,12 +709,19 @@ class TestV14GarageFlowOrder:
     """UAT-5: drop the Base tab (there is no third sheet); the bottom-left action is
     "Build initial setup"; Analyse is the NEXT step, once a run has been recorded."""
 
-    def test_only_the_two_real_sheets_are_offered(self, wired):
+    def test_base_is_offered_alongside_the_two_disciplines(self, wired):
+        """SUPERSEDED — deliberately inverted by UAT 2026-08-07 (Phase 1 chunk 8).
+
+        This asserted only Race and Qualifying were offered. Base is now a first-class
+        sheet: it is the anchor the car is learned on, and Race and Qualifying are
+        explained deltas from it. Base leads the order because it is built first.
+        """
         shell, _win, _db, _bridge = wired
         assert [k for k, _ in
                 __import__("ui.components.setup_workspace", fromlist=["x"]).DISCIPLINES] \
-            == ["race", "qualifying"]
-        assert set(shell.garage_page._selector._buttons) == {"race", "qualifying"}
+            == ["base", "qualifying", "race"]
+        assert set(shell.garage_page._selector._buttons) == {
+            "base", "race", "qualifying"}
 
     def test_analyse_is_locked_until_a_run_is_recorded(self, wired):
         shell, _win, db, bridge = wired
@@ -1653,10 +1660,14 @@ class TestCarRangesBridgeWiring:
         bridge._on_car_ranges()
         assert len(opened) == 1   # dialog was attempted once with the car name
 
-    def test_ranges_button_exists_on_workspace(self, wired):
+    def test_car_data_button_exists_on_workspace(self, wired):
+        """UAT 2026-08-07 defect A7 — the button now opens the GT7 capture panel
+        rather than the classic ranges dialog, which wrote tuning PREFERENCE windows
+        into a file the rest of the app reads as slider LIMITS."""
         shell, _win, _db, _bridge = wired
         assert hasattr(shell.garage_page, "_ranges_btn")
-        assert "ranges" in shell.garage_page._ranges_btn.text().lower()
+        assert "gt7 data" in shell.garage_page._ranges_btn.text().lower()
+        assert hasattr(shell.garage_page, "car_data_capture")
 
 
 # ---------------------------------------------------------------------------

@@ -696,13 +696,20 @@ def detect_pit_lap_raw(
 ) -> bool:
     """Detect a pit-in lap without needing a centreline.
 
-    Computes XZ centroid of all samples. Any contiguous run of samples where
-    the XZ distance from centroid exceeds _PIT_DISTANCE_THRESHOLD_M (60 m)
-    lasting > threshold_seconds is treated as pit activity.
+    ⚠ SUPERSEDED — UAT 2026-08-07 defects D5/D6. Use
+    ``data.pit_lane_detection.is_pit_lap``, which measures divergence from the MEASURED
+    REFERENCE LINE and needs a station map.
 
-    Timestamps come from TelemetrySample.timestamp_ms (elapsed ms within the
-    lap). At 60 Hz a 10-second run equals 600 samples; timestamp_ms is used
-    directly when available.
+    This measures each sample's distance from the LAP'S OWN XZ CENTROID. On any real
+    circuit the centroid is the middle of the track, so essentially every sample is more
+    than 60 m from it and a perfectly clean lap is classified as a pit lap — verified
+    against a synthetic 300 m-radius circular lap, which this returns True for. It was
+    only ever harmless because ``pit_detection_enabled`` defaults False and no
+    production caller opts in; enabling that flag without replacing this would have
+    marked EVERY lap a pit lap and convergence would have excluded all of them.
+
+    Kept only for the callers that still pass ``pit_detection_enabled`` explicitly (its
+    own tests), and deliberately not deleted in the same change that replaces it.
     """
     if not samples:
         return False

@@ -115,17 +115,32 @@ def test_reasoning_surface_shape():
 
 # ------------------------------------------------------------------ integration
 
-def test_real_profile_tailors_baseline():
+def test_default_profile_tailors_nothing_and_says_so():
+    """SUPERSEDED — UAT 2026-08-07 defect A9 (Phase 1 chunk 4).
+
+    This asserted that "the real (Leon) profile tailors at least one field". The
+    profile it was reading derived eight preference booleans by SUBSTRING-MATCHING a
+    hardcoded prose constant, so all eight were True for every user of the app and two
+    of them cancelled each other outright. That is fictitious personalisation, and a
+    setup claiming to be tailored to you when it is not is worse than one that admits
+    it is generic.
+
+    With no learned evidence the profile now asserts nothing, so driver-fit tailors
+    nothing — which is the honest result, not a regression. The mechanism is unchanged
+    and still fires for a profile with real flags (see test_driver_fit_bias above);
+    strategy.driver_profile_evolution is what should set them, from recorded sessions.
+    """
     from strategy.driving_advisor import DrivingAdvisor
+    from strategy.setup_driver_profile import build_driver_profile
     from types import SimpleNamespace
+    assert not build_driver_profile().style_tags, (
+        "premise changed: the default profile now claims a style")
     adv = DrivingAdvisor(SimpleNamespace(recent_laps=lambda n: [], last_lap=lambda: None,
                                          best_lap=lambda: None), SimpleNamespace(), {})
     r = json.loads(adv.build_baseline_setup_response(
         _CAR, _ranges(), "RR", 6, None, False, session_type="Race",
         duration_mins=45.0, track_name="T", layout_id="full", historical_setups=[]))
-    dfr = r.get("driver_fit_reasoning") or {}
-    # The real (Leon) profile tailors at least one field from the neutral base.
-    assert dfr.get("intents")
+    assert not (r.get("driver_fit_reasoning") or {}).get("intents")
 
 
 def test_driver_fit_reaches_telemetry_path_but_respects_deferrals():
@@ -141,8 +156,11 @@ def test_driver_fit_reaches_telemetry_path_but_respects_deferrals():
         setup_dict=setup, car_name=UCAR, feeling=_UAT_FEELING, purpose="Race",
         drivetrain="RR", historical_setups=_uat_history(), track_name="NGR",
         fuel_multiplier=3.0, refuel_rate_lps=1.0))
-    # Driver-fit reasoning is surfaced on the telemetry path (was zero before).
-    assert r.get("driver_fit_reasoning")
+    # Driver-fit reasoning is surfaced on the telemetry path when there is anything to
+    # surface. UAT 2026-08-07 defect A9 emptied the fabricated preference flags, so with
+    # no learned evidence there are no intents and nothing is claimed — the honest
+    # result. What this test actually guards is the line below it.
+    assert not (r.get("driver_fit_reasoning") or {}).get("intents")
     # The balance solver's DEFERRED lsd fields are NOT authored by driver-fit.
     authored = {c["field"] for c in r.get("changes", [])}
     assert "lsd_accel" not in authored and "lsd_decel" not in authored

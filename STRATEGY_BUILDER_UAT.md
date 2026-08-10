@@ -1,4 +1,18 @@
 # Strategy Builder — User Acceptance Test
+
+> ## ⚠ SUPERSEDED — DO NOT RUN
+>
+> UAT 2026-08-07 defect E3. This script navigates by clicking tabs ("the **Setup
+> Builder** tab", "the **AI Log** tab") in the CLASSIC shell, which is being retired, and
+> exercises an AI path the determinism rebuild removed. The app now has eleven nav
+> destinations and no tab bar, so this mis-navigates from its first step. Every Pass/Fail
+> cell below is also still empty — it was never run.
+>
+> Use **[docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md](docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md)**.
+>
+> Kept for reference only: the expectations below still describe what the setup brain is
+> supposed to do, even though the route to it has changed.
+
 **Group 18F | Product: Next Gear Racing Pit Crew**
 **Version:** 1.0 | **Date:** 2026-06-26 | **Tester:** _______________
 

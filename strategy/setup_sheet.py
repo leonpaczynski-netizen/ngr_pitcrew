@@ -78,6 +78,14 @@ CONTEXT_FIELDS: frozenset = frozenset({
 ALL_FIELDS: Tuple[str, ...] = tuple(_NUM_DEFAULTS) + tuple(_TEXT_DEFAULTS) + (
     "gear_ratios", "bop_race")
 
+#: The disciplines for which an owner-authored baseline can be entered (Race and
+#: Qualifying). ``base`` is deliberately absent: for owner-baseline events ``base``
+#: is never the anchor — Race and Qualifying are each their own independent anchor
+#: (owner decision R1). ``base`` stays in the ``DISCIPLINES`` tuple in the UI layer
+#: (``ui/components/setup_workspace.py``) for backward-compatibility with callers
+#: that already rely on it; no owner-baseline logic writes it.
+OWNER_BASELINE_DISCIPLINES: Tuple[str, ...] = ("race", "qualifying")
+
 
 def _num(value, default: float, decimals: int) -> float:
     try:
@@ -201,11 +209,19 @@ def empty_sheet() -> SetupSheet:
     return sheet_from_dict({})
 
 
-#: The two disciplines that have a sheet. There is no third.
-DISCIPLINES: Tuple[str, ...] = ("race", "qualifying")
+#: The disciplines that have a sheet. UAT 2026-08-07: BASE was added as a first-class
+#: sheet. It had been left out on the reasoning that the baseline build fills Race and
+#: Qualifying so a third sheet would only mirror one of them — but that has the
+#: dependency backwards. Base is the ANCHOR the car is learned on, and the other two
+#: are explained deltas from it; without it a base setup has nowhere to live and there
+#: is no way to see what a discipline actually changed.
+DISCIPLINES: Tuple[str, ...] = ("base", "race", "qualifying")
 
-#: Discipline -> the purpose string the setup authority and the advisor use.
-PURPOSE: Dict[str, str] = {"race": "Race", "qualifying": "Qualifying"}
+#: Discipline -> the purpose string the setup authority and the advisor use. Base maps
+#: to "Practice" because that is the session it is driven in, and because it must NOT
+#: carry a discipline bias — that is the whole point of an anchor.
+PURPOSE: Dict[str, str] = {"base": "Practice", "race": "Race",
+                           "qualifying": "Qualifying"}
 
 
 def normalise_discipline(value) -> str:

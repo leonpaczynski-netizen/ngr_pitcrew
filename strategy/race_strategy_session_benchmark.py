@@ -50,13 +50,16 @@ class SessionBenchmarkResult:
 
 
 def _rear_fragile_from_profile() -> bool:
-    """Read rear fragility from the structured DriverProfile (never free text)."""
-    try:
-        from strategy.setup_driver_profile import build_driver_profile
-        p = build_driver_profile()
-        return bool(p.prefers_rear_stability or p.dislikes_snap_exit)
-    except Exception:
-        return True
+    """Read rear fragility from the structured DriverProfile (never free text).
+
+    UAT 2026-08-07 defect A9 — mirrors race_strategy_benchmark: an ABSENT profile and
+    a profile that positively says the rear is robust are different statements, and
+    only the second justifies dropping rear protection. Removing the fabricated
+    preference flags would otherwise have silently flipped this conservative default
+    to a permissive one.
+    """
+    from strategy.setup_driver_profile import rear_traction_fragile
+    return rear_traction_fragile()
 
 
 def seed_benchmark_session(db) -> int:

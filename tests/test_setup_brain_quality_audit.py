@@ -98,10 +98,11 @@ def _norm(value, lo, hi):
     return (float(value) - lo) / (hi - lo)
 
 
-def _build(car, ranges, drivetrain, num_gears):
+def _build(car, ranges, drivetrain, num_gears, proven_gearbox=None):
     return build_baseline_setup(
         car=car or "generic", ranges=ranges, drivetrain=drivetrain,
         num_gears=num_gears, profile=None, allowed_tuning=None, tuning_locked=False,
+        proven_gearbox=proven_gearbox,
     )
 
 
@@ -235,9 +236,21 @@ class TestBaselineGearbox:
             for a, b in zip(gears, gears[1:]):
                 assert b < a, f"[{label}] gearbox not strictly decreasing: {gears}"
 
-    def test_final_drive_present_and_in_range(self):
+    def test_final_drive_is_not_invented(self):
+        """UAT 2026-08-07 defect A4 — this asserted a final drive was ALWAYS present,
+        and what satisfied it was the midpoint of a global constant range: 4.25 for
+        every car in the game, with no reference to the engine, the redline or the
+        track. A final drive is now authored only from evidence, and none of these
+        matrix cars has any, so the correct result is none at all."""
         for label, car, dt, ng, ranges in _car_matrix():
             rd = _build(car, ranges, dt, ng)
+            fds = [ch["to_clamped"] for ch in rd["changes"] if ch["field"] == "final_drive"]
+            assert not fds, f"[{label}] invented a final drive from nothing: {fds}"
+            assert rd["gearbox_plan"]["authored"] is False, label
+
+    def test_a_proven_final_drive_is_present_and_in_range(self):
+        for label, car, dt, ng, ranges in _car_matrix():
+            rd = _build(car, ranges, dt, ng, proven_gearbox={"final_drive": 4.1})
             fds = [ch["to_clamped"] for ch in rd["changes"] if ch["field"] == "final_drive"]
             assert fds and 2.5 <= fds[0] <= 6.0, f"[{label}] final_drive {fds}"
 

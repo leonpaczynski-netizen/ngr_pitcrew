@@ -41,6 +41,8 @@ class SetupObjective(Enum):
 class FieldDisposition(Enum):
     """Why each adjustable field holds the value it holds. Every field the car
     exposes receives exactly one of these — nothing is left unexplained."""
+    OWNER_AUTHORED = "OWNER_AUTHORED"              # entered directly by the driver from external prep;
+                                                   # supersedes ALL generated paths (precedence 0)
     AUTHORED = "AUTHORED"                          # deterministically engineered for the objective
     PRESERVED = "PRESERVED"                        # kept at the current/known-good value on purpose
     PROVEN_HISTORY_SEED = "PROVEN_HISTORY_SEED"    # seeded from the driver's proven same-car value
@@ -58,6 +60,7 @@ class FieldDisposition(Enum):
 # source must never silently overwrite a higher-confidence one. History informs a
 # starting window; track/discipline demands then adjust it.
 EVIDENCE_PRECEDENCE: tuple[str, ...] = (
+    "0. Owner-authored baseline (driver-entered from external preparation — supersedes all)",
     "1. Safety and legal constraints",
     "2. Car-adjustment ranges and installed-part availability",
     "3. Event restrictions (tuning permissions / BoP)",
@@ -97,6 +100,10 @@ class SetupAuthoringContext:
     refuel_rate: Optional[float] = None
     required_compounds: tuple = ()
     car_class: str = ""
+    # Owner-baseline gate (A2): when this dict is provided, any field it contains is
+    # OWNER_AUTHORED and must NOT be overwritten by any history / archetype / proven-library
+    # path. Existing callers that do not supply it get the old behaviour unchanged.
+    owner_baseline: Optional[dict] = None
 
     def session_type_str(self) -> str:
         """Map the objective to the ``session_type`` string the deterministic
@@ -205,21 +212,42 @@ _OBJECTIVE_GENERIC_REASON: dict = {
 
 # Provenance-label → disposition. Labels come from strategy.setup_baseline.
 def _disposition_for_change(change: dict, objective: SetupObjective) -> FieldDisposition:
+    """Classify one authored field.
+
+    UAT 2026-08-07 defect A9 — this used to fall through to AUTHORED, i.e. "engineered
+    for the objective", for any provenance it did not recognise. That is the wrong
+    default in a system whose whole problem was overstating what it knew: an
+    unrecognised source is evidence we cannot vouch for, not evidence we can. It now
+    reads the machine-readable ``tier`` the generator attaches and falls back to
+    INSUFFICIENT_EVIDENCE, so a new or unmapped provenance is reported honestly rather
+    than promoted.
+    """
     src = str(change.get("source_label") or change.get("rationale") or "")
     sess = str(change.get("session_influence") or "")
-    # History-seeded values win the provenance.
+    tier = str(change.get("tier") or "").upper()
+
+    # The tier is authoritative when present — it is set at the point the value is
+    # seeded, whereas the label is prose that later layers rewrite.
+    if tier in ("PROVEN", "TRANSFERRED"):
+        return FieldDisposition.PROVEN_HISTORY_SEED
+    if tier == "ARCHETYPE":
+        # A real engineering position for the class, but NOT derived for this car.
+        return FieldDisposition.INSUFFICIENT_EVIDENCE
+    if tier == "GENERIC":
+        return FieldDisposition.INSUFFICIENT_EVIDENCE
+
+    # Label-based fallbacks for changes that predate the tier (e.g. the analyse path).
     if "proven setup" in src or "seeded from your proven" in src:
         return FieldDisposition.PROVEN_HISTORY_SEED
-    # Objective/session bias actually moved the value → engineered for the objective.
+    if tier in ("ENGINEERED", "STOCK"):
+        return FieldDisposition.AUTHORED
     if "session bias applied" in sess:
         return FieldDisposition.AUTHORED
     if "driver-profile biased" in src:
         return FieldDisposition.DRIVER_PROFILE_SEED
     if "conservative default" in src:
         return FieldDisposition.INSUFFICIENT_EVIDENCE
-    # Track shaping is folded into aero via bias; a car-range adaptation or a plain
-    # neutral seed is a deterministic authored starting value.
-    return FieldDisposition.AUTHORED
+    return FieldDisposition.INSUFFICIENT_EVIDENCE
 
 
 def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
@@ -230,81 +258,40 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
     funnel) and then classifies each field. Authors no value the generator/validator
     would not, invents nothing, and calls no AI.
     """
-    # Function-local imports avoid any module-level cycle (setup_baseline is imported
-    # lazily by driving_advisor; setup_authoring sits above both).
-    from strategy.setup_baseline import build_baseline_setup, NEUTRAL_SEEDS
+    # UAT 2026-08-07 defect A6 — compose the ONE authoring path. This function used
+    # to call build_baseline_setup directly with only the history seeds and a locally
+    # rebuilt engineering bias: no chassis seeds, no proven-library seeds, no proven
+    # gearbox, no spring-frequency model, no anchor and no synthesis. Since it is what
+    # fills the Base/Qualifying/Race comparison table, the table showed different
+    # numbers from the sheet that actually got applied (camber front 1.0 shown against
+    # 2.3 applied). It now runs the same pipeline the advisor does.
     from strategy.driving_advisor import (
         _CANONICAL_SETUP_PARAMS, _DISPLAY_ONLY_FIELDS, _derive_locked_fields,
     )
-    from strategy.setup_history_intelligence import build_baseline_seed_overrides
+    from strategy.setup_authoring_pipeline import (
+        BaselineInputs, build_enriched_baseline,
+    )
+    from strategy.setup_baseline import NEUTRAL_SEEDS
 
     objective = ctx.objective
     session_type = ctx.session_type_str()
 
-    # Proven-history seed overrides (geometry + LSD triplet, strong scope only).
-    seed_overrides: dict = {}
-    if ctx.history_prior:
-        try:
-            seed_overrides = build_baseline_seed_overrides(ctx.history_prior)
-        except Exception:
-            seed_overrides = {}
-
-    # Engineering-reasoning layer — vehicle + track + objective + driver coupled
-    # intents (gearing to the straight, ride-height for elevation, ARB balance, RR
-    # rear-stability). Flows through the same clamp/validate pipeline; degrades to
-    # no-op on any missing input so a bare context still authors deterministically.
-    eng_bias: dict = {}
-    eng_lean: float = 0.0
-    try:
-        from strategy.setup_engineering import (
-            build_vehicle_model, derive_engineering_intents, resolve_car_specs,
-        )
-        vehicle = build_vehicle_model(
-            ctx.car, ctx.drivetrain, ctx.num_gears, resolve_car_specs(ctx.car))
-        corner_profile = None
-        try:
-            from strategy.corner_profile import (
-                load_reviewed_segments, build_corner_profile,
-            )
-            _loc = getattr(ctx.track_profile, "track_location_id", "") or ""
-            _lay = getattr(ctx.track_profile, "layout_id", "") or ""
-            _segs = load_reviewed_segments(_loc, _lay)
-            if _segs:
-                corner_profile = build_corner_profile(_segs)
-        except Exception:
-            corner_profile = None
-        eng_plan = derive_engineering_intents(
-            vehicle, ctx.track_profile, objective.value, ctx.profile,
-            corner_profile=corner_profile)
-        eng_bias = eng_plan.bias()
-        eng_lean = eng_plan.final_drive_lean
-    except Exception:
-        eng_bias, eng_lean = {}, 0.0
-    # Evidence-scaled driver fit — tailor the neutral base toward the driver's window.
-    try:
-        from strategy.driver_fit import derive_driver_fit, driver_fit_bias
-        from strategy.setup_baseline import NEUTRAL_SEEDS
-        # A proven-history seed already reflects the driver's validated preference —
-        # exclude those fields from driver-fit so it does not double-count/overshoot.
-        _df = [i for i in derive_driver_fit(ctx.profile, NEUTRAL_SEEDS, ctx.ranges)
-               if i.field not in (seed_overrides or {})]
-        for _dff, _dfd in driver_fit_bias(_df).items():
-            eng_bias[_dff] = eng_bias.get(_dff, 0.0) + _dfd
-    except Exception:
-        pass
-
-    raw = build_baseline_setup(
-        ctx.car, ctx.ranges, ctx.drivetrain, ctx.num_gears,
-        ctx.profile, ctx.allowed_tuning, ctx.tuning_locked,
-        session_type=session_type,
+    enriched = build_enriched_baseline(BaselineInputs(
+        car=ctx.car, ranges=ctx.ranges, session_type=session_type,
+        drivetrain=ctx.drivetrain, num_gears=ctx.num_gears,
+        allowed_tuning=ctx.allowed_tuning, tuning_locked=ctx.tuning_locked,
+        car_class=ctx.car_class, duration_mins=ctx.duration_mins,
         tyre_wear_multiplier=ctx.tyre_wear_multiplier,
-        car_class=ctx.car_class,
-        duration_mins=ctx.duration_mins,
         track_profile=ctx.track_profile,
-        historical_seed_overrides=seed_overrides or None,
-        engineering_bias=eng_bias,
-        final_drive_lean=eng_lean,
-    )
+        track_name=getattr(ctx.track_profile, "track_name", "") or "",
+        layout_id=getattr(ctx.track_profile, "layout_id", "") or "",
+        current_setup=ctx.current_setup, history_prior=ctx.history_prior,
+    ), profile=ctx.profile)
+    raw = enriched.raw_data
+    # Fields the plan reports as history-seeded: the personal-history lift plus the
+    # proven library, both of which are "a value you have already validated".
+    seed_overrides = dict(enriched.history_seeds or {})
+    seed_overrides.update(enriched.proven_seeds or {})
 
     changes_by_field = {c.get("field"): c for c in (raw.get("changes") or []) if c.get("field")}
     setup_fields = dict(raw.get("setup_fields") or {})
@@ -327,6 +314,28 @@ def author_full_field_plan(ctx: SetupAuthoringContext) -> FullFieldPlan:
                 proven = float(pd.get("value"))
             except (TypeError, ValueError):
                 proven = None
+
+        # OWNER_AUTHORED gate (A2, precedence 0): a field the owner explicitly entered
+        # skips ALL generated paths — history / archetype / proven-library must never
+        # silently overwrite a value the driver sourced from external preparation.
+        if ctx.owner_baseline is not None and f in ctx.owner_baseline:
+            raw_v = ctx.owner_baseline[f]
+            try:
+                v = float(raw_v)
+            except (TypeError, ValueError):
+                v = raw_v
+            entries.append(FieldPlanEntry(
+                field=f,
+                value=v,
+                disposition=FieldDisposition.OWNER_AUTHORED,
+                source="owner-entered baseline",
+                objective_contribution="driver-entered from external preparation; "
+                                       "not modified by any generated path",
+                confidence="high",
+                proven_value=proven,
+                reason="owner-authored value supersedes all generated paths (precedence 0)",
+            ))
+            continue
 
         # Not adjustable: no car range AND not a computed gearbox field.
         _is_gearbox = f == "final_drive" or (f.startswith("gear_") and f != "gear_ratios")

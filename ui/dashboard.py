@@ -6068,6 +6068,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
 
         self._feedback_combos: dict[str, QComboBox] = {}
 
+        # UAT 2026-08-07 defect B5 — the canonical data key per row, stated rather
+        # than derived. Deriving it as label.lower().replace(" ","_").replace("/","_")
+        # produced "mid-corner" (the hyphen survives) and "rear_under_braking", while
+        # every reader looks for "mid_corner" and "rear_braking" — so those two fields
+        # were destroyed on EVERY write since the form was built. A display label is
+        # not a data key and must never be mangled into one.
         feedback_rows = [
             ("Corner Entry", ["—", "Good balance", "Too much understeer", "Too much oversteer", "Rear unstable under braking"]),
             ("Mid-Corner", ["—", "Good rotation", "Pushes wide", "Too much rotation", "Snaps on lift-off"]),
@@ -6199,9 +6205,12 @@ class MainWindow(TrackModellingMixin, SetupBuilderMixin, SettingsMixin, RacePlan
         if running_setup:
             parts.append(f"Setup run this stint: {running_setup}")
 
+        from data.session_db import FEEDBACK_LABEL_KEYS
         for label, combo in self._feedback_combos.items():
             val = combo.currentText()
-            key = label.lower().replace(" ", "_").replace("/", "_")
+            # Defect B5 — explicit map, never derived from the display label.
+            key = FEEDBACK_LABEL_KEYS.get(
+                label, label.lower().replace(" ", "_").replace("-", "_").replace("/", "_"))
             feedback_dict[key] = val if (val and val != "—") else ""
             if val and val != "—":
                 parts.append(f"{label}: {val}")

@@ -243,27 +243,50 @@ class TestAC6EndToEndAdvisor:
             f"springs_front={sf['springs_front']} not in race band [{lo}, {hi}]"
         )
 
-    def test_fallback_car_yields_neutral_springs(self):
-        """AC6 fallback path: a car with no recognisable specs (empty category,
-        empty drivetrain) returns exactly the neutral seeds through the full
-        build_baseline_setup_response call chain — the springs are unchanged."""
+    # UAT 2026-08-07 defect A1/A9 changed what "the spring model has no data" means.
+    # These two tests asserted the fallback was the flat NEUTRAL_SEEDS constant — one
+    # spring rate for all 579 cars in the game. Phase 1 replaced that fallback with the
+    # car's CLASS archetype, and an unrecognisable car resolves to the widest class
+    # (road). The neutral constant is now only reachable when even the archetype has no
+    # opinion. The behaviour under test is unchanged — the spring model still declines
+    # to invent a value it cannot derive — so the assertions move to the new fallback
+    # rather than being deleted.
+    def _road_archetype_springs(self):
+        from data.car_parameter_model import resolve_parameter_model
+        m = resolve_parameter_model("NonExistentCarThatHasNoSpecs XYZ")
+        assert m.archetype == "road", "premise changed: unknown car no longer road-class"
+        return m.spec("springs_front").anchor, m.spec("springs_rear").anchor
+
+    def test_fallback_car_yields_class_archetype_springs(self):
+        """AC6 fallback path: a car with no recognisable specs (empty category, empty
+        drivetrain) gets the road-class starting point, NOT a physics-derived value —
+        the spring model still refuses to invent one."""
+        front, rear = self._road_archetype_springs()
         sf, _ = self._advisor_response(car_name="", drivetrain="")
-        assert sf.get("springs_front") == _NEUTRAL_FRONT, (
-            f"Fallback car: springs_front={sf.get('springs_front')!r} expected {_NEUTRAL_FRONT}"
+        assert sf.get("springs_front") == front, (
+            f"Fallback car: springs_front={sf.get('springs_front')!r} expected {front}"
         )
-        assert sf.get("springs_rear") == _NEUTRAL_REAR, (
-            f"Fallback car: springs_rear={sf.get('springs_rear')!r} expected {_NEUTRAL_REAR}"
+        assert sf.get("springs_rear") == rear, (
+            f"Fallback car: springs_rear={sf.get('springs_rear')!r} expected {rear}"
         )
 
-    def test_unknown_car_name_no_specs_yields_neutral_springs(self):
+    def test_unknown_car_name_no_specs_yields_class_archetype_springs(self):
         """AC6: a valid drivetrain string but an unknown car name (no entry in
-        car_specs.json) means weight_kg is None → fallback fires → neutral springs."""
+        car_specs.json) means weight_kg is None → the physics model declines → the
+        class archetype supplies the starting point instead of a flat constant."""
+        front, _rear = self._road_archetype_springs()
         sf, _ = self._advisor_response(
             car_name="NonExistentCarThatHasNoSpecs XYZ", drivetrain="rr"
         )
-        assert sf.get("springs_front") == _NEUTRAL_FRONT, (
-            f"Unknown-car springs_front={sf.get('springs_front')!r} expected {_NEUTRAL_FRONT}"
+        assert sf.get("springs_front") == front, (
+            f"Unknown-car springs_front={sf.get('springs_front')!r} expected {front}"
         )
+
+    def test_fallback_springs_are_not_the_flat_neutral_constant(self):
+        """The point of the change: an unmapped car no longer inherits the same spring
+        rate as every other car in the game."""
+        sf, _ = self._advisor_response(car_name="", drivetrain="")
+        assert sf.get("springs_front") != _NEUTRAL_FRONT
 
 
 # ===========================================================================

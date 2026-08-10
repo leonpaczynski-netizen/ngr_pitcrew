@@ -266,7 +266,11 @@ def test_build_race_certification_from_bridge(qapp, tmp_path):
         report = b.build_race_certification("league-r3")
         # versions + identity auto-captured; physical gates stay uncertified → NOT Certified.
         payload = report.as_json_payload()
-        assert payload["evidence"]["db_version"] == 40
+        # Read the constant rather than pinning the number a second time — Phase 0 of
+        # the 2026-08-07 UAT remediation took the schema to v41 for the widened
+        # driver_feedback table and this hard-coded 40 was left behind.
+        from strategy._setup_constants import DB_VERSION
+        assert payload["evidence"]["db_version"] == DB_VERSION
         assert payload["evidence"]["rule_engine_version"] == "46.0"
         assert report.verdict != CertVerdict.CERTIFIED
         # environment/build auto-passed (non-physical, automated)

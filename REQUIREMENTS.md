@@ -1,5 +1,14 @@
 # Technical Specification
 
+> **⚠ ACCURACY NOTE — 8 August 2026 (UAT 2026-08-07 defect E3).**
+> The product requirements below remain the intent. Any part that describes NAVIGATION
+> is out of date: the app now ships the NGR Pit Crew shell with eleven nav destinations
+> and **no tab bar**, and the AI paths described here were removed by the determinism
+> rebuild — the setup and strategy brains are deterministic and offline.
+>
+> See [docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md](docs/UAT_2026-08-07_REMEDIATION_CERTIFICATION.md)
+> for what the app actually does today and how it is verified.
+
 ## GT7 Pit Crew Race Engineer Application
 
 ### 1. Product Vision

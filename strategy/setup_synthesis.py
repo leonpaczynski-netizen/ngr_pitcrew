@@ -169,7 +169,15 @@ PARAMETER_INTERACTIONS: dict = {
     "springs_front": {"kerb_compliance": -1, "apex_front_support": +1},
     "springs_rear": {"kerb_compliance": -1, "exit_traction": +1},
     "camber_front": {"apex_front_support": +1, "tyre_preservation": -1, "high_speed_stability": -1},
-    "camber_rear": {"exit_traction": +1, "power_oversteer_resistance": +1, "tyre_preservation": -1},
+    # UAT 2026-08-07 (A1, "rear camber above front is backwards"): rear camber used to
+    # be modelled as {exit_traction: +1, power_oversteer_resistance: +1,
+    # tyre_preservation: -1}. Camber trades straight-line and traction contact patch
+    # for cornering grip, and that trade happens at BOTH axles — the front entry above
+    # already models it. Modelling the rear as if more camber helped drive off the
+    # corner is why every race baseline came out with more camber on the rear than the
+    # front, which is the opposite of every vetted setup in data/proven_setups.json.
+    "camber_rear": {"exit_traction": -1, "power_oversteer_resistance": +1,
+                    "tyre_preservation": -1, "high_speed_stability": -1},
     "aero_front_ratio": {},
 }
 
@@ -235,6 +243,40 @@ def _place_in_window(field: str, v: float, lo: float, hi: float) -> float:
     return r
 
 
+def _centre_of(w, lo: float, hi: float) -> float:
+    """The reference point a candidate moves away from.
+
+    ``WorkingWindow.centre`` already implements the precedence (proven > anchor >
+    legal midpoint); this helper keeps synthesis working with any window-shaped object
+    a test or caller hands it, including ones predating the anchor.
+    """
+    c = getattr(w, "centre", None)
+    if c is not None:
+        try:
+            return float(c)
+        except (TypeError, ValueError):
+            pass
+    pref = getattr(w, "preferred", None)
+    if pref is not None:
+        return float(pref)
+    anchor = getattr(w, "anchor", None)
+    if anchor is not None:
+        return float(anchor)
+    return (lo + hi) / 2.0
+
+
+def _half_span_of(w, lo: float, hi: float) -> float:
+    """Half the PREFERENCE band — the distance a full-strength move may travel."""
+    p_lo = getattr(w, "pref_low", None)
+    p_hi = getattr(w, "pref_high", None)
+    try:
+        if p_lo is not None and p_hi is not None and float(p_hi) > float(p_lo):
+            return (float(p_hi) - float(p_lo)) / 2.0
+    except (TypeError, ValueError):
+        pass
+    return (hi - lo) / 2.0
+
+
 def generate_candidates(context, target: TargetHandlingModel) -> list:
     """Build a full-field candidate per lens. Every field with a working window gets a
     value chosen within that window toward the target-desired direction (or the proven
@@ -250,9 +292,14 @@ def generate_candidates(context, target: TargetHandlingModel) -> list:
                 values[field] = _place_in_window(field, lo, lo, hi)
                 prov[field] = "locked" if getattr(w, "locked", False) else "fixed"
                 continue
-            centre = w.preferred if w.preferred is not None else (lo + hi) / 2.0
+            # UAT 2026-08-07 defect A1 — the reference is the ANCHOR (proven value >
+            # captured stock > class default), never the midpoint of the legal range,
+            # and the distance walked is half the PREFERENCE band, not half the legal
+            # span. Half of a generic 1-20Hz spring range is 9.5Hz, which is what put
+            # 13.4Hz springs on a Gr.3; half of the Gr.3 band is 1.0Hz.
+            centre = _centre_of(w, lo, hi)
             direction = _field_desired_direction(field, target)
-            half = (hi - lo) / 2.0
+            half = _half_span_of(w, lo, hi)
             # Move from the centre toward the target-desired direction, scaled by lens.
             step = max(-1.0, min(1.0, direction)) * tw * half
             # History pull keeps a proven field near its proven value.
@@ -300,8 +347,12 @@ def _predicted_handling(candidate: SetupCandidate, context) -> dict:
         w = windows.get(field)
         if w is None or w.high <= w.low:
             continue
-        centre = w.preferred if w.preferred is not None else (w.low + w.high) / 2.0
-        norm = (float(val) - centre) / ((w.high - w.low) / 2.0)   # -1..+1
+        # Deviation is measured from the anchor and scaled by the preference band, so
+        # a candidate one band-width off the class position reads as a full-strength
+        # move — not as the 5% of a generic slider that it happens to be.
+        centre = _centre_of(w, w.low, w.high)
+        half = _half_span_of(w, w.low, w.high) or ((w.high - w.low) / 2.0)
+        norm = (float(val) - centre) / half   # -1..+1
         for axis, sign in PARAMETER_INTERACTIONS.get(field, {}).items():
             pred[axis] = pred.get(axis, 0.0) + sign * norm
     # squash
@@ -428,12 +479,17 @@ def reconcile_synthesis_primary(baseline_setup_fields: dict, synthesis_result,
             out["skipped"].append(f)
             continue
         sv = best.values[f]
-        centre = (lo + hi) / 2.0
-        if abs(float(sv) - centre) < (hi - lo) * 0.05:
+        # UAT 2026-08-07 defect A1 — walk from the ANCHOR, not from the midpoint of
+        # the legal range. `centre = (lo + hi) / 2` here is what replaced a
+        # physics-informed setup with a walk away from 10.5Hz springs and 130mm ride
+        # height, because 575 of 579 cars fall back to the generic range.
+        centre = _centre_of(w, lo, hi)
+        span = _half_span_of(w, lo, hi) * 2.0
+        if abs(float(sv) - centre) < span * 0.05:
             out["skipped"].append(f)            # no directional view — leave baseline
             continue
         # Temper the move toward the target so a from-scratch baseline never ships a
-        # range extreme; keeps the direction, drops the aggression.
+        # band extreme; keeps the direction, drops the aggression.
         val = _place_in_window(f, centre + (float(sv) - centre) * _PRIMARY_MODERATION,
                                lo, hi)
         if _num_eq(base.get(f), val):
@@ -441,6 +497,30 @@ def reconcile_synthesis_primary(baseline_setup_fields: dict, synthesis_result,
         out["overrides"][f] = val
         out["provenance"][f] = best.provenance.get(f, "synthesis")
         out["applied"].append(f)
+
+    # Cross-field physics invariants. Per-field scoring cannot see relationships
+    # BETWEEN fields, which is how a race baseline ended up with more camber on the
+    # rear axle than the front. Run over the MERGED view (baseline + overrides) so an
+    # invariant spanning an overridden and a non-overridden field still sees both.
+    try:
+        from strategy.setup_invariants import enforce_invariants
+        merged = dict(base)
+        merged.update(out["overrides"])
+        inv = enforce_invariants(merged, context)
+        for f, v in inv.fields.items():
+            if f not in fields:
+                continue                    # never author outside the handling domain
+            if not _num_eq(merged.get(f), v):
+                out["overrides"][f] = v
+                out["provenance"][f] = "physics invariant"
+                if f not in out["applied"]:
+                    out["applied"].append(f)
+        out["corrections"] = list(inv.corrections)
+        out["violations"] = list(inv.violations)
+    except Exception:
+        out.setdefault("corrections", [])
+        out.setdefault("violations", [])
+
     out["reason"] = (
         f"synthesis authored {len(out['applied'])} handling field(s) as primary "
         f"(track shaping {shaping}); {len(out['kept_proven'])} proven value(s) kept"

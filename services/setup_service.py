@@ -68,6 +68,32 @@ class AnalysisResult:
     status: str = ""
     raw: str = ""
     weighed_feeling: bool = False   # did the analysis include the driver's handling verdict?
+    #: UAT 2026-08-07 defect B6 — "I heard X, I did Y", one entry per thing the driver
+    #: reported. build_feedback_dispositions has produced exactly this record all
+    #: along; AnalysisResult never extracted it, so the new shell structurally could
+    #: not show it and the only rendering was in the classic UI inside a collapsed
+    #: <details>. Nothing the driver reported is allowed to disappear silently.
+    feedback_dispositions: Tuple[dict, ...] = field(default_factory=tuple)
+    #: UAT 2026-08-07 defect B3 — the diagnosis fell back to a conservative all-clear
+    #: on any internal error. True means this analysis ran on partial evidence.
+    diagnosis_degraded: bool = False
+    diagnosis_degraded_reason: str = ""
+
+    @property
+    def acknowledgement(self) -> str:
+        """What was done with what the driver reported, in one line."""
+        if not self.feedback_dispositions:
+            return ""
+        by_state: dict = {}
+        for d in self.feedback_dispositions:
+            by_state.setdefault(str(d.get("state") or "?"), []).append(
+                str(d.get("feedback") or ""))
+        bits = []
+        for state in ("addressed", "deferred", "strategy", "preserved"):
+            names = by_state.get(state)
+            if names:
+                bits.append(f"{state}: {', '.join(n for n in names if n)}")
+        return "  ·  ".join(bits)
 
     @property
     def has_recommendation(self) -> bool:
@@ -81,6 +107,13 @@ class AnalysisResult:
         if self.has_recommendation:
             n = len(self.changes)
             return f"{n} change{'s' if n != 1 else ''} recommended."
+        if self.diagnosis_degraded:
+            # Defect B3 — never let a failed diagnosis read as a clean bill of health.
+            return ("Analysis ran on PARTIAL evidence — the telemetry read failed"
+                    + (f" ({self.diagnosis_degraded_reason})"
+                       if self.diagnosis_degraded_reason else "")
+                    + ". Your handling notes were still weighed. Treat any "
+                      "'no change' below as unproven.")
         if self.validation_errors:
             return "No change recommended — " + "; ".join(self.validation_errors[:2])
         if self.reason:
@@ -104,6 +137,22 @@ class BaselineResult:
     reason: str = ""
     built: Tuple[str, ...] = field(default_factory=tuple)     # disciplines actually written
     failed: Dict[str, str] = field(default_factory=dict)      # discipline -> why
+    #: UAT 2026-08-07 — what each discipline CHANGED from the Base anchor:
+    #: {discipline: {field: (base_value, discipline_value)}}. Base is the platform;
+    #: Race and Qualifying are deltas from it, and a delta nobody can see is
+    #: indistinguishable from no delta at all — which is what the UAT reported when
+    #: the three sheets looked identical.
+    deltas_from_base: Dict[str, Dict[str, tuple]] = field(default_factory=dict)
+
+    def delta_summary(self, discipline: str) -> str:
+        """One line naming what this discipline actually changed."""
+        d = (self.deltas_from_base or {}).get(str(discipline).lower()) or {}
+        if not d:
+            return f"{str(discipline).capitalize()} is identical to Base."
+        names = ", ".join(sorted(d)[:6])
+        more = f" and {len(d) - 6} more" if len(d) > 6 else ""
+        return (f"{str(discipline).capitalize()} changes {len(d)} field"
+                f"{'s' if len(d) != 1 else ''} from Base: {names}{more}.")
 
     @property
     def headline(self) -> str:
@@ -257,17 +306,22 @@ class SetupService:
         if self._advisor is None:
             return BaselineResult(reason="The setup engine is not available.")
 
-        built, failed, sheets = [], {}, {}
-        for discipline in ("race", "qualifying"):
+        built, failed, sheets, authored = [], {}, {}, {}
+        # UAT 2026-08-07 — Base is authored FIRST and as its own sheet. It is the anchor
+        # the car is learned on; Race and Qualifying are deltas from it, so building
+        # them without ever building it left the anchor implicit and unviewable.
+        for discipline in ("base", "race", "qualifying"):
             ok, values, why = self._generate_baseline(inp, discipline)
             if ok:
                 sheets[discipline] = self.sheet(discipline, inp).merge(values)
+                authored[discipline] = dict(values)
                 built.append(discipline)
             else:
                 failed[discipline] = why
         if sheets:
             self._store.set_many(inp.scope, sheets)
         return BaselineResult(ok=bool(built), built=tuple(built), failed=failed,
+                              deltas_from_base=_deltas_from_base(authored),
                               reason="" if built else "No sheet could be built.")
 
     def _generate_baseline(self, inp: SetupInputs, discipline: str) -> Tuple[bool, dict, str]:
@@ -357,7 +411,13 @@ class SetupService:
             validation_errors=tuple(_norm(e) for e in
                                     (data.get("validation_errors") or ()) if _norm(e)),
             status=_norm(data.get("recommendation_status")), raw=_norm(payload),
-            weighed_feeling=_weighed)
+            weighed_feeling=_weighed,
+            feedback_dispositions=tuple(
+                d for d in (data.get("feedback_dispositions") or ())
+                if isinstance(d, Mapping)),
+            diagnosis_degraded=bool((data.get("diagnosis") or {}).get("diagnosis_degraded")),
+            diagnosis_degraded_reason=_norm(
+                (data.get("diagnosis") or {}).get("diagnosis_degraded_reason")))
 
     # ---- apply / revert ---------------------------------------------------
     def apply(self, discipline: str, fields: Optional[Mapping]) -> SetupOutcome:
@@ -541,3 +601,33 @@ class SetupService:
             return f"{sid}::rev{rev}" if sid else ""
         except Exception:
             return ""
+
+
+def _deltas_from_base(authored: dict) -> dict:
+    """{discipline: {field: (base_value, value)}} for every field a discipline moved.
+
+    UAT 2026-08-07 — Base is the anchor and the other two are deltas from it. Computing
+    them here means the Garage can SHOW what qualifying actually changed rather than
+    presenting three sheets that look the same and asking the driver to trust that they
+    differ. A field missing from Base is not reported as a delta: that is an absence,
+    not a change.
+    """
+    base = (authored or {}).get("base") or {}
+    if not base:
+        return {}
+    out: dict = {}
+    for discipline, values in (authored or {}).items():
+        if discipline == "base" or not isinstance(values, dict):
+            continue
+        moved: dict = {}
+        for field, value in values.items():
+            if field not in base:
+                continue
+            try:
+                if abs(float(base[field]) - float(value)) > 1e-9:
+                    moved[field] = (base[field], value)
+            except (TypeError, ValueError):
+                if base[field] != value:
+                    moved[field] = (base[field], value)
+        out[discipline] = moved
+    return out

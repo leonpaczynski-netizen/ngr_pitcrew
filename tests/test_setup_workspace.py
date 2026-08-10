@@ -288,20 +288,33 @@ class TestLockControl:
         assert seen == [("base", True)]              # locks base, not race
 
 
-class TestCarRangesButton:
-    """AREA 1 — "Set car min/max ranges…" button opens the ranges editor."""
+class TestCarDataCaptureButton:
+    """UAT 2026-08-07 defect A7 — this button used to open the classic
+    CarRangesDialog, which writes tuning PREFERENCE windows into a file the rest of the
+    app reads as GT7 slider LIMITS. Right idea, wrong semantics, and the source of
+    several bad values. It now opens the capture panel, which records what GT7 actually
+    shows and keeps the legal range, the preference window and the step separate.
+    """
 
-    def test_button_exists(self, qapp):
+    def test_button_opens_the_gt7_capture_page(self, qapp):
         w = SetupWorkspace()
-        assert hasattr(w, "_ranges_btn")
-        assert "ranges" in w._ranges_btn.text().lower()
+        assert "gt7 data" in w._ranges_btn.text().lower()
+        w._ranges_btn.setChecked(True)
+        assert w._stack.currentWidget() is w.car_data_capture
 
-    def test_click_emits_car_ranges_requested(self, qapp):
+    def test_unchecking_returns_to_the_previous_view(self, qapp):
+        w = SetupWorkspace()
+        before = w._stack.currentIndex()
+        w._ranges_btn.setChecked(True)
+        w._ranges_btn.setChecked(False)
+        assert w._stack.currentIndex() == before
+
+    def test_a_saved_capture_is_re_emitted_for_the_shell(self, qapp):
         w = SetupWorkspace()
         seen = []
-        w.car_ranges_requested.connect(lambda: seen.append(True))
-        w._ranges_btn.click()
-        assert seen == [True]
+        w.car_data_captured.connect(seen.append)
+        w.car_data_capture.capture_saved.emit("Some Car '20")
+        assert seen == ["Some Car '20"]
 
 
 class TestGearingControls:

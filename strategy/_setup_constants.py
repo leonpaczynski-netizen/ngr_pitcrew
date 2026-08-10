@@ -157,7 +157,29 @@ HIGH_SUCCESS_RATE: float = 0.60
 # v39 (Program 3 PTT audit trail): adds ptt_interactions — every push-to-talk interaction stamped with its
 #     context (event/cycle/run/stint/lap/car/setup/strategy) + intent + resolved action + response, so a
 #     wrong response is traceable. NO raw-transcript column (push_to_talk invariant). Additive. Idempotent.
-DB_VERSION: int = 40
+# v41 (UAT 2026-08-07 defect B4): widens driver_feedback to the FULL Practice Review capture set —
+#     braking_confidence, traction, rotation, drive_out, straight_line, kerb_behaviour, bottoming,
+#     gear_choice, overall_confidence. The table held 7 of the 14 captured fields, so nine of them were
+#     dropped on every write and the driver's report genuinely was discarded. Additive. Idempotent.
+# v42 (Owner-baseline feature): adds owner_baselines (one row per event × discipline, revision-
+#     incremented on re-entry; provenance OWNER_AUTHORED) + owner_baseline_proposals (proposed
+#     parameter changes per session, per discipline, carrying label/status/clip/evidence). Two
+#     standalone additive tables; no existing table touched. Idempotent.
+# v43 (Owner-baseline fixes): amends v42 tables in place for any database already at v42.
+#     Adds owner_baseline_proposals.provenance column (C2 — provenance must survive the DB round
+#     trip for C19).  Adds three new tables:
+#     • owner_baseline_riders  — B9/Correction-2 unresolved riders (structurally distinct from B11
+#       contradictions which are proposals with status="unresolved").
+#     • owner_baseline_suppressed_changes — B16 changes the rule engine computed but withheld; the
+#       doctrine "nothing silently disappears" requires them to be exported.
+#     • owner_baseline_evidence_flags — tracks sessions where evidence was collected without a
+#       baseline entered (R2; replaces the in-memory _no_baseline_sessions counter in the recorder).
+#     All operations idempotent (CREATE IF NOT EXISTS; ALTER with per-column try/except guard).
+DB_VERSION: int = 43
+
+# Export format version — bumped when the external-file schema changes. Embedded as a
+# top-level field in every event export so the external Claude project can detect stale files.
+EXPORT_FORMAT_VERSION: str = "1.0"
 
 # Status written to setup_history when the AI audit rejected the plan.
 # NOT in APPROVED_STATUSES → routes to the _rejected_ bucket automatically.

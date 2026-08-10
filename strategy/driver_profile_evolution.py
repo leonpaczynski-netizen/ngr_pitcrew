@@ -55,7 +55,23 @@ def _v(row: Mapping, field: str) -> str:
 
 
 def _row_signals(row: Mapping) -> "tuple[bool, bool]":
-    """(understeer, oversteer) reported in this feedback row."""
+    """(understeer, oversteer) reported in this feedback row.
+
+    UAT 2026-08-07 defect B10 — this matched the bare words "understeer"/"oversteer"
+    while the classic capture form wrote "Too much understeer", so every row it read
+    from that surface scored as neither. Combined with the rows mostly never being
+    written at all (B1/B4/B5), the learning loop could not fire from real data.
+
+    Rows are now normalised through the shared vocabulary before they are read, so a
+    row captured on ANY surface counts. This matters more since the fabricated driver
+    preference flags were deleted (defect A9): profile evolution is now the only thing
+    that can populate a driver profile at all.
+    """
+    try:
+        from data.session_db import normalise_feedback, normalise_feedback_values
+        row = normalise_feedback_values(normalise_feedback(dict(row or {})))
+    except Exception:
+        pass
     understeer = _v(row, "corner_entry") in _UNDERSTEER or _v(row, "mid_corner") in _UNDERSTEER
     oversteer = _v(row, "exit_stability") in _OVERSTEER
     return understeer, oversteer

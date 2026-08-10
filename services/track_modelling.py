@@ -114,6 +114,15 @@ class TrackModellingService:
         """
         station_map = self._session.artefact("station_map")
         if station_map is None:
+            # UAT 2026-08-07 defect D3: an ALREADY-APPROVED track has no in-memory
+            # station-map artefact — select_track clears the artefact dict and
+            # refresh_disk_readiness only restores ``model_active``. Without a disk
+            # fallback this refused with "Approve the track model before mapping the
+            # pit lane" for every approved track, which made pit-lane mapping
+            # structurally impossible after an app restart. The map RENDERER already
+            # falls back to disk; the mapper now does the same.
+            station_map = self._load_station_map_from_disk()
+        if station_map is None:
             return TrackActionResult(action="map_pit_lane", session=self._session,
                                      reason="Approve the track model before mapping the pit lane.")
         laps = list(pit_laps) if isinstance(pit_laps, (list, tuple)) else [pit_laps]
@@ -136,9 +145,87 @@ class TrackModellingService:
             export_station_map_json(station_map)
         except Exception:
             pass
+        # UAT 2026-08-07 defect D7 — a successful mapping used to land ONLY in
+        # data/track_models/<layout>.station_map.json. The live engineer's pit-lane
+        # corroboration reads a different store entirely (data/track_library, whose
+        # index.json is an empty tracks list), so live pit corroboration was permanently
+        # inert no matter how many times the driver mapped the lane. Publishing it to
+        # the store the reader actually uses is what makes the mapping mean anything.
+        published = self._publish_pit_lane_to_library(boundary)
         self._session = self._session.with_artefact("station_map", station_map)
-        return TrackActionResult(ok=True, action="map_pit_lane", session=self._session,
-                                 reason="Pit lane mapped — the track model is complete.")
+        return TrackActionResult(
+            ok=True, action="map_pit_lane", session=self._session,
+            reason=("Pit lane mapped — the track model is complete."
+                    if published else
+                    "Pit lane mapped — the track model is complete. (It could not be "
+                    "published to the track library, so live pit corroboration will "
+                    "not use it yet.)"))
+
+    def _publish_pit_lane_to_library(self, boundary) -> bool:
+        """Write the mapped pit lane where the LIVE engineer reads it (defect D7).
+
+        ``data.track_library.load_track_pit_lane`` resolves
+        ``tracks/<track_id>/layouts/<layout_id>/pit_lane.json`` first, so that is what
+        is written. Best-effort and never raises: a failure downgrades the message
+        above rather than losing the mapping, which is safely on disk either way.
+        """
+        try:
+            import json
+            from pathlib import Path
+
+            from data.track_library import TRACK_LIBRARY_BASE
+
+            track_id = str(getattr(self._session, "location_id", "") or "").strip()
+            layout_id = str(getattr(self._session, "layout_id", "") or "").strip() or track_id
+            if not track_id:
+                return False
+
+            segments = getattr(boundary, "segments", None)
+            if segments is None and isinstance(boundary, dict):
+                segments = boundary.get("segments")
+            if not segments:
+                return False
+            payload = {
+                "schema": "track_pit_lane_v1",
+                "track_id": track_id,
+                "layout_id": layout_id,
+                "available": True,
+                "source": "measured (track modelling)",
+                "segments": [
+                    s if isinstance(s, dict) else {
+                        "start_m": float(getattr(s, "start_m", 0.0)),
+                        "end_m": float(getattr(s, "end_m", 0.0)),
+                    }
+                    for s in segments
+                ],
+            }
+            ldir = Path(TRACK_LIBRARY_BASE) / "tracks" / track_id / "layouts" / layout_id
+            ldir.mkdir(parents=True, exist_ok=True)
+            tmp = ldir / "pit_lane.json.tmp"
+            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(ldir / "pit_lane.json")
+            return True
+        except Exception:
+            return False
+
+    def _load_station_map_from_disk(self):
+        """The accepted station map for the selected layout, or None.
+
+        Read-only recovery path for :meth:`map_pit_lane` (UAT 2026-08-07 defect D3).
+        Never raises — a missing or unreadable file simply yields None and the caller
+        falls back to asking the driver to approve the model first.
+        """
+        try:
+            from data.track_station_map import (
+                find_station_map_path, import_station_map_json)
+            path = find_station_map_path(
+                str(getattr(self._session, "location_id", "") or ""),
+                str(getattr(self._session, "layout_id", "") or ""))
+            if path is None:
+                return None
+            return import_station_map_json(path)
+        except Exception:
+            return None
 
     # ---- write ------------------------------------------------------------
     def select_track(self, location_id: str, layout_id: str) -> TrackActionResult:

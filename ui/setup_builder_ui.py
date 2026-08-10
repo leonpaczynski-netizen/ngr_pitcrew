@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import json as _json  # alias used in _display_setup_result (verbatim copy from dashboard.py)
+import os
 import time
 from pathlib import Path
 
@@ -833,6 +834,70 @@ def _engineering_brain_html(data: dict) -> str:
             f"{_str}</div>"
         )
     return html
+
+
+# ---------------------------------------------------------------------------
+# Injectable seams — blocking modal dialogs (I2 / project doctrine)
+#
+# A modal dialog is correct in production and fatal without a human: it waits
+# for a click that never comes.  PYTEST_CURRENT_TEST is the reliable guard.
+# Failing closed means: do not act (cancel the resolve, cancel the reject/edit).
+# Each function is also injectable at the instance level via a matching `_fn`
+# attribute, so tests can drive specific branches without any env-var tricks.
+# ---------------------------------------------------------------------------
+
+def _default_ask_resolve(parent, param: str, tel_direction: str) -> str:
+    """B11 resolve dialog.  Returns 'tel', 'feedback', or 'cancel'."""
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return "cancel"  # fail closed under test runner
+    from PyQt6.QtWidgets import QMessageBox
+    fb_dir = "decrease" if tel_direction == "increase" else "increase"
+    box = QMessageBox(parent)
+    box.setWindowTitle("Resolve conflict")
+    box.setText(
+        f"Telemetry and driver feedback OPPOSE each other on "
+        f"\"{param.replace('_', ' ')}\".\n\n"
+        f"Telemetry implies: {tel_direction}\n"
+        f"Driver feedback implies: {fb_dir}\n\n"
+        "Which direction do you want to act on? "
+        "(You can still Reject after choosing.)")
+    tel_btn = box.addButton(
+        f"Telemetry ({tel_direction})", QMessageBox.ButtonRole.AcceptRole)
+    fb_btn = box.addButton(
+        f"Driver feedback ({fb_dir})", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked == tel_btn:
+        return "tel"
+    if clicked == fb_btn:
+        return "feedback"
+    return "cancel"
+
+
+def _default_ask_text(parent, title: str, message: str) -> tuple:
+    """Generic one-line text entry.  Returns (text, ok_bool)."""
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return ("", False)  # fail closed under test runner
+    from PyQt6.QtWidgets import QInputDialog
+    return QInputDialog.getText(parent, title, message)
+
+
+def _default_warn_invalid(parent, message: str) -> None:
+    """Show a non-critical warning after the user enters a bad value.
+
+    The error path in _do_edit_proposal is only reachable via the _ask_text_fn
+    seam — a test that injects a non-numeric string would hit this path.  Without
+    the guard it hangs waiting for a QMessageBox click that never comes.  Fail
+    closed = do nothing (the operation already silently aborted).
+    """
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return   # fail closed — no dialog under a test runner
+    from PyQt6.QtWidgets import QMessageBox
+    QMessageBox.warning(parent, "Invalid value", message)
 
 
 class SetupBuilderMixin:
@@ -2259,14 +2324,23 @@ class SetupBuilderMixin:
                 if _qv:
                     cols.append({"name": "quali", "label": "Quali setup",
                                  "source": "your Qualifying form", "values": _qv})
-            # From-scratch base — pure generator (no AI, no Qt); num_gears read here.
+            # From-scratch base — the ONE authoring path (UAT 2026-08-07 defect A6).
+            # This was the third place that authored "the same" base setup, with the
+            # barest inputs of the three: no proven library, no history, no chassis
+            # seeds, no spring model, no anchor. It now composes the same pipeline the
+            # advisor and the comparison table use, so all three agree.
             try:
-                from strategy.setup_baseline import build_baseline_setup as _bbs
-                from strategy.setup_driver_profile import build_driver_profile as _bdp
                 from strategy.setup_ranges import resolve_ranges as _rr
+                from strategy.setup_authoring_pipeline import (
+                    BaselineInputs as _BI, build_enriched_baseline as _bes,
+                )
                 _ng = int(self._setup_num_gears.value()) if hasattr(self, "_setup_num_gears") else 0
-                _base = _bbs(car_name, _rr(car_name), drivetrain or "", _ng,
-                             _bdp(), allowed, locked, track_profile=track_profile)
+                _base = _bes(_BI(
+                    car=car_name, ranges=_rr(car_name), drivetrain=drivetrain or "",
+                    num_gears=_ng, allowed_tuning=allowed, tuning_locked=locked,
+                    track_profile=track_profile,
+                    track_name=getattr(track_profile, "track_name", "") or "",
+                )).raw_data
                 _bf = _base.get("setup_fields") or {}
                 if _bf:
                     cols.append({"name": "base", "label": "Base (from scratch)",
@@ -4315,6 +4389,49 @@ class SetupBuilderMixin:
         self._lbl_setup_event_ctx.setStyleSheet("color: #F5C542; font-size: 11px; padding: 4px;")
         layout.addWidget(self._lbl_setup_event_ctx)
 
+        # --- Owner baseline status & stale-baseline banner (v42) ---
+        # A4: per-discipline status indicator (Race / Qualifying baseline entered?).
+        # A5: stale-baseline banner when revision > 1 and prior proposals exist.
+        self._owner_baseline_status_group = QGroupBox("Owner Baseline Status")
+        self._owner_baseline_status_group.setStyleSheet(self._group_style())
+        _obs_lay = QVBoxLayout(self._owner_baseline_status_group)
+        _obs_row = QHBoxLayout()
+        # Race status label
+        self._lbl_race_baseline_status = QLabel("Race: —")
+        self._lbl_race_baseline_status.setStyleSheet(
+            f"color: {_ngr_t.TEXT_DIM}; font-size: {_ngr_t.FS_LABEL}pt;")
+        _obs_row.addWidget(self._lbl_race_baseline_status)
+        _obs_row.addSpacing(_ngr_t.SPACE_LG)
+        # Qualifying status label
+        self._lbl_qual_baseline_status = QLabel("Qualifying: —")
+        self._lbl_qual_baseline_status.setStyleSheet(
+            f"color: {_ngr_t.TEXT_DIM}; font-size: {_ngr_t.FS_LABEL}pt;")
+        _obs_row.addWidget(self._lbl_qual_baseline_status)
+        _obs_row.addStretch(1)
+        _obs_lay.addLayout(_obs_row)
+        # A5: stale-baseline warning — shown when revision > 1 for any discipline.
+        self._lbl_stale_baseline = QLabel("")
+        self._lbl_stale_baseline.setWordWrap(True)
+        self._lbl_stale_baseline.setStyleSheet(
+            f"background: {_ngr_t.STATUS_TONES['warn'][0]}; "
+            f"color: {_ngr_t.STATUS_TONES['warn'][1]}; "
+            f"border-left: 4px solid {_ngr_t.STATUS_TONES['warn'][2]}; "
+            f"border-radius: {_ngr_t.RADIUS_MD}px; "
+            f"padding: {_ngr_t.SPACE_SM}px {_ngr_t.SPACE_MD}px; "
+            f"font-size: {_ngr_t.FS_LABEL}pt;")
+        self._lbl_stale_baseline.setVisible(False)
+        _obs_lay.addWidget(self._lbl_stale_baseline)
+        layout.addWidget(self._owner_baseline_status_group)
+
+        # --- Owner baseline proposals section (v42) ---
+        # B10-B12, B16, CORRECTION-2: proposals from post-session arbiter.
+        self._proposals_group = QGroupBox("Owner Baseline Proposals")
+        self._proposals_group.setStyleSheet(self._group_style())
+        self._proposals_group.setVisible(False)
+        self._proposals_layout = QVBoxLayout(self._proposals_group)
+        self._proposals_layout.setSpacing(4)
+        layout.addWidget(self._proposals_group)
+
         history_group = QGroupBox("Setup History")
         history_group.setStyleSheet(self._group_style())
         history_h = QHBoxLayout(history_group)
@@ -4793,3 +4910,731 @@ class SetupBuilderMixin:
             except Exception as _e:
                 print(f"[SetupBuilder] re_brief DB save failed: {_e}")
         self._persist_config()
+
+    # ------------------------------------------------------------------ #
+    # Owner baseline panels — v42 additions (A4, A5, B10-B12, B16, C2).  #
+    # ------------------------------------------------------------------ #
+
+    def refresh_owner_baseline_panels(self, db=None, event_id: int = 0) -> None:
+        """Refresh all owner-baseline UI sections from the DB (v42).
+
+        Safe to call with ``db=None`` or ``event_id=0`` — all sections degrade
+        to their "not available" states without raising. The bridge should call
+        this after an event is activated and after each session is recorded.
+
+        Updates:
+          - A4: per-discipline status labels (entered / not_entered).
+          - A5: stale-baseline banner when baseline revision > 1.
+          - B10-B12, B16, C2: proposals section.
+        """
+        # Guard: only refresh if the group widgets were built.
+        if not hasattr(self, "_lbl_race_baseline_status"):
+            return
+        try:
+            self._refresh_baseline_status(db, event_id)
+        except Exception:
+            pass
+        try:
+            self._refresh_proposals(db, event_id)
+        except Exception:
+            pass
+
+    def _refresh_baseline_status(self, db, event_id: int) -> None:
+        """A4: update per-discipline status labels and the stale-baseline banner."""
+        from ui import ngr_theme as t
+        if db is None or not event_id:
+            self._lbl_race_baseline_status.setText("Race: —")
+            self._lbl_race_baseline_status.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt;")
+            self._lbl_qual_baseline_status.setText("Qualifying: —")
+            self._lbl_qual_baseline_status.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt;")
+            self._lbl_stale_baseline.setVisible(False)
+            return
+
+        try:
+            status = db.get_discipline_baseline_status(event_id)
+        except Exception:
+            status = {}
+
+        def _fmt(disc_key: str, disc_label: str, lbl_widget) -> bool:
+            """Update one discipline label; returns True if baseline is entered."""
+            st = str(status.get(disc_key, "not_entered"))
+            entered = st == "entered"
+            if entered:
+                lbl_widget.setText(f"{disc_label}: Owner baseline entered")
+                lbl_widget.setStyleSheet(
+                    f"color: {t.SUCCESS}; font-size: {t.FS_LABEL}pt; font-weight: 600;")
+            else:
+                lbl_widget.setText(f"{disc_label}: No baseline — proposals unavailable")
+                lbl_widget.setStyleSheet(
+                    f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt;")
+            return entered
+
+        race_entered = _fmt("race", "Race", self._lbl_race_baseline_status)
+        _fmt("qualifying", "Qualifying", self._lbl_qual_baseline_status)
+
+        # A5: stale-baseline banner — shown when ANY entered discipline has
+        # revision > 1. Prior proposals must NOT appear re-evaluated.
+        stale_discs: list = []
+        for disc in ("race", "qualifying"):
+            try:
+                rev = db.get_owner_baseline_revision(event_id, disc)
+                if int(rev or 0) > 1:
+                    stale_discs.append(disc)
+            except Exception:
+                pass
+
+        if stale_discs:
+            disc_list = " and ".join(d.title() for d in stale_discs)
+            self._lbl_stale_baseline.setText(
+                f"Stale baseline: the {disc_list} baseline was updated after "
+                "earlier proposals were computed. Prior proposals in the list "
+                "below were NOT re-evaluated against the new baseline — they "
+                "reflect an earlier version. Review and re-record a session to "
+                "get fresh proposals.")
+            self._lbl_stale_baseline.setVisible(True)
+        else:
+            self._lbl_stale_baseline.setVisible(False)
+
+    def _refresh_proposals(self, db, event_id: int) -> None:
+        """B10-B12, B16, C2 (DB v43): rebuild the proposals section from DB.
+
+        Sections rendered:
+          1. Active proposals  (status='proposed' or 'unresolved')
+          2. Stale proposals   (status='stale' — old-revision; visually distinct)
+          3. Actioned proposals (status='accepted'/'rejected'/'edited')
+          4. Suppressed changes (B16) — from get_suppressed_changes_for_event
+          5. Unresolved riders  (CORRECTION-2) — from get_owner_riders_for_event
+        """
+        from ui import ngr_theme as t
+        from ui.qt_layout_utils import clear_layout
+
+        if not hasattr(self, "_proposals_layout"):
+            return
+
+        clear_layout(self._proposals_layout)
+        proposals_group = getattr(self, "_proposals_group", None)
+
+        if db is None or not event_id:
+            if proposals_group is not None:
+                proposals_group.setVisible(False)
+            return
+
+        try:
+            proposals = db.get_owner_proposals_for_event(event_id)
+        except Exception:
+            proposals = []
+
+        # Fetch riders from the dedicated table (DB v43 — B9-RIDER).
+        riders: list = []
+        if hasattr(db, "get_owner_riders_for_event"):
+            try:
+                riders = db.get_owner_riders_for_event(event_id)
+            except Exception:
+                riders = []
+
+        # Fetch suppressed changes from the dedicated table (DB v43 — B16).
+        suppressed: list = []
+        if hasattr(db, "get_suppressed_changes_for_event"):
+            try:
+                suppressed = db.get_suppressed_changes_for_event(event_id)
+            except Exception:
+                suppressed = []
+
+        if not proposals and not riders and not suppressed:
+            if proposals_group is not None:
+                proposals_group.setVisible(False)
+            return
+
+        if proposals_group is not None:
+            proposals_group.setVisible(True)
+
+        # Import label constants — NEVER retype these strings (B10).
+        try:
+            from strategy.owner_baseline_arbiter import (
+                LABEL_DRIVER_ONLY, LABEL_DRIVER_EARLY_TEL,
+                LABEL_TEL_CORROBORATED, LABEL_TEL_NO_FEEDBACK,
+            )
+            _LABEL_TONE = {
+                LABEL_DRIVER_ONLY:       "warn",
+                LABEL_DRIVER_EARLY_TEL:  "info",
+                LABEL_TEL_CORROBORATED:  "success",
+                LABEL_TEL_NO_FEEDBACK:   "neutral",
+            }
+        except Exception:
+            _LABEL_TONE = {}
+
+        # Split proposals by status. 'stale' is excluded from active and actioned.
+        _ACTIONED = {"accepted", "rejected", "edited"}
+        _EXCLUDED = {"unresolved", "stale"} | _ACTIONED
+        normal_props     = [p for p in proposals if str(p.get("status")) not in
+                            _EXCLUDED]
+        accepted_props   = [p for p in proposals if str(p.get("status")) == "accepted"]
+        rejected_props   = [p for p in proposals if str(p.get("status")) == "rejected"]
+        edited_props     = [p for p in proposals if str(p.get("status")) == "edited"]
+        unresolved_props = [p for p in proposals if str(p.get("status")) == "unresolved"]
+        stale_props      = [p for p in proposals if str(p.get("status")) == "stale"]
+
+        lay = self._proposals_layout
+
+        # ---- Active proposals (proposed / unresolved) ----
+        active_props = normal_props + unresolved_props
+        if active_props:
+            hdr = QLabel("Active proposals")
+            hdr.setStyleSheet(
+                f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt; "
+                f"font-weight: 700; padding: 4px 0 2px 0;")
+            lay.addWidget(hdr)
+            for prop in active_props:
+                lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
+
+        # ---- Stale proposals (old-revision — visually distinct from active) ----
+        if stale_props:
+            stale_hdr = QLabel(
+                "Stale proposals  (baseline was updated after these were computed — "
+                "re-record a session to get fresh proposals)")
+            stale_hdr.setWordWrap(True)
+            stale_hdr.setStyleSheet(
+                f"color: {t.WARN}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
+                f"padding: 4px 0 2px 0;")
+            lay.addWidget(stale_hdr)
+            for prop in stale_props:
+                lay.addWidget(self._build_stale_proposal_row(prop, _LABEL_TONE))
+
+        # ---- Already-actioned proposals (accepted / rejected / edited) ----
+        actioned = accepted_props + rejected_props + edited_props
+        if actioned:
+            act_hdr = QLabel("Actioned proposals")
+            act_hdr.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt; "
+                f"font-weight: 700; padding: 4px 0 2px 0;")
+            lay.addWidget(act_hdr)
+            for prop in actioned:
+                lay.addWidget(self._build_actioned_proposal_row(prop, _LABEL_TONE))
+
+        # ---- Suppressed changes (B16 — now persisted in DB v43) ----
+        # Nothing silently disappears: these are rule-engine candidates the arbiter
+        # withheld. Leon sees what was withheld and why.
+        if suppressed:
+            sc_hdr = QLabel("Suppressed changes  (engine candidates not surfaced)")
+            sc_hdr.setWordWrap(True)
+            sc_hdr.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
+                f"padding: 4px 0 2px 0;")
+            lay.addWidget(sc_hdr)
+            sc_note = QLabel(
+                "These parameters had rule-engine candidates that were withheld "
+                "(rejected at the same band, ratchet-locked, or both). "
+                "They are listed here and included in the export — B16 doctrine: "
+                "nothing disappears silently.")
+            sc_note.setWordWrap(True)
+            sc_note.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            lay.addWidget(sc_note)
+            for sc in suppressed:
+                lay.addWidget(self._build_suppressed_row(sc))
+
+        # ---- Unresolved riders (CORRECTION-2 / B9-RIDER — now from dedicated table) ----
+        # B9-RIDER items are driver feedback at 5+ clean laps about a parameter the
+        # telemetry is SILENT on. They are completely distinct from B11 contradictions
+        # (which have both telemetry AND feedback and are in the proposals list).
+        # NO Accept/Reject — there is no telemetry direction to act on.
+        if riders:
+            rider_hdr = QLabel("Unresolved riders  (driver feedback, no telemetry finding)")
+            rider_hdr.setWordWrap(True)
+            rider_hdr.setStyleSheet(
+                f"color: {t.WARN}; font-size: {t.FS_LABEL}pt; font-weight: 700; "
+                f"padding: 4px 0 2px 0;")
+            lay.addWidget(rider_hdr)
+            rider_note = QLabel(
+                "These are driver feedback signals at 5+ clean laps for parameters "
+                "that telemetry produced no finding on. They are acknowledged here "
+                "and included in the export — they have NO Accept/Reject because "
+                "there is no telemetry direction to act on.  Driver feedback is "
+                "never silently dropped.")
+            rider_note.setWordWrap(True)
+            rider_note.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            lay.addWidget(rider_note)
+            for rider in riders:
+                lay.addWidget(self._build_rider_row(rider))
+
+        lay.addStretch(1)
+
+    # -- Row builders (advisory-only; never auto-apply) ---------------------
+
+    def _build_proposal_row(self, prop: dict, label_tone: dict, db) -> QWidget:
+        """Build one interactive proposal row (Accept / Reject / Edit).
+
+        UNRESOLVED proposals (B11): Accept/Reject disabled until the owner
+        resolves the conflict between telemetry and feedback directions.
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrProposalRow")
+        row_w.setStyleSheet(
+            f"QWidget#ngrProposalRow {{ background: {t.CARBON_RAISED}; "
+            f"border: 1px solid {t.HAIRLINE}; border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QVBoxLayout(row_w)
+        row_l.setContentsMargins(8, 6, 8, 6)
+        row_l.setSpacing(3)
+
+        status = str(prop.get("status") or "proposed")
+        is_unresolved = status == "unresolved"
+        param = str(prop.get("parameter") or "")
+        direction = str(prop.get("direction") or "")
+        proposed_val = prop.get("proposed_value")
+        original_val = prop.get("original_value")
+        label_str = str(prop.get("label") or "")
+        discipline = str(prop.get("discipline") or "")
+        clean_laps = int(prop.get("clean_laps") or 0)
+        evidence = list(prop.get("evidence_sources") or [])
+        clipped = bool(prop.get("clipped"))
+        clip_reason = str(prop.get("clip_stated_reason") or "")
+        session_id = str(prop.get("session_run_id") or "")[:8]
+        proposal_id = str(prop.get("proposal_id") or "")
+        # C19 / DB v43: provenance tag (MEASURED_FACT / DETERMINISTIC_INFERENCE /
+        # DRIVER_REPORT / UNRESOLVED). Never blend these visually.
+        provenance = str(prop.get("provenance") or "")
+
+        # Headline: parameter, direction, values
+        top = QHBoxLayout()
+        param_lbl = QLabel(
+            f"<b>{param.replace('_', ' ')}</b>  {direction}  "
+            f"{original_val:g} → {proposed_val:g}"
+            if isinstance(proposed_val, (int, float)) and isinstance(original_val, (int, float))
+            else f"<b>{param.replace('_', ' ')}</b>  {direction}")
+        param_lbl.setStyleSheet(f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt;")
+        top.addWidget(param_lbl)
+        top.addStretch(1)
+
+        # B10: label badge (never a numeric weight; import constants only).
+        if label_str and label_str in label_tone:
+            tone = label_tone[label_str]
+            badge = QLabel(label_str)
+            badge.setStyleSheet(t.badge_qss(tone))
+            top.addWidget(badge)
+
+        disc_badge = QLabel(discipline)
+        disc_badge.setStyleSheet(t.badge_qss("neutral"))
+        top.addWidget(disc_badge)
+
+        # C19: provenance badge — MEASURED_FACT / DETERMINISTIC_INFERENCE /
+        # DRIVER_REPORT / UNRESOLVED.  Four distinct tones; never blended.
+        _PROV_TONE = {
+            "MEASURED_FACT":           "success",
+            "DETERMINISTIC_INFERENCE": "info",
+            "DRIVER_REPORT":           "warn",
+            "UNRESOLVED":              "danger",
+        }
+        if provenance:
+            prov_badge = QLabel(provenance.replace("_", " "))
+            prov_badge.setStyleSheet(t.badge_qss(_PROV_TONE.get(provenance, "neutral")))
+            top.addWidget(prov_badge)
+
+        row_l.addLayout(top)
+
+        # Clean laps and session context
+        ctx_text = f"{clean_laps} clean lap(s)  ·  session …{session_id}"
+        ctx_lbl = QLabel(ctx_text)
+        ctx_lbl.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+        row_l.addWidget(ctx_lbl)
+
+        # Evidence sources (always shown — provenance must never be hidden).
+        if evidence:
+            ev_lbl = QLabel("Evidence: " + " · ".join(str(e) for e in evidence[:3]))
+            ev_lbl.setWordWrap(True)
+            ev_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(ev_lbl)
+
+        # B15: clip note — when the value was snapped to the nearest legal grid position.
+        if clipped and clip_reason:
+            clip_lbl = QLabel(f"Note: {clip_reason}")
+            clip_lbl.setWordWrap(True)
+            clip_lbl.setStyleSheet(
+                f"color: {t.WARN}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(clip_lbl)
+
+        # B11: UNRESOLVED — both signals shown; Accept/Reject unavailable until resolved.
+        if is_unresolved:
+            unres_lbl = QLabel(
+                "UNRESOLVED: telemetry and driver feedback OPPOSE each other on this "
+                "parameter. Both signals are shown. Telemetry implies "
+                f"\"{direction}\"; driver feedback implies the opposite. "
+                "Accept and Reject are unavailable until you explicitly resolve the conflict.")
+            unres_lbl.setWordWrap(True)
+            unres_lbl.setStyleSheet(
+                f"background: {t.STATUS_TONES['warn'][0]}; "
+                f"color: {t.STATUS_TONES['warn'][1]}; "
+                f"border-left: 4px solid {t.STATUS_TONES['warn'][2]}; "
+                f"border-radius: {t.RADIUS_SM}px; "
+                f"padding: 4px 8px; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(unres_lbl)
+
+        # Action row (B12: no "accept all"; individual Accept/Reject/Edit only).
+        act_row = QHBoxLayout()
+        act_row.setSpacing(4)
+        accept_btn = QPushButton("Accept")
+        reject_btn = QPushButton("Reject")
+        edit_btn = QPushButton("Edit value...")
+        for b in (accept_btn, reject_btn, edit_btn):
+            b.setMinimumHeight(t.TOUCH_MIN_H - 4)
+            b.setStyleSheet(t.secondary_button_qss())
+        accept_btn.setEnabled(not is_unresolved)
+        reject_btn.setEnabled(not is_unresolved)
+        if is_unresolved:
+            accept_btn.setToolTip(
+                "Resolve the telemetry/feedback conflict first before accepting.")
+            reject_btn.setToolTip(
+                "Resolve the telemetry/feedback conflict first before rejecting.")
+            # Offer a Resolve button
+            resolve_btn = QPushButton("Resolve conflict...")
+            resolve_btn.setMinimumHeight(t.TOUCH_MIN_H - 4)
+            resolve_btn.setStyleSheet(t.primary_button_qss())
+            resolve_btn.clicked.connect(
+                lambda _=False, pid=proposal_id, ab=accept_btn, rb=reject_btn,
+                d=direction, p=param, dbr=db:
+                    self._resolve_conflict(pid, ab, rb, d, p, dbr))
+            act_row.addWidget(resolve_btn)
+        act_row.addWidget(accept_btn)
+        act_row.addWidget(reject_btn)
+        act_row.addWidget(edit_btn)
+        act_row.addStretch(1)
+        row_l.addLayout(act_row)
+
+        # Wire accept / reject / edit.
+        accept_btn.clicked.connect(
+            lambda _=False, pid=proposal_id, rw=row_w, d=db:
+                self._do_accept_proposal(pid, rw, d))
+        reject_btn.clicked.connect(
+            lambda _=False, pid=proposal_id, rw=row_w, d=db:
+                self._do_reject_proposal(pid, rw, d))
+        edit_btn.clicked.connect(
+            lambda _=False, pid=proposal_id, pv=proposed_val, ov=original_val,
+            rw=row_w, d=db:
+                self._do_edit_proposal(pid, pv, ov, rw, d))
+
+        return row_w
+
+    def _build_actioned_proposal_row(self, prop: dict, label_tone: dict) -> QWidget:
+        """Compact read-only row for accepted / rejected / edited proposals."""
+        from ui import ngr_theme as t
+        status = str(prop.get("status") or "")
+        param = str(prop.get("parameter") or "")
+        proposed_val = prop.get("proposed_value")
+        original_val = prop.get("original_value")
+        original_proposed_val = prop.get("original_proposed_value")
+        direction = str(prop.get("direction") or "")
+
+        row_w = QWidget()
+        row_w.setObjectName("ngrProposalRowActioned")
+        row_w.setStyleSheet(
+            f"QWidget#ngrProposalRowActioned {{ background: {t.CARBON}; "
+            f"border: 1px solid {t.HAIRLINE_SOFT}; border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QHBoxLayout(row_w)
+        row_l.setContentsMargins(8, 4, 8, 4)
+
+        status_tone = {
+            "accepted": "success", "rejected": "danger", "edited": "info"
+        }.get(status, "neutral")
+        status_badge = QLabel(status.upper())
+        status_badge.setStyleSheet(t.badge_qss(status_tone))
+        row_l.addWidget(status_badge)
+
+        param_lbl = QLabel(param.replace("_", " "))
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT}; font-size: {t.FS_LABEL}pt;")
+        row_l.addWidget(param_lbl)
+
+        # For EDITED: show BOTH original proposed value and the edited value (A5 edge case).
+        if status == "edited" and isinstance(proposed_val, (int, float)):
+            orig_str = ""
+            if isinstance(original_proposed_val, (int, float)) and \
+               abs(original_proposed_val - proposed_val) > 1e-9:
+                orig_str = f"  (originally proposed: {original_proposed_val:g})"
+            val_lbl = QLabel(
+                f"{direction}  →  {proposed_val:g}{orig_str}")
+            val_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(val_lbl)
+        elif isinstance(proposed_val, (int, float)):
+            val_lbl = QLabel(
+                f"{direction}  {original_val:g} → {proposed_val:g}"
+                if isinstance(original_val, (int, float)) else
+                f"{direction}  → {proposed_val:g}")
+            val_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(val_lbl)
+
+        row_l.addStretch(1)
+        return row_w
+
+    def _build_rider_row(self, rider: dict) -> QWidget:
+        """CORRECTION-2 / B9-RIDER: render one unresolved rider — NO Accept/Reject.
+
+        Accepts dicts from both the old proposals-embedded shape (key='direction')
+        and the new dedicated riders table (DB v43, key='feedback_direction').
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrRiderRow")
+        row_w.setStyleSheet(
+            f"QWidget#ngrRiderRow {{ background: {t.ADVISORY_TINT}; "
+            f"border: 1px solid {t.ADVISORY_EDGE}; "
+            f"border-left: 4px solid {t.ADVISORY_EDGE}; "
+            f"border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QVBoxLayout(row_w)
+        row_l.setContentsMargins(8, 6, 8, 6)
+        row_l.setSpacing(3)
+        param = str(rider.get("parameter") or "")
+        # 'feedback_direction' is the canonical key from the riders table (v43);
+        # 'direction' is a fallback for the old embedded-in-proposals shape.
+        direction = str(
+            rider.get("feedback_direction") or rider.get("direction") or "")
+        evidence = list(rider.get("evidence_sources") or [])
+        discipline = str(rider.get("discipline") or "")
+        note_text = str(rider.get("note") or "")
+        top = QHBoxLayout()
+        param_lbl = QLabel(
+            f"<b>{param.replace('_', ' ')}</b>  ·  feedback direction: {direction}")
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt;")
+        top.addWidget(param_lbl)
+        top.addStretch(1)
+        if discipline:
+            d_badge = QLabel(discipline)
+            d_badge.setStyleSheet(t.badge_qss("neutral"))
+            top.addWidget(d_badge)
+        row_l.addLayout(top)
+        desc = QLabel(
+            note_text if note_text else
+            "Driver feedback exists for this parameter but telemetry produced no "
+            "finding. Acknowledged here and included in the export. No Accept/Reject — "
+            "there is no telemetry direction to act on.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+        row_l.addWidget(desc)
+        if evidence:
+            ev_lbl = QLabel("Evidence: " + " · ".join(str(e) for e in evidence[:3]))
+            ev_lbl.setWordWrap(True)
+            ev_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(ev_lbl)
+        return row_w
+
+    def _build_stale_proposal_row(self, prop: dict, label_tone: dict) -> QWidget:
+        """Compact read-only row for stale proposals (old-revision, DB v43).
+
+        Visually distinct from active proposals: muted background, STALE badge.
+        No Accept/Reject/Edit — the baseline changed, these proposals no longer
+        reflect the current baseline. Leon must re-record a session for fresh ones.
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrProposalRowStale")
+        row_w.setStyleSheet(
+            f"QWidget#ngrProposalRowStale {{ background: {t.CARBON}; "
+            f"border: 1px solid {t.HAIRLINE_SOFT}; "
+            f"border-left: 4px solid {t.HAIRLINE}; "
+            f"border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QHBoxLayout(row_w)
+        row_l.setContentsMargins(8, 4, 8, 4)
+        stale_badge = QLabel("STALE")
+        stale_badge.setStyleSheet(t.badge_qss("warn"))
+        row_l.addWidget(stale_badge)
+        param = str(prop.get("parameter") or "")
+        direction = str(prop.get("direction") or "")
+        proposed_val = prop.get("proposed_value")
+        discipline = str(prop.get("discipline") or "")
+        revision = int(prop.get("baseline_revision") or 0)
+        provenance = str(prop.get("provenance") or "")
+        val_str = (
+            f"  {direction}  → {proposed_val:g}"
+            if isinstance(proposed_val, (int, float)) else f"  {direction}")
+        param_lbl = QLabel(
+            f"{param.replace('_', ' ')}{val_str}  "
+            f"· {discipline} · rev {revision}")
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+        row_l.addWidget(param_lbl)
+        if provenance:
+            _PROV_TONE = {
+                "MEASURED_FACT": "success", "DETERMINISTIC_INFERENCE": "info",
+                "DRIVER_REPORT": "warn", "UNRESOLVED": "danger",
+            }
+            prov_badge = QLabel(provenance.replace("_", " "))
+            prov_badge.setStyleSheet(t.badge_qss(_PROV_TONE.get(provenance, "neutral")))
+            row_l.addWidget(prov_badge)
+        row_l.addStretch(1)
+        return row_w
+
+    def _build_suppressed_row(self, sc: dict) -> QWidget:
+        """B16 (DB v43): render one suppressed change — read-only, always shown.
+
+        Nothing silently disappears. Leon sees what the engine withheld and why.
+        """
+        from ui import ngr_theme as t
+        row_w = QWidget()
+        row_w.setObjectName("ngrSuppressedRow")
+        row_w.setStyleSheet(
+            f"QWidget#ngrSuppressedRow {{ background: {t.CARBON}; "
+            f"border: 1px solid {t.HAIRLINE_SOFT}; "
+            f"border-left: 4px solid {t.HAIRLINE}; "
+            f"border-radius: {t.RADIUS_SM}px; }}")
+        row_l = QVBoxLayout(row_w)
+        row_l.setContentsMargins(8, 4, 8, 4)
+        row_l.setSpacing(2)
+        param = str(sc.get("parameter") or "")
+        reason = str(sc.get("reason") or "")
+        ratchet = bool(sc.get("ratchet_locked"))
+        feedback_recorded = bool(sc.get("feedback_recorded"))
+        discipline = str(sc.get("discipline") or "")
+        top = QHBoxLayout()
+        param_lbl = QLabel(f"<b>{param.replace('_', ' ')}</b>  · {discipline}")
+        param_lbl.setStyleSheet(
+            f"color: {t.TEXT_DIM}; font-size: {t.FS_LABEL}pt;")
+        top.addWidget(param_lbl)
+        top.addStretch(1)
+        if ratchet:
+            rl_badge = QLabel("RATCHET LOCKED")
+            rl_badge.setStyleSheet(t.badge_qss("danger"))
+            top.addWidget(rl_badge)
+        if feedback_recorded:
+            fb_badge = QLabel("feedback recorded")
+            fb_badge.setStyleSheet(t.badge_qss("warn"))
+            top.addWidget(fb_badge)
+        row_l.addLayout(top)
+        if reason:
+            reason_lbl = QLabel(reason)
+            reason_lbl.setWordWrap(True)
+            reason_lbl.setStyleSheet(
+                f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
+            row_l.addWidget(reason_lbl)
+        return row_w
+
+    # -- Injectable seams for blocking modal dialogs (I2 / project doctrine) -
+
+    def _ask_resolve(self, param: str, tel_direction: str) -> str:
+        """B11: injectable seam for the resolve-conflict dialog.
+
+        Returns 'tel', 'feedback', or 'cancel'.  Under a test runner
+        (PYTEST_CURRENT_TEST set) the default always returns 'cancel'
+        (fail-closed).  Tests can set ``self._resolve_conflict_fn`` to drive
+        a specific outcome without opening any modal.
+        """
+        fn = getattr(self, "_resolve_conflict_fn", None)
+        if fn is not None:
+            return fn(param, tel_direction)
+        return _default_ask_resolve(self, param, tel_direction)
+
+    def _ask_text_dialog(self, title: str, message: str) -> tuple:
+        """Generic one-line text entry — injectable seam for QInputDialog.getText.
+
+        Returns (text, ok_bool).  Under a test runner returns ('', False)
+        (fail-closed).  Tests can set ``self._ask_text_fn`` to drive a
+        specific outcome.
+        """
+        fn = getattr(self, "_ask_text_fn", None)
+        if fn is not None:
+            return fn(title, message)
+        return _default_ask_text(self, title, message)
+
+    def _warn_invalid(self, message: str) -> None:
+        """Show a non-critical warning after bad user input — injectable seam.
+
+        Gap 1 fix: the except (ValueError, TypeError) path in _do_edit_proposal
+        previously called QMessageBox.warning directly.  Under a test runner
+        (PYTEST_CURRENT_TEST set) any injected _ask_text_fn that returns a
+        non-numeric string would reach this path and hang on an unanswered
+        dialog.  The seam fails closed (no-op) under pytest; tests can inject
+        ``self._warn_invalid_fn`` to capture the message.
+        """
+        fn = getattr(self, "_warn_invalid_fn", None)
+        if fn is not None:
+            fn(message)
+            return
+        _default_warn_invalid(self, message)
+
+    # -- Proposal action handlers (B12: individual, never auto-apply) -------
+
+    def _resolve_conflict(self, proposal_id: str, accept_btn, reject_btn,
+                          tel_direction: str, param: str, db) -> None:
+        """B11: offer the owner a choice between telemetry and feedback directions.
+
+        Only after an explicit choice do Accept and Reject become available.
+        Uses the injectable _ask_resolve seam — never opens a dialog under pytest.
+        """
+        result = self._ask_resolve(param, tel_direction)
+        if result in ("tel", "feedback"):
+            # Resolution made — unlock Accept/Reject for this row.
+            accept_btn.setEnabled(True)
+            reject_btn.setEnabled(True)
+            accept_btn.setToolTip("")
+            reject_btn.setToolTip("")
+
+    def _do_accept_proposal(self, proposal_id: str, row_widget, db) -> None:
+        """B12: accept one proposal. Advisory — never auto-applies to the car."""
+        if db is None:
+            return
+        try:
+            from services.owner_baseline_service import accept_proposal
+            ok = accept_proposal(db, proposal_id)
+            if ok:
+                row_widget.setEnabled(False)
+                row_widget.setToolTip("Accepted — included in the event export.")
+        except Exception:
+            pass
+
+    def _do_reject_proposal(self, proposal_id: str, row_widget, db) -> None:
+        """B12: reject one proposal with an optional reason.
+
+        Uses the injectable _ask_text_dialog seam — never opens a dialog under pytest.
+        """
+        if db is None:
+            return
+        try:
+            reason, ok = self._ask_text_dialog(
+                "Reject proposal", "Reason for rejection (optional):")
+            if not ok:
+                return  # cancelled
+            from services.owner_baseline_service import reject_proposal
+            reject_proposal(db, proposal_id, reason=str(reason or ""))
+            row_widget.setEnabled(False)
+            row_widget.setToolTip("Rejected.")
+        except Exception:
+            pass
+
+    def _do_edit_proposal(self, proposal_id: str, current_value,
+                          original_value, row_widget, db) -> None:
+        """B12: edit a proposed value. Shows both original and edited values.
+
+        Uses the injectable _ask_text_dialog seam — never opens a dialog under pytest.
+        """
+        if db is None:
+            return
+        try:
+            init_val = float(current_value or 0)
+            text, ok = self._ask_text_dialog(
+                "Edit proposal value",
+                f"Original proposed value: {init_val:g}\n"
+                f"Original baseline value: "
+                f"{float(original_value or 0):g}\n\n"
+                "Enter your edited value:")
+            if not ok:
+                return
+            edited = float(str(text or "").strip())
+            from services.owner_baseline_service import edit_proposal
+            edit_proposal(db, proposal_id, edited)
+            row_widget.setEnabled(False)
+            row_widget.setToolTip(
+                f"Edited: original proposed {init_val:g}, your value {edited:g}.")
+        except (ValueError, TypeError):
+            # Gap 1 fix: use the injectable _warn_invalid seam (never a bare
+            # QMessageBox under a test runner — it would hang with no human).
+            self._warn_invalid("The value you entered is not a valid number.")
+        except Exception:
+            pass

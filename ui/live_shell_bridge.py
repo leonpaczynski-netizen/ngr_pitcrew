@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional
 
+import os
 import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -44,18 +45,53 @@ _LIBRARY_TAB = {
 }
 
 
+
+def _default_confirm(parent, title: str, body: str) -> bool:
+    """Ask the driver a blocking yes/no. Defaults to No.
+
+    Split out so the bridge can be constructed with a different decision function, and
+    so the one case where the question CANNOT be asked has an explicit answer.
+
+    A modal dialog is correct in production and fatal without a human: it waits for a
+    click that never comes. UAT 2026-08-07 Phase 3 put one behind the weekend gate's
+    override prompt, and that hung tests/test_live_shell_bridge.py for the full 900s
+    timeout at zero CPU — which reads exactly like a slow test rather than a stuck one.
+
+    On an offscreen platform there is nobody to click, so the answer is NO. Failing
+    closed is the right direction for this specific question: it means "do not proceed
+    onto incomplete preparation", which is the conservative outcome, and it can never
+    silently wave a session through because no one was watching.
+    """
+    # Nobody can answer a modal dialog under a test runner or on an offscreen
+    # platform, so do not open one. PYTEST_CURRENT_TEST is the reliable marker — the
+    # offscreen check alone was not enough, because the regression runner sets that in
+    # its subprocess env while a developer running pytest directly does not, so the
+    # hang came straight back outside the runner.
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            or str(os.environ.get("QT_QPA_PLATFORM", "")).strip().lower() == "offscreen"):
+        return False
+    from PyQt6.QtWidgets import QMessageBox
+    return QMessageBox.warning(
+        parent, title, body,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+
 class LiveShellBridge(QObject):
     #: Emitted from the setup workers so results are handled on the Qt thread —
     #: a worker must never touch a widget.
     _analysis_done = pyqtSignal(object)
     _baseline_done = pyqtSignal(object)
     _plan_done = pyqtSignal(object)
+    #: Pit-lane mapping runs off-thread (UAT 2026-08-07 defect D9) — the result comes
+    #: back here so the session state and the status line are touched on the Qt thread.
+    _pit_map_done = pyqtSignal(object)
     #: PTT strategy acknowledgement — emitted by the voice listener thread and
     #: dispatched on the Qt thread so the slot can safely call refresh().
     _voice_strategy_ack = pyqtSignal(str)
 
     def __init__(self, shell, controller, window=None, config=None, db=None,
-                 *, refresh_ms: int = 750, parent=None, spawn=None):
+                 *, refresh_ms: int = 750, parent=None, spawn=None, confirm=None):
         super().__init__(parent)
         #: How long-running setup work is started. INJECTABLE: the engine is synchronous
         #: by design and only this bridge decides where it runs. Tests pass an inline
@@ -63,6 +99,13 @@ class LiveShellBridge(QObject):
         #: process, and inline keeps the assertions deterministic.
         self._spawn = spawn or (
             lambda fn: threading.Thread(target=fn, daemon=True).start())
+        #: How a blocking yes/no confirmation is asked. INJECTABLE for the same reason
+        #: as ``spawn``: the default is a MODAL QMessageBox, which waits for a human
+        #: forever. A headless run has no human, so the weekend gate's override prompt
+        #: hung tests/test_live_shell_bridge.py indefinitely — at zero CPU, which reads
+        #: exactly like a slow test rather than a stuck one. Tests inject a decision;
+        #: production gets the dialog.
+        self._confirm = confirm or _default_confirm
         self._shell = shell
         self._controller = controller
         self._window = window
@@ -232,6 +275,13 @@ class LiveShellBridge(QObject):
         self._last_analysis = None
         self._analysis_done.connect(self._on_analysis_done)
         self._baseline_done.connect(self._on_baseline_done)
+        self._pit_map_done.connect(self._on_pit_map_done)
+        #: True while an off-thread pit-lane mapping attempt is in flight.
+        self._pit_map_pending = False
+        #: Consecutive 750ms ticks the car has held pit-lane speed (defect D1).
+        self._box_ticks = 0
+        #: Whether the track model has converged — the state in which "box" is expected.
+        self._tm_converged = False
         #: Last Event Command Centre view — the run planner reads the current objective
         #: from it so a started run carries the purpose the engineer actually asked for.
         self._last_guidance_view = None
@@ -394,6 +444,8 @@ class LiveShellBridge(QObject):
                     gp.lock_requested.connect(self._on_lock_setup)
                 if hasattr(gp, "car_ranges_requested"):
                     gp.car_ranges_requested.connect(self._on_car_ranges)
+                if hasattr(gp, "car_data_captured"):
+                    gp.car_data_captured.connect(self._on_car_data_captured)
                 if hasattr(gp, "gearing_changed"):
                     gp.gearing_changed.connect(self._on_gearing_changed)
                 if hasattr(gp, "ballast_changed"):
@@ -2044,6 +2096,10 @@ class LiveShellBridge(QObject):
         if not plan.ok:
             self._run_status(plan.reason or "Could not start the run.")
             return
+        # A new run is a new piece of evidence — the previous run's handling verdict
+        # must not carry into it (defect B8).
+        if not plan.reused:
+            self._clear_feedback("a new run is open")
         self._run_status("Run open — drive it, then come back and press “End run & record”."
                          if not plan.reused else "That run is already open.")
         self.refresh()
@@ -2106,6 +2162,10 @@ class LiveShellBridge(QObject):
         # Clear the tyre-test override — the run is now bound and its compound tag is
         # fixed; subsequent runs start fresh from the sheet compound.
         self._test_compound_override = None
+        # This run now needs its OWN handling verdict. Anything still held from the
+        # previous run describes a different run on a possibly different setup, and
+        # carrying it here is what let a stale verdict drive the next analysis (B8).
+        self._clear_feedback("this run needs its own notes")
         msg = (f"Run recorded — {decision.reason} "
                f"Open Review to see the laps, then submit your feedback.")
         if decision.warning:
@@ -2120,6 +2180,8 @@ class LiveShellBridge(QObject):
         # so the next run should start from the sheet compound again.
         self._test_compound_override = None
         ok = self._runs.discard_run()
+        if ok:
+            self._clear_feedback("the run was discarded")
         self._run_status("Run discarded — nothing was recorded against the event."
                          if ok else "There was no open run to discard.")
         self.refresh()
@@ -2474,7 +2536,19 @@ class LiveShellBridge(QObject):
             # Evaluate the recorded laps once, then both SPEAK the engineer's per-lap call
             # (once per new lap) and show it on the page.
             lap_results = self._track_lap_results(session)
+            # Whether the model has converged — the state in which the app says "box
+            # this lap", and therefore the only state in which slowing down should be
+            # read as boxing (defect D1).
+            try:
+                from data.track_convergence import assess_capture_convergence
+                self._tm_converged = bool(
+                    assess_capture_convergence(lap_results).converged)
+            except Exception:
+                self._tm_converged = False
             self._voice_track_modelling(session, lap_results)
+            # The physical box the driver has just performed, rather than the button
+            # they cannot reach in VR.
+            self._auto_box_if_converged()
             page.set_session(session,
                              laps_captured=self._track_laps_captured(),
                              corners=self._track_corners(session),
@@ -2518,7 +2592,15 @@ class LiveShellBridge(QObject):
         Restarts capture so the pit lap is recorded; the first completed lap from here is
         detected as the pit-lane lap (the car diverges from the racing line and rejoins)."""
         self._pit_lane_mode = True
-        self._pit_lane_baseline_laps = self._controller_lap_count()
+        # UAT 2026-08-07 defect D2: the baseline USED to be read here, BEFORE
+        # start_session() allocated a brand-new CalibrationSession with laps=[]. The
+        # gate in _try_map_pit_lane is `len(laps) <= baseline`, so a baseline of 5-7
+        # (carried over from the just-approved modelling session) meant the driver had
+        # to complete that many MORE laps before a single mapping attempt was made —
+        # and the pit lap they had just driven went with the discarded session. Read
+        # the baseline AFTER the restart so it reflects the new session's lap count
+        # (0). If the restart fails we keep counting against the existing session, so
+        # the baseline must then stay at its current value.
         try:
             ctrl = getattr(self._tracks, "_controller", None)
             sess = self._tracks.session
@@ -2526,10 +2608,77 @@ class LiveShellBridge(QObject):
                 ctrl.start_session(sess.location_id, sess.layout_id)
         except Exception:
             pass
+        self._pit_lane_baseline_laps = self._controller_lap_count()
         self._tm_status = ("Track approved. Now take one lap through the pit lane — in at "
                            "the pit entry, down the lane and back out — and I'll map it. A "
                            "drive-through is enough; you don't need to stop. That completes "
                            "the model.")
+
+    # ---- boxing, detected rather than clicked (UAT 2026-08-07 D1/D8) ------
+    #: Sustained speed below this, while recording, reads as pit-lane running rather
+    #: than a slow corner. GT7 pit limiters sit at 60 km/h (50 at some circuits); a
+    #: genuine slow hairpin is taken above 70. 65 separates them without needing the
+    #: track's own limiter value, which the app does not have.
+    _BOX_SPEED_KMH = 65.0
+    #: How long the car must hold that speed. A hairpin is over in about a second; the
+    #: pit lane is several. Held in ticks of the 750ms refresh.
+    _BOX_TICKS = 5
+
+    def _detect_box(self) -> bool:
+        """Has the driver just driven into the pit lane? (UAT 2026-08-07 defect D1.)
+
+        "Box this lap" is what the app says when the track model has converged, and in
+        that sentence "box" meant PRESS THE STOP RECORDING BUTTON. ``stop_capture`` had
+        exactly one caller — a widget click — and no telemetry path reached it. In VR
+        the driver cannot press it, so the flow could not advance: the physical pit stop
+        was a no-op, the pit lap scored as usable, convergence still held, and the same
+        callout fired again on the next clean lap. That is the loop the UAT reported.
+
+        The obvious detector is unavailable here: ``telemetry.state`` only recognises a
+        pit stop from refuelling or a 3-second stop below 10 km/h **in RACING phase**,
+        and track modelling runs in Time Trial where that phase never occurs (defect
+        D8) — so the app's own instruction ("a drive-through is enough, you don't need
+        to stop") is unsatisfiable by the only detector it had. Sustained pit-lane speed
+        needs no phase, no refuelling and no stop, so it detects the drive-through the
+        app actually asks for.
+        """
+        speed = None
+        for attr in ("_last_packet", "last_packet"):
+            p = getattr(self._window, attr, None)
+            if p is not None:
+                try:
+                    speed = float(getattr(p, "speed_kmh", None))
+                except (TypeError, ValueError):
+                    speed = None
+                if speed is not None:
+                    break
+        if speed is None:
+            return False
+        if speed <= 0.0:
+            # Stationary in the garage/menus is not boxing.
+            self._box_ticks = 0
+            return False
+        if speed < self._BOX_SPEED_KMH:
+            self._box_ticks = int(getattr(self, "_box_ticks", 0)) + 1
+        else:
+            self._box_ticks = 0
+        return self._box_ticks >= self._BOX_TICKS
+
+    def _auto_box_if_converged(self) -> None:
+        """Finish the capture when the driver boxes, without needing the button.
+
+        Only fires once the model has actually converged — the app has said "box this
+        lap" — so slowing for any other reason mid-capture cannot end the session early.
+        """
+        if getattr(self, "_pit_lane_mode", False):
+            return                      # already past capture, mapping the lane
+        if not getattr(self, "_tm_converged", False):
+            return
+        if not self._detect_box():
+            return
+        self._box_ticks = 0
+        self._track_status("Box detected — finishing the track model.")
+        self._on_track_action("stop_capture")
 
     def _try_map_pit_lane(self) -> None:
         """While mapping the pit lane, detect it from the completed out-lap(s).
@@ -2540,20 +2689,42 @@ class LiveShellBridge(QObject):
         simply misses once), so the driver isn't forced to pit on a specific lap."""
         if not self._pit_lane_mode:
             return
+        if getattr(self, "_pit_map_pending", False):
+            return                       # an attempt is already running off-thread
         try:
             ctrl = getattr(self._tracks, "_controller", None)
             laps = getattr(getattr(ctrl, "_session", None), "laps", None) or []
             if len(laps) <= self._pit_lane_baseline_laps:
                 return                                   # no new lap completed yet
             self._pit_lane_baseline_laps = len(laps)     # one attempt per new lap
-            result = self._tracks.map_pit_lane(laps[-2:])  # stitch the last two laps
-            if result.ok:
+            # UAT 2026-08-07 defect D9 — map_pit_lane is O(samples x stations): a
+            # 90-second lap at 60 Hz against a 5 km centreline is roughly 27 million
+            # distance computations in pure Python, and this ran SYNCHRONOUSLY on the Qt
+            # thread inside a 750 ms timer, wrapped in a bare except. A slow attempt
+            # froze the UI mid-session and a failing one was indistinguishable from a
+            # no-op. It now runs on the worker the bridge already uses for the setup
+            # engine, and the result comes back on the Qt thread.
+            snapshot = list(laps[-2:])                   # stitch the last two laps
+            self._pit_map_pending = True
+            self._spawn(lambda: self._pit_map_done.emit(
+                self._tracks.map_pit_lane(snapshot)))
+        except Exception:
+            self._pit_map_pending = False
+
+    def _on_pit_map_done(self, result) -> None:
+        """Apply a pit-lane mapping attempt that ran off the Qt thread (defect D9)."""
+        self._pit_map_pending = False
+        try:
+            if getattr(result, "ok", False):
                 self._pit_lane_mode = False
+                ctrl = getattr(self._tracks, "_controller", None)
                 if ctrl is not None and hasattr(ctrl, "stop_session"):
                     ctrl.stop_session()
             # A miss (car hasn't been through the pit yet) leaves us in mapping mode to
             # try the next lap; either way surface the engineer's message.
-            self._tm_status = result.reason or self._tm_status
+            self._tm_status = getattr(result, "reason", "") or self._tm_status
+            if self._tm_status:
+                self._track_status(self._tm_status)
         except Exception:
             pass
 
@@ -2852,8 +3023,11 @@ class LiveShellBridge(QObject):
     def _form_for_discipline(self, discipline: str = ""):
         """The classic setup form that owns this discipline's values.
 
-        The domain has exactly two editable sheets — Race and Qualifying. The initial
-        setup build FILLS both; it is an action, not a third sheet.
+        The classic shell has exactly two forms, Race and Qualifying, and it is being
+        retired — so Base (added to the new shell for UAT 2026-08-07) maps onto the Race
+        form here rather than growing a third classic form. The Base SHEET is real and
+        separate in strategy.setup_sheet; this is only about which legacy widget holds
+        the values.
         """
         d = (discipline or self._discipline or "race").lower()
         attr = "_qual_form" if d == "qualifying" else "_race_form"
@@ -2967,6 +3141,15 @@ class LiveShellBridge(QObject):
             # form seeded first it would shadow the driver's last-applied setup on reopen.
             self._seed_from_last_applied()
             self._seed_sheets()
+            # Keep the GT7 car-data capture page pointed at the active car so opening
+            # it never asks "which car?" (UAT 2026-08-07 defect A7).
+            try:
+                panel = getattr(gp, "car_data_capture", None)
+                car = str(self._setups.inputs().car or "")
+                if panel is not None and car and getattr(panel, "_car", "") != car:
+                    panel.set_car(car)
+            except Exception:
+                pass
             sheet = self._setups.sheet(self._discipline)
             # A defaults-only sheet is NOT a setup. Passing it would present numbers
             # nobody authored as though they were the driver's own.
@@ -2974,10 +3157,19 @@ class LiveShellBridge(QObject):
             label, applied = self._setups.active_setup(self._discipline)
             from ui.setup_recommendation_vm import build_recommendation_vm
             vm = self._recommendation_vm()
+            # Defect B6 — the "I heard X, I did Y" record for the SHOWN discipline.
+            # Only the analysis that belongs to this sheet may speak for it.
+            _res = self._last_analysis
+            _own = _res is not None and getattr(_res, "discipline", "") == self._discipline
             gp.set_recommendation(
                 vm if vm is not None else build_recommendation_vm({}),
                 discipline=self._discipline, active_setup=label, applied=applied,
                 setup_values=setup,
+                feedback_dispositions=(
+                    list(getattr(_res, "feedback_dispositions", ()) or ()) if _own else []),
+                degraded_reason=(
+                    str(getattr(_res, "diagnosis_degraded_reason", "") or "")
+                    if _own and getattr(_res, "diagnosis_degraded", False) else ""),
                 lineage_nodes=self._lineage_nodes(label),
                 has_recorded_run=self._has_recorded_run(),
             )
@@ -3583,10 +3775,20 @@ class LiveShellBridge(QObject):
     def _on_discipline(self, discipline: str) -> None:
         """Remember the selected discipline and re-feed the Garage for it."""
         d = str(discipline or "").lower()
-        if d not in ("qualifying", "race"):
+        if d not in ("base", "qualifying", "race"):
             d = "race"
+        if d != getattr(self, "_discipline", d):
+            # Feedback is about a run on ONE discipline's setup; a race verdict must
+            # not silently drive a qualifying analysis (defect B8).
+            self._clear_feedback(f"you switched to the {d} setup")
         self._discipline = d
-        self._push_practice_mode(d)
+        # UAT 2026-08-07 — Base is INERT for the live runtime. Selecting a discipline
+        # tab already mutates the live session type (defect C5, a Phase 3 fix), and
+        # adding a third tab would have made that worse: opening the Garage to build a
+        # base setup would have asserted a discipline the driver is not running. Base
+        # is the anchor, not a session, so it pushes nothing.
+        if d != "base":
+            self._push_practice_mode(d)
         # Selecting the qualifying sheet applies the qualifying tyre rule to it (softest
         # dry / rain tyre), so the setup sheet is always on the right compound. Guarded to
         # an authored sheet + only-when-different inside the helper, so no churn.
@@ -3600,6 +3802,74 @@ class LiveShellBridge(QObject):
             pass
         self._feed_garage()
 
+    # ---- weekend transition gate (UAT 2026-08-07 C1/C4/C6/C7/C11) ---------
+    def _weekend_gate(self, transition):
+        """Evaluate one weekend transition against the evidence actually recorded.
+
+        Composes what the reporters already compute — readiness levels, per-compound
+        tyre coverage, whether the setup is confirmed on the car, the driver's own
+        comfort verdict — into one verdict. The pure modules keep reporting; THIS is
+        where the app refuses.
+        """
+        from strategy.weekend_gate import evaluate_weekend_transition
+        view = self._last_guidance_view if isinstance(self._last_guidance_view, Mapping) else {}
+        try:
+            required, sampled = self._tyre_compound_coverage()
+        except Exception:
+            required, sampled = (), ()
+        try:
+            _label, applied = self._setups.active_setup(self._discipline)
+        except Exception:
+            _label, applied = "", False
+        return evaluate_weekend_transition(
+            transition,
+            readiness=view.get("readiness") or [],
+            required_compounds=required, sampled_compounds=sampled,
+            setup_applied=bool(applied), setup_label=str(_label or ""),
+            driver_comfortable=self._driver_comfort(),
+            convergence_state=str((view.get("convergence") or {}).get("state") or ""))
+
+    def _driver_comfort(self):
+        """The driver's own "am I happy with this setup" verdict, or None if unasked.
+
+        UAT 2026-08-07 defect C7 — no such gate existed anywhere in the app
+        (`grep -i comfortab` over the non-test tree returned only CSS comments). It is
+        read from the handling verdict the driver already gives in Review rather than
+        adding a second thing to fill in: an explicit better/worse call on the setup IS
+        the comfort statement. None means never asked, which is NOT the same as happy.
+        """
+        fb = dict(getattr(self, "_last_feedback", None) or {})
+        verdict = str(fb.get("overall") or fb.get("vs_previous") or "").strip().lower()
+        if not verdict:
+            return None
+        if any(t in verdict for t in ("better", "good", "happy", "confident")):
+            return True
+        if any(t in verdict for t in ("worse", "bad", "unhappy", "no confidence")):
+            return False
+        return None
+
+    def _confirm_override(self, verdict, title: str) -> bool:
+        """Ask the driver to proceed on incomplete preparation — NAMING what is missing.
+
+        Defect C11: the Start Race check was documented "never hard-stop" and proceeded
+        on a bare Yes/No listing only stage names. The app stays advisory — it will not
+        stop anyone driving — but consent has to be informed, and the override is
+        recorded so the laps are never mistaken for a properly prepared session.
+        """
+        if not self._confirm(self._shell, title, verdict.confirmation_prompt()):
+            self._run_status(f"{title} held — {verdict.headline} Nothing was changed.")
+            return False
+
+        self._last_gate_override = {
+            "transition": verdict.transition.value,
+            "skipped": [b.key for b in verdict.blockers],
+            "detail": [b.message for b in verdict.blockers],
+        }
+        self._run_status(
+            f"{title} started on INCOMPLETE preparation — skipped: "
+            + "; ".join(b.message for b in verdict.blockers))
+        return True
+
     def _on_begin_qualifying(self) -> None:
         """Actually ENTER qualifying — not just show the pit wall.
 
@@ -3612,7 +3882,17 @@ class LiveShellBridge(QObject):
         still confirms it in-game — but everything the app controls now reflects
         qualifying.
         """
+        # Defect C4 — this handler contained ZERO validation; the only defence was a
+        # disabled button whose readiness mapping treated developing/adequate/strong/
+        # unknown alike as non-blocking, so only the literal string "missing" stopped
+        # anything. The transition is now earned or explicitly overridden.
+        from strategy.weekend_gate import WeekendTransition
+        _verdict = self._weekend_gate(WeekendTransition.BEGIN_QUALIFYING)
+        if not _verdict.allowed and not self._confirm_override(_verdict, "Begin Qualifying"):
+            return
         self._live_session_mode = "qualifying"
+        if getattr(self, "_discipline", "") != "qualifying":
+            self._clear_feedback("qualifying has begun")
         self._discipline = "qualifying"
         # Reflect the switch in the Garage's own selector so the two never disagree.
         try:
@@ -3639,18 +3919,15 @@ class LiveShellBridge(QObject):
         any stage is still open the driver is warned and can confirm; then the app KNOWS
         it is racing and commits the race setup, race shift RPM, and the approved plan.
         """
-        ready, blockers = self._race_readiness()
-        if not ready and blockers:
-            from PyQt6.QtWidgets import QMessageBox
-            body = ("Some stages are not complete yet:\n\n  •  "
-                    + "\n  •  ".join(blockers)
-                    + "\n\nStart the race anyway?")
-            answer = QMessageBox.warning(
-                self._shell, "Start Race", body,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+        # UAT 2026-08-07 defect C11 — the old prompt listed stage NAMES and nothing
+        # about what any of them means, and the readiness list behind it was documented
+        # as "never hard-stop". The same gate that guards qualifying now guards the
+        # race, and the confirmation enumerates exactly what is being skipped. The
+        # stage-level blockers are still surfaced, as warnings alongside it.
+        from strategy.weekend_gate import WeekendTransition
+        _verdict = self._weekend_gate(WeekendTransition.START_RACE)
+        if not _verdict.allowed and not self._confirm_override(_verdict, "Start Race"):
+            return
         self._enter_race()
 
     def _enter_race(self) -> None:
@@ -3711,13 +3988,24 @@ class LiveShellBridge(QObject):
             # multi-car lobby as a RACE. A baseline practice run then fired "Race started."
             # and framed the pit wall as a live race. Forcing the override keeps a plain
             # practice run a PRACTICE session end-to-end.
+            # UAT 2026-08-07 defect C5 — the SESSION TYPE may only be declared by an
+            # explicit live session, never by which Garage tab is open. `is_qual` above
+            # falls back to the selected discipline, and refresh() pushes this every
+            # 750ms, so simply LOOKING at the qualifying sheet to build a setup silently
+            # converted the live session to Qualifying — and there was no Practice tab
+            # to look at instead. Browsing a setup is not a declaration of intent.
+            #
+            # The shift-beep refs above still follow the discipline (which RPM to beep
+            # at is a property of the setup being tested, not of the session), but the
+            # tracker only hears an explicitly declared session.
+            declared = str(getattr(self, "_live_session_mode", "") or "").lower()
             tracker = getattr(self._window, "_tracker", None)
             if tracker is not None and hasattr(tracker, "set_session_type_override"):
                 try:
                     from telemetry.state import SessionType
                     tracker.set_session_type_override(
-                        SessionType.QUALIFYING if is_qual
-                        else SessionType.RACE if is_race
+                        SessionType.QUALIFYING if declared == "qualifying"
+                        else SessionType.RACE if declared == "race"
                         else SessionType.PRACTICE)
                 except Exception:
                     pass
@@ -3880,6 +4168,24 @@ class LiveShellBridge(QObject):
         if outcome.ok:
             self._mirror_to_classic(self._discipline)
         self._garage_status(outcome.reason or "Gearing updated.")
+        self.refresh()
+
+    def _on_car_data_captured(self, car_name: str) -> None:
+        """The driver typed in real GT7 data for a car (UAT 2026-08-07 defect A7).
+
+        Nothing is re-authored automatically — an existing setup is not silently
+        rewritten under the driver, which is the same rule the rest of the Garage
+        follows. The Garage is refreshed and told what changed, so the next Build or
+        Analyse uses the real numbers instead of the class archetype.
+        """
+        try:
+            from data.car_parameter_model import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
+        self._garage_status(
+            f"Saved GT7 data for {car_name}. Rebuild the setup to use it — nothing was "
+            f"changed on the current sheet.")
         self.refresh()
 
     def _on_car_ranges(self) -> None:
@@ -4322,11 +4628,64 @@ class LiveShellBridge(QObject):
         # traction, kerbs); only the free-text notes go through the text path. Without
         # this the brain sees telemetry symptoms only, so an understeer felt by the
         # driver on a car with clean telemetry would falsely read "inside its window".
-        feedback = dict(getattr(self, "_last_feedback", None) or {})
+        feedback = self._current_feedback()
         notes = str(feedback.get("notes") or "").strip()
         self._spawn(lambda: self._analysis_done.emit(self._setups.analyse(
             discipline, feeling=notes, feedback=feedback or None,
             live_corner_aggregates=self._live_corner_aggregates())))
+
+    def _clear_feedback(self, why: str) -> None:
+        """Drop the driver's handling verdict at a run or discipline boundary.
+
+        UAT 2026-08-07 defect B8: ``_last_feedback`` was never cleared by start-run,
+        record-run, discard-run, a discipline change or Begin Qualifying, so a
+        qualifying analysis could quietly reuse a verdict the driver gave about a
+        practice run on a different setup. Feedback is evidence about ONE run on ONE
+        setup; carrying it past that boundary is not continuity, it is contamination.
+
+        The form is cleared too, otherwise the next run starts with the previous run's
+        answers already filled in and the driver has to notice and undo them.
+        """
+        if not getattr(self, "_last_feedback", None):
+            self._reset_feedback_form()
+            return
+        self._last_feedback = {}
+        self._reset_feedback_form()
+        self._run_status(
+            f"Handling notes cleared — {why}. Note how THIS run felt before analysing.")
+
+    def _reset_feedback_form(self) -> None:
+        try:
+            form = getattr(self._shell, "feedback_form", None)
+            if form is not None and hasattr(form, "reset"):
+                form.reset()
+        except Exception:
+            pass
+
+    def _current_feedback(self) -> dict:
+        """The driver's handling verdict as it stands RIGHT NOW.
+
+        UAT 2026-08-07 defect B2: Analyse read ``self._last_feedback``, which is only
+        written when the driver presses "Submit feedback". Fill in all fourteen
+        dropdowns, navigate to the Garage and press Analyse without that click and
+        100% of it was ignored — and the headline then blamed missing evidence rather
+        than the missing press, so the driver had no way to tell what had happened.
+
+        The live form is read first and the last submitted dict is the fallback, so
+        unsubmitted answers count and a submitted verdict still survives navigating
+        away from the form.
+        """
+        live: dict = {}
+        try:
+            form = getattr(self._shell, "feedback_form", None)
+            if form is not None and hasattr(form, "current_feedback"):
+                live = {k: v for k, v in (form.current_feedback() or {}).items()
+                        if str(v).strip()}
+        except Exception:
+            live = {}
+        merged = dict(getattr(self, "_last_feedback", None) or {})
+        merged.update(live)          # what is on screen now wins
+        return merged
 
     def _live_corner_aggregates(self) -> list:
         """Live per-corner telemetry, when the host runs an aggregator ([] otherwise)."""
@@ -4495,17 +4854,86 @@ class LiveShellBridge(QObject):
         # Keep the driver's handling verdict so the next Analyse can weigh it
         # (the Garage "Analyse" otherwise sees telemetry symptoms only).
         self._last_feedback = dict(feedback or {})
-        try:
-            window = self._window
-            for name in ("record_driver_feedback", "_record_driver_feedback", "save_driver_feedback"):
-                fn = getattr(window, name, None)
-                if callable(fn):
-                    fn(dict(feedback or {}))
-                    break
-        except Exception:
-            pass
+        self._persist_feedback(feedback)
         self._feed_outcome(feedback)
         self.refresh()
+
+    def _persist_feedback(self, feedback: dict) -> bool:
+        """Write the driver's feedback to the session DB. Returns True on success.
+
+        UAT 2026-08-07 defect B1: this used to probe the window for
+        ``record_driver_feedback`` / ``_record_driver_feedback`` / ``save_driver_feedback``
+        inside a bare ``except: pass``. None of those three methods exists in production
+        code — only in a test stub — so every piece of feedback submitted in the new
+        shell lived solely in ``self._last_feedback`` and died with the process. Nothing
+        reached the ``driver_feedback`` table, so the profile-evolution loop, the
+        failed-direction lockout and the rollback prompt could never arm.
+
+        The write is attributed to the RECORDED run being reviewed (not the live
+        session), because that is the run the driver is giving feedback on. Failures are
+        surfaced on the status line rather than swallowed.
+        """
+        fb = dict(feedback or {})
+        if not fb:
+            return False
+        if self._db is None or not hasattr(self._db, "write_feedback"):
+            self._run_status("Feedback captured for this analysis but NOT saved — "
+                             "no session database is attached.")
+            return False
+        try:
+            sid = int(self._review_session_id() or 0) or int(self._live_session_id() or 0)
+            setup_id = 0
+            try:
+                setup_id = int(self._db.get_dominant_setup_id(sid) or 0) if sid else 0
+            except Exception:
+                setup_id = 0
+            config_id = ""
+            try:
+                fn = getattr(self._window, "_active_config_id", None)
+                config_id = str(fn() or "") if callable(fn) else ""
+            except Exception:
+                config_id = ""
+            self._db.write_feedback(
+                session_id=sid,
+                lap_num=self._live_lap_count(),
+                feedback=fb,
+                config_id=config_id,
+                setup_id=setup_id,
+                rating="",
+            )
+        except Exception as exc:
+            self._run_status(f"Feedback could not be saved: {exc}")
+            return False
+        # A directional better/worse call stamps the latest setup-lineage node, which is
+        # what arms rollback and the failed-direction lockout. Best effort, but reported.
+        self._stamp_lineage_outcome(fb)
+        return True
+
+    def _stamp_lineage_outcome(self, feedback: dict) -> None:
+        """Record a better/unchanged/worse verdict against the latest lineage node."""
+        verdict_src = str((feedback or {}).get("overall")
+                          or (feedback or {}).get("vs_previous") or "").strip()
+        if not verdict_src or self._db is None:
+            return
+        try:
+            from strategy.setup_lineage import vs_previous_to_verdict
+            verdict = vs_previous_to_verdict(verdict_src)
+            if not verdict:
+                return
+            car_id = 0
+            if hasattr(self._window, "_current_car_id"):
+                car_id = int(self._window._current_car_id() or 0)
+            if car_id <= 0:
+                return
+            ev = (self._window._build_event_context()
+                  if hasattr(self._window, "_build_event_context") else None)
+            track = str(getattr(ev, "track", "") or "")
+            layout = str(getattr(ev, "layout_id", "") or "")
+            self._db.record_latest_lineage_outcome(
+                car_id, track, layout, verdict,
+                int(self._review_session_id() or 0))
+        except Exception:
+            pass
 
     def _feed_outcome(self, feedback=None) -> None:
         """Reconcile the reviewed run with the driver's feedback onto the Outcome page."""
@@ -4741,18 +5169,20 @@ class LiveShellBridge(QObject):
         neighbouring "switch"/"create" controls — so it confirms first, mirroring the
         Start Race warning.
         """
+        # Routed through the injectable confirm seam so a headless run never blocks on a
+        # modal nobody can answer, and so a FAILURE to ask does not become permission:
+        # the old `except Exception: pass` fell through to _finish_active_event(), so a
+        # dialog that raised silently finished the event unconfirmed — the destructive
+        # direction, from the branch that exists to be careful.
         try:
-            from PyQt6.QtWidgets import QMessageBox
-            answer = QMessageBox.warning(
+            confirmed = bool(self._confirm(
                 self._shell, "Finish event",
                 "Finish and close this event? Preparation for it stops and it is no "
-                "longer the active event.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if answer != QMessageBox.StandardButton.Yes:
-                return
+                "longer the active event."))
         except Exception:
-            pass
+            confirmed = False
+        if not confirmed:
+            return
         self._finish_active_event()
 
     def _finish_active_event(self) -> None:

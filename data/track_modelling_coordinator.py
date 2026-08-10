@@ -45,6 +45,9 @@ class TrackModellingState(str, Enum):
     REVIEW_REQUIRED = "review_required"
     VALIDATED = "validated"
     ACTIVE = "active"
+    #: Model accepted, pit lane still to map (defect D4). A distinct STATE rather than
+    #: a flag, so it survives a restart and the rail can show the work that remains.
+    PIT_LANE_PENDING = "pit_lane_pending"
     ERROR = "error"
 
 
@@ -59,6 +62,8 @@ class TrackModellingAction(str, Enum):
     EDIT_SEGMENT = "edit_segment"        # rename/renumber/merge/split/reject/approve
     VALIDATE = "validate"
     ACTIVATE = "activate"
+    MAP_PIT_LANE = "map_pit_lane"        # begin mapping the pit lane (defect D4)
+    PIT_LANE_MAPPED = "pit_lane_mapped"  # the lane was detected and written
     RECALIBRATE = "recalibrate"
     RESET = "reset"
     FAIL = "fail"
@@ -71,6 +76,12 @@ class WorkflowStep(str, Enum):
     REVIEW = "review"
     VALIDATE = "validate"
     ACTIVATE = "activate"
+    #: UAT 2026-08-07 defect D4 — the six-step rail had no pit action, state or
+    #: message, so the outstanding pit-lane step lived only in ``_pit_lane_mode``, an
+    #: in-memory flag on the bridge that was lost on restart. An approved-but-unmapped
+    #: track then read as finished; confirmed on the driver's disk, where the Monza
+    #: model carries "accepted": true beside "pit_lane": null.
+    MAP_PIT_LANE = "map_pit_lane"
 
 
 # Which guided step each state belongs to.
@@ -84,6 +95,7 @@ _STATE_STEP: Dict[TrackModellingState, WorkflowStep] = {
     TrackModellingState.REVIEW_REQUIRED: WorkflowStep.REVIEW,
     TrackModellingState.VALIDATED: WorkflowStep.VALIDATE,
     TrackModellingState.ACTIVE: WorkflowStep.ACTIVATE,
+    TrackModellingState.PIT_LANE_PENDING: WorkflowStep.MAP_PIT_LANE,
     TrackModellingState.ERROR: WorkflowStep.IDENTIFY,
 }
 
@@ -99,6 +111,10 @@ _NEXT_STEP: Dict[TrackModellingState, str] = {
     TrackModellingState.REVIEW_REQUIRED: "Resolve the flagged segments, then validate the model.",
     TrackModellingState.VALIDATED: "Activate the validated model so live features use it.",
     TrackModellingState.ACTIVE: "Model is active. Recalibrate only if the track feels wrong.",
+    TrackModellingState.PIT_LANE_PENDING: (
+        "Model accepted. Now drive one lap through the pit lane — in at the pit entry, "
+        "down the lane and back out — and I'll map it. A drive-through is enough; "
+        "nothing to press."),
     TrackModellingState.ERROR: "Something went wrong — reset and reselect the track to try again.",
 }
 
@@ -113,6 +129,14 @@ _TRANSITIONS: Dict[TrackModellingState, Dict[TrackModellingAction, TrackModellin
     TrackModellingState.IDENTIFIED: {
         TrackModellingAction.START_CAPTURE: TrackModellingState.CAPTURING,
         TrackModellingAction.CLEAR_TRACK: TrackModellingState.NO_TRACK,
+    },
+    # Defect D4 — mapping the pit lane is a STEP, so it has states and transitions
+    # rather than an in-memory flag. ACTIVE can drop back into it (an approved model
+    # whose lane was never mapped, or a re-map), and mapping returns to ACTIVE.
+    TrackModellingState.PIT_LANE_PENDING: {
+        TrackModellingAction.PIT_LANE_MAPPED: TrackModellingState.ACTIVE,
+        TrackModellingAction.RECALIBRATE: TrackModellingState.IDENTIFIED,
+        TrackModellingAction.FAIL: TrackModellingState.ERROR,
     },
     TrackModellingState.CAPTURING: {
         TrackModellingAction.STOP_CAPTURE: TrackModellingState.CAPTURE_COMPLETE,
@@ -145,6 +169,9 @@ _TRANSITIONS: Dict[TrackModellingState, Dict[TrackModellingAction, TrackModellin
     TrackModellingState.ACTIVE: {
         TrackModellingAction.RECALIBRATE: TrackModellingState.CAPTURING,
         TrackModellingAction.EDIT_SEGMENT: TrackModellingState.REVIEW_REQUIRED,
+        # Defect D4 — an accepted model whose pit lane was never mapped is not
+        # finished; it can be sent back to the mapping step at any time.
+        TrackModellingAction.MAP_PIT_LANE: TrackModellingState.PIT_LANE_PENDING,
     },
     TrackModellingState.ERROR: {
         TrackModellingAction.RESET: TrackModellingState.NO_TRACK,

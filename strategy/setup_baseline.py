@@ -111,6 +111,12 @@ _LABEL_PROVEN     = "seeded from the proven-setup library"
 # Provenance for a value shaped by the engineering-reasoning layer (vehicle + track
 # + objective coupling) — an engineer's directional call, not a neutral default.
 _LABEL_ENGINEERING = "engineered for car + track + objective"
+# Provenance for a value that came from the car's class archetype (UAT 2026-08-07
+# defect A1/A9). This is a real engineering position — a Gr.3 starting where Gr.3 cars
+# start — but it is NOT engineered for this specific car, and it must never borrow the
+# _LABEL_ENGINEERING wording. It is what an unmapped car runs until a GT7 capture
+# lands for it.
+_LABEL_ANCHOR = "class starting point (no captured data for this car)"
 
 # When a neutral seed lands within this fraction of either end of a car's
 # resolved range, it is treated as boundary-hugging and re-placed by intent.
@@ -190,6 +196,55 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _snap_to_step(field: str, value: float, ranges: dict,
+                  field_steps: "dict | None") -> float:
+    """Snap an authored value onto the field's real GT7 increment.
+
+    UAT 2026-08-07 defect A7 — no step model existed anywhere. ``_round_for_field``
+    applies a fixed decimal precision globally (springs to 1dp, toe to 2dp, integers
+    for the rest), which is a reasonable *display* convention and has nothing to do
+    with what the GT7 slider can actually land on. A car whose ride-height slider moves
+    in 5mm steps was being handed 52mm, a value the driver cannot dial in.
+
+    The grid is anchored at the field's legal minimum so a snapped value is always
+    reachable from the bottom of the slider. Steps derived from the app's own precision
+    are marked "assumed" by the parameter model and are numerically identical to
+    ``_round_for_field``, so this is a no-op until a real per-car capture supplies a
+    genuine increment — which is exactly the intent: do nothing until we know something.
+    """
+    step = (field_steps or {}).get(field)
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return _round_for_field(field, value)
+    if step <= 0:
+        return _round_for_field(field, value)
+
+    rng = (ranges or {}).get(field)
+    lo = float(rng[0]) if rng and len(rng) == 2 else 0.0
+    snapped = lo + round((float(value) - lo) / step) * step
+    if rng and len(rng) == 2:
+        snapped = _clamp(snapped, float(rng[0]), float(rng[1]))
+    # Kill binary float dust (0.1 * 3 = 0.30000000000000004) at the field's precision.
+    return _round_for_field(field, snapped)
+
+
+def _clamp_to_range(field: str, value: float, ranges: dict) -> float:
+    """Clamp into the field's legal range without re-placing it by intent."""
+    rng = (ranges or {}).get(field)
+    if not rng or len(rng) != 2:
+        return value
+    return _clamp(value, float(rng[0]), float(rng[1]))
+
+
+def _num_close(a, b, tol: float = 1e-9) -> bool:
+    """True when two numbers are equal to within float dust."""
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except (TypeError, ValueError):
+        return False
+
+
 def _place_seed_in_range(field: str, seed: float, ranges: dict) -> "tuple[float, bool]":
     """Return (value, adjusted) for a neutral seed given the car's resolved range.
 
@@ -246,124 +301,76 @@ def _build_gearbox_changes(
     locked_fields: set,
     final_drive_lean: float = 0.0,
     proven_gearbox: "dict | None" = None,
-) -> list[dict]:
-    """Build change dicts for gearbox fields (final_drive + gear_1..gear_N).
+    car_model=None,
+    track_profile=None,
+) -> "tuple[list, object]":
+    """Author the gearbox from evidence, or author nothing and say so.
 
-    For a from-scratch baseline there is no prior setup, so all computed
-    gearbox values are always authored (``from`` is set to the computed value
-    itself, which is the baseline starting point — not a no-op).
+    UAT 2026-08-07 defect A4. This used to emit the SAME geometric spread for every
+    car in the game — 3.800/2.558/1.722/1.159/0.780/0.525 with a final drive of 4.25 —
+    from two global constants, with no reference to the engine, the redline or the
+    track. A gearbox is the one part of a setup a driver cannot judge by feel from the
+    sheet, so a plausible-looking wrong answer there is worse than no answer at all.
 
-    Algorithm:
-    - final_drive = midpoint of _FINAL_DRIVE_RANGE clamped to ranges; label "range midpoint".
-    - gear_1..gear_N: strictly-decreasing geometric sequence from
-        high = _GEAR_RATIO_RANGE[1] * 0.95  down to
-        low  = _GEAR_RATIO_RANGE[0] * 1.05
-      ratio_n = high * (low/high)**((n-1)/(N-1)) for n=1..N.
-      Each is clamped into _GEAR_RATIO_RANGE, rounded to 3 dp, and then
-      strict monotonicity is enforced by nudging any tied value down by 0.001.
-    - num_gears <= 1: single gear_1 at midpoint of _GEAR_RATIO_RANGE.
-    - num_gears == 0: no gear fields authored.
-    - num_gears > 6: capped at 6 (canonical set only has gear_1..gear_6).
-    - transmission_max_speed_kmh is NEVER authored.
+    The decision now lives in ``strategy.setup_gearbox.derive_gearbox``, and it
+    authors nothing far more often than this did: a proven gear set is used verbatim,
+    and everything else needs a GT7 capture (redline + stock ratios) plus a measured
+    longest straight. Until then the answer is "keep the stock gearing", with a
+    specific list of what capture would change that.
+
+    Returns ``(changes, plan)`` — the plan carries the advice and the missing evidence
+    so the response can render them.
     """
-    # Function-local import: avoids module-level circular import while ensuring
-    # we always use the same range constants as the validator in setup_diagnosis.
-    try:
-        from strategy.setup_diagnosis import (
-            _GEAR_RATIO_RANGE as _GRR,  # type: ignore[attr-defined]
-            _FINAL_DRIVE_RANGE as _FDR,  # type: ignore[attr-defined]
-        )
-    except (ImportError, AttributeError):
-        _GRR = _GEAR_RATIO_RANGE   # module-level fallback
-        _FDR = _FINAL_DRIVE_RANGE  # module-level fallback
+    from strategy.setup_gearbox import derive_gearbox
+
+    plan = derive_gearbox(
+        car_model=car_model, track_profile=track_profile,
+        proven_gearbox=proven_gearbox, final_drive_lean=final_drive_lean)
 
     changes: list[dict] = []
-    _gear_lo, _gear_hi = _GRR
-    _fd_lo, _fd_hi = _FDR
-    _pg = proven_gearbox or {}
+    if not plan.authored:
+        return changes, plan
 
-    # final_drive (only if not locked). A proven-library value wins; otherwise the
-    # engineering lean shifts it off the neutral midpoint toward longer (lower) or
-    # shorter (higher) gearing.
-    if "final_drive" not in locked_fields:
-        _fd_range = ranges.get("final_drive", (_fd_lo, _fd_hi))
-        _fd_proven = _pg.get("final_drive")
-        if _fd_proven is not None:
-            _fd_val = _round_for_field(
-                "final_drive", _clamp(float(_fd_proven), _fd_range[0], _fd_range[1]))
-            _fd_label = _LABEL_PROVEN
-        else:
-            _fd_mid = (_fd_range[0] + _fd_range[1]) / 2.0
-            _fd_target = _fd_mid + (float(final_drive_lean) or 0.0)
-            _fd_val = _round_for_field("final_drive", _clamp(_fd_target, _fd_range[0], _fd_range[1]))
-            _fd_label = _LABEL_ENGINEERING if final_drive_lean else _LABEL_MIDPOINT
+    if plan.final_drive is not None and "final_drive" not in locked_fields:
+        _fd_range = ranges.get("final_drive", (_FINAL_DRIVE_RANGE[0], _FINAL_DRIVE_RANGE[1]))
+        _fd_val = _round_for_field(
+            "final_drive", _clamp(float(plan.final_drive), _fd_range[0], _fd_range[1]))
         changes.append(_make_change_dict(
             field="final_drive",
-            from_val=_fd_val,   # from-scratch: "from" == "to" (starting point)
+            from_val=_fd_val,      # from-scratch: "from" == "to" (starting point)
             to_val=_fd_val,
-            label=_fd_label,
+            label=_LABEL_PROVEN if "proven" in plan.source else _LABEL_ENGINEERING,
             alignment="neutral",
+            tier="PROVEN" if "proven" in plan.source else "ENGINEERED",
         ))
 
-    # gear ratios
-    effective_n = max(0, min(6, num_gears))
-    if effective_n == 0:
-        return changes
+    try:
+        from strategy.setup_diagnosis import _GEAR_RATIO_RANGE as _GRR
+    except (ImportError, AttributeError):
+        _GRR = _GEAR_RATIO_RANGE
+    _gear_lo, _gear_hi = _GRR
 
-    _high = _gear_hi * 0.95
-    _low  = _gear_lo * 1.05
-
-    if effective_n == 1:
-        _ratio = round((_gear_lo + _gear_hi) / 2.0, 3)
-        _ratio = _clamp(_ratio, _gear_lo, _gear_hi)
-        _gear_key = "gear_1"
-        if _gear_key not in locked_fields:
-            changes.append(_make_change_dict(
-                field=_gear_key,
-                from_val=_ratio,
-                to_val=_ratio,
-                label=_LABEL_MIDPOINT,
-                alignment="neutral",
-            ))
-        return changes
-
-    # N >= 2: geometric sequence
-    raw_ratios: list[float] = []
-    for n in range(1, effective_n + 1):
-        t = (n - 1) / (effective_n - 1)   # 0.0 .. 1.0
-        ratio = _high * (_low / _high) ** t
-        ratio = round(_clamp(ratio, _gear_lo, _gear_hi), 3)
-        raw_ratios.append(ratio)
-
-    # A proven-library gear set replaces the generic geometric spread (clamped to range).
-    # Track which gears came from the library so each carries the right provenance label.
-    _proven_gear = [False] * effective_n
-    for idx in range(effective_n):
-        _gv = _pg.get(f"gear_{idx + 1}")
-        if _gv is not None:
-            raw_ratios[idx] = round(_clamp(float(_gv), _gear_lo, _gear_hi), 3)
-            _proven_gear[idx] = True
-
-    # Enforce strict monotonic decrease (rounding can cause ties)
-    for i in range(1, len(raw_ratios)):
-        if raw_ratios[i] >= raw_ratios[i - 1]:
-            raw_ratios[i] = round(raw_ratios[i - 1] - 0.001, 3)
-            # Ensure we stay within range
-            raw_ratios[i] = max(_gear_lo, raw_ratios[i])
-
-    for idx, ratio in enumerate(raw_ratios):
-        _gear_key = f"gear_{idx + 1}"
-        if _gear_key in locked_fields:
+    ordered = [(k, plan.ratios[k]) for k in sorted(
+        plan.ratios, key=lambda k: int(k.split("_")[1]))]
+    prev = None
+    for key, ratio in ordered:
+        if key in locked_fields:
             continue
+        val = round(_clamp(float(ratio), _gear_lo, _gear_hi), 3)
+        # Strict monotonic decrease — rounding or a clamp can otherwise tie two gears.
+        if prev is not None and val >= prev:
+            val = max(_gear_lo, round(prev - 0.001, 3))
+        prev = val
         changes.append(_make_change_dict(
-            field=_gear_key,
-            from_val=ratio,   # from-scratch: "from" == "to" (starting point)
-            to_val=ratio,
-            label=_LABEL_PROVEN if _proven_gear[idx] else _LABEL_MIDPOINT,
+            field=key,
+            from_val=val,
+            to_val=val,
+            label=_LABEL_PROVEN if "proven" in plan.source else _LABEL_ENGINEERING,
             alignment="neutral",
+            tier="PROVEN" if "proven" in plan.source else "ENGINEERED",
         ))
 
-    return changes
+    return changes, plan
 
 
 def _make_change_dict(
@@ -374,6 +381,7 @@ def _make_change_dict(
     alignment: str,
     session_influence: str = "",
     car_drivetrain_influence: str = "",
+    tier: str = "GENERIC",
 ) -> dict:
     """Build a change dict in plan_to_raw_data / AI-response shape.
 
@@ -401,6 +409,10 @@ def _make_change_dict(
         "driver_style_alignment": alignment,
         # Group 45 explainability fields
         "source_label": label,          # label IS the source description for baseline changes
+        # UAT 2026-08-07 defect A9 — machine-readable provenance strength:
+        # PROVEN > TRANSFERRED > STOCK > ENGINEERED > ARCHETYPE > GENERIC. Only
+        # ENGINEERED and above may be presented as engineered for this car.
+        "tier": tier,
         "session_influence": session_influence,
         "car_drivetrain_influence": car_drivetrain_influence,
         "pack": "",                     # baseline changes have no rule pack
@@ -507,6 +519,10 @@ def build_baseline_setup(
     chassis_seed_overrides: "dict | None" = None,
     proven_seed_overrides: "dict | None" = None,
     proven_gearbox: "dict | None" = None,
+    anchor_seed_overrides: "dict | None" = None,
+    anchor_tiers: "dict | None" = None,
+    field_steps: "dict | None" = None,
+    car_model=None,
 ) -> dict:
     """Build a from-scratch baseline raw_data dict.
 
@@ -669,6 +685,20 @@ def build_baseline_setup(
 
         seed = NEUTRAL_SEEDS[field]
 
+        # UAT 2026-08-07 defect A1 — anchor, never a flat constant. NEUTRAL_SEEDS is
+        # one set of numbers for all 579 cars in the game: 80mm ride height and 3.5/3.0
+        # springs whether the car is an LMP1 or a kei van, and camber 1.0 front against
+        # 1.5 rear, which is backwards for anything that turns. The anchor is this
+        # car's class position (or its captured GT7 stock value, or a proven value).
+        # Everything below still stacks on top in the same order as before.
+        _anchor_seeded = False
+        if anchor_seed_overrides and field in anchor_seed_overrides:
+            try:
+                seed = float(anchor_seed_overrides[field])
+                _anchor_seeded = True
+            except (TypeError, ValueError):
+                pass
+
         # Car/objective-specific chassis seed (dampers/camber/toe) — replaces the flat
         # neutral constant so these fields differ by car and by race vs qualifying
         # instead of coming out identical for every car. A proven-history override
@@ -727,7 +757,14 @@ def build_baseline_setup(
         # Map the (possibly ride-height-pre-adjusted) seed into the car's range,
         # preserving engineering intent instead of clamping to a boundary. For
         # generic-range cars and wide-range fields this returns the seed unchanged.
-        base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
+        # UAT 2026-08-07 defect A3 — a value from the proven library is NOT a generic
+        # seed that needs re-placing off a boundary; it is a number the driver has
+        # validated on track. The boundary guard was quietly moving the vetted 63mm
+        # rear ride height to 62.57. Clamp it for safety, re-place it never.
+        if _proven_seeded:
+            base_val, seed_adjusted = _clamp_to_range(field, float(seed), ranges), False
+        else:
+            base_val, seed_adjusted = _place_seed_in_range(field, float(seed), ranges)
 
         # Compute value WITH combined bias (profile + session). A proven-library seed is a
         # COMPLETE vetted setup that already encodes the driver's preference, so profile/
@@ -753,7 +790,14 @@ def build_baseline_setup(
 
         # Round to natural precision. "from" mirrors the authored base (from-scratch
         # baseline: from == to for non-biased fields), not the pre-mapping seed.
-        to_val = _round_for_field(field, to_val)
+        # UAT 2026-08-07 defect A3 — a proven value that nothing moved must come out
+        # byte-identical. _round_for_field snaps springs to one decimal, which silently
+        # turned the vetted 3.35 Hz in data/proven_setups.json into 3.4. A curated
+        # setup is the strongest evidence in the system; rounding it is not our call.
+        if _proven_seeded and not is_biased and _num_close(to_val, base_val):
+            to_val = base_val
+        else:
+            to_val = _snap_to_step(field, to_val, ranges, field_steps)
         seed_rounded = _round_for_field(field, base_val)
 
         # Group 46: compute value WITHOUT session bias to detect session_changed.
@@ -788,6 +832,11 @@ def build_baseline_setup(
         elif is_biased:
             label = _LABEL_BIASED
             alignment = "aligned"
+        elif _anchor_seeded:
+            # The class starting point. A real position, but not one derived for this
+            # car — labelled so the Garage can say which fields are class defaults.
+            label = _LABEL_ANCHOR
+            alignment = "neutral"
         elif seed_adjusted:
             label = _LABEL_CAR_RANGE
             alignment = "neutral"
@@ -797,6 +846,24 @@ def build_baseline_setup(
         else:
             label = _LABEL_NEUTRAL
             alignment = "neutral"
+
+        # UAT 2026-08-07 defect A9 — the per-field provenance TIER. The label above is
+        # prose for the driver; this is the machine-readable strength of the evidence
+        # the value rests on, and it is what the Garage colours a field by and what
+        # gates the phrase "engineered for car + track + objective". It is decided by
+        # what the value was SEEDED from, not by whether a bias later nudged it: a
+        # driver-profile nudge on top of a class default does not make the result
+        # personal knowledge.
+        if _proven_seeded:
+            tier = "PROVEN"
+        elif _hist_seeded:
+            tier = "PROVEN"          # the lift is strong-scope only (same car+track)
+        elif field in _eng_fields:
+            tier = "ENGINEERED"
+        elif _anchor_seeded:
+            tier = str((anchor_tiers or {}).get(field) or "ARCHETYPE")
+        else:
+            tier = "GENERIC"
 
         # Group 46: honest session_influence per change (brief contract):
         # - session known + field changed numerically by session bias → real session text
@@ -830,6 +897,7 @@ def build_baseline_setup(
             to_val=to_val,
             label=label,
             alignment=alignment,
+            tier=tier,
             session_influence=_ch_session_influence,
             car_drivetrain_influence="",
         )
@@ -843,12 +911,14 @@ def build_baseline_setup(
             except (TypeError, ValueError):
                 setup_fields[field] = to_val
 
-    # Gearbox fields — always authored (from-scratch baseline, no prior setup).
-    # final_drive_lean gears the car to the circuit (longer for top speed on a
-    # straight-heavy track, shorter for acceleration on a corner-dense one).
-    gb_changes = _build_gearbox_changes(ranges, num_gears, locked_fields,
-                                        final_drive_lean=final_drive_lean,
-                                        proven_gearbox=proven_gearbox)
+    # Gearbox fields — authored from evidence, or not at all (UAT 2026-08-07 A4).
+    # Most cars will get nothing here and a "keep the stock gearing" instruction,
+    # because no car in the repository has a redline or stock ratios until a GT7
+    # capture supplies them. That is the intended outcome, not a shortfall.
+    gb_changes, gearbox_plan = _build_gearbox_changes(
+        ranges, num_gears, locked_fields,
+        final_drive_lean=final_drive_lean, proven_gearbox=proven_gearbox,
+        car_model=car_model, track_profile=track_profile)
     for ch in gb_changes:
         changes.append(ch)
         f = ch.get("field")
@@ -909,4 +979,9 @@ def build_baseline_setup(
             "overall": "low",
             "reason": "no telemetry — neutral baseline",
         },
+        # UAT 2026-08-07 defect A4 — what was decided about the gearbox, including the
+        # case where the honest decision was to decide nothing. Carries the advice and
+        # the specific missing evidence so the Garage can say "keep the stock gearing,
+        # and capture X to change that" rather than shipping an invented ratio set.
+        "gearbox_plan": gearbox_plan.as_json(),
     }

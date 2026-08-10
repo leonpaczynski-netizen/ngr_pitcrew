@@ -41,6 +41,23 @@ class _Win:
         self.feedback = fb
 
 
+class _FakeDb:
+    """Minimal stand-in for SessionDB recording what write_feedback was asked to store."""
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    def write_feedback(self, **kwargs):
+        self._sink.append(kwargs)
+        return len(self._sink)
+
+    def get_dominant_setup_id(self, session_id):
+        return 0
+
+    def record_latest_lineage_outcome(self, *a, **kw):
+        return None
+
+
 def _revert_ok():
     from services.setup_service import SetupOutcome
     return SetupOutcome(ok=True, reason="Reverted to the previous values.")
@@ -51,7 +68,7 @@ def wired(qapp):
     ctrl = PitCrewController()
     shell = PitCrewShell(ctrl)
     win = _Win()
-    bridge = LiveShellBridge(shell, ctrl, window=win, config={})
+    bridge = LiveShellBridge(shell, ctrl, window=win, config={}, confirm=lambda *_a, **_k: True)
     return shell, win, bridge
 
 
@@ -101,10 +118,39 @@ class TestRealBehaviourActions:
         assert reverted == ["race"]
 
     def test_feedback_persisted(self, wired):
-        shell, win, _ = wired
+        """UAT 2026-08-07 defect B1 — feedback must reach the session DB.
+
+        This test used to assert against ``_Win.record_driver_feedback``, a method that
+        exists ONLY on this stub: production code has no such method on any window, so
+        the bridge's getattr probe always found nothing, the bare ``except: pass``
+        swallowed it, and the test passed while every piece of new-shell feedback was
+        discarded. It now asserts on the real collaborator — the session database.
+        """
+        shell, _win, bridge = wired
+        written = []
+        bridge._db = _FakeDb(written)
         shell.feedback_form._set_overall("worse")
-        shell.feedback_form.submitted.emit({"overall": "worse"})
-        assert win.feedback == {"overall": "worse"}
+        shell.feedback_form.submitted.emit({"overall": "worse", "traction": "Poor"})
+        assert len(written) == 1
+        assert written[0]["feedback"] == {"overall": "worse", "traction": "Poor"}
+
+    def test_feedback_failure_is_reported_not_swallowed(self, wired):
+        """A failed write must tell the driver, never look like a successful submit."""
+        shell, _win, bridge = wired
+
+        class _Boom:
+            def write_feedback(self, **kw):
+                raise RuntimeError("disk full")
+
+        bridge._db = _Boom()
+        shell.feedback_form.submitted.emit({"overall": "better"})
+        assert "could not be saved" in shell.run_card._status.text().lower()
+
+    def test_feedback_without_a_database_is_reported(self, wired):
+        shell, _win, bridge = wired
+        bridge._db = None
+        shell.feedback_form.submitted.emit({"overall": "better"})
+        assert "not saved" in shell.run_card._status.text().lower()
 
     def test_library_open_never_raises_the_classic_window(self, wired):
         """The Library hosts engineering panels natively now — opening an area must

@@ -40,10 +40,14 @@ except Exception:  # pragma: no cover - defensive
         return ()
 
 
-#: The two sheets the domain actually has. There is no third "Base" sheet — the
-#: baseline build FILLS these two, so a Base tab could only ever mirror the Race one.
-#: It is an ACTION ("Build initial setup"), not a discipline.
-DISCIPLINES = (("race", "Race"), ("qualifying", "Qualifying"))
+#: The three sheets. UAT 2026-08-07: this used to be two, on the reasoning that the
+#: baseline build FILLS Race and Qualifying so a Base tab could only mirror Race. That
+#: reasoning had the dependency backwards. Base is the ANCHOR — the platform the car is
+#: learned on — and Race and Qualifying are explained DELTAS from it. Without it there
+#: is nowhere for a base setup to live, no way to see what a discipline actually
+#: changed, and the driver has to build a base setup on a tab labelled with a
+#: discipline they are not running.
+DISCIPLINES = (("base", "Base"), ("qualifying", "Qualifying"), ("race", "Race"))
 
 
 class SetupDisciplineSelector(QWidget):
@@ -103,6 +107,9 @@ class SetupDisciplineSelector(QWidget):
 #: What each discipline IS, in the driver's words — shown under the selector so the
 #: three tabs are never three identical-looking sheets with no explanation.
 DISCIPLINE_NOTE = {
+    "base": ("Base is the platform you learn the car on — balanced, no discipline bias. "
+             "Qualifying and Race are deltas from this, so get it right first and the "
+             "other two inherit it."),
     "qualifying": ("Qualifying is the one-lap tune: peak grip for a single hot lap, "
                    "tyre life and fuel are not the priority."),
     "race": ("Race is the stint tune: consistent pace over a full stint, tyre life and "
@@ -130,7 +137,8 @@ class SetupWorkspace(QWidget):
     front_weight_dist_changed = pyqtSignal(int)  # driver entered front weight distribution %
     save_front_weight_dist_requested = pyqtSignal()  # save current % front to the car library
     lock_requested = pyqtSignal(str, bool)       # (discipline, lock?) — lock or reopen the setup
-    car_ranges_requested = pyqtSignal()          # open the per-car min/max ranges editor
+    car_ranges_requested = pyqtSignal()          # legacy: open the classic ranges editor
+    car_data_captured = pyqtSignal(str)          # the driver saved real GT7 data for a car
     gearing_changed = pyqtSignal(dict)           # {gear_ratios, final_drive, transmission_max_speed_kmh}
     ballast_changed = pyqtSignal(dict)           # {ballast_kg, ballast_position}
     regulation_changed = pyqtSignal(dict)        # {weight_kg, power_hp} — series BOP override
@@ -400,6 +408,14 @@ class SetupWorkspace(QWidget):
         self.shift_strategy_view = ShiftStrategyView()
         self._stack.addWidget(self.shift_strategy_view)
 
+        # Page 5 — car data capture (UAT 2026-08-07 defect A7). The engineering brain
+        # has no real data for any car in the game, so every setup rests on a class
+        # archetype until the driver types in what GT7 actually shows for their car.
+        from ui.components.car_data_capture import CarDataCapturePanel
+        self.car_data_capture = CarDataCapturePanel()
+        self.car_data_capture.capture_saved.connect(self.car_data_captured)
+        self._stack.addWidget(self.car_data_capture)
+
         # NOTE: The Transmission entry (gear ratios, final drive, top speed) is now
         # embedded in the Full setup sheet (page 1) as an editable section in the right
         # column of GT7SettingsSheet, so the driver can enter gear values without
@@ -441,11 +457,31 @@ class SetupWorkspace(QWidget):
         act.addWidget(self._applied_in_game)
         act.addWidget(self._explain)
         act.addWidget(self._gearbox_btn)
-        self._ranges_btn = SecondaryActionButton("Set car min/max ranges…")
-        self._ranges_btn.clicked.connect(lambda: self.car_ranges_requested.emit())
+        # UAT 2026-08-07 defect A7 — this used to open the classic CarRangesDialog,
+        # which writes TUNING PREFERENCE windows into a file the rest of the app reads
+        # as GT7 slider limits. Right idea, wrong semantics. It now opens the capture
+        # panel, which records what GT7 actually shows and keeps the legal range, the
+        # preference window and the step as separate things.
+        self._ranges_btn = SecondaryActionButton("Record this car's GT7 data…")
+        self._ranges_btn.setCheckable(True)
+        self._ranges_btn.toggled.connect(self._on_car_data)
         act.addWidget(self._ranges_btn)
         act.addStretch(1)
         lay.addLayout(act)
+
+        # UAT 2026-08-07 defect B6 — "I heard X, I did Y", for every item the driver
+        # reported. This record has always existed; in the classic UI it rendered
+        # inside a COLLAPSED <details>, and the new shell could not show it at all.
+        # It is deliberately not behind the "Why these changes" toggle: an
+        # acknowledgement the driver has to go looking for is not an acknowledgement.
+        self._ack = QLabel("")
+        self._ack.setWordWrap(True)
+        self._ack.setStyleSheet(
+            f"color: {_t.TEXT}; background: {_t.CARBON_RAISED}; "
+            f"border-left: 3px solid {_t.NGR_GREEN}; border-radius: {_t.RADIUS_SM}px; "
+            f"padding: 6px 10px; font-size: {_t.FS_LABEL}pt;")
+        self._ack.setVisible(False)
+        lay.addWidget(self._ack)
 
         self._why = QLabel("")
         self._why.setWordWrap(True)
@@ -467,6 +503,7 @@ class SetupWorkspace(QWidget):
         active_setup: str = "", saved: bool = False, applied: bool = False,
         validated: bool = False, setup_values: Optional[dict] = None,
         lineage_nodes=None, comparisons=None, has_recorded_run: bool = True,
+        feedback_dispositions=None, degraded_reason: str = "",
     ) -> None:
         if not isinstance(vm, SetupRecommendationVM):
             vm = build_recommendation_vm({})
@@ -490,6 +527,12 @@ class SetupWorkspace(QWidget):
             tuple(sorted((setup_values or {}).keys())), _rows_fp,
             tuple(str(n) for n in (lineage_nodes or ())),
             tuple(str(c) for c in (comparisons or ())),
+            # Defect B6 — the acknowledgement is part of what the driver sees, so it
+            # must take part in the re-render skip. Without it, a new set of
+            # dispositions on an otherwise-identical recommendation is silently
+            # dropped, which is the same disappearing act in a new place.
+            tuple(sorted(str(d) for d in (feedback_dispositions or ()))),
+            str(degraded_reason or ""),
         )
         if fingerprint == getattr(self, "_last_reco_fp", None):
             return
@@ -498,6 +541,7 @@ class SetupWorkspace(QWidget):
         self._vm = vm
         self._lineage.set_nodes(lineage_nodes or ())
         self._compare.set_comparisons(comparisons or ())
+        self._set_acknowledgement(feedback_dispositions, degraded_reason)
         self._selector.set_discipline(discipline)
         self._note.setText(DISCIPLINE_NOTE.get(discipline, ""))
         self._active.setText(f"Active setup: {active_setup}" if active_setup else "Active setup: —")
@@ -814,6 +858,51 @@ class SetupWorkspace(QWidget):
 
     def _on_gearbox(self, checked: bool):
         self._gearbox.setVisible(bool(checked))
+
+    #: How each disposition state reads to the driver.
+    _ACK_STATE_TEXT = {
+        "addressed": "Acted on",
+        "deferred": "Heard, not changed",
+        "strategy": "Strategy, not setup",
+        "preserved": "Left alone deliberately",
+    }
+
+    def _set_acknowledgement(self, dispositions, degraded_reason: str = "") -> None:
+        """Render what was done with everything the driver reported (defect B6)."""
+        lines: list = []
+        if degraded_reason:
+            lines.append(
+                f"⚠ This analysis ran on PARTIAL evidence — {degraded_reason}. Your "
+                f"notes were still weighed; treat any “no change” as unproven.")
+        for d in (dispositions or ()):
+            try:
+                state = str(d.get("state") or "")
+                lines.append(
+                    f"• {d.get('feedback')} — "
+                    f"{self._ACK_STATE_TEXT.get(state, state)}: {d.get('detail') or ''}")
+            except Exception:
+                continue
+        if not lines:
+            self._ack.setText("")
+            self._ack.setVisible(False)
+            return
+        head = "What I did with what you told me:" if dispositions else ""
+        self._ack.setText("\n".join(([head] if head else []) + lines))
+        self._ack.setVisible(True)
+
+    def _on_car_data(self, checked: bool) -> None:
+        """Show or hide the GT7 car-data capture page (UAT 2026-08-07 defect A7)."""
+        if checked:
+            self._last_stack_index = self._stack.currentIndex()
+            self._stack.setCurrentWidget(self.car_data_capture)
+        else:
+            self._stack.setCurrentIndex(getattr(self, "_last_stack_index", 0))
+
+    def show_car_data_capture(self, car_name: str = "") -> None:
+        """Open the capture page for a car (used by the nav wiring and by tests)."""
+        if car_name:
+            self.car_data_capture.set_car(car_name)
+        self._ranges_btn.setChecked(True)
 
     def show_shift_strategy_tab(self) -> None:
         """Switch the Garage view to the Shift Strategy sub-tab."""

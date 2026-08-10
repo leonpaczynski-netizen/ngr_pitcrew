@@ -174,9 +174,17 @@ def test_end_to_end_authored_values_stay_in_range_and_differ_by_track():
 
     fuji, rfuji = run(_fuji())
     twisty, _ = run(_twisty())
-    # Genuinely track-specific: gearing differs.
-    assert fuji["final_drive"] != twisty["final_drive"]
-    assert fuji["final_drive"] < twisty["final_drive"]   # Fuji longer
+    # Genuinely track-specific. UAT 2026-08-07 defect A4 (Phase 1 chunk 6): this used
+    # to compare the authored FINAL DRIVE, which no longer exists for a car with no
+    # captured redline or stock ratios — the app now says "keep the stock gearing"
+    # rather than shipping a value derived from two global constants. The track
+    # shaping it was really testing is still there and is still directional; it is
+    # reported as a lean rather than converted into a ratio it cannot justify.
+    assert "final_drive" not in fuji and "final_drive" not in twisty
+    fuji_lean = (rfuji.get("engineering_reasoning") or {}).get("final_drive_lean")
+    assert fuji_lean is not None
+    # Aero is the track-shaped field that IS authored without a capture.
+    assert fuji["aero_rear"] != twisty["aero_rear"]
     # All authored values remain within the car's legal range.
     for f, v in fuji.items():
         if f in ranges and isinstance(v, (int, float)):

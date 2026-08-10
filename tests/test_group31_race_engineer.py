@@ -468,10 +468,15 @@ class TestModuleLevelFunctionsExist:
 
 class TestNormaliseChangesRegression:
     def test_out_of_range_still_clamped(self):
-        changes = [{"setting": "ARB F", "field": "arb_front", "from": "4", "to": 15}]
+        # UAT 2026-08-07 defect A7 raised the generic ARB ceiling from 7 to 10 (all
+        # four curated cars use 10). Read it rather than hard-coding it again.
+        from strategy.setup_ranges import GENERIC_DEFAULTS
+        ceiling = GENERIC_DEFAULTS["arb_front"][1]
+        changes = [{"setting": "ARB F", "field": "arb_front", "from": "4",
+                    "to": ceiling + 5}]
         result = da._normalise_changes(changes, {}, "")
         assert len(result) == 1
-        assert result[0]["to_clamped"] == 7
+        assert result[0]["to_clamped"] == ceiling
 
     def test_setup_fields_value_preferred(self):
         sf = {"arb_front": 5}

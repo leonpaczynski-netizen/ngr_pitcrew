@@ -213,46 +213,77 @@ class SetupFormWidget(QWidget):
         outer.addWidget(auto_grp)
 
         # --- Manual-entry spinboxes ---
-        def _dbl(lo, hi, step=0.5, dec=1, val=0.0):
+        # UAT 2026-08-07 defect A7 — these bounds and steps were hard-coded a second
+        # time here, and disagreed with the range table they were supposed to mirror:
+        # ballast was capped at 150 against 200 in setup_ranges, and ARB at 7 against
+        # the 10 all four curated cars use. `field` binds a spinbox to the single
+        # source of truth instead; an unknown field keeps the literal arguments so
+        # nothing silently loses its bounds.
+        from strategy.setup_ranges import GENERIC_DEFAULTS as _GD
+        try:
+            from data.car_parameter_model import _archetypes as _arch
+            _STEPS = dict((_arch().get("steps") or {}))
+        except Exception:
+            _STEPS = {}
+
+        def _bounds(field, lo, hi):
+            rng = _GD.get(field)
+            if rng and len(rng) == 2:
+                return float(rng[0]), float(rng[1])
+            return lo, hi
+
+        def _dbl(lo, hi, step=0.5, dec=1, val=0.0, field=None):
+            if field:
+                lo, hi = _bounds(field, lo, hi)
+                step = float(_STEPS.get(field) or step)
             w = QDoubleSpinBox()
             w.setRange(lo, hi)
             w.setSingleStep(step)
             w.setDecimals(dec)
-            w.setValue(val)
+            w.setValue(max(lo, min(hi, val)))
             return w
 
-        def _int(lo, hi, val=1):
+        def _int(lo, hi, val=1, field=None):
+            if field:
+                lo, hi = _bounds(field, lo, hi)
+                lo, hi = int(lo), int(hi)
             w = QSpinBox()
             w.setRange(lo, hi)
-            w.setValue(val)
+            step = _STEPS.get(field) if field else None
+            if step:
+                try:
+                    w.setSingleStep(max(1, int(float(step))))
+                except (TypeError, ValueError):
+                    pass
+            w.setValue(max(lo, min(hi, val)))
             return w
 
-        self._setup_rh_f       = _int(60, 200, 80)
-        self._setup_rh_r       = _int(60, 200, 80)
-        self._setup_spr_f      = _dbl(1.00, 20.00, 0.10, 2, 3.50)
+        self._setup_rh_f       = _int(60, 200, 80, field="ride_height_front")
+        self._setup_rh_r       = _int(60, 200, 80, field="ride_height_rear")
+        self._setup_spr_f      = _dbl(1.00, 20.00, 0.10, 2, 3.50, field="springs_front")
         self._setup_spr_f.setToolTip(
             "Spring natural frequency in Hz — GT7's suspension stiffness unit.\n"
             "Higher = stiffer. Stiffer front → more understeer on corner entry.\n"
             "Road cars: 1.5–3 Hz  |  Sport: 3–5 Hz  |  Race (GT3): 4–8 Hz")
-        self._setup_spr_r      = _dbl(1.00, 20.00, 0.10, 2, 3.00)
+        self._setup_spr_r      = _dbl(1.00, 20.00, 0.10, 2, 3.00, field="springs_rear")
         self._setup_spr_r.setToolTip(
             "Spring natural frequency in Hz — GT7's suspension stiffness unit.\n"
             "Higher = stiffer. Stiffer rear → more oversteer on corner entry.\n"
             "Road cars: 1.5–3 Hz  |  Sport: 3–5 Hz  |  Race (GT3): 4–8 Hz")
-        self._setup_dmp_f_comp = _int(1, 100, 30)
+        self._setup_dmp_f_comp = _int(1, 100, 30, field="dampers_front_comp")
         self._setup_dmp_f_comp.setSuffix(" %")
-        self._setup_dmp_f_ext  = _int(1, 100, 40)
+        self._setup_dmp_f_ext  = _int(1, 100, 40, field="dampers_front_ext")
         self._setup_dmp_f_ext.setSuffix(" %")
-        self._setup_dmp_r_comp = _int(1, 100, 25)
+        self._setup_dmp_r_comp = _int(1, 100, 25, field="dampers_rear_comp")
         self._setup_dmp_r_comp.setSuffix(" %")
-        self._setup_dmp_r_ext  = _int(1, 100, 35)
+        self._setup_dmp_r_ext  = _int(1, 100, 35, field="dampers_rear_ext")
         self._setup_dmp_r_ext.setSuffix(" %")
-        self._setup_arb_f      = _int(1, 7, 5)
-        self._setup_arb_r      = _int(1, 7, 4)
-        self._setup_cam_f      = _dbl(0.0, 6.0, 0.1, 1, 1.0)
-        self._setup_cam_r      = _dbl(0.0, 6.0, 0.1, 1, 1.5)
-        self._setup_toe_f      = _dbl(-2.0, 2.0, 0.01, 2, 0.00)
-        self._setup_toe_r      = _dbl(-2.0, 2.0, 0.01, 2, 0.05)
+        self._setup_arb_f      = _int(1, 7, 5, field="arb_front")
+        self._setup_arb_r      = _int(1, 7, 4, field="arb_rear")
+        self._setup_cam_f      = _dbl(0.0, 6.0, 0.1, 1, 1.0, field="camber_front")
+        self._setup_cam_r      = _dbl(0.0, 6.0, 0.1, 1, 1.5, field="camber_rear")
+        self._setup_toe_f      = _dbl(-2.0, 2.0, 0.01, 2, 0.00, field="toe_front")
+        self._setup_toe_r      = _dbl(-2.0, 2.0, 0.01, 2, 0.05, field="toe_rear")
         _cam_tip = (
             "0 = no camber; higher values lean the tyre top inward (GT7 shows 0–6).\n"
             "More camber improves cornering grip but reduces braking stability "
@@ -323,9 +354,9 @@ class SetupFormWidget(QWidget):
             "0 = no regulation, use car's full power.\n"
             "AI uses this to recommend power restrictor setting.")
 
-        self._setup_ballast_kg  = _dbl(0.0, 150.0, 0.5, 1, 0.0)
+        self._setup_ballast_kg  = _dbl(0.0, 150.0, 0.5, 1, 0.0, field="ballast_kg")
         self._setup_ballast_kg.setToolTip("Kilograms of ballast added to the car.")
-        self._setup_ballast_pos = _int(-50, 50, 0)
+        self._setup_ballast_pos = _int(-50, 50, 0, field="ballast_position")
         self._setup_ballast_pos.setToolTip(
             "Ballast position: −50 = full rear, +50 = full front, 0 = neutral.")
         self._setup_power_rest  = _dbl(0.0, 100.0, 1.0, 1, 100.0)

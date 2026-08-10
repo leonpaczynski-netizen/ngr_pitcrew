@@ -103,6 +103,10 @@ class EventSetupPage(QWidget):
     cancelled = pyqtSignal()
     #: Edit an existing event by name (from the list on step 1).
     edit_requested = pyqtSignal(str)
+    #: Emitted after the bridge successfully saves and activates the event.
+    #: Carries the new event_id so the baseline capture flow can be launched.
+    #: The bridge calls on_event_saved(event_id) which emits this.
+    baseline_capture_requested = pyqtSignal(int)
 
     def __init__(self, tracks: Sequence[str] = (), cars: Sequence[str] = (), parent=None):
         super().__init__(parent)
@@ -516,3 +520,12 @@ class EventSetupPage(QWidget):
 
     def current_step(self) -> int:
         return self._step
+
+    def on_event_saved(self, event_id: int) -> None:
+        """Called by the bridge after save_and_activate succeeds.
+
+        Emits ``baseline_capture_requested(event_id)`` so the bridge can
+        launch the owner-baseline capture flow immediately after the wizard
+        closes. The bridge wires this signal to show the capture widget.
+        """
+        self.baseline_capture_requested.emit(int(event_id or 0))

@@ -82,13 +82,18 @@ def _rear_fragile_from_profile() -> bool:
     the rear traction is treated as something to PROTECT.  Falls back to True
     (protect the rear) if the profile cannot be built — the safe default for this
     driver, and never raises.
+
+    UAT 2026-08-07 defect A9 — this used to read two flags that were True for every
+    user because they were substring-matched out of a hardcoded prose constant. When
+    that fabrication was removed the flags went False, and this silently flipped from
+    "protect the rear" to "do not", turning a conservative safety default into a
+    permissive one as a side effect. An ABSENT profile and a profile that positively
+    says the rear is robust are not the same statement: no evidence takes the
+    conservative side, which is what the fallback below already did for an exception
+    and should always have done for an empty profile.
     """
-    try:
-        from strategy.setup_driver_profile import build_driver_profile
-        p = build_driver_profile()
-        return bool(p.prefers_rear_stability or p.dislikes_snap_exit)
-    except Exception:
-        return True
+    from strategy.setup_driver_profile import rear_traction_fragile
+    return rear_traction_fragile()
 
 
 def build_benchmark_evidence() -> RaceStrategyEvidence:

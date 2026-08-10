@@ -1,0 +1,42 @@
+# Normalise line endings: text files are stored LF in the index and in history.
+# Working trees may check out CRLF on Windows (core.autocrlf), but the repository
+# itself must stay LF so diffs read as real changes, not whole-file rewrites.
+* text=auto
+
+# Source and data files are explicitly LF, regardless of what the checkout does.
+*.py     text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+*.txt    text eol=lf
+*.csv    text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.ini    text eol=lf
+*.cfg    text eol=lf
+*.toml   text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Windows batch files need CRLF to be reliable.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# Binary: never touch, never diff as text.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.wav    binary
+*.mp3    binary
+*.onnx   binary
+*.db     binary
+*.sqlite binary
+*.sqlite3 binary
+*.xlsx   binary
+*.zip    binary
+*.gz     binary
+*.tar    binary
+*.tar.gz binary
+*.pdf    binary
+*.pyc    binary
