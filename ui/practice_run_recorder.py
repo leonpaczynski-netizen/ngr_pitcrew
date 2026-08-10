@@ -15,6 +15,7 @@ reason, it never raises into the UI.
 from __future__ import annotations
 
 import datetime
+import threading
 from typing import Mapping, Optional
 
 from strategy.practice_run_recording import (
@@ -37,6 +38,12 @@ class PracticeRunRecorder:
     def __init__(self, db=None, config: Optional[dict] = None):
         self._db = db
         self._config = config if isinstance(config, dict) else {}
+        # Live references to off-thread proposal-generation threads so they
+        # are not garbage-collected before they finish. Pruned after each call.
+        self._proposal_threads: list = []
+        # Sessions recorded where evidence exists but no owner baseline was
+        # entered. Callers can surface these via no_baseline_sessions().
+        self._no_baseline_sessions: list = []
 
     # ---- reads ------------------------------------------------------------
     def active_cycle_id(self) -> str:
@@ -163,6 +170,11 @@ class PracticeRunRecorder:
             self._db.upsert_preparation_activity(completed_activity_row(run, now_iso=now))
         except Exception as exc:  # pragma: no cover - defensive
             return RunBindingDecision(reason=f"Could not record the run: {exc}")
+        # After a successful bind, trigger owner-baseline proposal generation off
+        # the Qt thread. This never blocks record_run — proposal generation is
+        # best-effort and non-fatal (never raises into the UI). The brief requires
+        # this to happen after record_run, off the Qt thread (B part, practice path).
+        self._trigger_owner_proposals(session_id, meta)
         return decision
 
     def discard_run(self) -> bool:
@@ -175,6 +187,90 @@ class PracticeRunRecorder:
             return True
         except Exception:  # pragma: no cover - defensive
             return False
+
+    def no_baseline_sessions(self) -> list:
+        """Sessions where evidence was collected but no owner baseline was entered.
+
+        Returns a list of dicts ``{session_id, event_id, discipline, note}``.
+        The UI should surface these as "evidence collected, no baseline" (not as
+        failures) and NEVER offer to auto-generate a baseline from them (decision R2).
+        """
+        return list(self._no_baseline_sessions)
+
+    def _trigger_owner_proposals(self, session_id, session_meta=None) -> None:
+        """Trigger owner-baseline proposal generation off the Qt thread (B part).
+
+        ONLY runs when an owner baseline has been entered for the discipline.
+        When no baseline exists the session is flagged "evidence collected, no
+        baseline" — decision R2 prevents auto-generating a baseline.
+
+        Uses a daemon threading.Thread so shutdown never blocks on this work.
+        Never raises — proposal generation failure is non-fatal.
+        """
+        try:
+            if self._db is None:
+                return
+            # Resolve the session_run (uuid) from the integer session_id.
+            session_run = None
+            if hasattr(self._db, "get_run_for_session"):
+                session_run = self._db.get_run_for_session(int(session_id or 0))
+            if not session_run:
+                return  # no session_run row yet — nothing to propose against
+            event_id = int(session_run.get("event_id") or 0)
+            run_id = str(session_run.get("run_id") or "")
+            if not event_id or not run_id:
+                return
+
+            # Determine discipline from session_type (Practice → race baseline;
+            # Qualifying → qualifying baseline).
+            meta = session_meta or self._session_meta(session_id)
+            session_type_str = str(meta.get("session_type") or "").lower()
+            discipline = "qualifying" if "qual" in session_type_str else "race"
+
+            # Check whether an owner baseline exists for this event + discipline.
+            baseline = None
+            if hasattr(self._db, "get_owner_baseline"):
+                baseline = self._db.get_owner_baseline(event_id, discipline)
+
+            if baseline is None:
+                # Evidence collected, but owner has not entered a baseline.
+                # Surface this state to the UI; do NOT auto-generate (R2).
+                self._no_baseline_sessions.append({
+                    "session_id": int(session_id or 0),
+                    "event_id": event_id,
+                    "discipline": discipline,
+                    "note": "evidence collected, no baseline",
+                })
+                return
+
+            # Spawn off-thread proposal generation. The thread is a daemon so it
+            # never blocks application shutdown.
+            db = self._db
+
+            def _run() -> None:
+                try:
+                    from services import owner_baseline_service
+                    owner_baseline_service.run_for_session(
+                        db,
+                        session_run_id=run_id,
+                        discipline=discipline,
+                    )
+                except Exception:
+                    pass  # non-fatal — never propagate
+
+            t = threading.Thread(
+                target=_run,
+                daemon=True,
+                name=f"owner_proposal_{run_id[:8]}",
+            )
+            t.start()
+            self._proposal_threads.append(t)
+            # Prune finished threads so the list stays small.
+            self._proposal_threads = [
+                t for t in self._proposal_threads if t.is_alive()
+            ]
+        except Exception:
+            pass  # never propagate — record_run must always succeed if possible
 
     # ---- helpers ----------------------------------------------------------
     def _session_meta(self, session_id) -> dict:
