@@ -2774,3 +2774,314 @@ class TestB11_ServiceRoundTrip:
             f"got {lsd_props[0].get('provenance')!r}"
         )
         db.close()
+
+
+# =============================================================================
+# I-C service-level regression guard: band-1 proposals must persist
+#
+# At band 1 (1-4 clean laps) the second pass (feedback-only fields) must run
+# because source-separation means telemetry plans no longer carry feedback-
+# driven intents.  Before the fix (gate >= 2), a 3-lap practice session
+# silently lost all feedback-only proposals.
+# =============================================================================
+
+class TestICBand1_ServiceRegression:
+    """Service-level guard for the I-C band-1 silent-drop regression.
+
+    Runs the real run_for_session against a real SessionDB with exactly 3 clean
+    laps (band 1).  The feedback-only parameter must appear in proposals.
+
+    Failure mode when reverted: gate >= 2 means band 1 has no second pass.
+    tel_dirs is empty for feedback-driven rules (source-separated telemetry plan
+    has no feedback).  Proposals are empty for the feedback-only field.
+    The assert ``len(arb_rear_props) >= 1`` fails.
+    """
+
+    def test_band1_proposals_persist_for_feedback_only_field(self, tmp_path):
+        """3 clean laps + feedback -> feedback-only field in proposals at band 1.
+
+        Scenario: 3 laps, wheelspin=0 (tel plan fires no wheelspin rules),
+        feedback={'mid_corner':'understeer'}.
+        - Feedback plan: C3_mid_arb_rear fires (mid_corner_understeer=True,
+          dominant_problem contains 'understeer', wheelspin=low in fb plan) ->
+          arb_rear increase in fb_dirs.
+        - Telemetry plan: no dominant understeer (feedback=None, no wheelspin) ->
+          arb_rear NOT in tel_dirs.
+        - Second pass (band >= 1): arb_rear from fb_dirs -> DRIVER_TEL_SILENT.
+
+        Reverting the gate to >= 2 makes the second pass skip at band 1 ->
+        arb_rear absent from proposals -> assertion fails.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT
+
+        db = SessionDB(str(tmp_path / "ic_band1.db"))
+        event_id = _seed_event_row(db, "I-C band-1 regression")
+        db.save_owner_baseline(event_id, "race", {
+            "arb_rear": 5, "lsd_decel": 30, "aero_front": 300,
+        })
+        # 3 laps -> band 1 (1-4 laps); wheelspin=0 keeps tel plan silent on arb_rear.
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=3,
+            wheelspin_count=0,
+            feedback={"mid_corner": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+        arb_props = [p for p in proposals if p.get("parameter") == "arb_rear"]
+        assert len(arb_props) >= 1, (
+            "arb_rear must appear in proposals at band 1 (3 laps).  "
+            "If this fails, the second-pass gate was reverted to >= 2 and "
+            "feedback-only proposals silently disappear at band 1."
+        )
+        # Label must be DRIVER_TEL_SILENT (band 1 does not apply corroboration).
+        assert arb_props[0].get("label") == LABEL_DRIVER_TEL_SILENT, (
+            f"Band-1 feedback-only proposal must be DRIVER_TEL_SILENT; "
+            f"got {arb_props[0].get('label')!r}"
+        )
+        # Provenance must be DRIVER_REPORT.
+        assert arb_props[0].get("provenance") == "DRIVER_REPORT", (
+            f"Band-1 feedback-only proposal must have provenance=DRIVER_REPORT; "
+            f"got {arb_props[0].get('provenance')!r}"
+        )
+        db.close()
+
+
+# =============================================================================
+# Sixth-label service round-trip tests
+#
+# Three scenarios that exercise the full corroboration gate from
+# run_for_session through to the proposals table.
+# =============================================================================
+
+class TestSymptomCorroboration_ServiceRoundTrip:
+    """Service-level tests for the sixth label (LABEL_DRIVER_SYMPTOM_CORROBORATED).
+
+    The service computes the corroboration gate independently:
+      _true_feel_flags = active feel flags from the feedback diagnosis
+      _raw_corroborated = flags confirmed by the telemetry diagnosis
+      Gate open when: _true_feel_flags non-empty AND _true_feel_flags <= _raw_corroborated
+
+    When the gate opens the arbiter upgrades second-pass proposals from
+    DRIVER_TEL_SILENT to DRIVER_SYMPTOM_CORROBORATED with PROV_DRIVER_REPORT.
+    """
+
+    def test_sixth_label_fires_entry_understeer_with_aero_near_min(self, tmp_path):
+        """Gate OPEN: entry_understeer corroborated by aero_front_near_min -> sixth label.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic aero range 0-1000).
+          Baseline: {aero_front: 0.0, lsd_decel: 30, arb_rear: 5}.
+          aero_front=0.0, range (0,1000): threshold=100 -> aero_front_near_min=True.
+          6 clean laps, wheelspin=0 (tel plan fires no wheelspin-driven rules).
+          feedback={'corner_entry':'understeer'} -> entry_understeer=True.
+
+          Corroboration: entry_understeer + aero_front_near_min -> corroborated.
+          Service gate: _true_feel_flags={'entry_understeer'},
+                        _raw_corroborated={'entry_understeer'} -> gate opens.
+          Feedback plan fires:
+            C1_entry_lsd_decel (entry_understeer=True) -> lsd_decel decrease in fb_dirs.
+            C3_mid_arb_rear (dominant contains 'understeer') -> arb_rear increase in fb_dirs.
+          Tel plan fires nothing for lsd_decel or arb_rear (no understeer signal, no wheelspin).
+          Second pass: lsd_decel and arb_rear -> DRIVER_SYMPTOM_CORROBORATED.
+
+        Failure mode when reverted:
+          If the gate condition breaks (e.g. reverts to 'exactly one flag'), the gate
+          closes -> arbiter receives empty corroborated_flags -> DRIVER_TEL_SILENT.
+          The label assertion below fails.
+          If the label upgrade is removed from the arbiter, same failure.
+          If provenance is changed to MEASURED_FACT, the provenance assertion fails.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_SYMPTOM_CORROBORATED,
+            PROV_DRIVER_REPORT,
+            PROV_MEASURED_FACT,
+        )
+
+        db = SessionDB(str(tmp_path / "sym_sixth_label.db"))
+        event_id = _seed_event_row(db, "SYM-sixth-label")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 0.0, "lsd_decel": 30, "arb_rear": 5,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=0,
+            feedback={"corner_entry": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+
+        # Feedback-only proposals must carry the sixth label.
+        sixth_label_props = [
+            p for p in proposals if p.get("label") == LABEL_DRIVER_SYMPTOM_CORROBORATED
+        ]
+        assert len(sixth_label_props) >= 1, (
+            "At least one DRIVER_SYMPTOM_CORROBORATED proposal must exist when "
+            "entry_understeer is corroborated by aero_front_near_min (aero_front=0.0). "
+            f"All labels: {[p.get('label') for p in proposals]}"
+        )
+        # The upgraded proposals must include lsd_decel and/or arb_rear.
+        sixth_params = {p.get("parameter") for p in sixth_label_props}
+        assert sixth_params & {"lsd_decel", "arb_rear"}, (
+            f"lsd_decel or arb_rear must carry the sixth label; got {sixth_params!r}"
+        )
+        # Provenance must be DRIVER_REPORT — NOT MEASURED_FACT.
+        for p in sixth_label_props:
+            assert p.get("provenance") == PROV_DRIVER_REPORT, (
+                f"DRIVER_SYMPTOM_CORROBORATED proposal for {p.get('parameter')!r} "
+                f"must have provenance=DRIVER_REPORT; got {p.get('provenance')!r}"
+            )
+            assert p.get("provenance") != PROV_MEASURED_FACT, (
+                f"MEASURED_FACT on a DRIVER_SYMPTOM_CORROBORATED proposal for "
+                f"{p.get('parameter')!r} is the original defect."
+            )
+        db.close()
+
+    def test_symptom_axis_does_not_suppress_b11_contradiction(self, tmp_path):
+        """Gate OPEN with two corroborated flags, but B11 lever conflict is NOT suppressed.
+
+        The symptom corroboration axis only affects the SECOND pass (feedback-only
+        fields not addressed by telemetry).  A field that has opposing proposals in
+        BOTH plans (B11 contradiction) is handled by the FIRST pass and keeps
+        status='unresolved' regardless of the gate state.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic).
+          Baseline: {aero_front: 300, lsd_accel: 30, aero_rear: 600}.
+          6 laps, wheelspin=14 (major band).
+          feedback={'exit_stability':'strong oversteer'}.
+
+          Feel flags: rear_loose_on_exit=True, snap_oversteer_exit=True.
+          Telemetry corroboration: both flags + wheelspin=major -> both corroborated.
+          Service gate: _true_feel_flags=both, _raw_corroborated=both -> gate OPENS.
+
+          Tel plan: C5 fires (wheelspin major, is_traction) -> lsd_accel increase.
+          Fb plan:  B3 fires (snap_oversteer_exit=True) -> lsd_accel decrease.
+          B11: opposite directions -> status='unresolved' in FIRST PASS.
+          Second pass skips lsd_accel (it is in tel_fields) -> no DRIVER_SYMPTOM_CORROBORATED
+          for lsd_accel regardless of gate state.
+
+        Failure mode: if the corroboration gate accidentally marks B11 contradictions
+        as DRIVER_SYMPTOM_CORROBORATED or DRIVER_REPORT instead of UNRESOLVED, the
+        status assertion below fails.
+        """
+        import pytest
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import PROV_UNRESOLVED
+
+        db = SessionDB(str(tmp_path / "sym_b11_no_suppress.db"))
+        event_id = _seed_event_row(db, "SYM-B11-no-suppress")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 300, "lsd_accel": 30, "aero_rear": 600,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=14,
+            feedback={"exit_stability": "strong oversteer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+        lsd_props = [p for p in proposals if p.get("parameter") == "lsd_accel"]
+        assert len(lsd_props) == 1, (
+            f"Exactly one lsd_accel proposal expected (B11); got {len(lsd_props)}"
+        )
+        p = lsd_props[0]
+        assert p.get("status") == "unresolved", (
+            "The symptom corroboration gate must NEVER suppress a B11 contradiction. "
+            f"lsd_accel must remain status='unresolved'; got {p.get('status')!r}. "
+            "The corroboration axis only upgrades second-pass (feedback-only) fields."
+        )
+        assert p.get("provenance") == PROV_UNRESOLVED, (
+            f"B11 lsd_accel must have provenance=UNRESOLVED; got {p.get('provenance')!r}"
+        )
+        db.close()
+
+    def test_symptom_gate_closed_mid_corner_understeer_falls_back(self, tmp_path):
+        """Gate CLOSED: mid_corner_understeer is not in the corroboration mapping.
+
+        When none of the active feel flags are corroborated, the gate closes and
+        the second pass falls back to LABEL_DRIVER_TEL_SILENT.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic).
+          Baseline: {aero_front: 300, arb_rear: 5, lsd_decel: 30}.
+          6 clean laps, wheelspin=0.
+          feedback={'mid_corner':'understeer'} -> mid_corner_understeer=True.
+
+          mid_corner_understeer is NOT in corroborated_feel_flags() mapping.
+          _raw_corroborated=frozenset() -> _true_feel_flags <= _raw_corroborated is
+          False -> gate closes -> arbiter receives empty corroborated_flags.
+          Second pass: arb_rear -> DRIVER_TEL_SILENT (no upgrade).
+
+        Failure mode: if the gate condition is weakened to allow mid_corner_understeer
+        or if the fallback label is changed, the sixth-label assertion triggers.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_TEL_SILENT,
+            LABEL_DRIVER_SYMPTOM_CORROBORATED,
+            PROV_DRIVER_REPORT,
+        )
+
+        db = SessionDB(str(tmp_path / "sym_gate_closed.db"))
+        event_id = _seed_event_row(db, "SYM-gate-closed")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 300, "arb_rear": 5, "lsd_decel": 30,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=0,
+            feedback={"mid_corner": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+
+        # No DRIVER_SYMPTOM_CORROBORATED proposals — gate is closed.
+        sixth_label_props = [
+            p for p in proposals if p.get("label") == LABEL_DRIVER_SYMPTOM_CORROBORATED
+        ]
+        assert len(sixth_label_props) == 0, (
+            "mid_corner_understeer is not in the corroboration mapping -> gate must "
+            "be closed -> no DRIVER_SYMPTOM_CORROBORATED proposals. "
+            f"Got: {[(p.get('parameter'), p.get('label')) for p in sixth_label_props]}"
+        )
+        # Feedback-only proposals must fall back to DRIVER_TEL_SILENT.
+        driver_report_props = [
+            p for p in proposals
+            if p.get("provenance") == PROV_DRIVER_REPORT
+        ]
+        assert len(driver_report_props) >= 1, (
+            "With mid_corner understeer feedback, at least one DRIVER_REPORT proposal "
+            "must exist (arb_rear from C3_mid_arb_rear, gate-closed -> DRIVER_TEL_SILENT)."
+        )
+        for p in driver_report_props:
+            assert p.get("label") == LABEL_DRIVER_TEL_SILENT, (
+                f"Gate-closed DRIVER_REPORT proposals must carry DRIVER_TEL_SILENT; "
+                f"parameter={p.get('parameter')!r} got label={p.get('label')!r}"
+            )
+        db.close()
