@@ -252,6 +252,36 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
     except Exception:
         pass
 
+    # --- 12a. Compute symptom-corroboration set for the second pass ---
+    # ``corroborated_feel_flags`` returns which FEEDBACK feel-flags are independently
+    # confirmed by a TELEMETRY signal (e.g. rear_loose_on_exit + wheelspin major).
+    # The SERVICE applies the unambiguous-linkage gate: pass a non-empty frozenset
+    # to the arbiter ONLY when exactly one feel flag is True in the feedback and
+    # that single flag is in the corroborated set.  When multiple flags are active,
+    # the link between any individual proposal and a specific flag is ambiguous —
+    # emit empty frozenset and let the arbiter use LABEL_DRIVER_TEL_SILENT.
+    _safe_corroborated: "frozenset[str]" = frozenset()
+    try:
+        from strategy.setup_diagnosis import corroborated_feel_flags as _corr_flags
+        _fb_feel_flags: dict = feedback_diagnosis.get("driver_feel_flags") or {}
+        _tel_wheelspin_band: str = str(telemetry_diagnosis.get("wheelspin_band") or "")
+        _tel_aero_front_near_min: bool = bool(telemetry_diagnosis.get("aero_front_near_min"))
+        _tel_aero_rear_near_min: bool = bool(telemetry_diagnosis.get("aero_rear_near_min"))
+        _tel_avg_lockups: float = float(telemetry_diagnosis.get("avg_lockups") or 0.0)
+        _raw_corroborated = _corr_flags(
+            _fb_feel_flags,
+            _tel_wheelspin_band,
+            _tel_aero_front_near_min,
+            _tel_aero_rear_near_min,
+            _tel_avg_lockups,
+        )
+        # Unambiguous linkage: exactly one feel flag is True AND it is corroborated.
+        _true_feel_flags = frozenset(k for k, v in _fb_feel_flags.items() if v)
+        if len(_true_feel_flags) == 1 and _true_feel_flags <= _raw_corroborated:
+            _safe_corroborated = _raw_corroborated
+    except Exception:
+        pass  # degraded silently — arbiter defaults to LABEL_DRIVER_TEL_SILENT
+
     # --- 12. Build proposals ---
     proposals, suppressed, unresolved = build_owner_proposals(
         clean_laps=clean_laps,
@@ -264,6 +294,7 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         session_run_id=session_run_id,
         event_id=event_id,
         suppression_keys=suppression_keys,
+        corroborated_flags=_safe_corroborated,
     )
 
     # --- 13. Persist proposals to DB ---

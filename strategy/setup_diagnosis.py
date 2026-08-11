@@ -1271,33 +1271,78 @@ def _derive_tuning_priority(
     return priority
 
 
+def corroborated_feel_flags(
+    driver_feel_flags: dict,
+    wheelspin_band: str,
+    aero_front_near_min: bool,
+    aero_rear_near_min: bool,
+    avg_lockups: float,
+) -> "frozenset[str]":
+    """Return the feel flags that are independently corroborated by telemetry.
+
+    Each flag in the returned frozenset was BOTH reported by the driver AND
+    confirmed by a separate telemetry signal.  The two sources are independent:
+    the telemetry diagnosis is built with ``feedback=None`` (source separation);
+    this function therefore describes SYMPTOM corroboration, not lever agreement.
+
+    This is the SINGLE authoritative mapping.  ``_driver_feel_supported_by_telemetry``
+    delegates here so there is exactly one copy of the rules.
+
+    Parameters
+    ----------
+    driver_feel_flags
+        ``{flag_name: bool}`` dict from ``driver_feel_flags_from_feedback``.
+    wheelspin_band
+        Telemetry-derived wheelspin severity band (e.g. "none", "meaningful",
+        "major", "severe").
+    aero_front_near_min
+        True when front downforce is at or near its legal minimum.
+    aero_rear_near_min
+        True when rear downforce is at or near its legal minimum.
+    avg_lockups
+        Average lockup events per lap (from the telemetry diagnosis).
+
+    Returns
+    -------
+    frozenset[str]
+        Names of corroborated feel flags.  Empty frozenset when none qualify.
+    """
+    corroborated: set = set()
+    # floaty front + front aero near min
+    if driver_feel_flags.get("floaty_front") and aero_front_near_min:
+        corroborated.add("floaty_front")
+    # entry understeer + front aero near min
+    if driver_feel_flags.get("entry_understeer") and aero_front_near_min:
+        corroborated.add("entry_understeer")
+    # rear loose on exit + wheelspin meaningful+
+    if driver_feel_flags.get("rear_loose_on_exit") and wheelspin_band in ("meaningful", "major", "severe"):
+        corroborated.add("rear_loose_on_exit")
+    # rear loose on exit + rear aero near min
+    if driver_feel_flags.get("rear_loose_on_exit") and aero_rear_near_min:
+        corroborated.add("rear_loose_on_exit")  # same flag; set.add is idempotent
+    # snap oversteer exit + wheelspin meaningful+
+    if driver_feel_flags.get("snap_oversteer_exit") and wheelspin_band in ("meaningful", "major", "severe"):
+        corroborated.add("snap_oversteer_exit")
+    # braking instability + lockups > 0.3/lap
+    if driver_feel_flags.get("braking_instability") and avg_lockups > 0.3:
+        corroborated.add("braking_instability")
+    return frozenset(corroborated)
+
+
 def _driver_feel_supported_by_telemetry(
-    driver_feel_flags: dict[str, bool],
+    driver_feel_flags: dict,
     wheelspin_band: str,
     aero_front_near_min: bool,
     aero_rear_near_min: bool,
     avg_lockups: float,
 ) -> bool:
-    """Return True when at least one driver feel flag is corroborated by telemetry."""
-    # floaty front + front aero near min
-    if driver_feel_flags.get("floaty_front") and aero_front_near_min:
-        return True
-    # entry understeer + front aero near min
-    if driver_feel_flags.get("entry_understeer") and aero_front_near_min:
-        return True
-    # rear loose on exit + wheelspin meaningful+
-    if driver_feel_flags.get("rear_loose_on_exit") and wheelspin_band in ("meaningful", "major", "severe"):
-        return True
-    # rear loose on exit + rear aero near min
-    if driver_feel_flags.get("rear_loose_on_exit") and aero_rear_near_min:
-        return True
-    # snap oversteer exit + wheelspin meaningful+
-    if driver_feel_flags.get("snap_oversteer_exit") and wheelspin_band in ("meaningful", "major", "severe"):
-        return True
-    # braking instability + lockups > 0.3/lap
-    if driver_feel_flags.get("braking_instability") and avg_lockups > 0.3:
-        return True
-    return False
+    """Return True when at least one driver feel flag is corroborated by telemetry.
+
+    Thin delegate to ``corroborated_feel_flags`` — ONE copy of the mapping.
+    """
+    return bool(corroborated_feel_flags(
+        driver_feel_flags, wheelspin_band, aero_front_near_min, aero_rear_near_min, avg_lockups
+    ))
 
 
 # ---------------------------------------------------------------------------
