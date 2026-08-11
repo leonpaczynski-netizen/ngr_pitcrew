@@ -79,6 +79,17 @@ class Store:
         rows = self._query("SELECT value FROM app_state WHERE key = ?", (key,))
         return rows[0]["value"] if rows else None
 
+    def custom_catalog(self, kind: str) -> list[str]:
+        """Names the driver added because the shipped list was missing them."""
+        raw = self.get_state(f"custom_{kind}s")
+        return json.loads(raw) if raw else []
+
+    def add_to_catalog(self, kind: str, name: str) -> None:
+        names = self.custom_catalog(kind)
+        if name and name not in names:
+            names.append(name)
+            self.set_state(f"custom_{kind}s", json.dumps(sorted(names)))
+
     def active_event_id(self) -> int | None:
         raw = self.get_state("active_event_id")
         if raw is None:

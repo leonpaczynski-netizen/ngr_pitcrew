@@ -37,35 +37,18 @@ from pitcrew.ui.widgets import (
     CompoundBand,
     Field,
     MarkButton,
+    Picker,
     Plate,
     StencilLabel,
 )
 
 WEATHER = ("Dry", "Damp", "Wet", "Changeable")
-MULTIPLIERS = ("Off", "1x", "2x", "3x", "4x", "5x", "6x", "8x", "10x")
+MULTIPLIERS = ("Off",) + tuple(f"{n}x" for n in range(1, 11))
 ABS_SETTINGS = ("Off", "Weak", "Default")
 
 # Spin boxes have no null. This sentinel is the minimum of the range and
 # renders as a dash, so a setting nobody entered never reads as zero.
 EMPTY = -9999.0
-
-
-def _suggesting_combo(items, placeholder: str) -> QComboBox:
-    """An editable combo that suggests without dictating its own width.
-
-    Left to itself a combo sizes to its longest entry, and one 60-character
-    track name would swallow the column and squeeze its neighbour to a few
-    characters.
-    """
-    combo = QComboBox()
-    combo.setEditable(True)
-    combo.addItems(items)
-    combo.setCurrentText("")
-    combo.setSizeAdjustPolicy(
-        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-    combo.setMinimumContentsLength(12)
-    combo.lineEdit().setPlaceholderText(placeholder)
-    return combo
 
 
 class CompoundChip(CompoundBand):
@@ -97,12 +80,23 @@ class EventScreen(QWidget):
     """Create or edit the event, and the sheet that will be in the car."""
 
     saved = pyqtSignal(dict)
+    catalog_extended = pyqtSignal(str, str)    # kind, name
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, tracks=None, cars=None,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._setup_editors: dict[str, QDoubleSpinBox] = {}
         self._compound_chips: dict[str, CompoundChip] = {}
+        self._tracks = list(tracks) if tracks is not None else list(
+            catalogs.track_names())
+        self._cars = list(cars) if cars is not None else list(
+            catalogs.car_names())
         self._build()
+
+    def set_catalogs(self, tracks, cars) -> None:  # noqa: N802 - Qt naming
+        self._tracks, self._cars = list(tracks), list(cars)
+        self.track_edit.set_items(self._tracks)
+        self.car_edit.set_items(self._cars)
 
     # ------------------------------------------------------------------ build
 
@@ -156,16 +150,18 @@ class EventScreen(QWidget):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Round 4 - Fuji")
 
-        self.track_edit = _suggesting_combo(catalogs.track_names(),
-                                           "Fuji Speedway")
+        self.track_edit = Picker(self._tracks, placeholder="Pick a track")
+        self.track_edit.added.connect(
+            lambda name: self.catalog_extended.emit("track", name))
         self.layout_edit = QLineEdit()
         self.layout_edit.setPlaceholderText("Full")
-        self.car_edit = _suggesting_combo(catalogs.car_names(),
-                                          "Porsche 911 RSR (991) '17")
+        self.car_edit = Picker(self._cars, placeholder="Pick a car")
+        self.car_edit.added.connect(
+            lambda name: self.catalog_extended.emit("car", name))
 
         grid.addWidget(Field("Name", self.name_edit), 0, 0, 1, 2)
         grid.addWidget(Field("Track", self.track_edit,
-                             hint="Suggestions only - type anything"), 1, 0)
+                             hint="Add if GT7 has one the list lacks"), 1, 0)
         grid.addWidget(Field("Layout", self.layout_edit,
                              hint="Full, East, No Chicane"), 1, 1)
         grid.addWidget(Field("Car", self.car_edit), 2, 0, 1, 2)

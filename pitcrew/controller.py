@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import QApplication
 from pitcrew.export.build import build_session_export
 from pitcrew.export.payload import ExportRefused, to_json
 from pitcrew.setup.sheet import SetupError, SetupSheet
+from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
@@ -109,6 +110,8 @@ class PitCrewController(QObject):
         self.bridge.parse_failed.connect(self._on_parse_failed)
 
         self.event_screen.saved.connect(self._on_event_saved)
+        self.event_screen.catalog_extended.connect(
+            self._on_catalog_extended)
         self.practice.recording_toggled.connect(self._on_recording_toggled)
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
@@ -120,7 +123,21 @@ class PitCrewController(QObject):
         self._health.setInterval(1000)
         self._health.timeout.connect(self._report_health)
 
+        self.refresh_catalogs()
         self.load_active_event()
+
+    # --------------------------------------------------------------- catalog
+
+    def refresh_catalogs(self) -> None:
+        """Shipped names plus whatever the driver has added."""
+        tracks = sorted(set(catalogs.track_names())
+                        | set(self.store.custom_catalog("track")))
+        cars = sorted(set(catalogs.car_names())
+                      | set(self.store.custom_catalog("car")))
+        self.event_screen.set_catalogs(tracks, cars)
+
+    def _on_catalog_extended(self, kind: str, name: str) -> None:
+        self.store.add_to_catalog(kind, name)
 
     # ----------------------------------------------------------------- event
 

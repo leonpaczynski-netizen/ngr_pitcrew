@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QEvent,
+    QObject,
     QPropertyAnimation,
     QRectF,
     Qt,
@@ -17,16 +19,57 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QAbstractScrollArea,
     QAbstractSpinBox,
+    QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from pitcrew.ui import theme
+
+
+class _WheelGuard(QObject):
+    """Stops the mouse wheel silently changing a setting you scrolled past.
+
+    Qt's default is that a wheel over an unfocused combo or spin box edits it.
+    On a page of setup values that means scrolling the form quietly rewrites
+    the car — the driver would take a sheet to the track with a value nobody
+    typed. The event is forwarded to the enclosing scroll area instead, so the
+    page still scrolls.
+    """
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt naming
+        if event.type() != QEvent.Type.Wheel or obj.hasFocus():
+            return False
+        scroller = obj.parentWidget()
+        while scroller is not None and not isinstance(scroller, QAbstractScrollArea):
+            scroller = scroller.parentWidget()
+        if scroller is not None:
+            QApplication.sendEvent(scroller.viewport(), event)
+        return True
+
+
+_WHEEL_GUARD = _WheelGuard()
+
+
+def block_wheel(widget: QWidget) -> QWidget:
+    """Make a value widget ignore the wheel until it is deliberately focused."""
+    if isinstance(widget, (QComboBox, QAbstractSpinBox)):
+        widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        widget.installEventFilter(_WHEEL_GUARD)
+        if isinstance(widget, QComboBox):
+            # A combo's own view scrolls on wheel too; the guard above only
+            # covers the collapsed control.
+            widget.view().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    return widget
 
 
 class StencilLabel(QLabel):
@@ -226,11 +269,14 @@ class MarkButton(QPushButton):
     """An action, lettered on a plate. `primary` is the one the run ends with."""
 
     def __init__(self, text: str, *, primary: bool = False,
-                 danger: bool = False, parent: QWidget | None = None) -> None:
+                 danger: bool = False, compact: bool = False,
+                 parent: QWidget | None = None) -> None:
         super().__init__(text.upper(), parent)
-        self.setFont(theme.stencil_font(13, tracking=12.0))
+        self.setFont(theme.stencil_font(11 if compact else 13,
+                                        tracking=6.0 if compact else 12.0))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(40)
+        self.setMinimumHeight(34 if compact else 40)
+        padding = "4px 8px" if compact else "9px 20px"
 
         if primary:
             base, ink, edge = theme.CRAYON, theme.RUBBER, theme.CRAYON
@@ -247,7 +293,7 @@ class MarkButton(QPushButton):
                 background: {base};
                 color: {ink};
                 border: 1px solid {edge};
-                padding: 9px 20px;
+                padding: {padding};
             }}
             QPushButton:hover {{ background: {hover}; }}
             QPushButton:pressed {{ background: {theme.SHOULDER}; }}
@@ -325,13 +371,24 @@ class Field(QWidget):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(theme.GAP_TIGHT)
 
-        column.addWidget(StencilLabel(label, size=11, tracking=12.0))
+        # Every text row reserves its real line height rather than the height
+        # Qt reports. Bahnschrift's ascenders and descenders run past that, and
+        # at 125% display scaling the difference is enough for a label to sit
+        # on the box below it.
+        caption = StencilLabel(label, size=11, tracking=12.0)
+        caption.setMinimumHeight(caption.fontMetrics().height() + 2)
+        caption.setSizePolicy(caption.sizePolicy().horizontalPolicy(),
+                              QSizePolicy.Policy.Fixed)
+        column.addWidget(caption)
 
         # A field sharing a grid row with a taller neighbour can be squeezed
         # until its editor is a sliver. Pin the height, and drop the spinner
         # arrows: they crowd the box at this size, and every value here is
         # typed from a screen the driver is reading anyway.
         editor.setMinimumHeight(34)
+        editor.setSizePolicy(QSizePolicy.Policy.Expanding,
+                             QSizePolicy.Policy.Fixed)
+        block_wheel(editor)
         if isinstance(editor, QAbstractSpinBox):
             editor.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
@@ -352,14 +409,132 @@ class Field(QWidget):
             # size hint and then overruns the field below it once the grid
             # gives it a narrower column. Keep hints to one short line.
             note = BodyLabel(hint, size=12, colour=theme.STRUCK, wrap=False)
-            # Bahnschrift's descenders run past the height Qt reports for the
-            # label, so a hint sitting directly under an editor grazes it.
-            # Reserve the real line height rather than the reported one.
             note.setMinimumHeight(note.fontMetrics().height() + 4)
+            note.setSizePolicy(note.sizePolicy().horizontalPolicy(),
+                               QSizePolicy.Policy.Fixed)
             column.addSpacing(2)
             column.addWidget(note)
 
+        # Nothing in a field stretches vertically: a grid row taller than this
+        # one leaves space below rather than smearing it between the rows.
+        column.addStretch(0)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Minimum)
+
         self.editor = editor
+
+
+class Picker(QWidget):
+    """A dropdown you cannot mistype into, plus a way to add what is missing.
+
+    Free text was letting a typo through: "Fuji Speedwya" would save happily
+    and then match nothing next session. But the shipped track catalogue is
+    incomplete, so a closed list alone would block real events. Both are solved
+    by making the list authoritative and letting the driver extend it once —
+    after which the name is in the dropdown forever.
+    """
+
+    added = pyqtSignal(str)
+
+    def __init__(self, items, *, placeholder: str = "", allow_add: bool = True,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._placeholder = placeholder
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        self.combo = QComboBox()
+        self.combo.setMinimumHeight(34)
+        self.combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo.setMinimumContentsLength(12)
+        block_wheel(self.combo)
+        self.combo.currentIndexChanged.connect(self._sync_ink)
+        self.set_items(items)
+        row.addWidget(self.combo, 1)
+
+        self._add_button = None
+        self._entry = None
+        if allow_add:
+            self._add_button = MarkButton("Add", compact=True)
+            self._add_button.setFixedWidth(56)
+            self._add_button.setToolTip("Add one the list is missing")
+            self._add_button.clicked.connect(self._begin_add)
+            row.addWidget(self._add_button)
+
+            self._entry = QLineEdit()
+            self._entry.setPlaceholderText("Name it exactly as GT7 spells it")
+            self._entry.setMinimumHeight(34)
+            self._entry.hide()
+            self._entry.returnPressed.connect(self._commit_add)
+            row.addWidget(self._entry, 1)
+
+    # ------------------------------------------------------------------ value
+
+    def set_items(self, items) -> None:  # noqa: N802 - Qt naming
+        current = self.currentText()
+        self.combo.clear()
+        self.combo.addItem(self._placeholder or "—", None)
+        for item in items:
+            self.combo.addItem(item, item)
+        if current:
+            self.setCurrentText(current)
+        self._sync_ink()
+
+    def _sync_ink(self) -> None:
+        """Nothing chosen reads struck, not crayon.
+
+        The same discipline as a placeholder: an unset field must never look
+        like a value the driver declared.
+        """
+        palette = self.combo.palette()
+        chosen = self.combo.currentData() is not None
+        palette.setColor(palette.ColorRole.ButtonText,
+                         QColor(theme.CRAYON if chosen else theme.STRUCK))
+        palette.setColor(palette.ColorRole.Text,
+                         QColor(theme.CRAYON if chosen else theme.STRUCK))
+        self.combo.setPalette(palette)
+
+    def currentText(self) -> str:  # noqa: N802 - Qt naming
+        return self.combo.currentData() or ""
+
+    def setCurrentText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        if not text:
+            self.combo.setCurrentIndex(0)
+            return
+        index = self.combo.findData(text)
+        if index < 0:
+            self.combo.addItem(text, text)
+            index = self.combo.count() - 1
+        self.combo.setCurrentIndex(index)
+
+    def items(self) -> list[str]:
+        return [self.combo.itemData(i) for i in range(1, self.combo.count())]
+
+    # -------------------------------------------------------------- adding
+
+    def _begin_add(self) -> None:
+        # Inline, never a modal: a dialog waiting on a human is a hang
+        # anywhere there is no human, and this app is driven by tests too.
+        self.combo.hide()
+        self._add_button.hide()
+        self._entry.show()
+        self._entry.setFocus()
+
+    def _commit_add(self) -> None:
+        name = self._entry.text().strip()
+        self._entry.clear()
+        self._entry.hide()
+        self.combo.show()
+        self._add_button.show()
+        if not name:
+            return
+        if self.combo.findData(name) < 0:
+            self.combo.addItem(name, name)
+        self.setCurrentText(name)
+        self.added.emit(name)
 
 
 class StrikeRow(QFrame):

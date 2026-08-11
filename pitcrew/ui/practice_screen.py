@@ -29,6 +29,7 @@ from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
+    block_wheel,
     CompoundBand,
     Declared,
     MarkButton,
@@ -162,6 +163,7 @@ class RackRow(QWidget):
         self.compound_picker.setFixedWidth(W_COMPOUND)
         self.compound_picker.currentIndexChanged.connect(self._on_compound)
         self.compound_picker.setToolTip("Which compound this lap ran on")
+        block_wheel(self.compound_picker)
         line.addWidget(self.compound_picker)
 
         self.wear_front = self._wear_box("Front tyre gauge, fraction consumed")
@@ -187,6 +189,7 @@ class RackRow(QWidget):
         box.setSpecialValueText(UNTAGGED)
         box.setFixedWidth(W_WEAR)
         box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        block_wheel(box)
         box.setToolTip(tip)
         box.valueChanged.connect(lambda _: self._on_wear())
         return box
