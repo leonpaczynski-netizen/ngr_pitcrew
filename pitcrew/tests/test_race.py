@@ -352,3 +352,63 @@ def test_the_push_call_arrives_late_in_a_stint():
                     stint_ends_on_lap=16)
     call = next_call(state)
     assert call.kind == FUEL_LONG
+
+
+def test_fuel_calls_switch_to_the_races_own_burn_rate():
+    """Practice said 3.4; this race is burning 4.6. Advising on the practice
+    figure would tell him he can push while he is running dry."""
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+
+    for lap_num in range(1, 5):
+        race.handle(lap_event(lap_num, fuel_used=4.6,
+                              fuel_end=92.0 - lap_num * 4.6))
+
+    assert race.observed_fuel_per_lap() == pytest.approx(4.6)
+    assert race.state.fuel_per_lap_l == pytest.approx(4.6)
+    assert race.planned_fuel_per_lap_l == pytest.approx(3.4)
+
+
+def test_one_odd_lap_does_not_move_the_burn_rate():
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for used in (3.4, 3.4, 0.9, 3.5):
+        race.handle(lap_event(1, fuel_used=used))
+    assert race.state.fuel_per_lap_l == pytest.approx(3.4)
+
+
+def test_the_practice_rate_stands_until_the_race_shows_its_own():
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    race.handle(lap_event(1, fuel_used=4.6))
+    assert race.observed_fuel_per_lap() is None
+    assert race.state.fuel_per_lap_l == pytest.approx(3.4)
+
+
+def test_accepting_a_run_to_the_flag_removes_the_stop():
+    """Keeping the running stint would leave the stop he just cancelled."""
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for lap_num in range(1, 7):
+        race.handle(lap_event(lap_num))
+    assert race.stops_planned() == 1
+
+    race.adopt((14,))
+    assert race.stops_planned() == 0
+    assert race.state.stint_ends_on_lap is None
+
+
+def test_accepting_an_extra_stop_adds_one():
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for lap_num in range(1, 7):
+        race.handle(lap_event(lap_num))
+
+    race.adopt((7, 7))
+    assert race.stops_planned() == 1
+    assert race.state.stint_ends_on_lap == 13

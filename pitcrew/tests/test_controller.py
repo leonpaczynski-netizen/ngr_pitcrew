@@ -68,6 +68,7 @@ def raw(**overrides) -> bytes:
     struct.pack_into("<f", data, 68, packet.fuel_level)
     struct.pack_into("<i", data, 124, packet.last_lap_ms)
     struct.pack_into("<I", data, 128, packet.time_of_day_ms)
+    struct.pack_into("<H", data, 136, packet.rpm_alert_min)
     for offset in (180, 184, 188, 192):
         struct.pack_into("<f", data, offset, 0.35)
     data[344:348] = b"TTTT"

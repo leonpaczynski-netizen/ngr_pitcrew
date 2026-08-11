@@ -163,6 +163,32 @@ class RaceScreen(QWidget):
         self.last_reason.setText(call.reason)
         self.log_layout.insertWidget(0, CallRow(call))
 
+    def show_exchange(self, heard: str, said: str) -> None:
+        """What the driver asked, and what came back."""
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 4, 0, 4)
+        line.setSpacing(theme.GAP)
+        tag = StencilLabel("radio", size=10, tracking=14.0,
+                           colour=theme.CHALK)
+        tag.setFixedWidth(34)
+        line.addWidget(tag)
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        if heard:
+            text.addWidget(BodyLabel(f'"{heard}"', size=13,
+                                     colour=theme.STRUCK, wrap=False))
+        text.addWidget(BodyLabel(said, colour=theme.CHALK, wrap=False))
+        line.addLayout(text, 1)
+        self.log_layout.insertWidget(0, row)
+
+    def show_offer(self, verdict) -> None:
+        """A re-plan on the table, until he accepts or keeps."""
+        self.last_call.setText(verdict.call())
+        self.last_call.setStyleSheet(
+            f"color: {theme.WARNING}; background: transparent;")
+        self.last_reason.setText(f"{verdict.reason}. Say accept, or keep.")
+
     def clear_log(self) -> None:
         while self.log_layout.count():
             item = self.log_layout.takeAt(0)

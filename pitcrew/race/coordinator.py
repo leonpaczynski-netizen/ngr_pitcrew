@@ -58,6 +58,8 @@ class RaceCoordinator:
         self.state = RaceState(
             fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap)
         self.refusal: str | None = None
+        self.planned_fuel_per_lap_l = fuel_per_lap_l
+        self._burns: list[float] = []
         self._stints = list(self.plan.get("stints") or ())
         self._apply_stint(0)
 
@@ -135,6 +137,10 @@ class RaceCoordinator:
             self.state.laps_total = event.data["laps_in_race"]
         return self._emit()
 
+    # Below this the race has not shown enough of its own burn to trust it
+    # over the practice figure.
+    BURN_LAPS_NEEDED = 3
+
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
         self.state.lap = lap.lap_num
@@ -142,7 +148,24 @@ class RaceCoordinator:
         self.state.fuel_l = lap.fuel_end
         if lap.position:
             self.state.position = lap.position
+
+        # Fuel calls must use what this race is actually burning, not what
+        # practice suggested. Told he could push while burning 35% more than
+        # planned, the driver would run dry - and the number that produced
+        # that advice would have looked perfectly reasonable.
+        if lap.fuel_used > 0:
+            self._burns.append(lap.fuel_used)
+        if len(self._burns) >= self.BURN_LAPS_NEEDED:
+            ordered = sorted(self._burns)
+            self.state.fuel_per_lap_l = ordered[len(ordered) // 2]
+
         return self._emit()
+
+    def observed_fuel_per_lap(self) -> float | None:
+        if len(self._burns) < self.BURN_LAPS_NEEDED:
+            return None
+        ordered = sorted(self._burns)
+        return ordered[len(ordered) // 2]
 
     def _on_finish(self, event) -> Call | None:
         self.phase = RacePhase.FINISHED
@@ -156,6 +179,29 @@ class RaceCoordinator:
         if call is not None:
             self.state.said.append(call.kind)
         return call
+
+    def stops_planned(self) -> int:
+        """Stops still in the plan from here, for the re-plan comparison."""
+        return max(0, len(self._stints) - 1 - self.state.stint_index)
+
+    def adopt(self, stint_laps) -> None:
+        """Take on a re-plan the driver accepted.
+
+        The stints already completed are left alone: what changes is the
+        shape of the race from here, not a rewrite of what already happened.
+        The stint currently running is replaced, not kept - keeping it would
+        leave the stop at the end of it in the plan, which is exactly the stop
+        the driver just cancelled.
+        """
+        done = self._stints[:self.state.stint_index]
+        start = self.state.lap + 1
+        fresh = []
+        for laps in stint_laps:
+            fresh.append({"laps": laps, "compound": None, "fuel_l": None,
+                          "start_lap": start})
+            start += laps
+        self._stints = done + fresh
+        self._apply_stint(self.state.stint_index)
 
     # ---------------------------------------------------------------- answers
 

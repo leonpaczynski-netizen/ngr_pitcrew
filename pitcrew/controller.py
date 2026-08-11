@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
+from pitcrew.engineer.ptt import PushToTalk, best_listener, best_recogniser
+from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import build_event_export
 from pitcrew.export.payload import ExportRefused, to_json
@@ -25,6 +28,7 @@ from pitcrew.setup.sheet import SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
+from pitcrew.race.replan import assess, observed_fuel_per_lap
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.listener import UDPListener
@@ -55,6 +59,9 @@ class TelemetryBridge(QObject):
         self.state = SessionState(SessionKind.PRACTICE)
         self.recorder = LapRecorder()
         self._announced = False
+        # On the telemetry thread on purpose: a shift beep routed through
+        # the Qt event loop arrives after the corner it was for.
+        self.shift_beep = ShiftBeep(enabled=False)
 
     def reset(self, *, race: bool = False) -> None:
         self.state = SessionState(
@@ -74,6 +81,11 @@ class TelemetryBridge(QObject):
 
         if not self._announced:
             self._announced = True
+            # GT7 sends the car's own shift-light thresholds, so the beep does
+            # not need a configured rpm per car - the game already knows.
+            if 1000 < packet.rpm_alert_min < 20_000:
+                self.shift_beep.rpm = float(packet.rpm_alert_min)
+                self.shift_beep.enabled = True
             self.stream_seen.emit({
                 "packet_format": packet.packet_format,
                 "car_category": packet.car_category,
@@ -82,6 +94,7 @@ class TelemetryBridge(QObject):
             })
 
         self.recorder.record_frame(packet)
+        self.shift_beep.update(packet, _monotonic())
         for event in self.state.update(packet):
             if event.kind is EventKind.LAP_COMPLETED:
                 # Detach inline; compress and store on the Qt thread.
@@ -107,6 +120,15 @@ class PitCrewController(QObject):
         self.voice = voice if voice is not None else Voice()
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
+        self._race_inputs = None
+        self._race_burns: list[float] = []
+        self._pending_replan = None
+        self.ptt = PushToTalk(
+            snapshot=self._ptt_snapshot,
+            speak=self.voice.say,
+            recogniser=best_recogniser(),
+            listener=best_listener(),
+            on_answer=self._on_ptt_answer)
         self._plans: list = []
         self._inputs = None
 
@@ -505,6 +527,11 @@ class PitCrewController(QObject):
         self.listener.start()
         self._health.start()
 
+        self._race_inputs = inputs
+        self._race_burns = []
+        self._pending_replan = None
+        self.ptt.pending_replan = None
+        self.ptt.start()
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
         self.race_screen.set_status(
@@ -522,6 +549,7 @@ class PitCrewController(QObject):
         if self.race_run_id is not None:
             self.store.finish_race_run(self.race_run_id)
         self.race = None
+        self.ptt.stop()
         if self.race_screen is not None:
             self.race_screen.set_armed(False)
             self.race_screen.set_status("Race closed.")
@@ -531,12 +559,15 @@ class PitCrewController(QObject):
         if self.race is None:
             return
         call = self.race.handle(event)
+        if event.kind is EventKind.LAP_COMPLETED:
+            self._check_replan(event.data["lap"])
         if self.race_screen is not None:
             self.race_screen.show_snapshot(self.race.snapshot())
         if call is None:
             return
 
         self.voice.say(call.spoken())
+        self.ptt.last_call = call.spoken()
         if self.race_screen is not None:
             self.race_screen.show_call(call)
         if self.race_run_id is not None:
@@ -547,6 +578,78 @@ class PitCrewController(QObject):
                 self.race_run_id, call.lap, call.call,
                 {"call": call.as_export(), "confidence": call.confidence},
                 accepted=False)
+
+    # ------------------------------------------------------------------- ptt
+
+    def _ptt_snapshot(self) -> dict:
+        """What the engineer is allowed to answer from."""
+        if self.race is None:
+            return {}
+        snapshot = self.race.snapshot()
+        # The fuel target for the stop, so "how much fuel do I take" has an
+        # answer rather than a refusal.
+        stints = (self.race.plan or {}).get("stints") or []
+        index = self.race.state.stint_index + 1
+        if index < len(stints):
+            snapshot["stopFuelL"] = stints[index].get("fuel_l")
+        return snapshot
+
+    def _on_ptt_answer(self, heard: str, said: str) -> None:
+        if self.race_screen is not None:
+            self.race_screen.show_exchange(heard, said)
+        if self._pending_replan is not None and heard:
+            from pitcrew.engineer.intents import ACCEPT, KEEP, match_intent
+            intent = match_intent(heard)
+            if intent in (ACCEPT, KEEP):
+                self._resolve_replan(accepted=intent == ACCEPT)
+
+    def _resolve_replan(self, *, accepted: bool) -> None:
+        """Record what the driver did with the offer, and act on it."""
+        offer = self._pending_replan
+        self._pending_replan = None
+        self.ptt.pending_replan = None
+        if offer is None or self.race_run_id is None:
+            return
+        self.store.append_revision(
+            self.race_run_id, self.race.state.lap if self.race else 0,
+            offer.call() or offer.reason, offer.as_plan(), accepted=accepted)
+        if accepted and offer.stint_laps:
+            self.race.adopt(offer.stint_laps)
+
+    # ---------------------------------------------------------------- replan
+
+    def _check_replan(self, lap) -> None:
+        """After each lap, ask whether the plan still holds."""
+        if self.race is None or not self.race.running:
+            return
+        if lap.fuel_used > 0:
+            self._race_burns.append(lap.fuel_used)
+
+        inputs = self._race_inputs
+        verdict = assess(
+            laps_done=self.race.state.lap,
+            laps_total=self.race.state.laps_total,
+            fuel_l=self.race.state.fuel_l,
+            planned_fuel_per_lap=self.race.planned_fuel_per_lap_l,
+            observed_fuel_per_lap_l=self.race.observed_fuel_per_lap(),
+            lap_time_ms=lap.lap_time_ms,
+            planned_lap_time_ms=inputs.lap_time_ms if inputs else None,
+            current_stops=self.race.stops_planned(),
+            inputs=inputs,
+            fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
+        )
+        if not verdict.offered or self._pending_replan is not None:
+            return
+
+        # Offered, never imposed: it stands until he accepts or keeps.
+        self._pending_replan = verdict
+        self.ptt.pending_replan = verdict.call()
+        text = f"{verdict.call()} {verdict.reason}."
+        self.voice.say(text)
+        self.last_call = text
+        self.ptt.last_call = text
+        if self.race_screen is not None:
+            self.race_screen.show_offer(verdict)
 
     # ---------------------------------------------------------------- export
 
@@ -592,4 +695,5 @@ class PitCrewController(QObject):
         if self.listener is not None:
             self.listener.stop()
         self._health.stop()
+        self.ptt.stop()
         self.voice.stop()
