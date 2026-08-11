@@ -1,12 +1,25 @@
 PyQt6>=6.6.0
 pyttsx3>=2.90
 openpyxl>=3.1.0
-SpeechRecognition>=3.10.0
-pocketsphinx>=5.0.0  # local (offline) speech recognition — the ONLY recogniser since Sprint 11 (voice/query_listener.py::_recognise); PTT voice queries fail without it
-piper-tts>=1.4.0  # local (offline) neural TTS — natural voice cues (voice/piper_tts.py); falls back to Windows SAPI5 if absent. Voice models downloaded separately into voice/piper_models/
+piper-tts>=1.4.0  # local (offline) neural TTS — the engineer's voice (pitcrew/engineer/voice.py::PiperEngine); falls back to Windows SAPI5 if absent. Voice models live in pitcrew/engineer/piper_models/
 sounddevice>=0.4.0
 pynput>=1.7.6
 requests>=2.28.0
 pycryptodome>=3.19.0  # Crypto.Cipher.Salsa20 — GT7 packet decryption (telemetry/packet.py)
+pywin32>=306  # SAPI5 speech and the shortcut installer (win32com.client)
+pillow>=10.0.0  # builds pitcrew.ico from logo.png (tools/install_shortcut.py)
+numpy>=1.24.0  # Piper synthesis buffers (pitcrew/engineer/voice.py)
 # PyAudio>=0.2.14 — requires PortAudio headers; use sounddevice instead
 # pygame>=2.5.0  — optional, for joystick button detection; install separately if needed
+#
+# Removed 12 Aug 2026:
+#   SpeechRecognition, pocketsphinx — the comment described pocketsphinx as
+#   "the ONLY recogniser since Sprint 11 (voice/query_listener.py::_recognise)".
+#   That module and the whole voice/ package are gone; recognition moved to
+#   pitcrew/engineer/ptt.py, which uses SAPI. Nothing in the tree imports
+#   either, and pocketsphinx has no cp314 wheel, so it would have blocked the
+#   Python 3.14 this now runs on.
+#
+# Still declared but imported nowhere: pyttsx3, openpyxl, requests. Left in
+# place deliberately rather than swept up with the recogniser change — worth
+# their own look, not a silent removal inside an unrelated commit.
