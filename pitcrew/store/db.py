@@ -287,11 +287,13 @@ class Store:
             cur = conn.execute(
                 "INSERT OR REPLACE INTO laps "
                 "(session_id, lap_num, lap_time_ms, delta_ms, fuel_start, fuel_end, "
-                " fuel_used, position, compound, is_pit_lap, is_out_lap, recorded_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
+                " recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
-                 lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap), _now()))
+                 lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
+                 json.dumps(lap.gear_ratios) if lap.gear_ratios else None,
+                 _now()))
             lap_id = int(cur.lastrowid)
             if frames is not None:
                 conn.execute(
@@ -436,6 +438,12 @@ class Store:
         with self._write() as conn:
             conn.execute("UPDATE race_runs SET finished_at = ? WHERE id = ?",
                          (_now(), race_run_id))
+
+    def list_race_runs(self, event_id: int) -> list[dict]:
+        rows = self._query(
+            "SELECT * FROM race_runs WHERE event_id = ? ORDER BY id",
+            (event_id,))
+        return [dict(r) for r in rows]
 
     def append_revision(self, race_run_id: int, lap_num: int, reason: str,
                         plan: dict, *, accepted: bool = False) -> int:

@@ -11,6 +11,7 @@ import json
 import pytest
 
 from pitcrew.controller import PitCrewController, TelemetryBridge
+from pitcrew.export.payload import FORMAT
 from pitcrew.store.db import Store
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
@@ -251,7 +252,7 @@ def test_export_produces_a_validated_payload(wired, tmp_path, monkeypatch):
     text = controller._on_export()
     assert text is not None
     payload = json.loads(text)
-    assert payload["format"] == "gt7-pitcrew/1.1"
+    assert payload["format"] == FORMAT
     assert payload["meta"]["packet"] == "C"
     assert payload["session"]["lapsRun"] == 1
     assert payload["setup"]["values"]["rh_f"] == 62.0

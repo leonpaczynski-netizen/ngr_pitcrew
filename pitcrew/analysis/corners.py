@@ -165,6 +165,11 @@ def _measure(window: list[dict], approach: list[dict], corner: Corner,
         "steer_peak_deg": _peak_abs(window, "steering_deg"),
         "steer_peak_norm": _peak_signed(window, "steering_norm"),
         "trail_brake_ms": _trail_brake_ms(window, interval_ms),
+        "gear_min": _gear_min(window),
+        "gear_at_apex": _gear_at(window, _apex_index(window)),
+        "gear_at_exit": _gear_at(window, len(window) - 1),
+        "shifts": _shift_count(window),
+        "upshift_rpm": _first_upshift_rpm(window),
         "susp_min_mm": _suspension_minima(window),
         "surface_counts": _surface_counts(window),
         "flags": _flags(window, interval_ms, bottoming_ref, bottoming_wheels),
@@ -236,6 +241,56 @@ def _trail_brake_ms(window: list[dict], interval_ms: float) -> float | None:
                 and abs(steering) * 100.0 > thresholds.TRAIL_BRAKE_STEER_PCT):
             total += interval_ms
     return round(total, 1)
+
+
+def _apex_index(window: list[dict]) -> int:
+    """Minimum-speed point, the same apex the brake point is measured from."""
+    speeds = [f["speed_kph"] for f in window]
+    return speeds.index(min(speeds))
+
+
+def _gear_min(window: list[dict]) -> int | None:
+    gears = [f.get("gear") for f in window if f.get("gear")]
+    return min(gears) if gears else None
+
+
+def _gear_at(window: list[dict], index: int) -> int | None:
+    if not 0 <= index < len(window):
+        return None
+    return window[index].get("gear") or None
+
+
+def _shift_count(window: list[dict]) -> int:
+    """Gear changes inside the corner, which is what answers "does 2nd cover
+    all three chicanes without an upshift"."""
+    shifts = 0
+    previous = None
+    for frame in window:
+        gear = frame.get("gear")
+        if not gear:
+            continue
+        if previous is not None and gear != previous:
+            shifts += 1
+        previous = gear
+    return shifts
+
+
+def _first_upshift_rpm(window: list[dict]) -> float | None:
+    """Engine speed at the first upshift after the apex.
+
+    This is how short-shifting becomes visible: an upshift well below the
+    limiter is a choice, and it costs pace while saving fuel and rear tyre.
+    """
+    start = _apex_index(window)
+    previous = window[start].get("gear")
+    for frame in window[start:]:
+        gear = frame.get("gear")
+        if not gear:
+            continue
+        if previous and gear > previous:
+            return frame.get("rpm")
+        previous = gear
+    return None
 
 
 def _suspension_minima(window: list[dict]) -> dict[str, float] | None:
@@ -396,6 +451,14 @@ def _kerb_struck(window: list[dict], interval_ms: float) -> bool:
     return False
 
 
+def _modal(values: list):
+    """Most common value, or None. Used where a mean would be nonsense."""
+    present = _defined(values)
+    if not present:
+        return None
+    return max(set(present), key=present.count)
+
+
 def _combine(corner: Corner, per_lap: list[dict]) -> dict:
     """Fold the per-lap measurements into one corner object."""
     times = [m["time_ms"] for m in per_lap]
@@ -425,6 +488,7 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
     for measurement in per_lap:
         flags |= measurement["flags"]
 
+    gear_mins = [m["gear_min"] for m in per_lap if m["gear_min"]]
     payload = {
         "id": corner.id,
         "name": corner.name,
@@ -446,6 +510,16 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
             _mean_or_none([m["throttle_on_pct"] for m in per_lap])),
         "timeLossVsBestMs": round(mean(times) - best_time),
         "consistencyMs": round(pstdev(times)) if len(times) > 1 else None,
+        # Modal, not mean: a mean gear of 2.6 is not a gear.
+        "gearMin": _modal(gear_mins),
+        "gearAtApex": _modal([m["gear_at_apex"] for m in per_lap]),
+        "gearAtExit": _modal([m["gear_at_exit"] for m in per_lap]),
+        # A fraction is meaningful here - 0.4 means he shifted on four laps
+        # in ten, which is exactly the inconsistency worth seeing.
+        "shiftsInCorner": _round_or_none(
+            _mean_or_none([m["shifts"] for m in per_lap]), 2),
+        "upshiftRpm": _round_or_none(
+            _mean_or_none([m["upshift_rpm"] for m in per_lap]), 0),
         "suspHeightMinMm": susp_min,
         "surfaceMix": surface_mix,
         "flags": sorted(flags),

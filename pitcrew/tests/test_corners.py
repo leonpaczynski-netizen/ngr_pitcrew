@@ -44,6 +44,7 @@ def frame(distance_m: float, speed_kph: float, index: int, **overrides) -> dict:
         "surf_fl": "T", "surf_fr": "T", "surf_rl": "T", "surf_rr": "T",
         "road_plane_y": 1.0,
         "rev_limiter": 0,
+        "tyre_radius_m": 0.35,
     }
     base.update(overrides)
     return base

@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS laps (
     -- only wear figure anchored to the game's own number.
     wear_front    REAL,
     wear_rear     REAL,
+    gear_ratios   TEXT,          -- JSON array, the ratios fitted
     recorded_at   TEXT    NOT NULL,
     UNIQUE(session_id, lap_num)
 );

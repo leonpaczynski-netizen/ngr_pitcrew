@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.1` payload.
+"""Building and validating the `gt7-pitcrew/1.2` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from pitcrew.telemetry.packet import STEER_SOURCE
 from pitcrew.telemetry.recorder import DEFAULT_STEER_ROTATION_DEG
 
-FORMAT = "gt7-pitcrew/1.1"
-APP_VERSION = "pitcrew 2.0.0"
+FORMAT = "gt7-pitcrew/1.2"
+APP_VERSION = "pitcrew 2.1.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
 PACKET_FORMATS = ("A", "B", "~", "C")
@@ -115,6 +115,7 @@ def build_payload(meta: Meta, *,
                   laps: list[dict] | None = None,
                   corners: list[dict] | None = None,
                   wear: dict | None = None,
+                  gearing: dict | None = None,
                   strategy: dict | None = None,
                   derived: Derived | None = None,
                   notes: str = "") -> dict:
@@ -136,6 +137,8 @@ def build_payload(meta: Meta, *,
         payload["corners"] = list(corners)
     if wear:
         payload["wear"] = wear
+    if gearing:
+        payload["gearing"] = gearing
     if strategy:
         payload["strategy"] = strategy
     if derived is not None:
@@ -195,6 +198,50 @@ def validate(payload: dict) -> list[str]:
     problems.extend(_validate_corners(payload, meta))
     problems.extend(_validate_laps(payload))
     problems.extend(_validate_wear(payload))
+    problems.extend(_validate_no_tow(payload))
+    problems.extend(_validate_strategy(payload))
+    return problems
+
+
+def _validate_no_tow(payload: dict) -> list[str]:
+    """GT7 carries no proximity, closing speed or opponent positions, so a tow
+    cannot be detected. Any key named after one is a fabrication by definition,
+    and this refuses it wherever it appears."""
+    offenders: list[str] = []
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if "tow" in key.lower():
+                    offenders.append(f"{path}.{key}" if path else key)
+                walk(value, f"{path}.{key}" if path else key)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{path}[{index}]")
+
+    walk(payload, "")
+    return [f"{name} claims a tow, which GT7's feed cannot detect"
+            for name in offenders]
+
+
+def _validate_strategy(payload: dict) -> list[str]:
+    strategy = payload.get("strategy")
+    if not isinstance(strategy, dict):
+        return []
+    problems = []
+    assumptions = strategy.get("assumptions")
+    if not isinstance(assumptions, dict):
+        problems.append("strategy.assumptions is required alongside a plan")
+        return problems
+    if assumptions.get("refuelRateLps") in (None, ""):
+        problems.append(
+            "strategy.assumptions.refuelRateLps is required - it is the number "
+            "that decides the race, and a default in its place is unreadable")
+    constraint = strategy.get("bindingConstraint")
+    if constraint not in ("tyre", "fuel", "regulation", "unknown", None):
+        problems.append(
+            f"strategy.bindingConstraint must be tyre, fuel, regulation or "
+            f"unknown, got {constraint!r}")
     return problems
 
 

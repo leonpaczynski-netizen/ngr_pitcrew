@@ -6,6 +6,7 @@ back a payload that has already been validated — or refuse.
 """
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from pitcrew.analysis import thresholds
@@ -14,6 +15,7 @@ from pitcrew.analysis.corners import (
     aggregate_corners,
     bottoming_reference,
 )
+from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
 from pitcrew.analysis.session import (
     LapInput,
@@ -66,9 +68,15 @@ def _lap_inputs(store, session_id: int) -> list[LapInput]:
             exclusion_reason=row["exclusion_reason"],
             wear_front=row["wear_front"],
             wear_rear=row["wear_rear"],
+            gear_ratios=_ratios(row),
             frames=frames,
         ))
     return out
+
+
+def _ratios(row) -> list[float] | None:
+    raw = row["gear_ratios"] if "gear_ratios" in row.keys() else None
+    return json.loads(raw) if raw else None
 
 
 def _dominant_compound(laps: list[LapInput]) -> str | None:
@@ -93,7 +101,7 @@ def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
 
 def build_session_export(store, session_id: int, *, notes: str = "",
                          calibrated_at_race_multiplier: bool = True) -> dict:
-    """Assemble the `gt7-pitcrew/1.1` payload for one recorded session."""
+    """Assemble the `gt7-pitcrew/1.2` payload for one recorded session."""
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"no session with id {session_id}")
@@ -136,12 +144,17 @@ def build_session_export(store, session_id: int, *, notes: str = "",
 
     setup = None
     driver_changes = None
+    sheet_gears = None
     if session["setup_sheet_id"]:
         sheet = store.get_setup_sheet(session["setup_sheet_id"])
         if sheet is not None:
             setup = sheet.as_export()
+            sheet_gears = sheet.gears
             changes = store.list_setup_changes(session_id)
             driver_changes = [c.as_export() for c in changes] or None
+
+    gearing = gearing_export(counted, sheet_gears)
+    strategy = _strategy_section(store, event["id"])
 
     range_record = None
     if event["car_name"]:
@@ -161,9 +174,57 @@ def build_session_export(store, session_id: int, *, notes: str = "",
         corners=corners,
         wear=wear_export(
             laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier),
+        gearing=gearing,
+        strategy=strategy,
         derived=Derived(thresholds.as_export(), bottoming_ref_mm=bottoming_ref),
         notes=all_notes,
     )
+
+
+def _strategy_section(store, event_id: int) -> dict | None:
+    """The approved plan, its assumptions, and every call the engineer made.
+
+    Omitted entirely when no plan is approved - a skeleton of nulls would read
+    as "planned, measured nothing" rather than "not planned".
+    """
+    approved = store.get_approved_strategy(event_id)
+    if approved is None:
+        return None
+
+    section = dict(approved["plan"].get("export") or {})
+    if not section:
+        return None
+
+    assumptions = section.setdefault("assumptions", {})
+    event = store.get_event(event_id)
+    if event is not None:
+        # Required: at 1 L/s against a 2.5 default this is the number that
+        # decides the race, and a default standing in its place is unreadable.
+        assumptions["refuelRateLps"] = event["refuel_rate_lps"]
+        assumptions["mandatoryStops"] = event["mandatory_stops"]
+
+    calls = _calls_made(store, event_id)
+    if calls:
+        section["callsMade"] = calls
+    return section
+
+
+def _calls_made(store, event_id: int) -> list[dict]:
+    """Every call, including the ones declined.
+
+    A plan offered and refused is evidence about the model; dropping it makes
+    the model look better than it was.
+    """
+    calls: list[dict] = []
+    for run in store.list_race_runs(event_id):
+        for revision in store.list_revisions(run["id"]):
+            calls.append({
+                "lap": revision["lap_num"],
+                "call": revision["reason"],
+                "accepted": revision["accepted"],
+                "confidence": revision["plan"].get("confidence", "unstated"),
+            })
+    return calls
 
 
 def _compound_full_name(code: str | None) -> str | None:

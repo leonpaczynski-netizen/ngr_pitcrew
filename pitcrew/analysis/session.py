@@ -40,6 +40,7 @@ class LapInput:
     exclusion_reason: str | None = None
     wear_front: float | None = None
     wear_rear: float | None = None
+    gear_ratios: list[float] | None = None
     frames: list[dict] | None = None
 
     @property

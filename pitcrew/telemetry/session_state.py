@@ -84,6 +84,10 @@ class Lap:
     is_out_lap: bool
     recorded_at: float = field(default_factory=time.time)
     compound: str | None = None
+    # The ratios actually fitted, read off the packet rather than the sheet.
+    # This is what catches "the sheet says one gearbox, the car has another",
+    # which is otherwise invisible until a whole session has been run on it.
+    gear_ratios: list[float] | None = None
 
 
 class SessionState:
@@ -107,6 +111,7 @@ class SessionState:
         self._pit_lap = False
         self._out_lap_pending = False
         self._fuel_at_pit_entry: float | None = None
+        self._gear_ratios: list[float] | None = None
 
     # ------------------------------------------------------------------ state
 
@@ -169,6 +174,10 @@ class SessionState:
 
         now = time.monotonic()
         events: list[SessionEvent] = []
+
+        ratios = [r for r in packet.gear_ratios if r]
+        if ratios:
+            self._gear_ratios = ratios
 
         events.extend(self._update_phase(packet, now))
         events.extend(self._update_pit(packet))
@@ -278,6 +287,7 @@ class SessionState:
             position=p.current_position,
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,
+            gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
         )
         self._laps.append(lap)
         self._pit_lap = False

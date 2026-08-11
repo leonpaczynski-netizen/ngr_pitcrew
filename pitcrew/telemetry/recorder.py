@@ -55,6 +55,10 @@ FRAME_FIELDS: tuple[str, ...] = (
     "surf_fl", "surf_fr", "surf_rl", "surf_rr",   # T/C/D/G/S/s, null before '~'
     "road_plane_y",      # off-track proxy for formats without surface type
     "rev_limiter",
+    # Needed to derive the final drive from engine speed against wheel speed.
+    # Appended, so laps recorded before this still decode - the blob carries
+    # its own field list.
+    "tyre_radius_m",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -176,6 +180,7 @@ class LapRecorder:
                 surface[0], surface[1], surface[2], surface[3],
                 round(packet.road_plane_y, 4),
                 1 if packet.rev_limiter_active else 0,
+                round(packet.tyre_radius_rl, 4),
             ])
 
     def take_rows(self) -> list[list]:
