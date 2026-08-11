@@ -5050,22 +5050,32 @@ class SetupBuilderMixin:
             proposals_group.setVisible(True)
 
         # Import label constants — NEVER retype these strings (B10).
-        # LABEL_DRIVER_TEL_SILENT is the fifth label added in the source-separation fix;
-        # it arrives as an ordinary proposal with a proposed_value and full controls.
-        _driver_tel_silent_label: str = ""
+        # Six labels now exist. The two driver-led labels (LABEL_DRIVER_TEL_SILENT and
+        # LABEL_DRIVER_SYMPTOM_CORROBORATED) share Group 2, but carry distinct tones:
+        #   DRIVER_TEL_SILENT:         "warn"  (amber)  — no corroboration at all
+        #   DRIVER_SYMPTOM_CORROBORATED: "info" (blue)  — symptom corroborated (stronger)
+        # Neither uses "success" (green) — that is reserved for MEASURED_FACT labels only.
+        _driver_led_labels: frozenset = frozenset()
         try:
             from strategy.owner_baseline_arbiter import (
                 LABEL_DRIVER_ONLY, LABEL_DRIVER_EARLY_TEL,
                 LABEL_TEL_CORROBORATED, LABEL_TEL_NO_FEEDBACK,
-                LABEL_DRIVER_TEL_SILENT,
+                LABEL_DRIVER_TEL_SILENT, LABEL_DRIVER_SYMPTOM_CORROBORATED,
             )
-            _driver_tel_silent_label = LABEL_DRIVER_TEL_SILENT
+            # Both driver-led labels route to Group 2.
+            _driver_led_labels = frozenset({
+                LABEL_DRIVER_TEL_SILENT,
+                LABEL_DRIVER_SYMPTOM_CORROBORATED,
+            })
             _LABEL_TONE = {
-                LABEL_DRIVER_ONLY:        "warn",
-                LABEL_DRIVER_EARLY_TEL:   "info",
-                LABEL_TEL_CORROBORATED:   "success",
-                LABEL_TEL_NO_FEEDBACK:    "neutral",
-                LABEL_DRIVER_TEL_SILENT:  "warn",   # no corroboration affordance
+                LABEL_DRIVER_ONLY:                "warn",
+                LABEL_DRIVER_EARLY_TEL:           "info",
+                LABEL_TEL_CORROBORATED:           "success",
+                LABEL_TEL_NO_FEEDBACK:            "neutral",
+                # Driver-led labels: both are DRIVER_REPORT provenance, NEVER success.
+                LABEL_DRIVER_TEL_SILENT:          "warn",   # amber — no corroboration
+                LABEL_DRIVER_SYMPTOM_CORROBORATED: "info",  # blue — symptom corroborated,
+                                                             # but NOT MEASURED_FACT strength
             }
         except Exception:
             _LABEL_TONE = {}
@@ -5075,20 +5085,22 @@ class SetupBuilderMixin:
         _ACTIONED = {"accepted", "rejected", "edited"}
         _EXCLUDED = {"unresolved", "stale"} | _ACTIONED
 
-        # Bucket 1a — proposed, non-driver-silent (feeds active_props below)
+        # Bucket 1a — proposed, non-driver-led (feeds active_props below)
         normal_props = [
             p for p in proposals
             if str(p.get("status")) not in _EXCLUDED
-            and str(p.get("label") or "") != _driver_tel_silent_label
+            and str(p.get("label") or "") not in _driver_led_labels
         ]
         # Bucket 1b — B11 contradictions (status=unresolved, any label)
         unresolved_props = [p for p in proposals if str(p.get("status")) == "unresolved"]
 
-        # Bucket 2 — driver-report, telemetry silent (proposed only; after action → bucket 4)
-        driver_silent_props = [
+        # Bucket 2 — driver-led proposals (both DRIVER_TEL_SILENT and
+        # DRIVER_SYMPTOM_CORROBORATED); proposed only — after action they go to bucket 4.
+        # Note: driver-led proposals appear at any band (0, 1, 2) — do not assume 5+ laps.
+        driver_led_props = [
             p for p in proposals
             if str(p.get("status")) not in _EXCLUDED
-            and str(p.get("label") or "") == _driver_tel_silent_label
+            and str(p.get("label") or "") in _driver_led_labels
         ]
 
         # Bucket 3 — stale (old-revision; no actions)
@@ -5113,26 +5125,34 @@ class SetupBuilderMixin:
             for prop in active_props:
                 lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
 
-        # ---- Group 2: Driver-report proposals (telemetry silent; full controls) ----
-        # These arrived as UnresolvedRiders on the old path. They now carry a
-        # proposed_value and Accept/Reject/Edit controls. NEVER show a corroboration
-        # badge here — provenance is always DRIVER_REPORT, never MEASURED_FACT.
-        if driver_silent_props:
-            dr_hdr = QLabel("Driver report  (telemetry silent on these parameters)")
+        # ---- Group 2: Driver-led proposals (two labels; full controls) ----
+        # Includes both LABEL_DRIVER_TEL_SILENT (no corroboration) and
+        # LABEL_DRIVER_SYMPTOM_CORROBORATED (symptom independently confirmed by
+        # telemetry, but telemetry measured no value for THIS parameter).
+        # NEVER show MEASURED_FACT / TEL_CORROBORATED affordance here — provenance
+        # is always DRIVER_REPORT.  The label badges distinguish the two within the
+        # group: amber (warn) for tel-silent, blue (info) for symptom-corroborated.
+        # These appear at any band (0, 1, or 2) — do not assume 5+ laps.
+        if driver_led_props:
+            dr_hdr = QLabel(
+                "Driver report  (no direct telemetry measurement on these parameters)")
             dr_hdr.setWordWrap(True)
             dr_hdr.setStyleSheet(
                 f"color: {t.TEXT_HI}; font-size: {t.FS_LABEL}pt; "
                 f"font-weight: 700; padding: 4px 0 2px 0;")
             lay.addWidget(dr_hdr)
             dr_note = QLabel(
-                "Driver feedback at 5+ clean laps for parameters where telemetry "
-                "produced no finding. Telemetry contributed nothing — these are "
-                "purely driver-reported. Accept, Reject, or Edit each one.")
+                "Driver feedback for parameters where telemetry produced no direct "
+                "measurement on this lever. Telemetry may have independently "
+                "corroborated the reported symptom (shown with a blue badge) — but "
+                "it did not measure this parameter directly. These are driver-led: "
+                "provenance is DRIVER REPORT, not measured telemetry. "
+                "Accept, Reject, or Edit each one.")
             dr_note.setWordWrap(True)
             dr_note.setStyleSheet(
                 f"color: {t.TEXT_DIM}; font-size: {t.FS_CAPTION}pt;")
             lay.addWidget(dr_note)
-            for prop in driver_silent_props:
+            for prop in driver_led_props:
                 lay.addWidget(self._build_proposal_row(prop, _LABEL_TONE, db))
 
         # ---- Stale proposals (old-revision — visually distinct from active) ----

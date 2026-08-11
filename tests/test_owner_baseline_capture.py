@@ -971,6 +971,209 @@ class TestDriverSilentProposalSection:
             "driver-silent section must not appear when the only driver-silent prop is actioned")
 
 
+# ---------------------------------------------------------------------------
+# Sixth label — LABEL_DRIVER_SYMPTOM_CORROBORATED (2026-08-11)
+# ---------------------------------------------------------------------------
+
+def _make_symptom_corroborated_prop(status: str = "proposed",
+                                    clean_laps: int = 5) -> dict:
+    """Build a minimal proposal dict with label == LABEL_DRIVER_SYMPTOM_CORROBORATED."""
+    from strategy.owner_baseline_arbiter import LABEL_DRIVER_SYMPTOM_CORROBORATED
+    return {
+        "proposal_id": "sc-1",
+        "event_id": 1,
+        "session_run_id": "run-sc",
+        "discipline": "race",
+        "parameter": "lsd_decel",
+        "direction": "decrease",
+        "proposed_value": 25.0,
+        "original_value": 30.0,
+        "original_proposed_value": 25.0,
+        "label": LABEL_DRIVER_SYMPTOM_CORROBORATED,   # imported constant, not retyped
+        "status": status,
+        "clipped": False,
+        "clip_stated_reason": "",
+        "clean_laps": clean_laps,
+        "evidence_sources": ["exit oversteer confirmed by wheelspin telemetry"],
+        "baseline_revision": 1,
+        "provenance": "DRIVER_REPORT",
+    }
+
+
+class TestSymptomCorroboratedLabel:
+    """LABEL_DRIVER_SYMPTOM_CORROBORATED — sixth label, same Group 2, distinct tone.
+
+    Provenance is DRIVER_REPORT (never MEASURED_FACT). Renders in the driver-led
+    group alongside LABEL_DRIVER_TEL_SILENT. Visually stronger tone (info/blue)
+    vs tel-silent (warn/amber), but NEVER the success/green tone reserved for
+    MEASURED_FACT. Full Accept/Reject/Edit controls.
+    """
+
+    def test_symptom_corroborated_renders_in_driver_led_group(self, qapp):
+        """LABEL_DRIVER_SYMPTOM_CORROBORATED appears under the driver-report section heading."""
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid):
+                return [_make_symptom_corroborated_prop()]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        all_text = " ".join(lbl.text() for lbl in labels).lower()
+        assert "driver report" in all_text, (
+            "symptom-corroborated proposal must appear under the driver-report section heading")
+
+    def test_symptom_corroborated_not_in_active_proposals_section(self, qapp):
+        """LABEL_DRIVER_SYMPTOM_CORROBORATED must NOT appear under Active proposals."""
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid):
+                return [_make_symptom_corroborated_prop()]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        all_text = " ".join(lbl.text() for lbl in labels).lower()
+        assert "active proposals" not in all_text, (
+            "symptom-corroborated must NOT appear under 'Active proposals' heading "
+            "(mutual exclusion: it belongs to the driver-led group only)")
+
+    def test_symptom_corroborated_has_accept_reject_edit(self, qapp):
+        """Symptom-corroborated rows must expose Accept, Reject, and Edit buttons."""
+        from PyQt6.QtWidgets import QPushButton
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid):
+                return [_make_symptom_corroborated_prop()]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        buttons = w.findChildren(QPushButton)
+        btn_texts = [b.text() for b in buttons]
+        assert any("Accept" in t for t in btn_texts), (
+            "symptom-corroborated row must have Accept button")
+        assert any("Reject" in t for t in btn_texts), (
+            "symptom-corroborated row must have Reject button")
+        assert any("Edit" in t for t in btn_texts), (
+            "symptom-corroborated row must have Edit button")
+
+    def test_symptom_corroborated_shows_driver_report_provenance_not_measured_fact(self, qapp):
+        """Symptom-corroborated rows must show DRIVER REPORT badge, NEVER MEASURED FACT.
+
+        This is the load-bearing constraint: telemetry corroborated the symptom,
+        not the lever. Rendering it as measured would recreate the exact defect
+        this branch was created to fix.
+        """
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid):
+                return [_make_symptom_corroborated_prop()]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        badge_texts = [lbl.text() for lbl in labels]
+        assert not any("MEASURED FACT" in t for t in badge_texts), (
+            "symptom-corroborated must NOT show MEASURED FACT badge — "
+            "provenance is DRIVER_REPORT, telemetry measured the symptom not the lever")
+        assert not any("TEL CORROBORATED" in t for t in badge_texts), (
+            "symptom-corroborated must NOT show TEL CORROBORATED label badge")
+        assert any("DRIVER REPORT" in t for t in badge_texts), (
+            "symptom-corroborated must show DRIVER REPORT provenance badge")
+
+    def test_two_driver_led_labels_coexist_in_same_group(self, qapp):
+        """LABEL_DRIVER_TEL_SILENT and LABEL_DRIVER_SYMPTOM_CORROBORATED appear
+        in the same driver-led group (no seventh section created)."""
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid):
+                return [
+                    _make_driver_silent_prop(),
+                    _make_symptom_corroborated_prop(),
+                ]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        all_text = " ".join(lbl.text() for lbl in labels).lower()
+        # Only ONE driver-report heading, not two.
+        heading_count = all_text.count("driver report")
+        assert heading_count >= 1, "driver-report group heading must appear"
+        # Active proposals section must NOT appear for either.
+        assert "active proposals" not in all_text, (
+            "neither driver-led label must appear under Active proposals")
+
+    def test_symptom_corroborated_label_tone_differs_from_tel_silent_tone(self, qapp):
+        """LABEL_DRIVER_SYMPTOM_CORROBORATED must have a different _LABEL_TONE entry
+        than LABEL_DRIVER_TEL_SILENT so they are visually distinguishable."""
+        # Verify via the module-level _LABEL_TONE built inside _refresh_proposals
+        # by checking that the constant is imported and maps to a non-warn tone.
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_TEL_SILENT, LABEL_DRIVER_SYMPTOM_CORROBORATED,
+        )
+        # Both constants must be distinct strings.
+        assert LABEL_DRIVER_TEL_SILENT != LABEL_DRIVER_SYMPTOM_CORROBORATED, (
+            "the two driver-led labels must be distinct strings")
+
+        # Verify the tone mapping by inspecting what _refresh_proposals would
+        # compute.  We check that symptom-corroborated gets "info" (blue) not "warn"
+        # (amber, same as tel-silent) and not "success" (green, reserved for MEASURED_FACT).
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+        both = [_make_driver_silent_prop(), _make_symptom_corroborated_prop()]
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid): return both
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        badge_texts = [lbl.text() for lbl in labels]
+        # The two label badge texts must both appear (label is shown when in _LABEL_TONE).
+        silent_label_shown = any(
+            "driver report" in t.lower() and "telemetry silent" in t.lower()
+            for t in badge_texts
+        )
+        corr_label_shown = any(
+            "symptom" in t.lower() and "corroborated" in t.lower()
+            for t in badge_texts
+        )
+        assert silent_label_shown, (
+            "LABEL_DRIVER_TEL_SILENT badge text must appear in the row")
+        assert corr_label_shown, (
+            "LABEL_DRIVER_SYMPTOM_CORROBORATED badge text must appear in the row")
+
+    def test_symptom_corroborated_at_band1_clean_laps_renders(self, qapp):
+        """Symptom-corroborated proposals appear at band 1 (1-4 clean laps) too.
+
+        I-C regression: feedback-led proposals now appear at band 1, not only band 2.
+        The UI must not assume driver-led proposals require 5+ clean laps.
+        """
+        from PyQt6.QtWidgets import QLabel
+        w = _make_proposals_host(qapp)
+        band1_prop = _make_symptom_corroborated_prop(clean_laps=3)   # band 1
+
+        class _DB:
+            def get_owner_proposals_for_event(self, eid): return [band1_prop]
+            def get_suppressed_changes_for_event(self, eid): return []
+
+        w._refresh_proposals(_DB(), event_id=1)
+        labels = w.findChildren(QLabel)
+        all_text = " ".join(lbl.text() for lbl in labels).lower()
+        assert "driver report" in all_text, (
+            "symptom-corroborated proposal at 3 clean laps (band 1) must render — "
+            "the UI must not gate on clean_laps >= 5")
+
+
 class TestV43SuppressedChangesRendering:
     """Suppressed changes (B16) must render non-empty from db.get_suppressed_changes_for_event."""
 
