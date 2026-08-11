@@ -1,6 +1,8 @@
 """Full-rate capture, slip derivation and the on-disk frame format."""
 from __future__ import annotations
 
+import math
+
 from pitcrew.telemetry.recorder import (
     FRAME_FIELDS,
     SAMPLE_HZ,
@@ -141,14 +143,41 @@ def test_slip_is_not_computed_when_nearly_stopped():
     assert frames[0]["slip_fl"] == 1.0
 
 
-def test_unverified_channels_are_null_not_zero():
-    """Missing must be null. A zero here reads downstream as a real measurement."""
+def test_channels_the_packet_format_lacks_are_null_not_zero():
+    """The 'A' format carries no steering or surface. A zero would read
+    downstream as a real measurement of a centred wheel on tarmac."""
     rec = LapRecorder()
-    rec.record_frame(rolling_packet(extended=True))
+    rec.record_frame(rolling_packet(extended=False))
     frames = decode_frames(rec.take_lap().blob)
     for channel in ("steering_deg", "steering_norm",
                     "surf_fl", "surf_fr", "surf_rl", "surf_rr"):
         assert frames[0][channel] is None
+
+
+def test_a_padded_tail_does_not_invent_surfaces():
+    """Four NULs are not four wheels on an unknown surface."""
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(extended=True))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["surf_fl"] is None
+
+
+def test_steering_is_captured_in_degrees_and_normalised():
+    import struct as _struct
+
+    from pitcrew.telemetry.packet import parse_packet
+
+    from .conftest import raw_packet
+    data = bytearray(raw_packet(extended=True))
+    _struct.pack_into("<f", data, 296, math.pi / 2)
+    _struct.pack_into("<H", data, 142, 0x0001)          # on track
+    packet = parse_packet(bytes(data))
+
+    rec = LapRecorder()
+    rec.record_frame(packet)
+    frames = decode_frames(rec.take_lap().blob)
+    assert round(frames[0]["steering_deg"]) == 90
+    assert round(frames[0]["steering_norm"], 3) == 0.5
 
 
 def test_a_full_lap_compresses_to_a_sane_size():

@@ -18,6 +18,7 @@ All field offsets are verified against the granturismo open-source packet model:
   https://github.com/snipem/gt7dashboard / granturismo PyPI package
 """
 from __future__ import annotations
+import math
 import struct
 from dataclasses import dataclass
 from Crypto.Cipher import Salsa20
@@ -69,16 +70,42 @@ _IV_MASK_OLD = 0xDEADBEAF   # pre-2024 (kept for fallback)
 #
 # Turn the wheel lock to lock; the steering channel is the float whose range is
 # large and symmetric about zero.  Set this constant to that offset and add a
-# regression test with a captured packet.  Until then GT7Packet.steering is
-# None and every consumer must degrade to a labelled proxy.
+# regression test with a captured packet.
 #
-# The same applies to the other two tail channels the export needs: per-wheel
-# surface character ('~' and 'C' formats) and current lap time ('C' only).
-# All three stay None until measured, because the failure mode of a guessed
-# offset is confident nonsense, not an error.
-STEERING_TAIL_OFFSET: int | None = None
-SURFACE_TAIL_OFFSET: int | None = None
-CURRENT_LAP_TAIL_OFFSET: int | None = None
+# Measured 11 Aug 2026 against a live GT7 v1.70 stream (Porsche 911 RSR, wheel
+# turned lock to lock, car parked on tarmac with the lap clock running):
+#
+#   296  wheel rotation      exactly -pi..+pi, and 0 with hands off the wheel.
+#                            A chassis heading angle would also span +-pi but
+#                            would not read zero while parked, which is what
+#                            separates the two.
+#   344  surface type        'TTTT' - four ASCII characters, one per wheel.
+#   348  current lap time    rose by exactly 16 ms across one packet at 60 Hz.
+#   360  wheelbase           constant 2.516 m, the RSR's actual wheelbase.
+#   364  car category        'GR3\0'.
+#
+# Also moving but not yet needed: 300/304/308/312 (sway, heave, surge and one
+# more, all exactly zero while parked), 340, and 352/356 - the latter pair
+# ranging about +-0.4 rad, which is the road-wheel steering angle rather than
+# the driver's wheel.
+STEERING_TAIL_OFFSET: int | None = 296
+SURFACE_TAIL_OFFSET: int | None = 344
+CURRENT_LAP_TAIL_OFFSET: int | None = 348
+WHEELBASE_TAIL_OFFSET: int | None = 360
+CAR_CATEGORY_TAIL_OFFSET: int | None = 364
+
+# `wheelRotation` saturates at +-pi at full lock, so a fraction of full lock is
+# simply radians / pi.  It is the in-game wheel angle, NOT the driver's
+# physical wheel, so it does not scale with his 1080-degree rotation setting.
+# The export names this channel in `derived.steerSource`.
+STEER_SOURCE = "wheelRotation"
+STEERING_FULL_LOCK_RAD = math.pi
+
+# The surface characters GT7 emits: tarmac, kerb, dirt, grass, sand, snow.
+# Anything else means we are not looking at the surface channel — a padded or
+# truncated tail decodes to NULs, and four NULs must read as "no surface data"
+# rather than as four wheels on an unknown surface.
+SURFACE_CHARS = frozenset("TCDGSs")
 
 
 def _decrypt(data: bytes) -> bytes:
@@ -288,25 +315,57 @@ class GT7Packet:
 
     @property
     def steering(self) -> float | None:
-        """Steering / wheel rotation, or None when unavailable.
+        """Wheel rotation in radians, -pi..+pi, or None on the 'A' format.
 
-        GT7 does not send steering in the 296-byte packet.  The extended packet
-        is believed to carry it, but the offset must be confirmed empirically
-        (`tools/probe_extended_packet.py`) before this returns anything.  Until
-        then this is None and callers must fall back to a labelled proxy rather
-        than silently reporting yaw rate as steering.
+        This is the in-game steering wheel, not the driver's physical rim, so
+        it saturates at +-pi regardless of his rotation setting.
         """
         if STEERING_TAIL_OFFSET is None:
             return None
         return self.tail_float(STEERING_TAIL_OFFSET)
 
     @property
+    def steering_norm(self) -> float | None:
+        """Steering as a fraction of full lock, -1..+1."""
+        radians = self.steering
+        if radians is None:
+            return None
+        return max(-1.0, min(1.0, radians / STEERING_FULL_LOCK_RAD))
+
+    @property
+    def wheelbase_m(self) -> float | None:
+        if WHEELBASE_TAIL_OFFSET is None:
+            return None
+        return self.tail_float(WHEELBASE_TAIL_OFFSET)
+
+    @property
+    def car_category(self) -> str | None:
+        """GT7 car class, e.g. 'GR3'.  'C' format only; None elsewhere.
+
+        Goes straight into `meta.carCategory`, which otherwise would have to be
+        typed in by hand and would drift from what the car actually is.
+        """
+        if CAR_CATEGORY_TAIL_OFFSET is None or self.tail is None:
+            return None
+        rel = CAR_CATEGORY_TAIL_OFFSET - PACKET_SIZE
+        if rel < 0 or rel + 4 > len(self.tail):
+            return None
+        text = self.tail[rel:rel + 4].split(b"\x00")[0]
+        if not text:
+            return None
+        try:
+            return text.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+
+    @property
     def surface_types(self) -> tuple[str, str, str, str] | None:
         """Per-wheel surface character (T/C/D/G/S/s), or None.
 
-        Offered by the '~' and 'C' formats only.  Like steering, the offset is
-        unverified, so this reports absence rather than guessing — a wrong
-        offset would produce confident nonsense about kerb and grass contact.
+        Offered by the '~' and 'C' formats only.  Wheel order is assumed to be
+        FL, FR, RL, RR, matching every other per-wheel quad in the packet;
+        the measurement was taken with all four on tarmac so it could not
+        distinguish them.
         """
         if SURFACE_TAIL_OFFSET is None or self.tail is None:
             return None
@@ -314,6 +373,8 @@ class GT7Packet:
         if rel < 0 or rel + 4 > len(self.tail):
             return None
         chars = self.tail[rel:rel + 4].decode("ascii", errors="replace")
+        if not all(ch in SURFACE_CHARS for ch in chars):
+            return None
         return (chars[0], chars[1], chars[2], chars[3])
 
     @property

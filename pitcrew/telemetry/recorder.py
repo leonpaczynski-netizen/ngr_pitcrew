@@ -57,8 +57,11 @@ FRAME_FIELDS: tuple[str, ...] = (
     "rev_limiter",
 )
 
-# Steering rotation of the driver's wheel, needed to normalise steering angle
-# to -1..1.  Fanatec DD Extreme; overridden from config at runtime.
+# The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
+# in `derived.steerRotationDeg` so a reader can relate the captured angle to
+# what his hands did — it is NOT used to normalise, because the channel we
+# capture is the in-game wheel, which saturates at +-pi whatever the rim is set
+# to.  Normalisation lives in GT7Packet.steering_norm.
 DEFAULT_STEER_ROTATION_DEG = 1080.0
 
 _TWO_PI = 2.0 * math.pi
@@ -112,12 +115,10 @@ def decode_frames(blob: bytes) -> list[dict]:
 class LapRecorder:
     """Buffers frames for the lap in progress and hands them over on completion."""
 
-    def __init__(self, sample_every: int = 1,
-                 steer_rotation_deg: float = DEFAULT_STEER_ROTATION_DEG) -> None:
+    def __init__(self, sample_every: int = 1) -> None:
         # sample_every=1 is full rate.  Exposed only so a test can thin the
         # stream; the app should never raise it.
         self._sample_every = max(1, sample_every)
-        self._steer_rotation_deg = steer_rotation_deg
         self._lock = threading.Lock()
         self._counter = 0
         self._rows: list[list] = []
@@ -146,12 +147,9 @@ class LapRecorder:
             slip = _slip_ratios(packet)
             lat_g = abs(packet.speed_ms * packet.angvel_z) / 9.81
             steer_rad = packet.steering
-            if steer_rad is None:
-                steer_deg = steer_norm = None
-            else:
-                steer_deg = round(math.degrees(steer_rad), 2)
-                half_lock = self._steer_rotation_deg / 2.0
-                steer_norm = round(steer_deg / half_lock, 4) if half_lock else None
+            steer_deg = None if steer_rad is None else round(math.degrees(steer_rad), 2)
+            steer_norm = packet.steering_norm
+            steer_norm = None if steer_norm is None else round(steer_norm, 4)
             surface = packet.surface_types or (None, None, None, None)
 
             self._rows.append([
