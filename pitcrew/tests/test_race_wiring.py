@@ -230,3 +230,53 @@ def test_a_backlog_is_dropped_rather_than_read_out_late():
         speaker.say(f"call {index}")
     assert speaker._queue.qsize() <= MAX_QUEUED + 1
     speaker.stop()
+
+
+# ------------------------------------------------------------------- piper
+
+def test_piper_is_preferred_over_sapi():
+    """Piper sounds like a race engineer; SAPI sounds like a screen reader."""
+    import inspect
+
+    from pitcrew.engineer import voice as voice_module
+
+    source = inspect.getsource(voice_module._best_engine)
+    assert source.index("PiperEngine") < source.index("Sapi5Engine")
+
+
+def test_a_voice_model_is_shipped():
+    from pitcrew.engineer.voice import _default_model
+    assert _default_model().endswith(".onnx")
+
+
+def test_the_engine_warms_up_off_the_callers_thread():
+    """Cold-loading Piper takes ~1.7s; arriving mid-call it would be useless."""
+    warmed = []
+
+    class Slow:
+        name = "slow"
+
+        def warm(self):
+            warmed.append(True)
+
+        def speak(self, text):
+            pass
+
+    speaker = Voice(Slow(), enabled=True)
+    assert warmed == []          # not on construction
+    speaker.warm()
+    for _ in range(50):
+        if warmed:
+            break
+        import time
+        time.sleep(0.02)
+    speaker.stop()
+    assert warmed == [True]
+
+
+def test_an_engine_without_warmup_is_fine():
+    speaker = Voice(NullEngine(), enabled=True)
+    speaker.warm()
+    speaker.say("Green, green, green.")
+    speaker.stop()
+    assert speaker.spoken == ["Green, green, green."]

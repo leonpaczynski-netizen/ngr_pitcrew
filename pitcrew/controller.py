@@ -306,6 +306,7 @@ class PitCrewController(QObject):
             self.practice.set_recording(False)
             return
 
+        self.voice.warm()
         self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet)
         self.listener.start()
         self._parse_errors = 0
@@ -527,6 +528,7 @@ class PitCrewController(QObject):
         self.listener.start()
         self._health.start()
 
+        self.voice.warm()
         self._race_inputs = inputs
         self._race_burns = []
         self._pending_replan = None

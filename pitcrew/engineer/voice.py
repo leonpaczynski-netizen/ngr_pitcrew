@@ -48,6 +48,27 @@ class Voice:
                 target=self._run, name="PitCrewVoice", daemon=True)
             self._thread.start()
 
+    def warm(self) -> None:
+        """Pay any model-loading cost now, off the caller's thread.
+
+        Called when a session starts rather than when the Voice is built:
+        constructing a Voice must stay cheap, or every test and every screen
+        that merely holds one pays a second and a half for a model it will
+        never speak through.
+        """
+        warm = getattr(self._engine, "warm", None)
+        if warm is None:
+            return
+
+        def run() -> None:
+            try:
+                warm()
+            except Exception as exc:            # noqa: BLE001
+                print(f"[voice] warm-up failed: {type(exc).__name__}: {exc}")
+
+        threading.Thread(target=run, name="PitCrewVoiceWarm",
+                         daemon=True).start()
+
     @property
     def engine_name(self) -> str:
         if self._engine is None:
@@ -107,6 +128,74 @@ class NullEngine:
         self.lines.append(text)
 
 
+class PiperEngine:
+    """Local neural speech. Offline, and far better than SAPI on a race radio.
+
+    Two details that matter on the voice thread:
+
+    * **The model is loaded once, ahead of time.** Cold-loading takes about
+      1.7 seconds, which arriving in the middle of "box this lap" would make
+      the call useless. `warm()` pays that cost before the race starts.
+    * **Playback is serialised.** Overlapping sounddevice streams crash the
+      PortAudio host rather than mixing, so one call finishes before the next
+      begins - which is what a real radio does anyway.
+    """
+
+    name = "piper"
+    _play_lock = threading.Lock()
+
+    def __init__(self, model_path: str | None = None) -> None:
+        import numpy  # noqa: F401 - required by the synth path
+        import sounddevice  # noqa: F401
+
+        self._path = model_path or _default_model()
+        if not self._path:
+            raise FileNotFoundError(
+                "no Piper voice model. Download one with: "
+                "python -m piper.download_voices en_GB-alan-medium "
+                "pitcrew/engineer/piper_models")
+        from piper import PiperVoice  # noqa: F401 - probe it imports
+        self._voice = None
+
+    def warm(self) -> None:
+        """Load the model now, so the first real call does not wait for it."""
+        self._load()
+
+    def _load(self):
+        if self._voice is None:
+            from piper import PiperVoice
+            self._voice = PiperVoice.load(self._path)
+        return self._voice
+
+    def speak(self, text: str) -> None:
+        import numpy as np
+        import sounddevice as sd
+        from piper.config import SynthesisConfig
+
+        voice = self._load()
+        chunks, rate = [], 22_050
+        for chunk in voice.synthesize(
+                text, SynthesisConfig(length_scale=1.0, volume=1.0,
+                                      normalize_audio=True)):
+            chunks.append(np.frombuffer(chunk.audio_int16_bytes,
+                                        dtype=np.int16))
+            rate = chunk.sample_rate
+        if not chunks:
+            return
+        audio = np.concatenate(chunks)
+        with self._play_lock:
+            sd.play(audio, rate, blocking=True)
+
+
+def _default_model() -> str:
+    """The first voice model shipped alongside this module."""
+    from pathlib import Path
+
+    folder = Path(__file__).resolve().parent / "piper_models"
+    models = sorted(folder.glob("*.onnx")) if folder.is_dir() else []
+    return str(models[0]) if models else ""
+
+
 class Sapi5Engine:
     """Windows SAPI5 through win32com.
 
@@ -132,12 +221,18 @@ class Sapi5Engine:
 
 
 def _best_engine():
-    """The first speech engine that actually imports on this machine."""
-    for factory in (Sapi5Engine,):
+    """The best speech engine this machine can actually run.
+
+    Piper first: it is a neural voice and sounds like a race engineer, where
+    SAPI sounds like a screen reader. SAPI is the fallback rather than the
+    default, and no speech at all is still a running app.
+    """
+    for factory in (PiperEngine, Sapi5Engine):
         try:
             return factory()
-        except Exception:                       # noqa: BLE001
-            continue
+        except Exception as exc:                # noqa: BLE001
+            print(f"[voice] {factory.__name__} unavailable: "
+                  f"{type(exc).__name__}: {exc}")
     return None
 
 
