@@ -360,8 +360,15 @@ def test_a_nonsense_voice_tuning_is_refused():
         Settings(voice_noise_w_scale=9.0).validate()
 
 
-def test_the_engine_chain_still_degrades_without_raising(monkeypatch):
-    """Piper -> SAPI -> silent. Failure is silent, never fatal."""
+def test_the_engine_chain_still_degrades_without_raising(monkeypatch,
+                                                         tmp_path):
+    """Pack -> Piper -> SAPI -> silent. Failure is silent, never fatal.
+
+    PACK_ROOT is pointed at nothing on purpose. A rendered pack plays even
+    with no live engine behind it - that is deliberate, and covered in
+    test_voice_pack.py - so leaving the real pack in place here would test
+    the pack rather than the degradation it sits in front of.
+    """
     from pitcrew.engineer import voice as voice_module
 
     def unavailable(*_args, **_kwargs):
@@ -369,6 +376,7 @@ def test_the_engine_chain_still_degrades_without_raising(monkeypatch):
 
     monkeypatch.setattr(voice_module, "PiperEngine", unavailable)
     monkeypatch.setattr(voice_module, "Sapi5Engine", unavailable)
+    monkeypatch.setattr(voice_module, "PACK_ROOT", tmp_path / "absent")
     assert voice_module._best_engine() is None
 
     silent = voice_module.Voice(engine=None)

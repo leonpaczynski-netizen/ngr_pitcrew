@@ -39,6 +39,13 @@ pitcrew/engineer/piper_models/
 *.onnx
 *.onnx.json
 
+# The rendered phrase pack. Same reasoning as the model above, more so: it is
+# ~33 MB of wav, it is reproducible from the manifest and the model, and it is
+# replaced wholesale every time the voice or the tuning changes - so committing
+# it would put a fresh 33 MB in history for every tweak.
+#   python tools/render_voice_pack.py
+pitcrew/engineer/voice_pack/
+
 # Data wipe quarantine (2026-08-02) — corrupt event/car/track linkage
 _quarantine_*/
 .last_quarantine_path
