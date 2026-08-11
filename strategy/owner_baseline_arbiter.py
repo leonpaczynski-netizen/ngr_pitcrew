@@ -15,11 +15,21 @@ telemetry against the owner baseline for one discipline and returns three lists:
 Band logic (owner decision R5 — three hard bands, no continuous float):
   ``clean_laps == 0``                  → feedback alone; label LABEL_DRIVER_ONLY.
   ``1 <= clean_laps < 5``              → both sources noted; label LABEL_DRIVER_EARLY_TEL.
+                                          Second pass also fires at band 1 (I-C fix):
+                                          feedback-only fields get LABEL_DRIVER_TEL_SILENT.
   ``clean_laps >= 5``, feedback absent → label LABEL_TEL_NO_FEEDBACK.
   ``clean_laps >= 5``, feedback agrees → label LABEL_TEL_CORROBORATED.
   ``clean_laps >= 5``, feedback opposes → UNRESOLVED; NEITHER direction suppressed,
                                           NEITHER averaged; must be resolved before
                                           accept/reject.
+  ``clean_laps >= 5``, telemetry silent → label LABEL_DRIVER_TEL_SILENT; proposal with
+                                          PROV_DRIVER_REPORT (NOT MEASURED_FACT).
+                                          Previously emitted as an UnresolvedRider; now
+                                          actionable via the standard Accept/Reject path.
+                                          Upgraded to LABEL_DRIVER_SYMPTOM_CORROBORATED
+                                          when the linkage is unambiguous (exactly one
+                                          active feel flag, independently corroborated
+                                          by telemetry).  Provenance stays DRIVER_REPORT.
 
 Clip rule (B15): proposed values are passed through ``ParameterSpec.snap()``; if
 the snapped value differs from the raw rule-engine value the difference is noted
@@ -57,8 +67,20 @@ LABEL_DRIVER_ONLY: str = "driver report only — no telemetry"
 LABEL_DRIVER_EARLY_TEL: str = "driver report with early telemetry"
 LABEL_TEL_CORROBORATED: str = "telemetry with driver corroboration"
 LABEL_TEL_NO_FEEDBACK: str = "telemetry (driver feedback absent or silent)"
+#: Fifth label — telemetry silent on this parameter.  Feedback alone supplies
+#: the direction.  Provenance is DRIVER_REPORT (NOT MEASURED_FACT — telemetry
+#: contributed nothing; this label exists precisely to avoid that blur).
+LABEL_DRIVER_TEL_SILENT: str = "driver report — telemetry silent on this parameter"
+#: Sixth label — feedback-led, but the driver's SYMPTOM (not the specific
+#: parameter) is independently corroborated by telemetry.  Applies only when the
+#: linkage is unambiguous (exactly one feel flag is active in the feedback session
+#: and that flag is corroborated by a separate telemetry signal).  Provenance
+#: stays PROV_DRIVER_REPORT — telemetry confirmed the symptom, not the lever.
+LABEL_DRIVER_SYMPTOM_CORROBORATED: str = (
+    "driver report — symptom independently corroborated by telemetry"
+)
 
-# Internal marker for contradicted proposals (B11) — NOT one of the four labels;
+# Internal marker for contradicted proposals (B11) — NOT one of the five labels;
 # these go into a separate UNRESOLVED bucket with ``status="unresolved"``.
 _STATUS_UNRESOLVED: str = "unresolved"
 _STATUS_PROPOSED: str = "proposed"
@@ -257,6 +279,7 @@ def build_owner_proposals(
     session_run_id: str,
     event_id: int,
     suppression_keys: FrozenSet[str] = frozenset(),
+    corroborated_flags: FrozenSet[str] = frozenset(),
 ) -> Tuple[List[OwnerProposal], List[SuppressedChange], List[UnresolvedRider]]:
     """Build proposals, suppressed changes and unresolved riders for one session.
 
@@ -292,6 +315,14 @@ def build_owner_proposals(
         band.  Passed as ``frozenset({(obs_key, band_int), ...})``.  A rejected
         proposal at the same band is suppressed; crossing a band boundary allows
         re-raise (B14 "materially different evidence").
+    corroborated_flags
+        The feel flags that are independently corroborated by telemetry for this
+        session, as returned by ``setup_diagnosis.corroborated_feel_flags()``.
+        The SERVICE enforces the "exactly one active feel flag" gate before
+        passing a non-empty value; a non-empty frozenset therefore always means
+        the linkage is unambiguous and the second-pass label may be upgraded to
+        ``LABEL_DRIVER_SYMPTOM_CORROBORATED``.  Defaults to the empty frozenset
+        so all existing callers are unaffected.
 
     Returns
     -------
@@ -310,6 +341,7 @@ def build_owner_proposals(
             session_run_id=str(session_run_id or ""),
             event_id=int(event_id or 0),
             suppression_keys=suppression_keys or frozenset(),
+            corroborated_flags=corroborated_flags or frozenset(),
         )
     except Exception:
         return [], [], []
@@ -327,6 +359,7 @@ def _build_proposals_inner(
     session_run_id: str,
     event_id: int,
     suppression_keys: FrozenSet,
+    corroborated_flags: FrozenSet = frozenset(),
 ) -> Tuple[List[OwnerProposal], List[SuppressedChange], List[UnresolvedRider]]:
     """Inner implementation — may raise; always wrapped by build_owner_proposals."""
     try:
@@ -377,8 +410,11 @@ def _build_proposals_inner(
         default_label = LABEL_DRIVER_ONLY
         default_prov = PROV_DRIVER_REPORT
     elif current_band == 1:
-        # B10: 1-4 laps — both sources noted; feedback is primary carrier of direction.
-        # Use the TELEMETRY plan (which already merged feedback into the diagnosis).
+        # B10: 1-4 laps — both sources noted for fields telemetry addressed.
+        # Since source-separation (feedback=None in telemetry diagnosis), the
+        # telemetry plan no longer contains feedback-driven rules — tel_dirs
+        # reflects real telemetry signals only.  A second pass below
+        # (current_band >= 1) catches feedback-only fields that tel_dirs misses.
         source_items = list(tel_dirs.items())
         default_label = LABEL_DRIVER_EARLY_TEL
         default_prov = PROV_DETERMINISTIC_INFERENCE
@@ -469,37 +505,104 @@ def _build_proposals_inner(
             continue  # never raise; degrade silently per-proposal
 
     # ----------------------------------------------------------------
-    # Unresolved riders (B9/Correction 2): feedback at 5+ laps for
-    # parameters telemetry is SILENT on.
+    # Second pass: feedback-plan fields that telemetry is SILENT on.
+    #
+    # Previously these became UnresolvedRider objects (B9/Correction 2) and
+    # were gated at band 2 only (5+ laps).  Both restrictions are now lifted:
+    #
+    #   Gate change (I-C regression fix): the gate was extended to
+    #   ``current_band >= 1`` because source-separation (feedback=None in the
+    #   telemetry diagnosis) means feedback-only parameters no longer appear
+    #   in tel_dirs at band 1.  Before the fix, they silently disappeared —
+    #   a doctrine violation.  They must produce an actionable proposal.
+    #
+    #   B11 source-separation fix: a feedback signal on a tel-silent field is
+    #   genuine driver input.  We emit OwnerProposal objects with:
+    #     label      = LABEL_DRIVER_TEL_SILENT  (or LABEL_DRIVER_SYMPTOM_CORROBORATED
+    #                  at band 2 when the linkage is unambiguous — see below)
+    #     provenance = PROV_DRIVER_REPORT  (NOT MEASURED_FACT — telemetry
+    #                                       contributed nothing to the lever)
+    #     status     = proposed
+    #
+    # Symptom corroboration (sixth label, band 2 only): when the session had
+    # exactly one active feel flag AND that flag is corroborated by a separate
+    # telemetry signal, upgrade to LABEL_DRIVER_SYMPTOM_CORROBORATED.
+    # The unambiguous-linkage gate (enforced in the SERVICE before passing
+    # ``corroborated_flags``) means a non-empty frozenset here always implies
+    # a safe attribution.  Provenance stays PROV_DRIVER_REPORT.
+    #
+    # The UnresolvedRider dataclass and the third return-value position are
+    # kept so callers that unpack (proposals, suppressed, riders) continue to
+    # compile.  `unresolved_riders` is always empty after the B11 fix.
+    # The export's schema key is repopulated from proposals by the export
+    # service (see event_export_service.py).
+    #
+    # Double-emit prevention: `tel_fields = set(tel_dirs)`.  The first pass
+    # consumed every field in tel_dirs.  This pass skips any field present in
+    # tel_fields — the two passes iterate disjoint sets by construction.
     # ----------------------------------------------------------------
-    if current_band >= 2:
+    if current_band >= 1:
         tel_fields = set(tel_dirs)
         for field_name, (fb_dir, fb_intent) in fb_dirs.items():
             if field_name in tel_fields:
-                continue   # telemetry addressed it → handled above
+                continue   # first pass already handled this field — do not double-emit
             try:
-                note = str(getattr(fb_intent, "symptom", "") or "")
+                raw_to = getattr(fb_intent, "to_value", None)
+                if raw_to is None:
+                    continue
+                try:
+                    raw_float = float(raw_to)
+                except (TypeError, ValueError):
+                    continue
+                original_val = float(owner_baseline.get(field_name, 0.0) or 0.0)
+                snapped, clipped, clip_reason = _clip_to_spec(
+                    field_name, raw_float, parameter_model
+                )
+
+                # B14: suppress if previously rejected at this band.
+                if _is_suppressed(field_name, fb_dir):
+                    continue
+
+                evidence: List[str] = []
+                symptom = str(getattr(fb_intent, "symptom", "") or "")
                 rationale = str(getattr(fb_intent, "rationale", "") or "")
                 rule_id = str(getattr(fb_intent, "rule_id", "") or "")
-                evidence: List[str] = [s for s in (note, rationale) if s]
+                if symptom:
+                    evidence.append(symptom)
+                if rationale and rationale != symptom:
+                    evidence.append(rationale)
                 if rule_id:
                     evidence.append(f"rule:{rule_id}")
-                unresolved_riders.append(UnresolvedRider(
-                    parameter=field_name,
-                    feedback_direction=fb_dir,
-                    discipline=discipline,
-                    session_run_id=session_run_id,
-                    baseline_revision=baseline_revision,
-                    note=(
-                        f"Feedback implies {fb_dir} {field_name} but telemetry "
-                        f"produced no finding for this parameter at "
-                        f"{clean_laps} clean laps. Never discarded."
-                    ),
-                    evidence_sources=evidence,
+
+                # Symptom corroboration upgrade (band 2 only).
+                # At band 1, corroboration evidence is too sparse to trust;
+                # always use LABEL_DRIVER_TEL_SILENT there.
+                if current_band >= 2 and corroborated_flags:
+                    second_pass_label = LABEL_DRIVER_SYMPTOM_CORROBORATED
+                else:
+                    second_pass_label = LABEL_DRIVER_TEL_SILENT
+
+                proposals.append(OwnerProposal(
+                    proposal_id=str(uuid.uuid4()),
                     event_id=event_id,
+                    session_run_id=session_run_id,
+                    discipline=discipline,
+                    parameter=field_name,
+                    direction=fb_dir,
+                    proposed_value=snapped,
+                    original_value=original_val,
+                    clipped=clipped,
+                    clip_stated_reason=clip_reason,
+                    label=second_pass_label,
+                    status=_STATUS_PROPOSED,
+                    original_proposed_value=raw_float,
+                    evidence_sources=evidence,
+                    baseline_revision=baseline_revision,
+                    provenance=PROV_DRIVER_REPORT,
+                    clean_laps=clean_laps,
                 ))
             except Exception:
-                continue
+                continue  # never raise; degrade silently per-proposal
 
     # ----------------------------------------------------------------
     # Suppressed changes (B16): surface what the rule engine withheld.

@@ -87,13 +87,26 @@ def _build_inner(db, event_id: int, *, car: str, track: str, layout_id: str) -> 
     raw_proposals = db.get_owner_proposals_for_event(event_id)
     proposals = [p for p in (raw_proposals or [])]
 
-    # --- Unresolved riders (C1/I5 fix) ---
-    # B9 riders (feedback at 5+ laps on fields telemetry is SILENT on) are fetched
-    # from the dedicated owner_baseline_riders table, NOT filtered from proposals.
-    # Proposals with status="unresolved" are B11 contradictions (telemetry and
-    # feedback oppose each other on the SAME field) — a structurally different concept
-    # that remains in the proposals list with its status intact.
-    unresolved_riders = db.get_owner_riders_for_event(event_id)
+    # --- Unresolved riders (B11 source-separation update) ---
+    # After the B11 source-separation fix, feedback-only / tel-silent signals are
+    # emitted as OwnerProposal objects (LABEL_DRIVER_TEL_SILENT, PROV_DRIVER_REPORT)
+    # rather than UnresolvedRider objects stored in the riders table.  The export's
+    # schema key is retained for external schema compatibility (the owner's Claude
+    # project consumes the file), but it is now populated as a VIEW over proposals
+    # carrying the LABEL_DRIVER_TEL_SILENT label.
+    #
+    # These proposals ALSO appear in the full `proposals` list (they are actionable,
+    # with a status and an accept/reject path).  The duplication is intentional and
+    # load-bearing: the external consumer reads `unresolved_riders` as a distinct
+    # group, and making it a full-entry view (not just parameter names) keeps the
+    # file self-describing.  If the schema ever diverges, rename the key rather than
+    # changing the population logic here.
+    #
+    # NOTE: db.get_owner_riders_for_event() remains callable (a frontend agent will
+    # stop calling it) but the riders table is DEPRECATED and is no longer written to.
+    from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT as _LBL_SILENT
+    unresolved_riders = [p for p in (raw_proposals or [])
+                         if p.get("label") == _LBL_SILENT]
 
     # --- Suppressed changes (C3 fix) ---
     # B16 suppressed changes are fetched from the dedicated

@@ -627,23 +627,44 @@ class TestB9Rider_UnresolvedRiders:
     This is the criterion most likely to have been implemented incompletely."""
 
     def test_feedback_on_tel_silent_param_becomes_rider(self):
-        """Core rider test (B9-RIDER)."""
+        """B9-RIDER → DRIVER_TEL_SILENT proposal (B11 source-separation fix).
+
+        After the fix, build_owner_proposals never returns UnresolvedRider objects.
+        Feedback on a parameter the telemetry is silent on produces an OwnerProposal
+        with label=LABEL_DRIVER_TEL_SILENT and provenance=PROV_DRIVER_REPORT — fully
+        actionable via the standard Accept/Reject path.  The 'never discarded'
+        invariant is preserved: the proposal appears in the proposals list.
+        """
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT, PROV_DRIVER_REPORT
         tel = _intent("springs_front", +0.5, to_value=5.5)      # telemetry addresses only front
-        fb_front = _intent("springs_front", +0.3, to_value=5.3)  # agrees → proposal
-        fb_rear = _intent("springs_rear", -0.3, to_value=4.7)    # ONLY in feedback → rider
+        fb_front = _intent("springs_front", +0.3, to_value=5.3)  # agrees → first-pass proposal
+        fb_rear = _intent("springs_rear", -0.3, to_value=4.7)    # ONLY in feedback → DRIVER_TEL_SILENT
+
         proposals, _, riders = _build_proposals(
             clean_laps=5,
             telemetry_plan=_plan(proposed=[tel]),
             feedback_plan=_plan(proposed=[fb_front, fb_rear]),
             owner_baseline={"springs_front": 5.0, "springs_rear": 5.0},
         )
-        rider_params = {r.parameter for r in riders}
-        prop_params = {p.parameter for p in proposals}
-        assert "springs_rear" in rider_params, (
-            "springs_rear is only in feedback — must appear as an unresolved rider (B9-RIDER)"
+
+        assert riders == [], (
+            "riders list must be empty after the source-separation fix — "
+            "feedback-on-tel-silent fields are now DRIVER_TEL_SILENT proposals (B9-RIDER)"
         )
-        assert "springs_rear" not in prop_params, (
-            "springs_rear must NOT appear as a proposal when it is a rider (B9-RIDER)"
+
+        tel_silent = [p for p in proposals if p.label == LABEL_DRIVER_TEL_SILENT]
+        silent_params = {p.parameter for p in tel_silent}
+
+        assert "springs_rear" in silent_params, (
+            "springs_rear is only in feedback — must appear as a DRIVER_TEL_SILENT proposal (B9)"
+        )
+        assert all(p.provenance == PROV_DRIVER_REPORT for p in tel_silent), (
+            "DRIVER_TEL_SILENT proposals must carry PROV_DRIVER_REPORT, not MEASURED_FACT"
+        )
+        # Telemetry-addressed field must NOT carry the silent label.
+        front_proposals = [p for p in proposals if p.parameter == "springs_front"]
+        assert all(p.label != LABEL_DRIVER_TEL_SILENT for p in front_proposals), (
+            "telemetry-addressed springs_front must NOT carry the DRIVER_TEL_SILENT label"
         )
 
     def test_rider_has_no_accept_reject_implied_by_structure(self):
@@ -657,36 +678,57 @@ class TestB9Rider_UnresolvedRiders:
         )
 
     def test_rider_not_discarded_is_preserved_in_return(self):
-        """Riders are NEVER discarded — the 'never discarded' note is in the note field."""
+        """Feedback on a tel-silent field is NEVER DISCARDED — preserved as a DRIVER_TEL_SILENT proposal.
+
+        After the source-separation fix the 'never discarded' invariant is honoured by
+        emitting an OwnerProposal (fully actionable) rather than an UnresolvedRider.
+        The rider return-value is always an empty list.
+        """
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT
         tel = _intent("arb_front", +1, to_value=6)
         fb_rear = _intent("arb_rear", -1, to_value=3)   # telemetry silent on rear
-        _, _, riders = _build_proposals(
+        proposals, _, riders = _build_proposals(
             clean_laps=7,
             telemetry_plan=_plan(proposed=[tel]),
             feedback_plan=_plan(proposed=[fb_rear]),
             owner_baseline={"arb_front": 5, "arb_rear": 4},
         )
-        assert riders, "riders must be returned (not discarded)"
-        assert "arb_rear" in {r.parameter for r in riders}
-        # The 'note' field should mention 'never discarded' per the module spec.
-        assert any("never discarded" in r.note.lower() for r in riders), (
-            "rider note must state it is never discarded"
+        assert riders == [], (
+            "riders list must be empty after source-separation fix"
+        )
+        tel_silent = [p for p in proposals if p.label == LABEL_DRIVER_TEL_SILENT]
+        assert tel_silent, (
+            "arb_rear feedback must be preserved as a DRIVER_TEL_SILENT proposal (never discarded)"
+        )
+        assert any(p.parameter == "arb_rear" for p in tel_silent), (
+            "arb_rear must appear in proposals with DRIVER_TEL_SILENT label"
         )
 
     def test_rider_feedback_direction_recorded(self):
-        """Riders must carry the feedback direction (increase/decrease)."""
+        """DRIVER_TEL_SILENT proposals carry the feedback direction in the `direction` field.
+
+        The old UnresolvedRider.feedback_direction contract is fulfilled by
+        OwnerProposal.direction for DRIVER_TEL_SILENT proposals.  The rider list
+        is always empty after the source-separation fix.
+        """
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT
         tel = _intent("damper_bump_front", +1, to_value=6)
         fb_rear = _intent("damper_bump_rear", -1, to_value=4)  # only in feedback
-        _, _, riders = _build_proposals(
+        proposals, _, riders = _build_proposals(
             clean_laps=5,
             telemetry_plan=_plan(proposed=[tel]),
             feedback_plan=_plan(proposed=[fb_rear]),
             owner_baseline={"damper_bump_front": 5, "damper_bump_rear": 5},
         )
-        assert riders
-        r = riders[0]
-        assert r.feedback_direction in ("increase", "decrease"), (
-            "rider must carry the feedback direction"
+        assert riders == [], "riders list must always be empty after source-separation fix"
+        silent = [p for p in proposals if p.label == LABEL_DRIVER_TEL_SILENT]
+        assert silent, "damper_bump_rear feedback must appear as a DRIVER_TEL_SILENT proposal"
+        p = silent[0]
+        assert p.direction in ("increase", "decrease"), (
+            "DRIVER_TEL_SILENT proposal must carry the feedback direction in p.direction"
+        )
+        assert p.direction == "decrease", (
+            "direction must match the feedback intent (decrease for fb_rear delta=-1)"
         )
 
     def test_no_riders_at_band_0(self):
@@ -1805,19 +1847,31 @@ class TestWiredPath_B9Rider_C1_ViaDB:
         )
 
     def test_rider_and_b11_contradiction_are_in_separate_stores(self, tmp_path):
-        """B9 rider and B11 contradiction (status=unresolved) must NEVER be conflated.
+        """DRIVER_TEL_SILENT proposals and B11 UNRESOLVED contradictions must be distinguishable.
 
-        Calls build_export_for_event to verify the wired export path honours the separation.
+        After the B11 source-separation fix both live in the proposals table.  They
+        are distinguished by label (LABEL_DRIVER_TEL_SILENT vs '') and by status
+        ('proposed' vs 'unresolved') and provenance ('DRIVER_REPORT' vs 'UNRESOLVED').
+
+        The export's ``unresolved_riders`` key is a VIEW over proposals filtered by
+        LABEL_DRIVER_TEL_SILENT — B11 contradictions (status='unresolved', no label)
+        must never be placed there.  This is the guard that once failed when both
+        concepts shared the same proposals table without distinction.
         """
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT, PROV_DRIVER_REPORT
         db = _db(tmp_path)
         event_id = _seed_event_row(db, "B9-B11-sep")
 
-        # Genuine B9 rider — feedback on a parameter telemetry is silent on.
-        db.save_owner_rider(event_id, {
+        # DRIVER_TEL_SILENT proposal — feedback on a parameter telemetry is silent on.
+        # This replaces the old `save_owner_rider` call; the riders table is deprecated.
+        db.save_owner_proposal(event_id, {
             "event_id": event_id, "session_run_id": "run-s1",
             "discipline": "race", "parameter": "lsd_coast",
-            "feedback_direction": "decrease", "baseline_revision": 1,
-            "note": "Rider: coast feels tight", "evidence_sources": ["feedback"],
+            "direction": "decrease", "proposed_value": 28.0,
+            "original_value": 30.0, "status": "proposed",
+            "baseline_revision": 1, "clean_laps": 6,
+            "label": LABEL_DRIVER_TEL_SILENT,
+            "provenance": PROV_DRIVER_REPORT,
         })
 
         # B11 contradiction — telemetry and feedback OPPOSE on the SAME field.
@@ -1837,10 +1891,12 @@ class TestWiredPath_B9Rider_C1_ViaDB:
         proposal_params = [p["parameter"] for p in spec.get("proposals", [])]
 
         assert "lsd_coast" in rider_params, (
-            "B9 rider (lsd_coast) must appear in unresolved_riders block (B9-RIDER/C1)"
+            "DRIVER_TEL_SILENT proposal (lsd_coast) must appear in unresolved_riders block "
+            "(export view is filtered by LABEL_DRIVER_TEL_SILENT)"
         )
         assert "springs_front" not in rider_params, (
-            "B11 contradiction (springs_front) must NOT appear in unresolved_riders (C1)"
+            "B11 contradiction (springs_front) must NOT appear in unresolved_riders — "
+            "it has status='unresolved' not label=DRIVER_TEL_SILENT (C1)"
         )
         assert "springs_front" in proposal_params, (
             "B11 contradiction (springs_front) must remain in proposals list (B11/C1)"
@@ -1849,6 +1905,17 @@ class TestWiredPath_B9Rider_C1_ViaDB:
         assert b11_row["status"] == "unresolved", (
             "B11 contradiction must carry status='unresolved' in the export (B11)"
         )
+        assert b11_row["provenance"] == "UNRESOLVED", (
+            "B11 contradiction must carry provenance='UNRESOLVED' (B11)"
+        )
+        # DRIVER_TEL_SILENT proposals must ALSO appear in proposals (duplication intentional).
+        assert "lsd_coast" in proposal_params, (
+            "DRIVER_TEL_SILENT proposal must also appear in the main proposals list "
+            "(it is fully actionable)"
+        )
+        silent_row = next(p for p in spec["proposals"] if p["parameter"] == "lsd_coast")
+        assert silent_row["label"] == LABEL_DRIVER_TEL_SILENT
+        assert silent_row["provenance"] == PROV_DRIVER_REPORT
 
 
 class TestWiredPath_B13_C2_ViaDB:
@@ -2002,18 +2069,29 @@ class TestWiredPath_C17_C19_ExportService:
     """
 
     def test_c17_riders_and_suppressed_changes_in_export(self, tmp_path):
-        """C17: Export spec contains non-empty unresolved_riders and suppressed_changes from DB."""
+        """C17: Export spec contains non-empty unresolved_riders and suppressed_changes from DB.
+
+        After the B11 source-separation fix, ``unresolved_riders`` in the export is a VIEW
+        over proposals filtered by label=LABEL_DRIVER_TEL_SILENT.  The riders table is
+        deprecated and no longer written by the live path.  Seeding a DRIVER_TEL_SILENT
+        proposal is the correct way to populate the unresolved_riders block (C1/C17).
+        """
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT, PROV_DRIVER_REPORT
         db = _db(tmp_path)
         event_id = _seed_event_row(db, "C17-full")
         db.save_owner_baseline(event_id, "race", {"springs_front": 70.0})
 
-        # Seed a B9 rider to the dedicated riders table.
-        db.save_owner_rider(event_id, {
+        # Seed a DRIVER_TEL_SILENT proposal (new mechanism replacing the old riders row).
+        # The export service filters proposals by LABEL_DRIVER_TEL_SILENT to populate
+        # the unresolved_riders block.
+        db.save_owner_proposal(event_id, {
             "event_id": event_id, "session_run_id": "run-c17",
             "discipline": "race", "parameter": "lsd_coast",
-            "feedback_direction": "decrease", "baseline_revision": 1,
-            "note": "Rider — coast tight, no telemetry signal",
-            "evidence_sources": ["feedback"],
+            "direction": "decrease", "proposed_value": 28.0,
+            "original_value": 30.0, "status": "proposed",
+            "baseline_revision": 1, "clean_laps": 6,
+            "label": LABEL_DRIVER_TEL_SILENT,
+            "provenance": PROV_DRIVER_REPORT,
         })
 
         # Seed a B16 suppressed change to the dedicated changes table.
@@ -2024,7 +2102,7 @@ class TestWiredPath_C17_C19_ExportService:
             "feedback_recorded": True, "baseline_revision": 1,
         })
 
-        # Seed a proposal with provenance.
+        # Seed a regular telemetry proposal with provenance.
         db.save_owner_proposal(event_id, {
             "event_id": event_id, "session_run_id": "run-c17",
             "discipline": "race", "parameter": "springs_front",
@@ -2043,15 +2121,17 @@ class TestWiredPath_C17_C19_ExportService:
 
         # The populated blocks must be non-empty — these are the critical C1/C3 assertions.
         assert len(spec["unresolved_riders"]) >= 1, (
-            "unresolved_riders must contain the B9 rider seeded to the DB "
-            "(C17/C1) — pre-v43 this was always empty"
+            "unresolved_riders must contain the DRIVER_TEL_SILENT proposal seeded to DB "
+            "(C17/C1) — the export view is now filtered by LABEL_DRIVER_TEL_SILENT"
+        )
+        assert spec["unresolved_riders"][0]["parameter"] == "lsd_coast", (
+            "the DRIVER_TEL_SILENT proposal for lsd_coast must appear in unresolved_riders"
         )
         assert len(spec["suppressed_changes"]) >= 1, (
-            "suppressed_changes must contain the B16 change seeded to the DB "
-            "(C17/C3) — pre-v43 this was always hardcoded to []"
+            "suppressed_changes must contain the B16 change seeded to DB (C17/C3)"
         )
-        assert len(spec["proposals"]) >= 1, (
-            "proposals must contain the seeded proposal (C17)"
+        assert len(spec["proposals"]) >= 2, (
+            "proposals must contain both the DRIVER_TEL_SILENT and the regular proposal (C17)"
         )
 
     def test_c19_all_four_provenance_tags_in_export_spec(self, tmp_path):
@@ -2281,31 +2361,36 @@ class TestModalSeams_Acceptance:
 
 
 # =============================================================================
-# I-B — Service wiring: run_for_session persists riders and suppressed changes
+# I-B — Service wiring: run_for_session persists proposals and suppressed changes
 # =============================================================================
-# Tests the two blocks in owner_baseline_service._run_inner that were never
-# exercised by any previous test:
-#   step 14 (lines 264-268): for rider in unresolved: db.save_owner_rider(...)
-#   step 15 (lines 271-275): for sc in suppressed: db.save_suppressed_change(...)
+# Tests the live service path through the real arbiter after the B11
+# source-separation fix (2026-08-10):
+#   step 13 (lines 269-274): proposals → db.save_owner_proposal (includes DRIVER_TEL_SILENT)
+#   step 14 (lines 276-284): riders loop is a DEPRECATED no-op (always empty)
+#   step 15 (lines 286-291): suppressed → db.save_suppressed_change
 #
-# The scenario is engineered to make the real arbiter emit at least one
-# UnresolvedRider AND one SuppressedChange without any mock:
+# Three scenarios are exercised:
 #
-#   Setup:
-#     Owner baseline includes arb_rear and lsd_decel.
-#     6 clean laps with wheelspin_count=12 (major band), no snap throttle.
-#     Feedback: corner_entry="understeer" AND mid_corner="understeer".
+#   IB-1 (riders table deprecated):
+#     Baseline {arb_rear, lsd_decel}. 6 laps wheelspin=12. Feedback: understeer.
+#     With source-separation: tel-plan has no feedback → no feedback-driven rules
+#     fire in the telemetry plan. Feedback-only fields (lsd_decel, arb_rear) become
+#     DRIVER_TEL_SILENT proposals. The riders table is never written.
 #
-#   Why the arbiter emits what it emits:
-#     C3_mid_arb_rear precondition: dominant_problem contains "understeer" — met.
-#     C3 contraindication in telemetry plan: wheelspin_band="major" is __not_low__ — fired.
-#       Result: arb_rear is SUPPRESSED (contraindicated) in telemetry_plan.rejected.
-#     C3 contraindication in feedback plan: wheelspin_band="low" (no laps) — not fired.
-#       Result: arb_rear increase is PROPOSED in feedback_plan.proposed.
-#     At band 2 (5+ clean laps): arb_rear in fb_dirs but NOT in tel_dirs -> RIDER.
-#     SuppressedChange: arb_rear from telemetry_plan.rejected with "SUPPRESSED".
-#     Proposal: C1_entry_lsd_decel fires in both plans (entry_understeer from feedback)
-#       -> lsd_decel decrease -> CORROBORATED proposal saved to DB.
+#   IB-2 (telemetry-driven suppression):
+#     Car: Porsche 911 RSR (991) '17 (has real aero range 500-700, not generic 0-1000).
+#     Baseline {lsd_accel: 30, aero_rear: 600}. 6 laps wheelspin=14.
+#     Feedback: exit_stability=strong oversteer (triggers B11 on lsd_accel).
+#     C4_mid_rear_aero: wheelspin not_low ✓, aero_rear_near_min=False ✓ (600>520),
+#     contraindication aero_rear_healthy=True (600 >= 0.8*700=560) → SUPPRESSED.
+#     This is a TELEMETRY-driven suppression (C4 fires then is contraindicated
+#     by the setup value + real car range — no feedback involved).
+#
+#   IB-3 (no corroboration, DRIVER_TEL_SILENT):
+#     Same scenario as IB-1. True corroboration is architecturally impossible with
+#     source separation (no field has both a lap-only rule AND a feedback-only rule
+#     in the same direction in the current rule set). The honest outcome is asserted:
+#     DRIVER_TEL_SILENT proposals exist; riders table is empty.
 #
 # =============================================================================
 
@@ -2313,8 +2398,15 @@ def _seed_session_with_laps(db, event_id: int,
                              car_name: str = "Porsche 911 RSR (991/2)",
                              track: str = "Fuji Speedway",
                              n_laps: int = 6,
-                             wheelspin_count: int = 12) -> str:
-    """Open a session, insert clean laps, add feedback, return the run_id."""
+                             wheelspin_count: int = 12,
+                             feedback: "dict | None" = None) -> str:
+    """Open a session, insert clean laps, add feedback, return the run_id.
+
+    ``feedback`` defaults to {corner_entry: understeer, mid_corner: understeer}.
+    Pass an explicit dict to override (e.g. for the B11 scenario).
+    """
+    if feedback is None:
+        feedback = {"corner_entry": "understeer", "mid_corner": "understeer"}
     session_id = db.open_session(
         car_id=1, car_name=car_name, config_id="fuji",
         track=track, session_type="Practice", event_id=event_id,
@@ -2331,126 +2423,665 @@ def _seed_session_with_laps(db, event_id: int,
              0, 0, 0, 0, 1),
         )
     db._conn.commit()
-    db.write_feedback(session_id, 1, {
-        "corner_entry": "understeer",
-        "mid_corner": "understeer",
-    })
+    db.write_feedback(session_id, 1, feedback)
     run = db.get_run_for_session(session_id)
     return run["run_id"]
 
 
 class TestServiceRoundTrip_IB:
-    """I-B: run_for_session persists riders and suppressed changes to the DB.
+    """I-B: run_for_session persists proposals and suppressed changes to the DB.
 
-    Tests the wiring at owner_baseline_service._run_inner steps 14 and 15
-    (lines 264-275) — previously never exercised under test because the only
-    existing call used a StubDB whose get_owner_baseline returned None, causing
-    an early exit before the arbiter was ever called.
+    After the B11 source-separation fix (2026-08-10):
+      - The riders table (owner_baseline_riders) is DEPRECATED — nothing writes it.
+      - DRIVER_TEL_SILENT proposals are emitted instead of UnresolvedRider objects.
+      - unresolved_count is ALWAYS 0 (the arbiter's third return value is always []).
+      - B11 contradictions appear in the proposals table with status="unresolved".
     """
 
-    def test_riders_persisted_to_rider_table_not_proposals(self, tmp_path):
-        """run_for_session must write UnresolvedRiders to owner_baseline_riders,
-        NOT to owner_baseline_proposals. (B9-RIDER / C1 wiring, step 14.)"""
+    def test_riders_table_never_written_on_live_path(self, tmp_path):
+        """After the B11 fix the riders table must NEVER be written on the live path.
+
+        The arbiter's band-2 second pass now emits DRIVER_TEL_SILENT OwnerProposal
+        objects instead of UnresolvedRider objects.  `unresolved_riders` is always []
+        and `unresolved_count` is always 0.  The riders table (owner_baseline_riders) is
+        deprecated and must remain empty after run_for_session.
+
+        Scenario: wheelspin=14 (major) + 'exit_stability: strong oversteer' produces a
+        B11 contradiction on lsd_accel (C5 increases, B3 decreases).  The contradiction
+        goes into the proposals table (status=unresolved) — NOT into the riders table.
+        """
         from data.session_db import SessionDB
         from services.owner_baseline_service import run_for_session
 
-        db = SessionDB(str(tmp_path / "ib_riders.db"))
-        event_id = _seed_event_row(db, "I-B riders")
-        db.save_owner_baseline(event_id, "race", {"arb_rear": 5, "lsd_decel": 30})
-        run_id = _seed_session_with_laps(db, event_id)
+        db = SessionDB(str(tmp_path / "ib_riders_deprecated.db"))
+        event_id = _seed_event_row(db, "I-B riders-deprecated")
+        db.save_owner_baseline(event_id, "race", {"lsd_accel": 30, "aero_rear": 600})
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            wheelspin_count=14,
+            feedback={"exit_stability": "strong oversteer"},
+        )
 
         result = run_for_session(db, session_run_id=run_id, discipline="race")
 
         assert result["ok"], f"run_for_session failed: {result.get('error')}"
-        assert result["unresolved_count"] > 0, (
-            "arbiter must emit at least one UnresolvedRider for this scenario "
-            "(arb_rear is in feedback plan but suppressed from telemetry plan)"
+        # Invariant after fix: unresolved_count is always 0.
+        assert result["unresolved_count"] == 0, (
+            "unresolved_count must be 0 after the source-separation fix — B11 "
+            "contradictions are emitted as proposals (status=unresolved), not as riders"
         )
-
+        # Critical deprecation assertion: the riders table must never be written.
         riders = db.get_owner_riders_for_event(event_id)
-        assert len(riders) > 0, (
-            "get_owner_riders_for_event must return at least one row after "
-            "run_for_session saves an UnresolvedRider (step 14 wiring)"
+        assert len(riders) == 0, (
+            f"riders table must be empty after the B11 fix; got {len(riders)} row(s). "
+            "The loop in owner_baseline_service.py step 14 is a deprecated no-op."
         )
-
-        # Riders must NOT appear in the proposals table.
-        proposals = db.get_owner_proposals_for_event(event_id)
-        rider_params = {r["parameter"] for r in riders}
-        proposal_params = {p["parameter"] for p in proposals}
-        wrongly_in_proposals = rider_params & proposal_params
-        assert not wrongly_in_proposals, (
-            f"Rider parameter(s) {wrongly_in_proposals!r} appeared in the proposals "
-            "table — riders must be routed to owner_baseline_riders only (B9-RIDER/C1)"
-        )
-
         db.close()
 
     def test_suppressed_changes_persisted_to_suppressed_table(self, tmp_path):
         """run_for_session must write SuppressedChanges to owner_baseline_suppressed_changes.
-        (B16 / C3 wiring, step 15.)"""
+
+        Scenario: car "Porsche 911 RSR (991) '17" (non-generic aero range 500-700),
+        baseline {lsd_accel:30, aero_rear:600}, 6 laps wheelspin=14 (major band).
+
+        Rule C4_mid_rear_aero fires on wheelspin=major with aero_rear not near minimum.
+        It is CONTRAINDICATED by aero_rear_healthy (600 >= 0.8 x 700=560, non-generic
+        range) — _record_suppression creates a rejected_candidate with "SUPPRESSED
+        (contraindicated)" in its rationale — the arbiter surfaces it as a SuppressedChange.
+
+        With generic aero range (0,1000) the _aero_range_is_generic guard makes
+        aero_rear_healthy always False, so C4 is not contraindicated.  This is why
+        "Porsche 911 RSR (991) '17" (with car-specific aero range) is required.
+        """
         from data.session_db import SessionDB
         from services.owner_baseline_service import run_for_session
 
         db = SessionDB(str(tmp_path / "ib_suppressed.db"))
         event_id = _seed_event_row(db, "I-B suppressed")
-        db.save_owner_baseline(event_id, "race", {"arb_rear": 5, "lsd_decel": 30})
-        run_id = _seed_session_with_laps(db, event_id)
+        db.save_owner_baseline(event_id, "race", {"lsd_accel": 30, "aero_rear": 600})
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991) '17",
+            wheelspin_count=14,
+            feedback={"exit_stability": "strong oversteer"},
+        )
 
         result = run_for_session(db, session_run_id=run_id, discipline="race")
 
         assert result["ok"], f"run_for_session failed: {result.get('error')}"
         assert result["suppressed_count"] > 0, (
-            "arbiter must emit at least one SuppressedChange for this scenario "
-            "(C3_mid_arb_rear is SUPPRESSED (contraindicated) in the telemetry plan "
-            "because wheelspin_band=major triggers the __not_low__ contraindication)"
+            "C4_mid_rear_aero must be suppressed (contraindicated by aero_rear_healthy) "
+            "for car='Porsche 911 RSR (991) '17' with aero_rear=600; suppressed_count must be > 0"
         )
-
         suppressed = db.get_suppressed_changes_for_event(event_id)
         assert len(suppressed) > 0, (
             "get_suppressed_changes_for_event must return at least one row after "
             "run_for_session saves a SuppressedChange (step 15 wiring)"
         )
-
+        suppressed_params = [s["parameter"] for s in suppressed]
+        assert "aero_rear" in suppressed_params, (
+            f"C4_mid_rear_aero suppression must target aero_rear; got params: {suppressed_params}"
+        )
+        aero_sc = next(s for s in suppressed if s["parameter"] == "aero_rear")
+        assert "SUPPRESSED" in aero_sc["reason"], (
+            f"suppressed change reason must contain 'SUPPRESSED'; got: {aero_sc['reason']!r}"
+        )
         db.close()
 
-    def test_corroborated_proposal_saved_and_riders_absent_from_proposals(self, tmp_path):
-        """After run_for_session: a corroborated proposal (lsd_decel) is in the proposals
-        table; no rider parameter appears there. Both tables populated in one call."""
+    def test_source_separation_true_corroboration_impossible(self, tmp_path):
+        """Source separation makes true corroboration architecturally impossible.
+
+        True corroboration (same field, same direction, from BOTH the telemetry plan
+        AND the feedback plan independently) would require a field that has both:
+          - a C-rule firing from lap telemetry ALONE, AND
+          - a B-rule firing from driver feedback ALONE
+        in the same direction.  No such field exists in the current rule set.
+
+        Before the source-separation fix, sharing feedback with both diagnoses made
+        B-rules fire in BOTH plans, so the arbiter read agreement and emitted
+        LABEL_TEL_CORROBORATED / PROV_MEASURED_FACT for driver-reported signals —
+        reporting the driver's own words back to him as measured telemetry data.
+
+        After the fix, with feedback=None in the telemetry plan:
+          - feedback-only fields (in feedback plan, not in telemetry plan) become
+            DRIVER_TEL_SILENT / PROV_DRIVER_REPORT proposals — honest labelling.
+          - No PROV_MEASURED_FACT proposal should exist for a feedback-only field.
+          - The riders table is never written.
+
+        Scenario: wheelspin=0 (tel plan fires no wheelspin-driven proposals) +
+        'exit_stability: strong oversteer' (fb plan fires B3 for lsd_accel decrease).
+        With source separation: lsd_accel only in fb_dirs -> DRIVER_TEL_SILENT.
+        Old code: B3 fired in BOTH plans -> MEASURED_FACT on lsd_accel (the bug).
+        """
         from data.session_db import SessionDB
         from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_TEL_SILENT,
+            PROV_DRIVER_REPORT,
+            PROV_MEASURED_FACT,
+        )
 
-        db = SessionDB(str(tmp_path / "ib_full.db"))
-        event_id = _seed_event_row(db, "I-B full")
-        db.save_owner_baseline(event_id, "race", {"arb_rear": 5, "lsd_decel": 30})
-        run_id = _seed_session_with_laps(db, event_id)
+        db = SessionDB(str(tmp_path / "ib_corroboration.db"))
+        event_id = _seed_event_row(db, "I-B corroboration-guard")
+        db.save_owner_baseline(event_id, "race", {"lsd_accel": 30, "aero_rear": 600})
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            wheelspin_count=0,   # band="low" -> tel plan has no lsd_accel proposal
+            feedback={"exit_stability": "strong oversteer"},
+        )
 
         result = run_for_session(db, session_run_id=run_id, discipline="race")
 
         assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        assert result["unresolved_count"] == 0, "unresolved_count must be 0 after fix"
+        riders = db.get_owner_riders_for_event(event_id)
+        assert len(riders) == 0, "riders table must be empty (deprecated) after fix"
+
+        proposals = db.get_owner_proposals_for_event(event_id)
+        # Regression guard: no proposal may carry PROV_MEASURED_FACT for a
+        # feedback-only signal.
+        bad = [p for p in proposals if p.get("provenance") == PROV_MEASURED_FACT]
+        assert len(bad) == 0, (
+            "REGRESSION: PROV_MEASURED_FACT found for feedback-driven field(s). "
+            "Feedback is leaking into the telemetry diagnosis — the source-separation "
+            "fix is broken. "
+            f"Bad proposals: {[(p['parameter'], p['label'], p['provenance']) for p in bad]}"
+        )
+        # Positive: with wheelspin=0 and 'strong oversteer' feedback, B3 fires in the
+        # feedback plan (snap_oversteer_exit=True) and proposes lsd_accel decrease.
+        # Telemetry plan has nothing on lsd_accel -> DRIVER_TEL_SILENT.
+        lsd_props = [p for p in proposals if p.get("parameter") == "lsd_accel"]
+        assert len(lsd_props) >= 1, (
+            "lsd_accel must appear in proposals when feedback='strong oversteer' "
+            "(B3 fires in the feedback plan, snap_oversteer_exit=True)"
+        )
+        assert lsd_props[0].get("label") == LABEL_DRIVER_TEL_SILENT, (
+            f"lsd_accel proposal must be DRIVER_TEL_SILENT when telemetry is silent; "
+            f"got label={lsd_props[0].get('label')!r}"
+        )
+        assert lsd_props[0].get("provenance") == PROV_DRIVER_REPORT, (
+            f"lsd_accel proposal must have provenance=DRIVER_REPORT; "
+            f"got {lsd_props[0].get('provenance')!r}"
+        )
+        db.close()
+
+
+# =============================================================================
+# B11 end-to-end service round-trip tests
+#
+# Two tests that require run_for_session to exercise the full source-separation
+# path from laps + feedback through both rule-engine runs into the DB.
+#
+# B11-e2e: confirm the B11 contradiction produces an unresolved proposal in the DB
+#   with the telemetry plan's proposed_value (NOT the average of both plans).
+#
+# Provenance guard: the most important test in the suite.  With wheelspin=0 and
+#   feedback='strong oversteer', the telemetry plan has nothing to say about
+#   lsd_accel.  Before the fix, B3 fired in both plans -> MEASURED_FACT (wrong).
+#   After the fix, lsd_accel is DRIVER_TEL_SILENT / DRIVER_REPORT.
+# =============================================================================
+
+class TestB11_ServiceRoundTrip:
+    """B11 end-to-end: a B11 contradiction is saved as an unresolved proposal in the DB.
+
+    B11 requires source-separated diagnoses: both plans use DISJOINT inputs so that a
+    field can be proposed in OPPOSITE directions from telemetry vs feedback.  Before the
+    fix, sharing feedback with both diagnoses prevented B11 from ever arising (both plans
+    produced identical directions -> always corroborated or absent).
+    """
+
+    def test_b11_contradiction_creates_unresolved_proposal_in_db(self, tmp_path):
+        """A B11 contradiction must be saved as an unresolved proposal (not a rider).
+
+        Scenario:
+          Car: "Porsche 911 RSR (991)" (GENERIC lsd_accel range 0-60, step omitted)
+          Baseline: {lsd_accel: 30, aero_rear: 600}
+          Telemetry: 6 laps, wheelspin_count=14 (band="major") -> C5 fires
+              handling_severity="moderate" (from wheelspin band, feedback=None in tel plan)
+              room = cap_hi - from = (60 - 6) - 30 = 24
+              severity_scaled delta = 24 x 0.5 = 12 -> proposed = 42.0
+          Feedback: exit_stability="strong oversteer" -> B3 fires (snap_oversteer_exit=True)
+              handling_severity="severe" (rank=2 from _FB_BALANCE_STRONG)
+              room for decrease = from - cap_lo = 30 - (0 + 6) = 24
+              severity_scaled delta = 24 x 1.0 = 24 -> proposed = 6.0
+          B11: lsd_accel increase (tel, 42.0) vs decrease (fb, 6.0) -> UNRESOLVED
+          proposed_value is taken from the TELEMETRY plan = 42.0 (NOT averaged with 6.0)
+        """
+        import pytest
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import PROV_UNRESOLVED
+
+        db = SessionDB(str(tmp_path / "b11_e2e.db"))
+        event_id = _seed_event_row(db, "B11-e2e")
+        db.save_owner_baseline(event_id, "race", {"lsd_accel": 30, "aero_rear": 600})
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            wheelspin_count=14,
+            feedback={"exit_stability": "strong oversteer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        # Service-level invariant: unresolved proposals are in the proposals table,
+        # not in the deprecated riders table.
+        assert result["unresolved_count"] == 0, (
+            "unresolved_count must be 0 — B11 contradictions go to proposals table "
+            "(status=unresolved), not riders table (arbiter always returns unresolved=[])"
+        )
         assert result["proposals_saved"] > 0, (
-            "at least one proposal must be saved (lsd_decel decrease corroborated "
-            "by C1_entry_lsd_decel firing in both plans)"
+            "at least one proposal must be saved for the B11 scenario"
         )
 
         proposals = db.get_owner_proposals_for_event(event_id)
-        proposal_params = [p["parameter"] for p in proposals]
-        assert "lsd_decel" in proposal_params, (
-            "lsd_decel must appear in proposals (C1 fires in both plans, CORROBORATED)"
+        lsd_props = [p for p in proposals if p.get("parameter") == "lsd_accel"]
+        assert len(lsd_props) == 1, (
+            f"exactly one lsd_accel proposal expected (B11); "
+            f"got {len(lsd_props)}: {lsd_props}"
+        )
+        p = lsd_props[0]
+        assert p["status"] == "unresolved", (
+            f"B11 lsd_accel proposal must have status='unresolved'; got {p['status']!r}"
+        )
+        assert p.get("provenance") == PROV_UNRESOLVED, (
+            f"B11 proposal must have provenance='UNRESOLVED'; got {p.get('provenance')!r}"
+        )
+        assert p.get("direction") == "increase", (
+            "B11 proposed_value is taken from the TELEMETRY plan (C5=increase); "
+            f"got direction={p.get('direction')!r}"
+        )
+        assert p.get("proposed_value") == pytest.approx(42.0, abs=0.5), (
+            "B11 proposed_value must be 42.0 (tel: room=24, moderate x 0.5=12, 30+12=42); "
+            f"got {p.get('proposed_value')!r}"
+        )
+        db.close()
+
+    def test_provenance_regression_guard_no_measured_fact_for_feedback_only_signal(
+        self, tmp_path
+    ):
+        """Feedback-only signals must NEVER be labelled as PROV_MEASURED_FACT.
+
+        This is the most important regression guard in the owner-baseline suite.
+
+        Before the B11 source-separation fix, build_setup_diagnosis was called with
+        feedback= in BOTH plans.  B-rules (feedback-driven) fired in BOTH the telemetry
+        plan and the feedback plan identically.  The arbiter read the matching directions
+        as corroboration and emitted:
+            label=LABEL_TEL_CORROBORATED, provenance=PROV_MEASURED_FACT
+        reporting the driver's own words back as measured telemetry — a provenance lie.
+
+        After the fix, with feedback=None in the telemetry plan:
+          - feedback-only fields are NOT present in tel_dirs
+          - they appear only in fb_dirs
+          - the arbiter emits LABEL_DRIVER_TEL_SILENT, provenance=PROV_DRIVER_REPORT
+
+        Scenario:
+          wheelspin_count=0 -> tel plan fires NO wheelspin-driven proposals.
+          feedback={'exit_stability': 'strong oversteer'} -> fb plan fires B3 for lsd_accel.
+          With source separation: lsd_accel only in fb_dirs -> DRIVER_TEL_SILENT.
+          Old code: B3 fired in BOTH plans -> MEASURED_FACT on lsd_accel (the provenance bug).
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_TEL_SILENT,
+            PROV_DRIVER_REPORT,
+            PROV_MEASURED_FACT,
         )
 
-        riders = db.get_owner_riders_for_event(event_id)
-        rider_params = {r["parameter"] for r in riders}
-        for rp in rider_params:
-            assert rp not in proposal_params, (
-                f"Rider parameter '{rp}' must NOT appear in proposals table — "
-                "riders are stored in owner_baseline_riders (B9-RIDER/C1 routing)"
+        db = SessionDB(str(tmp_path / "b11_prov_guard.db"))
+        event_id = _seed_event_row(db, "B11-prov-guard")
+        db.save_owner_baseline(event_id, "race", {"lsd_accel": 30, "aero_rear": 600})
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            wheelspin_count=0,   # band="low" -> tel plan has no lsd_accel proposal
+            feedback={"exit_stability": "strong oversteer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+
+        proposals = db.get_owner_proposals_for_event(event_id)
+        # PRIMARY GUARD: no proposal may carry PROV_MEASURED_FACT for a feedback-only field.
+        bad = [p for p in proposals if p.get("provenance") == PROV_MEASURED_FACT]
+        assert len(bad) == 0, (
+            "REGRESSION: PROV_MEASURED_FACT found for feedback-driven field(s). "
+            "The source-separation fix is broken — feedback is leaking into the "
+            "telemetry diagnosis, causing B-rules to fire in both plans and the arbiter "
+            "to report driver words as measured telemetry. "
+            f"Bad proposals: {[(p['parameter'], p['label'], p['provenance']) for p in bad]}"
+        )
+        # POSITIVE ASSERTION: lsd_accel must be a DRIVER_TEL_SILENT/DRIVER_REPORT proposal.
+        # Feedback plan fires B3 (snap_oversteer_exit=True from 'strong oversteer').
+        # Telemetry plan is silent on lsd_accel (wheelspin=0=low -> C5 does not fire).
+        lsd_props = [p for p in proposals if p.get("parameter") == "lsd_accel"]
+        assert len(lsd_props) >= 1, (
+            "lsd_accel must appear in proposals when feedback='strong oversteer' "
+            "(B3 fires in the feedback plan, snap_oversteer_exit=True from exit_stability)"
+        )
+        assert lsd_props[0].get("label") == LABEL_DRIVER_TEL_SILENT, (
+            "lsd_accel proposal must be DRIVER_TEL_SILENT when telemetry is silent "
+            f"(wheelspin=0); got label={lsd_props[0].get('label')!r}"
+        )
+        assert lsd_props[0].get("provenance") == PROV_DRIVER_REPORT, (
+            "lsd_accel proposal must have provenance=DRIVER_REPORT (not MEASURED_FACT); "
+            f"got {lsd_props[0].get('provenance')!r}"
+        )
+        db.close()
+
+
+# =============================================================================
+# I-C service-level regression guard: band-1 proposals must persist
+#
+# At band 1 (1-4 clean laps) the second pass (feedback-only fields) must run
+# because source-separation means telemetry plans no longer carry feedback-
+# driven intents.  Before the fix (gate >= 2), a 3-lap practice session
+# silently lost all feedback-only proposals.
+# =============================================================================
+
+class TestICBand1_ServiceRegression:
+    """Service-level guard for the I-C band-1 silent-drop regression.
+
+    Runs the real run_for_session against a real SessionDB with exactly 3 clean
+    laps (band 1).  The feedback-only parameter must appear in proposals.
+
+    Failure mode when reverted: gate >= 2 means band 1 has no second pass.
+    tel_dirs is empty for feedback-driven rules (source-separated telemetry plan
+    has no feedback).  Proposals are empty for the feedback-only field.
+    The assert ``len(arb_rear_props) >= 1`` fails.
+    """
+
+    def test_band1_proposals_persist_for_feedback_only_field(self, tmp_path):
+        """3 clean laps + feedback -> feedback-only field in proposals at band 1.
+
+        Scenario: 3 laps, wheelspin=0 (tel plan fires no wheelspin rules),
+        feedback={'mid_corner':'understeer'}.
+        - Feedback plan: C3_mid_arb_rear fires (mid_corner_understeer=True,
+          dominant_problem contains 'understeer', wheelspin=low in fb plan) ->
+          arb_rear increase in fb_dirs.
+        - Telemetry plan: no dominant understeer (feedback=None, no wheelspin) ->
+          arb_rear NOT in tel_dirs.
+        - Second pass (band >= 1): arb_rear from fb_dirs -> DRIVER_TEL_SILENT.
+
+        Reverting the gate to >= 2 makes the second pass skip at band 1 ->
+        arb_rear absent from proposals -> assertion fails.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import LABEL_DRIVER_TEL_SILENT
+
+        db = SessionDB(str(tmp_path / "ic_band1.db"))
+        event_id = _seed_event_row(db, "I-C band-1 regression")
+        db.save_owner_baseline(event_id, "race", {
+            "arb_rear": 5, "lsd_decel": 30, "aero_front": 300,
+        })
+        # 3 laps -> band 1 (1-4 laps); wheelspin=0 keeps tel plan silent on arb_rear.
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=3,
+            wheelspin_count=0,
+            feedback={"mid_corner": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+        arb_props = [p for p in proposals if p.get("parameter") == "arb_rear"]
+        assert len(arb_props) >= 1, (
+            "arb_rear must appear in proposals at band 1 (3 laps).  "
+            "If this fails, the second-pass gate was reverted to >= 2 and "
+            "feedback-only proposals silently disappear at band 1."
+        )
+        # Label must be DRIVER_TEL_SILENT (band 1 does not apply corroboration).
+        assert arb_props[0].get("label") == LABEL_DRIVER_TEL_SILENT, (
+            f"Band-1 feedback-only proposal must be DRIVER_TEL_SILENT; "
+            f"got {arb_props[0].get('label')!r}"
+        )
+        # Provenance must be DRIVER_REPORT.
+        assert arb_props[0].get("provenance") == "DRIVER_REPORT", (
+            f"Band-1 feedback-only proposal must have provenance=DRIVER_REPORT; "
+            f"got {arb_props[0].get('provenance')!r}"
+        )
+        db.close()
+
+
+# =============================================================================
+# Sixth-label service round-trip tests
+#
+# Three scenarios that exercise the full corroboration gate from
+# run_for_session through to the proposals table.
+# =============================================================================
+
+class TestSymptomCorroboration_ServiceRoundTrip:
+    """Service-level tests for the sixth label (LABEL_DRIVER_SYMPTOM_CORROBORATED).
+
+    The service computes the corroboration gate independently:
+      _true_feel_flags = active feel flags from the feedback diagnosis
+      _raw_corroborated = flags confirmed by the telemetry diagnosis
+      Gate open when: _true_feel_flags non-empty AND _true_feel_flags <= _raw_corroborated
+
+    When the gate opens the arbiter upgrades second-pass proposals from
+    DRIVER_TEL_SILENT to DRIVER_SYMPTOM_CORROBORATED with PROV_DRIVER_REPORT.
+    """
+
+    def test_sixth_label_fires_entry_understeer_with_aero_near_min(self, tmp_path):
+        """Gate OPEN: entry_understeer corroborated by aero_front_near_min -> sixth label.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic aero range 0-1000).
+          Baseline: {aero_front: 0.0, lsd_decel: 30, arb_rear: 5}.
+          aero_front=0.0, range (0,1000): threshold=100 -> aero_front_near_min=True.
+          6 clean laps, wheelspin=0 (tel plan fires no wheelspin-driven rules).
+          feedback={'corner_entry':'understeer'} -> entry_understeer=True.
+
+          Corroboration: entry_understeer + aero_front_near_min -> corroborated.
+          Service gate: _true_feel_flags={'entry_understeer'},
+                        _raw_corroborated={'entry_understeer'} -> gate opens.
+          Feedback plan fires:
+            C1_entry_lsd_decel (entry_understeer=True) -> lsd_decel decrease in fb_dirs.
+            C3_mid_arb_rear (dominant contains 'understeer') -> arb_rear increase in fb_dirs.
+          Tel plan fires nothing for lsd_decel or arb_rear (no understeer signal, no wheelspin).
+          Second pass: lsd_decel and arb_rear -> DRIVER_SYMPTOM_CORROBORATED.
+
+        Failure mode when reverted:
+          If the gate condition breaks (e.g. reverts to 'exactly one flag'), the gate
+          closes -> arbiter receives empty corroborated_flags -> DRIVER_TEL_SILENT.
+          The label assertion below fails.
+          If the label upgrade is removed from the arbiter, same failure.
+          If provenance is changed to MEASURED_FACT, the provenance assertion fails.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_SYMPTOM_CORROBORATED,
+            PROV_DRIVER_REPORT,
+            PROV_MEASURED_FACT,
+        )
+
+        db = SessionDB(str(tmp_path / "sym_sixth_label.db"))
+        event_id = _seed_event_row(db, "SYM-sixth-label")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 0.0, "lsd_decel": 30, "arb_rear": 5,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=0,
+            feedback={"corner_entry": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+
+        # Feedback-only proposals must carry the sixth label.
+        sixth_label_props = [
+            p for p in proposals if p.get("label") == LABEL_DRIVER_SYMPTOM_CORROBORATED
+        ]
+        assert len(sixth_label_props) >= 1, (
+            "At least one DRIVER_SYMPTOM_CORROBORATED proposal must exist when "
+            "entry_understeer is corroborated by aero_front_near_min (aero_front=0.0). "
+            f"All labels: {[p.get('label') for p in proposals]}"
+        )
+        # The upgraded proposals must include lsd_decel and/or arb_rear.
+        sixth_params = {p.get("parameter") for p in sixth_label_props}
+        assert sixth_params & {"lsd_decel", "arb_rear"}, (
+            f"lsd_decel or arb_rear must carry the sixth label; got {sixth_params!r}"
+        )
+        # Provenance must be DRIVER_REPORT — NOT MEASURED_FACT.
+        for p in sixth_label_props:
+            assert p.get("provenance") == PROV_DRIVER_REPORT, (
+                f"DRIVER_SYMPTOM_CORROBORATED proposal for {p.get('parameter')!r} "
+                f"must have provenance=DRIVER_REPORT; got {p.get('provenance')!r}"
             )
+            assert p.get("provenance") != PROV_MEASURED_FACT, (
+                f"MEASURED_FACT on a DRIVER_SYMPTOM_CORROBORATED proposal for "
+                f"{p.get('parameter')!r} is the original defect."
+            )
+        db.close()
 
-        # Suppressed changes are distinct from proposals
-        suppressed = db.get_suppressed_changes_for_event(event_id)
-        suppressed_params = [s["parameter"] for s in suppressed]
-        assert len(suppressed_params) > 0, (
-            "suppressed_changes must be populated alongside proposals (B16/C3 wiring)"
+    def test_symptom_axis_does_not_suppress_b11_contradiction(self, tmp_path):
+        """Gate OPEN with two corroborated flags, but B11 lever conflict is NOT suppressed.
+
+        The symptom corroboration axis only affects the SECOND pass (feedback-only
+        fields not addressed by telemetry).  A field that has opposing proposals in
+        BOTH plans (B11 contradiction) is handled by the FIRST pass and keeps
+        status='unresolved' regardless of the gate state.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic).
+          Baseline: {aero_front: 300, lsd_accel: 30, aero_rear: 600}.
+          6 laps, wheelspin=14 (major band).
+          feedback={'exit_stability':'strong oversteer'}.
+
+          Feel flags: rear_loose_on_exit=True, snap_oversteer_exit=True.
+          Telemetry corroboration: both flags + wheelspin=major -> both corroborated.
+          Service gate: _true_feel_flags=both, _raw_corroborated=both -> gate OPENS.
+
+          Tel plan: C5 fires (wheelspin major, is_traction) -> lsd_accel increase.
+          Fb plan:  B3 fires (snap_oversteer_exit=True) -> lsd_accel decrease.
+          B11: opposite directions -> status='unresolved' in FIRST PASS.
+          Second pass skips lsd_accel (it is in tel_fields) -> no DRIVER_SYMPTOM_CORROBORATED
+          for lsd_accel regardless of gate state.
+
+        Failure mode: if the corroboration gate accidentally marks B11 contradictions
+        as DRIVER_SYMPTOM_CORROBORATED or DRIVER_REPORT instead of UNRESOLVED, the
+        status assertion below fails.
+        """
+        import pytest
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import PROV_UNRESOLVED
+
+        db = SessionDB(str(tmp_path / "sym_b11_no_suppress.db"))
+        event_id = _seed_event_row(db, "SYM-B11-no-suppress")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 300, "lsd_accel": 30, "aero_rear": 600,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=14,
+            feedback={"exit_stability": "strong oversteer"},
         )
 
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+        lsd_props = [p for p in proposals if p.get("parameter") == "lsd_accel"]
+        assert len(lsd_props) == 1, (
+            f"Exactly one lsd_accel proposal expected (B11); got {len(lsd_props)}"
+        )
+        p = lsd_props[0]
+        assert p.get("status") == "unresolved", (
+            "The symptom corroboration gate must NEVER suppress a B11 contradiction. "
+            f"lsd_accel must remain status='unresolved'; got {p.get('status')!r}. "
+            "The corroboration axis only upgrades second-pass (feedback-only) fields."
+        )
+        assert p.get("provenance") == PROV_UNRESOLVED, (
+            f"B11 lsd_accel must have provenance=UNRESOLVED; got {p.get('provenance')!r}"
+        )
+        db.close()
+
+    def test_symptom_gate_closed_mid_corner_understeer_falls_back(self, tmp_path):
+        """Gate CLOSED: mid_corner_understeer is not in the corroboration mapping.
+
+        When none of the active feel flags are corroborated, the gate closes and
+        the second pass falls back to LABEL_DRIVER_TEL_SILENT.
+
+        Scenario:
+          Car "Porsche 911 RSR (991)" (generic).
+          Baseline: {aero_front: 300, arb_rear: 5, lsd_decel: 30}.
+          6 clean laps, wheelspin=0.
+          feedback={'mid_corner':'understeer'} -> mid_corner_understeer=True.
+
+          mid_corner_understeer is NOT in corroborated_feel_flags() mapping.
+          _raw_corroborated=frozenset() -> _true_feel_flags <= _raw_corroborated is
+          False -> gate closes -> arbiter receives empty corroborated_flags.
+          Second pass: arb_rear -> DRIVER_TEL_SILENT (no upgrade).
+
+        Failure mode: if the gate condition is weakened to allow mid_corner_understeer
+        or if the fallback label is changed, the sixth-label assertion triggers.
+        """
+        from data.session_db import SessionDB
+        from services.owner_baseline_service import run_for_session
+        from strategy.owner_baseline_arbiter import (
+            LABEL_DRIVER_TEL_SILENT,
+            LABEL_DRIVER_SYMPTOM_CORROBORATED,
+            PROV_DRIVER_REPORT,
+        )
+
+        db = SessionDB(str(tmp_path / "sym_gate_closed.db"))
+        event_id = _seed_event_row(db, "SYM-gate-closed")
+        db.save_owner_baseline(event_id, "race", {
+            "aero_front": 300, "arb_rear": 5, "lsd_decel": 30,
+        })
+        run_id = _seed_session_with_laps(
+            db, event_id,
+            car_name="Porsche 911 RSR (991)",
+            n_laps=6,
+            wheelspin_count=0,
+            feedback={"mid_corner": "understeer"},
+        )
+
+        result = run_for_session(db, session_run_id=run_id, discipline="race")
+
+        assert result["ok"], f"run_for_session failed: {result.get('error')}"
+        proposals = db.get_owner_proposals_for_event(event_id)
+
+        # No DRIVER_SYMPTOM_CORROBORATED proposals — gate is closed.
+        sixth_label_props = [
+            p for p in proposals if p.get("label") == LABEL_DRIVER_SYMPTOM_CORROBORATED
+        ]
+        assert len(sixth_label_props) == 0, (
+            "mid_corner_understeer is not in the corroboration mapping -> gate must "
+            "be closed -> no DRIVER_SYMPTOM_CORROBORATED proposals. "
+            f"Got: {[(p.get('parameter'), p.get('label')) for p in sixth_label_props]}"
+        )
+        # Feedback-only proposals must fall back to DRIVER_TEL_SILENT.
+        driver_report_props = [
+            p for p in proposals
+            if p.get("provenance") == PROV_DRIVER_REPORT
+        ]
+        assert len(driver_report_props) >= 1, (
+            "With mid_corner understeer feedback, at least one DRIVER_REPORT proposal "
+            "must exist (arb_rear from C3_mid_arb_rear, gate-closed -> DRIVER_TEL_SILENT)."
+        )
+        for p in driver_report_props:
+            assert p.get("label") == LABEL_DRIVER_TEL_SILENT, (
+                f"Gate-closed DRIVER_REPORT proposals must carry DRIVER_TEL_SILENT; "
+                f"parameter={p.get('parameter')!r} got label={p.get('label')!r}"
+            )
         db.close()

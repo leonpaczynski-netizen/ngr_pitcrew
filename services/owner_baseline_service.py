@@ -4,8 +4,12 @@ This module is the ONLY server-side entry point for the owner-baseline proposal
 pipeline (Part B). It:
 
   1. Fetches the session run, session meta, laps, feedback and owner baseline from DB.
-  2. Builds TWO setup diagnoses — one with all clean laps (telemetry) and one with
-     ``laps=[]`` (feedback only) — using the existing ``build_setup_diagnosis`` helper.
+  2. Builds TWO setup diagnoses, SEPARATED BY SOURCE — one from the clean laps with
+     no feedback (telemetry evidence only), one from the feedback with ``laps=[]``
+     (driver report only) — using the existing ``build_setup_diagnosis`` helper.
+     The separation is load-bearing: if feedback reaches both diagnoses, every
+     feedback-driven rule fires in both plans, so the arbiter reads agreement where
+     telemetry contributed nothing, and a contradiction (B11) can never arise.
   3. Calls ``run_rule_engine`` twice, passing the owner baseline as the ``setup=``
      argument both times (so the engine evaluates modifications to the owner's own values).
   4. Passes both plans to the pure arbiter (``build_owner_proposals``).
@@ -187,14 +191,22 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
     ranges = resolve_ranges(car_name)
     profile = build_driver_profile()
 
-    # --- 8. Build the telemetry diagnosis (full laps + feedback) ---
+    # --- 8. Build the telemetry diagnosis (laps ONLY — no feedback) ---
+    # feedback= is deliberately omitted. Passing it here used to contaminate this
+    # plan: a feedback-driven rule (e.g. B2b from mid_corner_understeer) fired in
+    # BOTH plans identically, so the arbiter saw agreement and labelled a purely
+    # driver-reported change LABEL_TEL_CORROBORATED / PROV_MEASURED_FACT — reporting
+    # the driver's own words back to him as measured data. It also made B11
+    # structurally unreachable: two plans built from overlapping inputs cannot
+    # disagree. The two diagnoses must be separated BY SOURCE for the weighting to
+    # mean anything.
     telemetry_diagnosis = build_setup_diagnosis(
         clean_ns,
         setup_for_engine,
         car_name,
         event_ctx,
-        feeling=None,  # structured feedback carries the signal
-        feedback=feedback_dict,
+        feeling=None,
+        feedback=None,  # source separation — telemetry evidence only
     )
 
     # --- 9. Build the feedback-only diagnosis (laps=[]) ---
@@ -240,6 +252,57 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
     except Exception:
         pass
 
+    # --- 12a. Compute symptom-corroboration set for the second pass ---
+    # ``corroborated_feel_flags`` returns which FEEDBACK feel-flags are independently
+    # confirmed by a TELEMETRY signal (e.g. rear_loose_on_exit + wheelspin major).
+    # The SERVICE applies the unambiguous-linkage gate: pass a non-empty frozenset
+    # to the arbiter ONLY when EVERY feel flag the driver raised is corroborated.
+    #
+    # Why "all", not "exactly one": we cannot tell which flag drove a given
+    # feedback proposal, so the question that matters is not "is the link
+    # unambiguous?" but "does the answer depend on the link?".  If every active
+    # flag is corroborated, it does not — whichever one drove the proposal, its
+    # symptom is confirmed by telemetry, so the upgrade is safe without guessing.
+    # An earlier "exactly one flag" gate was strictly worse: one dropdown answer
+    # can raise two flags (exit_stability="strong oversteer" sets BOTH
+    # rear_loose_on_exit AND snap_oversteer_exit), so the common corroborated
+    # case was refused while adding no safety.
+    #
+    # If ANY active flag is uncorroborated the set is empty and the arbiter falls
+    # back to LABEL_DRIVER_TEL_SILENT — this fails CLOSED, understating the
+    # evidence rather than overstating it.  Overstating is the defect class that
+    # produced the MEASURED_FACT bug; never trade that away for a stronger label.
+    _safe_corroborated: "frozenset[str]" = frozenset()
+    try:
+        from strategy.setup_diagnosis import corroborated_feel_flags as _corr_flags
+        _fb_feel_flags: dict = feedback_diagnosis.get("driver_feel_flags") or {}
+        _tel_wheelspin_band: str = str(telemetry_diagnosis.get("wheelspin_band") or "")
+        _tel_aero_front_near_min: bool = bool(telemetry_diagnosis.get("aero_front_near_min"))
+        _tel_aero_rear_near_min: bool = bool(telemetry_diagnosis.get("aero_rear_near_min"))
+        _tel_avg_lockups: float = float(telemetry_diagnosis.get("avg_lockups") or 0.0)
+        _raw_corroborated = _corr_flags(
+            _fb_feel_flags,
+            _tel_wheelspin_band,
+            _tel_aero_front_near_min,
+            _tel_aero_rear_near_min,
+            _tel_avg_lockups,
+        )
+        # Safe upgrade: at least one flag raised, and EVERY raised flag corroborated.
+        _true_feel_flags = frozenset(k for k, v in _fb_feel_flags.items() if v)
+        if _true_feel_flags and _true_feel_flags <= _raw_corroborated:
+            _safe_corroborated = _raw_corroborated
+    except Exception as _corr_exc:
+        # Fails CLOSED: the arbiter falls back to LABEL_DRIVER_TEL_SILENT, which
+        # understates the evidence rather than overstating it. But it must not fail
+        # SILENTLY. A bare ``except: pass`` here would hide a broken corroboration
+        # gate behind a plausible-looking downgrade on every session, and no test
+        # would catch it — that is exactly how the C5 NameError survived two review
+        # cycles. Surface it the way driving_advisor._mk_ctx does.
+        result.setdefault("validation_warnings", []).append(
+            "symptom-corroboration gate failed; driver-led labels downgraded to "
+            f"telemetry-silent: {type(_corr_exc).__name__}: {_corr_exc}"
+        )
+
     # --- 12. Build proposals ---
     proposals, suppressed, unresolved = build_owner_proposals(
         clean_laps=clean_laps,
@@ -252,6 +315,7 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         session_run_id=session_run_id,
         event_id=event_id,
         suppression_keys=suppression_keys,
+        corroborated_flags=_safe_corroborated,
     )
 
     # --- 13. Persist proposals to DB ---
@@ -261,10 +325,14 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         if pid:
             saved += 1
 
-    # --- 14. Persist B9 unresolved riders (C1/Correction-2) ---
-    # UnresolvedRider objects are structurally distinct from B11 contradiction
-    # proposals: they live in the owner_baseline_riders table, NOT in proposals.
-    for rider in unresolved:
+    # --- 14. Riders — DEPRECATED (B11 source-separation fix 2026-08-10) ---
+    # After the fix, the arbiter's band-2 second pass emits OwnerProposal objects
+    # (label=LABEL_DRIVER_TEL_SILENT) instead of UnresolvedRider objects.
+    # The `unresolved` list is always empty; the riders table is no longer written.
+    # The loop below is intentionally left as a no-op rather than removed so that
+    # callers which unpack (proposals, suppressed, unresolved) still compile.
+    # (DB method save_owner_rider is also marked deprecated in session_db.py.)
+    for rider in unresolved:  # always empty after the fix
         db.save_owner_rider(event_id, rider.as_dict())
 
     # --- 15. Persist B16 suppressed changes (C3) ---

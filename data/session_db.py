@@ -11203,15 +11203,21 @@ class SessionDB:
 
     # ------------------------------------------------------------------
     # Owner baseline riders (v43 — B9/Correction-1)
+    # DEPRECATED after the B11 source-separation fix (2026-08-10).
+    # Superseded by: OwnerProposal objects with label=LABEL_DRIVER_TEL_SILENT
+    # and provenance=PROV_DRIVER_REPORT (strategy/owner_baseline_arbiter.py).
+    # The owner_baseline_riders table remains in the schema (no migration) and
+    # get_owner_riders_for_event() remains callable.  Nothing writes to the
+    # table any longer — the arbiter's second pass now emits proposals instead.
     # ------------------------------------------------------------------
 
     def save_owner_rider(self, event_id: int, rider: dict) -> str:
         """Persist one UnresolvedRider dict to ``owner_baseline_riders``. Returns
         the rider_id, or '' on failure. Never raises.
 
-        B9 riders (feedback at 5+ laps on fields telemetry is SILENT on) are
-        structurally different from B11 contradictions (proposals with
-        status="unresolved").  They live in their own table (C1/Correction-2).
+        DEPRECATED: no caller writes riders after the B11 source-separation fix.
+        See class-level deprecation comment above.  Method kept so any residual
+        call sites compile without changes.
         """
         try:
             rid = str(rider.get("rider_id") or new_id())
@@ -11247,6 +11253,10 @@ class SessionDB:
 
     def get_owner_riders_for_event(self, event_id: int) -> list:
         """Return all B9 unresolved riders for an event, ordered by discipline then parameter.
+
+        DEPRECATED: the riders table is no longer written to after the B11
+        source-separation fix.  This method remains callable so that frontend
+        agents can stop calling it without a simultaneous backend change.
         Never raises.
         """
         try:
