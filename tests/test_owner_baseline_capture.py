@@ -928,12 +928,19 @@ class TestDriverSilentProposalSection:
 
         w._refresh_proposals(_DB(), event_id=1)
         labels = w.findChildren(QLabel)
-        badge_texts = [lbl.text() for lbl in labels]
-        assert not any("MEASURED FACT" in t for t in badge_texts), (
+        # Exact-match on the whole label text, NOT a substring scan. A substring
+        # scan also matches explanatory note copy that legitimately mentions
+        # "MEASURED FACT" while drawing the distinction — which previously forced
+        # production copy to be reworded to satisfy the assertion. A badge label's
+        # text IS the token, so equality is both precise and prose-proof.
+        badge_texts = {lbl.text().strip() for lbl in labels}
+        assert "MEASURED FACT" not in badge_texts, (
             "driver-silent row must NOT show a MEASURED FACT badge "
-            "(that is the exact defect the source-separation fix corrects)")
-        assert not any("TEL CORROBORATED" in t for t in badge_texts), (
-            "driver-silent row must NOT show a TEL CORROBORATED badge")
+            "(that is the exact defect the source-separation fix corrects); "
+            f"badges present: {sorted(badge_texts)}")
+        assert "TEL CORROBORATED" not in badge_texts, (
+            "driver-silent row must NOT show a TEL CORROBORATED badge; "
+            f"badges present: {sorted(badge_texts)}")
 
     def test_driver_silent_shows_driver_report_provenance(self, qapp):
         """Driver-silent rows must show DRIVER REPORT provenance badge (not MEASURED FACT)."""

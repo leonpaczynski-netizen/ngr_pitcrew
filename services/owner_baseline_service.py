@@ -291,8 +291,17 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
         _true_feel_flags = frozenset(k for k, v in _fb_feel_flags.items() if v)
         if _true_feel_flags and _true_feel_flags <= _raw_corroborated:
             _safe_corroborated = _raw_corroborated
-    except Exception:
-        pass  # degraded silently — arbiter defaults to LABEL_DRIVER_TEL_SILENT
+    except Exception as _corr_exc:
+        # Fails CLOSED: the arbiter falls back to LABEL_DRIVER_TEL_SILENT, which
+        # understates the evidence rather than overstating it. But it must not fail
+        # SILENTLY. A bare ``except: pass`` here would hide a broken corroboration
+        # gate behind a plausible-looking downgrade on every session, and no test
+        # would catch it — that is exactly how the C5 NameError survived two review
+        # cycles. Surface it the way driving_advisor._mk_ctx does.
+        result.setdefault("validation_warnings", []).append(
+            "symptom-corroboration gate failed; driver-led labels downgraded to "
+            f"telemetry-silent: {type(_corr_exc).__name__}: {_corr_exc}"
+        )
 
     # --- 12. Build proposals ---
     proposals, suppressed, unresolved = build_owner_proposals(
