@@ -392,3 +392,55 @@ def test_a_nonsense_shift_threshold_leaves_the_beep_off(qt_app, store):  # noqa:
     controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=0))
     assert controller.bridge.shift_beep.enabled is False
     controller.shutdown()
+
+
+# ----------------------------------------------------------------- outcome
+
+def a_race_lap(lap_num: int, **overrides):
+    from pitcrew.analysis.session import LapInput
+    fields = dict(lap_num=lap_num, lap_time_ms=94_000, fuel_start=90.0,
+                  fuel_end=86.6)
+    fields.update(overrides)
+    return LapInput(**fields)
+
+
+def test_the_outcome_states_what_happened():
+    from pitcrew.race.outcome import race_outcome
+    laps = [a_race_lap(n) for n in range(1, 21)]
+    laps[10] = a_race_lap(11, is_pit_lap=True)
+    text = race_outcome(laps, planned_stops=1, final_position=2,
+                        binding_constraint="fuel")
+    assert "20 laps run" in text
+    assert "lap 11" in text
+    assert "P2" in text
+    assert "fuel-limited" in text
+
+
+def test_a_plan_that_was_not_followed_is_said():
+    from pitcrew.race.outcome import race_outcome
+    laps = [a_race_lap(n) for n in range(1, 21)]
+    text = race_outcome(laps, planned_stops=1)
+    assert "no stops" in text.lower()
+    assert "plan called for 1 stop" in text
+
+
+def test_declined_calls_appear_in_the_outcome():
+    from pitcrew.race.outcome import race_outcome
+    text = race_outcome([a_race_lap(1)], declined_calls=2)
+    assert "2 calls offered and not taken" in text
+
+
+def test_no_race_gives_no_outcome():
+    from pitcrew.race.outcome import race_outcome
+    assert race_outcome([]) == ""
+
+
+def test_the_outcome_states_fuel_left_but_not_tyre_margin():
+    """Tyre margin is the driver's judgement; inventing it would fabricate the
+    very thing the tune builder is trying to learn."""
+    from pitcrew.race.outcome import fuel_left_note
+    laps = [a_race_lap(n, fuel_start=90.0 - n * 3.4,
+                       fuel_end=86.6 - n * 3.4) for n in range(1, 6)]
+    note = fuel_left_note(laps)
+    assert "litres" in note
+    assert "tyre" not in note.lower()

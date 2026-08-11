@@ -46,3 +46,7 @@ data/pitcrew.db
 data/pitcrew.db-wal
 data/pitcrew.db-shm
 exports/
+
+pitcrew/engineer/piper_models/
+data/gt7_sessions.db
+*.pyc

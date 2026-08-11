@@ -1,0 +1,27 @@
+{
+  "schema": "accepted_track_model_v1",
+  "builder_version": "2.0",
+  "track_location_id": "autodromo_nazionale_monza",
+  "layout_id": "autodromo_nazionale_monza__full_course",
+  "match_status": "PARTIAL_MATCH",
+  "accepted": true,
+  "accepted_at": "2026-08-05T10:57:45.961635+00:00",
+  "seed_corners_expected": 0,
+  "model_corners_found": 12,
+  "extra_peaks_suppressed": 0,
+  "placeholder_count": 0,
+  "lap_length_m_model": 5751.948204195354,
+  "lap_length_m_seed": 0.0,
+  "lap_length_delta_pct": 0.0,
+  "station_count": 5752,
+  "confidence": 0.701,
+  "blockers": [],
+  "warnings": [
+    "Seed has no lap length \u2014 lap length alignment skipped",
+    "Seed corner location data unavailable \u2014 corner count matched, but corner-position match cannot be fully verified.",
+    "Matched on corner count and lap length only \u2014 corner positions cannot be verified without a seed corner map, so this is a partial match. The model is usable; author seed corner windows for this layout for full acceptance."
+  ],
+  "seed_corner_positions_available": false,
+  "corner_position_match": "NOT_AVAILABLE",
+  "corners_matched": 0
+}

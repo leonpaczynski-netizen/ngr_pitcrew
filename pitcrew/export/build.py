@@ -26,6 +26,7 @@ from pitcrew.analysis.session import (
     session_export,
 )
 from pitcrew.analysis.wear import wear_export
+from pitcrew.race.outcome import fuel_left_note, race_outcome
 from pitcrew.export.payload import Derived, Meta, build_payload
 from pitcrew.store.tyres import get_by_code
 
@@ -264,7 +265,29 @@ def _strategy_section(store, event_id: int) -> dict | None:
     calls = _calls_made(store, event_id)
     if calls:
         section["callsMade"] = calls
+
+    outcome = _outcome(store, event_id, section)
+    if outcome:
+        section["outcome"] = outcome
     return section
+
+
+def _outcome(store, event_id: int, section: dict) -> str:
+    """What happened, from the race laps. Omitted when no race was run."""
+    race_laps = _event_lap_inputs(store, event_id, "race")
+    if not race_laps:
+        return ""
+    plan = section.get("plan") or {}
+    declined = sum(1 for call in section.get("callsMade") or []
+                   if call.get("accepted") is False)
+    text = race_outcome(
+        race_laps,
+        planned_stops=plan.get("stops"),
+        planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
+        binding_constraint=section.get("bindingConstraint"),
+        declined_calls=declined)
+    fuel = fuel_left_note(race_laps)
+    return f"{text} {fuel}".strip() if fuel else text
 
 
 def _calls_made(store, event_id: int) -> list[dict]:

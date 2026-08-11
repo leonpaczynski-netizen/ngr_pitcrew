@@ -345,7 +345,12 @@
       "Bash(python -m pytest --co -q tests/test_group18e_setup_history.py)",
       "Bash(xargs ls -la)",
       "Bash(break)",
-      "Bash(python -m pytest tests/test_ui_structure_smoke.py tests/test_config_safety_smoke.py -q -p no:cacheprovider)"
+      "Bash(python -m pytest tests/test_ui_structure_smoke.py tests/test_config_safety_smoke.py -q -p no:cacheprovider)",
+      "Bash(python -c \"from strategy.setup_knowledge_base import _DELTA_RESOLVERS, get_all_rules; print\\('resolvers:', 'increase_lsd_initial' in _DELTA_RESOLVERS, 'decrease_lsd_initial' in _DELTA_RESOLVERS\\); print\\('rules load:', len\\(get_all_rules\\(\\)\\)\\)\")",
+      "Bash(python -m pytest tests/ -k \"knowledge_base or rule_engine or delta or resolver or lsd\" -q)",
+      "Bash(python -m pytest tests/ -k \"coherence or phase3 or finalise or combined_setup or recommendation or advisor\" -q)",
+      "Bash(python -m pytest tests/ -k \"setup or diagnos or rule or advisor or gear or bottom or lsd or aero or camber or baseline or candidate or history or arbitration or qualifying or race_time or test_plan or feedback or snapshot\" -q)",
+      "Bash(python -m pytest tests/ -k \"phase15 or combined_setup or race_engineer_surface or setup_builder or render\" -q)"
     ]
   }
 }
