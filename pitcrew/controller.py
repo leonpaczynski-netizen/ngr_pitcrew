@@ -129,12 +129,19 @@ class PitCrewController(QObject):
     # --------------------------------------------------------------- catalog
 
     def refresh_catalogs(self) -> None:
-        """Shipped names plus whatever the driver has added."""
-        tracks = sorted(set(catalogs.track_names())
+        """Shipped names, plus anything added straight to the store.
+
+        There is no UI for adding: a free-text field is where the typos came
+        from. A missing track is fixed in the catalogue, not at the keyboard
+        mid-session.
+        """
+        tracks = sorted(set(catalogs.track_bases())
                         | set(self.store.custom_catalog("track")))
-        cars = sorted(set(catalogs.car_names())
-                      | set(self.store.custom_catalog("car")))
-        self.event_screen.set_catalogs(tracks, cars)
+        groups = list(catalogs.cars_by_category().items())
+        extra = self.store.custom_catalog("car")
+        if extra:
+            groups.append(("Added", tuple(sorted(extra))))
+        self.event_screen.set_catalogs(tracks, groups)
 
     def _on_catalog_extended(self, kind: str, name: str) -> None:
         self.store.add_to_catalog(kind, name)

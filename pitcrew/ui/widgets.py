@@ -434,10 +434,10 @@ class Picker(QWidget):
     after which the name is in the dropdown forever.
     """
 
-    added = pyqtSignal(str)
+    changed = pyqtSignal(str)
 
-    def __init__(self, items, *, placeholder: str = "", allow_add: bool = True,
-                 parent: QWidget | None = None) -> None:
+    def __init__(self, items=None, *, placeholder: str = "",
+                 groups=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._placeholder = placeholder
 
@@ -450,38 +450,62 @@ class Picker(QWidget):
         self.combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.combo.setMinimumContentsLength(12)
+        # The popup is sized independently of the collapsed control, otherwise
+        # a long name is elided to "24 Heures du...cing Circuit" and two
+        # circuits become indistinguishable in the one place it matters.
+        self.combo.view().setTextElideMode(Qt.TextElideMode.ElideNone)
         block_wheel(self.combo)
-        self.combo.currentIndexChanged.connect(self._sync_ink)
-        self.set_items(items)
+        self.combo.currentIndexChanged.connect(self._on_index_changed)
+        if groups is not None:
+            self.set_groups(groups)
+        else:
+            self.set_items(items or [])
         row.addWidget(self.combo, 1)
-
-        self._add_button = None
-        self._entry = None
-        if allow_add:
-            self._add_button = MarkButton("Add", compact=True)
-            self._add_button.setFixedWidth(56)
-            self._add_button.setToolTip("Add one the list is missing")
-            self._add_button.clicked.connect(self._begin_add)
-            row.addWidget(self._add_button)
-
-            self._entry = QLineEdit()
-            self._entry.setPlaceholderText("Name it exactly as GT7 spells it")
-            self._entry.setMinimumHeight(34)
-            self._entry.hide()
-            self._entry.returnPressed.connect(self._commit_add)
-            row.addWidget(self._entry, 1)
 
     # ------------------------------------------------------------------ value
 
     def set_items(self, items) -> None:  # noqa: N802 - Qt naming
+        self.set_groups([(None, list(items))])
+
+    def set_groups(self, groups) -> None:  # noqa: N802 - Qt naming
+        """Populate from [(heading or None, [names]), ...].
+
+        Headings are inserted as unselectable rows so a long list can be
+        skimmed by class instead of scrolled by alphabet.
+        """
         current = self.currentText()
+        self.combo.blockSignals(True)
         self.combo.clear()
         self.combo.addItem(self._placeholder or "—", None)
-        for item in items:
-            self.combo.addItem(item, item)
+
+        widest = self._placeholder or ""
+        for heading, names in groups:
+            if heading:
+                self.combo.addItem(f"— {heading} —", None)
+                self._disable_last_item()
+            for name in names:
+                self.combo.addItem(name, name)
+                if len(name) > len(widest):
+                    widest = name
+        self.combo.blockSignals(False)
+
+        metrics = self.combo.view().fontMetrics()
+        self.combo.view().setMinimumWidth(
+            metrics.horizontalAdvance(widest) + 44)
+
         if current:
             self.setCurrentText(current)
         self._sync_ink()
+
+    def _disable_last_item(self) -> None:
+        model = self.combo.model()
+        item = model.item(self.combo.count() - 1)
+        if item is not None:
+            item.setEnabled(False)
+
+    def _on_index_changed(self) -> None:
+        self._sync_ink()
+        self.changed.emit(self.currentText())
 
     def _sync_ink(self) -> None:
         """Nothing chosen reads struck, not crayon.
@@ -511,30 +535,12 @@ class Picker(QWidget):
         self.combo.setCurrentIndex(index)
 
     def items(self) -> list[str]:
-        return [self.combo.itemData(i) for i in range(1, self.combo.count())]
+        """Selectable names, headings excluded."""
+        return [self.combo.itemData(i) for i in range(1, self.combo.count())
+                if self.combo.itemData(i) is not None]
 
-    # -------------------------------------------------------------- adding
-
-    def _begin_add(self) -> None:
-        # Inline, never a modal: a dialog waiting on a human is a hang
-        # anywhere there is no human, and this app is driven by tests too.
-        self.combo.hide()
-        self._add_button.hide()
-        self._entry.show()
-        self._entry.setFocus()
-
-    def _commit_add(self) -> None:
-        name = self._entry.text().strip()
-        self._entry.clear()
-        self._entry.hide()
-        self.combo.show()
-        self._add_button.show()
-        if not name:
-            return
-        if self.combo.findData(name) < 0:
-            self.combo.addItem(name, name)
-        self.setCurrentText(name)
-        self.added.emit(name)
+    def setEnabledState(self, enabled: bool) -> None:  # noqa: N802 - Qt naming
+        self.combo.setEnabled(enabled)
 
 
 class StrikeRow(QFrame):

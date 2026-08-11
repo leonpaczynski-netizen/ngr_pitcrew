@@ -54,6 +54,69 @@ def cars_by_id() -> dict[int, str]:
     return out
 
 
+# GT7 writes track names as "Base – Layout" with an en dash. The app keeps
+# track and layout in separate fields, so the catalogue is split on it rather
+# than offering 86 entries that repeat the base name a dozen times.
+LAYOUT_SEPARATOR = "–"
+
+
+@functools.lru_cache(maxsize=1)
+def track_layouts() -> dict[str, tuple[str, ...]]:
+    """Base track name -> its layouts, empty when the track has only one."""
+    grouped: dict[str, list[str]] = {}
+    for name in track_names():
+        base, _, layout = name.partition(LAYOUT_SEPARATOR)
+        base = base.strip()
+        layout = layout.strip()
+        grouped.setdefault(base, [])
+        if layout and layout not in grouped[base]:
+            grouped[base].append(layout)
+    return {base: tuple(layouts) for base, layouts in sorted(grouped.items())}
+
+
+def track_bases() -> tuple[str, ...]:
+    return tuple(track_layouts())
+
+
+def layouts_for(track: str) -> tuple[str, ...]:
+    return track_layouts().get(track, ())
+
+
+@functools.lru_cache(maxsize=1)
+def car_specs() -> dict[str, dict]:
+    path = DATA_DIR / "car_specs.json"
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+# Race classes first, in their own order; road cars last because there are ten
+# times as many of them and they are not what a league event usually picks.
+CATEGORY_ORDER = ("Gr.1", "Gr.2", "Gr.3", "Gr.4", "Gr.B", "Road Car")
+
+
+@functools.lru_cache(maxsize=1)
+def cars_by_category() -> dict[str, tuple[str, ...]]:
+    """Car names grouped by GT7 class.
+
+    Note the shipped spec file carries no Gr.B cars, so that group is simply
+    absent rather than empty - a heading with nothing under it would suggest
+    the data is there when it is not.
+    """
+    grouped: dict[str, list[str]] = {}
+    for name, spec in car_specs().items():
+        grouped.setdefault(spec.get("category") or "Road Car", []).append(name)
+
+    ordered: dict[str, tuple[str, ...]] = {}
+    for category in CATEGORY_ORDER:
+        if grouped.get(category):
+            ordered[category] = tuple(sorted(grouped.pop(category)))
+    for category in sorted(grouped):
+        ordered[category] = tuple(sorted(grouped[category]))
+    return ordered
+
+
 def car_name(car_id: int | None) -> str | None:
     if car_id is None:
         return None

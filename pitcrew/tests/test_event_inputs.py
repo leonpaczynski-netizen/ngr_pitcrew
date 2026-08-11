@@ -57,7 +57,8 @@ def test_a_focused_widget_still_takes_the_wheel(qt_app):  # noqa: F811
 
 
 def test_every_setup_editor_is_guarded(qt_app):  # noqa: F811
-    screen = EventScreen(tracks=["Fuji Speedway"], cars=["Some Car"])
+    screen = EventScreen(tracks=["Fuji Speedway"],
+                         car_groups=[("Gr.3", ["Some Car"])])
     for editor in screen._setup_editors.values():
         before = editor.value()
         scroll(editor)
@@ -65,7 +66,8 @@ def test_every_setup_editor_is_guarded(qt_app):  # noqa: F811
 
 
 def test_the_regulation_boxes_are_guarded(qt_app):  # noqa: F811
-    screen = EventScreen(tracks=["Fuji Speedway"], cars=["Some Car"])
+    screen = EventScreen(tracks=["Fuji Speedway"],
+                         car_groups=[("Gr.3", ["Some Car"])])
     for widget in (screen.tyre_mult, screen.fuel_mult, screen.race_length,
                    screen.refuel_rate, screen.pit_loss, screen.tcs,
                    screen.weather, screen.abs_setting):
@@ -106,26 +108,20 @@ def test_a_stored_name_outside_the_list_is_still_loadable(qt_app):  # noqa: F811
     assert picker.currentText() == "Somewhere Else"
 
 
-def test_adding_extends_the_list_and_announces_it(qt_app):  # noqa: F811
-    picker = Picker(["Fuji Speedway"])
-    seen = []
-    picker.added.connect(seen.append)
-
-    picker._begin_add()
-    picker._entry.setText("Circuit de Sainte-Croix A")
-    picker._commit_add()
-
-    assert seen == ["Circuit de Sainte-Croix A"]
-    assert picker.currentText() == "Circuit de Sainte-Croix A"
-    assert "Circuit de Sainte-Croix A" in picker.items()
+def test_group_headings_cannot_be_chosen(qt_app):  # noqa: F811
+    """A heading is a signpost, not a car."""
+    picker = Picker(groups=[("Gr.3", ["A", "B"]), ("Road Car", ["C"])])
+    assert picker.items() == ["A", "B", "C"]
+    model = picker.combo.model()
+    heading = next(i for i in range(picker.combo.count())
+                   if picker.combo.itemText(i).startswith("—") and i > 0)
+    assert model.item(heading).isEnabled() is False
 
 
-def test_adding_nothing_leaves_the_list_alone(qt_app):  # noqa: F811
-    picker = Picker(["Fuji Speedway"])
-    picker._begin_add()
-    picker._entry.setText("   ")
-    picker._commit_add()
-    assert picker.items() == ["Fuji Speedway"]
+def test_groups_keep_their_order(qt_app):  # noqa: F811
+    picker = Picker(groups=[("Gr.1", ["one"]), ("Road Car", ["two"])])
+    texts = [picker.combo.itemText(i) for i in range(picker.combo.count())]
+    assert texts.index("— Gr.1 —") < texts.index("— Road Car —")
 
 
 def test_setting_items_keeps_the_current_choice(qt_app):  # noqa: F811
@@ -149,19 +145,6 @@ def test_off_is_available_as_a_multiplier():
 
 # ---------------------------------------------------------- custom catalogs
 
-def test_an_added_track_survives_a_restart(qt_app, store: Store):  # noqa: F811
-    screen = EventScreen(tracks=["Fuji Speedway"], cars=["Some Car"])
-    controller = PitCrewController(store, screen, PracticeScreen())
-    screen.catalog_extended.emit("track", "Circuit de Sainte-Croix A")
-
-    assert "Circuit de Sainte-Croix A" in store.custom_catalog("track")
-
-    reopened = EventScreen(tracks=["Fuji Speedway"], cars=["Some Car"])
-    PitCrewController(store, reopened, PracticeScreen())
-    assert "Circuit de Sainte-Croix A" in reopened.track_edit.items()
-    controller.shutdown()
-
-
 def test_adding_the_same_name_twice_stores_it_once(store: Store):
     store.add_to_catalog("car", "Some Car")
     store.add_to_catalog("car", "Some Car")
@@ -172,13 +155,46 @@ def test_an_unknown_catalog_kind_is_empty(store: Store):
     assert store.custom_catalog("banana") == []
 
 
-def test_the_shipped_catalogue_is_merged_with_additions(qt_app, store: Store):  # noqa: F811
-    store.add_to_catalog("track", "Somewhere New")
+def test_tracks_are_listed_once_with_layouts_split_off(qt_app, store: Store):  # noqa: F811
+    """86 catalogue entries repeat 27 base names; the layout has its own box."""
     screen = EventScreen()
     controller = PitCrewController(store, screen, PracticeScreen())
     items = screen.track_edit.items()
-    assert "Somewhere New" in items
-    assert any("Monza" in name for name in items)
+    assert "Autodrome Lago Maggiore" in items
+    assert not any("–" in name for name in items)
+    assert len([n for n in items if n.startswith("Autodrome Lago")]) == 1
+    controller.shutdown()
+
+
+def test_choosing_a_track_offers_only_its_layouts(qt_app, store: Store):  # noqa: F811
+    screen = EventScreen()
+    controller = PitCrewController(store, screen, PracticeScreen())
+    screen.track_edit.setCurrentText("Autodrome Lago Maggiore")
+    layouts = screen.layout_edit.items()
+    assert "Centre" in layouts
+    assert "East" in layouts
+    assert all("Lago" not in layout for layout in layouts)
+    controller.shutdown()
+
+
+def test_a_track_with_one_layout_disables_the_layout_box(qt_app, store: Store):  # noqa: F811
+    screen = EventScreen(tracks=["Somewhere"],
+                         car_groups=[("Gr.3", ["Some Car"])])
+    controller = PitCrewController(store, screen, PracticeScreen())
+    screen.track_edit.setCurrentText("Somewhere")
+    assert screen.layout_edit.items() == []
+    assert screen.layout_edit.combo.isEnabled() is False
+    controller.shutdown()
+
+
+def test_cars_are_grouped_by_class(qt_app, store: Store):  # noqa: F811
+    screen = EventScreen()
+    controller = PitCrewController(store, screen, PracticeScreen())
+    texts = [screen.car_edit.combo.itemText(i)
+             for i in range(screen.car_edit.combo.count())]
+    assert "— Gr.3 —" in texts
+    assert "— Road Car —" in texts
+    assert texts.index("— Gr.3 —") < texts.index("— Road Car —")
     controller.shutdown()
 
 
@@ -196,3 +212,19 @@ def test_a_saved_event_reopens_with_its_track_and_car(qt_app, store: Store):  # 
     assert reopened.track_edit.currentText() == "Fuji Speedway"
     assert reopened.car_edit.currentText() == "Porsche 911 RSR (991) '17"
     controller.shutdown()
+
+
+def test_the_popup_is_wide_enough_for_the_longest_name(qt_app):  # noqa: F811
+    """Elided to "24 Heures du...cing Circuit", two circuits look identical."""
+    longest = "24 Heures du Mans Racing Circuit No Chicane Extended"
+    picker = Picker(["Short", longest])
+    view = picker.combo.view()
+    assert view.minimumWidth() >= view.fontMetrics().horizontalAdvance(longest)
+    assert view.textElideMode() == Qt.TextElideMode.ElideNone
+
+
+def test_the_popup_widens_for_grouped_names(qt_app):  # noqa: F811
+    longest = "Porsche 911 GT3 RS (997) Something Very Long Indeed '11"
+    picker = Picker(groups=[("Gr.3", ["A"]), ("Road Car", [longest])])
+    view = picker.combo.view()
+    assert view.minimumWidth() >= view.fontMetrics().horizontalAdvance(longest)

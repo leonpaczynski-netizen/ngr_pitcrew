@@ -82,21 +82,31 @@ class EventScreen(QWidget):
     saved = pyqtSignal(dict)
     catalog_extended = pyqtSignal(str, str)    # kind, name
 
-    def __init__(self, tracks=None, cars=None,
+    def __init__(self, tracks=None, car_groups=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._setup_editors: dict[str, QDoubleSpinBox] = {}
         self._compound_chips: dict[str, CompoundChip] = {}
-        self._tracks = list(tracks) if tracks is not None else list(
-            catalogs.track_names())
-        self._cars = list(cars) if cars is not None else list(
-            catalogs.car_names())
+        self._tracks = (list(tracks) if tracks is not None
+                        else list(catalogs.track_bases()))
+        self._car_groups = (list(car_groups) if car_groups is not None
+                            else list(catalogs.cars_by_category().items()))
         self._build()
 
-    def set_catalogs(self, tracks, cars) -> None:  # noqa: N802 - Qt naming
-        self._tracks, self._cars = list(tracks), list(cars)
+    def set_catalogs(self, tracks, car_groups) -> None:  # noqa: N802 - Qt naming
+        self._tracks = list(tracks)
+        self._car_groups = list(car_groups)
         self.track_edit.set_items(self._tracks)
-        self.car_edit.set_items(self._cars)
+        self.car_edit.set_groups(self._car_groups)
+
+    def _on_track_changed(self, track: str) -> None:
+        """Layouts belong to their track, so the list follows the choice."""
+        layouts = catalogs.layouts_for(track) if track else ()
+        chosen = self.layout_edit.currentText()
+        self.layout_edit.set_items(layouts)
+        self.layout_edit.setEnabledState(bool(layouts))
+        if chosen in layouts:
+            self.layout_edit.setCurrentText(chosen)
 
     # ------------------------------------------------------------------ build
 
@@ -151,19 +161,14 @@ class EventScreen(QWidget):
         self.name_edit.setPlaceholderText("Round 4 - Fuji")
 
         self.track_edit = Picker(self._tracks, placeholder="Pick a track")
-        self.track_edit.added.connect(
-            lambda name: self.catalog_extended.emit("track", name))
-        self.layout_edit = QLineEdit()
-        self.layout_edit.setPlaceholderText("Full")
-        self.car_edit = Picker(self._cars, placeholder="Pick a car")
-        self.car_edit.added.connect(
-            lambda name: self.catalog_extended.emit("car", name))
+        self.track_edit.changed.connect(self._on_track_changed)
+        self.layout_edit = Picker(placeholder="—")
+        self.car_edit = Picker(placeholder="Pick a car", groups=self._car_groups)
 
         grid.addWidget(Field("Name", self.name_edit), 0, 0, 1, 2)
-        grid.addWidget(Field("Track", self.track_edit,
-                             hint="Add if GT7 has one the list lacks"), 1, 0)
+        grid.addWidget(Field("Track", self.track_edit), 1, 0)
         grid.addWidget(Field("Layout", self.layout_edit,
-                             hint="Full, East, No Chicane"), 1, 1)
+                             hint="Set by the track"), 1, 1)
         grid.addWidget(Field("Car", self.car_edit), 2, 0, 1, 2)
         # Without this the hint under Track widens its column and squeezes
         # Layout down to a few characters.
@@ -402,7 +407,8 @@ class EventScreen(QWidget):
         if event:
             self.name_edit.setText(event.get("name") or "")
             self.track_edit.setCurrentText(event.get("track") or "")
-            self.layout_edit.setText(event.get("layout") or "")
+            self._on_track_changed(event.get("track") or "")
+            self.layout_edit.setCurrentText(event.get("layout") or "")
             self.car_edit.setCurrentText(event.get("car_name") or "")
             self.race_type.setCurrentText(
                 "Timed" if event.get("race_type") == "time" else "Laps")
@@ -444,7 +450,7 @@ class EventScreen(QWidget):
         return {
             "name": self.name_edit.text().strip(),
             "track": self.track_edit.currentText().strip(),
-            "layout": self.layout_edit.text().strip() or None,
+            "layout": self.layout_edit.currentText() or None,
             "car_name": self.car_edit.currentText().strip(),
             "race_type": "laps" if self.race_type.currentText() == "Laps" else "time",
             "race_laps": self.race_length.value(),
