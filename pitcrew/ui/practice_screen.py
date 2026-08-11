@@ -334,6 +334,10 @@ class PracticeScreen(QWidget):
 
         self.export_button = MarkButton("Export for the tune builder",
                                         primary=True)
+        self.export_button.setToolTip(
+            "Copies the gt7-pitcrew payload to the clipboard and writes it to "
+            "exports/. Paste it into the Pit Crew data box on the tune "
+            "builder's Driver Feedback tab.")
         self.export_button.clicked.connect(self.export_requested.emit)
         row.addWidget(self.export_button)
         return row
@@ -396,7 +400,6 @@ class PracticeScreen(QWidget):
         # The subtitle belongs to the controller: it carries connection and
         # session state, which refresh() has no way of knowing. Lap counts are
         # already in the spec line.
-        self.export_button.setEnabled(bool(counted))
         if untagged:
             self.footer_note.setText(
                 f"{len(untagged)} counted "

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import replace
 
 from pitcrew.analysis import thresholds
 from pitcrew.analysis.corners import (
@@ -49,8 +50,25 @@ def multiplier_factor(setting: str | None) -> float | None:
 
 
 def _lap_inputs(store, session_id: int) -> list[LapInput]:
+    return _rows_to_laps(store, store.list_laps(session_id))
+
+
+def _event_lap_inputs(store, event_id: int, kind: str) -> list[LapInput]:
+    """Every lap of every run of this kind, numbered continuously.
+
+    Practice accumulates: a driver who goes out three times has one body of
+    evidence, not three. The stored lap numbers restart at 1 each run, so they
+    are renumbered here - two laps both called "lap 1" in one export would be
+    unreadable.
+    """
+    rows = store.list_event_laps(event_id, kind)
+    laps = _rows_to_laps(store, rows)
+    return [replace(lap, lap_num=index) for index, lap in enumerate(laps, 1)]
+
+
+def _rows_to_laps(store, rows) -> list[LapInput]:
     out = []
-    for row in store.list_laps(session_id):
+    for row in rows:
         frames = None
         stored = store.get_lap_frames(row["id"])
         if stored:
@@ -101,15 +119,55 @@ def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
 
 def build_session_export(store, session_id: int, *, notes: str = "",
                          calibrated_at_race_multiplier: bool = True) -> dict:
-    """Assemble the `gt7-pitcrew/1.2` payload for one recorded session."""
+    """The payload for one run on its own."""
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"no session with id {session_id}")
+    return _build(store, session, _lap_inputs(store, session_id),
+                  notes=notes,
+                  calibrated_at_race_multiplier=calibrated_at_race_multiplier)
+
+
+def build_event_export(store, event_id: int, *, kind: str = "practice",
+                       notes: str = "",
+                       calibrated_at_race_multiplier: bool = True) -> dict:
+    """The payload for everything run at this event.
+
+    This is what the driver exports: three runs at one circuit are one body of
+    evidence about one car, and splitting them would hand the tune builder
+    three thin samples instead of one usable one.
+    """
+    sessions = store.list_sessions(event_id, kind)
+    if not sessions:
+        raise ValueError("nothing recorded for this event yet")
+    laps = _event_lap_inputs(store, event_id, kind)
+    return _build(store, _merged_session(sessions), laps, notes=notes,
+                  calibrated_at_race_multiplier=calibrated_at_race_multiplier)
+
+
+def _merged_session(sessions: list[dict]) -> dict:
+    """One session record standing for the run of runs.
+
+    Dated from the first run and described by the first run that actually saw
+    each stream fact - a later run started before GT7 was streaming would
+    otherwise erase what an earlier one measured.
+    """
+    ordered = sorted(sessions, key=lambda s: s["started_at"])
+    merged = dict(ordered[0])
+    for key in ("packet_format", "car_category", "fuel_capacity_l",
+                "setup_sheet_id"):
+        merged[key] = next(
+            (s[key] for s in ordered if s[key] is not None), None)
+    return merged
+
+
+def _build(store, session: dict, laps: list[LapInput], *, notes: str,
+           calibrated_at_race_multiplier: bool) -> dict:
+    """Assemble the `gt7-pitcrew/1.2` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
-        raise ValueError(f"session {session_id} has no event")
+        raise ValueError("session has no event")
 
-    laps = _lap_inputs(store, session_id)
     counted = counted_laps(laps)
 
     compound = _compound_full_name(_dominant_compound(laps))
@@ -150,7 +208,7 @@ def build_session_export(store, session_id: int, *, notes: str = "",
         if sheet is not None:
             setup = sheet.as_export()
             sheet_gears = sheet.gears
-            changes = store.list_setup_changes(session_id)
+            changes = store.list_setup_changes(session["id"])
             driver_changes = [c.as_export() for c in changes] or None
 
     gearing = gearing_export(counted, sheet_gears)

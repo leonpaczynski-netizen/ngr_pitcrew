@@ -200,3 +200,54 @@ def test_unset_multiplier_is_none():
 
 def test_nonsense_multiplier_is_none_not_a_guess():
     assert multiplier_factor("fast") is None
+
+
+# ------------------------------------------------------- accumulating runs
+
+def test_a_second_run_adds_to_the_event_rather_than_replacing_it(store, recorded):
+    """Going out again is more evidence about one car, not a fresh start."""
+    from pitcrew.export.build import build_event_export
+
+    event_id = recorded["event_id"]
+    second = store.start_session(event_id, "practice")
+    store.add_lap(second, a_stored_lap(1, lap_time_ms=93_300))
+    store.add_lap(second, a_stored_lap(2, lap_time_ms=93_100))
+
+    payload = build_event_export(store, event_id)
+    assert payload["session"]["lapsRun"] == 6      # 4 from the first run + 2
+    # The later run's flyer is in the aggregate, which is the whole point.
+    assert payload["session"]["bestLapMs"] == 93_100
+
+
+def test_laps_are_renumbered_continuously_across_runs(store, recorded):
+    """Two laps both called "lap 1" in one export would be unreadable."""
+    from pitcrew.export.build import build_event_export
+
+    event_id = recorded["event_id"]
+    second = store.start_session(event_id, "practice")
+    store.add_lap(second, a_stored_lap(1))
+    store.add_lap(second, a_stored_lap(2))
+
+    numbers = [lap["lap"] for lap in build_event_export(store, event_id)["laps"]]
+    assert numbers == [1, 2, 3, 4, 5, 6]
+
+
+def test_stream_facts_survive_a_later_run_that_saw_none(store, recorded):
+    """A run started before GT7 was streaming must not erase what was measured."""
+    from pitcrew.export.build import build_event_export
+
+    event_id = recorded["event_id"]
+    later = store.start_session(event_id, "practice")
+    store.add_lap(later, a_stored_lap(1))
+
+    payload = build_event_export(store, event_id)
+    assert payload["meta"]["packet"] == "C"
+    assert payload["meta"]["carCategory"] == "GR3"
+    assert payload["session"]["fuelCapacityL"] == 100.0
+
+
+def test_an_event_with_nothing_recorded_refuses(store):
+    from pitcrew.export.build import build_event_export
+    event_id = store.create_event(name="Empty", track="Spa")
+    with pytest.raises(ValueError, match="nothing recorded"):
+        build_event_export(store, event_id)

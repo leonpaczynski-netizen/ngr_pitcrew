@@ -262,10 +262,17 @@ def test_export_produces_a_validated_payload(wired, tmp_path, monkeypatch):
     assert json.loads(written[0].read_text(encoding="utf-8")) == payload
 
 
-def test_export_without_a_session_says_so(wired):
+def test_export_without_an_event_says_so(wired):
     controller, _, practice, _ = wired
     assert controller._on_export() is None
-    assert "Nothing recorded" in practice.footer_note.text()
+    assert "Create an event" in practice.footer_note.text()
+
+
+def test_export_with_an_event_but_no_laps_says_so(wired):
+    controller, _, practice, _ = wired
+    controller._on_event_saved(an_event())
+    assert controller._on_export() is None
+    assert "nothing recorded" in practice.footer_note.text().lower()
 
 
 # -------------------------------------------------------------------- bridge

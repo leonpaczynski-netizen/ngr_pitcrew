@@ -18,7 +18,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from pitcrew.export.build import build_session_export
+from pitcrew.export.build import build_event_export
 from pitcrew.export.payload import ExportRefused, to_json
 from pitcrew.setup.sheet import SetupError, SetupSheet
 from pitcrew.store import catalogs
@@ -165,7 +165,7 @@ class PitCrewController(QObject):
         if sheets:
             sheet = sheets[0]
         self.event_screen.load(event, sheet)
-        self.practice.set_laps(self._rows_for_latest_session(event["id"]))
+        self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
 
     def _idle_status(self, event: dict) -> str:
@@ -256,7 +256,10 @@ class PitCrewController(QObject):
         self.bridge.reset()
         self.session_id = self.store.start_session(
             event["id"], "practice", setup_sheet_id=sheet_id)
-        self.practice.set_laps([])
+        # The rack is NOT cleared. Going out again adds to the session's
+        # evidence; it does not replace it. Three runs at one circuit are one
+        # body of evidence about one car.
+        self.practice.set_laps(self._rows_for_event(event["id"]))
         return self.session_id
 
     def start_practice(self) -> None:
@@ -318,7 +321,7 @@ class PitCrewController(QObject):
         lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
         self.practice.add_lap(LapRow(
             lap_id=lap_id,
-            lap_num=lap.lap_num,
+            lap_num=len(self.practice.rows()) + 1,
             lap_time_ms=lap.lap_time_ms,
             fuel_used=lap.fuel_used,
             compound=lap.compound,
@@ -336,15 +339,18 @@ class PitCrewController(QObject):
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
 
-    def _rows_for_latest_session(self, event_id: int) -> list[LapRow]:
-        sessions = self.store.list_sessions(event_id, "practice")
-        if not sessions:
-            return []
-        self.session_id = sessions[0]["id"]
+    def _rows_for_event(self, event_id: int) -> list[LapRow]:
+        """Every practice lap at this event, numbered continuously.
+
+        The stored numbers restart at 1 each run, so two laps would both read
+        "1" on the rack. Display numbering runs through the whole event; the
+        database id is what every edit is written against, so renumbering the
+        display cannot mis-file a mark.
+        """
         return [
             LapRow(
                 lap_id=row["id"],
-                lap_num=row["lap_num"],
+                lap_num=index,
                 lap_time_ms=row["lap_time_ms"],
                 fuel_used=row["fuel_used"],
                 compound=row["compound"],
@@ -355,7 +361,8 @@ class PitCrewController(QObject):
                 wear_front=row["wear_front"],
                 wear_rear=row["wear_rear"],
             )
-            for row in self.store.list_laps(sessions[0]["id"])
+            for index, row in enumerate(
+                self.store.list_event_laps(event_id, "practice"), 1)
         ]
 
     def _report_health(self) -> None:
@@ -435,16 +442,20 @@ class PitCrewController(QObject):
     # ---------------------------------------------------------------- export
 
     def _on_export(self) -> str | None:
-        if self.session_id is None:
-            self.practice.note("Nothing recorded to export.", warn=True)
+        event = self.active_event()
+        if event is None:
+            self.practice.note("Create an event before exporting.", warn=True)
             return None
         try:
-            payload = build_session_export(self.store, self.session_id)
+            payload = build_event_export(self.store, event["id"])
             text = to_json(payload)
         except ExportRefused as exc:
             # Refusing is the designed behaviour: the consumer is a reader, so
-            # a malformed payload would be misread rather than rejected.
-            self.practice.note(str(exc).splitlines()[0], warn=True)
+            # a malformed payload would be misread rather than rejected. Show
+            # every reason, not the first - a one-line note was easy to miss.
+            self.practice.note(
+                " · ".join(line.strip(" -") for line in
+                           str(exc).splitlines()[1:]) or str(exc), warn=True)
             return None
         except ValueError as exc:
             self.practice.note(str(exc), warn=True)
@@ -455,8 +466,10 @@ class PitCrewController(QObject):
             clipboard.setText(text)
 
         path = self._write_export(text)
+        laps = len(payload.get("laps") or ())
         self.practice.note(
-            f"Copied to the clipboard, and saved to {path}.")
+            f"{laps} laps copied to the clipboard. Paste into the Pit Crew "
+            f"data box on the Driver Feedback tab. Also saved to {path}.")
         return text
 
     def _write_export(self, text: str) -> Path:
