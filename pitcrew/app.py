@@ -21,6 +21,7 @@ from pitcrew.store.db import DEFAULT_DB_PATH, Store
 from pitcrew.ui import theme
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
+from pitcrew.ui.race_screen import RaceScreen
 from pitcrew.ui.strategy_screen import StrategyScreen
 from pitcrew.ui.widgets import StencilLabel
 
@@ -94,6 +95,8 @@ class PitCrewWindow(QMainWindow):
         self.strategy_screen = StrategyScreen()
         self.stack.addWidget(self.practice_screen)
         self.stack.addWidget(self.strategy_screen)
+        self.race_screen = RaceScreen()
+        self.stack.addWidget(self.race_screen)
 
         self.rail = NavRail(self.stack, SCREENS)
         row.addWidget(self.rail)
@@ -102,7 +105,7 @@ class PitCrewWindow(QMainWindow):
 
         self.controller = PitCrewController(
             store, self.event_screen, self.practice_screen,
-            self.strategy_screen, port=port)
+            self.strategy_screen, self.race_screen, port=port)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()

@@ -18,11 +18,13 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
+from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import build_event_export
 from pitcrew.export.payload import ExportRefused, to_json
 from pitcrew.setup.sheet import SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
+from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.listener import UDPListener
@@ -44,6 +46,7 @@ class TelemetryBridge(QObject):
     """Turns the packet stream into Qt signals, on the right threads."""
 
     lap_completed = pyqtSignal(object, object)   # Lap, detached frame rows
+    session_event = pyqtSignal(object)           # every event, for the race
     stream_seen = pyqtSignal(object)             # first packet's fixed facts
     parse_failed = pyqtSignal()
 
@@ -53,8 +56,9 @@ class TelemetryBridge(QObject):
         self.recorder = LapRecorder()
         self._announced = False
 
-    def reset(self) -> None:
-        self.state = SessionState(SessionKind.PRACTICE)
+    def reset(self, *, race: bool = False) -> None:
+        self.state = SessionState(
+            SessionKind.RACE if race else SessionKind.PRACTICE)
         self.recorder.discard()
         self._announced = False
 
@@ -83,20 +87,26 @@ class TelemetryBridge(QObject):
                 # Detach inline; compress and store on the Qt thread.
                 rows = self.recorder.take_rows()
                 self.lap_completed.emit(event.data["lap"], rows)
+            self.session_event.emit(event)
 
 
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
     def __init__(self, store: Store, event_screen, practice_screen,
-                 strategy_screen=None, *, port: int = DEFAULT_PORT,
+                 strategy_screen=None, race_screen=None, *,
+                 port: int = DEFAULT_PORT, voice=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
         self.event_screen = event_screen
         self.practice = practice_screen
         self.strategy = strategy_screen
+        self.race_screen = race_screen
         self.port = port
+        self.voice = voice if voice is not None else Voice()
+        self.race: RaceCoordinator | None = None
+        self.race_run_id: int | None = None
         self._plans: list = []
         self._inputs = None
 
@@ -108,6 +118,7 @@ class PitCrewController(QObject):
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.stream_seen.connect(self._on_stream_seen)
         self.bridge.parse_failed.connect(self._on_parse_failed)
+        self.bridge.session_event.connect(self._on_race_event)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.catalog_extended.connect(
@@ -118,6 +129,9 @@ class PitCrewController(QObject):
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
             self.strategy.approve_requested.connect(self.approve_strategy)
+        if self.race_screen is not None:
+            self.race_screen.start_requested.connect(self.start_race)
+            self.race_screen.stop_requested.connect(self.stop_race)
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -430,6 +444,14 @@ class PitCrewController(QObject):
         plan = self._plans[index]
         payload = plan.as_dict()
         payload["export"] = plan.as_export(self._inputs)
+        # What the plan was built for. Without this the race-day guard
+        # has nothing to check against and silently always passes.
+        payload["context"] = {
+            "car": event["car_name"] or "",
+            "track": event["track"] or "",
+            "layout": event["layout"],
+            "race_laps": int(event["race_laps"] or 0),
+        }
         strategy_id = self.store.save_strategy(
             event["id"], payload, label=plan.label(),
             evidence={"missing": self._inputs.missing()})
@@ -438,6 +460,93 @@ class PitCrewController(QObject):
             f"{plan.label()} approved. It is the race plan until you approve "
             "another.")
         return strategy_id
+
+    # ------------------------------------------------------------------ race
+
+    def start_race(self) -> bool:
+        """Arm the race. Nothing fires until the car actually goes green."""
+        if self.race_screen is None:
+            return False
+        event = self.active_event()
+        if event is None:
+            self.race_screen.set_status(
+                "Create an event before racing.", warn=True)
+            return False
+
+        approved = self.store.get_approved_strategy(event["id"])
+        plan = approved["plan"] if approved else None
+        try:
+            inputs, _ = build_inputs(self.store, event["id"])
+        except ValueError:
+            inputs = None
+
+        self.race = RaceCoordinator(
+            plan,
+            fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
+            wear_per_lap=inputs.wear_per_lap if inputs else None)
+
+        actual = PlanContext(
+            car=event["car_name"] or "", track=event["track"] or "",
+            layout=event["layout"], race_laps=int(event["race_laps"] or 0))
+        stored = (plan or {}).get("context")
+        planned = PlanContext(**stored) if stored else None
+        if not self.race.arm(planned, actual):
+            self.race_screen.set_status(
+                f"Plan refused: {self.race.refusal}", warn=True)
+            self.race = None
+            return False
+
+        self.bridge.reset(race=True)
+        self.session_id = self.store.start_session(event["id"], "race")
+        self.race_run_id = self.store.start_race_run(
+            event["id"], approved["id"] if approved else None, self.session_id)
+
+        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet)
+        self.listener.start()
+        self._health.start()
+
+        self.race_screen.clear_log()
+        self.race_screen.set_armed(True)
+        self.race_screen.set_status(
+            "Armed. Waiting for you to cross the line." if plan else
+            "Armed with no approved plan - the engineer will call fuel only.")
+        return True
+
+    def stop_race(self) -> None:
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None
+        self._health.stop()
+        if self.session_id is not None:
+            self.store.end_session(self.session_id)
+        if self.race_run_id is not None:
+            self.store.finish_race_run(self.race_run_id)
+        self.race = None
+        if self.race_screen is not None:
+            self.race_screen.set_armed(False)
+            self.race_screen.set_status("Race closed.")
+
+    def _on_race_event(self, event) -> None:
+        """Feed one telemetry event to the race, and say what comes back."""
+        if self.race is None:
+            return
+        call = self.race.handle(event)
+        if self.race_screen is not None:
+            self.race_screen.show_snapshot(self.race.snapshot())
+        if call is None:
+            return
+
+        self.voice.say(call.spoken())
+        if self.race_screen is not None:
+            self.race_screen.show_call(call)
+        if self.race_run_id is not None:
+            # Every call is recorded, accepted or not: a plan offered and
+            # ignored is evidence about the model, and dropping it would make
+            # the model look better than it was.
+            self.store.append_revision(
+                self.race_run_id, call.lap, call.call,
+                {"call": call.as_export(), "confidence": call.confidence},
+                accepted=False)
 
     # ---------------------------------------------------------------- export
 
@@ -483,3 +592,4 @@ class PitCrewController(QObject):
         if self.listener is not None:
             self.listener.stop()
         self._health.stop()
+        self.voice.stop()
