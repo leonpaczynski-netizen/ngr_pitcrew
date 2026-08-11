@@ -1,0 +1,173 @@
+"""Full-rate capture, slip derivation and the on-disk frame format."""
+from __future__ import annotations
+
+from pitcrew.telemetry.recorder import (
+    FRAME_FIELDS,
+    SAMPLE_HZ,
+    LapRecorder,
+    decode_frames,
+)
+
+from .conftest import make_packet, rolling_wheel_rps
+
+
+def rolling_packet(speed_ms: float = 50.0, **overrides):
+    rps = rolling_wheel_rps(speed_ms)
+    fields = {
+        "speed_ms": speed_ms,
+        "wheel_rps_fl": rps, "wheel_rps_fr": rps,
+        "wheel_rps_rl": rps, "wheel_rps_rr": rps,
+    }
+    fields.update(overrides)
+    return make_packet(**fields)
+
+
+def test_records_every_packet_by_default():
+    rec = LapRecorder()
+    for i in range(10):
+        rec.record_frame(rolling_packet(time_of_day_ms=i * 16))
+    assert rec.frame_count == 10
+    assert rec.take_lap().sample_hz == SAMPLE_HZ
+
+
+def test_off_track_frames_are_dropped():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet())
+    rec.record_frame(rolling_packet(on_track=False))
+    rec.record_frame(rolling_packet())
+    assert rec.frame_count == 2
+
+
+def test_take_lap_round_trips_through_the_blob():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(time_of_day_ms=1000, throttle_raw=255, gear_raw=0x14))
+    rec.record_frame(rolling_packet(time_of_day_ms=1016, brake_raw=128))
+    lap = rec.take_lap()
+
+    frames = decode_frames(lap.blob)
+    assert lap.frame_count == 2
+    assert len(frames) == 2
+    assert set(frames[0]) == set(FRAME_FIELDS)
+    assert frames[0]["t_ms"] == 0
+    assert frames[1]["t_ms"] == 16
+    assert frames[0]["gear"] == 4
+
+
+def test_pedals_are_stored_as_percent():
+    """The feed gives 0-255; the export contract fixes percent 0-100."""
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(throttle_raw=255))
+    rec.record_frame(rolling_packet(brake_raw=128))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["throttle_pct"] == 100.0
+    assert round(frames[1]["brake_pct"]) == 50
+
+
+def test_suspension_and_body_height_are_stored_in_mm():
+    """The feed gives metres of absolute height, not travel remaining."""
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(
+        suspension_fl=0.0342, suspension_fr=0.0360,
+        suspension_rl=0.0410, suspension_rr=0.0420,
+        body_height=0.0755))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["susp_mm_fl"] == 34.2
+    assert frames[0]["susp_mm_rr"] == 42.0
+    assert frames[0]["body_height_mm"] == 75.5
+
+
+def test_speed_is_stored_in_kph():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(speed_ms=50.0))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["speed_kph"] == 180.0
+
+
+def test_take_lap_clears_the_buffer():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet())
+    assert rec.take_lap() is not None
+    assert rec.take_lap() is None
+    assert rec.frame_count == 0
+
+
+def test_elapsed_restarts_each_lap():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(time_of_day_ms=500_000))
+    rec.record_frame(rolling_packet(time_of_day_ms=500_100))
+    rec.take_lap()
+    rec.record_frame(rolling_packet(time_of_day_ms=600_000))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["t_ms"] == 0
+
+
+def test_rolling_wheels_give_unit_slip():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(speed_ms=50.0))
+    frames = decode_frames(rec.take_lap().blob)
+    for corner in ("slip_fl", "slip_fr", "slip_rl", "slip_rr"):
+        assert abs(frames[0][corner] - 1.0) < 0.001
+
+
+def test_locked_front_wheels_show_as_low_slip():
+    rec = LapRecorder()
+    rps = rolling_wheel_rps(50.0)
+    rec.record_frame(make_packet(
+        speed_ms=50.0,
+        wheel_rps_fl=0.0, wheel_rps_fr=0.0,
+        wheel_rps_rl=rps, wheel_rps_rr=rps,
+    ))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["slip_fl"] == 0.0
+    assert abs(frames[0]["slip_rl"] - 1.0) < 0.001
+
+
+def test_spinning_rear_wheels_show_as_high_slip():
+    rec = LapRecorder()
+    rps = rolling_wheel_rps(50.0)
+    rec.record_frame(make_packet(
+        speed_ms=50.0,
+        wheel_rps_fl=rps, wheel_rps_fr=rps,
+        wheel_rps_rl=rps * 1.3, wheel_rps_rr=rps * 1.3,
+    ))
+    frames = decode_frames(rec.take_lap().blob)
+    assert round(frames[0]["slip_rr"], 2) == 1.3
+
+
+def test_slip_is_not_computed_when_nearly_stopped():
+    rec = LapRecorder()
+    rec.record_frame(make_packet(speed_ms=0.5, wheel_rps_fl=0.0))
+    frames = decode_frames(rec.take_lap().blob)
+    assert frames[0]["slip_fl"] == 1.0
+
+
+def test_unverified_channels_are_null_not_zero():
+    """Missing must be null. A zero here reads downstream as a real measurement."""
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(extended=True))
+    frames = decode_frames(rec.take_lap().blob)
+    for channel in ("steering_deg", "steering_norm",
+                    "surf_fl", "surf_fr", "surf_rl", "surf_rr"):
+        assert frames[0][channel] is None
+
+
+def test_a_full_lap_compresses_to_a_sane_size():
+    """~7,200 frames is one lap at 60 Hz; guard against a runaway blob."""
+    rec = LapRecorder()
+    for i in range(7_200):
+        rec.record_frame(rolling_packet(
+            time_of_day_ms=i * 16,
+            pos_x=float(i % 500), pos_z=float(i % 300),
+            road_distance=float(i) * 0.8,
+        ))
+    lap = rec.take_lap()
+    assert lap.frame_count == 7_200
+    assert lap.size_bytes < 1_500_000
+    assert len(decode_frames(lap.blob)) == 7_200
+
+
+def test_discard_drops_the_lap():
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet())
+    rec.discard()
+    assert rec.take_lap() is None

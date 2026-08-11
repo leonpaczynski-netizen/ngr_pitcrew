@@ -1,0 +1,293 @@
+"""SQLite store for Pit Crew.
+
+One small class with explicit methods, in contrast to the 11,000-line god-class
+it replaces.  If a method here starts needing a paragraph of explanation it
+probably belongs in the layer above.
+
+Concurrency: sqlite is opened with `check_same_thread=False` because laps are
+written from the telemetry thread while the UI reads on the Qt thread, and
+every write goes through `_write()` which holds a lock for the transaction.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import sqlite3
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from pathlib import Path
+
+from pitcrew.store.schema import DDL, SCHEMA_VERSION
+
+DEFAULT_DB_PATH = Path("data/pitcrew.db")
+
+
+def _now() -> str:
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+class Store:
+    def __init__(self, path: str | Path = DEFAULT_DB_PATH) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._init_schema()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def _init_schema(self) -> None:
+        with self._write() as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version and version != SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"{self.path} is schema v{version}, this build expects "
+                    f"v{SCHEMA_VERSION}. Point at a different file or migrate."
+                )
+            conn.executescript(DDL)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        with self._lock:
+            with self._conn:
+                yield self._conn
+
+    def _query(self, sql: str, params: Sequence = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
+
+    # ---------------------------------------------------------------- events
+
+    def create_event(self, **fields) -> int:
+        fields.setdefault("created_at", _now())
+        fields["updated_at"] = _now()
+        for key in ("available_compounds", "required_compounds"):
+            if isinstance(fields.get(key), (list, tuple)):
+                fields[key] = json.dumps(list(fields[key]))
+        cols = ", ".join(fields)
+        marks = ", ".join("?" for _ in fields)
+        with self._write() as conn:
+            cur = conn.execute(
+                f"INSERT INTO events ({cols}) VALUES ({marks})", list(fields.values()))
+            return int(cur.lastrowid)
+
+    def update_event(self, event_id: int, **fields) -> None:
+        if not fields:
+            return
+        fields["updated_at"] = _now()
+        for key in ("available_compounds", "required_compounds"):
+            if isinstance(fields.get(key), (list, tuple)):
+                fields[key] = json.dumps(list(fields[key]))
+        assignments = ", ".join(f"{k} = ?" for k in fields)
+        with self._write() as conn:
+            conn.execute(f"UPDATE events SET {assignments} WHERE id = ?",
+                         [*fields.values(), event_id])
+
+    def get_event(self, event_id: int) -> dict | None:
+        rows = self._query("SELECT * FROM events WHERE id = ?", (event_id,))
+        return _event_row(rows[0]) if rows else None
+
+    def list_events(self) -> list[dict]:
+        # id breaks the tie: timestamps are second-resolution, so two events
+        # created in the same second would otherwise come back in any order.
+        rows = self._query("SELECT * FROM events ORDER BY updated_at DESC, id DESC")
+        return [_event_row(r) for r in rows]
+
+    def delete_event(self, event_id: int) -> None:
+        with self._write() as conn:
+            conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+
+    # -------------------------------------------------------------- sessions
+
+    def start_session(self, event_id: int, kind: str,
+                      tune_label: str | None = None) -> int:
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO sessions (event_id, kind, tune_label, started_at) "
+                "VALUES (?, ?, ?, ?)", (event_id, kind, tune_label, _now()))
+            return int(cur.lastrowid)
+
+    def end_session(self, session_id: int) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?",
+                         (_now(), session_id))
+
+    def get_session(self, session_id: int) -> dict | None:
+        rows = self._query("SELECT * FROM sessions WHERE id = ?", (session_id,))
+        return dict(rows[0]) if rows else None
+
+    def list_sessions(self, event_id: int, kind: str | None = None) -> list[dict]:
+        if kind is None:
+            rows = self._query(
+                "SELECT * FROM sessions WHERE event_id = ? ORDER BY started_at DESC",
+                (event_id,))
+        else:
+            rows = self._query(
+                "SELECT * FROM sessions WHERE event_id = ? AND kind = ? "
+                "ORDER BY started_at DESC", (event_id, kind))
+        return [dict(r) for r in rows]
+
+    def delete_session(self, session_id: int) -> None:
+        with self._write() as conn:
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    # ------------------------------------------------------------------ laps
+
+    def add_lap(self, session_id: int, lap, frames=None) -> int:
+        """Store one completed lap and, if captured, its telemetry frames.
+
+        `lap` is a `pitcrew.telemetry.session_state.Lap`; `frames` a
+        `LapFrames`.  Both are written in one transaction so a lap never exists
+        without the telemetry the export depends on.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT OR REPLACE INTO laps "
+                "(session_id, lap_num, lap_time_ms, delta_ms, fuel_start, fuel_end, "
+                " fuel_used, position, compound, is_pit_lap, is_out_lap, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
+                 lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
+                 lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap), _now()))
+            lap_id = int(cur.lastrowid)
+            if frames is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO lap_frames "
+                    "(lap_id, sample_hz, frame_count, blob) VALUES (?,?,?,?)",
+                    (lap_id, frames.sample_hz, frames.frame_count, frames.blob))
+            return lap_id
+
+    def list_laps(self, session_id: int) -> list[dict]:
+        rows = self._query(
+            "SELECT * FROM laps WHERE session_id = ? ORDER BY lap_num", (session_id,))
+        return [dict(r) for r in rows]
+
+    def list_event_laps(self, event_id: int, kind: str = "practice") -> list[dict]:
+        rows = self._query(
+            "SELECT laps.*, sessions.started_at AS session_started "
+            "FROM laps JOIN sessions ON sessions.id = laps.session_id "
+            "WHERE sessions.event_id = ? AND sessions.kind = ? "
+            "ORDER BY sessions.started_at, laps.lap_num", (event_id, kind))
+        return [dict(r) for r in rows]
+
+    def set_lap_compound(self, lap_id: int, compound: str | None) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE laps SET compound = ? WHERE id = ?", (compound, lap_id))
+
+    def get_lap_frames(self, lap_id: int) -> dict | None:
+        """Return {sample_hz, frame_count, frames: [dict, ...]} or None."""
+        rows = self._query("SELECT * FROM lap_frames WHERE lap_id = ?", (lap_id,))
+        if not rows:
+            return None
+        from pitcrew.telemetry.recorder import decode_frames
+        row = rows[0]
+        return {
+            "sample_hz": row["sample_hz"],
+            "frame_count": row["frame_count"],
+            "frames": decode_frames(row["blob"]),
+        }
+
+    def has_frames(self, lap_id: int) -> bool:
+        return bool(self._query(
+            "SELECT 1 FROM lap_frames WHERE lap_id = ?", (lap_id,)))
+
+    # ------------------------------------------------------------ strategies
+
+    def save_strategy(self, event_id: int, plan: dict, *, label: str | None = None,
+                      evidence: dict | None = None, status: str = "candidate") -> int:
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO strategies (event_id, status, label, plan_json, "
+                "evidence_json, created_at) VALUES (?,?,?,?,?,?)",
+                (event_id, status, label, json.dumps(plan),
+                 json.dumps(evidence) if evidence is not None else None, _now()))
+            return int(cur.lastrowid)
+
+    def approve_strategy(self, strategy_id: int) -> None:
+        """Make this the approved plan, demoting whatever held that status."""
+        with self._write() as conn:
+            row = conn.execute("SELECT event_id FROM strategies WHERE id = ?",
+                               (strategy_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"no strategy with id {strategy_id}")
+            conn.execute(
+                "UPDATE strategies SET status = 'candidate' "
+                "WHERE event_id = ? AND status = 'approved'", (row["event_id"],))
+            conn.execute("UPDATE strategies SET status = 'approved' WHERE id = ?",
+                         (strategy_id,))
+
+    def get_approved_strategy(self, event_id: int) -> dict | None:
+        rows = self._query(
+            "SELECT * FROM strategies WHERE event_id = ? AND status = 'approved' "
+            "ORDER BY created_at DESC LIMIT 1", (event_id,))
+        return _strategy_row(rows[0]) if rows else None
+
+    def list_strategies(self, event_id: int) -> list[dict]:
+        rows = self._query(
+            "SELECT * FROM strategies WHERE event_id = ? ORDER BY created_at DESC",
+            (event_id,))
+        return [_strategy_row(r) for r in rows]
+
+    # ------------------------------------------------------------- race runs
+
+    def start_race_run(self, event_id: int, strategy_id: int | None,
+                       session_id: int | None) -> int:
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO race_runs (event_id, strategy_id, session_id, started_at) "
+                "VALUES (?,?,?,?)", (event_id, strategy_id, session_id, _now()))
+            return int(cur.lastrowid)
+
+    def finish_race_run(self, race_run_id: int) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE race_runs SET finished_at = ? WHERE id = ?",
+                         (_now(), race_run_id))
+
+    def append_revision(self, race_run_id: int, lap_num: int, reason: str,
+                        plan: dict, *, accepted: bool = False) -> int:
+        """Append to the immutable revision chain for a race run."""
+        with self._write() as conn:
+            parent = conn.execute(
+                "SELECT id FROM race_revisions WHERE race_run_id = ? "
+                "ORDER BY id DESC LIMIT 1", (race_run_id,)).fetchone()
+            cur = conn.execute(
+                "INSERT INTO race_revisions (race_run_id, parent_id, lap_num, reason, "
+                "accepted, plan_json, created_at) VALUES (?,?,?,?,?,?,?)",
+                (race_run_id, parent["id"] if parent else None, lap_num, reason,
+                 int(accepted), json.dumps(plan), _now()))
+            return int(cur.lastrowid)
+
+    def list_revisions(self, race_run_id: int) -> list[dict]:
+        rows = self._query(
+            "SELECT * FROM race_revisions WHERE race_run_id = ? ORDER BY id",
+            (race_run_id,))
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["plan"] = json.loads(item.pop("plan_json"))
+            item["accepted"] = bool(item["accepted"])
+            out.append(item)
+        return out
+
+
+def _event_row(row: sqlite3.Row) -> dict:
+    event = dict(row)
+    for key in ("available_compounds", "required_compounds"):
+        raw = event.get(key) or "[]"
+        event[key] = json.loads(raw)
+    return event
+
+
+def _strategy_row(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    item["plan"] = json.loads(item.pop("plan_json"))
+    evidence = item.pop("evidence_json", None)
+    item["evidence"] = json.loads(evidence) if evidence else None
+    return item
