@@ -215,6 +215,7 @@ class PitCrewController(QObject):
         # once, and never allowed to overwrite something read off a car.
         self.store.seed_range_records(catalogs.range_seed_records())
         self.bridge.apply_settings(self.settings)
+        self.voice.tune(**self.settings.voice_tuning())
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -360,6 +361,7 @@ class PitCrewController(QObject):
         rebind = new.ptt_key != self.settings.ptt_key
         self.settings = new
         self.bridge.apply_settings(new)
+        self.voice.tune(**new.voice_tuning())
         if rebind:
             # A key the hook is not watching is a button that does nothing, so
             # the listener is rebuilt rather than reconfigured.

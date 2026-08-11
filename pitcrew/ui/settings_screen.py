@@ -79,7 +79,14 @@ class SettingsScreen(QWidget):
         columns = QHBoxLayout()
         columns.setSpacing(theme.GAP_WIDE)
         columns.addWidget(self._ptt_plate(), 1)
-        columns.addWidget(self._beep_plate(), 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(theme.GAP_WIDE)
+        right.addWidget(self._beep_plate())
+        right.addWidget(self._voice_plate())
+        right.addStretch(1)
+        columns.addLayout(right, 1)
+
         page.addLayout(columns)
         page.addStretch(1)
         page.addWidget(self._footer())
@@ -179,6 +186,44 @@ class SettingsScreen(QWidget):
         plate.body.addStretch(1)
         return plate
 
+    def _voice_plate(self) -> Plate:
+        """How the engineer sounds.
+
+        Here rather than in a file because this app reads no config file, and
+        at the rig rather than in code because it is settled by ear.
+        """
+        plate = Plate("Engineer's voice")
+        plate.body.addWidget(BodyLabel(
+            "A race engineer is calm. Jitter is what makes a synthetic voice "
+            "sound nervous — it is the one to reach for first.",
+            size=13, colour=theme.STRUCK))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(theme.GAP)
+        grid.setVerticalSpacing(theme.GAP)
+
+        self.length_scale = self._tuning_box(0.5, 2.0, 0.02, 1.12)
+        self.noise_scale = self._tuning_box(0.0, 1.5, 0.05, 0.60)
+        self.noise_w_scale = self._tuning_box(0.0, 1.5, 0.05, 0.55)
+
+        grid.addWidget(Field("Pace", self.length_scale,
+                             hint="Higher is slower."), 0, 0)
+        grid.addWidget(Field("Timbre variation", self.noise_scale), 0, 1)
+        grid.addWidget(Field("Jitter", self.noise_w_scale,
+                             hint="Lower is calmer."), 1, 0)
+        plate.body.addLayout(grid)
+        return plate
+
+    def _tuning_box(self, low: float, high: float, step: float,
+                    value: float) -> QDoubleSpinBox:
+        box = QDoubleSpinBox()
+        box.setRange(low, high)
+        box.setSingleStep(step)
+        box.setDecimals(2)
+        box.setValue(value)
+        block_wheel(box)
+        return box
+
     def _rule_label(self, text: str) -> StencilLabel:
         label = StencilLabel(text, size=11, tracking=12.0)
         label.setContentsMargins(0, 8, 0, 0)
@@ -207,6 +252,9 @@ class SettingsScreen(QWidget):
         index = self.rpm_source.findData(settings.beep_rpm_source)
         self.rpm_source.setCurrentIndex(max(0, index))
         self.beep_rpm.setValue(settings.beep_rpm)
+        self.length_scale.setValue(settings.voice_length_scale)
+        self.noise_scale.setValue(settings.voice_noise_scale)
+        self.noise_w_scale.setValue(settings.voice_noise_w_scale)
         self._sync_rpm_enabled()
 
     def values(self) -> Settings:
@@ -217,6 +265,9 @@ class SettingsScreen(QWidget):
             beep_enabled=self.beep_enabled.isChecked(),
             beep_rpm_source=self.rpm_source.currentData() or RPM_FROM_GT7,
             beep_rpm=self.beep_rpm.value(),
+            voice_length_scale=self.length_scale.value(),
+            voice_noise_scale=self.noise_scale.value(),
+            voice_noise_w_scale=self.noise_w_scale.value(),
         )
 
     def _sync_rpm_enabled(self) -> None:

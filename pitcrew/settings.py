@@ -52,11 +52,33 @@ class Settings:
     beep_rpm_source: str = RPM_FROM_GT7
     beep_rpm: float = 7000.0
 
+    # --- how the engineer sounds.
+    #
+    # A race engineer is calm. The defaults below slow the delivery slightly
+    # and, more importantly, cut the phoneme-duration jitter that is the main
+    # contributor to the nervous, uneven cadence that reads as robotic.
+    #
+    # These are on the Settings screen rather than in a file because this app
+    # reads no config file - the one at the repo root belonged to the app this
+    # replaced. They are here so the voice can be tuned at the rig, by ear,
+    # without a code change.
+    voice_length_scale: float = 1.12       # > 1 is slower
+    voice_noise_scale: float = 0.60        # timbre variation
+    voice_noise_w_scale: float = 0.55      # duration jitter - the big one
+
     def validate(self) -> None:
         if self.beep_rpm_source not in RPM_SOURCES:
             raise ValueError(
                 f"beep_rpm_source must be one of {RPM_SOURCES}, "
                 f"got {self.beep_rpm_source!r}")
+        for name, low, high in (("voice_length_scale", 0.5, 2.0),
+                                ("voice_noise_scale", 0.0, 1.5),
+                                ("voice_noise_w_scale", 0.0, 1.5)):
+            value = getattr(self, name)
+            if not low <= value <= high:
+                raise ValueError(
+                    f"{name} of {value} is outside {low}-{high}, which is the "
+                    f"range Piper produces speech in at all")
         if not 1000.0 <= self.beep_rpm <= 20000.0:
             raise ValueError(
                 f"a shift threshold of {self.beep_rpm} rpm is not a threshold "
@@ -67,6 +89,14 @@ class Settings:
     @property
     def uses_game_rpm(self) -> bool:
         return self.beep_rpm_source == RPM_FROM_GT7
+
+    def voice_tuning(self) -> dict[str, float]:
+        """The synthesis parameters, in the names Piper's config uses."""
+        return {
+            "length_scale": self.voice_length_scale,
+            "noise_scale": self.voice_noise_scale,
+            "noise_w_scale": self.voice_noise_w_scale,
+        }
 
 
 def load(store) -> Settings:

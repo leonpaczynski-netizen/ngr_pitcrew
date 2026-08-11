@@ -8,7 +8,7 @@ set.
 from __future__ import annotations
 
 import logging
-import sqlite3
+
 import threading
 
 import pytest
@@ -301,3 +301,166 @@ def test_a_worker_thread_exception_is_recorded_too(tmp_path, monkeypatch):
                 handler.close()
                 logger.removeHandler(handler)
         diagnostics._installed = False
+
+
+# ------------------------------------------------------------- the voice
+
+def test_the_voice_tuning_round_trips_and_reaches_the_engine(store):
+    from pitcrew.engineer.voice import DEFAULT_TUNING, Voice
+
+    settings.save(store, Settings(voice_length_scale=1.20,
+                                  voice_noise_w_scale=0.40))
+    loaded = settings.load(store)
+    assert loaded.voice_tuning() == {"length_scale": 1.20,
+                                     "noise_scale": 0.60,
+                                     "noise_w_scale": 0.40}
+
+    class Tunable:
+        name = "tunable"
+
+        def __init__(self):
+            self.tuning = dict(DEFAULT_TUNING)
+
+        def tune(self, **params):
+            self.tuning.update(params)
+
+        def speak(self, text):
+            pass
+
+    engine = Tunable()
+    voice = Voice(engine=engine)
+    voice.tune(**loaded.voice_tuning())
+    assert engine.tuning["noise_w_scale"] == 0.40
+    voice.stop()
+
+
+def test_tuning_an_engine_that_cannot_be_tuned_is_not_an_error(store):
+    """SAPI has no synthesis parameters, and no voice at all is still a
+    running app."""
+    from pitcrew.engineer.voice import NullEngine, Voice
+
+    Voice(engine=NullEngine()).tune(length_scale=1.5)
+    Voice(engine=None).tune(length_scale=1.5)
+
+
+def test_the_engine_ignores_a_parameter_it_does_not_have():
+    """A newer settings screen must not break an older engine."""
+    from pitcrew.engineer.voice import PiperEngine
+
+    engine = PiperEngine.__new__(PiperEngine)
+    from pitcrew.engineer.voice import DEFAULT_TUNING
+    engine.tuning = dict(DEFAULT_TUNING)
+    engine.tune(noise_w_scale=0.3, invented_parameter=99.0)
+    assert engine.tuning["noise_w_scale"] == 0.3
+    assert "invented_parameter" not in engine.tuning
+
+
+def test_a_nonsense_voice_tuning_is_refused():
+    with pytest.raises(ValueError, match="noise_w_scale"):
+        Settings(voice_noise_w_scale=9.0).validate()
+
+
+def test_the_engine_chain_still_degrades_without_raising(monkeypatch):
+    """Piper -> SAPI -> silent. Failure is silent, never fatal."""
+    from pitcrew.engineer import voice as voice_module
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("not on this machine")
+
+    monkeypatch.setattr(voice_module, "PiperEngine", unavailable)
+    monkeypatch.setattr(voice_module, "Sapi5Engine", unavailable)
+    assert voice_module._best_engine() is None
+
+    silent = voice_module.Voice(engine=None)
+    assert silent.enabled is False
+    silent.say("box this lap")          # must not raise
+    assert silent.spoken == ["box this lap"]
+
+
+def test_synthesis_streams_rather_than_collecting_the_whole_line():
+    """Audio must start on the first chunk, not after the last one.
+
+    Collecting every chunk before playing any of them puts the whole
+    synthesis time in front of the first word, which on a long call is most
+    of a second of silence while the engineer is supposedly talking.
+
+    Proved by interleaving, not by counting: the log has to show the first
+    chunk written before the last chunk was produced.
+    """
+    import sys
+    import types
+
+    from pitcrew.engineer.voice import PiperEngine
+
+    log: list[str] = []
+
+    class Stream:
+        def start(self):
+            log.append("start")
+
+        def write(self, samples):
+            log.append(f"write {samples[0]}")
+
+        def stop(self):
+            log.append("stop")
+
+        def close(self):
+            log.append("close")
+
+    def synthesise(_text):
+        for index in range(3):
+            log.append(f"synth {index}")
+            yield ([index], 22_050)
+
+    engine = PiperEngine.__new__(PiperEngine)
+    engine.synthesise = synthesise
+
+    fake = types.ModuleType("sounddevice")
+    fake.OutputStream = lambda **_kwargs: Stream()
+    original = sys.modules.get("sounddevice")
+    sys.modules["sounddevice"] = fake
+    try:
+        engine.speak("box this lap")
+    finally:
+        if original is None:
+            sys.modules.pop("sounddevice", None)
+        else:
+            sys.modules["sounddevice"] = original
+
+    assert log == ["synth 0", "start", "write 0",
+                   "synth 1", "write 1",
+                   "synth 2", "write 2",
+                   "stop", "close"]
+    # The load-bearing assertion, stated plainly: the first sample was on its
+    # way to the device before the last one had been synthesised.
+    assert log.index("write 0") < log.index("synth 2")
+
+
+def test_a_line_that_synthesises_to_nothing_opens_no_stream():
+    """No audio device is touched for an empty result, and nothing raises."""
+    import sys
+    import types
+
+    from pitcrew.engineer.voice import PiperEngine
+
+    opened = []
+    engine = PiperEngine.__new__(PiperEngine)
+    engine.synthesise = lambda _text: iter(())
+
+    fake = types.ModuleType("sounddevice")
+
+    def output_stream(**_kwargs):
+        opened.append(1)
+        raise AssertionError("no stream should be opened")
+
+    fake.OutputStream = output_stream
+    original = sys.modules.get("sounddevice")
+    sys.modules["sounddevice"] = fake
+    try:
+        engine.speak("")
+    finally:
+        if original is None:
+            sys.modules.pop("sounddevice", None)
+        else:
+            sys.modules["sounddevice"] = original
+    assert opened == []

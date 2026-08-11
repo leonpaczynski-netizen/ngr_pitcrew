@@ -50,6 +50,16 @@ class Voice:
                 target=self._run, name="PitCrewVoice", daemon=True)
             self._thread.start()
 
+    def tune(self, **params: float) -> None:
+        """Pass synthesis settings to the engine, if it takes any.
+
+        Forwarded rather than held here: `Voice` owns the queue and the
+        thread, and knows nothing about how any particular engine makes sound.
+        """
+        tune = getattr(self._engine, "tune", None)
+        if tune is not None:
+            tune(**params)
+
     def warm(self) -> None:
         """Pay any model-loading cost now, off the caller's thread.
 
@@ -132,10 +142,20 @@ class NullEngine:
         self.lines.append(text)
 
 
+# How the engineer sounds, before the driver tunes it. Overridden from the
+# Settings screen; see pitcrew/settings.py for what each one does and why
+# noise_w_scale is the one that matters.
+DEFAULT_TUNING: dict[str, float] = {
+    "length_scale": 1.12,
+    "noise_scale": 0.60,
+    "noise_w_scale": 0.55,
+}
+
+
 class PiperEngine:
     """Local neural speech. Offline, and far better than SAPI on a race radio.
 
-    Two details that matter on the voice thread:
+    Three details that matter on the voice thread:
 
     * **The model is loaded once, ahead of time.** Cold-loading takes about
       1.7 seconds, which arriving in the middle of "box this lap" would make
@@ -143,12 +163,17 @@ class PiperEngine:
     * **Playback is serialised.** Overlapping sounddevice streams crash the
       PortAudio host rather than mixing, so one call finishes before the next
       begins - which is what a real radio does anyway.
+    * **Audio starts on the first chunk.** Synthesising the whole line before
+      playing any of it puts the entire synthesis time in front of the first
+      word. A real radio call starts as the engineer starts talking, and on a
+      long line that is most of a second earlier.
     """
 
     name = "piper"
     _play_lock = threading.Lock()
 
-    def __init__(self, model_path: str | None = None) -> None:
+    def __init__(self, model_path: str | None = None, *,
+                 tuning: dict | None = None) -> None:
         import numpy  # noqa: F401 - required by the synth path
         import sounddevice  # noqa: F401
 
@@ -160,6 +185,16 @@ class PiperEngine:
                 "pitcrew/engineer/piper_models")
         from piper import PiperVoice  # noqa: F401 - probe it imports
         self._voice = None
+        self.tuning = dict(DEFAULT_TUNING)
+        if tuning:
+            self.tuning.update(tuning)
+
+    def tune(self, **params: float) -> None:
+        """Change how it sounds, between calls. Unknown names are ignored so a
+        newer settings screen cannot break an older engine."""
+        for key, value in params.items():
+            if key in DEFAULT_TUNING:
+                self.tuning[key] = float(value)
 
     def warm(self) -> None:
         """Load the model now, so the first real call does not wait for it."""
@@ -171,24 +206,43 @@ class PiperEngine:
             self._voice = PiperVoice.load(self._path)
         return self._voice
 
-    def speak(self, text: str) -> None:
-        import numpy as np
-        import sounddevice as sd
+    def _config(self):
         from piper.config import SynthesisConfig
 
-        voice = self._load()
-        chunks, rate = [], 22_050
-        for chunk in voice.synthesize(
-                text, SynthesisConfig(length_scale=1.0, volume=1.0,
-                                      normalize_audio=True)):
-            chunks.append(np.frombuffer(chunk.audio_int16_bytes,
-                                        dtype=np.int16))
-            rate = chunk.sample_rate
-        if not chunks:
-            return
-        audio = np.concatenate(chunks)
+        return SynthesisConfig(volume=1.0, normalize_audio=True,
+                               **self.tuning)
+
+    def synthesise(self, text: str):
+        """Yield (samples, sample_rate) as they are produced.
+
+        Separated from playback so the render tool can write a wav without
+        touching an audio device, and so a test can drive synthesis on a
+        machine with no sound card at all.
+        """
+        import numpy as np
+
+        for chunk in self._load().synthesize(text, self._config()):
+            yield (np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16),
+                   chunk.sample_rate)
+
+    def speak(self, text: str) -> None:
+        import sounddevice as sd
+
         with self._play_lock:
-            sd.play(audio, rate, blocking=True)
+            stream = None
+            try:
+                for samples, rate in self.synthesise(text):
+                    if stream is None:
+                        stream = sd.OutputStream(samplerate=rate, channels=1,
+                                                 dtype="int16")
+                        stream.start()
+                    stream.write(samples)
+            finally:
+                if stream is not None:
+                    # stop() drains what is already queued; close() would cut
+                    # the last syllable off.
+                    stream.stop()
+                    stream.close()
 
 
 def _default_model() -> str:
