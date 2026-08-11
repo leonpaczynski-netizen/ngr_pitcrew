@@ -34,8 +34,14 @@ CREATE TABLE IF NOT EXISTS events (
     race_laps           INTEGER,
     race_minutes        REAL,
     weather             TEXT    NOT NULL DEFAULT 'dry',
-    tyre_wear_mult      REAL    NOT NULL DEFAULT 1.0,
-    fuel_mult           REAL    NOT NULL DEFAULT 1.0,
+    -- Strings, not numbers, because "Off" is a real setting and a number
+    -- cannot express it. Parsed to a factor where the maths needs one.
+    tyre_wear_mult      TEXT    NOT NULL DEFAULT 'Off',
+    fuel_mult           TEXT    NOT NULL DEFAULT 'Off',
+    game_version        TEXT,
+    abs_setting         TEXT,          -- 'Off' | 'Weak' | 'Default'
+    tcs                 INTEGER,       -- 0-5
+    countersteer        INTEGER,       -- assist on/off
     refuel_rate_lps     REAL    NOT NULL DEFAULT 2.5,
     pit_loss_secs       REAL    NOT NULL DEFAULT 20.0,
     mandatory_stops     INTEGER NOT NULL DEFAULT 0,
@@ -95,6 +101,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     kind        TEXT    NOT NULL,          -- 'practice' | 'race'
     setup_sheet_id INTEGER REFERENCES setup_sheets(id),
     tune_label  TEXT,
+    -- Observed from the stream, not configured: which packet format actually
+    -- arrived, and the car class the game reported. The export must declare
+    -- the format so a null channel reads as "not offered by this format"
+    -- rather than "not measured".
+    packet_format TEXT,
+    car_category  TEXT,
+    -- 100 L for almost every car, 5 for karts, 0 for electric. Zero is a real
+    -- value, so the divide is guarded rather than the field.
+    fuel_capacity_l REAL,
     started_at  TEXT    NOT NULL,
     ended_at    TEXT
 );

@@ -190,6 +190,32 @@ def test_brake_point_is_metres_before_the_apex():
     assert corner["brakePeakPct"] == 90.0
 
 
+def test_brake_point_is_measured_from_outside_the_corner_window():
+    """Braking begins on the straight. Measuring only inside the window
+    systematically under-reports it, which matters most for a deep braker."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 400.0 <= f["road_distance_m"] <= 600.0:
+            f["brake_pct"] = 95.0
+    laps = [CountedLap(1, frames)]
+    # The window opens at 540, well after braking began at 400.
+    corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 540, 600, 660)]), laps)[0]
+    assert 195 <= corner["brakePointM"] <= 205
+
+
+def test_an_earlier_unrelated_brake_does_not_move_the_brake_point():
+    """Only the last continuous run into the apex counts."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 100.0 <= f["road_distance_m"] <= 150.0:
+            f["brake_pct"] = 80.0        # a lift-and-dab far up the road
+        if 520.0 <= f["road_distance_m"] <= 600.0:
+            f["brake_pct"] = 95.0
+    laps = [CountedLap(1, frames)]
+    corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 540, 600, 660)]), laps)[0]
+    assert 75 <= corner["brakePointM"] <= 85
+
+
 def test_a_corner_taken_without_braking_reports_null_not_zero():
     laps = [CountedLap(1, synthetic_lap(apex_positions=(600.0,)))]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]

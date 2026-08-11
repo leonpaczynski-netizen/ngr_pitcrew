@@ -47,10 +47,25 @@ def _round_or_none(value: float | None, digits: int = 1) -> float | None:
     return None if value is None else round(value, digits)
 
 
+# How far back to look for the start of braking. Braking begins on the straight,
+# outside the corner window, so a brake point measured only inside the window is
+# systematically short — which matters most for a driver who brakes deep.
+BRAKE_LOOKBACK_M = 500.0
+
+
 def _slice(frames: list[dict], corner: Corner) -> list[dict]:
     return [f for f in frames
             if f.get("road_distance_m") is not None
             and corner.contains(f["road_distance_m"])]
+
+
+def _approach(frames: list[dict], corner: Corner) -> list[dict]:
+    """Frames from the braking zone up to the apex, in distance order."""
+    low = corner.start_m - BRAKE_LOOKBACK_M
+    picked = [f for f in frames
+              if f.get("road_distance_m") is not None
+              and low <= f["road_distance_m"] <= corner.apex_m]
+    return sorted(picked, key=lambda f: f["road_distance_m"])
 
 
 def _frame_interval_ms(window: list[dict]) -> float:
@@ -121,14 +136,16 @@ def aggregate_corners(model: CornerModel, laps: list[CountedLap],
             window = _slice(lap.frames, corner)
             if len(window) < 2:
                 continue
-            per_lap.append(_measure(window, corner, bottoming_ref, inferable))
+            approach = _approach(lap.frames, corner)
+            per_lap.append(
+                _measure(window, approach, corner, bottoming_ref, inferable))
         if not per_lap:
             continue
         out.append(_combine(corner, per_lap))
     return out
 
 
-def _measure(window: list[dict], corner: Corner,
+def _measure(window: list[dict], approach: list[dict], corner: Corner,
              bottoming_ref: dict[str, float] | None,
              bottoming_wheels: set[str]) -> dict:
     """Everything measurable about one corner on one lap."""
@@ -143,7 +160,7 @@ def _measure(window: list[dict], corner: Corner,
         "min_kph": min(speeds),
         "exit_kph": speeds[-1],
         "brake_peak_pct": max(brakes),
-        "brake_point_m": _brake_point_m(window, corner),
+        "brake_point_m": _brake_point_m(approach, corner),
         "throttle_on_pct": _throttle_on_pct(window, corner),
         "steer_peak_deg": _peak_abs(window, "steering_deg"),
         "steer_peak_norm": _peak_signed(window, "steering_norm"),
@@ -156,19 +173,28 @@ def _measure(window: list[dict], corner: Corner,
     return measurement
 
 
-def _brake_point_m(window: list[dict], corner: Corner) -> float | None:
+def _brake_point_m(approach: list[dict], corner: Corner) -> float | None:
     """Metres before the apex at which braking began.
 
-    None when the corner was taken without braking — which is a finding, and
-    is not the same as braking zero metres before the apex.
+    Walks back from the apex to the start of the last continuous braking run,
+    so a brake application that began out on the straight is measured from
+    where it actually began rather than from where the corner window opens.
+
+    None when the corner was taken without braking — a finding in itself, and
+    not the same claim as braking zero metres before the apex.
     """
-    for frame in window:
-        if frame["brake_pct"] > thresholds.BRAKE_ON_PCT:
-            distance = frame["road_distance_m"]
-            if distance > corner.apex_m:
-                return None
-            return round(corner.apex_m - distance, 1)
-    return None
+    if not approach:
+        return None
+
+    index = len(approach) - 1
+    while index >= 0 and approach[index]["brake_pct"] <= thresholds.BRAKE_ON_PCT:
+        index -= 1
+    if index < 0:
+        return None
+
+    while index > 0 and approach[index - 1]["brake_pct"] > thresholds.BRAKE_ON_PCT:
+        index -= 1
+    return round(corner.apex_m - approach[index]["road_distance_m"], 1)
 
 
 def _throttle_on_pct(window: list[dict], corner: Corner) -> float | None:

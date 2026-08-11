@@ -203,6 +203,17 @@ class Store:
                 (event_id, kind, tune_label, setup_sheet_id, _now()))
             return int(cur.lastrowid)
 
+    def note_stream_facts(self, session_id: int, *, packet_format: str | None = None,
+                          car_category: str | None = None,
+                          fuel_capacity_l: float | None = None) -> None:
+        """Record what the stream actually delivered, once it is known."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET packet_format = COALESCE(?, packet_format), "
+                "car_category = COALESCE(?, car_category), "
+                "fuel_capacity_l = COALESCE(?, fuel_capacity_l) WHERE id = ?",
+                (packet_format, car_category, fuel_capacity_l, session_id))
+
     def end_session(self, session_id: int) -> None:
         with self._write() as conn:
             conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?",

@@ -1,0 +1,180 @@
+"""One call that turns a recorded session into a validated export payload.
+
+Everything upstream of here is deliberately small and testable in isolation.
+This is the join: read the session out of the store, aggregate it, and hand
+back a payload that has already been validated — or refuse.
+"""
+from __future__ import annotations
+
+from collections import Counter
+
+from pitcrew.analysis import thresholds
+from pitcrew.analysis.corners import (
+    CountedLap,
+    aggregate_corners,
+    bottoming_reference,
+)
+from pitcrew.analysis.resolve import resolve_corner_model
+from pitcrew.analysis.session import (
+    LapInput,
+    counted_laps,
+    exclusion_note,
+    lap_export,
+    session_export,
+)
+from pitcrew.analysis.wear import wear_export
+from pitcrew.export.payload import Derived, Meta, build_payload
+from pitcrew.store.tyres import get_by_code
+
+# GT7 multipliers are shown as "Off" or "Nx". "Off" means the thing does not
+# happen at all, which is a factor of zero, not of one.
+MULTIPLIER_OFF = "Off"
+
+
+def multiplier_factor(setting: str | None) -> float | None:
+    """Parse "4x" to 4.0 and "Off" to 0.0. None when it was never set."""
+    if not setting:
+        return None
+    text = setting.strip()
+    if text.lower() == "off":
+        return 0.0
+    if text.lower().endswith("x"):
+        text = text[:-1]
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _lap_inputs(store, session_id: int) -> list[LapInput]:
+    out = []
+    for row in store.list_laps(session_id):
+        frames = None
+        stored = store.get_lap_frames(row["id"])
+        if stored:
+            frames = stored["frames"]
+        out.append(LapInput(
+            lap_num=row["lap_num"],
+            lap_time_ms=row["lap_time_ms"],
+            fuel_start=row["fuel_start"],
+            fuel_end=row["fuel_end"],
+            compound=row["compound"],
+            fuel_map=row["fuel_map"],
+            is_pit_lap=bool(row["is_pit_lap"]),
+            is_out_lap=bool(row["is_out_lap"]),
+            excluded=bool(row["excluded"]),
+            exclusion_reason=row["exclusion_reason"],
+            wear_front=row["wear_front"],
+            wear_rear=row["wear_rear"],
+            frames=frames,
+        ))
+    return out
+
+
+def _dominant_compound(laps: list[LapInput]) -> str | None:
+    """The compound most of the counted laps ran on.
+
+    None rather than a guess when nothing was tagged — the tune builder reads
+    an absent compound as "not recorded", which is true.
+    """
+    tags = [lap.compound for lap in counted_laps(laps) if lap.compound]
+    if not tags:
+        return None
+    return Counter(tags).most_common(1)[0][0]
+
+
+def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
+    """The fastest counted lap that has frames — the corner model's reference."""
+    candidates = [lap for lap in counted_laps(laps) if lap.frames]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda lap: lap.lap_time_ms).frames
+
+
+def build_session_export(store, session_id: int, *, notes: str = "",
+                         calibrated_at_race_multiplier: bool = True) -> dict:
+    """Assemble the `gt7-pitcrew/1.1` payload for one recorded session."""
+    session = store.get_session(session_id)
+    if session is None:
+        raise ValueError(f"no session with id {session_id}")
+    event = store.get_event(session["event_id"])
+    if event is None:
+        raise ValueError(f"session {session_id} has no event")
+
+    laps = _lap_inputs(store, session_id)
+    counted = counted_laps(laps)
+
+    compound = _compound_full_name(_dominant_compound(laps))
+    meta = Meta(
+        car=event["car_name"] or "unknown",
+        circuit=_circuit_name(event),
+        date=(session["started_at"] or "")[:10],
+        session_type=session["kind"],
+        packet=session["packet_format"] or "A",
+        car_category=session["car_category"],
+        game_version=event["game_version"],
+        compound_front=compound,
+        compound_rear=compound,
+        abs_setting=event["abs_setting"],
+        tcs=event["tcs"],
+        countersteer=(None if event["countersteer"] is None
+                      else bool(event["countersteer"])),
+        tyre_wear_mult=event["tyre_wear_mult"],
+        fuel_mult=event["fuel_mult"],
+    )
+
+    corners = None
+    reference = _reference_frames(laps)
+    model = resolve_corner_model(store, event["track"], event["layout"], reference)
+    counted_with_frames = [CountedLap(lap.lap_num, lap.frames)
+                           for lap in counted if lap.frames]
+    bottoming_ref = None
+    if model is not None and counted_with_frames:
+        meta.corner_model = model.as_meta()
+        bottoming_ref = bottoming_reference(counted_with_frames)
+        corners = aggregate_corners(model, counted_with_frames, bottoming_ref)
+
+    setup = None
+    driver_changes = None
+    if session["setup_sheet_id"]:
+        sheet = store.get_setup_sheet(session["setup_sheet_id"])
+        if sheet is not None:
+            setup = sheet.as_export()
+            changes = store.list_setup_changes(session_id)
+            driver_changes = [c.as_export() for c in changes] or None
+
+    range_record = None
+    if event["car_name"]:
+        record = store.get_range_record(event["car_name"])
+        if record is not None:
+            range_record = record.as_export()
+
+    all_notes = " ".join(part for part in (exclusion_note(laps), notes) if part)
+
+    return build_payload(
+        meta,
+        setup=setup,
+        driver_changes=driver_changes,
+        range_record=range_record,
+        session=session_export(laps, fuel_capacity_l=session["fuel_capacity_l"]),
+        laps=[lap_export(lap) for lap in laps],
+        corners=corners,
+        wear=wear_export(
+            laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier),
+        derived=Derived(thresholds.as_export(), bottoming_ref_mm=bottoming_ref),
+        notes=all_notes,
+    )
+
+
+def _compound_full_name(code: str | None) -> str | None:
+    """"RM" -> "Racing Medium". The contract wants the full GT7 name."""
+    if not code:
+        return None
+    compound = get_by_code(code)
+    return compound.name if compound else code
+
+
+def _circuit_name(event: dict) -> str:
+    track = event["track"] or "unknown"
+    layout = event["layout"]
+    return f"{track} ({layout})" if layout else track
