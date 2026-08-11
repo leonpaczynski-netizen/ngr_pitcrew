@@ -23,6 +23,13 @@ from __future__ import annotations
 SCHEMA_VERSION = 1
 
 DDL = """
+-- Small key/value store for things like which event is active. Not a settings
+-- system; if it grows past a handful of keys it wants a real table.
+CREATE TABLE IF NOT EXISTS app_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT    NOT NULL UNIQUE,

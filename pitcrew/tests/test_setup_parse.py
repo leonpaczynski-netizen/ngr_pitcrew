@@ -111,7 +111,7 @@ def test_summary_states_what_was_read():
     summary = result.summary()
     assert "1 of 23 settings" in summary
     assert "2 gears" in summary
-    assert "1 lines not recognised" in summary
+    assert "1 line not recognised" in summary
 
 
 def test_a_sheet_of_pure_junk_matches_nothing():

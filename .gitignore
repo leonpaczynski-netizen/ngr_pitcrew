@@ -40,3 +40,9 @@ voice/piper_models/
 # Data wipe quarantine (2026-08-02) — corrupt event/car/track linkage
 _quarantine_*/
 .last_quarantine_path
+
+# Pit Crew runtime data - race prep, never committed
+data/pitcrew.db
+data/pitcrew.db-wal
+data/pitcrew.db-shm
+exports/

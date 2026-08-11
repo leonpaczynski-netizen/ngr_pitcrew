@@ -38,6 +38,9 @@ class SetupSheet:
     performance: dict[str, float] = field(default_factory=dict)
     build: dict[str, float] = field(default_factory=dict)
     notes: str = ""
+    # Set when the sheet came out of the store, so a session can record which
+    # sheet was fitted without a second lookup.
+    id: int | None = None
 
     def validate(self) -> None:
         if not self.car_name.strip():

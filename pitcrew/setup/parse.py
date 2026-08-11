@@ -69,7 +69,9 @@ class ParsedSheet:
         if self.gears:
             parts.append(f"{len(self.gears)} gears")
         if self.unmatched:
-            parts.append(f"{len(self.unmatched)} lines not recognised")
+            count = len(self.unmatched)
+            parts.append(
+                f"{count} line{'' if count == 1 else 's'} not recognised")
         return ", ".join(parts)
 
 

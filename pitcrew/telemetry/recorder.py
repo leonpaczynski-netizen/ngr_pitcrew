@@ -178,13 +178,24 @@ class LapRecorder:
                 1 if packet.rev_limiter_active else 0,
             ])
 
-    def take_lap(self) -> LapFrames | None:
-        """Close off the lap in progress and return its frames, or None if empty."""
+    def take_rows(self) -> list[list]:
+        """Detach the lap in progress, without compressing it.
+
+        This must run on the telemetry thread the instant a lap completes: any
+        frame recorded after the lap boundary but before the swap belongs to
+        the next lap, and compressing ~7,200 rows takes long enough to drop
+        packets if it happens inline. The caller compresses afterwards, off the
+        socket loop.
+        """
         with self._lock:
             rows = self._rows
             self._rows = []
             self._lap_start_ms = None
             self._dropped_off_track = 0
+        return rows
+
+    def encode(self, rows: list[list]) -> LapFrames | None:
+        """Compress detached rows. Safe to call from any thread."""
         if not rows:
             return None
         return LapFrames(
@@ -192,6 +203,10 @@ class LapRecorder:
             sample_hz=SAMPLE_HZ / self._sample_every,
             blob=encode_frames(rows),
         )
+
+    def take_lap(self) -> LapFrames | None:
+        """Detach and compress in one step. Convenient off the hot path."""
+        return self.encode(self.take_rows())
 
     def discard(self) -> None:
         with self._lock:

@@ -234,6 +234,7 @@ class PracticeScreen(QWidget):
 
     export_requested = pyqtSignal()
     lap_changed = pyqtSignal(int)
+    recording_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -389,15 +390,9 @@ class PracticeScreen(QWidget):
             self.spec.add("Untagged", str(len(untagged)), declared=True)
         self.spec.finish()
 
-        if not self._rows:
-            self.subtitle.setText(
-                "No laps yet. Start practice, then drive - laps land here as "
-                "you complete them.")
-        else:
-            self.subtitle.setText(
-                f"{len(self._rows)} laps recorded. Mark up the session, then "
-                "export.")
-
+        # The subtitle belongs to the controller: it carries connection and
+        # session state, which refresh() has no way of knowing. Lap counts are
+        # already in the spec line.
         self.export_button.setEnabled(bool(counted))
         if untagged:
             self.footer_note.setText(
@@ -413,6 +408,21 @@ class PracticeScreen(QWidget):
             self.footer_note.setStyleSheet(f"color: {theme.STRUCK};")
 
     def _toggle_recording(self) -> None:
-        self._recording = not self._recording
+        self.recording_toggled.emit(not self._recording)
+
+    def set_recording(self, recording: bool) -> None:  # noqa: N802 - Qt naming
+        """Reflect what the controller actually managed to do, not the click."""
+        self._recording = recording
         self.record_button.setText(
-            "Stop practice" if self._recording else "Start practice")
+            "Stop practice" if recording else "Start practice")
+
+    def set_status(self, text: str, *, warn: bool = False) -> None:  # noqa: N802
+        self.subtitle.setText(text)
+        self.subtitle.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.STENCIL_DIM};"
+            f"background: transparent;")
+
+    def note(self, text: str, *, warn: bool = False) -> None:
+        self.footer_note.setText(text)
+        self.footer_note.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.CHALK};")

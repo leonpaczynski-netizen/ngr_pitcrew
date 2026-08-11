@@ -63,6 +63,31 @@ class Store:
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
 
+    # ------------------------------------------------------------- app state
+
+    def set_state(self, key: str, value: str | int | None) -> None:
+        with self._write() as conn:
+            if value is None:
+                conn.execute("DELETE FROM app_state WHERE key = ?", (key,))
+            else:
+                conn.execute(
+                    "INSERT INTO app_state (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, str(value)))
+
+    def get_state(self, key: str) -> str | None:
+        rows = self._query("SELECT value FROM app_state WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def active_event_id(self) -> int | None:
+        raw = self.get_state("active_event_id")
+        if raw is None:
+            return None
+        # The event may have been deleted since; an id pointing at nothing is
+        # worse than no id at all.
+        event_id = int(raw)
+        return event_id if self.get_event(event_id) else None
+
     # ---------------------------------------------------------------- events
 
     def create_event(self, **fields) -> int:
@@ -446,6 +471,7 @@ def _setup_sheet(row: sqlite3.Row):
         performance=json.loads(row["performance_json"] or "{}"),
         build=json.loads(row["build_json"] or "{}"),
         notes=row["notes"] or "",
+        id=row["id"],
     )
 
 

@@ -45,6 +45,10 @@ WEATHER = ("Dry", "Damp", "Wet", "Changeable")
 MULTIPLIERS = ("Off", "1x", "2x", "3x", "4x", "5x", "6x", "8x", "10x")
 ABS_SETTINGS = ("Off", "Weak", "Default")
 
+# Spin boxes have no null. This sentinel is the minimum of the range and
+# renders as a dash, so a setting nobody entered never reads as zero.
+EMPTY = -9999.0
+
 
 def _suggesting_combo(items, placeholder: str) -> QComboBox:
     """An editable combo that suggests without dictating its own width.
@@ -330,14 +334,13 @@ class EventScreen(QWidget):
 
         for index, key in enumerate(keys_in_group(group)):
             editor = QDoubleSpinBox()
-            editor.setRange(-9999.0, 9999.0)
+            editor.setRange(EMPTY, 9999.0)
             editor.setDecimals(key.decimals)
             editor.setSingleStep(10 ** -key.decimals if key.decimals else 1)
             # A setting nobody entered must not read as zero: the spin box
             # shows a dash until it holds a real value.
             editor.setSpecialValueText("—")
-            editor.setMinimum(-9999.0)
-            editor.setValue(-9999.0)
+            editor.setValue(EMPTY)
             self._setup_editors[key.key] = editor
             grid.addWidget(Field(key.label, editor, suffix=key.unit,
                                  hint=key.note),
@@ -398,11 +401,48 @@ class EventScreen(QWidget):
             self.paste_status.setToolTip(
                 "Not recognised:\n" + "\n".join(result.unmatched[:12]))
 
+    def load(self, event: dict | None, sheet=None) -> None:
+        """Populate from a stored event and its fitted sheet."""
+        if event:
+            self.name_edit.setText(event.get("name") or "")
+            self.track_edit.setCurrentText(event.get("track") or "")
+            self.layout_edit.setText(event.get("layout") or "")
+            self.car_edit.setCurrentText(event.get("car_name") or "")
+            self.race_type.setCurrentText(
+                "Timed" if event.get("race_type") == "time" else "Laps")
+            self.race_length.setValue(int(event.get("race_laps") or 20))
+            self.weather.setCurrentText((event.get("weather") or "dry").title())
+            self.tyre_mult.setCurrentText(event.get("tyre_wear_mult") or "Off")
+            self.fuel_mult.setCurrentText(event.get("fuel_mult") or "Off")
+            self.refuel_rate.setValue(float(event.get("refuel_rate_lps") or 2.5))
+            self.pit_loss.setValue(float(event.get("pit_loss_secs") or 20.0))
+            self.mandatory_stops.setValue(int(event.get("mandatory_stops") or 0))
+            if event.get("abs_setting"):
+                self.abs_setting.setCurrentText(event["abs_setting"])
+            self.tcs.setValue(int(event.get("tcs") or 0))
+
+            allowed = set(event.get("available_compounds") or [])
+            for code, chip in self._compound_chips.items():
+                chip.setSelected(code in allowed)
+
+        if sheet is not None:
+            self.sheet_name.setText(sheet.sheet_name)
+            for key, editor in self._setup_editors.items():
+                value = sheet.values.get(key)
+                editor.setValue(EMPTY if value is None else float(value))
+            if sheet.gears:
+                self.gear_edit.setText("  ".join(f"{g:g}" for g in sheet.gears))
+
+    def note(self, text: str, *, warn: bool = False) -> None:
+        self.footer_note.setText(text)
+        self.footer_note.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.CHALK};")
+
     def values(self) -> dict:
         """Everything the driver declared on this screen."""
         setup_values = {}
         for key, editor in self._setup_editors.items():
-            if editor.value() > -9999.0:
+            if editor.value() > EMPTY:
                 setup_values[key] = editor.value()
 
         return {
@@ -425,6 +465,7 @@ class EventScreen(QWidget):
                                     if chip.isSelected()],
             "sheet_name": self.sheet_name.text().strip(),
             "setup_values": setup_values,
+            "gear_text": self.gear_edit.text().strip(),
         }
 
     def _on_save(self) -> None:
