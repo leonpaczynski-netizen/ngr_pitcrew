@@ -256,10 +256,22 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
     # ``corroborated_feel_flags`` returns which FEEDBACK feel-flags are independently
     # confirmed by a TELEMETRY signal (e.g. rear_loose_on_exit + wheelspin major).
     # The SERVICE applies the unambiguous-linkage gate: pass a non-empty frozenset
-    # to the arbiter ONLY when exactly one feel flag is True in the feedback and
-    # that single flag is in the corroborated set.  When multiple flags are active,
-    # the link between any individual proposal and a specific flag is ambiguous —
-    # emit empty frozenset and let the arbiter use LABEL_DRIVER_TEL_SILENT.
+    # to the arbiter ONLY when EVERY feel flag the driver raised is corroborated.
+    #
+    # Why "all", not "exactly one": we cannot tell which flag drove a given
+    # feedback proposal, so the question that matters is not "is the link
+    # unambiguous?" but "does the answer depend on the link?".  If every active
+    # flag is corroborated, it does not — whichever one drove the proposal, its
+    # symptom is confirmed by telemetry, so the upgrade is safe without guessing.
+    # An earlier "exactly one flag" gate was strictly worse: one dropdown answer
+    # can raise two flags (exit_stability="strong oversteer" sets BOTH
+    # rear_loose_on_exit AND snap_oversteer_exit), so the common corroborated
+    # case was refused while adding no safety.
+    #
+    # If ANY active flag is uncorroborated the set is empty and the arbiter falls
+    # back to LABEL_DRIVER_TEL_SILENT — this fails CLOSED, understating the
+    # evidence rather than overstating it.  Overstating is the defect class that
+    # produced the MEASURED_FACT bug; never trade that away for a stronger label.
     _safe_corroborated: "frozenset[str]" = frozenset()
     try:
         from strategy.setup_diagnosis import corroborated_feel_flags as _corr_flags
@@ -275,9 +287,9 @@ def _run_inner(db, *, session_run_id: str, discipline: str) -> dict:
             _tel_aero_rear_near_min,
             _tel_avg_lockups,
         )
-        # Unambiguous linkage: exactly one feel flag is True AND it is corroborated.
+        # Safe upgrade: at least one flag raised, and EVERY raised flag corroborated.
         _true_feel_flags = frozenset(k for k, v in _fb_feel_flags.items() if v)
-        if len(_true_feel_flags) == 1 and _true_feel_flags <= _raw_corroborated:
+        if _true_feel_flags and _true_feel_flags <= _raw_corroborated:
             _safe_corroborated = _raw_corroborated
     except Exception:
         pass  # degraded silently — arbiter defaults to LABEL_DRIVER_TEL_SILENT
