@@ -111,10 +111,38 @@ CREATE TABLE IF NOT EXISTS laps (
     fuel_used     REAL    NOT NULL DEFAULT 0.0,
     position      INTEGER NOT NULL DEFAULT 0,
     compound      TEXT,                    -- tagged by the driver after the session
+    -- GT7 does not broadcast the fuel map, so this is null unless the driver
+    -- says what he was running. Never inferred.
+    fuel_map      INTEGER,
     is_pit_lap    INTEGER NOT NULL DEFAULT 0,
     is_out_lap    INTEGER NOT NULL DEFAULT 0,
+    -- Excluded from the counted set: out-lap, in-lap, an off, traffic. The
+    -- reason travels to the export's notes, because it is cheaper to explain
+    -- an exclusion than to have a setup built on a misread aggregate.
+    excluded         INTEGER NOT NULL DEFAULT 0,
+    exclusion_reason TEXT,
+    -- Driver's reading of the in-game tyre gauge, fraction consumed 0-1. The
+    -- only wear figure anchored to the game's own number.
+    wear_front    REAL,
+    wear_rear     REAL,
     recorded_at   TEXT    NOT NULL,
     UNIQUE(session_id, lap_num)
+);
+
+-- Corner definitions per circuit. Stored rather than re-detected each session:
+-- re-detection renumbers the corners the first time the driver takes a
+-- different line, and a corner aggregate is worthless if T3 means a different
+-- corner next week.
+CREATE TABLE IF NOT EXISTS corner_models (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    circuit_key  TEXT    NOT NULL UNIQUE,   -- track + layout, slugged
+    model_id     TEXT    NOT NULL,
+    version      INTEGER NOT NULL DEFAULT 1,
+    source       TEXT    NOT NULL,          -- 'auto-segment' | 'track-map'
+    lap_length_m REAL    NOT NULL,
+    corners_json TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_laps_session ON laps(session_id);
 

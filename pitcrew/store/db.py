@@ -270,6 +270,57 @@ class Store:
         with self._write() as conn:
             conn.execute("UPDATE laps SET compound = ? WHERE id = ?", (compound, lap_id))
 
+    def set_lap_fuel_map(self, lap_id: int, fuel_map: int | None) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE laps SET fuel_map = ? WHERE id = ?", (fuel_map, lap_id))
+
+    def exclude_lap(self, lap_id: int, reason: str | None) -> None:
+        """Exclude a lap from the counted set, or re-include it with reason=None."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE laps SET excluded = ?, exclusion_reason = ? WHERE id = ?",
+                (0 if reason is None else 1, reason, lap_id))
+
+    def set_lap_wear(self, lap_id: int, front: float | None,
+                     rear: float | None) -> None:
+        """Record the driver's tyre-gauge reading, fraction consumed 0-1."""
+        for value in (front, rear):
+            if value is not None and not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"wear is a fraction consumed, 0-1, got {value}")
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE laps SET wear_front = ?, wear_rear = ? WHERE id = ?",
+                (front, rear, lap_id))
+
+    # --------------------------------------------------------- corner models
+
+    def save_corner_model(self, circuit_key: str, model) -> None:
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO corner_models (circuit_key, model_id, version, source, "
+                "lap_length_m, corners_json, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(circuit_key) DO UPDATE SET "
+                "model_id=excluded.model_id, version=excluded.version, "
+                "source=excluded.source, lap_length_m=excluded.lap_length_m, "
+                "corners_json=excluded.corners_json, updated_at=excluded.updated_at",
+                (circuit_key, model.model_id, model.version, model.source,
+                 model.lap_length_m, json.dumps(model.as_dict()), _now(), _now()))
+
+    def get_corner_model(self, circuit_key: str):
+        from pitcrew.analysis.corner_model import CornerModel
+        rows = self._query(
+            "SELECT corners_json FROM corner_models WHERE circuit_key = ?",
+            (circuit_key,))
+        if not rows:
+            return None
+        return CornerModel.from_dict(json.loads(rows[0]["corners_json"]))
+
+    def list_corner_models(self) -> list[str]:
+        rows = self._query("SELECT circuit_key FROM corner_models ORDER BY circuit_key")
+        return [r["circuit_key"] for r in rows]
+
     def get_lap_frames(self, lap_id: int) -> dict | None:
         """Return {sample_hz, frame_count, frames: [dict, ...]} or None."""
         rows = self._query("SELECT * FROM lap_frames WHERE lap_id = ?", (lap_id,))
