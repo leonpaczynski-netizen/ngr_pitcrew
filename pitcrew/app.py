@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import sys
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -27,6 +30,21 @@ from pitcrew.ui.widgets import StencilLabel
 
 WINDOW = (1600, 1000)
 SCREENS = ("Event", "Practice", "Strategy", "Race")
+ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
+
+# Windows groups taskbar buttons by this id. Without one, a Python GUI app is
+# grouped under the interpreter, so a pinned shortcut and the running window
+# appear as two separate buttons with two different icons.
+APP_ID = "NextGearRacing.PitCrew"
+
+
+def _claim_taskbar_identity() -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:                            # noqa: BLE001
+        pass                                     # not Windows, or too old
 
 
 class NavRail(QWidget):
@@ -82,6 +100,8 @@ class PitCrewWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Next Gear Racing Pit Crew")
         self.resize(*WINDOW)
+        if ICON.exists():
+            self.setWindowIcon(QIcon(str(ICON)))
 
         shell = QWidget()
         row = QHBoxLayout(shell)
@@ -113,7 +133,10 @@ class PitCrewWindow(QMainWindow):
 
 
 def main() -> int:
+    _claim_taskbar_identity()
     app = QApplication(sys.argv)
+    if ICON.exists():
+        app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)
 
     store = Store(DEFAULT_DB_PATH)
