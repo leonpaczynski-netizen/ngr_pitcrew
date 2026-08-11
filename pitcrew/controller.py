@@ -22,6 +22,8 @@ from pitcrew.export.build import build_session_export
 from pitcrew.export.payload import ExportRefused, to_json
 from pitcrew.setup.sheet import SetupError, SetupSheet
 from pitcrew.store.db import Store
+from pitcrew.strategy.evidence import build_inputs
+from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.listener import UDPListener
 from pitcrew.telemetry.packet import parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
@@ -86,13 +88,16 @@ class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
     def __init__(self, store: Store, event_screen, practice_screen,
-                 *, port: int = DEFAULT_PORT,
+                 strategy_screen=None, *, port: int = DEFAULT_PORT,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
         self.event_screen = event_screen
         self.practice = practice_screen
+        self.strategy = strategy_screen
         self.port = port
+        self._plans: list = []
+        self._inputs = None
 
         self.bridge = TelemetryBridge(self)
         self.listener: UDPListener | None = None
@@ -107,6 +112,9 @@ class PitCrewController(QObject):
         self.practice.recording_toggled.connect(self._on_recording_toggled)
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
+        if self.strategy is not None:
+            self.strategy.build_requested.connect(self.build_strategy)
+            self.strategy.approve_requested.connect(self.approve_strategy)
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -337,6 +345,68 @@ class PitCrewController(QObject):
             self.practice.set_status(
                 f"{self._parse_errors} packets failed to decode. Check the "
                 "SimHub relay.", warn=True)
+
+    # -------------------------------------------------------------- strategy
+
+    def build_strategy(self) -> list:
+        """Plan the race from what practice actually measured."""
+        if self.strategy is None:
+            return []
+        event = self.active_event()
+        if event is None:
+            self.strategy.set_status(
+                "Create an event first - a plan needs a race to plan for.",
+                warn=True)
+            return []
+
+        inputs, evidence = build_inputs(self.store, event["id"])
+        self._inputs = inputs
+        try:
+            plans = recommend(inputs)
+        except StrategyImpossible as exc:
+            # Refusing beats inventing a plan the driver would race to.
+            self._plans = []
+            self.strategy.show_plans([], evidence)
+            self.strategy.set_status(str(exc), warn=True)
+            return []
+
+        self._plans = plans
+        approved = self.store.get_approved_strategy(event["id"])
+        approved_index = None
+        if approved:
+            approved_index = next(
+                (i for i, plan in enumerate(plans)
+                 if plan.stops == approved["plan"].get("stops")), None)
+
+        self.strategy.show_plans(plans, evidence, approved_index=approved_index)
+        gaps = inputs.missing()
+        if gaps:
+            self.strategy.note(
+                "Planned without " + ", ".join(gaps)
+                + ". Fill those in and rebuild before racing to this.",
+                warn=True)
+        else:
+            self.strategy.note("Every input measured.")
+        return plans
+
+    def approve_strategy(self, index: int) -> int | None:
+        if self.strategy is None or not self._plans:
+            return None
+        event = self.active_event()
+        if event is None or index >= len(self._plans):
+            return None
+
+        plan = self._plans[index]
+        payload = plan.as_dict()
+        payload["export"] = plan.as_export(self._inputs)
+        strategy_id = self.store.save_strategy(
+            event["id"], payload, label=plan.label(),
+            evidence={"missing": self._inputs.missing()})
+        self.store.approve_strategy(strategy_id)
+        self.strategy.note(
+            f"{plan.label()} approved. It is the race plan until you approve "
+            "another.")
+        return strategy_id
 
     # ---------------------------------------------------------------- export
 
