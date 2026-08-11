@@ -23,8 +23,12 @@ from pitcrew.engineer.ptt import PushToTalk, best_listener, best_recogniser
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import build_event_export
-from pitcrew.export.payload import ExportRefused, to_json
-from pitcrew.setup.sheet import SetupError, SetupSheet
+from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
+from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
+from pitcrew.prompts.context import gather
+from pitcrew.prompts.report import DriverReport
+from pitcrew.prompts.templates import PROMPT_VERSION
+from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
@@ -108,6 +112,7 @@ class PitCrewController(QObject):
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
+                 car_screen=None, engineer_screen=None,
                  port: int = DEFAULT_PORT, voice=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -116,6 +121,9 @@ class PitCrewController(QObject):
         self.practice = practice_screen
         self.strategy = strategy_screen
         self.race_screen = race_screen
+        self.car_screen = car_screen
+        self.engineer = engineer_screen
+        self.prompt_issue_id: int | None = None
         self.port = port
         self.voice = voice if voice is not None else Voice()
         self.race: RaceCoordinator | None = None
@@ -154,6 +162,17 @@ class PitCrewController(QObject):
         if self.race_screen is not None:
             self.race_screen.start_requested.connect(self.start_race)
             self.race_screen.stop_requested.connect(self.stop_race)
+        if self.car_screen is not None:
+            self.car_screen.car_changed.connect(self.load_car)
+            self.car_screen.saved.connect(self.save_ranges)
+        if self.engineer is not None:
+            self.engineer.generate_requested.connect(self.generate_prompt)
+            self.engineer.copy_requested.connect(self.copy_prompt)
+            self.engineer.reply_saved.connect(self.file_prompt_reply)
+
+        # Ranges measured before the app had anywhere to keep them. Seeded
+        # once, and never allowed to overwrite something read off a car.
+        self.store.seed_range_records(catalogs.range_seed_records())
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -178,6 +197,8 @@ class PitCrewController(QObject):
         if extra:
             groups.append(("Added", tuple(sorted(extra))))
         self.event_screen.set_catalogs(tracks, groups)
+        if self.car_screen is not None:
+            self.car_screen.set_car_groups(groups)
 
     def _on_catalog_extended(self, kind: str, name: str) -> None:
         self.store.add_to_catalog(kind, name)
@@ -203,6 +224,9 @@ class PitCrewController(QObject):
         self.event_screen.load(event, sheet)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
+        if self.car_screen is not None and event["car_name"]:
+            self.load_car(event["car_name"])
+        self.refresh_engineer()
 
     def _idle_status(self, event: dict) -> str:
         circuit = event["track"] or "unknown"
@@ -228,6 +252,12 @@ class PitCrewController(QObject):
             "abs_setting": data["abs_setting"], "tcs": data["tcs"],
             "available_compounds": data["available_compounds"],
         }
+        # Declared event facts the race-engineering prompts carry. Optional in
+        # the payload so an older caller - or a test - still saves an event.
+        for key in ("countersteer", "pp_cap", "start_type", "time_of_day",
+                    "priority", "notes"):
+            if key in data:
+                fields[key] = data[key]
         if existing:
             self.store.update_event(existing["id"], **fields)
             event_id = existing["id"]
@@ -237,7 +267,8 @@ class PitCrewController(QObject):
             verb = "Created"
 
         message = f"{verb} {data['name']}."
-        if data["setup_values"] or data["sheet_name"]:
+        if (data["setup_values"] or data["sheet_name"]
+                or data.get("build") or data.get("performance")):
             try:
                 self._save_sheet(data)
                 message += " Sheet saved."
@@ -264,8 +295,137 @@ class PitCrewController(QObject):
             sheet_name=data["sheet_name"] or f"{data['name']} sheet",
             values=dict(data["setup_values"]),
             gears=gears,
+            performance=dict(data.get("performance") or {}),
+            build=dict(data.get("build") or {}),
         )
         return self.store.save_setup_sheet(sheet)
+
+    # ------------------------------------------------------------------- car
+
+    def load_car(self, car: str) -> None:
+        """Show a car's reference facts and whatever ranges are on file."""
+        if self.car_screen is None or not car:
+            return
+        self.car_screen.show_car(car, catalogs.car_spec(car),
+                                 self.store.get_range_record(car))
+
+    def save_ranges(self, car: str, ranges: dict, verified: bool) -> None:
+        """Measure a car once. Everything downstream picks it up from here."""
+        if self.car_screen is None:
+            return
+        record = RangeRecord(
+            car_name=car,
+            measured_date=datetime.date.today().isoformat(),
+            ranges=ranges,
+            game_version=(self.active_event() or {}).get("game_version"),
+            verified=verified,
+        )
+        try:
+            self.store.save_range_record(record)
+        except SetupError as exc:
+            self.car_screen.footer(f"Refused: {exc}", warn=True)
+            return
+        self.load_car(car)
+        self.car_screen.footer(
+            f"Saved {len(ranges)} ranges for {car}"
+            + (". Every prompt and every export now quotes them as measured."
+               if verified else
+               ". Not marked as read off the car, so they stay labelled "
+               "estimates."))
+        self.refresh_engineer()
+
+    # -------------------------------------------------------- race engineer
+
+    def prompt_context(self, kind: str):
+        event = self.active_event()
+        return gather(self.store, event_id=event["id"] if event else None,
+                      kind=kind)
+
+    def refresh_engineer(self) -> None:
+        """Say what the app is filling in, before anything is generated."""
+        if self.engineer is None:
+            return
+        event = self.active_event()
+        if event is None:
+            self.engineer.set_context_note(
+                "No event yet. Create one on the Event screen — a prompt has "
+                "to be about something.")
+            return
+        context = self.prompt_context(self.engineer.kind())
+        parts = [f"{context.car or 'no car'} at "
+                 f"{context.circuit_name or 'no circuit'}"]
+        if context.sheet is not None:
+            parts.append(f"sheet {context.sheet.sheet_name}")
+        if context.ranges.source == "record":
+            parts.append("measured slider ranges"
+                         if context.ranges.verified else
+                         "slider ranges on file, unverified")
+        else:
+            parts.append("no measured ranges — estimated windows")
+        if context.laps:
+            parts.append(f"{len(context.laps)} recorded laps")
+        gaps = context.missing()
+        note = " · ".join(parts)
+        if gaps:
+            note += ". Not on file: " + ", ".join(gaps) + "."
+        self.engineer.set_context_note(note)
+
+    def generate_prompt(self, kind: str) -> str | None:
+        """Compose a prompt and log it as issued."""
+        if self.engineer is None:
+            return None
+        event = self.active_event()
+        context = self.prompt_context(kind)
+        try:
+            prompt = build_prompt(context, self.engineer.report(), kind=kind)
+        except PromptRefused as exc:
+            self.engineer.show_prompt("")
+            self.engineer.note(f"Refused: {exc}", warn=True)
+            return None
+
+        self.engineer.show_prompt(prompt.text, warnings=prompt.warnings)
+        self.refresh_engineer()
+        self.prompt_issue_id = self.store.log_prompt(
+            kind=kind, body=prompt.text, prompt_version=PROMPT_VERSION,
+            app_version=APP_VERSION,
+            event_id=event["id"] if event else None,
+            session_id=context.session_id,
+            car_name=context.car, circuit=context.circuit_name)
+        self.engineer.note(
+            f"{KIND_LABELS.get(kind, kind)} logged as prompt "
+            f"#{self.prompt_issue_id}, template {PROMPT_VERSION}.")
+        self.engineer.note_reply("")
+        return prompt.text
+
+    def copy_prompt(self) -> str:
+        """Clipboard is the whole transport. The app makes no network calls."""
+        if self.engineer is None:
+            return ""
+        text = self.engineer.prompt_text()
+        clipboard = QApplication.clipboard()
+        if clipboard is not None and text:
+            clipboard.setText(text)
+        self.engineer.note(
+            "Copied. Paste it into the knowledge base session."
+            if text else "Nothing to copy — generate first.", warn=not text)
+        return text
+
+    def file_prompt_reply(self, reply: str) -> None:
+        """Keep what came back, against the prompt that asked for it."""
+        if self.engineer is None:
+            return
+        if self.prompt_issue_id is None:
+            self.engineer.note_reply(
+                "Generate a prompt first — a reply is filed against the "
+                "prompt that asked for it.", warn=True)
+            return
+        if not reply.strip():
+            self.engineer.note_reply("Nothing pasted.", warn=True)
+            return
+        self.store.save_prompt_reply(self.prompt_issue_id, reply)
+        self.engineer.note_reply(
+            f"Filed against prompt #{self.prompt_issue_id}. Paste the setup "
+            f"block into the Event screen to fit it.")
 
     # -------------------------------------------------------------- practice
 

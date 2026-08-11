@@ -22,14 +22,19 @@ from PyQt6.QtWidgets import (
 from pitcrew.controller import DEFAULT_PORT, PitCrewController
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
 from pitcrew.ui import theme
+from pitcrew.ui.car_screen import CarScreen
+from pitcrew.ui.engineer_screen import EngineerScreen
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
 from pitcrew.ui.race_screen import RaceScreen
+from pitcrew.ui.reference_screen import ReferenceScreen
 from pitcrew.ui.strategy_screen import StrategyScreen
 from pitcrew.ui.widgets import StencilLabel
 
 WINDOW = (1600, 1000)
-SCREENS = ("Event", "Practice", "Strategy", "Race")
+# Preparation, then the running of it, then what is done with what it produced.
+SCREENS = ("Event", "Car", "Practice", "Strategy", "Race", "Engineer",
+           "Reference")
 ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 
 # Windows groups taskbar buttons by this id. Without one, a Python GUI app is
@@ -110,13 +115,18 @@ class PitCrewWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.event_screen = EventScreen()
+        self.car_screen = CarScreen()
         self.practice_screen = PracticeScreen()
-        self.stack.addWidget(self.event_screen)
         self.strategy_screen = StrategyScreen()
-        self.stack.addWidget(self.practice_screen)
-        self.stack.addWidget(self.strategy_screen)
         self.race_screen = RaceScreen()
-        self.stack.addWidget(self.race_screen)
+        self.engineer_screen = EngineerScreen()
+        self.reference_screen = ReferenceScreen()
+        # Order matches SCREENS: the rail indexes into the stack.
+        for screen in (self.event_screen, self.car_screen,
+                       self.practice_screen, self.strategy_screen,
+                       self.race_screen, self.engineer_screen,
+                       self.reference_screen):
+            self.stack.addWidget(screen)
 
         self.rail = NavRail(self.stack, SCREENS)
         row.addWidget(self.rail)
@@ -125,7 +135,9 @@ class PitCrewWindow(QMainWindow):
 
         self.controller = PitCrewController(
             store, self.event_screen, self.practice_screen,
-            self.strategy_screen, self.race_screen, port=port)
+            self.strategy_screen, self.race_screen,
+            car_screen=self.car_screen,
+            engineer_screen=self.engineer_screen, port=port)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()

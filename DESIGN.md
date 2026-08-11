@@ -34,6 +34,13 @@ so `theme.apply()` sets `QPalette.PlaceholderText` and the stylesheet
 deliberately sets no `color` on editors. A stylesheet colour would beat the
 palette role and make an empty field render as a value the driver declared.
 
+**Shipped reference data is prose, not a register.** GT7's own car and circuit
+tables, and the knowledge base's Quick Reference, were neither measured here
+nor declared here. Setting them in stencil white would make them look like
+they came off the stream. They are set as `BodyLabel` at `STENCIL_DIM` — a
+sentence, not a value. The three registers apply to values; nothing else is
+admitted to them.
+
 ## Ground and material
 
 Warm carbon, not blue-black — rubber under work lamps is brown-black. The
@@ -99,7 +106,10 @@ Scale runs larger than a desk app's default (title 30px, body 15px, data
   taller neighbour was collapsing to a sliver. Hints do not wrap — a wrapped
   hint reports a one-line height and overruns the field below it.
 - **`MarkButton`** — lettered on a plate. Primary is crayon-filled; the run
-  ends on one.
+  ends on one. `set_primary()` re-applies the fill, so a row of buttons
+  standing for a choice can show which one is selected — Qt's `setDown` does
+  not survive the next repaint, and a selection nobody can see is no
+  selection.
 
 ## Screens
 
@@ -109,10 +119,32 @@ full 23-key form staying visible as the editor. Every value on this screen is
 declared, so the screen has no stencil white on it at all — which is what makes
 stencil mean something on Practice.
 
+**Car** (`car_screen.py`) — the range rack. Its subject is not the numbers but
+the difference between numbers read off the car's own settings screen and a
+typical window standing in for them, because that difference decides whether a
+returned sheet can be entered without clamping. Measured is crayon; the
+checkbox that claims it fills with crayon too.
+
 **Practice** (`practice_screen.py`) — the rack. One row per lap, band on the
 left. He is in a headset while driving and cannot see this at all, so nothing
 is designed to be read at speed; it is the surface he returns to between
 stints to mark up, strike out, and export.
+
+**Race Engineer** (`engineer_screen.py`) — split along the line the whole
+feature is built on: left is perception, all of it crayon because he declared
+it; right is the assembled prompt, presented as a block rather than a form
+because it is the thing being sent, not something to fill in. A plate above the
+form says what the app is filling in, so the division is visible before
+anything is generated.
+
+**Reference** (`reference_screen.py`) — the knowledge base's own tables,
+verbatim and read-only. No controls, because there is nothing here to act on.
+
+Layout note, learned twice: a `Field`'s hint does not wrap and a `QComboBox`
+sizes to its widest item, so a long hint or a sentence-length option sets a
+wide minimum for its whole pane and silently clips every label in the column.
+Hints stay short, and combos holding sentences get
+`AdjustToMinimumContentsLengthWithIcon` with the popup sized separately.
 
 ## What this world refuses
 

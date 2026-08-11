@@ -50,11 +50,11 @@ def multiplier_factor(setting: str | None) -> float | None:
         return None
 
 
-def _lap_inputs(store, session_id: int) -> list[LapInput]:
+def session_lap_inputs(store, session_id: int) -> list[LapInput]:
     return _rows_to_laps(store, store.list_laps(session_id))
 
 
-def _event_lap_inputs(store, event_id: int, kind: str) -> list[LapInput]:
+def event_lap_inputs(store, event_id: int, kind: str) -> list[LapInput]:
     """Every lap of every run of this kind, numbered continuously.
 
     Practice accumulates: a driver who goes out three times has one body of
@@ -124,7 +124,7 @@ def build_session_export(store, session_id: int, *, notes: str = "",
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"no session with id {session_id}")
-    return _build(store, session, _lap_inputs(store, session_id),
+    return _build(store, session, session_lap_inputs(store, session_id),
                   notes=notes,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
@@ -141,7 +141,7 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
     sessions = store.list_sessions(event_id, kind)
     if not sessions:
         raise ValueError("nothing recorded for this event yet")
-    laps = _event_lap_inputs(store, event_id, kind)
+    laps = event_lap_inputs(store, event_id, kind)
     return _build(store, _merged_session(sessions), laps, notes=notes,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
@@ -274,7 +274,7 @@ def _strategy_section(store, event_id: int) -> dict | None:
 
 def _outcome(store, event_id: int, section: dict) -> str:
     """What happened, from the race laps. Omitted when no race was run."""
-    race_laps = _event_lap_inputs(store, event_id, "race")
+    race_laps = event_lap_inputs(store, event_id, "race")
     if not race_laps:
         return ""
     plan = section.get("plan") or {}

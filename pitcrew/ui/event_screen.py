@@ -45,6 +45,17 @@ from pitcrew.ui.widgets import (
 WEATHER = ("Dry", "Damp", "Wet", "Changeable")
 MULTIPLIERS = ("Off",) + tuple(f"{n}x" for n in range(1, 11))
 ABS_SETTINGS = ("Off", "Weak", "Default")
+START_TYPES = ("Rolling", "Standing", "Grid - no track limit")
+TIMES_OF_DAY = ("Fixed day", "Fixed night", "Day to night transition")
+# What this round is being tuned for. Declared once, on the event, because it
+# is a property of the round rather than of a session.
+PRIORITIES = (
+    "Balanced - quali grid and race pace",
+    "Qualifying - track position is everything here",
+    "Race pace and tyre life",
+    "Fuel economy / strategy",
+    "Drivability - I need to finish",
+)
 
 # Spin boxes have no null. This sentinel is the minimum of the range and
 # renders as a dash, so a setting nobody entered never reads as zero.
@@ -144,11 +155,24 @@ class EventScreen(QWidget):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(theme.GAP_WIDE)
 
-        column.addWidget(self._identity_plate())
-        column.addWidget(self._format_plate())
-        column.addWidget(self._regulations_plate())
-        column.addWidget(self._compounds_plate())
-        column.addStretch(1)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        stack = QVBoxLayout(inner)
+        stack.setContentsMargins(0, 0, 4, 0)
+        stack.setSpacing(theme.GAP_WIDE)
+        stack.addWidget(self._identity_plate())
+        stack.addWidget(self._format_plate())
+        stack.addWidget(self._regulations_plate())
+        stack.addWidget(self._compounds_plate())
+        stack.addWidget(self._context_plate())
+        stack.addStretch(1)
+        scroller.setWidget(inner)
+
+        column.addWidget(scroller, 1)
         return holder
 
     def _identity_plate(self) -> Plate:
@@ -200,6 +224,19 @@ class EventScreen(QWidget):
         row.addWidget(self._length_field, 1)
         row.addWidget(Field("Weather", self.weather), 1)
         plate.body.addLayout(row)
+
+        # Declared here rather than asked for again when a prompt is written.
+        # Every one of these was a form field in the tool this replaced, and
+        # every re-entry was a chance to get it wrong.
+        second = QHBoxLayout()
+        second.setSpacing(theme.GAP)
+        self.start_type = QComboBox()
+        self.start_type.addItems(START_TYPES)
+        self.time_of_day = QComboBox()
+        self.time_of_day.addItems(TIMES_OF_DAY)
+        second.addWidget(Field("Start", self.start_type), 1)
+        second.addWidget(Field("Time of day", self.time_of_day), 1)
+        plate.body.addLayout(second)
         return plate
 
     def _on_race_type_changed(self, kind: str) -> None:
@@ -238,6 +275,14 @@ class EventScreen(QWidget):
         self.abs_setting.setCurrentText("Weak")
         self.tcs = QSpinBox()
         self.tcs.setRange(0, 5)
+        self.countersteer = QComboBox()
+        self.countersteer.addItems(("Off", "On"))
+
+        self.pp_cap = QDoubleSpinBox()
+        self.pp_cap.setRange(EMPTY, 2000.0)
+        self.pp_cap.setDecimals(2)
+        self.pp_cap.setSpecialValueText("—")
+        self.pp_cap.setValue(EMPTY)
 
         grid.addWidget(Field("Tyre wear", self.tyre_mult), 0, 0)
         grid.addWidget(Field("Fuel use", self.fuel_mult), 0, 1)
@@ -246,9 +291,27 @@ class EventScreen(QWidget):
         grid.addWidget(Field("Pit loss", self.pit_loss, suffix="SEC",
                              hint="A track constant - measure once"), 1, 1)
         grid.addWidget(Field("Mandatory stops", self.mandatory_stops), 2, 0)
-        grid.addWidget(Field("ABS", self.abs_setting), 2, 1)
-        grid.addWidget(Field("TCS", self.tcs), 3, 0)
+        grid.addWidget(Field("PP cap", self.pp_cap,
+                             hint="Blank when the league sets none"), 2, 1)
+        grid.addWidget(Field("ABS", self.abs_setting), 3, 0)
+        grid.addWidget(Field("TCS", self.tcs), 3, 1)
+        grid.addWidget(Field("Countersteer assist", self.countersteer), 4, 0)
         plate.body.addLayout(grid)
+        return plate
+
+    def _context_plate(self) -> Plate:
+        plate = Plate("This round")
+        self.priority = QComboBox()
+        self.priority.addItems(PRIORITIES)
+        plate.body.addWidget(Field(
+            "Priority", self.priority,
+            hint="What the sheets should be biased toward"))
+        self.event_notes = QPlainTextEdit()
+        self.event_notes.setPlaceholderText(
+            "League rules, a problem you want solved, anything carried over "
+            "from the last round.")
+        self.event_notes.setFixedHeight(72)
+        plate.body.addWidget(self.event_notes)
         return plate
 
     def _compounds_plate(self) -> Plate:
@@ -324,8 +387,43 @@ class EventScreen(QWidget):
             column.addWidget(self._group_plate(group))
 
         column.addWidget(self._gears_plate())
+        column.addWidget(self._build_plate())
         column.addStretch(1)
         return holder
+
+    def _build_plate(self) -> Plate:
+        """The car as raced, not as it left the showroom.
+
+        These are the export contract's `setup.build` and `setup.performance`,
+        and they are what makes a brief say "525 bhp at 1300 kg" instead of
+        quoting stock figures for a car that is nothing like stock.
+        """
+        plate = Plate("Build as raced")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(theme.GAP)
+        grid.setVerticalSpacing(theme.GAP_TIGHT)
+
+        self._build_editors: dict[str, QDoubleSpinBox] = {}
+        fields = (
+            ("build", "bhp", "Power", "BHP", 0),
+            ("build", "weightKg", "Weight", "KG", 0),
+            ("build", "pp", "PP", "", 2),
+            ("performance", "powerRestrictor", "Power restrictor", "%", 0),
+            ("performance", "ecuOutput", "ECU output", "%", 0),
+            ("performance", "ballastKg", "Ballast", "KG", 0),
+            ("performance", "ballastPosition", "Ballast position", "", 0),
+        )
+        for index, (section, key, label, unit, decimals) in enumerate(fields):
+            editor = QDoubleSpinBox()
+            editor.setRange(EMPTY, 99999.0)
+            editor.setDecimals(decimals)
+            editor.setSpecialValueText("—")
+            editor.setValue(EMPTY)
+            self._build_editors[f"{section}.{key}"] = editor
+            grid.addWidget(Field(label, editor, suffix=unit),
+                           index // 2, index % 2)
+        plate.body.addLayout(grid)
+        return plate
 
     def _group_plate(self, group: str) -> Plate:
         plate = Plate(group)
@@ -422,6 +520,17 @@ class EventScreen(QWidget):
             if event.get("abs_setting"):
                 self.abs_setting.setCurrentText(event["abs_setting"])
             self.tcs.setValue(int(event.get("tcs") or 0))
+            self.countersteer.setCurrentText(
+                "On" if event.get("countersteer") else "Off")
+            cap = event.get("pp_cap")
+            self.pp_cap.setValue(EMPTY if cap is None else float(cap))
+            if event.get("start_type"):
+                self.start_type.setCurrentText(event["start_type"])
+            if event.get("time_of_day"):
+                self.time_of_day.setCurrentText(event["time_of_day"])
+            if event.get("priority"):
+                self.priority.setCurrentText(event["priority"])
+            self.event_notes.setPlainText(event.get("notes") or "")
 
             allowed = set(event.get("available_compounds") or [])
             for code, chip in self._compound_chips.items():
@@ -434,6 +543,11 @@ class EventScreen(QWidget):
                 editor.setValue(EMPTY if value is None else float(value))
             if sheet.gears:
                 self.gear_edit.setText("  ".join(f"{g:g}" for g in sheet.gears))
+            for name, editor in self._build_editors.items():
+                section, _, key = name.partition(".")
+                stored = (sheet.build if section == "build"
+                          else sheet.performance).get(key)
+                editor.setValue(EMPTY if stored is None else float(stored))
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
@@ -446,6 +560,14 @@ class EventScreen(QWidget):
         for key, editor in self._setup_editors.items():
             if editor.value() > EMPTY:
                 setup_values[key] = editor.value()
+
+        build: dict[str, float] = {}
+        performance: dict[str, float] = {}
+        for name, editor in self._build_editors.items():
+            if editor.value() <= EMPTY:
+                continue
+            section, _, key = name.partition(".")
+            (build if section == "build" else performance)[key] = editor.value()
 
         return {
             "name": self.name_edit.text().strip(),
@@ -462,12 +584,23 @@ class EventScreen(QWidget):
             "mandatory_stops": self.mandatory_stops.value(),
             "abs_setting": self.abs_setting.currentText(),
             "tcs": self.tcs.value(),
+            "countersteer": 1 if self.countersteer.currentText() == "On" else 0,
+            # Blank is blank: a league with no PP cap is not a league with a
+            # cap of zero.
+            "pp_cap": (None if self.pp_cap.value() <= EMPTY
+                       else self.pp_cap.value()),
+            "start_type": self.start_type.currentText(),
+            "time_of_day": self.time_of_day.currentText(),
+            "priority": self.priority.currentText(),
+            "notes": self.event_notes.toPlainText().strip() or None,
             "available_compounds": [code for code, chip
                                     in self._compound_chips.items()
                                     if chip.isSelected()],
             "sheet_name": self.sheet_name.text().strip(),
             "setup_values": setup_values,
             "gear_text": self.gear_edit.text().strip(),
+            "build": build,
+            "performance": performance,
         }
 
     def _on_save(self) -> None:

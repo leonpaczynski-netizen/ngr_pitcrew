@@ -1,0 +1,73 @@
+{
+ "note": "Lifted from reference/gt7-race-engineering.html by tools/extract_reference.py. Static GT7 reference data: the app reads it and never writes it. Do not hand-edit — re-run the tool. This is a controlled vocabulary shared with the knowledge base; it is expected to grow.",
+ "groups": [
+  {
+   "group": "Braking",
+   "symptoms": [
+    "Rear excited / sketchy under braking",
+    "Rear locking",
+    "Front locking",
+    "Braking distance inconsistent"
+   ]
+  },
+  {
+   "group": "Entry",
+   "symptoms": [
+    "Initial turn-in lazy",
+    "Entry understeer under trail braking",
+    "Rear steps out on entry",
+    "Rear floats / feels unsupported"
+   ]
+  },
+  {
+   "group": "Mid",
+   "symptoms": [
+    "Pushes wide mid-corner",
+    "Will not hold line on maintenance throttle",
+    "Nervous / darty mid-corner",
+    "Loses rear when I lift"
+   ]
+  },
+  {
+   "group": "Exit",
+   "symptoms": [
+    "Loose on throttle exit",
+    "Will not hook up under throttle",
+    "Will not rotate under throttle",
+    "Wheelspin in 2nd / 3rd"
+   ]
+  },
+  {
+   "group": "Surface",
+   "symptoms": [
+    "Undriveable over bumps",
+    "Skips or hops on kerbs",
+    "Bounces repeatedly after a kerb",
+    "Suddenly refuses to turn"
+   ]
+  },
+  {
+   "group": "Gearing",
+   "symptoms": [
+    "Gearbox too long",
+    "Gearbox too short"
+   ]
+  },
+  {
+   "group": "Stint",
+   "symptoms": [
+    "Migrated to understeer late in stint",
+    "Rear gave up before the fronts",
+    "Front-left overloaded",
+    "Balance changed abruptly, not gradually"
+   ]
+  },
+  {
+   "group": "Overall",
+   "symptoms": [
+    "Fast but inconsistent",
+    "Stable but feels dead"
+   ]
+  }
+ ]
+}

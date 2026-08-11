@@ -1,4 +1,4 @@
-"""Pit Crew database schema, version 1.
+"""Pit Crew database schema, version 2.
 
 A clean start.  The previous database carried 43 migrations covering setup
 authoring, evidence, assurance and a knowledge graph — none of which exist any
@@ -17,10 +17,23 @@ Design notes worth keeping in mind when extending this:
   tuned.
 * `pit_loss_secs` is an event field.  It used to hide in `config.json` with one
   code path defaulting to 20 s and another to 23 s.
+
+Versions, and what upgrading means here:
+
+* **v1** the clean start.
+* **v2** adds `prompt_issues` — the log of every prompt the Race Engineer
+  screen produced and whatever the knowledge base sent back.
+
+Everything in this file is `CREATE ... IF NOT EXISTS`, so a v1 file becomes a
+v2 file by running the script over it: v1 -> v2 adds tables and changes no
+existing column.  **That is the only kind of change `Store._init_schema` can
+apply.**  The first time a column has to change type, be dropped, or be
+back-filled, this needs a real numbered migration table rather than one more
+`IF NOT EXISTS`.
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -55,6 +68,14 @@ CREATE TABLE IF NOT EXISTS events (
     available_compounds TEXT    NOT NULL DEFAULT '[]',     -- JSON array of codes
     required_compounds  TEXT    NOT NULL DEFAULT '[]',     -- JSON array of codes
     tune_label          TEXT,                              -- which Claude-built tune is fitted
+    -- Declared event facts the race-engineering prompts carry. They exist
+    -- here rather than as questions on a form because the app is meant to
+    -- know them: asking for them again at prompt time is the transcription
+    -- step this whole feature removes.
+    start_type          TEXT,          -- 'Rolling' | 'Standing' | ...
+    time_of_day         TEXT,          -- 'Fixed day' | 'Day to night' | ...
+    priority            TEXT,          -- what this round is being tuned for
+    pp_cap              REAL,          -- league PP ceiling, null when none
     notes               TEXT,
     created_at          TEXT    NOT NULL,
     updated_at          TEXT    NOT NULL
@@ -210,4 +231,52 @@ CREATE TABLE IF NOT EXISTS race_revisions (
     created_at   TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revisions_run ON race_revisions(race_run_id);
+
+-- Every prompt the Race Engineer screen issued, and what came back.
+--
+-- Same reasoning as `race_revisions`: advice that is never recorded cannot be
+-- audited.  The body is stored whole rather than as the fields it was built
+-- from, because the point is to know exactly what was asked -- and
+-- `prompt_version` is what makes a returned setup sheet traceable to the
+-- template that asked for it.
+--
+-- The reply is not parsed and is not meant to be.  It needs to be findable,
+-- not machine-legible: the setup values inside it re-enter the app through
+-- the Event screen's existing paste box.
+CREATE TABLE IF NOT EXISTS prompt_issues (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id       INTEGER REFERENCES events(id) ON DELETE CASCADE,
+    -- Null for a setup brief: it is written before anything has been run.
+    session_id     INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    kind           TEXT    NOT NULL,   -- 'brief' | 'refinement' | 'outcome'
+    car_name       TEXT,
+    circuit        TEXT,
+    prompt_version TEXT    NOT NULL,
+    app_version    TEXT    NOT NULL,
+    body           TEXT    NOT NULL,
+    reply          TEXT,
+    replied_at     TEXT,
+    issued_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_issues_event
+    ON prompt_issues(event_id, issued_at DESC);
 """
+
+# Columns added to tables that already existed in an earlier version.
+#
+# `CREATE TABLE IF NOT EXISTS` does nothing to a table that is already there,
+# so a new column in the DDL above would never reach an existing file. These
+# are applied by `Store._init_schema` with `ALTER TABLE ... ADD COLUMN`, which
+# sqlite does in place and which cannot fail destructively - the new column
+# reads null on every existing row, which is exactly what it means.
+#
+# Only nullable columns with no default belong here. Anything that needs a
+# back-fill, a type change or a drop needs a real numbered migration instead.
+ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "events": (
+        ("start_type", "TEXT"),
+        ("time_of_day", "TEXT"),
+        ("priority", "TEXT"),
+        ("pp_cap", "REAL"),
+    ),
+}

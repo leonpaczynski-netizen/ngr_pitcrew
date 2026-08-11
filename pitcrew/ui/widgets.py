@@ -276,6 +276,18 @@ class MarkButton(QPushButton):
                                         tracking=6.0 if compact else 12.0))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(34 if compact else 40)
+        self._danger = danger
+        self._compact = compact
+        self.set_primary(primary)
+
+    def set_primary(self, primary: bool) -> None:
+        """Fill the plate, or empty it.
+
+        Re-appliable, so a row of buttons standing for a choice can show which
+        one is selected. Qt's `setDown` does not survive the next repaint, and
+        a selection nobody can see is the same as no selection.
+        """
+        danger, compact = self._danger, self._compact
         padding = "4px 8px" if compact else "9px 20px"
 
         if primary:

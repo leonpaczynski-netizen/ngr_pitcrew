@@ -18,7 +18,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
-from pitcrew.store.schema import DDL, SCHEMA_VERSION
+from pitcrew.store.schema import ADDED_COLUMNS, DDL, SCHEMA_VERSION
 
 DEFAULT_DB_PATH = Path("data/pitcrew.db")
 
@@ -43,14 +43,29 @@ class Store:
             self._conn.close()
 
     def _init_schema(self) -> None:
+        """Create or upgrade the schema.
+
+        An older file is upgraded in place: the script creates whatever tables
+        are missing, and `ADDED_COLUMNS` adds columns to tables that already
+        existed.  Both are additive by construction - see `schema.py`.  A
+        *newer* file is refused rather than opened: this build would not know
+        about its columns, and quietly writing to it is how data gets lost.
+        """
         with self._write() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version and version != SCHEMA_VERSION:
+            if version > SCHEMA_VERSION:
                 raise RuntimeError(
                     f"{self.path} is schema v{version}, this build expects "
                     f"v{SCHEMA_VERSION}. Point at a different file or migrate."
                 )
             conn.executescript(DDL)
+            for table, columns in ADDED_COLUMNS.items():
+                existing = {row["name"] for row in
+                            conn.execute(f"PRAGMA table_info({table})")}
+                for name, kind in columns:
+                    if name not in existing:
+                        conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -168,12 +183,17 @@ class Store:
         return _setup_sheet(rows[0]) if rows else None
 
     def list_setup_sheets(self, car_name: str | None = None) -> list:
+        # id breaks the tie: timestamps are second-resolution, so two sheets
+        # saved in the same second come back in any order - and the caller
+        # takes the first as "the current sheet", which then silently becomes
+        # whichever one sqlite felt like.
         if car_name is None:
-            rows = self._query("SELECT * FROM setup_sheets ORDER BY updated_at DESC")
+            rows = self._query(
+                "SELECT * FROM setup_sheets ORDER BY updated_at DESC, id DESC")
         else:
             rows = self._query(
-                "SELECT * FROM setup_sheets WHERE car_name = ? ORDER BY updated_at DESC",
-                (car_name,))
+                "SELECT * FROM setup_sheets WHERE car_name = ? "
+                "ORDER BY updated_at DESC, id DESC", (car_name,))
         return [_setup_sheet(r) for r in rows]
 
     def add_setup_change(self, session_id: int, change) -> int:
@@ -226,6 +246,77 @@ class Store:
     def cars_with_ranges(self) -> list[str]:
         rows = self._query("SELECT car_name FROM range_records ORDER BY car_name")
         return [r["car_name"] for r in rows]
+
+    def seed_range_records(self, records) -> int:
+        """Insert shipped range records for cars that have none yet.
+
+        Ranges lived in a hand-edited JavaScript object literal in the tool
+        this app replaced.  They are seeded once so nothing measured is lost,
+        and then never again: a record in this table is something the driver
+        read off the car's own settings screen, and shipped data must never
+        overwrite it.
+        """
+        from pitcrew.setup.sheet import RangeRecord
+
+        known = set(self.cars_with_ranges())
+        seeded = 0
+        for record in records:
+            car = record.get("car")
+            if not car or car in known:
+                continue
+            self.save_range_record(RangeRecord(
+                car_name=car,
+                measured_date=record.get("measuredDate") or "",
+                ranges={k: list(v) for k, v in (record.get("r") or {}).items()},
+                game_version=record.get("gameVersion"),
+                verified=bool(record.get("verified")),
+            ))
+            seeded += 1
+        return seeded
+
+    # ------------------------------------------------------------- prompt log
+
+    def log_prompt(self, *, kind: str, body: str, prompt_version: str,
+                   app_version: str, event_id: int | None = None,
+                   session_id: int | None = None, car_name: str | None = None,
+                   circuit: str | None = None) -> int:
+        """Record a prompt as issued.  Advice that is never recorded cannot be
+        audited, and a returned sheet has to be traceable to the template that
+        asked for it."""
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO prompt_issues (event_id, session_id, kind, "
+                "car_name, circuit, prompt_version, app_version, body, "
+                "issued_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (event_id, session_id, kind, car_name, circuit, prompt_version,
+                 app_version, body, _now()))
+            return int(cur.lastrowid)
+
+    def save_prompt_reply(self, issue_id: int, reply: str | None) -> None:
+        """Store what the knowledge base sent back, against the prompt that
+        asked for it.  Not parsed - the setup values re-enter the app through
+        the Event screen's paste box, unchanged."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE prompt_issues SET reply = ?, replied_at = ? WHERE id = ?",
+                (reply or None, _now() if reply else None, issue_id))
+
+    def list_prompts(self, event_id: int | None = None,
+                     limit: int = 50) -> list[dict]:
+        if event_id is None:
+            rows = self._query(
+                "SELECT * FROM prompt_issues ORDER BY issued_at DESC, id DESC "
+                "LIMIT ?", (limit,))
+        else:
+            rows = self._query(
+                "SELECT * FROM prompt_issues WHERE event_id = ? "
+                "ORDER BY issued_at DESC, id DESC LIMIT ?", (event_id, limit))
+        return [dict(r) for r in rows]
+
+    def get_prompt(self, issue_id: int) -> dict | None:
+        rows = self._query("SELECT * FROM prompt_issues WHERE id = ?",
+                           (issue_id,))
+        return dict(rows[0]) if rows else None
 
     # -------------------------------------------------------------- sessions
 

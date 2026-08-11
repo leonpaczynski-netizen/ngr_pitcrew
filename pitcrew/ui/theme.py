@@ -229,6 +229,29 @@ QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
     background: {SHOULDER_HI};
 }}
 
+/* A ticked symptom is the driver's own mark, so the box fills with crayon.
+   Square, not rounded, and no tick glyph: there are no icons in this world,
+   and a filled box reads at a glance from the driving position. */
+QCheckBox {{
+    background: transparent;
+    color: {STENCIL_DIM};
+    spacing: 9px;
+    padding: 3px 0;
+}}
+QCheckBox:hover {{ color: {STENCIL}; }}
+QCheckBox:checked {{ color: {STENCIL}; }}
+QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
+    background: {RUBBER_DEEP};
+    border: 1px solid {TREAD_LIGHT};
+}}
+QCheckBox::indicator:hover {{ border-color: {CRAYON}; }}
+QCheckBox::indicator:checked {{
+    background: {CRAYON};
+    border-color: {CRAYON};
+}}
+
 QToolTip {{
     background: {SHOULDER};
     color: {STENCIL};

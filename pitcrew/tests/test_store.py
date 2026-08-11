@@ -196,6 +196,44 @@ def test_reopening_an_existing_database_is_fine(tmp_path):
     second.close()
 
 
+def test_a_v1_database_upgrades_in_place_without_losing_anything(tmp_path):
+    """v1 -> v2 adds the prompt log and five declared event columns.
+
+    The upgrade runs on the driver's real file, so this checks the rows and
+    the settings in them survive it - a migration that quietly empties an
+    event is worse than one that refuses to run.
+    """
+    import sqlite3
+
+    path = tmp_path / "v1.db"
+    first = Store(path)
+    event_id = first.create_event(name="E", track="Spa", car_name="Car",
+                                  refuel_rate_lps=1.0, pit_loss_secs=19.5)
+    first.close()
+
+    # Rewind to v1 and strip what v2 added, the way a real old file looks.
+    conn = sqlite3.connect(str(path))
+    conn.execute("DROP TABLE prompt_issues")
+    for column in ("start_type", "time_of_day", "priority", "pp_cap"):
+        conn.execute(f"ALTER TABLE events DROP COLUMN {column}")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    upgraded = Store(path)
+    event = upgraded.get_event(event_id)
+    assert event["track"] == "Spa"
+    assert event["refuel_rate_lps"] == 1.0
+    # The new columns read null, which is what "nobody has said" means.
+    assert event["start_type"] is None
+    assert event["pp_cap"] is None
+    issue_id = upgraded.log_prompt(kind="brief", body="x",
+                                   prompt_version="v", app_version="a",
+                                   event_id=event_id)
+    assert upgraded.get_prompt(issue_id)["body"] == "x"
+    upgraded.close()
+
+
 def test_a_foreign_schema_version_is_refused(tmp_path):
     import sqlite3
     path = tmp_path / "other.db"
