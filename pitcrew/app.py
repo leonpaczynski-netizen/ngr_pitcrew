@@ -19,7 +19,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from pitcrew import diagnostics
 from pitcrew.controller import DEFAULT_PORT, PitCrewController
+from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
 from pitcrew.ui import theme
 from pitcrew.ui.car_screen import CarScreen
@@ -28,13 +30,15 @@ from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
 from pitcrew.ui.race_screen import RaceScreen
 from pitcrew.ui.reference_screen import ReferenceScreen
+from pitcrew.ui.settings_screen import SettingsScreen
 from pitcrew.ui.strategy_screen import StrategyScreen
 from pitcrew.ui.widgets import StencilLabel
 
 WINDOW = (1600, 1000)
 # Preparation, then the running of it, then what is done with what it produced.
+# Settings last: it is set once and then left alone.
 SCREENS = ("Event", "Car", "Practice", "Strategy", "Race", "Engineer",
-           "Reference")
+           "Reference", "Settings")
 ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 
 # Windows groups taskbar buttons by this id. Without one, a Python GUI app is
@@ -121,11 +125,12 @@ class PitCrewWindow(QMainWindow):
         self.race_screen = RaceScreen()
         self.engineer_screen = EngineerScreen()
         self.reference_screen = ReferenceScreen()
+        self.settings_screen = SettingsScreen()
         # Order matches SCREENS: the rail indexes into the stack.
         for screen in (self.event_screen, self.car_screen,
                        self.practice_screen, self.strategy_screen,
                        self.race_screen, self.engineer_screen,
-                       self.reference_screen):
+                       self.reference_screen, self.settings_screen):
             self.stack.addWidget(screen)
 
         self.rail = NavRail(self.stack, SCREENS)
@@ -137,7 +142,8 @@ class PitCrewWindow(QMainWindow):
             store, self.event_screen, self.practice_screen,
             self.strategy_screen, self.race_screen,
             car_screen=self.car_screen,
-            engineer_screen=self.engineer_screen, port=port)
+            engineer_screen=self.engineer_screen,
+            settings_screen=self.settings_screen, port=port)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()
@@ -145,6 +151,14 @@ class PitCrewWindow(QMainWindow):
 
 
 def main() -> int:
+    # First, before anything can fail. The shortcut launches this through
+    # pythonw, which has no console: without a log file a crash leaves nothing
+    # at all behind, which is exactly what happened the first time it died.
+    log_path = diagnostics.install()
+    diagnostics.install_qt_handler()
+    diagnostics.banner(version=APP_VERSION, database=DEFAULT_DB_PATH,
+                       log=log_path)
+
     _claim_taskbar_identity()
     app = QApplication(sys.argv)
     if ICON.exists():
@@ -154,7 +168,9 @@ def main() -> int:
     store = Store(DEFAULT_DB_PATH)
     window = PitCrewWindow(store)
     window.show()
-    return app.exec()
+    code = app.exec()
+    diagnostics.log().info("Pit Crew exited with %s", code)
+    return code
 
 
 if __name__ == "__main__":

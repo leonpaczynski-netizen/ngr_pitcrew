@@ -6,6 +6,8 @@ import time
 from collections import deque
 from typing import Callable
 
+from pitcrew.diagnostics import log
+
 
 class UDPListener(threading.Thread):
     """Daemon thread that reads UDP packets and calls `callback(data: bytes)`."""
@@ -54,7 +56,9 @@ class UDPListener(threading.Thread):
             # Bind to INADDR_ANY so we receive regardless of which interface SimHub uses
             sock.bind(("0.0.0.0", self._port))
         except OSError as e:
-            print(f"[UDPListener] bind failed on port {self._port}: {e}")
+            log("udp").error("bind failed on port %s: %s - is another "
+                             "copy of Pit Crew already running?",
+                             self._port, e)
             return
         sock.settimeout(1.0)
 
@@ -80,6 +84,7 @@ class UDPListener(threading.Thread):
             try:
                 self._callback(data)
             except Exception as exc:
-                print(f"[UDPListener] callback error: {exc}")
+                log("udp").error("packet handler raised: %s: %s",
+                                 type(exc).__name__, exc, exc_info=True)
 
         sock.close()

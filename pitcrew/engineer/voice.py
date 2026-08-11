@@ -18,6 +18,8 @@ from __future__ import annotations
 import queue
 import threading
 
+from pitcrew.diagnostics import log
+
 # A call older than this has been overtaken by the race.
 STALE_AFTER_S = 8.0
 # Deliberately shallow: a backlog read at the driver is worse than silence.
@@ -64,7 +66,8 @@ class Voice:
             try:
                 warm()
             except Exception as exc:            # noqa: BLE001
-                print(f"[voice] warm-up failed: {type(exc).__name__}: {exc}")
+                log("voice").error("warm-up failed: %s: %s",
+                                   type(exc).__name__, exc, exc_info=True)
 
         threading.Thread(target=run, name="PitCrewVoiceWarm",
                          daemon=True).start()
@@ -108,7 +111,8 @@ class Voice:
                 # Deliberately broad: a synthesis failure mid-race must not
                 # take the app with it, and the driver still has the screen
                 # and the call log. Reported, never swallowed silently.
-                print(f"[voice] {type(exc).__name__}: {exc}")
+                log("voice").error("%s: %s", type(exc).__name__, exc,
+                                   exc_info=True)
 
 
 def _now() -> float:
@@ -231,8 +235,8 @@ def _best_engine():
         try:
             return factory()
         except Exception as exc:                # noqa: BLE001
-            print(f"[voice] {factory.__name__} unavailable: "
-                  f"{type(exc).__name__}: {exc}")
+            log("voice").info("%s unavailable: %s: %s", factory.__name__,
+                              type(exc).__name__, exc)
     return None
 
 

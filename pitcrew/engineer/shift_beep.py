@@ -17,6 +17,8 @@ Three of them cost real sessions to learn:
 """
 from __future__ import annotations
 
+from pitcrew.diagnostics import log
+
 # How long a downshift suppresses the beep, to swallow the blip.
 DOWNSHIFT_MUTE_S = 0.3
 # Re-arm once rpm falls back to this fraction of the threshold.
@@ -102,6 +104,18 @@ class ShiftBeep:
             self._play()
         return beep
 
+    def play_now(self) -> bool:
+        """Sound it once regardless of gate or threshold.
+
+        For the settings screen: he is in a headset while driving and cannot
+        see whether the beep fired, so the only way to know it is audible over
+        the engine is to press a button and listen.
+        """
+        if self._tone is None:
+            return False
+        self._play()
+        return True
+
     def _play(self) -> None:
         if self._tone is None:
             return
@@ -109,7 +123,7 @@ class ShiftBeep:
             self._tone()
         except Exception as exc:                # noqa: BLE001
             # A failed beep must never take the telemetry thread down.
-            print(f"[shift-beep] {type(exc).__name__}: {exc}")
+            log("beep").warning("%s: %s", type(exc).__name__, exc)
 
 
 def _default_tone():

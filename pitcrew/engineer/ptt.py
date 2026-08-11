@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import threading
 
+from pitcrew.diagnostics import log
 from pitcrew.engineer.intents import answer, known_phrases, match_intent
 
 # How long the driver can hold the button before we stop listening anyway.
@@ -42,6 +43,18 @@ class PushToTalk:
     @property
     def available(self) -> bool:
         return self._recogniser is not None
+
+    @property
+    def has_listener(self) -> bool:
+        """Whether the button can be read at all on this machine."""
+        return self._listener is not None
+
+    def set_listener(self, listener) -> None:
+        """Swap the button. The old hook is stopped first, or it keeps firing
+        on the key the driver just changed away from."""
+        if self._listener is not None:
+            self._listener.stop()
+        self._listener = listener
 
     def start(self) -> None:
         if self._listener is not None:
@@ -170,8 +183,8 @@ def best_recogniser(phrases=None):
     try:
         return SapiGrammarRecogniser(phrases)
     except Exception as exc:                    # noqa: BLE001
-        print(f"[ptt] speech recognition unavailable: "
-              f"{type(exc).__name__}: {exc}")
+        log("ptt").warning("speech recognition unavailable: %s: %s",
+                          type(exc).__name__, exc)
         return None
 
 
@@ -179,5 +192,6 @@ def best_listener(key: str = "f8"):
     try:
         return KeyboardListener(key)
     except Exception as exc:                    # noqa: BLE001
-        print(f"[ptt] no keyboard hook: {type(exc).__name__}: {exc}")
+        log("ptt").warning("no keyboard hook: %s: %s",
+                          type(exc).__name__, exc)
         return None

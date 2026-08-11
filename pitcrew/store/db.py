@@ -341,10 +341,28 @@ class Store:
                 "fuel_capacity_l = COALESCE(?, fuel_capacity_l) WHERE id = ?",
                 (packet_format, car_category, fuel_capacity_l, session_id))
 
-    def end_session(self, session_id: int) -> None:
+    def end_session(self, session_id: int, *, at: str | None = None) -> None:
+        """Close a session.  `at` is for closing one the app never got to
+        close itself: stamping it now would claim it ran until the next
+        launch, which could be days."""
         with self._write() as conn:
             conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?",
-                         (_now(), session_id))
+                         (at or _now(), session_id))
+
+    def open_sessions(self) -> list[dict]:
+        """Sessions with no end, newest first, each with its last sign of life.
+
+        A session here means the app went without stopping.  `last_seen` is
+        the last lap it stored, falling back to when it started - the honest
+        answer to "how far did it get" when there is nothing else to go on.
+        """
+        rows = self._query(
+            "SELECT sessions.*, "
+            "  COALESCE(MAX(laps.recorded_at), sessions.started_at) AS last_seen "
+            "FROM sessions LEFT JOIN laps ON laps.session_id = sessions.id "
+            "WHERE sessions.ended_at IS NULL "
+            "GROUP BY sessions.id ORDER BY sessions.started_at DESC")
+        return [dict(r) for r in rows]
 
     def get_session(self, session_id: int) -> dict | None:
         rows = self._query("SELECT * FROM sessions WHERE id = ?", (session_id,))

@@ -19,6 +19,8 @@ from time import monotonic as _monotonic
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
+from pitcrew import settings
+from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import PushToTalk, best_listener, best_recogniser
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.engineer.voice import Voice
@@ -66,6 +68,20 @@ class TelemetryBridge(QObject):
         # On the telemetry thread on purpose: a shift beep routed through
         # the Qt event loop arrives after the corner it was for.
         self.shift_beep = ShiftBeep(enabled=False)
+        # Whether the first packet is allowed to set the threshold. Off means
+        # the driver picked a number, and the game must not overwrite it.
+        self.beep_from_game = True
+        self.beep_wanted = True
+
+    def apply_settings(self, settings) -> None:
+        self.beep_wanted = settings.beep_enabled
+        self.beep_from_game = settings.uses_game_rpm
+        if not settings.uses_game_rpm:
+            self.shift_beep.rpm = settings.beep_rpm
+        # Only the stream can turn the beep on when it follows the game: until
+        # a packet arrives there is no threshold to beep at.
+        self.shift_beep.enabled = settings.beep_enabled and (
+            not settings.uses_game_rpm or self._announced)
 
     def reset(self, *, race: bool = False) -> None:
         self.state = SessionState(
@@ -86,10 +102,24 @@ class TelemetryBridge(QObject):
         if not self._announced:
             self._announced = True
             # GT7 sends the car's own shift-light thresholds, so the beep does
-            # not need a configured rpm per car - the game already knows.
-            if 1000 < packet.rpm_alert_min < 20_000:
-                self.shift_beep.rpm = float(packet.rpm_alert_min)
-                self.shift_beep.enabled = True
+            # not need a configured rpm per car - the game already knows. The
+            # driver can override it, and then the game must not win: a manual
+            # threshold is usually a deliberate short-shift.
+            if self.beep_from_game:
+                usable = 1000 < packet.rpm_alert_min < 20_000
+                if usable:
+                    self.shift_beep.rpm = float(packet.rpm_alert_min)
+                # No threshold from the game and none chosen by the driver
+                # means no beep. Falling back to a default would beep at an
+                # rpm nobody picked, which is worse than silence.
+                self.shift_beep.enabled = self.beep_wanted and usable
+                if self.beep_wanted and not usable:
+                    log("beep").warning(
+                        "GT7 reported a shift-light rpm of %s, which is not a "
+                        "threshold - beep stays off. Set one by hand on the "
+                        "Settings screen.", packet.rpm_alert_min)
+            else:
+                self.shift_beep.enabled = self.beep_wanted
             self.stream_seen.emit({
                 "packet_format": packet.packet_format,
                 "car_category": packet.car_category,
@@ -112,7 +142,7 @@ class PitCrewController(QObject):
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
-                 car_screen=None, engineer_screen=None,
+                 car_screen=None, engineer_screen=None, settings_screen=None,
                  port: int = DEFAULT_PORT, voice=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -123,19 +153,22 @@ class PitCrewController(QObject):
         self.race_screen = race_screen
         self.car_screen = car_screen
         self.engineer = engineer_screen
+        self.settings_screen = settings_screen
         self.prompt_issue_id: int | None = None
         self.port = port
+        self.settings = settings.load(store)
         self.voice = voice if voice is not None else Voice()
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
         self._race_inputs = None
         self._race_burns: list[float] = []
         self._pending_replan = None
+        self._button_probe = None
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
             recogniser=best_recogniser(),
-            listener=best_listener(),
+            listener=best_listener(self.settings.ptt_key),
             on_answer=self._on_ptt_answer)
         self._plans: list = []
         self._inputs = None
@@ -169,10 +202,19 @@ class PitCrewController(QObject):
             self.engineer.generate_requested.connect(self.generate_prompt)
             self.engineer.copy_requested.connect(self.copy_prompt)
             self.engineer.reply_saved.connect(self.file_prompt_reply)
+        if self.settings_screen is not None:
+            self.settings_screen.saved.connect(self.save_settings)
+            self.settings_screen.test_beep_requested.connect(self.test_beep)
+            self.settings_screen.test_voice_requested.connect(self.test_voice)
+            self.settings_screen.listen_toggled.connect(self.probe_button)
+            self.settings_screen.load(self.settings)
+            self.settings_screen.show_capabilities(
+                speech=self.voice.engine_name, hook=self.ptt.has_listener)
 
         # Ranges measured before the app had anywhere to keep them. Seeded
         # once, and never allowed to overwrite something read off a car.
         self.store.seed_range_records(catalogs.range_seed_records())
+        self.bridge.apply_settings(self.settings)
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -180,6 +222,10 @@ class PitCrewController(QObject):
 
         self.refresh_catalogs()
         self.load_active_event()
+        # Last, so its warning survives: loading the event writes the practice
+        # status line, and running this first meant the one message saying the
+        # app had died was overwritten before anyone saw it.
+        self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
 
@@ -299,6 +345,118 @@ class PitCrewController(QObject):
             build=dict(data.get("build") or {}),
         )
         return self.store.save_setup_sheet(sheet)
+
+    # -------------------------------------------------------------- settings
+
+    def save_settings(self, new: settings.Settings) -> None:
+        """Apply the button and the beep, and remember them."""
+        try:
+            settings.save(self.store, new)
+        except ValueError as exc:
+            if self.settings_screen is not None:
+                self.settings_screen.note(f"Refused: {exc}", warn=True)
+            return
+
+        rebind = new.ptt_key != self.settings.ptt_key
+        self.settings = new
+        self.bridge.apply_settings(new)
+        if rebind:
+            # A key the hook is not watching is a button that does nothing, so
+            # the listener is rebuilt rather than reconfigured.
+            self.ptt.set_listener(best_listener(new.ptt_key))
+        log("settings").info(
+            "ptt %s on %r (practice=%s) · beep %s at %s rpm from %s",
+            "on" if new.ptt_enabled else "off", new.ptt_key,
+            new.ptt_in_practice, "on" if new.beep_enabled else "off",
+            round(self.bridge.shift_beep.rpm), new.beep_rpm_source)
+        if self.settings_screen is not None:
+            self.settings_screen.note("Saved.")
+            self.settings_screen.show_capabilities(
+                speech=self.voice.engine_name, hook=self.ptt.has_listener)
+
+    def test_beep(self) -> bool:
+        """Sound the beep now. The only way to know it carries over the engine."""
+        if self.settings_screen is None:
+            return False
+        beep = self.bridge.shift_beep
+        played = beep.play_now()
+        self.settings_screen.note_beep(
+            f"Beeped at the current threshold, {round(beep.rpm)} rpm."
+            if played else
+            "No beep - this machine has no tone device. Check the log.",
+            warn=not played)
+        return played
+
+    def test_voice(self) -> None:
+        if self.settings_screen is None:
+            return
+        self.voice.warm()
+        line = "Radio check. Box this lap or next."
+        self.voice.say(line)
+        self.settings_screen.note_beep(
+            f"Said it through {self.voice.engine_name}: “{line}”"
+            if self.voice.enabled else
+            "No speech engine loaded on this machine - check the log.",
+            warn=not self.voice.enabled)
+
+    def probe_button(self, listening: bool) -> None:
+        """Watch for the configured key and say when it is pressed.
+
+        The button is on a wheel, mapped through Fanatec's software, and the
+        app cannot see any of that. Pressing it here is the only proof.
+        """
+        if self.settings_screen is None:
+            return
+        if self._button_probe is not None:
+            self._button_probe.stop()
+            self._button_probe = None
+        if not listening:
+            self.settings_screen.set_listening(False)
+            self.settings_screen.note_ptt("Stopped listening.")
+            return
+
+        key = self.settings_screen.values().ptt_key
+        probe = best_listener(key)
+        if probe is None:
+            self.settings_screen.set_listening(False)
+            self.settings_screen.note_ptt(
+                "No keyboard hook on this machine, so the button cannot be "
+                "read at all. Check the log.", warn=True)
+            return
+
+        probe.start(
+            lambda: self.settings_screen.note_ptt(f"{key} down - held."),
+            lambda: self.settings_screen.note_ptt(
+                f"{key} released. That is the button."))
+        self._button_probe = probe
+        self.settings_screen.set_listening(True)
+
+    # ------------------------------------------------------- session hygiene
+
+    def _close_orphaned_sessions(self) -> None:
+        """Close any session the last run left open, and say so.
+
+        A session with no `ended_at` means the app went without stopping -
+        killed, crashed, or the window shut mid-recording. Left alone it stays
+        open forever and every later run looks like it is still going. Closed
+        silently, nobody ever finds out the app died.
+        """
+        open_sessions = self.store.open_sessions()
+        if not open_sessions:
+            return
+        for session in open_sessions:
+            self.store.end_session(session["id"], at=session["last_seen"])
+            log("session").warning(
+                "session %s (%s, started %s) was never closed - the app did "
+                "not shut down cleanly. Closed at %s.",
+                session["id"], session["kind"], session["started_at"],
+                session["last_seen"])
+        newest = open_sessions[0]
+        self.practice.set_status(
+            f"The previous session ({newest['started_at'][:16].replace('T', ' ')}) "
+            f"was never closed - the app did not shut down cleanly. Its laps "
+            f"are kept. Anything it recorded after the last lap is lost; "
+            f"logs/pitcrew.log has what happened.", warn=True)
 
     # ------------------------------------------------------------------- car
 
@@ -471,6 +629,13 @@ class PitCrewController(QObject):
         self.listener.start()
         self._parse_errors = 0
         self._health.start()
+        # Off by default: the engineer only answers during a race. On, it is
+        # how the button gets tested without committing to a race.
+        if self.settings.ptt_enabled and self.settings.ptt_in_practice:
+            self.ptt.start()
+        log("session").info(
+            "practice session %s open, listening on %s", self.session_id,
+            self.port)
 
         self.practice.set_recording(True)
         self.practice.set_status(
@@ -481,8 +646,11 @@ class PitCrewController(QObject):
             self.listener.stop()
             self.listener = None
         self._health.stop()
+        self.ptt.stop()
         if self.session_id is not None:
             self.store.end_session(self.session_id)
+            log("session").info("practice session %s closed", self.session_id)
+            self.session_id = None
 
         self.practice.set_recording(False)
         event = self.active_event()
@@ -854,8 +1022,19 @@ class PitCrewController(QObject):
         return path
 
     def shutdown(self) -> None:
+        # Close the session before anything else. Shutting the window while
+        # recording used to leave `ended_at` null, which is exactly what a
+        # crash leaves - so a clean exit was indistinguishable from a lost one.
+        if self.session_id is not None:
+            self.store.end_session(self.session_id)
+            log("session").info("session %s closed on shutdown",
+                                self.session_id)
+            self.session_id = None
         if self.listener is not None:
             self.listener.stop()
+        if self._button_probe is not None:
+            self._button_probe.stop()
+            self._button_probe = None
         self._health.stop()
         self.ptt.stop()
         self.voice.stop()
