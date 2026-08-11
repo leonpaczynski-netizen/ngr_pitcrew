@@ -34,6 +34,19 @@ PREFIX = "setting:"
 COMMON_KEYS = ("f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
                "ctrl_r", "shift_r", "alt_r", "b", "v", "`")
 
+# Which recogniser listens. SAPI's closed grammar was the safe one, but
+# Windows Speech Recognition is being retired - the WSR user experience is
+# already gone from this machine - so `moonshine` is where this is going and
+# `sapi` is what still works today.
+SPEECH_SAPI = "sapi"
+SPEECH_MOONSHINE = "moonshine"
+SPEECH_BACKENDS = (SPEECH_SAPI, SPEECH_MOONSHINE)
+
+# How readily the engineer acts on what he thinks he heard. Named, never
+# numeric: the raw cosine distances behind these live in `engineer/gate.py`
+# and mean nothing to the person choosing.
+SENSITIVITIES = ("low", "medium", "high")
+
 
 @dataclass
 class Settings:
@@ -46,6 +59,10 @@ class Settings:
     # it in practice too is how you find out whether the button works at all
     # without committing to a race to test it.
     ptt_in_practice: bool = False
+    speech_backend: str = SPEECH_SAPI
+    # low  - acts only when sure, asks more often
+    # high - acts readily, asks rarely
+    speech_sensitivity: str = "medium"
 
     # --- shift beep
     beep_enabled: bool = True
@@ -85,6 +102,14 @@ class Settings:
                 f"any GT7 car has - expected 1000-20000")
         if self.ptt_enabled and not self.ptt_key.strip():
             raise ValueError("push to talk needs a button")
+        if self.speech_backend not in SPEECH_BACKENDS:
+            raise ValueError(
+                f"speech_backend must be one of {SPEECH_BACKENDS}, "
+                f"got {self.speech_backend!r}")
+        if self.speech_sensitivity not in SENSITIVITIES:
+            raise ValueError(
+                f"speech_sensitivity must be one of {SENSITIVITIES}, "
+                f"got {self.speech_sensitivity!r}")
 
     @property
     def uses_game_rpm(self) -> bool:

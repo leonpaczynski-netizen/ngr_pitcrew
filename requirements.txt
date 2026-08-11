@@ -2,6 +2,11 @@ PyQt6>=6.6.0
 pyttsx3>=2.90
 openpyxl>=3.1.0
 piper-tts>=1.4.0  # local (offline) neural TTS — the engineer's voice (pitcrew/engineer/voice.py::PiperEngine); falls back to Windows SAPI5 if absent. Voice models live in pitcrew/engineer/piper_models/
+moonshine-voice>=0.1.1  # offline speech recognition (pitcrew/engineer/ptt.py).
+#   MIT, CPU-only, and a py3-none-win_amd64 wheel so it is fine on 3.14.
+#   Models download on first use: tiny-streaming-en ~50 MB for recognition,
+#   embeddinggemma-300m q4 ~200 MB for the semantic gate. Both optional at
+#   runtime - without them the app falls back to SAPI and literal matching.
 sounddevice>=0.4.0
 pynput>=1.7.6
 requests>=2.28.0

@@ -21,7 +21,12 @@ from PyQt6.QtWidgets import QApplication
 
 from pitcrew import settings
 from pitcrew.diagnostics import log
-from pitcrew.engineer.ptt import PushToTalk, best_listener, best_recogniser
+from pitcrew.engineer.ptt import (
+    PushToTalk,
+    best_listener,
+    best_recogniser_for,
+    best_semantic_matcher,
+)
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import build_event_export
@@ -167,9 +172,15 @@ class PitCrewController(QObject):
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
-            recogniser=best_recogniser(),
+            recogniser=best_recogniser_for(self.settings.speech_backend),
             listener=best_listener(self.settings.ptt_key),
-            on_answer=self._on_ptt_answer)
+            on_answer=self._on_ptt_answer,
+            # Only Moonshine returns free dictation, so only Moonshine needs
+            # the semantic gate. SAPI's closed grammar is exact already.
+            matcher=(best_semantic_matcher()
+                     if self.settings.speech_backend == settings.SPEECH_MOONSHINE
+                     else None),
+            sensitivity=self.settings.speech_sensitivity)
         self._plans: list = []
         self._inputs = None
 
