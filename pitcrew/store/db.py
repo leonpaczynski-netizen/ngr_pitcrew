@@ -104,14 +104,103 @@ class Store:
         with self._write() as conn:
             conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
 
+    # ----------------------------------------------------- setup (app state)
+
+    def save_setup_sheet(self, sheet) -> int:
+        """Insert or update a sheet by (car, name).  Returns its id."""
+        sheet.validate()
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
+                "gears_json, performance_json, build_json, notes, created_at, "
+                "updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(car_name, sheet_name) DO UPDATE SET "
+                "values_json=excluded.values_json, gears_json=excluded.gears_json, "
+                "performance_json=excluded.performance_json, "
+                "build_json=excluded.build_json, notes=excluded.notes, "
+                "updated_at=excluded.updated_at",
+                (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
+                 json.dumps(sheet.gears), json.dumps(sheet.performance),
+                 json.dumps(sheet.build), sheet.notes, _now(), _now()))
+            row = conn.execute(
+                "SELECT id FROM setup_sheets WHERE car_name = ? AND sheet_name = ?",
+                (sheet.car_name, sheet.sheet_name)).fetchone()
+            return int(row["id"])
+
+    def get_setup_sheet(self, sheet_id: int):
+        rows = self._query("SELECT * FROM setup_sheets WHERE id = ?", (sheet_id,))
+        return _setup_sheet(rows[0]) if rows else None
+
+    def list_setup_sheets(self, car_name: str | None = None) -> list:
+        if car_name is None:
+            rows = self._query("SELECT * FROM setup_sheets ORDER BY updated_at DESC")
+        else:
+            rows = self._query(
+                "SELECT * FROM setup_sheets WHERE car_name = ? ORDER BY updated_at DESC",
+                (car_name,))
+        return [_setup_sheet(r) for r in rows]
+
+    def add_setup_change(self, session_id: int, change) -> int:
+        change.validate()
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO setup_changes (session_id, from_lap, key, from_value, "
+                "to_value, created_at) VALUES (?,?,?,?,?,?)",
+                (session_id, change.from_lap, change.key, change.from_value,
+                 change.to_value, _now()))
+            return int(cur.lastrowid)
+
+    def list_setup_changes(self, session_id: int) -> list:
+        from pitcrew.setup.sheet import SetupChange
+        rows = self._query(
+            "SELECT * FROM setup_changes WHERE session_id = ? ORDER BY from_lap, id",
+            (session_id,))
+        return [SetupChange(from_lap=r["from_lap"], key=r["key"],
+                            from_value=r["from_value"], to_value=r["to_value"])
+                for r in rows]
+
+    def save_range_record(self, record) -> None:
+        record.validate()
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO range_records (car_name, measured_date, game_version, "
+                "verified, ranges_json, updated_at) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(car_name) DO UPDATE SET "
+                "measured_date=excluded.measured_date, "
+                "game_version=excluded.game_version, verified=excluded.verified, "
+                "ranges_json=excluded.ranges_json, updated_at=excluded.updated_at",
+                (record.car_name, record.measured_date, record.game_version,
+                 int(record.verified), json.dumps(record.ranges), _now()))
+
+    def get_range_record(self, car_name: str):
+        from pitcrew.setup.sheet import RangeRecord
+        rows = self._query(
+            "SELECT * FROM range_records WHERE car_name = ?", (car_name,))
+        if not rows:
+            return None
+        row = rows[0]
+        return RangeRecord(
+            car_name=row["car_name"],
+            measured_date=row["measured_date"],
+            ranges=json.loads(row["ranges_json"]),
+            game_version=row["game_version"],
+            verified=bool(row["verified"]),
+        )
+
+    def cars_with_ranges(self) -> list[str]:
+        rows = self._query("SELECT car_name FROM range_records ORDER BY car_name")
+        return [r["car_name"] for r in rows]
+
     # -------------------------------------------------------------- sessions
 
     def start_session(self, event_id: int, kind: str,
-                      tune_label: str | None = None) -> int:
+                      tune_label: str | None = None,
+                      setup_sheet_id: int | None = None) -> int:
         with self._write() as conn:
             cur = conn.execute(
-                "INSERT INTO sessions (event_id, kind, tune_label, started_at) "
-                "VALUES (?, ?, ?, ?)", (event_id, kind, tune_label, _now()))
+                "INSERT INTO sessions (event_id, kind, tune_label, setup_sheet_id, "
+                "started_at) VALUES (?, ?, ?, ?, ?)",
+                (event_id, kind, tune_label, setup_sheet_id, _now()))
             return int(cur.lastrowid)
 
     def end_session(self, session_id: int) -> None:
@@ -283,6 +372,19 @@ def _event_row(row: sqlite3.Row) -> dict:
         raw = event.get(key) or "[]"
         event[key] = json.loads(raw)
     return event
+
+
+def _setup_sheet(row: sqlite3.Row):
+    from pitcrew.setup.sheet import SetupSheet
+    return SetupSheet(
+        car_name=row["car_name"],
+        sheet_name=row["sheet_name"],
+        values=json.loads(row["values_json"] or "{}"),
+        gears=json.loads(row["gears_json"] or "[]"),
+        performance=json.loads(row["performance_json"] or "{}"),
+        build=json.loads(row["build_json"] or "{}"),
+        notes=row["notes"] or "",
+    )
 
 
 def _strategy_row(row: sqlite3.Row) -> dict:

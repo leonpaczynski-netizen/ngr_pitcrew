@@ -47,10 +47,53 @@ CREATE TABLE IF NOT EXISTS events (
     updated_at          TEXT    NOT NULL
 );
 
+-- The sheet as run.  Pure app state: no telemetry, no derivation, no advice.
+-- Keys inside values_json are the export contract's shared vocabulary, so a
+-- sheet round-trips to the tune builder and back with no translation.
+CREATE TABLE IF NOT EXISTS setup_sheets (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_name     TEXT    NOT NULL,
+    sheet_name   TEXT    NOT NULL,
+    values_json  TEXT    NOT NULL DEFAULT '{}',
+    gears_json   TEXT,                      -- JSON array, 1st..nth
+    performance_json TEXT,                  -- restrictor, ECU, ballast
+    build_json   TEXT,                      -- bhp, weight, PP
+    notes        TEXT,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    UNIQUE(car_name, sheet_name)
+);
+
+-- Mid-session changes, structured rather than prose: they are exactly what
+-- invalidates a corner aggregate, so they have to be machine-legible.
+CREATE TABLE IF NOT EXISTS setup_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    from_lap   INTEGER NOT NULL,
+    key        TEXT    NOT NULL,
+    from_value REAL,
+    to_value   REAL,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_changes_session ON setup_changes(session_id);
+
+-- The car's slider limits, read off its settings screen once and never
+-- re-entered.  Worth more than the setup values themselves: they are what
+-- makes a returned recommendation enterable without clamping.
+CREATE TABLE IF NOT EXISTS range_records (
+    car_name      TEXT PRIMARY KEY,
+    measured_date TEXT NOT NULL,
+    game_version  TEXT,
+    verified      INTEGER NOT NULL DEFAULT 0,   -- 1 = read off the screen
+    ranges_json   TEXT NOT NULL DEFAULT '{}',
+    updated_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     kind        TEXT    NOT NULL,          -- 'practice' | 'race'
+    setup_sheet_id INTEGER REFERENCES setup_sheets(id),
     tune_label  TEXT,
     started_at  TEXT    NOT NULL,
     ended_at    TEXT
