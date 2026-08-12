@@ -73,7 +73,7 @@ class NavRail(QWidget):
             self._labels.append(label)
 
         column.addStretch(1)
-        note = StencilLabel("Synthetic data", size=10, colour=theme.STRUCK,
+        note = StencilLabel("Synthetic data", size=10, colour=theme.STENCIL_DIM,
                             tracking=10.0)
         column.addWidget(note)
         self.select(0)
@@ -83,7 +83,7 @@ class NavRail(QWidget):
         for position, label in enumerate(self._labels):
             active = position == index
             label.setStyleSheet(
-                f"color: {theme.STENCIL if active else theme.STRUCK};"
+                f"color: {theme.STENCIL if active else theme.STENCIL_DIM};"
                 f"background: transparent;")
 
 

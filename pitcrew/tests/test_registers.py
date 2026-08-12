@@ -233,3 +233,171 @@ def test_the_line_edit_inside_a_spin_box_carries_the_ink(qt_app):
     role = box.palette().ColorRole
     assert box.lineEdit().palette().color(role.Text).name().upper() == \
         theme.CRAYON.upper()
+
+
+# --------------------------------------------------------------- contrast
+#
+# This app is read on an upper monitor at the rig with a VR headset just
+# pushed up, and PRODUCT.md commits to high contrast for that reason. The
+# numbers below are the floor, not an aspiration.
+
+def _contrast(one: str, two: str) -> float:
+    from PyQt6.QtGui import QColor
+
+    return theme.contrast_ratio(QColor(one), QColor(two))
+
+
+GROUNDS = ("RUBBER", "RUBBER_DEEP", "SHOULDER")
+
+
+def test_every_ink_that_carries_words_clears_the_body_floor():
+    """4.5:1 for text this size. `STRUCK` used to carry every hint, unit and
+    column header at 2.93:1 - the ink whose own meaning is "removed from the
+    count", doing duty as the app's instructional colour."""
+    for name in ("STENCIL", "STENCIL_DIM", "CRAYON", "DERIVED", "CHALK",
+                 "WARNING"):
+        ink = getattr(theme, name)
+        for ground in GROUNDS:
+            ratio = _contrast(ink, getattr(theme, ground))
+            assert ratio >= 4.5, f"{name} on {ground} is {ratio:.2f}:1"
+
+
+def test_struck_is_only_used_where_low_contrast_is_the_point():
+    """It stays low on purpose - placeholders, disabled controls, the empty
+    sentinel, the strike line. Those are inactive or absent, which is exactly
+    what WCAG exempts and what the ink means. So this asserts the boundary
+    rather than the ratio: no screen may paint prose with it."""
+    import pathlib
+
+    offenders = []
+    for path in pathlib.Path("pitcrew/ui").glob("*.py"):
+        if path.name in ("theme.py", "widgets.py", "preview.py"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "theme.STRUCK" in text:
+            offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} paint with STRUCK. It means 'removed from the count'; "
+        f"instructional prose belongs in STENCIL_DIM")
+
+
+def test_every_compound_code_is_legible_on_its_own_band():
+    """Colour is never the only channel - so the code carrying the
+    classification has to be readable, or the band is colour-only after all."""
+    from PyQt6.QtGui import QColor
+
+    for code, value in theme.COMPOUND_BANDS.items():
+        ratio = theme.contrast_ratio(theme.band_ink(code), QColor(value))
+        # The code is set as large text (19px DemiBold), where the floor is
+        # 3:1. Four of the racing colours cannot reach 4.5:1 against either
+        # ink without repainting colours that are the sport's, not ours.
+        assert ratio >= 3.0, f"{code} code is {ratio:.2f}:1 on its own band"
+
+
+def test_band_ink_picks_the_better_of_the_two_inks():
+    """Measured, not thresholded. The NTSC-brightness version put warm white
+    on Intermediate green at 2.53:1."""
+    from PyQt6.QtGui import QColor
+
+    for code, value in theme.COMPOUND_BANDS.items():
+        band = QColor(value)
+        chosen = theme.band_ink(code)
+        other = (QColor(theme.STENCIL) if chosen.name().upper()
+                 == theme.RUBBER.upper() else QColor(theme.RUBBER))
+        assert theme.contrast_ratio(chosen, band) >= \
+            theme.contrast_ratio(other, band), f"{code} picked the worse ink"
+
+
+# ------------------------------------------------------- keyboard and empties
+
+def test_the_nav_rail_is_reachable_without_a_mouse(qt_app):
+    """It was eight labels with mousePressEvent reassigned onto them: zero
+    focusable, no key handled, while all 355 controls inside the screens were
+    focusable. The gap was the one thing used on every visit."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QStackedWidget, QWidget
+
+    from pitcrew.app import NAV_GROUPS, NavRail
+
+    stack = QStackedWidget()
+    for _ in range(8):
+        stack.addWidget(QWidget())
+    rail = NavRail(stack, NAV_GROUPS)
+
+    assert len(rail._labels) == 8
+    for item in rail._labels:
+        assert item.focusPolicy() != Qt.FocusPolicy.NoFocus
+        assert item.accessibleName()
+
+
+def test_enter_on_a_focused_rail_item_selects_its_screen(qt_app):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtWidgets import QStackedWidget, QWidget
+
+    from pitcrew.app import NAV_GROUPS, NavRail
+
+    stack = QStackedWidget()
+    for _ in range(8):
+        stack.addWidget(QWidget())
+    rail = NavRail(stack, NAV_GROUPS)
+
+    rail._labels[4].keyPressEvent(
+        QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return.value,
+                  Qt.KeyboardModifier.NoModifier))
+    assert stack.currentIndex() == 4
+
+
+def test_the_rail_wraps_at_both_ends(qt_app):
+    """Qt only grants focus inside a shown widget, so the rail is realised
+    off-screen rather than the assertion weakened."""
+    from PyQt6.QtWidgets import QStackedWidget, QWidget
+
+    from pitcrew.app import NAV_GROUPS, NavRail
+
+    stack = QStackedWidget()
+    for _ in range(8):
+        stack.addWidget(QWidget())
+    rail = NavRail(stack, NAV_GROUPS)
+    rail.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    rail.show()
+    QApplication.processEvents()
+
+    rail.focus_item(-1)
+    assert rail.focusWidget() is rail._labels[7]
+    rail.focus_item(8)
+    assert rail.focusWidget() is rail._labels[0]
+    rail.focus_item(3)
+    assert rail.focusWidget() is rail._labels[3]
+
+
+def test_checkboxes_have_a_visible_focus_style():
+    """The stylesheet restyles the indicator, which suppresses Qt's own focus
+    rect. The Engineer screen has 28 focusable checkboxes and nothing showed
+    which one had focus."""
+    assert "QCheckBox::indicator:focus" in theme.STYLESHEET
+
+
+def test_a_plate_with_nothing_in_it_says_what_would_fill_it(qt_app):
+    """Strategy and Race rested as about a million pixels of bordered nothing
+    with the only explanation outside the plate."""
+    from pitcrew.ui.race_screen import RaceScreen
+    from pitcrew.ui.strategy_screen import StrategyScreen
+
+    strategy = StrategyScreen()
+    assert strategy.plan_empty.isVisibleTo(strategy)
+    assert strategy.evidence_empty.isVisibleTo(strategy)
+
+    race = RaceScreen()
+    assert race.log_empty.isVisibleTo(race)
+
+
+def test_the_empty_state_returns_when_a_rebuild_finds_nothing(qt_app):
+    """A second build that produces no plans must say so again, not leave a
+    blank plate - so it is detached on clear, never destroyed."""
+    from pitcrew.ui.strategy_screen import StrategyScreen
+
+    screen = StrategyScreen()
+    screen.show_plans([], [])
+    assert screen.plan_empty.isVisibleTo(screen)
+    assert screen.approve_button.isEnabled() is False

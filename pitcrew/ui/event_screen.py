@@ -215,7 +215,7 @@ class EventScreen(QWidget):
         self.weather = QComboBox()
         self.weather.addItems(WEATHER)
 
-        self._length_unit = StencilLabel("LAPS", size=11, colour=theme.STRUCK,
+        self._length_unit = StencilLabel("LAPS", size=11, colour=theme.STENCIL_DIM,
                                          tracking=8.0)
         self._length_field = Field("Length", self.race_length,
                                    suffix_widget=self._length_unit)
@@ -365,7 +365,7 @@ class EventScreen(QWidget):
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
         self.paste_status = BodyLabel("Nothing read yet.", size=13,
-                                      colour=theme.STRUCK)
+                                      colour=theme.STENCIL_DIM)
         read_button = MarkButton("Read sheet")
         read_button.clicked.connect(self._on_read_sheet)
         row.addWidget(self.paste_status, 1)
@@ -470,7 +470,7 @@ class EventScreen(QWidget):
         row.setContentsMargins(0, theme.GAP, 0, theme.GAP)
         row.setSpacing(theme.GAP)
 
-        self.footer_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
         row.addWidget(MarkButton("Discard"))
         save = MarkButton("Save event", primary=True)

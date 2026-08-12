@@ -148,7 +148,7 @@ class RackRow(QWidget):
 
         marker = self.row.structural_reason()
         self.marker_label = StencilLabel(marker or "", size=11,
-                                         colour=theme.STRUCK, tracking=10.0)
+                                         colour=theme.STENCIL_DIM, tracking=10.0)
         self.marker_label.setFixedWidth(W_MARKER)
         line.addWidget(self.marker_label)
 
@@ -220,7 +220,7 @@ class RackRow(QWidget):
         self.frame.setStruck(struck)
         self.band.setStruck(struck)
 
-        ink = theme.STRUCK if struck else theme.STENCIL
+        ink = theme.STENCIL_DIM if struck else theme.STENCIL
         self.time_label.setStyleSheet(f"color: {ink}; background: transparent;")
 
         if self.row.structural_reason():
@@ -311,7 +311,7 @@ class PracticeScreen(QWidget):
         row.setSpacing(theme.GAP)
 
         def cap(text: str, width: int) -> StencilLabel:
-            label = StencilLabel(text, size=10, colour=theme.STRUCK,
+            label = StencilLabel(text, size=10, colour=theme.STENCIL_DIM,
                                  tracking=14.0)
             label.setFixedWidth(width)
             return label
@@ -335,7 +335,7 @@ class PracticeScreen(QWidget):
         self.footer_note = BodyLabel(
             "Tag a compound on every counted lap before exporting - fuel and "
             "wear evidence is grouped by compound.",
-            size=13, colour=theme.STRUCK)
+            size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
 
         self.export_button = MarkButton("Export for the knowledge base",
@@ -414,10 +414,10 @@ class PracticeScreen(QWidget):
             self.footer_note.setStyleSheet(f"color: {theme.WARNING};")
         elif counted:
             self.footer_note.setText("Every counted lap is marked.")
-            self.footer_note.setStyleSheet(f"color: {theme.STRUCK};")
+            self.footer_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
         else:
             self.footer_note.setText("Nothing to export yet.")
-            self.footer_note.setStyleSheet(f"color: {theme.STRUCK};")
+            self.footer_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
 
     def _toggle_recording(self) -> None:
         self.recording_toggled.emit(not self._recording)

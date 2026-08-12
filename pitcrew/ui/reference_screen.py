@@ -85,7 +85,7 @@ class ReferenceScreen(QWidget):
         plate = Plate(section.get("title", ""))
         if section.get("hint"):
             plate.body.addWidget(BodyLabel(section["hint"], size=13,
-                                           colour=theme.STRUCK))
+                                           colour=theme.STENCIL_DIM))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.GAP_WIDE)

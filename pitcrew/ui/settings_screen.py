@@ -96,7 +96,7 @@ class SettingsScreen(QWidget):
         plate.body.addWidget(BodyLabel(
             "Hold the button, ask, let go. Map a wheel button to a key in the "
             "Fanatec software, then name that key here.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
 
         self.ptt_enabled = QCheckBox("Push to talk is on")
         plate.body.addWidget(self.ptt_enabled)
@@ -138,7 +138,7 @@ class SettingsScreen(QWidget):
             "One beep as the rpm crosses the threshold, re-armed once it "
             "falls back. It never sounds off track, and a downshift mutes it "
             "briefly so the throttle blip cannot trigger it.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
 
         self.beep_enabled = QCheckBox("Shift beep is on")
         plate.body.addWidget(self.beep_enabled)
@@ -168,7 +168,7 @@ class SettingsScreen(QWidget):
             "GT7 sends each car's own shift-light rpm, so the game's setting "
             "follows the car without you entering anything. A number you "
             "choose applies to every car until you change it.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
 
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
@@ -196,7 +196,7 @@ class SettingsScreen(QWidget):
         plate.body.addWidget(BodyLabel(
             "A race engineer is calm. Jitter is what makes a synthetic voice "
             "sound nervous — it is the one to reach for first.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.GAP)
@@ -235,7 +235,7 @@ class SettingsScreen(QWidget):
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, theme.GAP, 0, theme.GAP)
         row.setSpacing(theme.GAP)
-        self.footer_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
         save = MarkButton("Save settings", primary=True)
         save.clicked.connect(self._on_save)

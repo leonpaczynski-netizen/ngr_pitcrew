@@ -102,7 +102,7 @@ class CarScreen(QWidget):
 
         state = Plate("Ranges on file")
         self.state_note = BodyLabel("Pick a car.", size=14,
-                                    colour=theme.STRUCK)
+                                    colour=theme.STENCIL_DIM)
         state.body.addWidget(self.state_note)
 
         self.verified = QCheckBox(
@@ -127,7 +127,7 @@ class CarScreen(QWidget):
         state.body.addLayout(row)
         state.body.addWidget(BodyLabel(
             "A preset fills the rows so a prompt is still usable — it is "
-            "never saved as verified.", size=13, colour=theme.STRUCK))
+            "never saved as verified.", size=13, colour=theme.STENCIL_DIM))
         column.addWidget(state)
         column.addStretch(1)
         return holder
@@ -183,7 +183,7 @@ class CarScreen(QWidget):
             grid.addWidget(self._bound_editor(key, self._min_editors), row, 1)
             grid.addWidget(self._bound_editor(key, self._max_editors), row, 2)
             unit = catalogs.range_unit(key.key) or key.unit
-            grid.addWidget(StencilLabel(unit, size=11, colour=theme.STRUCK,
+            grid.addWidget(StencilLabel(unit, size=11, colour=theme.STENCIL_DIM,
                                         tracking=8.0), row, 3)
 
         grid.setColumnStretch(0, 4)
@@ -217,7 +217,7 @@ class CarScreen(QWidget):
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, theme.GAP, 0, theme.GAP)
         row.setSpacing(theme.GAP)
-        self.footer_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
         save = MarkButton("Save ranges", primary=True)
         save.clicked.connect(self._on_save)

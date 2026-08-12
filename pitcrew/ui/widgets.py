@@ -160,6 +160,37 @@ class Derived(Measured):
         super().__init__(text, **kwargs)
 
 
+class EmptyState(QWidget):
+    """What a plate says when it has nothing in it yet.
+
+    Strategy and Race rested as large empty rectangles - about a million
+    pixels of bordered nothing between them - with the only explanation a
+    subtitle outside the plate. On Race that is the screen looked at straight
+    after the headset comes off, where "no calls" and "it died before it
+    recorded any" are the same picture.
+
+    So the absence names itself, and names what would fill it. Set in prose,
+    not in a register: nothing here is a value.
+    """
+
+    def __init__(self, headline: str, needs=(), *,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, theme.GAP, 0, theme.GAP)
+        column.setSpacing(theme.GAP_TIGHT)
+        # Held to a readable measure. A plate here can be 1360px wide, and
+        # prose set across all of it is one line the eye cannot track back.
+        lead = BodyLabel(headline, colour=theme.STENCIL_DIM)
+        lead.setMaximumWidth(620)
+        column.addWidget(lead)
+        for item in needs:
+            row = BodyLabel(f"—  {item}", size=14, colour=theme.STENCIL_DIM)
+            row.setContentsMargins(theme.GAP, 0, 0, 0)
+            column.addWidget(row)
+        column.addStretch(1)
+
+
 class Plate(QFrame):
     """A bolted panel whose stencilled label is struck through its top edge.
 
@@ -238,7 +269,14 @@ class CompoundBand(QWidget):
         self._struck = False
         self._animate = animate
         self.setFixedWidth(self.WIDTH)
-        self._font = theme.stencil_font(12, tracking=6.0)
+        # Large text, deliberately. The two-letter code is the band's
+        # redundant channel, and four of the eleven racing colours cannot
+        # reach 4.5:1 against either ink without repainting colours that are
+        # the sport's, not ours. At 19px DemiBold it is large text, where the
+        # floor is 3:1 and every band clears it - and it reads better from the
+        # driving position, which is where it is actually read.
+        self._font = theme.stencil_font(19, tracking=4.0,
+                                        weight=QFont.Weight.Bold)
 
         self._animation = QPropertyAnimation(self, b"wipe", self)
         self._animation.setDuration(180)
@@ -457,7 +495,8 @@ class Field(QWidget):
         if suffix_widget is not None:
             row.addWidget(suffix_widget)
         elif suffix:
-            unit = StencilLabel(suffix, size=11, colour=theme.STRUCK,
+            unit = StencilLabel(suffix, size=11,
+                                colour=theme.STENCIL_DIM,
                                 tracking=8.0)
             row.addWidget(unit)
         column.addLayout(row)
@@ -466,7 +505,8 @@ class Field(QWidget):
             # Not wrapped: a hint that wraps reports a one-line height at its
             # size hint and then overruns the field below it once the grid
             # gives it a narrower column. Keep hints to one short line.
-            note = BodyLabel(hint, size=12, colour=theme.STRUCK, wrap=False)
+            note = BodyLabel(hint, size=12, colour=theme.STENCIL_DIM,
+                             wrap=False)
             note.setMinimumHeight(note.fontMetrics().height() + 4)
             note.setSizePolicy(note.sizePolicy().horizontalPolicy(),
                                QSizePolicy.Policy.Fixed)

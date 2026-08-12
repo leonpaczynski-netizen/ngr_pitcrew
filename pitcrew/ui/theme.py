@@ -106,12 +106,42 @@ def band_colour(code: str | None) -> QColor:
     return QColor(COMPOUND_BANDS.get(code.upper(), UNMARKED_BAND))
 
 
+def _relative_luminance(colour: QColor) -> float:
+    """WCAG relative luminance, which is not the same as perceived brightness."""
+    channels = []
+    for value in (colour.red(), colour.green(), colour.blue()):
+        channel = value / 255.0
+        channels.append(channel / 12.92 if channel <= 0.03928
+                        else ((channel + 0.055) / 1.055) ** 2.4)
+    return (0.2126 * channels[0] + 0.7152 * channels[1]
+            + 0.0722 * channels[2])
+
+
+def contrast_ratio(one: QColor, two: QColor) -> float:
+    first, second = _relative_luminance(one), _relative_luminance(two)
+    high, low = max(first, second), min(first, second)
+    return (high + 0.05) / (low + 0.05)
+
+
 def band_ink(code: str | None) -> QColor:
-    """Legible ink for the code stencilled on a band."""
-    colour = band_colour(code)
-    luminance = (0.299 * colour.red() + 0.587 * colour.green()
-                 + 0.114 * colour.blue()) / 255.0
-    return QColor(RUBBER) if luminance > 0.55 else QColor(STENCIL)
+    """Legible ink for the code stencilled on a band.
+
+    Whichever of the two inks actually contrasts better, measured - not
+    whichever side of a brightness threshold the band falls on.
+
+    The threshold version used NTSC coefficients against a fixed 0.55, and it
+    got six of the eleven compounds wrong: Intermediate green took warm white
+    at 2.53:1 and Sports Soft bronze at 2.84:1, both below even the large-text
+    floor. That matters more here than anywhere else in the app, because the
+    two-letter code is the redundant channel - the thing that carries the
+    classification for a viewer who cannot separate the hues. A code nobody
+    can read leaves colour as the only channel, which is the one outcome the
+    band exists to prevent.
+    """
+    band = band_colour(code)
+    dark, light = QColor(RUBBER), QColor(STENCIL)
+    return dark if contrast_ratio(dark, band) >= contrast_ratio(light, band) \
+        else light
 
 
 # ------------------------------------------------------------------ lettering
@@ -276,6 +306,11 @@ QCheckBox::indicator {{
     border: 1px solid {TREAD_LIGHT};
 }}
 QCheckBox::indicator:hover {{ border-color: {CRAYON}; }}
+/* Restyling the indicator suppresses Qt's own focus rect, so it has to be
+   put back. The Engineer screen has 28 of these and they were focusable with
+   nothing at all to show for it. Chalk, matching the button rule. */
+QCheckBox:focus {{ color: {STENCIL}; }}
+QCheckBox::indicator:focus {{ border: 1px solid {CHALK}; }}
 QCheckBox::indicator:checked {{
     background: {CRAYON};
     border-color: {CRAYON};

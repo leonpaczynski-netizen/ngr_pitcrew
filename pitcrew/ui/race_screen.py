@@ -25,6 +25,7 @@ from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
     Declared,
+    EmptyState,
     MarkButton,
     Measured,
     Plate,
@@ -65,7 +66,7 @@ class CallRow(QWidget):
         # must not look the same after the race any more than during it.
         badge = StencilLabel(call.confidence, size=10, tracking=14.0,
                              colour=CONFIDENCE_INK.get(call.confidence,
-                                                       theme.STRUCK))
+                                                       theme.STENCIL_DIM))
         badge.setFixedWidth(70)
         badge.setAlignment(Qt.AlignmentFlag.AlignRight
                            | Qt.AlignmentFlag.AlignVCenter)
@@ -129,6 +130,11 @@ class RaceScreen(QWidget):
         self.log_layout = QVBoxLayout(self.log)
         self.log_layout.setContentsMargins(0, 0, 0, 0)
         self.log_layout.setSpacing(0)
+        self.log_empty = EmptyState(
+            "No calls yet. The engineer speaks when the race is armed and "
+            "you cross the line; everything he says lands here with its "
+            "reason and its confidence, including calls you decline.")
+        self.log_layout.addWidget(self.log_empty)
         self.log_layout.addStretch(1)
         scroller.setWidget(self.log)
 
@@ -161,6 +167,7 @@ class RaceScreen(QWidget):
             f"color: {CONFIDENCE_INK.get(call.confidence, theme.STENCIL)};"
             f"background: transparent;")
         self.last_reason.setText(call.reason)
+        self.log_empty.setVisible(False)
         self.log_layout.insertWidget(0, CallRow(call))
 
     def show_exchange(self, heard: str, said: str) -> None:
@@ -177,7 +184,7 @@ class RaceScreen(QWidget):
         text.setSpacing(0)
         if heard:
             text.addWidget(BodyLabel(f'"{heard}"', size=13,
-                                     colour=theme.STRUCK, wrap=False))
+                                     colour=theme.STENCIL_DIM, wrap=False))
         text.addWidget(BodyLabel(said, colour=theme.CHALK, wrap=False))
         line.addLayout(text, 1)
         self.log_layout.insertWidget(0, row)
@@ -192,8 +199,10 @@ class RaceScreen(QWidget):
     def clear_log(self) -> None:
         while self.log_layout.count():
             item = self.log_layout.takeAt(0)
-            if item.widget():
+            if item.widget() and item.widget() is not self.log_empty:
                 item.widget().deleteLater()
+        self.log_empty.setVisible(True)
+        self.log_layout.addWidget(self.log_empty)
         self.log_layout.addStretch(1)
         self.last_call.setText("—")
         self.last_reason.setText("")

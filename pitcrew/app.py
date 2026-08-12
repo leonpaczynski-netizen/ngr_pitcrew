@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -67,6 +67,60 @@ def _claim_taskbar_identity() -> None:
         pass                                     # not Windows, or too old
 
 
+class NavItem(StencilLabel):
+    """A rail entry you can reach without a mouse.
+
+    The rail used to be eight labels with `mousePressEvent` reassigned onto
+    them. A QLabel takes no focus and answers no key, so the app's entire
+    primary navigation was unreachable from the keyboard - while every one of
+    the 355 controls inside the screens was focusable. The gap was the rail
+    alone, and it is the one thing used on every visit.
+
+    Focus is drawn rather than inherited: Qt paints no focus ring on a label,
+    and a focus nobody can see is the same as none.
+    """
+
+    def __init__(self, text: str, index: int, rail: "NavRail") -> None:
+        super().__init__(text, size=13, tracking=14.0)
+        self._index = index
+        self._rail = rail
+        self.setContentsMargins(0, 6, 0, 0)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"{text} screen")
+
+    def mousePressEvent(self, event) -> None:      # noqa: N802 - Qt naming
+        if self.isEnabled():
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._rail.select(self._index)
+
+    def keyPressEvent(self, event) -> None:        # noqa: N802 - Qt naming
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self._rail.select(self._index)
+        elif key in (Qt.Key.Key_Down, Qt.Key.Key_Right):
+            self._rail.focus_item(self._index + 1)
+        elif key in (Qt.Key.Key_Up, Qt.Key.Key_Left):
+            self._rail.focus_item(self._index - 1)
+        elif key == Qt.Key.Key_Home:
+            self._rail.focus_item(0)
+        elif key == Qt.Key.Key_End:
+            self._rail.focus_item(-1)
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:           # noqa: N802 - Qt naming
+        super().paintEvent(event)
+        if not self.hasFocus():
+            return
+        # A crayon bar in the rail's left margin: the same mark the app uses
+        # for "this is yours", in the one place a ring would fight the
+        # lettering.
+        painter = QPainter(self)
+        painter.fillRect(0, 6, 3, self.height() - 6, QColor(theme.CRAYON))
+        painter.end()
+
+
 class NavRail(QWidget):
     """Screen selection, lettered like a rack tag and grouped by job.
 
@@ -109,14 +163,10 @@ class NavRail(QWidget):
                 column.addWidget(Rule())
                 column.addSpacing(6)
             for name in names:
-                label = StencilLabel(name, size=13, tracking=14.0)
-                if index < stack.count():
-                    label.setCursor(Qt.CursorShape.PointingHandCursor)
-                    label.mousePressEvent = (                        # noqa: E731
-                        lambda _e, i=index: self.select(i))
-                else:
+                label = NavItem(name, index, self)
+                if index >= stack.count():
+                    label.setEnabled(False)
                     label.setToolTip("Not built yet")
-                label.setContentsMargins(0, 6, 0, 0)
                 column.addWidget(label)
 
                 # What the store already knows about this screen, so the rail
@@ -137,6 +187,20 @@ class NavRail(QWidget):
     # What fits on one line in the rail at this size, tracked. A note that
     # clips is worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
     NOTE_CHARS = 15
+
+    def focus_item(self, index: int) -> None:
+        """Move focus along the rail, wrapping. Skips what is not built."""
+        usable = [i for i in range(len(self._labels))
+                  if self._labels[i].isEnabled()]
+        if not usable:
+            return
+        if index < 0:
+            index = usable[-1]
+        elif index >= len(self._labels):
+            index = usable[0]
+        while index not in usable:
+            index = (index + 1) % len(self._labels)
+        self._labels[index].setFocus(Qt.FocusReason.TabFocusReason)
 
     def set_note(self, index: int, text: str) -> None:
         """A one-line state under a rail item, or "" to clear it."""
@@ -159,7 +223,7 @@ class NavRail(QWidget):
                 continue
             active = position == index
             label.setStyleSheet(
-                f"color: {theme.STENCIL if active else theme.STRUCK};"
+                f"color: {theme.STENCIL if active else theme.STENCIL_DIM};"
                 f"background: transparent;")
 
 
@@ -208,10 +272,47 @@ class PitCrewWindow(QMainWindow):
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
         self._update_rail(self.controller.nav_state())
+        self._install_shortcuts()
 
     def _update_rail(self, state: dict) -> None:
         for index, name in enumerate(SCREENS):
             self.rail.set_note(index, state.get(name, ""))
+
+    def _install_shortcuts(self) -> None:
+        """Keys for the things done every session.
+
+        There were none at all - not to a screen, not to Save, Export or
+        Generate. The one user does this weekly and knows exactly where he is
+        going; making him aim at a label eight times a session is the app
+        working at beginner speed forever.
+        """
+        for index in range(len(SCREENS)):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{index + 1}"), self)
+            shortcut.activated.connect(
+                lambda i=index: self.rail.select(i))
+
+        # The primary action of whichever screen is showing. One key rather
+        # than one per screen: the gesture is "do the thing this screen is
+        # for", and which thing that is depends on where you are.
+        primary = QShortcut(QKeySequence("Ctrl+Return"), self)
+        primary.activated.connect(self._trigger_primary)
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(
+            self._trigger_primary)
+
+    def _trigger_primary(self) -> None:
+        current = self.stack.currentWidget()
+        for action in ("_on_save", "_on_export", "_on_generate"):
+            handler = getattr(current, action, None)
+            if callable(handler):
+                handler()
+                return
+        # Screens whose primary action lives on the controller rather than on
+        # the screen itself.
+        if current is self.practice_screen:
+            self.practice_screen.export_requested.emit()
+        elif current is self.engineer_screen:
+            self.engineer_screen.generate_requested.emit(
+                self.engineer_screen.kind())
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()

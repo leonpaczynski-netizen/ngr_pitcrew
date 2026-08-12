@@ -28,6 +28,7 @@ from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
     Declared,
+    EmptyState,
     MarkButton,
     Measured,
     Plate,
@@ -198,6 +199,13 @@ class StrategyScreen(QWidget):
         self.plan_layout = QVBoxLayout(self.plan_holder)
         self.plan_layout.setContentsMargins(0, 0, 0, 0)
         self.plan_layout.setSpacing(theme.GAP)
+        self.plan_empty = EmptyState(
+            "No plans yet. Build from practice needs:",
+            ("an event, with its race length and pit loss",
+             "counted practice laps at race pace",
+             "a compound tagged on those laps",
+             "a tyre-gauge reading, for the wear rate"))
+        self.plan_layout.addWidget(self.plan_empty)
         self.plan_layout.addStretch(1)
         scroller.setWidget(self.plan_holder)
 
@@ -206,6 +214,10 @@ class StrategyScreen(QWidget):
 
     def _evidence_plate(self) -> Plate:
         plate = Plate("What this rests on")
+        self.evidence_empty = EmptyState(
+            "Every input the plan would use, and where each one came from, "
+            "appears here once a plan is built.")
+        plate.body.addWidget(self.evidence_empty)
         self.evidence_layout = QVBoxLayout()
         self.evidence_layout.setSpacing(theme.GAP)
         plate.body.addLayout(self.evidence_layout)
@@ -215,7 +227,7 @@ class StrategyScreen(QWidget):
     def _footer(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
-        self.footer_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
         self.approve_button = MarkButton("Approve for the race", primary=True)
         self.approve_button.setEnabled(False)
@@ -229,6 +241,12 @@ class StrategyScreen(QWidget):
     def show_plans(self, plans, evidence, *, approved_index: int | None = None) -> None:
         self._clear(self.plan_layout)
         self._cards.clear()
+        # The empty state survives _clear so it can come back: a rebuild that
+        # produces nothing has to say so again, not leave a blank plate.
+        if not plans:
+            self.plan_layout.addWidget(self.plan_empty)
+            self.plan_empty.setVisible(True)
+        self.evidence_empty.setVisible(not evidence)
 
         for index, plan in enumerate(plans):
             card = PlanCard(index, plan, best=index == 0)
@@ -260,10 +278,19 @@ class StrategyScreen(QWidget):
             self.evidence_layout.addWidget(_EvidenceRow(item))
 
     def _clear(self, layout) -> None:
+        """Empty a layout, keeping the empty-state block alive.
+
+        It is detached rather than destroyed, because a rebuild that produces
+        no plans has to say so again - and a deleted widget cannot.
+        """
+        keep = (getattr(self, "plan_empty", None),
+                getattr(self, "evidence_empty", None))
         while layout.count():
             entry = layout.takeAt(0)
-            if entry.widget():
-                entry.widget().deleteLater()
+            widget = entry.widget()
+            if widget is None or widget in keep:
+                continue
+            widget.deleteLater()
 
     def _on_selected(self, index: int) -> None:
         self._chosen = index
@@ -309,7 +336,7 @@ class _EvidenceRow(QWidget):
         trailer = SOURCE_WORD.get(item.source, item.source)
         if item.note:
             trailer = f"{trailer} — {item.note}"
-        column.addWidget(BodyLabel(trailer, size=12, colour=theme.STRUCK,
+        column.addWidget(BodyLabel(trailer, size=12, colour=theme.STENCIL_DIM,
                                    wrap=False))
 
 

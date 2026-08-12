@@ -192,7 +192,7 @@ class EngineerScreen(QWidget):
         plate.body.addWidget(BodyLabel(
             "Tick everything the car actually did. These are read literally — "
             "they are the shared vocabulary, so do not soften them.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.GAP)
@@ -279,7 +279,7 @@ class EngineerScreen(QWidget):
         plate.body.addWidget(BodyLabel(
             "The most valuable field on the screen. Say it the way you would "
             "say it over the radio — it goes into the prompt verbatim and is "
-            "read as primary evidence.", size=13, colour=theme.STRUCK))
+            "read as primary evidence.", size=13, colour=theme.STENCIL_DIM))
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText(
             "What the car did, where you lost confidence, what you changed "
@@ -313,7 +313,7 @@ class EngineerScreen(QWidget):
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
         self.output_note = BodyLabel("Nothing generated yet.", size=13,
-                                     colour=theme.STRUCK)
+                                     colour=theme.STENCIL_DIM)
         row.addWidget(self.output_note, 1)
         generate = MarkButton("Generate")
         generate.clicked.connect(
@@ -331,7 +331,7 @@ class EngineerScreen(QWidget):
             "Paste the reply here and it is filed against the prompt that "
             "asked for it. It is not parsed — the setup values go into the "
             "Event screen's paste box as they always have.",
-            size=13, colour=theme.STRUCK))
+            size=13, colour=theme.STENCIL_DIM))
         self.reply = QPlainTextEdit()
         self.reply.setPlaceholderText("Paste the knowledge base's reply…")
         self.reply.setMinimumHeight(90)
@@ -339,7 +339,7 @@ class EngineerScreen(QWidget):
 
         reply_row = QHBoxLayout()
         reply_row.setSpacing(theme.GAP)
-        self.reply_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.reply_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         reply_row.addWidget(self.reply_note, 1)
         self.save_reply = MarkButton("File reply")
         self.save_reply.clicked.connect(
@@ -355,7 +355,7 @@ class EngineerScreen(QWidget):
         bar.setFixedHeight(52)
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, theme.GAP, 0, theme.GAP)
-        self.footer_note = BodyLabel("", size=13, colour=theme.STRUCK)
+        self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
         return bar
 
@@ -375,7 +375,7 @@ class EngineerScreen(QWidget):
         self.output.clear()
         self.copy_button.setEnabled(False)
         self.output_note.setText("Nothing generated yet.")
-        self.output_note.setStyleSheet(f"color: {theme.STRUCK};")
+        self.output_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
 
     def kind(self) -> str:
         return self._kind

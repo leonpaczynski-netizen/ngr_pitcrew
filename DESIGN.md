@@ -85,9 +85,22 @@ row height down the left edge of a lap, so tagging a session paints the rack
 and the stint structure becomes visible without reading a number.
 
 **Colour is never the only channel.** Every band carries its two-letter code,
-stencilled in ink chosen by the band's own luminance (`theme.band_ink`). An
-excluded lap's band is desaturated toward grey — it keeps its identity and
-loses its voice.
+stencilled in whichever ink actually contrasts better against that band,
+measured (`theme.band_ink`, WCAG relative luminance). The earlier version
+thresholded NTSC brightness at 0.55 and got six of the eleven wrong —
+Intermediate green took warm white at 2.53:1 — which left colour as the only
+channel on exactly the bands where the code mattered most. The code is set at
+19px DemiBold so it qualifies as large text, where the floor is 3:1 and all
+eleven clear it; four of the racing colours cannot reach 4.5:1 against either
+ink, and those colours are the sport's, not ours. An excluded lap's band is
+desaturated toward grey — it keeps its identity and loses its voice.
+
+**`STRUCK` means removed from the count, and nothing else.** It carried every
+hint, unit, column header and footer note in the app at 2.93:1 — the ink for
+things that do not count, doing duty as the instructional colour. Prose is
+`STENCIL_DIM` (5.70:1). `STRUCK` is left to placeholders, disabled controls,
+the empty sentinel and the strike line, which are inactive or absent and are
+what WCAG exempts. A test asserts no screen paints prose with it.
 
 ## Lettering
 
