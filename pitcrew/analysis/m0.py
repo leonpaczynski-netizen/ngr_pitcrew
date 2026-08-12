@@ -126,6 +126,11 @@ class M0Result:
                           for name, m in sorted(self.measurements.items())},
             "stops": [
                 {"lap": s.lap, "durationS": round(s.duration_s, 3),
+                 # What the car arrived on. The run card sets an arrival
+                 # threshold per stop, because the fill available is capped by
+                 # how empty you turn up - and the tank is 100 L, so this
+                 # figure is both litres and percent.
+                 "arrivedOnL": round(s.fuel_before_l, 2),
                  "fuelAddedL": round(s.fuel_added_l, 2),
                  "tookFuel": s.took_fuel, "changedTyres": s.changed_tyres,
                  "confidence": s.confidence, "signals": list(s.signals),

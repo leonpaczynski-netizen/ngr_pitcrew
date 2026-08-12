@@ -26,6 +26,7 @@ from pitcrew.telemetry.capture import (
 )
 from pitcrew.telemetry.pit_detect import Sample, find_stops, refuel_span
 from pitcrew.tests.conftest import raw_packet
+from pitcrew.tests.test_controller import qt_app  # noqa: F401
 
 HZ = 60.0
 STEP = 1.0 / HZ
@@ -438,3 +439,163 @@ def test_the_cli_refuses_a_capture_it_cannot_measure(tmp_path, capsys):
     assert "three stops" in payload["voidReasons"][0]
     assert payload["constants"]["refuelRateLps"]["value"] is None
     assert "NOT wired into the strategy model" in capsys.readouterr().out
+
+
+# --------------------------------------------------------- the capture harness
+#
+# These construct a real Controller, which was impossible until the recogniser
+# deadline landed (register E6/E7). The harness is a tee on the callback the
+# app already receives: no second socket, no heartbeat, nothing that changes
+# who talks to the console.
+
+@pytest.fixture
+def rig(qt_app, store, tmp_path):                                  # noqa: F811
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.event_screen import EventScreen
+    from pitcrew.ui.practice_screen import PracticeScreen
+    from pitcrew.ui.settings_screen import SettingsScreen
+
+    screen = SettingsScreen()
+    controller = PitCrewController(store, EventScreen(), PracticeScreen(),
+                                   settings_screen=screen)
+    yield controller, screen, tmp_path
+    controller.stop_capture()
+    controller.shutdown()
+
+
+def _feed(controller, count, **fields):
+    for i in range(count):
+        controller.bridge.on_packet(_bytes_with(fuel_capacity=100.0, **fields))
+
+
+def test_the_harness_opens_no_socket_of_its_own(rig):
+    """The whole point: it observes the stream, it does not go and get one."""
+    controller, _, tmp_path = rig
+    before = controller.listener
+    controller.start_capture(tmp_path / "run.pcap")
+    assert controller.listener is before
+    assert controller.capturing
+
+
+def test_capture_records_the_datagrams_the_app_receives(rig):
+    controller, _, tmp_path = rig
+    path = controller.start_capture(tmp_path / "run.pcap")
+    _feed(controller, 20, fuel_level=50.0, speed_ms=40.0, flags_raw=0x0001)
+    summary = controller.stop_capture()
+
+    assert summary["packets"] == 20
+    assert summary["problem"] is None
+    assert len(list(read_datagrams(path))) == 20
+    assert read_metadata(path)["expected_format"] == "C"
+
+
+def test_capture_is_off_unless_it_is_turned_on(rig):
+    controller, _, _ = rig
+    assert controller.capturing is False
+    _feed(controller, 5, fuel_level=50.0, speed_ms=40.0, flags_raw=0x0001)
+    assert controller.stop_capture() is None
+
+
+def test_an_empty_capture_says_the_run_needs_repeating(rig):
+    """Silence is the failure that looks most like success."""
+    controller, _, tmp_path = rig
+    controller.start_capture(tmp_path / "run.pcap")
+    summary = controller.stop_capture()
+    assert summary["packets"] == 0
+    assert "Nothing was captured" in summary["problem"]
+    assert "repeating" in summary["problem"]
+
+
+def test_the_wrong_packet_format_fails_loudly(rig):
+    """A 296-byte 'A' capture cannot answer M0 and must not be discovered late."""
+    from pitcrew.tests.conftest import raw_packet as short_packet
+
+    controller, _, tmp_path = rig
+    controller.start_capture(tmp_path / "run.pcap")
+    for _ in range(5):
+        controller.bridge.on_packet(short_packet(extended=False))
+    summary = controller.stop_capture()
+
+    assert summary["formats"] == ["A"]
+    assert "expected C" in summary["problem"]
+    assert "run it again" in summary["problem"]
+
+
+def test_a_datagram_that_is_not_gt7_at_all_is_reported(rig):
+    controller, _, tmp_path = rig
+    controller.start_capture(tmp_path / "run.pcap")
+    controller.bridge.on_packet(b"\x00" * 40)
+    summary = controller.stop_capture()
+    assert summary["unparsed"] == 1
+    assert "not a GT7 packet size" in summary["problem"]
+
+
+def test_an_undecodable_datagram_is_still_written_to_disk(rig):
+    """The capture keeps what this build cannot read, for a build that can."""
+    controller, _, tmp_path = rig
+    path = controller.start_capture(tmp_path / "run.pcap")
+    controller.bridge.on_packet(b"\x00" * 40)
+    controller.stop_capture()
+    assert [d.data for d in read_datagrams(path)] == [b"\x00" * 40]
+
+
+def test_the_button_reports_what_happened(rig):
+    controller, screen, tmp_path = rig
+    controller.toggle_capture(True)
+    assert controller.capturing
+    assert screen.capture_button.isChecked()
+    assert "Recording to" in screen.capture_note.text()
+
+    _feed(controller, 10, fuel_level=50.0, speed_ms=40.0, flags_raw=0x0001)
+    controller.toggle_capture(False)
+    assert controller.capturing is False
+    assert screen.capture_button.isChecked() is False
+    assert "10 packets" in screen.capture_note.text()
+
+
+def test_a_captured_run_analyses_end_to_end(rig):
+    """Harness to file to analysis, with no synthetic Sample in the middle."""
+    from tools.analyse_m0 import samples_from_capture
+
+    controller, _, tmp_path = rig
+    path = controller.start_capture(tmp_path / "run.pcap")
+    # 3 laps of green running, then stationary with fuel going in.
+    for lap in (1, 2, 3):
+        _feed(controller, 5, fuel_level=60.0 - lap, speed_ms=50.0,
+              laps_completed=lap, flags_raw=0x0001)
+    for i in range(200):
+        controller.bridge.on_packet(_bytes_with(
+            fuel_capacity=100.0, fuel_level=57.0 + i * 0.1, speed_ms=0.0,
+            laps_completed=4, flags_raw=0x0001))
+    controller.stop_capture()
+
+    samples, capacity, formats, failed = samples_from_capture(path)
+    assert failed == 0 and formats == {"C"}
+    assert capacity == pytest.approx(100.0)
+    # Field values survived the whole chain: bytes -> file -> parse -> Sample.
+    assert samples[0].lap == 1
+    assert samples[-1].fuel_l == pytest.approx(57.0 + 199 * 0.1)
+
+    # Timestamps come from the arrival clock, and feeding 215 packets in a
+    # Python loop stamps them microseconds apart - so the "stop" lasts no time
+    # and the detector rightly ignores it. Re-space them onto the 60 Hz grid
+    # they would really arrive on; that is the loop being unrealistic, not the
+    # capture.
+    spaced = [Sample(**{**s.__dict__, "t_s": i * STEP})
+              for i, s in enumerate(samples)]
+    result = analyse(spaced, capacity_l=capacity)
+    assert len(result.stops) == 1
+    assert result.stops[0].took_fuel
+
+
+def test_the_file_records_what_each_stop_arrived_on():
+    """The run card's precondition is an arrival level, so expose it.
+
+    The tank is 100 L, so this number is litres and percent at once - which is
+    the whole reason the card can state a threshold the driver reads off the
+    MFD.
+    """
+    payload = analyse(_run(_protocol()), capacity_l=100.0).as_dict()
+    arrivals = {s["lap"]: s["arrivedOnL"] for s in payload["stops"]}
+    assert arrivals[12] < arrivals[5], "the car should arrive at B emptier"
+    assert all(v >= 0 for v in arrivals.values())

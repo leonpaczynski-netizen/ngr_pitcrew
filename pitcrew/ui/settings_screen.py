@@ -61,6 +61,7 @@ class SettingsScreen(QWidget):
     test_beep_requested = pyqtSignal()
     test_voice_requested = pyqtSignal()
     test_feed_requested = pyqtSignal()
+    capture_toggled = pyqtSignal(bool)      # raw session capture
     listen_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -148,6 +149,27 @@ class SettingsScreen(QWidget):
         self.feed_note = BodyLabel("", size=13, colour=theme.CHALK)
         self.feed_note.setWordWrap(True)
         plate.body.addWidget(self.feed_note)
+
+        # Raw capture. Off by default and started before going out, because a
+        # 30-minute session is ~40 MB and because there is nothing here anyone
+        # should be operating in a headset at speed.
+        plate.body.addWidget(BodyLabel(
+            "Record every packet to disk for a measurement run. Start it "
+            "before you go out, stop it when you come in. Nothing here is "
+            "operable at speed.",
+            size=13, colour=theme.STENCIL_DIM))
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        self.capture_button = MarkButton("Record raw session", compact=True)
+        self.capture_button.setCheckable(True)
+        self.capture_button.toggled.connect(self.capture_toggled.emit)
+        row.addWidget(self.capture_button)
+        row.addStretch(1)
+        plate.body.addLayout(row)
+
+        self.capture_note = BodyLabel("", size=13, colour=theme.CHALK)
+        self.capture_note.setWordWrap(True)
+        plate.body.addWidget(self.capture_note)
         return plate
 
     def _ptt_plate(self) -> Plate:
@@ -359,6 +381,20 @@ class SettingsScreen(QWidget):
         self.ptt_note.setStyleSheet(
             f"color: {theme.WARNING if warn else theme.CHALK};"
             "background: transparent;")
+
+    def note_capture(self, text: str, *, warn: bool = False) -> None:
+        self.capture_note.setText(text)
+        self.capture_note.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.CHALK};"
+            "background: transparent;")
+
+    def set_capturing(self, on: bool) -> None:
+        """Reflect what is actually happening, not what was clicked."""
+        was = self.capture_button.blockSignals(True)
+        self.capture_button.setChecked(on)
+        self.capture_button.setText(
+            "Stop recording" if on else "Record raw session")
+        self.capture_button.blockSignals(was)
 
     def note_feed(self, text: str, *, warn: bool = False) -> None:
         self.feed_note.setText(text)

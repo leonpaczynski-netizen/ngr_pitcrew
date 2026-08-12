@@ -55,6 +55,9 @@ data/pitcrew.db
 data/pitcrew.db-wal
 data/pitcrew.db-shm
 exports/
+# Raw session captures: ~40 MB a race, and they are the driver's own
+# measurement runs, not source.
+captures/
 
 data/gt7_sessions.db
 *.pyc

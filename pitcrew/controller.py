@@ -43,7 +43,8 @@ from pitcrew.race.replan import assess, observed_fuel_per_lap
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.listener import UDPListener, probe_port
-from pitcrew.telemetry.packet import parse_packet
+from pitcrew.telemetry.capture import CaptureWriter
+from pitcrew.telemetry.packet import packet_format_for, parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
 from pitcrew.telemetry.session_state import (
     EventKind,
@@ -57,6 +58,9 @@ from pitcrew.ui.practice_screen import LapRow
 # SimHub reconfiguration is a thing the driver can follow without a rebuild.
 DEFAULT_PORT = settings.DEFAULT_UDP_PORT
 EXPORT_DIR = Path("exports")
+# Raw session captures. A 30-minute run is ~40 MB, which is nothing set
+# against re-driving it.
+CAPTURE_DIR = Path("captures")
 STALE_AFTER_S = 3.0
 
 
@@ -73,6 +77,15 @@ class TelemetryBridge(QObject):
         self.state = SessionState(SessionKind.PRACTICE)
         self.recorder = LapRecorder()
         self._announced = False
+        # A raw capture sink, off unless the driver turned it on. It is a tee
+        # on this callback rather than a second socket on purpose: SimHub
+        # relays and this app never heartbeats the console, so the packet
+        # format is whatever SimHub asked for. A capture tool that opened its
+        # own socket and heartbeated would latch a different format and take
+        # the stream away from the app it is meant to be observing.
+        self.capture = None
+        self.capture_formats: set[str] = set()
+        self.capture_unparsed = 0
         # On the telemetry thread on purpose: a shift beep routed through
         # the Qt event loop arrives after the corner it was for.
         self.shift_beep = ShiftBeep(enabled=False)
@@ -99,6 +112,18 @@ class TelemetryBridge(QObject):
 
     def on_packet(self, data: bytes) -> None:
         """Called on the UDP thread for every datagram."""
+        if self.capture is not None:
+            # Before parsing, so a datagram this build cannot decode is still
+            # on disk for one that can. A capture that only kept what today's
+            # parser understood would be worth nothing the next time GT7
+            # changes the packet.
+            self.capture.write(data, _monotonic())
+            fmt = packet_format_for(len(data))
+            if fmt is None:
+                self.capture_unparsed += 1
+            else:
+                self.capture_formats.add(fmt)
+
         packet = parse_packet(data)
         if packet is None:
             # Never degrade into a stream of zeros: a decode failure is
@@ -229,6 +254,7 @@ class PitCrewController(QObject):
             self.settings_screen.test_beep_requested.connect(self.test_beep)
             self.settings_screen.test_voice_requested.connect(self.test_voice)
             self.settings_screen.test_feed_requested.connect(self.test_feed)
+            self.settings_screen.capture_toggled.connect(self.toggle_capture)
             self.settings_screen.listen_toggled.connect(self.probe_button)
             self.settings_screen.load(self.settings)
             self.settings_screen.show_capabilities(
@@ -470,6 +496,104 @@ class PitCrewController(QObject):
                 self.settings_screen.note("Saved.")
             self.settings_screen.show_capabilities(
                 speech=self.voice.engine_name, hook=self.ptt.has_listener)
+
+    # ---------------------------------------------------------- raw capture
+
+    # What M0 expects to be arriving. Not a filter — anything that turns up is
+    # written — but a mismatch is said out loud, because a capture recorded in
+    # the wrong format is only discovered when the analysis has nothing to
+    # measure, which is after the race and after the driver has got out.
+    CAPTURE_EXPECTED_FORMAT = "C"
+
+    def start_capture(self, path=None, **note) -> Path | None:
+        """Begin recording every datagram, raw, to disk.
+
+        A pre-race action. There is nothing here to operate at speed, and
+        nothing here that talks to the console: this is a tee on the callback
+        the app already receives.
+        """
+        if self.bridge.capture is not None:
+            return self.bridge.capture.path
+
+        target = Path(path) if path else (
+            CAPTURE_DIR / f"{datetime.datetime.now():%Y-%m-%d_%H%M%S}.pcap")
+        writer = CaptureWriter(
+            target, app_version=APP_VERSION,
+            started=datetime.datetime.now().isoformat(timespec="seconds"),
+            expected_format=self.CAPTURE_EXPECTED_FORMAT, **note)
+        writer.__enter__()
+        self.bridge.capture_formats = set()
+        self.bridge.capture_unparsed = 0
+        self.bridge.capture = writer
+        log("capture").info("recording raw telemetry to %s", target)
+        return target
+
+    def stop_capture(self) -> dict | None:
+        """Close the capture and say what actually landed in it."""
+        writer = self.bridge.capture
+        if writer is None:
+            return None
+        self.bridge.capture = None
+        writer.__exit__(None, None, None)
+
+        formats = sorted(self.bridge.capture_formats)
+        unparsed = self.bridge.capture_unparsed
+        # Fail loudly rather than silently mis-parsing later. A capture in the
+        # wrong format still contains bytes, and an analysis over the wrong
+        # bytes produces numbers rather than an error.
+        wrong = [f for f in formats if f != self.CAPTURE_EXPECTED_FORMAT]
+        problem = None
+        if not writer.count:
+            problem = ("Nothing was captured. The stream was not running - "
+                       "this file is empty and the run needs repeating.")
+        elif unparsed:
+            problem = (f"{unparsed} datagrams were not a GT7 packet size at "
+                       f"all. Something else is on the port.")
+        elif wrong:
+            problem = (f"Captured format {'/'.join(formats)}, expected "
+                       f"{self.CAPTURE_EXPECTED_FORMAT}. Only 'C' carries "
+                       f"current-lap time and surface type - reconfigure "
+                       f"SimHub and run it again.")
+        elif len(formats) > 1:
+            problem = f"The format changed mid-capture: {'/'.join(formats)}."
+
+        summary = {"path": writer.path, "packets": writer.count,
+                   "formats": formats, "unparsed": unparsed,
+                   "problem": problem}
+        if problem:
+            log("capture").warning("%s (%s)", problem, writer.path)
+        else:
+            log("capture").info("captured %d packets to %s",
+                                writer.count, writer.path)
+        return summary
+
+    @property
+    def capturing(self) -> bool:
+        return self.bridge.capture is not None
+
+    def toggle_capture(self, wanted: bool) -> None:
+        """The Settings button. Says what happened, including when nothing did."""
+        if self.settings_screen is None:
+            return
+        if wanted:
+            path = self.start_capture()
+            self.settings_screen.set_capturing(True)
+            self.settings_screen.note_capture(
+                f"Recording to {path}. Stop it when you come in - the file is "
+                f"closed on stop, and analysed with tools/analyse_m0.py.")
+            return
+
+        summary = self.stop_capture()
+        self.settings_screen.set_capturing(False)
+        if summary is None:
+            self.settings_screen.note_capture("Nothing was recording.")
+            return
+        if summary["problem"]:
+            self.settings_screen.note_capture(summary["problem"], warn=True)
+            return
+        self.settings_screen.note_capture(
+            f"{summary['packets']} packets, format "
+            f"{'/'.join(summary['formats'])}, written to {summary['path']}.")
 
     def test_feed(self) -> bool:
         """Can the port actually be opened, and is anything on it?
