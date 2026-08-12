@@ -1055,12 +1055,33 @@ results, and E7.
 
 ### E5 · P2 · `pitcrew/telemetry/pit_state.py` is unreachable
 
-Zero importers in the repo — test or otherwise. 200 lines implementing graded pit
-detection that D3 shows the live path needs. This is the one module matching the
-old `strategy/tyre_curves.py` pattern.
+Zero importers in the repo — test or otherwise. This is the one module matching
+the old `strategy/tyre_curves.py` pattern.
 
-**Evidence:** `pitcrew/telemetry/pit_state.py` · `grep -rn "pit_state"` returns
-only the file itself
+> **Correction, 12 Aug, while building its replacement.** I recommended wiring
+> this module. That was wrong, and reading it properly says so: **it detects
+> nothing.** It is a counter — `apply_pit_event` increments a tally of events it
+> is *handed* (`pit_state.py:135`), and the detection it refers to lives
+> elsewhere. "Elsewhere" is `RaceStateTracker`, which this codebase does not
+> have: `session_state.py:3` records that it *replaced* that 1081-line class.
+> The file arrived in `aa1782f` ("Group 54") — old-app vocabulary — and was
+> carried through the `9f3b668` rebuild unexamined.
+>
+> **Recommendation changed from wire to delete.** Its `tyre_age_laps` also
+> assumes every detected stop changed tyres, which is exactly the assumption D3
+> shows to be false.
+>
+> The real detector is now `pitcrew/telemetry/pit_detect.py`, written for M0 and
+> shaped so the live path can use the same code: pure, a function over samples,
+> testable against synthetic traces, and it reports *which* signals fired rather
+> than assuming. **Not done here:** deleting a file is the owner's call, and
+> leaving a dead module beside a live one of nearly the same name is the
+> "two pit-lane stores" trap this project has hit before. Worth one word of
+> approval.
+
+**Evidence:** `pitcrew/telemetry/pit_state.py:135`, `:61-67` ·
+`pitcrew/telemetry/session_state.py:3` · origin `aa1782f` ·
+`grep -rn "pit_state"` returns only the file itself
 
 ---
 
