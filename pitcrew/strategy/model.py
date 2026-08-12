@@ -90,10 +90,27 @@ class CompoundProfile:
     source: str = SOURCE_ASSUMED
     laps_measured: int = 0
     stints_measured: int = 0
+    # Where this compound's laps sat against its own temperature window, and
+    # in one sentence what that does to the pace and wear above. None when no
+    # temperature was captured, which is not the same as "the tyre was fine".
+    window: dict | None = None
+    window_note: str | None = None
 
     @property
     def is_measured(self) -> bool:
         return self.source == SOURCE_MEASURED
+
+    @property
+    def evidence_is_clean(self) -> bool:
+        """Measured, *and* measured on a tyre that was actually working.
+
+        A rate off a cold tyre is a measurement of the conditions as much as
+        of the compound. It is still the best number available and it is still
+        used - but a plan resting on it is not the same claim as one resting
+        on a compound that ran in its window, and the two must not rank
+        against each other silently.
+        """
+        return self.is_measured and self.window_note is None
 
     def as_export(self) -> dict:
         return {
@@ -104,6 +121,8 @@ class CompoundProfile:
             "source": self.source,
             "lapsMeasured": self.laps_measured,
             "stintsMeasured": self.stints_measured,
+            "tyreWindow": self.window,
+            "windowQualification": self.window_note,
         }
 
 
@@ -199,6 +218,13 @@ class Plan:
         """True when any stint is planned on a rate never measured on it."""
         return any(not profile.is_measured
                    for profile in self.profiles.values())
+
+    @property
+    def window_notes(self) -> list[str]:
+        """Compounds whose evidence came off a tyre outside its window."""
+        return [profile.window_note
+                for profile in self.profiles.values()
+                if profile.window_note]
 
     @property
     def stops(self) -> int:
@@ -463,6 +489,10 @@ def build_plan(inputs: RaceInputs, stops: int,
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
 
+    for note in dict.fromkeys(profile.window_note for profile in profiles
+                              if profile.window_note):
+        notes.append(note)
+
     guessed = sorted({profile.code for profile in profiles
                       if not profile.is_measured and profile.wear_per_lap})
     if guessed:
@@ -604,6 +634,9 @@ def crossover(ordered: list[Plan], inputs: RaceInputs) -> dict | None:
     rival_deficit = mean_deficit(rival, inputs)
 
     assumed = winner.rests_on_assumption or rival.rests_on_assumption
+    # Both sides, because a call is only as good as the weaker of the two
+    # measurements it rests on.
+    window_notes = list(dict.fromkeys(winner.window_notes + rival.window_notes))
     result = {
         "winner": {"label": winner.label(),
                    "compounds": [c for c in winner.compounds]},
@@ -614,13 +647,15 @@ def crossover(ordered: list[Plan], inputs: RaceInputs) -> dict | None:
         "alternativePaceDeltaSPerLap": round(rival_deficit, 3),
         "breakEvenSPerLap": round(rival_deficit - gap / laps_on_swapped, 3),
         "restsOnAssumption": assumed,
+        "outsideTyreWindow": window_notes,
         "source": "derived-from-total-race-time",
     }
-    result["verdict"] = _verdict(result, assumed)
+    result["verdict"] = _verdict(result, assumed, window_notes)
     return result
 
 
-def _verdict(crossover: dict, assumed: bool) -> str:
+def _verdict(crossover: dict, assumed: bool,
+             window_notes: list[str] | None = None) -> str:
     """One sentence saying what the comparison actually established.
 
     Written here rather than on the screen so the Strategy screen, the export
@@ -628,17 +663,22 @@ def _verdict(crossover: dict, assumed: bool) -> str:
     plan. Three outcomes worth telling apart, and the third is the trap: a
     gap of nothing between two compounds is not "they are equally good", it
     is "nothing here can tell them apart", and it has to read that way.
+
+    A tyre-window qualification is appended rather than folded in, because it
+    does not change the arithmetic - it changes how far the arithmetic can be
+    trusted, which is a separate claim and reads better as one.
     """
     win = "/".join(c or "?" for c in crossover["winner"]["compounds"])
     alt = "/".join(c or "?" for c in crossover["alternative"]["compounds"])
     gap = crossover["alternative"]["lostBySeconds"]
     saved = crossover["stopsSaved"]
+    tail = " " + " ".join(window_notes) if window_notes else ""
 
     if assumed and gap < 0.5:
         return (f"{win} and {alt} come out level, but only because no wear "
                 f"rate has been measured on both - they are being planned on "
                 f"the same number. This is not a comparison yet. Run a stint "
-                f"on each and read the gauge.")
+                f"on each and read the gauge." + tail)
 
     stops = ""
     if saved > 0:
@@ -659,7 +699,7 @@ def _verdict(crossover: dict, assumed: bool) -> str:
                  f"it is to change the call.")
     if assumed:
         lead += " [ASSUMED] One of these compounds has no measured rate."
-    return lead
+    return lead + tail
 
 
 def mean_deficit(plan: Plan, inputs: RaceInputs) -> float:

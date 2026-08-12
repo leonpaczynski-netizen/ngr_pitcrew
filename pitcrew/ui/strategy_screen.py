@@ -102,6 +102,19 @@ class CrossoverBand(QFrame):
     typed it. When either compound is planned on a rate that was never
     measured on it, the band says so in warning and the sentence leads with
     that rather than with the verdict.
+
+    Two different kinds of doubt reach this band and they are not the same, so
+    the heading names which one:
+
+    * **unconfirmed** — a compound has no measured rate at all, so the
+      comparison has not been earned yet;
+    * **outside the tyre window** — the rates are real, but one was gathered
+      on a tyre that was not working, so it describes the conditions as much
+      as the compound.
+
+    The second is the quieter failure. The arithmetic looks complete and the
+    numbers are genuinely measured; only the temperature says the answer will
+    not reproduce on race day.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -124,11 +137,17 @@ class CrossoverBand(QFrame):
             self.setVisible(False)
             return
         assumed = bool(crossover.get("restsOnAssumption"))
-        ink = theme.WARNING if assumed else theme.DERIVED
+        cold = bool(crossover.get("outsideTyreWindow"))
+        ink = theme.WARNING if (assumed or cold) else theme.DERIVED
         self.verdict.setText(crossover["verdict"])
         self.verdict.setStyleSheet(f"color: {ink}; background: transparent;")
-        self.heading.setText(
-            "Compound call — unconfirmed" if assumed else "Compound call")
+        if assumed:
+            heading = "Compound call — unconfirmed"
+        elif cold:
+            heading = "Compound call — outside the tyre window"
+        else:
+            heading = "Compound call"
+        self.heading.setText(heading)
         self.setStyleSheet(
             f"CrossoverBand {{ background: {theme.SHOULDER};"
             f" border-left: 3px solid {ink}; }}")

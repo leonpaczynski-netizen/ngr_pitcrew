@@ -14,6 +14,7 @@ from statistics import median
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
 from pitcrew.analysis.wear import wear_rate_by_compound
+from pitcrew.analysis.tyre_window import qualification, window_by_compound
 from pitcrew.strategy.model import (
     FUEL_WEIGHT_S_PER_L_PER_LAP,
     PIT_DEAD_TIME_S,
@@ -38,10 +39,31 @@ class Evidence:
     note: str = ""
 
 
+# How many laps per compound get their frames decoded for the temperature
+# window. A lap's mean surface temperature barely moves lap to lap, so a
+# handful is a real sample rather than a compromise - and the alternative is
+# not free: one lap's blob is ~1.6 MiB and costs ~65 ms to decode, so a
+# three-evening practice event would freeze the Strategy screen for seconds,
+# and freeze it again when the race is armed.
+#
+# The cap is never silent. `lapsSampled` travels in the window payload and on
+# the export, so the sample size is always visible next to the conclusion.
+WINDOW_SAMPLE_LAPS = 6
+
+
 def _lap_inputs(store, event_id: int) -> list[LapInput]:
+    """Every practice lap, with frames on only the laps that need them.
+
+    Frames are decoded for the temperature window and nothing else here, so
+    only the laps that window looks at are hydrated - the most recent few on
+    each compound, which are also the most representative: latest setup, track
+    at its most rubbered in.
+    """
     rows = store.list_event_laps(event_id, "practice")
+    wanted = _laps_to_hydrate(rows)
     return [
         LapInput(
+            frames=_frames_for(store, row["id"]) if row["id"] in wanted else None,
             lap_num=row["lap_num"],
             lap_time_ms=row["lap_time_ms"],
             fuel_start=row["fuel_start"],
@@ -65,6 +87,49 @@ def _fuel_capacity(store, event_id: int) -> float | None:
         if session["fuel_capacity_l"] is not None:
             return session["fuel_capacity_l"]
     return None
+
+
+def _laps_to_hydrate(rows) -> set[int]:
+    """Lap ids worth decoding: the last few counted laps on each compound."""
+    by_compound: dict[str, list[int]] = {}
+    for row in rows:
+        counted = not (row["excluded"] or row["is_out_lap"] or row["is_pit_lap"])
+        if row["compound"] and counted:
+            by_compound.setdefault(row["compound"], []).append(row["id"])
+    wanted: set[int] = set()
+    for lap_ids in by_compound.values():
+        wanted.update(lap_ids[-WINDOW_SAMPLE_LAPS:])
+    return wanted
+
+
+def _frames_for(store, lap_id: int) -> list[dict] | None:
+    stored = store.get_lap_frames(lap_id)
+    return stored["frames"] if stored else None
+
+
+def reference_compound(counted: list[LapInput]) -> str | None:
+    """The compound everything else is measured against: the most-run one.
+
+    Ties are broken by which ran first, because the opening stint is the
+    baseline the rest of the day was compared against by the driver too.
+
+    The tie-break is not decoration. This was `max(set(tagged), key=count)`,
+    and iterating a **set** of strings means the winner of a tie depends on
+    string hash randomisation - a different reference compound per process,
+    and with it a different sign on every pace delta in the table. Two equal
+    stints on two compounds is the *normal* shape of a comparison test, so the
+    tie was the common case rather than the edge one.
+    """
+    order: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for position, lap in enumerate(counted):
+        if not lap.compound:
+            continue
+        counts[lap.compound] = counts.get(lap.compound, 0) + 1
+        order.setdefault(lap.compound, position)
+    if not counts:
+        return None
+    return min(counts, key=lambda code: (-counts[code], order[code]))
 
 
 def compound_profiles(laps: list[LapInput],
@@ -93,6 +158,7 @@ def compound_profiles(laps: list[LapInput],
     reference_ms = (median([lap.lap_time_ms for lap in reference_laps])
                     if reference_laps else None)
     rates = wear_rate_by_compound(laps)
+    windows = window_by_compound(laps)
 
     profiles: dict[str, CompoundProfile] = {}
     for code, on_this in by_compound.items():
@@ -101,6 +167,7 @@ def compound_profiles(laps: list[LapInput],
             pace_delta = (median([lap.lap_time_ms for lap in on_this])
                           - reference_ms) / 1000.0
         rate = rates.get(code)
+        window = windows.get(code)
         profiles[code] = CompoundProfile(
             code=code,
             pace_delta_s=round(pace_delta, 3),
@@ -111,6 +178,10 @@ def compound_profiles(laps: list[LapInput],
             source=SOURCE_MEASURED if rate else SOURCE_DECLARED,
             laps_measured=len(on_this),
             stints_measured=rate["stints"] if rate else 0,
+            window=window,
+            # The figures above stay exactly as measured. This says how far
+            # they can be trusted, which is a different claim.
+            window_note=qualification(code, window),
         )
     return profiles
 
@@ -133,10 +204,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
 
     # The compound the evidence came from. Stints default to it, because a
     # wear rate measured on one compound does not describe another.
-    tagged = [lap.compound for lap in counted if lap.compound]
-    evidence_compound = None
-    if tagged:
-        evidence_compound = max(set(tagged), key=tagged.count)
+    evidence_compound = reference_compound(counted)
     profiles = compound_profiles(laps, evidence_compound)
 
     race_laps = event["race_laps"] or 0
@@ -187,6 +255,8 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         Evidence("Compounds compared", _compounds_compared(profiles),
                  MEASURED if _measured_count(profiles) > 1 else MISSING,
                  _compound_note(profiles, event["available_compounds"])),
+        Evidence("Tyre window", _window_value(profiles),
+                 _window_source(profiles), _window_note(profiles)),
         Evidence("Pit loss", f"{event['pit_loss_secs']:.1f} s", DECLARED,
                  "a track constant"),
         Evidence("Pit dead time", f"{PIT_DEAD_TIME_S:.1f} s", ASSUMED,
@@ -231,6 +301,41 @@ def _compound_note(profiles: dict[str, CompoundProfile],
         return "only one compound measured"
     return (f"{measured} compounds measured, so the harder-tyre call rests on "
             f"evidence rather than on the reference rate")
+
+
+def _windowed(profiles: dict[str, CompoundProfile]) -> list[CompoundProfile]:
+    """Compounds whose laps carried a temperature at all."""
+    return [p for p in profiles.values() if p.window]
+
+
+def _window_value(profiles: dict[str, CompoundProfile]) -> str:
+    """Each compound and the band it actually ran in."""
+    measured = _windowed(profiles)
+    if not measured:
+        return "—"
+    return " · ".join(f"{p.code} {p.window['band']}"
+                      for p in sorted(measured, key=lambda p: p.code))
+
+
+def _window_source(profiles: dict[str, CompoundProfile]) -> str:
+    """Measured off the stream, or nothing captured at all.
+
+    Never ASSUMED: this figure is either a real temperature or it is absent.
+    """
+    return MEASURED if _windowed(profiles) else MISSING
+
+
+def _window_note(profiles: dict[str, CompoundProfile]) -> str:
+    outside = [p for p in profiles.values() if p.window_note]
+    if not _windowed(profiles):
+        return ("no tyre temperature captured, so no compound's evidence can "
+                "be checked against its window")
+    if not outside:
+        return ("every compound ran in its window, so the pace and wear above "
+                "describe the compounds rather than the conditions")
+    codes = ", ".join(sorted(p.code for p in outside))
+    return (f"{codes} ran outside the window - the pace and wear measured "
+            f"there describe the conditions as much as the compound")
 
 
 def _lap_time(ms: int | None) -> str:

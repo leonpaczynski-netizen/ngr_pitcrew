@@ -229,3 +229,29 @@ def test_a_compound_never_run_gets_no_profile_at_all():
     """Rather than one invented from the compound next to it on the list."""
     laps = stint_laps("RS", 10, lap_ms=93_000, start=1, worst=0.55)
     assert set(compound_profiles(laps, "RS")) == {"RS"}
+
+
+# --------------------------------------------------- the reference compound
+
+def test_the_reference_compound_is_the_most_run_one():
+    from pitcrew.strategy.evidence import reference_compound
+    laps = (stint_laps("RS", 4, lap_ms=93_000, start=1, worst=0.2)
+            + stint_laps("RH", 9, lap_ms=93_600, start=5, worst=0.2))
+    assert reference_compound([lap for lap in laps if lap.counted]) == "RH"
+
+
+def test_an_even_comparison_picks_the_same_reference_every_run():
+    """Two equal stints on two compounds is the *normal* shape of a
+    comparison, so a tie is the common case, not the edge one.
+
+    This used to iterate a set of strings, so the winner depended on hash
+    randomisation - a different reference per process, and with it a flipped
+    sign on every pace delta in the table.
+    """
+    from pitcrew.strategy.evidence import reference_compound
+    laps = (stint_laps("RS", 12, lap_ms=93_000, start=1, worst=0.66)
+            + stint_laps("RH", 12, lap_ms=93_600, start=13, worst=0.36))
+    counted = [lap for lap in laps if lap.counted]
+    # The one that ran first, and the same one however the strings hash.
+    assert reference_compound(counted) == "RS"
+    assert len({reference_compound(counted) for _ in range(50)}) == 1

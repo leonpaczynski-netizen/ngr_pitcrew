@@ -444,9 +444,29 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
   "bindingConstraint": "fuel",
   "compoundProfiles": [
     { "compound": "RS", "paceDeltaSPerLap": 0.0,  "wearPerLap": 0.055,
-      "source": "measured", "lapsMeasured": 12, "stintsMeasured": 1 },
+      "source": "measured", "lapsMeasured": 12, "stintsMeasured": 1,
+      "tyreWindow": {
+        "meanC": 103.4,
+        "perCornerC": { "fl": 108.1, "fr": 101.7, "rl": 102.0, "rr": 101.8 },
+        "band": "optimal",
+        "lapsSampled": 6, "lapsInWindow": 6, "inWindow": true,
+        "windowC": [85, 110],
+        "hottestCorner": "fl",
+        "source": "tyre-surface-temp"
+      },
+      "windowQualification": null },
     { "compound": "RM", "paceDeltaSPerLap": 0.34, "wearPerLap": 0.038,
-      "source": "measured", "lapsMeasured": 11, "stintsMeasured": 1 }
+      "source": "measured", "lapsMeasured": 11, "stintsMeasured": 1,
+      "tyreWindow": {
+        "meanC": 71.2,
+        "perCornerC": { "fl": 74.0, "fr": 70.1, "rl": 70.4, "rr": 70.3 },
+        "band": "warming",
+        "lapsSampled": 6, "lapsInWindow": 0, "inWindow": false,
+        "windowC": [80, 105],
+        "hottestCorner": "fl",
+        "source": "tyre-surface-temp"
+      },
+      "windowQualification": "RM never got into its window (71.2 °C mean against a 80–105 °C window, 6 of 6 laps outside it). A cold tyre is slower than the compound is and wears less than it will, so its pace deficit is overstated and its stint length is flattered. Neither figure describes a race run at temperature." }
   ],
   "compoundCrossover": {
     "winner":      { "label": "1 stop",  "compounds": ["RS", "RM"] },
@@ -456,7 +476,8 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
     "alternativePaceDeltaSPerLap": 0.0,
     "breakEvenSPerLap": -0.42,
     "restsOnAssumption": false,
-    "verdict": "RS/RM beats RS/RS/RS by 8.4 s over the race, saving 1 stop. RS/RS/RS would need to be 0.42 s/lap quicker than it is to change the call.",
+    "outsideTyreWindow": ["RM never got into its window (…)"],
+    "verdict": "RS/RM beats RS/RS/RS by 8.4 s over the race, saving 1 stop. RS/RS/RS would need to be 0.42 s/lap quicker than it is to change the call. RM never got into its window (…)",
     "source": "derived-from-total-race-time"
   },
   "assumptions": {
@@ -497,6 +518,9 @@ delete a stop can win, which is the whole question the driver asks before a race
 | `compoundProfiles[].lapsMeasured` / `.stintsMeasured` | int | The sample count behind the pair. A rate from one stint and one from three are not the same claim |
 | `compoundCrossover.stopsSaved` | int | Stops the winner saves against the alternative. Negative when the winner takes *more* stops and still wins |
 | `compoundCrossover.breakEvenSPerLap` | float, seconds | The pace delta at which the alternative would draw level. Compare against its actual `alternativePaceDeltaSPerLap`: a small margin means a tenth either way decides the race |
+| `compoundProfiles[].tyreWindow` | object, or `null` | **Measured**, from per-wheel tyre *surface* temperature against that compound's own window in `store/tyres.py`. `meanC` and `perCornerC` are averaged over whole laps — surface temperature responds far faster than the carcass, so a single frame is not a working range. `lapsSampled` is capped (see below) and always travels with the conclusion. `null` when no frames carried a temperature, which is **not** the same as the tyre having been fine |
+| `compoundProfiles[].windowQualification` | string, or `null` | What the window does to the two figures above, in one sentence. `null` when the tyre was working and the evidence needs no qualification |
+| `compoundCrossover.outsideTyreWindow` | array of string | Every qualification bearing on this comparison, from **both** sides — a call is only as good as the weaker of the two measurements it rests on. Empty when both compounds were in window |
 | `compoundCrossover.restsOnAssumption` | bool | True when either side is planned on a rate never measured on it |
 | `compoundCrossover.verdict` | string | The comparison in one sentence, written once in the model so the screen, this payload and the engineer's prompt all say the same thing about the same plan |
 
@@ -506,6 +530,30 @@ name, so the plans cost identically. `restsOnAssumption` is `true` in that case 
 `verdict` says the comparison has not been earned yet rather than reporting a tie.
 `compoundCrossover` is absent entirely when there was no alternative on different
 rubber to compare against.
+
+### 10.2 The tyre window qualifies the evidence; it never corrects it
+
+**A compound below its window is slower than it is, and wears less than it will.**
+Harder compounds need more energy to light up, so a Racing Hard measured on a cool
+track looks like a bad tyre that lasts forever — and *both* halves of that are the
+temperature rather than the compound. Above the window the opposite: an overheating
+stint measures a wear rate a cooler race will not reproduce.
+
+Nothing in this section scales a measured figure to what it "would have been".
+GT7 publishes no recovery curve, and inventing one would put a fabricated number
+where a measured one belongs, in the section a race plan is built from. The pace
+and wear stay exactly as measured; `windowQualification` says how far they carry.
+
+This is the quieter of the two failures the crossover can suffer. `restsOnAssumption`
+is loud — a number is simply missing. A window failure looks complete: the
+arithmetic is finished and the inputs are genuinely measured, and only the
+temperature says the answer will not reproduce on race day.
+
+**Sampling.** Decoding a lap's frames costs roughly 65 ms against a ~1.6 MiB blob,
+so the window reads the **most recent 6 counted laps per compound** rather than the
+whole event — the latest setup, on the most rubbered-in track. A lap's mean surface
+temperature barely moves lap to lap, so this is a real sample rather than a
+compromise, and `lapsSampled` carries it so the cap is never silent.
 
 ## 11. `derived` and `notes`
 
@@ -643,6 +691,7 @@ of the shape the code emits.
 | 5 | **New `wear.byCompound`** | A wear rate measured on one compound describes that compound and no other, so rates are keyed by compound and never pooled. Measured over the laps each set ran — the old figure divided by the lap number, which assumed the tyres went on at lap 1 and understated every stint after the first by the length of the ones before it |
 | 6 | **New `strategy.compoundProfiles` and `strategy.compoundCrossover`** (§10.1) | The model could not tell compounds apart at all: one `wear_per_lap`, one `lap_time_ms`, and a search over stop counts only. A harder tyre was costed as identical to the soft it replaced, so it could never win — which made "is it worth running the hard longer to skip a stop" unanswerable |
 | 7 | `assumptions.compoundDeltaSPerLap` is a real figure | It had been hard-coded `null` since the field was introduced. It is now the plan's compounds against the reference, weighted over the race distance |
+| 8 | **New `compoundProfiles[].tyreWindow` / `.windowQualification` and `compoundCrossover.outsideTyreWindow`** (§10.2) | `store/tyres.py` had carried a per-compound temperature window since the rebuild and **nothing read it**, so compounds were compared on pace and wear without asking whether either was gathered on a tyre that was working. A compound below its window is slower than it is *and* wears less than it will, so a cold Racing Hard reads as a bad tyre that lasts forever — and a stint planned on that fails in the direction §5.1 says costs most |
 
 **Migrating stored 1.1 data.** The app's schema v3 migration spreads each axle
 reading across both of that axle's corners, which is what the single figure meant

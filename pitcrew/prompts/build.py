@@ -894,6 +894,15 @@ def _strategy_section(lines: Lines, context: ctx.PromptContext,
     if profiles:
         lines.add("", "What each compound was costed at:", "")
         for profile in profiles:
+            window = profile.get("tyreWindow") or {}
+            temperature = ""
+            if window.get("meanC") is not None:
+                low, high = window.get("windowC") or (None, None)
+                temperature = (
+                    f", ran at {window['meanC']} C against a {low}-{high} C "
+                    f"window [{window.get('band')}, "
+                    f"{window.get('lapsInWindow')}/{window.get('lapsSampled')} "
+                    f"laps in it]")
             lines.add(
                 f"- **{profile['compound']}**: "
                 f"{_number(profile.get('paceDeltaSPerLap'), 3)} s/lap against "
@@ -901,7 +910,12 @@ def _strategy_section(lines: Lines, context: ctx.PromptContext,
                 f"{'not measured' if profile.get('wearPerLap') is None else _number(profile['wearPerLap'], 4)}"
                 f" per lap [{profile.get('source')}, "
                 f"{profile.get('lapsMeasured', 0)} laps, "
-                f"{profile.get('stintsMeasured', 0)} stints]")
+                f"{profile.get('stintsMeasured', 0)} stints]"
+                + temperature)
+            # The qualification is its own line, because it does not amend the
+            # figures above - it says how far they can be carried.
+            if profile.get("windowQualification"):
+                lines.add(f"  - {profile['windowQualification']}")
         if len(measured) < 2:
             lines.add(
                 "", "Only one compound has a measured wear rate, so the "
