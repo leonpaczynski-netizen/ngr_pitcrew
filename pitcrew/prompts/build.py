@@ -876,6 +876,39 @@ def _strategy_section(lines: Lines, context: ctx.PromptContext,
                   f"it decides whether the next setup chases durability or "
                   f"pace.")
 
+    crossover = strategy.get("compoundCrossover")
+    if crossover and crossover.get("verdict"):
+        lines.add("", f"- Compound call: {crossover['verdict']}")
+        # The comparison's own inputs, so the reasoning can be checked rather
+        # than taken on trust - which is the whole point of exporting it.
+        alternative = crossover.get("alternative") or {}
+        lines.add(
+            f"  Compared on total race time: "
+            f"{'/'.join(crossover['winner']['compounds'])} against "
+            f"{'/'.join(alternative.get('compounds') or [])}, "
+            f"{alternative.get('lostBySeconds')} s apart, "
+            f"break-even at {crossover.get('breakEvenSPerLap')} s/lap.")
+
+    profiles = strategy.get("compoundProfiles") or []
+    measured = [p for p in profiles if p.get("source") == "measured"]
+    if profiles:
+        lines.add("", "What each compound was costed at:", "")
+        for profile in profiles:
+            lines.add(
+                f"- **{profile['compound']}**: "
+                f"{_number(profile.get('paceDeltaSPerLap'), 3)} s/lap against "
+                f"the reference, wear "
+                f"{'not measured' if profile.get('wearPerLap') is None else _number(profile['wearPerLap'], 4)}"
+                f" per lap [{profile.get('source')}, "
+                f"{profile.get('lapsMeasured', 0)} laps, "
+                f"{profile.get('stintsMeasured', 0)} stints]")
+        if len(measured) < 2:
+            lines.add(
+                "", "Only one compound has a measured wear rate, so the "
+                "harder-tyre comparison above is not yet evidence — the "
+                "alternatives are planned on the reference's own number. "
+                "Tell me whether that is worth the practice time to fix.")
+
     assumptions = strategy.get("assumptions") or {}
     if assumptions:
         lines.add("", "Every assumption behind that plan:", "")

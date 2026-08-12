@@ -442,13 +442,30 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
 "strategy": {
   "plan": { "stops": 1, "stintLaps": [11, 9], "compounds": ["RS", "RM"], "pitLap": 11 },
   "bindingConstraint": "fuel",
+  "compoundProfiles": [
+    { "compound": "RS", "paceDeltaSPerLap": 0.0,  "wearPerLap": 0.055,
+      "source": "measured", "lapsMeasured": 12, "stintsMeasured": 1 },
+    { "compound": "RM", "paceDeltaSPerLap": 0.34, "wearPerLap": 0.038,
+      "source": "measured", "lapsMeasured": 11, "stintsMeasured": 1 }
+  ],
+  "compoundCrossover": {
+    "winner":      { "label": "1 stop",  "compounds": ["RS", "RM"] },
+    "alternative": { "label": "2 stops", "compounds": ["RS", "RS", "RS"],
+                     "lostBySeconds": 8.4 },
+    "stopsSaved": 1,
+    "alternativePaceDeltaSPerLap": 0.0,
+    "breakEvenSPerLap": -0.42,
+    "restsOnAssumption": false,
+    "verdict": "RS/RM beats RS/RS/RS by 8.4 s over the race, saving 1 stop. RS/RS/RS would need to be 0.42 s/lap quicker than it is to change the call.",
+    "source": "derived-from-total-race-time"
+  },
   "assumptions": {
     "pitLossS": 19.5,
     "pitLossSource": "measured-this-track",
     "fuelPerLapL": 3.42,
     "fuelWeightSPerLPerLap": 0.003,
     "fuelWeightSource": "derived-not-measured",
-    "compoundDeltaSPerLap": null
+    "compoundDeltaSPerLap": 0.153
   },
   "callsMade": [
     { "lap": 4,  "call": "Map 3 down the back straight",     "reason": "1.2 laps short on fuel", "confidence": "high" },
@@ -464,6 +481,31 @@ whether the next setup should chase durability or pace.
 
 `callsMade` exists so live advice can be checked against what actually happened.
 An app that gives calls and never records them cannot be improved.
+
+### 10.1 `compoundProfiles` and `compoundCrossover`
+
+**What each compound costs, and why the plan picked the one it did.** The model
+searches stop counts *and* compound assignments, costing every candidate over the
+full race distance — so a tyre that is slower per lap but lasts long enough to
+delete a stop can win, which is the whole question the driver asks before a race.
+
+| Field | Type / unit | Provenance |
+|---|---|---|
+| `compoundProfiles[].paceDeltaSPerLap` | float, seconds | **Measured** where practice ran that compound: median counted lap on it against the median on the reference. The reference compound is always `0.0` |
+| `compoundProfiles[].wearPerLap` | float 0–1, or `null` | **Measured** over the laps the set actually ran, not over the lap number — a reading of 60% at lap 20 is a different rate depending on when the tyres went on. `null` where the compound was run but no gauge reading was taken |
+| `compoundProfiles[].source` | enum | `measured` \| `declared` \| `assumed`. `declared` means the pace is known but the wear rate — which is what sets the stint — is not. `assumed` means the compound inherited the reference's rate and was never run |
+| `compoundProfiles[].lapsMeasured` / `.stintsMeasured` | int | The sample count behind the pair. A rate from one stint and one from three are not the same claim |
+| `compoundCrossover.stopsSaved` | int | Stops the winner saves against the alternative. Negative when the winner takes *more* stops and still wins |
+| `compoundCrossover.breakEvenSPerLap` | float, seconds | The pace delta at which the alternative would draw level. Compare against its actual `alternativePaceDeltaSPerLap`: a small margin means a tenth either way decides the race |
+| `compoundCrossover.restsOnAssumption` | bool | True when either side is planned on a rate never measured on it |
+| `compoundCrossover.verdict` | string | The comparison in one sentence, written once in the model so the screen, this payload and the engineer's prompt all say the same thing about the same plan |
+
+**A gap of zero between two compounds is not a dead heat.** When only one compound
+has a measured wear rate, every alternative is that same rate wearing a different
+name, so the plans cost identically. `restsOnAssumption` is `true` in that case and
+`verdict` says the comparison has not been earned yet rather than reporting a tie.
+`compoundCrossover` is absent entirely when there was no alternative on different
+rubber to compare against.
 
 ## 11. `derived` and `notes`
 
@@ -598,6 +640,9 @@ of the shape the code emits.
 | 2 | **New `wear.byCorner`** | Which corner is going, and the front/rear and left/right asymmetry behind it. Reported rather than optimised against: GT7 permits no partial tyre change and no split compounds, so this is a brake-balance and setup finding |
 | 3 | `worstCorner` is `null` on a tie | Naming one of two corners tied at the same reading asserts an asymmetry the driver never reported, and an invented asymmetry is what a setup then gets built on |
 | 4 | A gauge entry naming **no** corner is refused at export | A row of nulls dressed as evidence is worse than no row. Consistent with refusing rather than emitting something that will be misread |
+| 5 | **New `wear.byCompound`** | A wear rate measured on one compound describes that compound and no other, so rates are keyed by compound and never pooled. Measured over the laps each set ran — the old figure divided by the lap number, which assumed the tyres went on at lap 1 and understated every stint after the first by the length of the ones before it |
+| 6 | **New `strategy.compoundProfiles` and `strategy.compoundCrossover`** (§10.1) | The model could not tell compounds apart at all: one `wear_per_lap`, one `lap_time_ms`, and a search over stop counts only. A harder tyre was costed as identical to the soft it replaced, so it could never win — which made "is it worth running the hard longer to skip a stop" unanswerable |
+| 7 | `assumptions.compoundDeltaSPerLap` is a real figure | It had been hard-coded `null` since the field was introduced. It is now the plan's compounds against the reference, weighted over the race distance |
 
 **Migrating stored 1.1 data.** The app's schema v3 migration spreads each axle
 reading across both of that axle's corners, which is what the single figure meant

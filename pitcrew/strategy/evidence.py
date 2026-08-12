@@ -13,9 +13,13 @@ from statistics import median
 
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
+from pitcrew.analysis.wear import wear_rate_by_compound
 from pitcrew.strategy.model import (
     FUEL_WEIGHT_S_PER_L_PER_LAP,
     PIT_DEAD_TIME_S,
+    SOURCE_DECLARED,
+    SOURCE_MEASURED,
+    CompoundProfile,
     RaceInputs,
     laps_from_minutes,
 )
@@ -63,6 +67,54 @@ def _fuel_capacity(store, event_id: int) -> float | None:
     return None
 
 
+def compound_profiles(laps: list[LapInput],
+                      reference: str | None) -> dict[str, CompoundProfile]:
+    """What each compound costs and lasts, measured where practice ran it.
+
+    Pace is the median counted lap on that compound against the median on the
+    reference — median, not mean, so one scruffy lap does not decide which
+    tyre the race is run on. Wear is the rate measured over the laps each set
+    actually ran.
+
+    A compound the driver has declared available but never run gets **no
+    profile at all** rather than an invented one. `RaceInputs.profile_for`
+    then falls back to the reference's rate and labels it `assumed`, so the
+    plan can still be costed but never claims to have been measured.
+    """
+    counted = counted_laps(laps)
+    by_compound: dict[str, list[LapInput]] = {}
+    for lap in counted:
+        if lap.compound:
+            by_compound.setdefault(lap.compound, []).append(lap)
+    if not by_compound:
+        return {}
+
+    reference_laps = by_compound.get(reference or "")
+    reference_ms = (median([lap.lap_time_ms for lap in reference_laps])
+                    if reference_laps else None)
+    rates = wear_rate_by_compound(laps)
+
+    profiles: dict[str, CompoundProfile] = {}
+    for code, on_this in by_compound.items():
+        pace_delta = 0.0
+        if reference_ms and code != reference:
+            pace_delta = (median([lap.lap_time_ms for lap in on_this])
+                          - reference_ms) / 1000.0
+        rate = rates.get(code)
+        profiles[code] = CompoundProfile(
+            code=code,
+            pace_delta_s=round(pace_delta, 3),
+            wear_per_lap=rate["wearPerLap"] if rate else None,
+            # Measured means measured: a compound run in practice with no
+            # gauge reading has a pace we know and a wear rate we do not, and
+            # it is the wear rate that sets the stint.
+            source=SOURCE_MEASURED if rate else SOURCE_DECLARED,
+            laps_measured=len(on_this),
+            stints_measured=rate["stints"] if rate else 0,
+        )
+    return profiles
+
+
 def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     """Assemble the model's inputs from the event and its practice laps."""
     event = store.get_event(event_id)
@@ -85,6 +137,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     evidence_compound = None
     if tagged:
         evidence_compound = max(set(tagged), key=tagged.count)
+    profiles = compound_profiles(laps, evidence_compound)
 
     race_laps = event["race_laps"] or 0
     if event["race_type"] == "time" and reference_ms:
@@ -102,6 +155,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         available_compounds=tuple(event["available_compounds"]),
         required_compounds=tuple(event["required_compounds"]),
         evidence_compound=evidence_compound,
+        compound_profiles=profiles,
     )
 
     evidence = [
@@ -130,6 +184,9 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  DECLARED if evidence_compound else MISSING,
                  "wear and fuel describe this compound only"
                  if evidence_compound else "tag your practice laps"),
+        Evidence("Compounds compared", _compounds_compared(profiles),
+                 MEASURED if _measured_count(profiles) > 1 else MISSING,
+                 _compound_note(profiles, event["available_compounds"])),
         Evidence("Pit loss", f"{event['pit_loss_secs']:.1f} s", DECLARED,
                  "a track constant"),
         Evidence("Pit dead time", f"{PIT_DEAD_TIME_S:.1f} s", ASSUMED,
@@ -140,6 +197,40 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  "derived, not measured - overwrite it if you measure it"),
     ]
     return inputs, evidence
+
+
+def _measured_count(profiles: dict[str, CompoundProfile]) -> int:
+    return sum(1 for p in profiles.values() if p.is_measured)
+
+
+def _compounds_compared(profiles: dict[str, CompoundProfile]) -> str:
+    measured = sorted(p.code for p in profiles.values() if p.is_measured)
+    return ", ".join(measured) if measured else "—"
+
+
+def _compound_note(profiles: dict[str, CompoundProfile],
+                   available: list[str]) -> str:
+    """Say plainly whether the crossover question can be answered yet.
+
+    Comparing compounds on total race time only means something when more than
+    one has a measured wear rate. With one, every alternative is the reference
+    rate wearing a different name, and the comparison would return the answer
+    it was given.
+    """
+    measured = _measured_count(profiles)
+    if measured == 0:
+        return ("no compound has a measured wear rate - read the gauge at the "
+                "end of a stint")
+    if measured == 1:
+        untried = [code for code in available
+                   if code not in profiles or not profiles[code].is_measured]
+        if untried:
+            return (f"only one measured, so {', '.join(sorted(untried))} "
+                    f"cannot be compared on its own merits - run a stint on "
+                    f"one of them")
+        return "only one compound measured"
+    return (f"{measured} compounds measured, so the harder-tyre call rests on "
+            f"evidence rather than on the reference rate")
 
 
 def _lap_time(ms: int | None) -> str:

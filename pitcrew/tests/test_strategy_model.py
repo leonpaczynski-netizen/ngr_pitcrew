@@ -276,13 +276,17 @@ def test_an_untested_required_compound_is_flagged_as_an_assumption():
                              required_compounds=("RS",),
                              evidence_compound="RM"), stops=1)
     assert [s.compound for s in plan.stints] == ["RS", "RM"]
-    assert any("measured on RM" in note for note in plan.notes)
+    assert any("RS has no measured rate of its own" in note
+               for note in plan.notes)
+    assert any("planned on RM's" in note for note in plan.notes)
+    assert plan.rests_on_assumption
 
 
 def test_no_flag_when_every_stint_is_on_the_tested_compound():
     plan = build_plan(inputs(available_compounds=("RM",),
                              evidence_compound="RM"), stops=1)
-    assert not any("measured on" in note for note in plan.notes)
+    assert not any("no measured rate" in note for note in plan.notes)
+    assert not plan.rests_on_assumption
 
 
 def test_an_untagged_session_falls_back_to_the_allowed_list():

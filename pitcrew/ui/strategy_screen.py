@@ -17,6 +17,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QScrollArea,
     QVBoxLayout,
@@ -88,6 +89,50 @@ class StintBar(QWidget):
                                  QColor(theme.RUBBER))
                 x += self.PIT_MARK
         painter.end()
+
+
+class CrossoverBand(QFrame):
+    """The compound call, in one sentence, directly under the spec line.
+
+    This is the question the driver asks before a race — is it worth running
+    the harder tyre longer to save a stop — so it gets the width of the page
+    rather than a row in the evidence column.
+
+    Derived ink, because the app worked it out; nobody measured it and nobody
+    typed it. When either compound is planned on a rate that was never
+    measured on it, the band says so in warning and the sentence leads with
+    that rather than with the verdict.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QVBoxLayout(self)
+        row.setContentsMargins(14, 10, 14, 12)
+        row.setSpacing(2)
+
+        self.heading = StencilLabel("Compound call", size=10,
+                                    colour=theme.STENCIL_DIM, tracking=14.0)
+        row.addWidget(self.heading)
+        self.verdict = BodyLabel("", size=14, colour=theme.DERIVED)
+        self.verdict.setWordWrap(True)
+        row.addWidget(self.verdict)
+        self.setVisible(False)
+
+    def show_crossover(self, crossover: dict | None) -> None:  # noqa: N802
+        """Nothing to show is not the same as a dead heat, so it hides."""
+        if not crossover or not crossover.get("verdict"):
+            self.setVisible(False)
+            return
+        assumed = bool(crossover.get("restsOnAssumption"))
+        ink = theme.WARNING if assumed else theme.DERIVED
+        self.verdict.setText(crossover["verdict"])
+        self.verdict.setStyleSheet(f"color: {ink}; background: transparent;")
+        self.heading.setText(
+            "Compound call — unconfirmed" if assumed else "Compound call")
+        self.setStyleSheet(
+            f"CrossoverBand {{ background: {theme.SHOULDER};"
+            f" border-left: 3px solid {ink}; }}")
+        self.setVisible(True)
 
 
 class PlanCard(QWidget):
@@ -179,6 +224,9 @@ class StrategyScreen(QWidget):
 
         self.spec = SpecLine()
         page.addWidget(self.spec)
+
+        self.crossover_band = CrossoverBand()
+        page.addWidget(self.crossover_band)
 
         columns = QHBoxLayout()
         columns.setSpacing(theme.GAP_WIDE)
@@ -274,6 +322,9 @@ class StrategyScreen(QWidget):
             self.subtitle.setText(
                 f"{len(plans)} legal plans. "
                 f"{best.notes[0] if best.notes else ''}")
+            self.crossover_band.show_crossover(best.crossover)
+        else:
+            self.crossover_band.show_crossover(None)
 
     def _show_evidence(self, evidence) -> None:
         self._clear(self.evidence_layout)

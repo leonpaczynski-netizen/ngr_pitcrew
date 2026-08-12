@@ -70,6 +70,18 @@ def a_wear_lap(lap_num: int, **overrides) -> LapInput:
     return LapInput(**fields)
 
 
+def a_stint(laps: int, **final_lap) -> list[LapInput]:
+    """A run of `laps` on one set, the gauge read on the last of them.
+
+    Built as a real run rather than as one lap carrying a high lap number,
+    because the wear *rate* is per lap the set actually ran. A reading of 60%
+    at lap 20 means one thing if the tyres went on at lap 1 and something very
+    different if they went on at lap 12.
+    """
+    return ([a_wear_lap(n, compound="RM") for n in range(1, laps)]
+            + [a_wear_lap(laps, compound="RM", **final_lap)])
+
+
 # ------------------------------------------------------------------ assembly
 
 def test_minimal_payload_is_valid():
@@ -231,22 +243,39 @@ def test_wear_per_lap_uses_the_worst_corner_not_an_average():
     a longer stint than the front-left can actually survive - and overshooting
     the cliff costs far more than undershooting (CLAUDE.md 5.1).
     """
-    laps = [a_wear_lap(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)]
+    laps = a_stint(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)
     assert wear_per_lap(laps) == 0.08
 
 
 def test_the_limiting_corner_is_named_not_just_the_number():
     """Which corner is going is the setup finding; the rate is the strategy one."""
-    laps = [a_wear_lap(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)]
+    laps = a_stint(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)
     payload = wear_export(laps)
     assert payload["byDriverGauge"][0]["worstCorner"] == "fl"
     assert payload["byCorner"]["worstCorner"] == "fl"
     assert payload["byCorner"]["frontMinusRear"] == 0.2
 
 
+def test_the_rate_is_per_lap_the_set_ran_not_per_lap_number():
+    """The second stint's tyres did not go on at lap 1.
+
+    Ten laps on the first set to 50% worn, then a stop, then ten laps on the
+    second to 50%. Both sets wore at 5% a lap. Dividing by the lap number
+    would call the second set 2.5% a lap - half as aggressive as it is - and
+    plan a stint twice as long as the tyres can survive.
+    """
+    laps = (
+        [a_wear_lap(n, compound="RM") for n in range(1, 10)]
+        + [a_wear_lap(10, compound="RM", wear_fl=0.5, is_pit_lap=True)]
+        + [a_wear_lap(n, compound="RM") for n in range(11, 20)]
+        + [a_wear_lap(20, compound="RM", wear_fl=0.5)]
+    )
+    assert wear_per_lap(laps) == 0.05
+
+
 def test_a_corner_that_was_not_read_stays_null():
     """Null is unread. A zero would read as a fresh tyre and be believed."""
-    laps = [a_wear_lap(10, wear_fl=0.8)]
+    laps = a_stint(10, wear_fl=0.8)
     reading = wear_export(laps)["byDriverGauge"][0]
     assert reading["fl"] == 0.8
     assert reading["fr"] is None and reading["rl"] is None
@@ -258,7 +287,7 @@ def test_a_corner_that_was_not_read_stays_null():
 
 def test_stint_length_carries_the_safety_margin():
     """0.85/w, not 1.0/w - the cliff's onset is sharp and asymmetric."""
-    laps = [a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)]
+    laps = a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)
     assert modelled_stint_laps(laps) == 17
 
 
@@ -269,14 +298,14 @@ def test_no_gauge_reading_gives_an_assumed_model_not_a_number():
 
 
 def test_a_reading_at_the_race_multiplier_is_measured():
-    payload = wear_export([a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)])
+    payload = wear_export(a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4))
     assert payload["modelConfidence"] == "measured"
     assert payload["byDriverGauge"][0]["source"] == "driver-gauge"
 
 
 def test_a_converted_figure_is_never_presented_as_measured():
     """Multiplier linearity is assumed, never demonstrated."""
-    payload = wear_export([a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)],
+    payload = wear_export(a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4),
                           calibrated_at_race_multiplier=False)
     assert payload["modelConfidence"] == "converted"
     assert "ASSUMED" in payload["modelBasis"]
@@ -303,7 +332,7 @@ def test_temperature_trend_reports_front_rear_asymmetry():
 
 
 def test_wear_section_validates_inside_a_payload():
-    laps = [a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)]
+    laps = a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)
     payload = build_payload(a_meta(), wear=wear_export(laps))
     assert validate(payload) == []
 

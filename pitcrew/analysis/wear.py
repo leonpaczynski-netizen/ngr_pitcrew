@@ -24,6 +24,7 @@ cliff, because overshooting costs far more than undershooting.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from statistics import mean
 
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
@@ -49,6 +50,80 @@ def phase_for(fraction_consumed: float | None) -> str | None:
 
 
 CORNERS = ("fl", "fr", "rl", "rr")
+
+
+@dataclass(frozen=True)
+class TyreStint:
+    """One set of tyres, from the lap it went on to the lap it came off."""
+    compound: str | None
+    lap_count: int              # laps run on this set, in-lap included
+    end_lap: int                # display lap number of its last lap
+    worst: float | None         # gauge reading at the end, worst corner
+    worst_corner: str | None
+
+    @property
+    def rate(self) -> float | None:
+        """Fraction consumed per lap on this set."""
+        if not self.worst or self.worst <= 0 or self.lap_count < 1:
+            return None
+        return self.worst / self.lap_count
+
+
+def stints(laps: list[LapInput]) -> list[TyreStint]:
+    """Group laps into the sets they were run on.
+
+    A new set starts at the first lap, after an in-lap, and wherever the
+    tagged compound changes. This grouping is what makes a wear *rate*
+    correct: dividing the gauge reading by the lap number assumes the tyres
+    went on at lap 1, which is true only of the first stint and understates
+    every stint after it - the second set looks half as aggressive as it is.
+    """
+    grouped: list[list[LapInput]] = []
+    for lap in laps:
+        start = (not grouped
+                 or grouped[-1][-1].is_pit_lap
+                 or (lap.compound and grouped[-1][-1].compound
+                     and lap.compound != grouped[-1][-1].compound))
+        if start:
+            grouped.append([lap])
+        else:
+            grouped[-1].append(lap)
+
+    out = []
+    for run in grouped:
+        # The reading that describes the set is the last one taken on it.
+        read = [lap for lap in run if lap.worst_wear is not None]
+        final = read[-1] if read else None
+        tagged = [lap.compound for lap in run if lap.compound]
+        out.append(TyreStint(
+            compound=tagged[0] if tagged else None,
+            lap_count=len(run),
+            end_lap=run[-1].lap_num,
+            worst=final.worst_wear if final else None,
+            worst_corner=final.worst_corner if final else None,
+        ))
+    return out
+
+
+def wear_rate_by_compound(laps: list[LapInput]) -> dict[str, dict]:
+    """Fraction consumed per lap, per compound, from the driver's readings.
+
+    A rate measured on one compound describes that compound and no other, so
+    they are never pooled. Where a compound was run more than once the rates
+    are averaged and the stint count travels with them - a rate from one stint
+    and one from three are not the same claim.
+    """
+    by_compound: dict[str, list[float]] = {}
+    for stint in stints(laps):
+        rate = stint.rate
+        if stint.compound and rate:
+            by_compound.setdefault(stint.compound, []).append(rate)
+    return {
+        code: {"wearPerLap": round(mean(rates), 5),
+               "stints": len(rates),
+               "source": "driver-gauge"}
+        for code, rates in by_compound.items()
+    }
 
 
 def gauge_readings(laps: list[LapInput]) -> list[dict]:
@@ -84,18 +159,15 @@ def wear_per_lap(laps: list[LapInput]) -> float | None:
     a plan built on it overshoots the cliff, which §5.1 says costs far more
     than undershooting.
 
+    Measured over the laps the set actually ran, not over the lap number: a
+    reading of 60% at lap 20 is a very different rate depending on whether the
+    tyres went on at lap 1 or at lap 12.
+
     Returns None without at least one reading. This figure drives every stint
     recommendation and must never be invented.
     """
-    readings = gauge_readings(laps)
-    if not readings:
-        return None
-    last = readings[-1]
-    worst = last["worst"]
-    if not worst or worst <= 0:
-        return None
-    laps_run = max(1, last["lap"])
-    return worst / laps_run
+    rates = [stint.rate for stint in stints(laps) if stint.rate]
+    return rates[-1] if rates else None
 
 
 def axle_bias(laps: list[LapInput]) -> dict | None:
@@ -218,6 +290,10 @@ def wear_export(laps: list[LapInput], *,
     bias = axle_bias(laps)
     if bias is not None:
         payload["byCorner"] = bias
+
+    per_compound = wear_rate_by_compound(laps)
+    if per_compound:
+        payload["byCompound"] = per_compound
 
     reference = green_lap_reference_ms(laps)
     degradation = degradation_ms_per_lap(laps)

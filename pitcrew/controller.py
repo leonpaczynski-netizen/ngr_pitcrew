@@ -929,9 +929,25 @@ class PitCrewController(QObject):
         approved = self.store.get_approved_strategy(event["id"])
         approved_index = None
         if approved:
+            # A plan is identified by its stops *and* its compounds. Several
+            # plans now share a stop count on different rubber, and matching
+            # on stops alone would re-select whichever came first - silently
+            # putting the car on a compound he did not approve.
+            stored = approved["plan"]
+            want_stops = stored.get("stops")
+            want_compounds = [s.get("compound")
+                              for s in stored.get("stints") or []]
             approved_index = next(
                 (i for i, plan in enumerate(plans)
-                 if plan.stops == approved["plan"].get("stops")), None)
+                 if plan.stops == want_stops
+                 and list(plan.compounds) == want_compounds), None)
+            if approved_index is None:
+                # The compounds no longer line up - the evidence moved under
+                # the plan. Fall back to the stop count so something sensible
+                # is selected, rather than nothing.
+                approved_index = next(
+                    (i for i, plan in enumerate(plans)
+                     if plan.stops == want_stops), None)
 
         self.strategy.show_plans(plans, evidence, approved_index=approved_index)
         gaps = inputs.missing()
