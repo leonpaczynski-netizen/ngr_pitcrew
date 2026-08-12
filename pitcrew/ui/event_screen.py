@@ -2,7 +2,7 @@
 
 Two columns. The left is the event as it will be raced: what track, what
 format, what the regulations allow. The right is the sheet that will be in the
-car, pasted from the tune builder and then editable, because a value you
+car, pasted from the knowledge base and then editable, because a value you
 changed in the garage after the paste has to be correctable without starting
 over.
 
@@ -40,6 +40,7 @@ from pitcrew.ui.widgets import (
     Picker,
     Plate,
     StencilLabel,
+    struck_when_empty,
 )
 
 WEATHER = ("Dry", "Damp", "Wet", "Changeable")
@@ -283,6 +284,7 @@ class EventScreen(QWidget):
         self.pp_cap.setDecimals(2)
         self.pp_cap.setSpecialValueText("—")
         self.pp_cap.setValue(EMPTY)
+        struck_when_empty(self.pp_cap)
 
         grid.addWidget(Field("Tyre wear", self.tyre_mult), 0, 0)
         grid.addWidget(Field("Fuel use", self.fuel_mult), 0, 1)
@@ -353,7 +355,7 @@ class EventScreen(QWidget):
         return holder
 
     def _paste_plate(self) -> Plate:
-        plate = Plate("Sheet from the tune builder")
+        plate = Plate("Sheet from the knowledge base")
         self.paste_box = QPlainTextEdit()
         self.paste_box.setPlaceholderText(
             "Paste the sheet here - JSON, key: value lines, or a table.")
@@ -419,6 +421,7 @@ class EventScreen(QWidget):
             editor.setDecimals(decimals)
             editor.setSpecialValueText("—")
             editor.setValue(EMPTY)
+            struck_when_empty(editor)
             self._build_editors[f"{section}.{key}"] = editor
             grid.addWidget(Field(label, editor, suffix=unit),
                            index // 2, index % 2)
@@ -440,6 +443,7 @@ class EventScreen(QWidget):
             # shows a dash until it holds a real value.
             editor.setSpecialValueText("—")
             editor.setValue(EMPTY)
+            struck_when_empty(editor)
             self._setup_editors[key.key] = editor
             grid.addWidget(Field(key.label, editor, suffix=key.unit,
                                  hint=key.note),

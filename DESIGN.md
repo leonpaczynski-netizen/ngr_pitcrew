@@ -8,8 +8,8 @@ breakpoint system — layout adapts through Qt layouts and stretch factors.
 
 ## Thesis
 
-A set of tyres arrives blank and black, and the crew marks it in three
-registers that are never confused: **moulded stencil** is manufacturer fact,
+A set of tyres arrives blank and black, and the crew marks it in registers
+that are never confused: **moulded stencil** is manufacturer fact,
 the **coloured band** is classification read at a glance, and **grease pencil**
 is the crew's own hand. Pit Crew carries provenance the same way, so measured,
 derived and declared never look alike.
@@ -18,7 +18,7 @@ It refuses the category's two defaults: the glowing-gauge telemetry dashboard
 with radial dials and a lime accent, and its opposite, the flat grey admin
 panel with a data table.
 
-## The three registers
+## The registers
 
 This is the system. Everything else serves it.
 
@@ -26,8 +26,26 @@ This is the system. Everything else serves it.
 |---|---|---|---|
 | Stencil | `#E8E4DC` warm white, mono | **Measured** — came off the telemetry stream | Lap times, deltas, fuel used |
 | Crayon | `#FF6B1A` tyre-marker orange | **Declared** — the driver entered it | Every editor, compound tags, wear gauge |
+| Derived | `#B08BD8` timing-screen purple | **Derived** — the app worked it out | Box-in call, modelled stint, assumed inputs |
 | Chalk | `#7FC7D9` | Provisional annotation, hints, parse results | Status lines |
 | Struck | `#6B6459` | Removed from the count, disabled, placeholder | Excluded laps, empty fields |
+
+**There were three registers and there should always have been four.** Measured
+had an ink and declared had an ink, so everything the app *computed* borrowed
+one — and borrowed badly. Assumed strategy inputs took struck, colliding with
+disabled and excluded; `"Box in 3"`, the highest-consequence number this
+product emits, took crayon, the ink that means the driver typed it himself.
+Purple is not a fourth colour picked to be different: on a timing screen it is
+already the sport's mark for a figure the system worked out rather than one
+somebody set.
+
+**The registers are asserted against rendered pixels, not against the
+stylesheet.** For the whole life of the app before this, `QWidget { color }`
+matched every editor subclass and beat `QPalette.Text`, so every value the
+driver typed rendered in the ink for one that came off the stream — declared
+and measured were pixel-identical everywhere, four docstrings said otherwise,
+and every test passed. `tests/test_registers.py` paints a widget and reads the
+colour back, because a cascade bug cannot be caught by reading the cascade.
 
 **Placeholders are struck, never crayon.** Qt has no `::placeholder` selector,
 so `theme.apply()` sets `QPalette.PlaceholderText` and the stylesheet
@@ -38,7 +56,7 @@ palette role and make an empty field render as a value the driver declared.
 tables, and the knowledge base's Quick Reference, were neither measured here
 nor declared here. Setting them in stencil white would make them look like
 they came off the stream. They are set as `BodyLabel` at `STENCIL_DIM` — a
-sentence, not a value. The three registers apply to values; nothing else is
+sentence, not a value. The registers apply to values; nothing else is
 admitted to them.
 
 ## Ground and material
@@ -111,13 +129,26 @@ Scale runs larger than a desk app's default (title 30px, body 15px, data
   not survive the next repaint, and a selection nobody can see is no
   selection.
 
+## The rail
+
+Eight screens, grouped by the job they belong to rather than listed. Two loops
+run through this app and they are not the same work — **Prepare** and **Learn**
+make the car faster; **Race day** is used under pressure — and flat, they read
+as eight peers in an order that put Engineer, the last step of the first loop,
+after Race. Each item carries a one-line state the store already knows
+(`11 laps`, `no plan`, `measured`), so the rail says where the work stands
+rather than only where it goes.
+
 ## Screens
 
 **Event** (`event_screen.py`) — two columns. Left is the event as raced;
 right is the sheet in the car: a paste box that populates the form, with the
 full 23-key form staying visible as the editor. Every value on this screen is
-declared, so the screen has no stencil white on it at all — which is what makes
-stencil mean something on Practice.
+declared, so the screen carries no stencil white at all — which is what makes
+stencil mean something on Practice. A setting nobody entered renders its dash
+struck rather than crayon: absent is not declared, and the spin box's *line
+edit* has to be told so, because it keeps its own resolved palette once the
+spin box's has been set.
 
 **Car** (`car_screen.py`) — the range rack. Its subject is not the numbers but
 the difference between numbers read off the car's own settings screen and a

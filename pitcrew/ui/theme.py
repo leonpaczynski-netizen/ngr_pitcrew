@@ -52,8 +52,27 @@ TREAD_LIGHT = "#4A443A"     # focused border
 STENCIL = "#E8E4DC"         # MEASURED - came off the telemetry stream
 STENCIL_DIM = "#9A948A"     # secondary, still measured
 CRAYON = "#FF6B1A"          # DECLARED - the driver typed this
+DERIVED = "#B08BD8"         # DERIVED - the app worked this out
 CHALK = "#7FC7D9"           # provisional annotation, notes, hints
 STRUCK = "#6B6459"          # struck out: excluded, disabled, not counted
+
+# Why purple for derived, in a world with no decoration in it:
+#
+# The thesis said three registers, and three was one short. Measured has an
+# ink and declared has an ink, so everything the app *computed* had to borrow
+# one - and it borrowed badly. `ASSUMED` took STRUCK, colliding with disabled
+# and excluded; "Box in 3", the highest-consequence number this product emits,
+# took CRAYON, the ink that means the driver typed it himself. Both are the
+# failure the whole system exists to prevent.
+#
+# Purple is not a fourth colour picked to be different. On a timing screen it
+# is already the sport's own mark for a figure the system worked out rather
+# than one somebody set - the fastest sector, computed and posted. It is the
+# right borrowed convention, the way DIN lettering and compound bands are.
+#
+# Weighted to sit alongside crayon rather than shout over it: 6.15:1 on the
+# panel face against crayon's 6.02:1. Derived is not more important than
+# declared. It is a different kind of claim.
 
 WARNING = "#F2C230"
 DANGER = "#E8352E"
@@ -157,9 +176,19 @@ GAP_WIDE = 22
 GAP_SECTION = 34
 
 STYLESHEET = f"""
+/* No `color` on QWidget. A Qt stylesheet rule on QWidget matches every
+   subclass, including QLineEdit, QComboBox and QSpinBox - and a stylesheet
+   colour beats a palette role. Setting it here painted every value the driver
+   typed in STENCIL, the ink that means "came off the telemetry stream", so
+   declared and measured were pixel-identical everywhere in the app and the
+   register system existed only in the comments.
+
+   The editor rule below already carried a warning about exactly this
+   mechanism. It guarded three rules too late. Text colour comes from the
+   palette: WindowText is stencil, Text and ButtonText are crayon,
+   PlaceholderText is struck. `theme.apply()` sets all four. */
 QWidget {{
     background: {RUBBER};
-    color: {STENCIL};
     font-family: "{STENCIL_FAMILY}";
     font-size: {BODY_PX}px;
 }}

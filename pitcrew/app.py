@@ -32,13 +32,24 @@ from pitcrew.ui.race_screen import RaceScreen
 from pitcrew.ui.reference_screen import ReferenceScreen
 from pitcrew.ui.settings_screen import SettingsScreen
 from pitcrew.ui.strategy_screen import StrategyScreen
-from pitcrew.ui.widgets import StencilLabel
+from pitcrew.ui.widgets import Rule, StencilLabel
 
 WINDOW = (1600, 1000)
-# Preparation, then the running of it, then what is done with what it produced.
-# Settings last: it is set once and then left alone.
-SCREENS = ("Event", "Car", "Practice", "Strategy", "Race", "Engineer",
-           "Reference", "Settings")
+
+# The rail, grouped by the job each screen belongs to. Two loops run through
+# this app and they are not the same work: PREPARE/LEARN is the setup loop
+# that makes the car faster, RACE DAY is the one used under pressure. Flat,
+# they read as eight peers; named, the rail describes the work.
+#
+# The order within each group is the order the work happens in - Engineer is
+# the last step of the setup loop, not an eighth thing after Race.
+NAV_GROUPS = (
+    ("Prepare", ("Event", "Car")),
+    ("Learn", ("Practice", "Engineer")),
+    ("Race day", ("Strategy", "Race")),
+    ("", ("Reference", "Settings")),
+)
+SCREENS = tuple(name for _heading, names in NAV_GROUPS for name in names)
 ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 
 # Windows groups taskbar buttons by this id. Without one, a Python GUI app is
@@ -57,37 +68,85 @@ def _claim_taskbar_identity() -> None:
 
 
 class NavRail(QWidget):
-    """Screen selection, lettered like a rack tag."""
+    """Screen selection, lettered like a rack tag and grouped by job.
 
-    def __init__(self, stack: QStackedWidget, names,
+    Eight equal peers in one list misrepresented the work. Two loops run
+    through this app - prepare the car and learn from it (Event, Car,
+    Practice, Engineer), and race it (Strategy, Race) - and the rail showed
+    them as siblings of each other and of Reference and Settings, in an order
+    that put Engineer, the last step of the first loop, after Race.
+
+    Grouping rather than restructuring: the same eight screens, with the two
+    loops named and ruled apart, so the rail describes the work instead of
+    listing it.
+    """
+
+    def __init__(self, stack: QStackedWidget, groups,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedWidth(178)
         self.setStyleSheet(f"background: {theme.RUBBER_DEEP};")
         self._stack = stack
         self._labels: list[StencilLabel] = []
+        self._notes: list[StencilLabel] = []
 
         column = QVBoxLayout(self)
         column.setContentsMargins(20, 26, 12, 20)
         column.setSpacing(4)
         column.addWidget(StencilLabel("Pit Crew", size=16, colour=theme.CRAYON,
                                       tracking=14.0))
-        column.addSpacing(28)
+        column.addSpacing(24)
 
-        for index, name in enumerate(names):
-            label = StencilLabel(name, size=13, tracking=14.0)
-            built = index < stack.count()
-            if built:
-                label.setCursor(Qt.CursorShape.PointingHandCursor)
-                label.mousePressEvent = lambda _e, i=index: self.select(i)  # noqa: E731
-            else:
-                label.setToolTip("Not built yet")
-            label.setContentsMargins(0, 8, 0, 8)
-            column.addWidget(label)
-            self._labels.append(label)
+        index = 0
+        for position, (heading, names) in enumerate(groups):
+            if position:
+                column.addSpacing(14)
+            if heading:
+                column.addWidget(StencilLabel(heading, size=10,
+                                              colour=theme.TREAD_LIGHT,
+                                              tracking=18.0))
+                column.addSpacing(2)
+                column.addWidget(Rule())
+                column.addSpacing(6)
+            for name in names:
+                label = StencilLabel(name, size=13, tracking=14.0)
+                if index < stack.count():
+                    label.setCursor(Qt.CursorShape.PointingHandCursor)
+                    label.mousePressEvent = (                        # noqa: E731
+                        lambda _e, i=index: self.select(i))
+                else:
+                    label.setToolTip("Not built yet")
+                label.setContentsMargins(0, 6, 0, 0)
+                column.addWidget(label)
+
+                # What the store already knows about this screen, so the rail
+                # says where the work stands instead of only where it goes.
+                note = StencilLabel("", size=10, colour=theme.TREAD_LIGHT,
+                                    tracking=8.0)
+                note.setContentsMargins(0, 0, 0, 4)
+                note.setVisible(False)
+                column.addWidget(note)
+
+                self._labels.append(label)
+                self._notes.append(note)
+                index += 1
 
         column.addStretch(1)
         self.select(0)
+
+    # What fits on one line in the rail at this size, tracked. A note that
+    # clips is worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
+    NOTE_CHARS = 15
+
+    def set_note(self, index: int, text: str) -> None:
+        """A one-line state under a rail item, or "" to clear it."""
+        if not 0 <= index < len(self._notes):
+            return
+        if len(text) > self.NOTE_CHARS:
+            text = text[:self.NOTE_CHARS - 1].rstrip() + "…"
+        note = self._notes[index]
+        note.setText(text)
+        note.setVisible(bool(text))
 
     def select(self, index: int) -> None:
         if index >= self._stack.count():
@@ -126,14 +185,15 @@ class PitCrewWindow(QMainWindow):
         self.engineer_screen = EngineerScreen()
         self.reference_screen = ReferenceScreen()
         self.settings_screen = SettingsScreen()
-        # Order matches SCREENS: the rail indexes into the stack.
+        # Order must match SCREENS, which NAV_GROUPS defines: the rail
+        # indexes straight into the stack.
         for screen in (self.event_screen, self.car_screen,
-                       self.practice_screen, self.strategy_screen,
-                       self.race_screen, self.engineer_screen,
+                       self.practice_screen, self.engineer_screen,
+                       self.strategy_screen, self.race_screen,
                        self.reference_screen, self.settings_screen):
             self.stack.addWidget(screen)
 
-        self.rail = NavRail(self.stack, SCREENS)
+        self.rail = NavRail(self.stack, NAV_GROUPS)
         row.addWidget(self.rail)
         row.addWidget(self.stack, 1)
         self.setCentralWidget(shell)
@@ -144,6 +204,14 @@ class PitCrewWindow(QMainWindow):
             car_screen=self.car_screen,
             engineer_screen=self.engineer_screen,
             settings_screen=self.settings_screen, port=port)
+        # The rail says where the work stands, not only where it goes. Every
+        # figure here is already in the store; nothing new is computed for it.
+        self.controller.nav_state_changed.connect(self._update_rail)
+        self._update_rail(self.controller.nav_state())
+
+    def _update_rail(self, state: dict) -> None:
+        for index, name in enumerate(SCREENS):
+            self.rail.set_note(index, state.get(name, ""))
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()

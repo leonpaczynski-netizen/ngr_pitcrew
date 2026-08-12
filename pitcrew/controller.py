@@ -145,6 +145,10 @@ class TelemetryBridge(QObject):
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
+    # What each screen has to show for itself, for the nav rail. Emitted
+    # rather than polled so the rail cannot drift from the store.
+    nav_state_changed = pyqtSignal(dict)
+
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, engineer_screen=None, settings_screen=None,
@@ -282,6 +286,7 @@ class PitCrewController(QObject):
         self.event_screen.load(event, sheet)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
+        self.refresh_nav_state()
         if self.car_screen is not None and event["car_name"]:
             self.load_car(event["car_name"])
         self.refresh_engineer()
@@ -357,6 +362,46 @@ class PitCrewController(QObject):
             build=dict(data.get("build") or {}),
         )
         return self.store.save_setup_sheet(sheet)
+
+    # ------------------------------------------------------------- nav state
+
+    def nav_state(self) -> dict:
+        """One line per screen for the rail: where the work actually stands.
+
+        Every figure here is already in the store. The rail used to show eight
+        equal peers with no completion state while the app knew perfectly well
+        that there were eleven laps, no approved plan and an unverified range
+        record - so the one place he looks first told him the least.
+        """
+        event = self.active_event()
+        if event is None:
+            return {"Event": "none yet"}
+
+        state = {"Event": event["name"] or "unnamed"}
+
+        car = event["car_name"]
+        if car:
+            record = self.store.get_range_record(car)
+            state["Car"] = ("measured" if record and record.verified
+                            else "unverified" if record else "no ranges")
+
+        laps = len(self.store.list_event_laps(event["id"], "practice"))
+        state["Practice"] = f"{laps} laps" if laps else "nothing recorded"
+
+        approved = self.store.get_approved_strategy(event["id"])
+        state["Strategy"] = (approved["label"] or "approved") if approved \
+            else "no plan"
+
+        race_laps = len(self.store.list_event_laps(event["id"], "race"))
+        state["Race"] = f"{race_laps} laps" if race_laps else "not raced"
+
+        issued = self.store.list_prompts(event["id"], limit=50)
+        state["Engineer"] = (f"{len(issued)} prompts" if issued
+                             else "not asked")
+        return state
+
+    def refresh_nav_state(self) -> None:
+        self.nav_state_changed.emit(self.nav_state())
 
     # -------------------------------------------------------------- settings
 
@@ -497,6 +542,7 @@ class PitCrewController(QObject):
             self.car_screen.footer(f"Refused: {exc}", warn=True)
             return
         self.load_car(car)
+        self.refresh_nav_state()
         self.car_screen.footer(
             f"Saved {len(ranges)} ranges for {car}"
             + (". Every prompt and every export now quotes them as measured."
@@ -565,6 +611,7 @@ class PitCrewController(QObject):
         self.engineer.note(
             f"{KIND_LABELS.get(kind, kind)} logged as prompt "
             f"#{self.prompt_issue_id}, template {PROMPT_VERSION}.")
+        self.refresh_nav_state()
         self.engineer.note_reply("")
         return prompt.text
 
@@ -697,6 +744,7 @@ class PitCrewController(QObject):
             return
         frames = self.bridge.recorder.encode(rows)
         lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
+        self.refresh_nav_state()
         self.practice.add_lap(LapRow(
             lap_id=lap_id,
             lap_num=len(self.practice.rows()) + 1,
@@ -823,6 +871,7 @@ class PitCrewController(QObject):
         self.strategy.note(
             f"{plan.label()} approved. It is the race plan until you approve "
             "another.")
+        self.refresh_nav_state()
         return strategy_id
 
     # ------------------------------------------------------------------ race
@@ -1023,8 +1072,8 @@ class PitCrewController(QObject):
         path = self._write_export(text)
         laps = len(payload.get("laps") or ())
         self.practice.note(
-            f"{laps} laps copied to the clipboard. Paste into the Pit Crew "
-            f"data box on the Driver Feedback tab. Also saved to {path}.")
+            f"{laps} laps copied to the clipboard. The Race Engineer screen "
+            f"embeds this payload in a prompt for you. Also saved to {path}.")
         return text
 
     def _write_export(self, text: str) -> Path:

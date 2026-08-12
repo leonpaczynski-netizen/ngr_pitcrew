@@ -3,7 +3,7 @@
 He is in a headset while driving and cannot see this screen at all, so nothing
 here is designed to be read at speed. This is the surface he comes back to
 between stints: mark up what was just run, strike out what does not count,
-enter what the gauge said, and send it to the tune builder.
+enter what the gauge said, and send it to the knowledge base.
 
 One row per lap. The compound band runs the full height of the row down its
 left edge, so tagging a session paints the rack and the stint structure becomes
@@ -171,7 +171,7 @@ class RackRow(QWidget):
         line.addWidget(self.wear_front)
         line.addWidget(self.wear_rear)
 
-        self.exclude_button = MarkButton("Count", parent=self)
+        self.exclude_button = MarkButton("Strike", parent=self)
         self.exclude_button.setFixedWidth(W_ACTION)
         self.exclude_button.setMinimumHeight(30)
         self.exclude_button.setFont(theme.stencil_font(12, tracking=6.0))
@@ -226,10 +226,16 @@ class RackRow(QWidget):
         if self.row.structural_reason():
             # An out-lap or in-lap is structurally uncounted; there is nothing
             # to toggle, and the reason already reads in the marker column.
-            self.exclude_button.setEnabled(False)
-            self.exclude_button.setText("")
+            # Hidden rather than emptied: a bordered button with no label is a
+            # control that looks broken instead of absent.
+            self.exclude_button.setVisible(False)
         else:
-            self.exclude_button.setText("Struck" if self.row.excluded else "Count")
+            # Labelled with what pressing it does, not with what the lap
+            # currently is. "Count" on a lap that was already counted reads as
+            # a state, and pressing it does the opposite of what it says.
+            self.exclude_button.setVisible(True)
+            self.exclude_button.setText(
+                "Restore" if self.row.excluded else "Strike")
 
 
 class PracticeScreen(QWidget):
@@ -332,12 +338,12 @@ class PracticeScreen(QWidget):
             size=13, colour=theme.STRUCK)
         row.addWidget(self.footer_note, 1)
 
-        self.export_button = MarkButton("Export for the tune builder",
+        self.export_button = MarkButton("Export for the knowledge base",
                                         primary=True)
         self.export_button.setToolTip(
-            "Copies the gt7-pitcrew payload to the clipboard and writes it to "
-            "exports/. Paste it into the Pit Crew data box on the tune "
-            "builder's Driver Feedback tab.")
+            "Copies the gt7-pitcrew payload to the clipboard and writes it "
+            "to exports/. The Race Engineer screen embeds the same payload in "
+            "a prompt for you; this is for pasting it anywhere else.")
         self.export_button.clicked.connect(self.export_requested.emit)
         row.addWidget(self.export_button)
         return row
@@ -394,7 +400,7 @@ class PracticeScreen(QWidget):
             self.spec.add("Fuel", f"{sorted(burns)[len(burns) // 2]:.2f} L/lap")
         untagged = [r for r in counted if not r.compound]
         if untagged:
-            self.spec.add("Untagged", str(len(untagged)), declared=True)
+            self.spec.add("Untagged", str(len(untagged)), derived=True)
         self.spec.finish()
 
         # The subtitle belongs to the controller: it carries connection and

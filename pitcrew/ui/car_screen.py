@@ -39,6 +39,7 @@ from pitcrew.ui.widgets import (
     Picker,
     Plate,
     StencilLabel,
+    struck_when_empty,
 )
 
 # Spin boxes have no null. The sentinel is the minimum of the range and renders
@@ -206,6 +207,7 @@ class CarScreen(QWidget):
         editor.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         from pitcrew.ui.widgets import block_wheel
         block_wheel(editor)
+        struck_when_empty(editor)
         registry[key.key] = editor
         return editor
 

@@ -211,7 +211,10 @@ class RaceScreen(QWidget):
             self.spec.add("Fuel", f"{fuel:.1f} laps")
         to_stop = snapshot.get("lapsToStop")
         if to_stop is not None:
-            self.spec.add("Box in", f"{max(0, to_stop)}", declared=True)
+            # The model worked this out. It is the highest-consequence
+            # number the app emits and it used to wear the ink that means
+            # "the driver typed this".
+            self.spec.add("Box in", f"{max(0, to_stop)}", derived=True)
         if snapshot.get("nextCompound"):
             self.spec.add("Then", snapshot["nextCompound"])
         self.spec.finish()

@@ -38,7 +38,7 @@ from pitcrew.ui.widgets import (
 SOURCE_INK = {
     MEASURED: theme.STENCIL,
     DECLARED: theme.CRAYON,
-    ASSUMED: theme.STRUCK,
+    ASSUMED: theme.DERIVED,
     MISSING: theme.WARNING,
 }
 SOURCE_WORD = {

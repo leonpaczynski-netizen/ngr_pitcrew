@@ -60,6 +60,37 @@ class _WheelGuard(QObject):
 _WHEEL_GUARD = _WheelGuard()
 
 
+def struck_when_empty(box: QAbstractSpinBox) -> QAbstractSpinBox:
+    """Paint a spin box's "nothing entered" dash struck, not crayon.
+
+    `setSpecialValueText("—")` renders in the ordinary text colour, and now
+    that editors honour the palette that colour is crayon - so a setting
+    nobody entered would read as one the driver declared. That is the same
+    failure as the one this app was built to prevent, wearing a dash.
+
+    Placeholders solve it through `QPalette.PlaceholderText`; a special value
+    is not a placeholder, so it is switched by hand here.
+    """
+    def sync() -> None:
+        empty = box.value() <= box.minimum()
+        colour = QColor(theme.STRUCK if empty else theme.CRAYON)
+        # On the line edit, not the spin box. A spin box's editor keeps its
+        # own resolved palette once the parent's has been set, so a later
+        # change to the parent never reaches it - which left every entered
+        # value painted in the struck grey of the empty one it started as.
+        target = box.lineEdit() if hasattr(box, "lineEdit") else None
+        for widget in (box, target):
+            if widget is None:
+                continue
+            palette = widget.palette()
+            palette.setColor(palette.ColorRole.Text, colour)
+            widget.setPalette(palette)
+
+    box.valueChanged.connect(lambda _value: sync())
+    sync()
+    return box
+
+
 def block_wheel(widget: QWidget) -> QWidget:
     """Make a value widget ignore the wheel until it is deliberately focused."""
     if isinstance(widget, (QComboBox, QAbstractSpinBox)):
@@ -111,6 +142,21 @@ class Declared(Measured):
 
     def __init__(self, text: str = "", **kwargs) -> None:
         kwargs.setdefault("colour", theme.CRAYON)
+        super().__init__(text, **kwargs)
+
+
+class Derived(Measured):
+    """A value the app worked out. Neither measured nor declared.
+
+    The register that was missing. Without it every computed figure had to
+    borrow an ink that meant something else, and the two that borrowed were
+    the two that carry the most consequence - a modelled stint length wearing
+    the disabled grey, and "Box in 3" wearing the ink for what the driver
+    typed himself.
+    """
+
+    def __init__(self, text: str = "", **kwargs) -> None:
+        kwargs.setdefault("colour", theme.DERIVED)
         super().__init__(text, **kwargs)
 
 
@@ -351,7 +397,7 @@ class SpecLine(QWidget):
         self._entries.clear()
 
     def add(self, label: str, value: str, *, declared: bool = False,
-            emphasis: bool = False) -> None:
+            derived: bool = False, emphasis: bool = False) -> None:
         if self._entries:
             separator = StencilLabel("·", size=theme.BODY_PX,
                                      colour=theme.TREAD_LIGHT, tracking=0.0)
@@ -361,7 +407,7 @@ class SpecLine(QWidget):
         name = StencilLabel(label, size=11, colour=theme.STENCIL_DIM,
                             tracking=14.0)
         name.setContentsMargins(0, 0, 8, 0)
-        cls = Declared if declared else Measured
+        cls = Derived if derived else Declared if declared else Measured
         reading = cls(value, size=theme.DATA_LARGE_PX if emphasis else theme.DATA_PX,
                       bold=emphasis)
         self._row.addWidget(name)
