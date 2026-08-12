@@ -22,6 +22,7 @@ tests, and so a machine without a microphone still runs the app.
 """
 from __future__ import annotations
 
+import os
 import threading
 
 from pitcrew.diagnostics import log
@@ -501,21 +502,79 @@ def best_semantic_matcher():
     return matcher if matcher.available else None
 
 
+# How long a recogniser gets to come up before the app gives up on it.
+#
+# This is a deadline, not a courtesy. `Dispatch("SAPI.SpSharedRecognizer")`
+# does not raise when Windows Speech Recognition is unconfigured - it never
+# returns at all, which `except Exception` cannot catch. Measured on this
+# machine: the call was still blocked after 60 s, outside pytest, with no Qt
+# event loop involved. Since `Controller.__init__` builds the recogniser and
+# the default backend is SAPI, that hang is the app failing to start.
+RECOGNISER_TIMEOUT_S = 5.0
+
+
+def _under_pytest() -> bool:
+    """Whether a test is driving us right now.
+
+    Tests build a Controller dozens of times and must not each pay a five
+    second speech probe, nor depend on how Windows Speech happens to be
+    configured on the machine running them. A test that wants a recogniser
+    injects one; `PushToTalk` already takes it as an argument.
+    """
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
+def build_within(factory, timeout_s: float, *args):
+    """Construct on a side thread, or give up when the deadline passes.
+
+    The thread is deliberately left running when it times out. A blocked COM
+    call cannot be cancelled from outside, so the only honest options are to
+    abandon it or to hang with it - and it is a daemon, so abandoning it does
+    not keep the process alive at exit.
+    """
+    outcome: dict = {}
+
+    def attempt() -> None:
+        try:
+            outcome["value"] = factory(*args)
+        except BaseException as exc:              # noqa: BLE001
+            outcome["error"] = exc
+
+    probe = threading.Thread(target=attempt, daemon=True,
+                             name=f"probe-{factory.__name__}")
+    probe.start()
+    probe.join(timeout_s)
+    if probe.is_alive():
+        raise TimeoutError(
+            f"{factory.__name__} did not come up within {timeout_s:.0f}s "
+            f"and was abandoned")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
+
 def best_recogniser_for(backend: str, phrases=None):
     """The recogniser the driver asked for, or the next one that loads.
 
     Moonshine first when it is chosen, then SAPI, then nothing - and nothing
     is a running app that says "speech isn't available on this machine"
     rather than one that will not start.
+
+    Each candidate is built under a deadline, because "will not start" turned
+    out to include the case this fallback chain was written to prevent: SAPI
+    hanging rather than raising meant the chain never advanced to Moonshine
+    and the app never opened a window.
     """
+    if _under_pytest():
+        return None
+
     order = ((MoonshineRecogniser, SapiGrammarRecogniser)
              if backend == "moonshine"
              else (SapiGrammarRecogniser, MoonshineRecogniser))
     for factory in order:
+        args = (phrases,) if factory is SapiGrammarRecogniser else ()
         try:
-            if factory is SapiGrammarRecogniser:
-                return factory(phrases)
-            return factory()
+            return build_within(factory, RECOGNISER_TIMEOUT_S, *args)
         except Exception as exc:                 # noqa: BLE001
             log("ptt").warning("%s unavailable: %s: %s", factory.__name__,
                                type(exc).__name__, exc)

@@ -31,14 +31,15 @@ No source was changed. Nothing staged, nothing committed.
 | B. Gates and legality | 2 | 2 | 1 | 5 |
 | C. Evidence and uncertainty | — | 5 | — | 5 |
 | D. Live operation | 3 | 4 | — | 7 |
-| E. Architecture | 1 | 2 | 3 | 6 |
-| **Total** | **9** | **16** | **4** | **29** |
+| E. Architecture | 3 | 3 | 3 | 9 |
+| **Total** | **11** | **17** | **4** | **32** |
 
 **The headline.** The strategy path does **not** have the setup path's
 wired/unwired split — 15 of 16 modules are reachable, and 0 of 710 tests
-exercise dead code. **Qualified by E6:** the three `*_wiring.py` files that
-would *prove* that wiring cannot execute on this machine at all, so the
-reachability result is static analysis, not a passing test. The defects are of a different kind: they sit in fully
+exercise dead code. **Resolved 12 Aug (E6/E7):** the three `*_wiring.py` files
+that *prove* it could not execute at all until the startup hang was fixed.
+They now run and pass, and they do verify controller-to-screen wiring with
+real widgets. Suite: **774 passed, zero failures.** The defects are of a different kind: they sit in fully
 wired, fully tested code, and they are dominated by *missing terms* and
 *defeasible gates* rather than by disconnection. Two of them are live right now
 against the stored event.
@@ -870,7 +871,118 @@ live warning.
 
 ---
 
-### E6 · P1 · Every `Controller`-constructing test hangs on a SAPI COM call — added 12 Aug, during Commit 1
+### E7 · P1 · **The app does not start.** SAPI hangs on the real startup path — added 12 Aug, RESOLVED same day
+
+**This is E6's actual cause, and it is a production defect, not a test defect.**
+Filed separately because the severity is different in kind: E6 said "the suite
+cannot be trusted"; E7 says "Pit Crew never opens a window on a default install".
+
+The commissioning prompt asked whether the hang can reach production. It does
+not merely *reach* production — production is where it lives. The test suite was
+the only thing reporting it.
+
+**Proof, in three steps.**
+
+1. The hang is not a pytest artefact. Plain `python`, no pytest, no Qt:
+
+   ```
+   CoInitialize ok  0.08s
+   [ Dispatch("SAPI.SpSharedRecognizer") still blocked at 60 s ]
+   ```
+
+2. The default backend is SAPI, and SAPI is tried **first**:
+
+   ```python
+   # pitcrew/settings.py:80
+       speech_backend: str = SPEECH_SAPI
+   # pitcrew/engineer/ptt.py:511-513
+       order = ((MoonshineRecogniser, SapiGrammarRecogniser)
+                if backend == "moonshine"
+                else (SapiGrammarRecogniser, MoonshineRecogniser))
+   ```
+
+   No speech setting exists in this store's `app_state` (only `active_event_id`),
+   so `settings.load` returns the default. `config.json` holds
+   `"speech_backend": "sphinx"` — a value dropped in `4a4edb6` and not in
+   `SPEECH_BACKENDS` — but `settings.py` does not read `config.json` at all; it
+   is an old-app leftover.
+
+3. The real startup path, resolved from the real store, hung:
+
+   ```
+   resolved speech_backend = sapi
+   exit=124   (timed out at 45 s)
+   ```
+
+   `app.py:265` builds `PitCrewController` at startup; `controller.py:185` builds
+   the recogniser. Nothing downstream of that line runs.
+
+**Regression origin.** Both the `SPEECH_SAPI` default and the SAPI-first order
+arrived in `0949b1b` — *the commit that added Moonshine*. Moonshine was added as
+the better recogniser and loads here in 2.75 s; it was wired behind a SAPI probe
+that never returns, so the fallback the chain exists to provide could never
+engage. The bug is not that SAPI is unavailable — the chain is written for that
+— it is that SAPI fails by hanging, and `except Exception` at `ptt.py:519`
+cannot catch a hang.
+
+**Fix, in this commit.** `build_within` (`ptt.py`) constructs each candidate on a
+daemon thread under a `RECOGNISER_TIMEOUT_S = 5.0` deadline. On timeout the
+thread is abandoned deliberately — a blocked COM call cannot be cancelled from
+outside, and the only honest alternatives are to abandon it or hang with it.
+Verified:
+
+```
+resolved speech_backend = sapi
+SapiGrammarRecogniser unavailable: TimeoutError: ... did not come up within 5s
+best_recogniser_for returned 7.14s -> <MoonshineRecogniser object>
+```
+
+The app starts, in 7.14 s, on the recogniser the project actually wants.
+
+**Why the bounded wait belongs here rather than in its own commit.** The test
+seam alone would have turned the suite green while leaving the startup hang in
+place on race morning — the precise failure mode this project keeps
+rediscovering. Fifteen lines that make the difference between a green suite and
+a running app do not wait for a scheduling slot.
+
+**Left deliberately.** The default backend is still `SPEECH_SAPI` even though
+Moonshine is the intended engine and SAPI's shared recogniser is a retired
+Windows component. Changing the default is a product decision, not a defect fix,
+and it is not this commit's to make. Flagged for the owner: **switching the
+default to Moonshine would remove the 5 s startup penalty entirely.** Also
+untouched: `Voice()` at `controller.py:175` uses `Dispatch("SAPI.SpVoice")`
+(`voice.py:423`), a different COM object which is measurably fine here — it runs
+before line 185 and the hang was never reached from it — but it carries no
+deadline either.
+
+**Evidence:** `pitcrew/settings.py:80` · `pitcrew/engineer/ptt.py:206-207`,
+`:511-513`, `:519` · `pitcrew/controller.py:175`, `:185` · `pitcrew/app.py:265` ·
+`pitcrew/engineer/voice.py:423` · origin `0949b1b`
+
+---
+
+### E8 · P2 · The test seam leaves recogniser construction uncovered — added 12 Aug
+
+`best_recogniser_for` returns `None` under pytest (`ptt.py:_under_pytest`), so
+**no test exercises the real construction of either recogniser**. That gap is
+created by the E7 fix and is named here rather than left to be discovered.
+
+What *is* covered: the deadline mechanism itself — `build_within` returns a quick
+value, propagates a genuine exception rather than masking it as a timeout,
+abandons a factory that never returns, and leaves only daemon threads behind
+(`test_speech_gate.py`). What is not: that `SapiGrammarRecogniser` and
+`MoonshineRecogniser` actually build and recognise on a real machine.
+
+That was never covered — before the seam those paths hung rather than passing —
+so this is a gap made *visible*, not a gap introduced. It is properly closed by
+a hardware smoke check, not by a unit test: the thing under test is a COM object
+and an audio device.
+
+**Evidence:** `pitcrew/engineer/ptt.py` `_under_pytest`, `best_recogniser_for`
+
+---
+
+### E6 · P1 · Every `Controller`-constructing test hangs on a SAPI COM call — added 12 Aug, RESOLVED same day by E7's fix
 
 **Found while establishing a baseline for the Commit 1 fixes. It is pre-existing
 — the working tree was unmodified — and it materially corrects this audit's own
@@ -927,13 +1039,14 @@ can execute on this machine.** The import-graph reachability result stands
 (15/16 modules reachable, verified statically). The claim that wiring is
 *verified by a green suite* does not: the suite cannot reach those assertions.
 
-**Minimal fix**, and it is small: give the recogniser factory the same
-`PYTEST_CURRENT_TEST` seam the project already uses for the config-clobber
-guardrail — skip SAPI construction under pytest, or make the recogniser
-injectable so `Controller` can be built with a null one. Either way the
-constructor stops depending on a COM object that may never answer. **Not done in
-Commit 1**: it is in the PTT path, outside this task's stated scope, and it wants
-its own review.
+**RESOLVED 12 Aug.** Fixed by E7's bounded wait plus a `PYTEST_CURRENT_TEST`
+seam — note that no such seam previously existed in this codebase; the one in
+the earlier note was remembered from the deleted app. After the fix the whole
+suite runs: **774 passed in 38.7 s, 30 files, zero failures, zero hangs.**
+
+All seven files pass in full. **Nothing was broken behind the hang** — see the
+resolved §1.12 note in the trace. The hang was hiding the absence of its own
+results, and E7.
 
 **Evidence:** `pitcrew/engineer/ptt.py:202-215`, `:511-522` ·
 `pitcrew/controller.py:185` · faulthandler dump above

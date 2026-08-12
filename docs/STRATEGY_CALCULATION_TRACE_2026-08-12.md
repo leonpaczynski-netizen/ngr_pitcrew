@@ -960,6 +960,39 @@ structural response to the old failure mode.
 > execute — which is a different failure from the 6 August one, and closer to it
 > than I first credited.
 
+> **Resolved, same day.** The hang is fixed (register **E7**) and the whole
+> suite now runs: **774 passed in 38.7 s across 30 files, zero failures, zero
+> hangs.** All seven previously-blocked files pass in full. So the question the
+> correction left open — *do the wiring tests verify what §1.12 said they
+> verify?* — now has an answer, and it is three-part:
+>
+> **Yes, for controller-to-screen wiring, and more thoroughly than I assumed.**
+> `test_strategy_wiring.py` (19 tests) builds a real `PitCrewController` with a
+> real `StrategyScreen`, `EventScreen` and `PracticeScreen`, calls
+> `build_strategy()`, and asserts on `strategy.subtitle.text()`,
+> `approve_button.isEnabled()` and what `store` actually persisted on approve.
+> `test_race_wiring.py` (18) arms a race, feeds telemetry events, and asserts
+> the calls are spoken, recorded with their reason, reach the export, and move
+> the pit wall. These are not import smoke tests; they drive the wired path
+> through real widgets and a real store.
+>
+> **No, for the telemetry ingest path.** Both inject `Lap` objects directly
+> rather than driving packets through `UDPListener → TelemetryBridge →
+> SessionState`. The wiring verified is controller ↔ screen ↔ store, not
+> socket ↔ plan.
+>
+> **And they caught neither P1.** A1's infeasible-plan ranking and D1's
+> 510-litre call both sat inside this fully wired, fully asserted code. That is
+> the §1.12 caveat holding exactly as written: a green suite here means the
+> wires are connected, not that the number is right.
+>
+> The sharpest lesson is about the hang itself. These tests were **correct** and
+> would have reported the startup defect the moment anyone ran them — the app
+> could not start, and the suite said so by refusing to finish. The failure was
+> not in the tests and not in the wiring; it was that nobody had run the suite
+> to completion. That is a *third* variant of the 6 August failure mode, and the
+> cheapest one to guard against: assert that the suite terminates.
+
 **The caveat that matters.** The suite tests *connectivity*, not *correctness of
 the number under adverse inputs*. Every defect in §1.4 and §1.9 — the infeasible
 plan ranked "Fastest", the 510-litre fuel call, the missing out-lap penalty, the

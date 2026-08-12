@@ -12,9 +12,13 @@ no microphone, no model and no audio device.
 """
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from pitcrew.engineer import gate
+from pitcrew.engineer import ptt
 from pitcrew.engineer.intents import BOX_WHEN, FUEL, UNKNOWN
 from pitcrew.engineer.ptt import PushToTalk
 
@@ -276,3 +280,65 @@ def test_the_bands_sit_inside_the_measured_gap():
     # At medium, every real question measured acts outright rather than
     # asking - the whole point of putting the band inside the gap.
     assert gate.bands("medium")[0] > real_worst - 0.06
+
+
+# ------------------------------------------------ the recogniser deadline (E6)
+#
+# `Dispatch("SAPI.SpSharedRecognizer")` does not raise when Windows Speech is
+# unconfigured - it never returns. `except Exception` cannot catch that, so
+# the fallback chain never advanced to Moonshine and `Controller.__init__`
+# never finished. Measured: still blocked after 60 s, outside pytest, no Qt.
+
+def test_a_quick_factory_is_returned_as_normal():
+    assert ptt.build_within(lambda: "engine", 5.0) == "engine"
+
+
+def test_a_factory_that_raises_still_raises():
+    """The deadline must not swallow a real failure into a timeout."""
+    def broken():
+        raise RuntimeError("no microphone")
+
+    with pytest.raises(RuntimeError, match="no microphone"):
+        ptt.build_within(broken, 5.0)
+
+
+def test_a_factory_that_never_returns_is_abandoned():
+    """The case that stopped the app starting."""
+    forever = threading.Event()          # never set
+
+    def blocks():
+        forever.wait()
+
+    started = time.perf_counter()
+    with pytest.raises(TimeoutError, match="did not come up"):
+        ptt.build_within(blocks, 0.2)
+    assert time.perf_counter() - started < 3.0, "the deadline did not bind"
+
+
+def test_the_abandoned_thread_is_a_daemon_and_cannot_hold_the_process_open():
+    """A blocked COM call cannot be cancelled, so it is abandoned deliberately."""
+    forever = threading.Event()
+    before = {t.name for t in threading.enumerate()}
+    with pytest.raises(TimeoutError):
+        ptt.build_within(lambda: forever.wait(), 0.1)
+    leaked = [t for t in threading.enumerate()
+              if t.name not in before and t.name.startswith("probe-")]
+    assert leaked and all(t.daemon for t in leaked)
+    forever.set()
+
+
+def test_the_factory_argument_is_passed_through():
+    assert ptt.build_within(lambda phrases: phrases, 5.0, ("box", "fuel")) == (
+        "box", "fuel")
+
+
+def test_speech_is_not_constructed_under_pytest():
+    """The seam that lets a Controller be built at all in a test.
+
+    Tests construct one dozens of times; none should pay a five second probe
+    or depend on how Windows Speech happens to be set up on the machine. A
+    test that wants a recogniser injects one.
+    """
+    assert ptt._under_pytest() is True
+    assert ptt.best_recogniser_for("sapi") is None
+    assert ptt.best_recogniser_for("moonshine") is None
