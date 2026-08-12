@@ -47,10 +47,28 @@ SPEECH_BACKENDS = (SPEECH_SAPI, SPEECH_MOONSHINE)
 # and mean nothing to the person choosing.
 SENSITIVITIES = ("low", "medium", "high")
 
+# Where the packets arrive. SimHub decrypts GT7's Salsa20 stream and relays it
+# here, so this app never heartbeats the PS5 itself and never needs the
+# console's address to *receive* - it binds and listens.
+#
+# 33741 is SimHub's relay port, not GT7's own pair (heartbeat to 33739, receive
+# on 33740). It was hard-coded, which is fine right up until SimHub's config
+# changes or something else on the machine takes the port.
+DEFAULT_UDP_PORT = 33741
+
 
 @dataclass
 class Settings:
     """Everything the driver can set. Small on purpose."""
+
+    # --- where the telemetry arrives
+    udp_port: int = DEFAULT_UDP_PORT
+    # Accept packets only from this address. Empty means accept from anything,
+    # which is the right default on a rig with one console on it. It earns its
+    # keep when something else on the network is talking on the same port -
+    # without it, a foreign packet reaches the parser, fails to decode, and
+    # shows up as a decode-error count rather than as what it is.
+    udp_source_ip: str = ""
 
     # --- push to talk
     ptt_enabled: bool = True
@@ -84,6 +102,14 @@ class Settings:
     voice_noise_w_scale: float = 0.55      # duration jitter - the big one
 
     def validate(self) -> None:
+        if not 1024 <= self.udp_port <= 65535:
+            raise ValueError(
+                f"a UDP port of {self.udp_port} is not one this app can bind - "
+                f"expected 1024-65535")
+        if self.udp_source_ip and not _looks_like_ipv4(self.udp_source_ip):
+            raise ValueError(
+                f"{self.udp_source_ip!r} is not an IPv4 address. Leave it "
+                f"empty to accept telemetry from anything on the network.")
         if self.beep_rpm_source not in RPM_SOURCES:
             raise ValueError(
                 f"beep_rpm_source must be one of {RPM_SOURCES}, "
@@ -153,6 +179,13 @@ def save(store, settings: Settings) -> None:
                         "0" if value is False else str(value))
 
 
+def _looks_like_ipv4(text: str) -> bool:
+    parts = text.strip().split(".")
+    if len(parts) != 4:
+        return False
+    return all(part.isdigit() and 0 <= int(part) <= 255 for part in parts)
+
+
 def _coerce(kind, raw: str):
     if kind is bool or kind == "bool":
         return raw not in ("0", "", "False", "false")
@@ -161,4 +194,12 @@ def _coerce(kind, raw: str):
             return float(raw)
         except ValueError:
             return 0.0
+    if kind is int or kind == "int":
+        try:
+            return int(raw)
+        except ValueError:
+            # Out of range rather than merely odd: `load` discards the whole
+            # settings object when validation fails, so a sentinel here means
+            # "fall back to the defaults" rather than "bind port zero".
+            return -1
     return raw

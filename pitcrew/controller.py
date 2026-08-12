@@ -42,7 +42,7 @@ from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.replan import assess, observed_fuel_per_lap
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
-from pitcrew.telemetry.listener import UDPListener
+from pitcrew.telemetry.listener import UDPListener, probe_port
 from pitcrew.telemetry.packet import parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
 from pitcrew.telemetry.session_state import (
@@ -52,7 +52,10 @@ from pitcrew.telemetry.session_state import (
 )
 from pitcrew.ui.practice_screen import LapRow
 
-DEFAULT_PORT = 33741        # SimHub's relay
+# SimHub's relay port. Kept as a module constant because `app.py` reads it,
+# but it is only the fallback now - the live value comes from settings, so a
+# SimHub reconfiguration is a thing the driver can follow without a rebuild.
+DEFAULT_PORT = settings.DEFAULT_UDP_PORT
 EXPORT_DIR = Path("exports")
 STALE_AFTER_S = 3.0
 
@@ -152,7 +155,7 @@ class PitCrewController(QObject):
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, engineer_screen=None, settings_screen=None,
-                 port: int = DEFAULT_PORT, voice=None,
+                 port: int | None = None, voice=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
@@ -164,8 +167,11 @@ class PitCrewController(QObject):
         self.engineer = engineer_screen
         self.settings_screen = settings_screen
         self.prompt_issue_id: int | None = None
-        self.port = port
         self.settings = settings.load(store)
+        # An explicit port wins - the tests bind their own - but otherwise the
+        # setting is the source of truth, not a constant in this file.
+        self._port_override = port
+        self.port = port if port is not None else self.settings.udp_port
         self.voice = voice if voice is not None else Voice()
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
@@ -222,6 +228,7 @@ class PitCrewController(QObject):
             self.settings_screen.saved.connect(self.save_settings)
             self.settings_screen.test_beep_requested.connect(self.test_beep)
             self.settings_screen.test_voice_requested.connect(self.test_voice)
+            self.settings_screen.test_feed_requested.connect(self.test_feed)
             self.settings_screen.listen_toggled.connect(self.probe_button)
             self.settings_screen.load(self.settings)
             self.settings_screen.show_capabilities(
@@ -434,7 +441,11 @@ class PitCrewController(QObject):
             return
 
         rebind = new.ptt_key != self.settings.ptt_key
+        feed_moved = (new.udp_port != self.settings.udp_port
+                      or new.udp_source_ip != self.settings.udp_source_ip)
         self.settings = new
+        if self._port_override is None:
+            self.port = new.udp_port
         self.bridge.apply_settings(new)
         self.voice.tune(**new.voice_tuning())
         if rebind:
@@ -447,9 +458,52 @@ class PitCrewController(QObject):
             new.ptt_in_practice, "on" if new.beep_enabled else "off",
             round(self.bridge.shift_beep.rpm), new.beep_rpm_source)
         if self.settings_screen is not None:
-            self.settings_screen.note("Saved.")
+            # A live listener is already bound to the old port. Rebinding it
+            # under a running session would drop packets mid-lap, so it is
+            # left alone and the change is announced instead.
+            if feed_moved and self.listener is not None:
+                self.settings_screen.note(
+                    f"Saved. The feed is still on {self.listener._port} for "
+                    f"this session - stop and restart it to move to "
+                    f"{new.udp_port}.", warn=True)
+            else:
+                self.settings_screen.note("Saved.")
             self.settings_screen.show_capabilities(
                 speech=self.voice.engine_name, hook=self.ptt.has_listener)
+
+    def test_feed(self) -> bool:
+        """Can the port actually be opened, and is anything on it?
+
+        Tested against the value in the boxes rather than the saved one, so
+        the answer is about the change he is considering. It reports the two
+        failures separately: a port that will not bind is a different problem
+        from a port that binds and stays silent, and only the first is
+        something this screen can fix.
+        """
+        if self.settings_screen is None:
+            return False
+        wanted = self.settings_screen.values()
+        if self.listener is not None and wanted.udp_port == self.listener._port:
+            self.settings_screen.note_feed(
+                f"Port {wanted.udp_port} is in use by this session's own "
+                f"listener, which is the answer you want. "
+                f"{self.listener.total_received} packets so far.")
+            return True
+
+        reason = probe_port(wanted.udp_port)
+        if reason:
+            self.settings_screen.note_feed(
+                f"Port {wanted.udp_port} will not open: {reason}. Nothing "
+                f"would arrive on it. Another copy of Pit Crew, or another "
+                f"program, is holding it.", warn=True)
+            return False
+        self.settings_screen.note_feed(
+            f"Port {wanted.udp_port} is free and this app can bind it. "
+            f"Whether GT7 and SimHub are actually sending to it only shows "
+            f"once you start practice."
+            + (f" Packets from anything other than {wanted.udp_source_ip} "
+               f"will be refused." if wanted.udp_source_ip else ""))
+        return True
 
     def test_beep(self) -> bool:
         """Sound the beep now. The only way to know it carries over the engine."""
@@ -704,7 +758,8 @@ class PitCrewController(QObject):
             return
 
         self.voice.warm()
-        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet)
+        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet,
+                                    source_ip=self.settings.udp_source_ip)
         self.listener.start()
         self._parse_errors = 0
         self._health.start()
@@ -816,9 +871,28 @@ class PitCrewController(QObject):
         ]
 
     def _report_health(self) -> None:
+        """Say which of the several silences this one is.
+
+        A listener that never bound, a console that is not streaming, and a
+        source filter eating every packet all look identical from the rack -
+        no laps appear. Zeros are the one failure mode that survives all the
+        way into a setup recommendation, so each gets its own sentence.
+        """
         if self.listener is None:
             return
-        if not self.listener.connected:
+        if self.listener.bind_error:
+            self.practice.set_status(
+                f"Port {self.port} could not be opened: "
+                f"{self.listener.bind_error}. Nothing will arrive until that "
+                f"is fixed - change the port on the Settings screen, or close "
+                f"whatever else is holding it.", warn=True)
+        elif self.listener.foreign_dropped and not self.listener.total_received:
+            self.practice.set_status(
+                f"{self.listener.foreign_dropped} packets arrived on "
+                f"{self.port} and every one was refused: they are not from "
+                f"{self.listener.source_ip}. Clear the source address on the "
+                f"Settings screen if the console moved.", warn=True)
+        elif not self.listener.connected:
             self.practice.set_status(
                 f"No telemetry on {self.port}. Is GT7 running and SimHub "
                 "relaying?", warn=True)
@@ -938,7 +1012,8 @@ class PitCrewController(QObject):
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
-        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet)
+        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet,
+                                    source_ip=self.settings.udp_source_ip)
         self.listener.start()
         self._health.start()
 

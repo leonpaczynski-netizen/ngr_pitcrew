@@ -1,8 +1,8 @@
-"""Settings — the button and the beep.
+"""Settings — the feed, the button and the beep.
 
-Two controls the driver genuinely has to be able to change, and until now
-could not: which button push-to-talk listens on, and whether the shift beep
-sounds and at what rpm.
+Three things the driver genuinely has to be able to change, and until now could
+not: where the telemetry arrives, which button push-to-talk listens on, and
+whether the shift beep sounds and at what rpm.
 
 Both are hardware questions, and hardware is the one thing this app cannot
 inspect. So both carry a **test** button. He is in a headset while driving and
@@ -24,11 +24,19 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
+    QLineEdit,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from pitcrew.settings import COMMON_KEYS, RPM_FROM_GT7, RPM_MANUAL, Settings
+from pitcrew.settings import (
+    COMMON_KEYS,
+    DEFAULT_UDP_PORT,
+    RPM_FROM_GT7,
+    RPM_MANUAL,
+    Settings,
+)
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
@@ -52,6 +60,7 @@ class SettingsScreen(QWidget):
     saved = pyqtSignal(object)          # Settings
     test_beep_requested = pyqtSignal()
     test_voice_requested = pyqtSignal()
+    test_feed_requested = pyqtSignal()
     listen_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -71,14 +80,19 @@ class SettingsScreen(QWidget):
         header.addWidget(StencilLabel("Settings", size=theme.TITLE_PX,
                                       colour=theme.STENCIL, tracking=6.0))
         header.addWidget(BodyLabel(
-            "The button and the beep. Test both here — in the headset you "
-            "cannot see whether either of them worked.",
+            "The feed, the button and the beep. Test them here — in the "
+            "headset you cannot see whether any of them worked.",
             colour=theme.STENCIL_DIM))
         page.addLayout(header)
 
         columns = QHBoxLayout()
         columns.setSpacing(theme.GAP_WIDE)
-        columns.addWidget(self._ptt_plate(), 1)
+
+        left = QVBoxLayout()
+        left.setSpacing(theme.GAP_WIDE)
+        left.addWidget(self._feed_plate())
+        left.addWidget(self._ptt_plate(), 1)
+        columns.addLayout(left, 1)
 
         right = QVBoxLayout()
         right.setSpacing(theme.GAP_WIDE)
@@ -90,6 +104,51 @@ class SettingsScreen(QWidget):
         page.addLayout(columns)
         page.addStretch(1)
         page.addWidget(self._footer())
+
+    def _feed_plate(self) -> Plate:
+        """Where the telemetry arrives.
+
+        Pit Crew is a receiver. SimHub decrypts GT7's stream and relays it
+        here, so there is no console address to enter for the app to *hear*
+        anything - it binds a port and listens. The source address below is a
+        filter, not a destination.
+        """
+        plate = Plate("Telemetry feed")
+        plate.body.addWidget(BodyLabel(
+            "SimHub decrypts GT7's stream and relays it here. This is the "
+            "port it relays to — change it if you change SimHub, or if "
+            "something else on this machine takes the port.",
+            size=13, colour=theme.STENCIL_DIM))
+
+        self.udp_port = QSpinBox()
+        self.udp_port.setRange(1024, 65535)
+        self.udp_port.setGroupSeparatorShown(False)
+        block_wheel(self.udp_port)
+        plate.body.addWidget(Field(
+            "Port", self.udp_port,
+            hint=f"SimHub's relay is {DEFAULT_UDP_PORT}. GT7's own pair is "
+                 f"33739 out, 33740 back — those are SimHub's business, not "
+                 f"this app's."))
+
+        self.udp_source_ip = QLineEdit()
+        self.udp_source_ip.setPlaceholderText("any address")
+        plate.body.addWidget(Field(
+            "Only accept from", self.udp_source_ip,
+            hint="Leave empty unless something else is talking on this port. "
+                 "Set wrong, nothing arrives at all."))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        self.test_feed_button = MarkButton("Test the port", compact=True)
+        self.test_feed_button.clicked.connect(self.test_feed_requested.emit)
+        row.addWidget(self.test_feed_button)
+        row.addStretch(1)
+        plate.body.addLayout(row)
+
+        self.feed_note = BodyLabel("", size=13, colour=theme.CHALK)
+        self.feed_note.setWordWrap(True)
+        plate.body.addWidget(self.feed_note)
+        return plate
 
     def _ptt_plate(self) -> Plate:
         plate = Plate("Push to talk")
@@ -245,6 +304,8 @@ class SettingsScreen(QWidget):
     # ---------------------------------------------------------------- state
 
     def load(self, settings: Settings) -> None:
+        self.udp_port.setValue(settings.udp_port)
+        self.udp_source_ip.setText(settings.udp_source_ip)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
         self.ptt_in_practice.setChecked(settings.ptt_in_practice)
@@ -259,6 +320,8 @@ class SettingsScreen(QWidget):
 
     def values(self) -> Settings:
         return Settings(
+            udp_port=self.udp_port.value(),
+            udp_source_ip=self.udp_source_ip.text().strip(),
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),
             ptt_in_practice=self.ptt_in_practice.isChecked(),
@@ -294,6 +357,12 @@ class SettingsScreen(QWidget):
     def note_ptt(self, text: str, *, warn: bool = False) -> None:
         self.ptt_note.setText(text)
         self.ptt_note.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.CHALK};"
+            "background: transparent;")
+
+    def note_feed(self, text: str, *, warn: bool = False) -> None:
+        self.feed_note.setText(text)
+        self.feed_note.setStyleSheet(
             f"color: {theme.WARNING if warn else theme.CHALK};"
             "background: transparent;")
 

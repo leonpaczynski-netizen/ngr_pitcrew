@@ -15,7 +15,12 @@ import pytest
 
 from pitcrew import diagnostics, settings
 from pitcrew.controller import PitCrewController
-from pitcrew.settings import RPM_FROM_GT7, RPM_MANUAL, Settings
+from pitcrew.settings import (
+    DEFAULT_UDP_PORT,
+    RPM_FROM_GT7,
+    RPM_MANUAL,
+    Settings,
+)
 from pitcrew.store.db import Store
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
@@ -64,6 +69,110 @@ def test_defaults_apply_when_nothing_has_been_set(store):
     loaded = settings.load(store)
     assert loaded.ptt_key == "f8"
     assert loaded.beep_rpm_source == RPM_FROM_GT7
+    assert loaded.udp_port == DEFAULT_UDP_PORT
+    assert loaded.udp_source_ip == ""
+
+
+# ------------------------------------------------------------ the udp feed
+
+def test_the_feed_settings_round_trip(store):
+    settings.save(store, Settings(udp_port=34000,
+                                  udp_source_ip="192.168.1.42"))
+    loaded = settings.load(store)
+    assert loaded.udp_port == 34000
+    assert loaded.udp_source_ip == "192.168.1.42"
+
+
+def test_an_empty_source_address_means_accept_anything(store):
+    """The default rig has one console on it. A filter would be ceremony."""
+    settings.save(store, Settings(udp_source_ip=""))
+    assert settings.load(store).udp_source_ip == ""
+    Settings(udp_source_ip="").validate()
+
+
+@pytest.mark.parametrize("port", [80, 0, 70000, -1])
+def test_a_port_this_app_cannot_bind_is_refused(port):
+    with pytest.raises(ValueError, match="UDP port"):
+        Settings(udp_port=port).validate()
+
+
+@pytest.mark.parametrize("address", ["192.168.1", "not.an.ip.here",
+                                     "999.1.1.1", "192.168.1.1.1"])
+def test_a_source_address_that_is_not_an_address_is_refused(address):
+    """Set wrong, nothing arrives at all - so it is refused at the door."""
+    with pytest.raises(ValueError, match="IPv4"):
+        Settings(udp_source_ip=address).validate()
+
+
+def test_a_corrupt_stored_port_falls_back_rather_than_binding_nonsense(store):
+    store.set_state(settings.PREFIX + "udp_port", "not a number")
+    assert settings.load(store).udp_port == DEFAULT_UDP_PORT
+
+
+def test_the_controller_takes_its_port_from_the_setting(store, qt_app):
+    settings.save(store, Settings(udp_port=34567))
+    controller = PitCrewController(store, EventScreen(), PracticeScreen())
+    try:
+        assert controller.port == 34567
+    finally:
+        controller.shutdown()
+
+
+def test_saving_a_new_port_moves_the_feed(wired):
+    controller, screen, _ = wired
+    controller.save_settings(Settings(udp_port=34321))
+    assert controller.port == 34321
+
+
+def test_an_explicit_port_still_wins_over_the_setting(store, qt_app):
+    """The tests bind their own; the setting must not reach over them."""
+    settings.save(store, Settings(udp_port=34567))
+    controller = PitCrewController(store, EventScreen(), PracticeScreen(),
+                                   port=39999)
+    try:
+        assert controller.port == 39999
+        controller.save_settings(Settings(udp_port=34321))
+        assert controller.port == 39999
+    finally:
+        controller.shutdown()
+
+
+def test_the_port_test_says_whether_it_can_bind(wired):
+    controller, screen, _ = wired
+    screen.load(Settings(udp_port=39871))
+    assert controller.test_feed() is True
+    assert "is free" in screen.feed_note.text()
+
+
+def test_the_port_test_fails_loudly_when_something_holds_the_port(wired):
+    """A port that will not open receives nothing, which otherwise looks
+    exactly like a console that is not streaming."""
+    import socket
+
+    controller, screen, _ = wired
+    holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    holder.bind(("0.0.0.0", 0))
+    taken = holder.getsockname()[1]
+    try:
+        screen.load(Settings(udp_port=taken))
+        assert controller.test_feed() is False
+        assert "will not open" in screen.feed_note.text()
+    finally:
+        holder.close()
+
+
+def test_a_packet_from_the_wrong_address_never_reaches_the_parser():
+    """Otherwise it decodes to nonsense and is counted as a decode error,
+    which reads as 'the relay is broken' rather than 'something else is
+    talking'."""
+    from pitcrew.telemetry.listener import UDPListener
+
+    seen = []
+    listener = UDPListener("0.0.0.0", 39872, seen.append,
+                           source_ip="192.168.1.42")
+    assert listener.source_ip == "192.168.1.42"
+    assert listener.foreign_dropped == 0
+    assert seen == []
 
 
 def test_a_stored_value_that_no_longer_validates_is_discarded(store):
