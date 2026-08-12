@@ -20,7 +20,11 @@ pytest.importorskip("PyQt6.QtWidgets")
 
 from PyQt6.QtCore import Qt                                    # noqa: E402
 from PyQt6.QtGui import QImage                                 # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLineEdit            # noqa: E402
+from PyQt6.QtWidgets import (                                  # noqa: E402
+    QApplication,
+    QLayout,
+    QLineEdit,
+)
 
 from pitcrew.ui import theme                                   # noqa: E402
 from pitcrew.ui.widgets import (                               # noqa: E402
@@ -73,6 +77,19 @@ def nearest_register(rendered: str) -> str:
         if distance is None or apart < distance:
             best, distance = name, apart
     return best if distance <= INK_TOLERANCE else f"unknown ({rendered})"
+
+
+def _fonts_are_real() -> bool:
+    """Whether this Qt platform actually has the faces the app is drawn in.
+
+    Offscreen has none of them, so text metrics inflate and any assertion
+    about position or size is measuring the platform rather than the app.
+    """
+    from PyQt6.QtGui import QFont
+
+    return all(QFont(family).exactMatch() for family in
+               (theme.STENCIL_FAMILY, theme.STENCIL_CONDENSED,
+                theme.DATA_FAMILY))
 
 
 def ink_of(widget) -> str:
@@ -453,15 +470,35 @@ def test_the_car_screen_reads_as_one_table_not_four(qt_app):
     about 8px further right down the screen."""
     from pitcrew.ui.car_screen import CarScreen
 
+    from PyQt6.QtWidgets import QGridLayout
+
     screen = CarScreen()
     screen.resize(1600 - 178, 1000)
     screen.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
     screen.show()
-    QApplication.processEvents()
+    for _ in range(3):
+        for layout in screen.findChildren(QLayout):
+            layout.activate()
+        QApplication.processEvents()
 
-    columns = {box.mapTo(screen, box.rect().topLeft()).x()
-               for box in screen._min_editors.values()}
-    assert len(columns) == 1, f"Min column starts at {sorted(columns)}"
+    # The mechanism, which holds on any platform: every range grid pins its
+    # name column to the same measured width and gives it no stretch, so none
+    # of them can size it to its own longest label.
+    grids = [g for g in screen.findChildren(QGridLayout)
+             if g.columnMinimumWidth(0) > 0]
+    assert len(grids) >= 4, "expected a pinned grid per range plate"
+    assert len({g.columnMinimumWidth(0) for g in grids}) == 1
+    assert {g.columnStretch(0) for g in grids} == {0}
+
+    # And the result, where the platform can be trusted to measure it. Under
+    # QT_QPA_PLATFORM=offscreen none of Bahnschrift, Bahnschrift Condensed,
+    # Cascadia Mono or Consolas exist, so every text metric inflates and
+    # positions are meaningless - the same trap that made a geometry sweep of
+    # this app report clipping that was not there.
+    if _fonts_are_real():
+        columns = {box.mapTo(screen, box.rect().topLeft()).x()
+                   for box in screen._min_editors.values()}
+        assert len(columns) == 1, f"Min column starts at {sorted(columns)}"
 
 
 def test_a_plate_title_outranks_the_captions_inside_it(qt_app):
