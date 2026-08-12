@@ -14,8 +14,8 @@ Two consequences, and they drive every decision below:
    attention that would otherwise go to what the driver felt. Export what changes a
    setup decision and nothing else.
 
-Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §14 (through
-1.1) and §15 (1.2 and 1.3).
+Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
+1.1) and §16 (1.2 and 1.3).
 
 ---
 
@@ -232,6 +232,11 @@ section gets built, build this one.**
     "throttleOnPct": 34,
     "timeLossVsBestMs": 210,
     "consistencyMs": 180,
+    "gearMin": 2,
+    "gearAtApex": 2,
+    "gearAtExit": 3,
+    "shiftsInCorner": 1.22,
+    "upshiftRpm": 8410,
     "suspHeightMinMm": { "fl": 34, "fr": 36, "rl": 41, "rr": 42 },
     "surfaceMix": { "T": 0.94, "C": 0.06 },
     "flags": ["countersteer", "trail-brake-instability"]
@@ -249,8 +254,18 @@ section gets built, build this one.**
 | `steerPeakNorm` | Peak steering as a fraction of full lock, −1…1. **Portable across rotation settings; prefer this when comparing sessions** |
 | `throttleOnPct` | Percentage through the corner where throttle first exceeds 10% |
 | `consistencyMs` | Spread of this corner's time across counted laps. **High spread with a normal average is the signature of a car the driver cannot trust, and it never shows up in a lap time** |
-| `suspHeightMinMm` | Minimum **absolute** suspension height reached, per wheel. **Not travel remaining** — see §14. Interpret against `derived.bottomingRefMm` |
+| `gearMin` | Lowest gear held anywhere in the corner window, **modal across the counted laps** — the gear he most often got down to, not the average of the gears he got down to |
+| `gearAtApex` | Gear at the minimum-speed point, modal across laps. Same apex as `brakePointM` |
+| `gearAtExit` | Gear at the last frame of the corner window, modal across laps |
+| `shiftsInCorner` | Gear changes inside the window, **mean across laps, so a fraction is meaningful** — `0.4` means he shifted on four laps in ten, which is the inconsistency worth seeing. This is what answers "does 2nd cover all three chicanes without an upshift" |
+| `upshiftRpm` | Engine speed at the **first upshift after the apex**, mean across the laps that had one, rounded to whole rpm. `null` if he never upshifted in the window. Compare against `gearing.limiterRpm`: an upshift well below the limiter is a deliberate short-shift, and it costs pace to save fuel and rear tyre |
+| `suspHeightMinMm` | Minimum **absolute** suspension height reached, per wheel. **Not travel remaining** — see §15. Interpret against `derived.bottomingRefMm` |
 | `surfaceMix` | Fraction of samples per surface character: `T` tarmac, `C` kerb, `D` dirt, `G` grass, `S` sand, `s` snow. Packet `~`/`C` only |
+
+**Gears are modal, never mean.** A mean gear of 2.6 is not a gear, and a reader
+given one reasons about a gearbox that does not exist. `shiftsInCorner` and
+`upshiftRpm` are a count and an engine speed rather than a gear, so those two
+average legitimately.
 
 ### 7.1 `flags` — controlled vocabulary
 
@@ -340,7 +355,85 @@ a fresh tyre and be believed.
   stint was calibrated at a different multiplier and scaled** — multiplier linearity
   is assumed, never demonstrated, so this value must never be presented as measured.
 
-## 9. `strategy` — the plan and its assumptions
+## 9. `gearing` — the box as fitted, with the final drive derived
+
+**GT7 broadcasts the eight gear-ratio slots but not the final drive.** Everything
+in this section that comes off the stream says so, and the one figure that does
+not — `fittedFinalGear` — is computed from engine speed against wheel speed and
+tyre radius and is labelled `derived`, per standing rule 5 in `CLAUDE.md`. It must
+never be read as the number on the sheet.
+
+The section answers three questions the driver otherwise answers by hand:
+
+- **Is the gearbox in the car the gearbox on the sheet?** Otherwise invisible
+  until a whole test session has been run on the wrong box.
+- **Where is the limiter, really?** Only when the rev-limiter flag actually fired.
+- **What is this car's gearing constant?** One clean reading makes every future
+  gearbox on that car exact instead of iterated.
+
+**There is no tow detection and there never will be.** GT7's feed carries no
+proximity, no closing speed and no opponent positions, so "top speed in clean air
+versus in a tow" is not answerable. This section reports the observed maximum with
+its sample count; whether there was a tow is the driver's to say in `notes`. Export
+validation walks the payload and **refuses any key containing "tow" at any depth**,
+because such a field could only be a fabrication.
+
+```json
+"gearing": {
+  "fittedRatios": [3.10, 2.28, 1.79, 1.46, 1.22, 1.04],
+  "fittedFinalGear": 3.72,
+  "ratioSource": "telemetry",
+  "finalGearSource": "derived: rpm against wheel speed and tyre radius",
+  "matchesSheet": true,
+  "gearboxChangedMidSession": false,
+  "limiterRpm": 8612.0,
+  "limiterRpmSource": "observed-at-rev-limiter",
+  "samples": 9,
+  "maxSpeedKph": 278.7,
+  "maxSpeedGear": 6,
+  "maxSpeedRpm": 8600.0,
+  "topGearReachedLimiter": true,
+  "gearingConstantK": 1078.2,
+  "gearingConstantSource": "computed: observed speed x ratio x final gear, gear 6, 9 laps"
+}
+```
+
+| Field | Type / unit | Provenance |
+|---|---|---|
+| `fittedRatios` | array of float, or `null` | **Measured.** The ratios the car actually had, taken from the **most recent counted lap that carried them** — not merged across laps. 1st…nth in order, dimensionless. GT7 sends eight slots and zeroes the ones a car does not have; the unused slots are dropped at capture, so the array length **is** the number of forward gears. `null` when no counted lap carried ratios |
+| `fittedFinalGear` | float, 3 dp, or `null` | **Derived, never measured** — GT7 does not broadcast it. `final = (rpm / 60) × 2π × r / (v × ratio[gear])`, evaluated per frame and reduced by **median**. Frames qualify only above 100 km/h and only in a gear the ratio array covers. `null` whenever `fittedRatios` is null or no frame qualified |
+| `ratioSource` | string, or `null` | `"telemetry"` when ratios were read off the stream, `null` when there are none. There is no other value: the app never reads ratios off the sheet into this field |
+| `finalGearSource` | string, or `null` | Literally `"derived: rpm against wheel speed and tyre radius"`, or `null` when `fittedFinalGear` is null. **Its whole job is to stop a derived number reading as a measured one** |
+| `matchesSheet` | bool, or `null` | **Derived comparison.** `fittedRatios`, truncated to the sheet's gear count, against `setup.gears`, each ratio within **±0.005 absolute**. `null` when either side is unknown — which is not "they differ", and is the reason it is a tri-state rather than a bool |
+| `gearboxChangedMidSession` | bool, never `null` | **Measured.** `true` when not every ratio-carrying lap ran the same box. A mid-session gearbox change invalidates any aggregate spanning it, exactly as a setup change does. `false` when fewer than two laps carried ratios — absence of evidence, reported as no change |
+| `limiterRpm` | float, whole rpm, or `null` | **Measured, and only at the limiter.** Median engine speed across frames where GT7's own rev-limiter flag was set. `null` when the limiter never fired. **Deliberately not "the highest rpm seen"** — a session that never hit the limiter has no limiter reading, and the peak in its place means something else entirely |
+| `limiterRpmSource` | string, always present | `"observed-at-rev-limiter"`, or `"limiter never fired in this session"` when `limiterRpm` is null. The null carries its own explanation rather than leaving the reader to guess between "not captured" and "never happened" |
+| `samples` | int | Counted laps that carried **frames**. Note this is the frame-bearing lap count, not the count of laps that carried ratios — `fittedRatios` is a single-lap reading and has no sample count of its own |
+| `maxSpeedKph` | float, 1 dp | **Measured.** Highest speed in any frame of any counted lap. Absent — the key is omitted, not null — when no frame carried a speed. `maxSpeedGear`, `maxSpeedRpm` and `topGearReachedLimiter` are omitted with it |
+| `maxSpeedGear` | int, or `null` | **Measured.** Gear held at that fastest frame |
+| `maxSpeedRpm` | float, whole rpm, or `null` | **Measured.** Engine speed at that fastest frame |
+| `topGearReachedLimiter` | bool | **Derived.** `true` only when the fastest frame was in the **top** gear the ratio array holds *and* within 100 rpm of `limiterRpm`. This is the qualifier for `gearingConstantK`, and on its own it answers whether the car is over- or under-geared for the circuit |
+| `gearingConstantK` | float, 1 dp | **Computed, and only when `topGearReachedLimiter` is true.** `K = maxSpeedKph × ratio[maxSpeedGear] × fittedFinalGear`. **Omitted entirely** — key absent, not null — whenever the condition does not hold. Anywhere but top gear at the limiter the car simply was not going as fast as that gearing allows, and K would come out low and be believed |
+| `gearingConstantSource` | string | Present only alongside `gearingConstantK`. States the formula, the gear it was taken in, and the lap count, so a K from one lap is not mistaken for a K from nine |
+
+**`fittedRatios` is not rounded.** It is the raw 32-bit float as broadcast, so
+expect `3.0999999046325684` where the game's screen shows `3.100`. That noise is
+exactly why `matchesSheet` and `gearboxChangedMidSession` compare within ±0.005
+rather than for equality, and it is why the ratios should be read to three decimals
+and no further.
+
+**Tyre radius is the rear-left wheel's.** The derivation needs a driven-wheel
+radius and the recorder stores one channel, `tyre_radius_m`, taken from the rear
+left. On a front-drive car with a different front radius the derived final drive
+inherits that error. Laps recorded before this channel existed decode fine and
+simply yield `fittedFinalGear: null`.
+
+**The whole section is omitted** when no counted lap carried ratios *and* no frame
+carried a speed — there is nothing to say about the box. It is emitted with nulls
+when something was captured but not enough to conclude, which is the honest middle
+case §1 describes.
+
+## 10. `strategy` — the plan and its assumptions
 
 Present only for `sessionType: "race"`, or for a practice session run explicitly to
 calibrate strategy. Its purpose is to make the app's own reasoning auditable.
@@ -372,7 +465,7 @@ whether the next setup should chase durability or pace.
 `callsMade` exists so live advice can be checked against what actually happened.
 An app that gives calls and never records them cannot be improved.
 
-## 10. `derived` and `notes`
+## 11. `derived` and `notes`
 
 ```json
 "derived": {
@@ -400,7 +493,7 @@ misread aggregate.
 
 ---
 
-## 11. Units — fixed, no inference from magnitude
+## 12. Units — fixed, no inference from magnitude
 
 | Quantity | Unit | Note |
 |---|---|---|
@@ -415,31 +508,39 @@ misread aggregate.
 | Angles (camber, toe) | degrees, signed | Toe `+` in, `−` out |
 | Brake balance | integer −5…+5 | `−` front, `+` rear; a delta from factory bias |
 | Wear fractions | 0–1, consumed | Not "remaining" |
+| Gear ratios and final drive | dimensionless | 1st…nth in order; final drive separate. Read to three decimals — `fittedRatios` carries float noise below that |
+| Engine speed | rpm | Scalars only, each named and sourced. Never a series — see §13 |
+| Gear | integer, 1-based | Modal across laps, never averaged |
 
 ---
 
-## 12. What NOT to export
+## 13. What NOT to export
 
-Raw 60 Hz traces · GPS position arrays · engine RPM series · **oil and water
+Raw 60 Hz traces · GPS position arrays · engine RPM **series** · **oil and water
 temperature** (pinned at ~110 °C and ~85 °C — they carry no information) · boost ·
 replay-derived data · anything about tyre pressure, caster, brake pressure, or
 high/low-speed damper splits (**none of these exist in GT7**).
 
 None of it changes a setup decision, and all of it displaces the driver's report.
 
+The RPM prohibition is on the **series**, not on engine speed as such. Three named
+rpm scalars are exported, each answering one question and each stated with its
+provenance: `gearing.limiterRpm`, `gearing.maxSpeedRpm` and `corners[].upshiftRpm`.
+A 60 Hz rpm trace is still refused.
+
 ---
 
-## 13. Markdown fallback
+## 14. Markdown fallback
 
 If JSON is impractical, the same content as markdown parses less cleanly but is
 acceptable. Keep the headings identical to the JSON keys — `## meta`, `## setup`,
-`## rangeRecord`, `## session`, `## laps`, `## corners`, `## wear`, `## strategy`,
-`## derived`, `## notes` — one table per section. Do not invent a different layout;
+`## rangeRecord`, `## session`, `## laps`, `## corners`, `## wear`, `## gearing`,
+`## strategy`, `## derived`, `## notes` — one table per section. Do not invent a different layout;
 the value is in the consistency, not the syntax.
 
 ---
 
-## 14. Changes from `gt7-pitcrew/1.0`, and why
+## 15. Changes from `gt7-pitcrew/1.0`, and why
 
 Every change below exists because the v1.0 field could not be produced honestly from
 what GT7 actually emits, or because the app's scope grew to cover strategy.
@@ -460,7 +561,7 @@ what GT7 actually emits, or because the app's scope grew to cover strategy.
 | 12 | `session.trackTempProxy` **removed** | GT7 does not expose track temperature and no honest proxy exists. A null field invites someone to fill it |
 | 13 | `session` gains `lapsExcluded`, `greenLapRefMs` | Exclusions were prose-only in v1.0. The green reference lap is required to interpret any degradation figure |
 
-### 14.1 Kept unchanged, deliberately
+### 15.1 Kept unchanged, deliberately
 
 - **The driver report is primary; this is corroboration.** Nothing in the schema
   implies otherwise, and nothing should.
@@ -471,22 +572,25 @@ what GT7 actually emits, or because the app's scope grew to cover strategy.
 
 ---
 
-## 15. Changes since `gt7-pitcrew/1.1`
+## 16. Changes since `gt7-pitcrew/1.1`
 
-### 15.1 → `1.2`
+### 16.1 → `1.2`
 
 | # | Change | Reason |
 |---|---|---|
-| 1 | **New `gearing` section** | GT7 broadcasts the eight fitted ratios but not the final drive. The section carries the ratios as fitted, whether they match the stored sheet, whether the box was changed mid-session, and the observed limiter — with the final drive marked **derived** (from rpm against wheel speed and tyre radius) rather than passing as measured |
-| 2 | `corners` gains the gear taken | Gear selection at a corner is a setup question the corner aggregates could not previously answer |
+| 1 | **New `gearing` section** (§9) | GT7 broadcasts the eight fitted ratios but not the final drive. The section carries the ratios as fitted, whether they match the stored sheet, whether the box was changed mid-session, and the observed limiter — with the final drive marked **derived** (from rpm against wheel speed and tyre radius) rather than passing as measured |
+| 2 | `corners` gains **`gearMin`, `gearAtApex`, `gearAtExit`, `shiftsInCorner`, `upshiftRpm`** | Gear selection at a corner is a setup question the corner aggregates could not previously answer. `shiftsInCorner` is what answers "does 2nd cover all three chicanes without an upshift"; `upshiftRpm` against `gearing.limiterRpm` is what makes a deliberate short-shift visible. The three gear fields are **modal** across laps — a mean gear is not a gear |
+| 3 | `strategy` is finally passed to the payload | It never had been, so every export before 1.2 was silent about the plan. `strategy.assumptions.refuelRateLps` became **required** at the same time and export refuses without it: at 1 L/s against a 2.5 default it is the number that decides the race |
+| 4 | Export refuses any key containing **"tow"**, at any depth | GT7 carries no proximity, closing speed or opponent positions, so a tow field could only be a fabrication. Enforced by the validator rather than left to discipline |
 
-> ⚠️ **1.2 shipped without a contract revision.** The `gearing` section above is
-> named here for completeness but is **not yet specified field by field** in this
-> document. Anything consuming it is reading an undocumented shape. Writing that
-> spec is outstanding work, and it should be written from `analysis/gearing.py`
-> rather than inferred from a sample payload.
+**1.2 shipped without a contract revision** — the four rows above were written
+after the fact, and the `gearing` spec in §9 was reconstructed from
+`analysis/gearing.py` rather than from a sample payload. A sample would have got it
+wrong: the one to hand has `fittedRatios: null` and carries neither
+`gearingConstantK` nor `gearingConstantSource`, so the shape it shows is a subset
+of the shape the code emits.
 
-### 15.2 → `1.3`
+### 16.2 → `1.3`
 
 | # | Change | Reason |
 |---|---|---|
