@@ -1,4 +1,4 @@
-"""The gt7-pitcrew/1.1 payload: assembly, validation and refusal."""
+"""The gt7-pitcrew/1.3 payload: assembly, validation and refusal."""
 from __future__ import annotations
 
 import json
@@ -223,15 +223,42 @@ def test_wear_per_lap_needs_a_gauge_reading():
     assert wear_per_lap([a_wear_lap(1), a_wear_lap(2)]) is None
 
 
-def test_wear_per_lap_uses_the_worst_axle():
-    """The stint ends when either end is done."""
-    laps = [a_wear_lap(10, wear_front=0.8, wear_rear=0.4)]
+def test_wear_per_lap_uses_the_worst_corner_not_an_average():
+    """The stint ends when one tyre is done, not when the car averages done.
+
+    The front-left here is at 80% while the other three are healthy. Averaging
+    the axle would call it 60% and the car average 50%, either of which plans
+    a longer stint than the front-left can actually survive - and overshooting
+    the cliff costs far more than undershooting (CLAUDE.md 5.1).
+    """
+    laps = [a_wear_lap(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)]
     assert wear_per_lap(laps) == 0.08
+
+
+def test_the_limiting_corner_is_named_not_just_the_number():
+    """Which corner is going is the setup finding; the rate is the strategy one."""
+    laps = [a_wear_lap(10, wear_fl=0.8, wear_fr=0.4, wear_rl=0.4, wear_rr=0.4)]
+    payload = wear_export(laps)
+    assert payload["byDriverGauge"][0]["worstCorner"] == "fl"
+    assert payload["byCorner"]["worstCorner"] == "fl"
+    assert payload["byCorner"]["frontMinusRear"] == 0.2
+
+
+def test_a_corner_that_was_not_read_stays_null():
+    """Null is unread. A zero would read as a fresh tyre and be believed."""
+    laps = [a_wear_lap(10, wear_fl=0.8)]
+    reading = wear_export(laps)["byDriverGauge"][0]
+    assert reading["fl"] == 0.8
+    assert reading["fr"] is None and reading["rl"] is None
+    # One corner read is still a usable rate - it is the worst one known.
+    assert wear_per_lap(laps) == 0.08
+    # But an axle comparison needs both ends, so it declines to invent one.
+    assert wear_export(laps)["byCorner"]["frontMinusRear"] is None
 
 
 def test_stint_length_carries_the_safety_margin():
     """0.85/w, not 1.0/w - the cliff's onset is sharp and asymmetric."""
-    laps = [a_wear_lap(10, wear_front=0.5, wear_rear=0.4)]
+    laps = [a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)]
     assert modelled_stint_laps(laps) == 17
 
 
@@ -242,14 +269,14 @@ def test_no_gauge_reading_gives_an_assumed_model_not_a_number():
 
 
 def test_a_reading_at_the_race_multiplier_is_measured():
-    payload = wear_export([a_wear_lap(10, wear_front=0.5, wear_rear=0.4)])
+    payload = wear_export([a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)])
     assert payload["modelConfidence"] == "measured"
     assert payload["byDriverGauge"][0]["source"] == "driver-gauge"
 
 
 def test_a_converted_figure_is_never_presented_as_measured():
     """Multiplier linearity is assumed, never demonstrated."""
-    payload = wear_export([a_wear_lap(10, wear_front=0.5, wear_rear=0.4)],
+    payload = wear_export([a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)],
                           calibrated_at_race_multiplier=False)
     assert payload["modelConfidence"] == "converted"
     assert "ASSUMED" in payload["modelBasis"]
@@ -259,7 +286,7 @@ def test_degradation_is_reported_with_the_phase_it_was_fitted_in():
     laps = [a_wear_lap(1, lap_time_ms=93_000),
             a_wear_lap(2, lap_time_ms=93_200),
             a_wear_lap(3, lap_time_ms=93_600),
-            a_wear_lap(4, lap_time_ms=94_000, wear_front=0.7, wear_rear=0.6)]
+            a_wear_lap(4, lap_time_ms=94_000, wear_fl=0.7, wear_fr=0.7, wear_rl=0.6, wear_rr=0.6)]
     payload = wear_export(laps)
     assert payload["byLapTime"]["degradationMsPerLap"] > 0
     assert payload["byLapTime"]["phase"] == PHASE_LINEAR
@@ -276,7 +303,7 @@ def test_temperature_trend_reports_front_rear_asymmetry():
 
 
 def test_wear_section_validates_inside_a_payload():
-    laps = [a_wear_lap(10, wear_front=0.5, wear_rear=0.4)]
+    laps = [a_wear_lap(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)]
     payload = build_payload(a_meta(), wear=wear_export(laps))
     assert validate(payload) == []
 
@@ -284,9 +311,20 @@ def test_wear_section_validates_inside_a_payload():
 def test_wear_fraction_above_one_is_refused():
     payload = build_payload(a_meta(), wear={
         "channelAvailable": False,
-        "byDriverGauge": [{"lap": 6, "front": 55, "rear": 0.4}],
+        "byDriverGauge": [{"lap": 6, "fl": 55, "fr": 0.4,
+                           "rl": 0.4, "rr": 0.4}],
     })
     assert any("fraction consumed" in p for p in validate(payload))
+
+
+def test_a_gauge_entry_naming_no_corner_is_refused():
+    """A row of nulls dressed as evidence is worse than no row."""
+    payload = build_payload(a_meta(), wear={
+        "channelAvailable": False,
+        "byDriverGauge": [{"lap": 6, "fl": None, "fr": None,
+                           "rl": None, "rr": None}],
+    })
+    assert any("no corner reading" in p for p in validate(payload))
 
 
 def test_claiming_a_wear_channel_exists_is_refused():

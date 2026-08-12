@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QHBoxLayout,
     QScrollArea,
     QVBoxLayout,
@@ -38,9 +37,16 @@ from pitcrew.ui.widgets import (
     SpecLine,
     StencilLabel,
     StrikeRow,
+    TyreGauge,
+    TyreGaugeSet,
 )
 
 ROW_HEIGHT = 54
+# A stint-end row is taller because it carries the four-corner gauge, which is
+# two gauges deep. The rack is read between runs, not at speed, so the extra
+# height costs nothing and the taller row is itself the signal that this is
+# where a set came off.
+STINT_ROW_HEIGHT = TyreGauge.HEIGHT * 2 + 4 + 12
 UNTAGGED = "—"
 
 # Column widths, shared by the heads and the rows so the two never drift.
@@ -50,12 +56,11 @@ W_DELTA = 78
 W_FUEL = 76
 W_MARKER = 84
 W_COMPOUND = 104
-W_WEAR = 78
+W_WEAR = TyreGauge.WIDTH * 2 + 4      # two gauges wide, plus the gap between
 W_ACTION = 104
 # Everything from the compound picker rightward, so the strike can stop before
-# it: four controls, three gaps between them, and the row's right margin.
-CONTROLS_WIDTH = (W_COMPOUND + W_WEAR * 2 + W_ACTION
-                  + theme.GAP * 3 + 16)
+# it: three controls, two gaps between them, and the row's right margin.
+CONTROLS_WIDTH = (W_COMPOUND + W_WEAR + W_ACTION + theme.GAP * 2 + 16)
 
 
 @dataclass
@@ -70,8 +75,14 @@ class LapRow:
     is_pit_lap: bool = False
     excluded: bool = False
     exclusion_reason: str | None = None
-    wear_front: float | None = None
-    wear_rear: float | None = None
+    wear_fl: float | None = None
+    wear_fr: float | None = None
+    wear_rl: float | None = None
+    wear_rr: float | None = None
+    # Which recorded session this lap came from, so the rack can show where
+    # one day's running ended and the next began. Display-only.
+    session_id: int | None = None
+    session_started: str | None = None
 
     @property
     def counted(self) -> bool:
@@ -83,6 +94,64 @@ class LapRow:
         if self.is_pit_lap:
             return "in-lap"
         return None
+
+    @property
+    def wear(self) -> dict[str, float | None]:
+        return {"fl": self.wear_fl, "fr": self.wear_fr,
+                "rl": self.wear_rl, "rr": self.wear_rr}
+
+    def set_wear(self, values: dict[str, float | None]) -> None:
+        self.wear_fl = values.get("fl")
+        self.wear_fr = values.get("fr")
+        self.wear_rl = values.get("rl")
+        self.wear_rr = values.get("rr")
+
+    @property
+    def worst_wear(self) -> float | None:
+        read = [v for v in self.wear.values() if v is not None]
+        return max(read) if read else None
+
+    @property
+    def worst_corner(self) -> str | None:
+        read = {k: v for k, v in self.wear.items() if v is not None}
+        return max(read, key=read.__getitem__) if read else None
+
+
+def stint_end_ids(rows: list[LapRow]) -> set[int]:
+    """Which laps end a stint, and so are worth a gauge reading.
+
+    A stint ends where the set comes off or stops being used:
+
+    * an in-lap - he came in, so whatever the gauge said is the set's final
+      state;
+    * the last lap before the compound changes - a different set from here on;
+    * the last lap on the rack, because the run stopped there.
+
+    Everything else gets no gauge. A reading taken mid-stint tells the model
+    nothing the end-of-stint one does not, and four more controls per row is
+    four more things asking to be filled in on a screen he only visits between
+    runs.
+
+    Struck laps are skipped when looking ahead, so striking the final lap of a
+    stint moves the gauge back to the last lap that still counts rather than
+    losing it entirely.
+    """
+    ends: set[int] = set()
+    live = [row for row in rows if row.counted or row.is_pit_lap]
+    for index, row in enumerate(live):
+        if row.is_pit_lap:
+            ends.add(row.lap_id)
+            continue
+        following = live[index + 1] if index + 1 < len(live) else None
+        if following is None:
+            ends.add(row.lap_id)
+        elif row.compound and following.compound and \
+                following.compound != row.compound:
+            ends.add(row.lap_id)
+    # A reading already entered keeps its gauge even if the lap stopped being
+    # a stint end - hiding the control would hide data that is still stored.
+    ends.update(row.lap_id for row in rows if row.worst_wear is not None)
+    return ends
 
 
 def format_lap_time(ms: int) -> str:
@@ -99,16 +168,56 @@ def format_delta(ms: int) -> str:
     return f"{'+' if ms > 0 else '−'}{abs(ms) / 1000:.3f}"
 
 
+class SessionBreak(QWidget):
+    """Where one day's running stopped and the next started.
+
+    Laps at an event accumulate across every session, which is what makes
+    coming back tomorrow work at all - but without a break in the rack, three
+    evenings of running read as one continuous run, and the tyre stint
+    structure looks like it spans days.
+    """
+
+    HEIGHT = 30
+
+    def __init__(self, started_at: str | None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(CompoundBand.WIDTH + 8, 0, 16, 0)
+        row.setSpacing(theme.GAP)
+
+        when = "New run"
+        if started_at:
+            # Stored as an ISO timestamp; the date and the hour are what
+            # matter, the seconds are noise.
+            when = started_at[:16].replace("T", " ")
+        label = StencilLabel(when, size=10, colour=theme.STENCIL_DIM,
+                             tracking=14.0)
+        row.addWidget(label)
+
+        rule = QWidget()
+        rule.setFixedHeight(1)
+        rule.setStyleSheet(f"background: {theme.TREAD};")
+        row.addWidget(rule, 1)
+
+
 class RackRow(QWidget):
     """One lap in the rack."""
 
     changed = pyqtSignal(int)
+    # Emitted when the edit changes *which* laps end a stint, and so which
+    # rows should carry a gauge. Kept apart from `changed` because rebuilding
+    # the rack under a drag would pull the gauge out from under the cursor
+    # mid-gesture.
+    restructured = pyqtSignal(int)
 
-    def __init__(self, row: LapRow, best_ms: int,
+    def __init__(self, row: LapRow, best_ms: int, *, stint_end: bool = False,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.row = row
-        self.setFixedHeight(ROW_HEIGHT)
+        self._stint_end = stint_end
+        self.setFixedHeight(STINT_ROW_HEIGHT if stint_end else ROW_HEIGHT)
 
         shell = QHBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
@@ -166,10 +275,19 @@ class RackRow(QWidget):
         block_wheel(self.compound_picker)
         line.addWidget(self.compound_picker)
 
-        self.wear_front = self._wear_box("Front tyre gauge, fraction consumed")
-        self.wear_rear = self._wear_box("Rear tyre gauge, fraction consumed")
-        line.addWidget(self.wear_front)
-        line.addWidget(self.wear_rear)
+        # The gauge only appears where a reading is worth taking. On every
+        # other row the column holds its width so the rack stays in line, but
+        # holds nothing to fill in.
+        self.gauges: TyreGaugeSet | None = None
+        if self._stint_end:
+            self.gauges = TyreGaugeSet()
+            self.gauges.setValues(self.row.wear)
+            self.gauges.changed.connect(self._on_wear)
+            line.addWidget(self.gauges)
+        else:
+            spacer = QWidget()
+            spacer.setFixedWidth(W_WEAR)
+            line.addWidget(spacer)
 
         self.exclude_button = MarkButton("Strike", parent=self)
         self.exclude_button.setFixedWidth(W_ACTION)
@@ -180,32 +298,18 @@ class RackRow(QWidget):
 
         self._sync()
 
-    def _wear_box(self, tip: str) -> QDoubleSpinBox:
-        box = QDoubleSpinBox()
-        box.setRange(-0.01, 1.0)
-        box.setDecimals(2)
-        box.setSingleStep(0.05)
-        box.setValue(-0.01)
-        box.setSpecialValueText(UNTAGGED)
-        box.setFixedWidth(W_WEAR)
-        box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        block_wheel(box)
-        box.setToolTip(tip)
-        box.valueChanged.connect(lambda _: self._on_wear())
-        return box
-
     # --------------------------------------------------------------- actions
 
     def _on_compound(self) -> None:
         self.row.compound = self.compound_picker.currentData()
         self.band.setCode(self.row.compound)
         self.changed.emit(self.row.lap_id)
+        self.restructured.emit(self.row.lap_id)
 
     def _on_wear(self) -> None:
-        front = self.wear_front.value()
-        rear = self.wear_rear.value()
-        self.row.wear_front = None if front < 0 else front
-        self.row.wear_rear = None if rear < 0 else rear
+        if self.gauges is None:
+            return
+        self.row.set_wear(self.gauges.values())
         self.changed.emit(self.row.lap_id)
 
     def _on_exclude(self) -> None:
@@ -214,6 +318,7 @@ class RackRow(QWidget):
         self.row.excluded = not self.row.excluded
         self._sync()
         self.changed.emit(self.row.lap_id)
+        self.restructured.emit(self.row.lap_id)
 
     def _sync(self) -> None:
         struck = not self.row.counted
@@ -249,6 +354,7 @@ class PracticeScreen(QWidget):
         super().__init__(parent)
         self._rows: list[LapRow] = []
         self._row_widgets: list[RackRow] = []
+        self._rendered_ends: set[int] = set()
         self._recording = False
         self._build()
 
@@ -329,8 +435,7 @@ class PracticeScreen(QWidget):
         row.addWidget(cap("", W_MARKER))
         row.addStretch(1)
         row.addWidget(cap("COMPOUND", W_COMPOUND))
-        row.addWidget(cap("WEAR F", W_WEAR))
-        row.addWidget(cap("WEAR R", W_WEAR))
+        row.addWidget(cap("SET OFF", W_WEAR))
         row.addWidget(cap("", W_ACTION))
         return head
 
@@ -376,9 +481,22 @@ class PracticeScreen(QWidget):
         self._row_widgets.clear()
 
         best = self._best_ms()
-        for row in self._rows:
-            widget = RackRow(row, best)
+        ends = stint_end_ids(self._rows)
+        self._rendered_ends = ends
+        seen_session: int | None = None
+        for index, row in enumerate(self._rows):
+            # A separator wherever the recorded session changes, so coming back
+            # the next day reads as a new run rather than as more of the same
+            # one. Not before the first row - there is nothing to separate it
+            # from.
+            if row.session_id is not None and row.session_id != seen_session:
+                if index:
+                    self.rack_layout.addWidget(SessionBreak(row.session_started))
+                seen_session = row.session_id
+
+            widget = RackRow(row, best, stint_end=row.lap_id in ends)
             widget.changed.connect(self._on_row_changed)
+            widget.restructured.connect(self._on_row_restructured)
             self.rack_layout.addWidget(widget)
             self._row_widgets.append(widget)
         self.rack_layout.addStretch(1)
@@ -386,6 +504,12 @@ class PracticeScreen(QWidget):
     def _on_row_changed(self, lap_id: int) -> None:
         self.refresh()
         self.lap_changed.emit(lap_id)
+
+    def _on_row_restructured(self, lap_id: int) -> None:
+        """The stint boundaries moved, so the gauges belong on other rows."""
+        if stint_end_ids(self._rows) != self._rendered_ends:
+            self._rebuild_rack()
+            self.refresh()
 
     def _best_ms(self) -> int:
         times = [r.lap_time_ms for r in self._rows if r.counted and r.lap_time_ms > 0]

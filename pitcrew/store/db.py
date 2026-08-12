@@ -18,7 +18,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
-from pitcrew.store.schema import ADDED_COLUMNS, DDL, SCHEMA_VERSION
+from pitcrew.diagnostics import log
+from pitcrew.store.schema import ADDED_COLUMNS, DDL, MIGRATIONS, SCHEMA_VERSION
 
 DEFAULT_DB_PATH = Path("data/pitcrew.db")
 
@@ -45,11 +46,17 @@ class Store:
     def _init_schema(self) -> None:
         """Create or upgrade the schema.
 
-        An older file is upgraded in place: the script creates whatever tables
-        are missing, and `ADDED_COLUMNS` adds columns to tables that already
-        existed.  Both are additive by construction - see `schema.py`.  A
-        *newer* file is refused rather than opened: this build would not know
-        about its columns, and quietly writing to it is how data gets lost.
+        An older file is upgraded in place, in three passes: the script creates
+        whatever tables are missing, `ADDED_COLUMNS` adds columns to tables
+        that already existed, and then `MIGRATIONS` runs in version order for
+        anything neither of those can express - a dropped column, a type
+        change, a back-fill.  A *newer* file is refused rather than opened:
+        this build would not know about its columns, and quietly writing to it
+        is how data gets lost.
+
+        The whole upgrade is one transaction.  A migration that raises rolls
+        the file back to the version it opened at rather than leaving it
+        half-converted, which is the state nothing else in the app could read.
         """
         with self._write() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -66,6 +73,15 @@ class Store:
                     if name not in existing:
                         conn.execute(
                             f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
+            for target in sorted(MIGRATIONS):
+                if target <= version:
+                    continue
+                label, migrate = MIGRATIONS[target]
+                migrate(conn)
+                log("store").info("migrated %s to v%s (%s)",
+                                  self.path, target, label)
+
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -439,17 +455,22 @@ class Store:
                 "UPDATE laps SET excluded = ?, exclusion_reason = ? WHERE id = ?",
                 (0 if reason is None else 1, reason, lap_id))
 
-    def set_lap_wear(self, lap_id: int, front: float | None,
-                     rear: float | None) -> None:
-        """Record the driver's tyre-gauge reading, fraction consumed 0-1."""
-        for value in (front, rear):
+    def set_lap_wear(self, lap_id: int, fl: float | None, fr: float | None,
+                     rl: float | None, rr: float | None) -> None:
+        """Record the driver's tyre-gauge reading per corner, consumed 0-1.
+
+        A corner he did not read stays null.  Null here has to survive: a zero
+        would read as a fresh tyre and would be believed, which is the failure
+        mode CLAUDE.md calls absolute.
+        """
+        for name, value in (("fl", fl), ("fr", fr), ("rl", rl), ("rr", rr)):
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError(
-                    f"wear is a fraction consumed, 0-1, got {value}")
+                    f"wear is a fraction consumed, 0-1, got {value} for {name}")
         with self._write() as conn:
             conn.execute(
-                "UPDATE laps SET wear_front = ?, wear_rear = ? WHERE id = ?",
-                (front, rear, lap_id))
+                "UPDATE laps SET wear_fl = ?, wear_fr = ?, wear_rl = ?, "
+                "wear_rr = ? WHERE id = ?", (fl, fr, rl, rr, lap_id))
 
     # --------------------------------------------------------- corner models
 

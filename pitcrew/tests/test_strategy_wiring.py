@@ -76,7 +76,7 @@ def test_wear_is_missing_until_the_gauge_is_read(planned):
 
 def test_a_gauge_reading_makes_wear_declared(planned):
     _, _, store, event_id = planned
-    store.set_lap_wear(_lap_ids(store, event_id)[-1], 0.30, 0.24)
+    store.set_lap_wear(_lap_ids(store, event_id)[-1], 0.30, 0.30, 0.24, 0.24)
     inputs, evidence = build_inputs(store, event_id)
     assert inputs.wear_per_lap == pytest.approx(0.05)
     assert next(e for e in evidence
@@ -117,7 +117,7 @@ def test_missing_inputs_are_warned_about_not_hidden(planned):
 
 def test_every_input_measured_says_so(planned):
     controller, strategy, store, event_id = planned
-    store.set_lap_wear(_lap_ids(store, event_id)[-1], 0.30, 0.24)
+    store.set_lap_wear(_lap_ids(store, event_id)[-1], 0.30, 0.30, 0.24, 0.24)
     controller.build_strategy()
     assert "Every input measured" in strategy.footer_note.text()
 

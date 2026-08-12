@@ -45,7 +45,7 @@ def raced(qt_app, store: Store, voice):  # noqa: F811
         store.set_lap_compound(lap_id, "RM")
     # A gauge reading, so the tyre limit forces a stop into the plan -
     # without it the fastest plan is no-stop and there is no box call.
-    store.set_lap_wear(lap_id, 0.42, 0.35)
+    store.set_lap_wear(lap_id, 0.42, 0.42, 0.35, 0.35)
     controller.build_strategy()
     controller.approve_strategy(0)
     yield controller, race_screen, store, event_id

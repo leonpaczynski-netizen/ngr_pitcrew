@@ -38,8 +38,13 @@ class LapInput:
     is_out_lap: bool = False
     excluded: bool = False
     exclusion_reason: str | None = None
-    wear_front: float | None = None
-    wear_rear: float | None = None
+    # The driver's gauge reading per corner, fraction consumed 0-1. Same
+    # vocabulary as the tyre temperatures below, so a wear figure and the
+    # temperature that explains it are named the same thing.
+    wear_fl: float | None = None
+    wear_fr: float | None = None
+    wear_rl: float | None = None
+    wear_rr: float | None = None
     gear_ratios: list[float] | None = None
     frames: list[dict] | None = None
 
@@ -47,6 +52,39 @@ class LapInput:
     def counted(self) -> bool:
         """Out-laps, in-laps and anything the driver excluded do not count."""
         return not (self.excluded or self.is_out_lap or self.is_pit_lap)
+
+    @property
+    def wear_by_corner(self) -> dict[str, float | None]:
+        return {"fl": self.wear_fl, "fr": self.wear_fr,
+                "rl": self.wear_rl, "rr": self.wear_rr}
+
+    @property
+    def worst_wear(self) -> float | None:
+        """The most-consumed corner, or None if he read no corner at all.
+
+        This is the figure a stint is planned against: the tyre that runs out
+        first ends the stint, and averaging it against three healthier corners
+        is how a plan overshoots the cliff.
+        """
+        read = [v for v in self.wear_by_corner.values() if v is not None]
+        return max(read) if read else None
+
+    @property
+    def worst_corner(self) -> str | None:
+        """Which corner is going first — the finding, not just the number.
+
+        None when nothing was read, and None when more than one corner shares
+        the highest reading. Naming one of a tied pair invents an asymmetry
+        the driver never reported, and an invented asymmetry is exactly the
+        kind of thing a setup gets built on. The rate is still knowable in
+        that case — `worst_wear` — it is only the *which* that is not.
+        """
+        read = {k: v for k, v in self.wear_by_corner.items() if v is not None}
+        if not read:
+            return None
+        highest = max(read.values())
+        tied = [corner for corner, value in read.items() if value == highest]
+        return tied[0] if len(tied) == 1 else None
 
     def reason_not_counted(self) -> str | None:
         if self.counted:

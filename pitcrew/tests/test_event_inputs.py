@@ -80,12 +80,20 @@ def test_the_regulation_boxes_are_guarded(qt_app):  # noqa: F811
 
 
 def test_the_rack_pickers_are_guarded(qt_app):  # noqa: F811
+    """A scroll over the rack must not retag a lap it merely passed over."""
     from pitcrew.ui.practice_screen import LapRow, RackRow
     row = RackRow(LapRow(1, 1, 94_000, 3.4), 94_000)
     scroll(row.compound_picker)
-    scroll(row.wear_front)
     assert row.row.compound is None
-    assert row.row.wear_front is None
+
+
+def test_the_gauge_only_appears_where_a_set_came_off(qt_app):  # noqa: F811
+    """Four controls per row is four things asking to be filled in."""
+    from pitcrew.ui.practice_screen import LapRow, RackRow
+    plain = RackRow(LapRow(1, 1, 94_000, 3.4), 94_000, stint_end=False)
+    ending = RackRow(LapRow(2, 2, 94_000, 3.4), 94_000, stint_end=True)
+    assert plain.gauges is None
+    assert ending.gauges is not None
 
 
 # ------------------------------------------------------------------ pickers

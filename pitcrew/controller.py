@@ -780,7 +780,8 @@ class PitCrewController(QObject):
         if row is None:
             return
         self.store.set_lap_compound(lap_id, row.compound)
-        self.store.set_lap_wear(lap_id, row.wear_front, row.wear_rear)
+        self.store.set_lap_wear(lap_id, row.wear_fl, row.wear_fr,
+                                row.wear_rl, row.wear_rr)
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
 
@@ -803,8 +804,12 @@ class PitCrewController(QObject):
                 is_pit_lap=bool(row["is_pit_lap"]),
                 excluded=bool(row["excluded"]),
                 exclusion_reason=row["exclusion_reason"],
-                wear_front=row["wear_front"],
-                wear_rear=row["wear_rear"],
+                wear_fl=row["wear_fl"],
+                wear_fr=row["wear_fr"],
+                wear_rl=row["wear_rl"],
+                wear_rr=row["wear_rr"],
+                session_id=row["session_id"],
+                session_started=row["session_started"],
             )
             for index, row in enumerate(
                 self.store.list_event_laps(event_id, "practice"), 1)

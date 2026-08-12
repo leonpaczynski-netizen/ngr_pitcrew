@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.1`
+# Pit Crew export contract — `gt7-pitcrew/1.3`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -14,7 +14,8 @@ Two consequences, and they drive every decision below:
    attention that would otherwise go to what the driver felt. Export what changes a
    setup decision and nothing else.
 
-Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §14.
+Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §14 (through
+1.1) and §15 (1.2 and 1.3).
 
 ---
 
@@ -27,7 +28,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.1",
+  "format": "gt7-pitcrew/1.3",
   "meta":        { },
   "setup":       { },
   "rangeRecord": { },
@@ -35,6 +36,7 @@ section full of zeros is not.
   "laps":        [ ],
   "corners":     [ ],
   "wear":        { },
+  "gearing":     { },
   "strategy":    { },
   "derived":     { },
   "notes":       ""
@@ -273,13 +275,35 @@ every export, so that retuning a detector does not read as a change in the car.
 **GT7 exposes no tyre wear channel in any packet format.** This section exists to
 make that explicit rather than to hide it. Every entry carries its source.
 
+**Readings are per corner, not per axle.** The four wheels wear at different rates,
+GT7's own gauge shows them separately, and a stint ends when the **worst single
+corner** is done — not when an axle pair averages done. An axle figure cannot express
+a car eating its front-left, which is the pattern open tuning without BoP tends to
+produce and the one brake balance and setup actually act on. `worst` is that limiting
+corner's fraction and is what `modelledStintLaps` is computed from.
+
+`worstCorner` is `null` when more than one corner shares the highest reading.
+Nominating one of a tied pair would assert an asymmetry the driver never reported.
+A corner he did not read is `null` and stays `null` — never `0`, which would read as
+a fresh tyre and be believed.
+
 ```json
 "wear": {
   "channelAvailable": false,
   "byDriverGauge": [
-    { "lap": 6,  "front": 0.55, "rear": 0.42, "source": "driver-gauge" },
-    { "lap": 11, "front": 0.88, "rear": 0.71, "source": "driver-gauge" }
+    { "lap": 6,  "fl": 0.58, "fr": 0.52, "rl": 0.43, "rr": 0.41,
+      "worst": 0.58, "worstCorner": "fl", "source": "driver-gauge" },
+    { "lap": 11, "fl": 0.94, "fr": 0.83, "rl": 0.72, "rr": 0.70,
+      "worst": 0.94, "worstCorner": "fl", "source": "driver-gauge" }
   ],
+  "byCorner": {
+    "atLap": 11,
+    "worstCorner": "fl",
+    "worst": 0.94,
+    "frontMinusRear": 0.175,
+    "leftMinusRight": 0.048,
+    "source": "driver-gauge"
+  },
   "byLapTime": {
     "refLapMs": 93912,
     "degradationMsPerLap": 118,
@@ -301,7 +325,15 @@ make that explicit rather than to hide it. Every entry carries its source.
 ```
 
 - `byDriverGauge` is the most reliable input and the only one anchored to the game's
-  own number. Fraction **consumed**, 0–1.
+  own number. Fraction **consumed**, 0–1, one entry per corner: `fl`, `fr`, `rl`,
+  `rr`. Same corner vocabulary as `laps[].tyreTempMeanC`, so a wear figure and the
+  temperature that explains it are named the same thing. An entry that names no
+  corner at all is refused at export rather than emitted.
+- `byCorner` is the axle and side asymmetry at the last lap read. It is reported, not
+  optimised against: **GT7 allows no partial tyre change and no split compounds
+  front-to-rear**, so asymmetric wear is a brake-balance and setup finding, never a
+  strategy one. `frontMinusRear` and `leftMinusRight` are `null` — not `0` — when only
+  one end or one side was read.
 - `phase` ∈ `flat` (0–50%) \| `linear` (50–90%) \| `cliff` (>90%) — GT7 degradation is
   piecewise. Do not report a linear rate without saying which phase it was fitted in.
 - `modelConfidence` ∈ `measured` \| `assumed` \| `converted`. **`converted` means the
@@ -436,3 +468,35 @@ what GT7 actually emits, or because the app's scope grew to cover strategy.
 - **Missing is `null`, never `0`.** Strengthened, via `meta.packet`.
 - **Every aggregate carries its sample count.**
 - **Nothing derived is presented as measured.** Extended to wear and bottoming.
+
+---
+
+## 15. Changes since `gt7-pitcrew/1.1`
+
+### 15.1 → `1.2`
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **New `gearing` section** | GT7 broadcasts the eight fitted ratios but not the final drive. The section carries the ratios as fitted, whether they match the stored sheet, whether the box was changed mid-session, and the observed limiter — with the final drive marked **derived** (from rpm against wheel speed and tyre radius) rather than passing as measured |
+| 2 | `corners` gains the gear taken | Gear selection at a corner is a setup question the corner aggregates could not previously answer |
+
+> ⚠️ **1.2 shipped without a contract revision.** The `gearing` section above is
+> named here for completeness but is **not yet specified field by field** in this
+> document. Anything consuming it is reading an undocumented shape. Writing that
+> spec is outstanding work, and it should be written from `analysis/gearing.py`
+> rather than inferred from a sample payload.
+
+### 15.2 → `1.3`
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | `wear.byDriverGauge[].front/.rear` → **`.fl/.fr/.rl/.rr`**, plus `worst` and `worstCorner` | **Breaking.** The four corners wear at different rates and GT7's own gauge shows them separately. A stint ends when the worst *single corner* is done; an axle pair averages that away, and a plan built on the average overshoots the cliff — which §5.1 of `CLAUDE.md` says costs far more than undershooting. `worst` is what `modelledStintLaps` divides |
+| 2 | **New `wear.byCorner`** | Which corner is going, and the front/rear and left/right asymmetry behind it. Reported rather than optimised against: GT7 permits no partial tyre change and no split compounds, so this is a brake-balance and setup finding |
+| 3 | `worstCorner` is `null` on a tie | Naming one of two corners tied at the same reading asserts an asymmetry the driver never reported, and an invented asymmetry is what a setup then gets built on |
+| 4 | A gauge entry naming **no** corner is refused at export | A row of nulls dressed as evidence is worse than no row. Consistent with refusing rather than emitting something that will be misread |
+
+**Migrating stored 1.1 data.** The app's schema v3 migration spreads each axle
+reading across both of that axle's corners, which is what the single figure meant
+when it was entered. It does overstate precision on the healthier corner of a pair
+and no later reading can correct that, so pre-1.3 readings should be read as axle
+figures wearing corner names.

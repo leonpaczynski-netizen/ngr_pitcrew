@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.2` payload.
+"""Building and validating the `gt7-pitcrew/1.3` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pitcrew.telemetry.packet import STEER_SOURCE
 from pitcrew.telemetry.recorder import DEFAULT_STEER_ROTATION_DEG
 
-FORMAT = "gt7-pitcrew/1.2"
+FORMAT = "gt7-pitcrew/1.3"
 APP_VERSION = "pitcrew 2.1.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
@@ -303,14 +303,20 @@ def _validate_wear(payload: dict) -> list[str]:
             "wear.channelAvailable must be false - GT7 exposes no tyre wear "
             "channel in any packet format")
     for index, reading in enumerate(wear.get("byDriverGauge") or []):
-        for axle in ("front", "rear"):
-            value = reading.get(axle)
+        for corner in ("fl", "fr", "rl", "rr", "worst"):
+            value = reading.get(corner)
             if value is None:
                 continue
             if not 0.0 <= value <= 1.0:
                 problems.append(
-                    f"wear.byDriverGauge[{index}].{axle} is a fraction consumed "
-                    f"0-1, got {value!r}")
+                    f"wear.byDriverGauge[{index}].{corner} is a fraction "
+                    f"consumed 0-1, got {value!r}")
+        # A reading that names no corner is a row of nulls dressed as
+        # evidence. Refusing is cheaper than having it read as a fresh tyre.
+        if all(reading.get(corner) is None for corner in ("fl", "fr", "rl", "rr")):
+            problems.append(
+                f"wear.byDriverGauge[{index}] has no corner reading at all - "
+                f"a gauge entry must name at least one of fl, fr, rl, rr")
     confidence = wear.get("modelConfidence")
     if confidence is not None and confidence not in ("measured", "assumed", "converted"):
         problems.append(

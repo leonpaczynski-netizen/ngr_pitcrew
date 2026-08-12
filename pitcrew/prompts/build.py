@@ -595,18 +595,30 @@ def _pace_lines(context: ctx.PromptContext,
     if fuel:
         lines.append("- Fuel: " + " · ".join(fuel))
 
-    gauge = [lap for lap in context.laps
-             if lap.wear_front is not None or lap.wear_rear is not None]
+    gauge = [lap for lap in context.laps if lap.worst_wear is not None]
     if gauge:
-        readings = ", ".join(
-            f"lap {lap.lap_num} front {lap.wear_front:.0%}"
-            if lap.wear_rear is None else
-            (f"lap {lap.lap_num} rear {lap.wear_rear:.0%}"
-             if lap.wear_front is None else
-             f"lap {lap.lap_num} front {lap.wear_front:.0%} / rear "
-             f"{lap.wear_rear:.0%}")
+        readings = "; ".join(
+            f"lap {lap.lap_num} "
+            + " ".join(f"{corner.upper()} {value:.0%}"
+                       for corner, value in lap.wear_by_corner.items()
+                       if value is not None)
             for lap in gauge)
         lines.append(f"- Tyre gauge, read off the in-game HUD: {readings}")
+        worst = gauge[-1]
+        if worst.worst_corner:
+            lines.append(
+                f"- Limiting corner at lap {worst.lap_num}: "
+                f"**{worst.worst_corner.upper()} at {worst.worst_wear:.0%}** "
+                f"consumed. Stint length is set by this corner, not by an "
+                f"axle average.")
+        else:
+            # All the read corners were equal. Nominating one anyway would
+            # hand the knowledge base an asymmetry the driver never saw.
+            lines.append(
+                f"- Limiting wear at lap {worst.lap_num}: "
+                f"**{worst.worst_wear:.0%}** consumed, even across the "
+                f"corners he read. Stint length is set by the worst corner, "
+                f"not by an axle average.")
 
     perception = []
     if report.balance_drift:
@@ -938,11 +950,28 @@ def _wear_section(lines: Lines, context: ctx.PromptContext) -> None:
 
     for reading in wear.get("byDriverGauge") or []:
         parts = [f"lap {reading.get('lap')}"]
-        for axle in ("front", "rear"):
-            if reading.get(axle) is not None:
-                parts.append(f"{axle} {reading[axle]:.0%}")
+        for corner in ("fl", "fr", "rl", "rr"):
+            if reading.get(corner) is not None:
+                parts.append(f"{corner.upper()} {reading[corner]:.0%}")
+        if reading.get("worstCorner"):
+            parts.append(f"worst {reading['worstCorner'].upper()}")
         lines.add(f"- Driver gauge: {', '.join(parts)} "
                   f"[{reading.get('source', 'driver-gauge')}]")
+
+    by_corner = wear.get("byCorner") or {}
+    if by_corner.get("worstCorner"):
+        bias = []
+        if by_corner.get("frontMinusRear") is not None:
+            bias.append(f"front minus rear {by_corner['frontMinusRear']:+.0%}")
+        if by_corner.get("leftMinusRight") is not None:
+            bias.append(f"left minus right {by_corner['leftMinusRight']:+.0%}")
+        lines.add(
+            f"- Limiting corner: **{by_corner['worstCorner'].upper()}** at "
+            f"{by_corner.get('worst', 0):.0%} consumed by lap "
+            f"{by_corner.get('atLap')}"
+            + (f" ({', '.join(bias)})" if bias else "")
+            + ". GT7 allows no partial tyre change and no split compounds, so "
+              "this is a setup and brake-balance finding, not a strategy one.")
 
     by_time = wear.get("byLapTime") or {}
     if by_time:

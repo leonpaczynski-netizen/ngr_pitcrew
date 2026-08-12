@@ -1,4 +1,4 @@
-"""Pit Crew database schema, version 2.
+"""Pit Crew database schema, version 3.
 
 A clean start.  The previous database carried 43 migrations covering setup
 authoring, evidence, assurance and a knowledge graph — none of which exist any
@@ -23,17 +23,23 @@ Versions, and what upgrading means here:
 * **v1** the clean start.
 * **v2** adds `prompt_issues` — the log of every prompt the Race Engineer
   screen produced and whatever the knowledge base sent back.
+* **v3** replaces the per-axle tyre gauge (`wear_front`, `wear_rear`) with
+  per-corner (`wear_fl`, `wear_fr`, `wear_rl`, `wear_rr`).  GT7 wears the four
+  corners at different rates and shows them separately on its own gauge; an
+  axle pair could not express a car eating its front-left in particular, which
+  is exactly the finding an open-tuning no-BoP setup produces.
 
-Everything in this file is `CREATE ... IF NOT EXISTS`, so a v1 file becomes a
-v2 file by running the script over it: v1 -> v2 adds tables and changes no
-existing column.  **That is the only kind of change `Store._init_schema` can
-apply.**  The first time a column has to change type, be dropped, or be
-back-filled, this needs a real numbered migration table rather than one more
-`IF NOT EXISTS`.
+`CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
+that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
+two columns and back-fills four — so `MIGRATIONS` below exists, and anything
+that changes or removes an existing column belongs there from now on rather
+than in one more `IF NOT EXISTS`.
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+import sqlite3
+
+SCHEMA_VERSION = 3
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -164,10 +170,16 @@ CREATE TABLE IF NOT EXISTS laps (
     -- an exclusion than to have a setup built on a misread aggregate.
     excluded         INTEGER NOT NULL DEFAULT 0,
     exclusion_reason TEXT,
-    -- Driver's reading of the in-game tyre gauge, fraction consumed 0-1. The
-    -- only wear figure anchored to the game's own number.
-    wear_front    REAL,
-    wear_rear     REAL,
+    -- Driver's reading of the in-game tyre gauge, fraction consumed 0-1, one
+    -- per corner. The only wear figure anchored to the game's own number.
+    --
+    -- Per corner rather than per axle because the four wear at different
+    -- rates and the stint ends when the *worst single tyre* is done, not when
+    -- an axle average is. Null is a corner he did not read, and stays null.
+    wear_fl       REAL,
+    wear_fr       REAL,
+    wear_rl       REAL,
+    wear_rr       REAL,
     gear_ratios   TEXT,          -- JSON array, the ratios fitted
     recorded_at   TEXT    NOT NULL,
     UNIQUE(session_id, lap_num)
@@ -279,4 +291,64 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("priority", "TEXT"),
         ("pp_cap", "REAL"),
     ),
+}
+
+
+# ---------------------------------------------------------------- migrations
+#
+# Numbered, ordered, and run once each by `Store._init_schema`. A migration
+# here is for the changes `ADDED_COLUMNS` cannot express: a column that has to
+# change type, be dropped, or be back-filled from another.
+#
+# Two rules, both learned the hard way:
+#
+# * **Guard on the current shape, not on the version number.** A brand new file
+#   is created from the DDL above at `user_version` 0, so it already has the
+#   v3 layout before any migration runs. Every migration must therefore be a
+#   no-op when its work is already done, or a fresh database breaks on its
+#   first open.
+# * **Never rebuild a table to drop a column from it.** The 12-step
+#   create-copy-drop-rename dance is the textbook answer, and here it would
+#   destroy data: `lap_frames` references `laps` with `ON DELETE CASCADE` and
+#   foreign keys are on, so dropping `laps` silently takes every recorded
+#   telemetry blob with it. `ALTER TABLE ... DROP COLUMN` (sqlite 3.35+) is
+#   in place and cascades nothing.
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate_v3_wear_per_corner(conn: sqlite3.Connection) -> None:
+    """Per-axle tyre gauge becomes per-corner.
+
+    The back-fill spreads each axle reading across both of its corners. That
+    is what was actually meant when the number was entered — he read one
+    figure per axle off the gauge and both wheels on that axle were described
+    by it — so it is a restatement rather than an invention. It does overstate
+    precision on the better corner of a pair, which no later reading can
+    correct; there is no way to recover a per-corner truth that was never
+    recorded, and discarding the readings entirely would be worse.
+    """
+    columns = _columns(conn, "laps")
+    if "wear_front" not in columns:
+        return                      # already v3, or a file built fresh from the DDL
+
+    for corner in ("wear_fl", "wear_fr", "wear_rl", "wear_rr"):
+        if corner not in columns:
+            conn.execute(f"ALTER TABLE laps ADD COLUMN {corner} REAL")
+
+    conn.execute(
+        "UPDATE laps SET wear_fl = wear_front, wear_fr = wear_front "
+        "WHERE wear_front IS NOT NULL")
+    conn.execute(
+        "UPDATE laps SET wear_rl = wear_rear, wear_rr = wear_rear "
+        "WHERE wear_rear IS NOT NULL")
+
+    conn.execute("ALTER TABLE laps DROP COLUMN wear_front")
+    conn.execute("ALTER TABLE laps DROP COLUMN wear_rear")
+
+
+MIGRATIONS: dict[int, tuple[str, object]] = {
+    3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
 }

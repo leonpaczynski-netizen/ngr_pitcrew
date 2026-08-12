@@ -81,7 +81,7 @@ def record_laps(store, session_id: int, times, *, pit_last: bool = True):
         fuel -= 3.4
         lap_id = store.add_lap(session_id, lap)
         if index == 6:
-            store.set_lap_wear(lap_id, 0.55, 0.42)
+            store.set_lap_wear(lap_id, 0.55, 0.55, 0.42, 0.42)
 
 
 @pytest.fixture()
@@ -220,7 +220,7 @@ def test_an_unmeasured_car_falls_back_to_a_labelled_estimate(store):
 def test_the_outcome_prompt_asks_for_the_paste_block_the_parser_reads(store,
                                                                       practice_event):
     text = prompt_for(store, practice_event, OUTCOME).text
-    assert "`gt7-pitcrew/1.1` paste block" in text
+    assert "`gt7-pitcrew/1.3` paste block" in text
     assert "race block first, then qualifying, one block per sheet" in text
 
 
@@ -418,8 +418,9 @@ def raced_event(store):
         fuel = 100.0 if index == 11 else fuel - 3.42
         lap_id = store.add_lap(session_id, lap)
         if index in (6, 11):
-            store.set_lap_wear(lap_id, 0.55 if index == 6 else 0.88,
-                               0.42 if index == 6 else 0.71)
+            front = 0.55 if index == 6 else 0.88
+            rear = 0.42 if index == 6 else 0.71
+            store.set_lap_wear(lap_id, front, front, rear, rear)
     store.end_session(session_id)
 
     plan = {
@@ -469,7 +470,13 @@ def test_declined_calls_survive_to_the_prompt(store, raced_event):
 def test_wear_is_never_presented_as_measured(store, raced_event):
     text = prompt_for(store, raced_event, OUTCOME).text
     assert "GT7 exposes no tyre wear channel in any packet format" in text
-    assert "Driver gauge: lap 6, front 55%, rear 42% [driver-gauge]" in text
+    assert ("Driver gauge: lap 6, FL 55%, FR 55%, RL 42%, RR 42% "
+            "[driver-gauge]") in text
+    # This fixture reads both corners of an axle the same, so no single corner
+    # is limiting and none is named. Nominating one of a tied pair would hand
+    # the knowledge base an asymmetry the driver never reported.
+    assert "worst FL" not in text
+    assert "Limiting corner:" not in text
     assert "multiplier actually raced" in text
 
 

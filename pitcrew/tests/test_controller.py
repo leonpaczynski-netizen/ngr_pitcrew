@@ -212,14 +212,16 @@ def test_marks_persist_the_moment_they_are_made(wired):
     row = practice.rows()[0]
     row.compound = "RM"
     row.excluded = True
-    row.wear_front, row.wear_rear = 0.42, 0.35
+    row.set_wear({"fl": 0.42, "fr": 0.38, "rl": 0.35, "rr": 0.35})
     controller._on_lap_changed(row.lap_id)
 
     stored = store.list_laps(session_id)[0]
     assert stored["compound"] == "RM"
     assert stored["excluded"] == 1
     assert stored["exclusion_reason"] == "struck by hand"
-    assert stored["wear_front"] == 0.42
+    assert stored["wear_fl"] == 0.42
+    assert stored["wear_fr"] == 0.38
+    assert stored["wear_rr"] == 0.35
 
 
 def test_reopening_reloads_the_last_session_onto_the_rack(wired):

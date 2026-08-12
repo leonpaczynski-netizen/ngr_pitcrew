@@ -47,8 +47,10 @@ def _lap_inputs(store, event_id: int) -> list[LapInput]:
             is_out_lap=bool(row["is_out_lap"]),
             excluded=bool(row["excluded"]),
             exclusion_reason=row["exclusion_reason"],
-            wear_front=row["wear_front"],
-            wear_rear=row["wear_rear"],
+            wear_fl=row["wear_fl"],
+            wear_fr=row["wear_fr"],
+            wear_rl=row["wear_rl"],
+            wear_rr=row["wear_rr"],
         )
         for row in rows
     ]

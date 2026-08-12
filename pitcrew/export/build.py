@@ -85,8 +85,10 @@ def _rows_to_laps(store, rows) -> list[LapInput]:
             is_out_lap=bool(row["is_out_lap"]),
             excluded=bool(row["excluded"]),
             exclusion_reason=row["exclusion_reason"],
-            wear_front=row["wear_front"],
-            wear_rear=row["wear_rear"],
+            wear_fl=row["wear_fl"],
+            wear_fr=row["wear_fr"],
+            wear_rl=row["wear_rl"],
+            wear_rr=row["wear_rr"],
             gear_ratios=_ratios(row),
             frames=frames,
         ))
@@ -164,7 +166,7 @@ def _merged_session(sessions: list[dict]) -> dict:
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            calibrated_at_race_multiplier: bool) -> dict:
-    """Assemble the `gt7-pitcrew/1.2` payload."""
+    """Assemble the `gt7-pitcrew/1.3` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
         raise ValueError("session has no event")

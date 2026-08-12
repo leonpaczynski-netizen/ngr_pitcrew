@@ -267,10 +267,23 @@ def test_wear_gauge_round_trips(store: Store, event_id: int):
     from .test_store import a_lap as a_stored_lap
     session_id = store.start_session(event_id, "practice")
     lap_id = store.add_lap(session_id, a_stored_lap())
-    store.set_lap_wear(lap_id, 0.55, 0.42)
+    store.set_lap_wear(lap_id, 0.55, 0.51, 0.42, 0.40)
     row = store.list_laps(session_id)[0]
-    assert row["wear_front"] == 0.55
-    assert row["wear_rear"] == 0.42
+    assert row["wear_fl"] == 0.55
+    assert row["wear_fr"] == 0.51
+    assert row["wear_rl"] == 0.42
+    assert row["wear_rr"] == 0.40
+
+
+def test_an_unread_corner_stores_as_null_not_zero(store: Store, event_id: int):
+    """A zero would read as a fresh tyre. Missing is null, never 0."""
+    from .test_store import a_lap as a_stored_lap
+    session_id = store.start_session(event_id, "practice")
+    lap_id = store.add_lap(session_id, a_stored_lap())
+    store.set_lap_wear(lap_id, 0.55, None, None, None)
+    row = store.list_laps(session_id)[0]
+    assert row["wear_fl"] == 0.55
+    assert row["wear_fr"] is None
 
 
 def test_wear_outside_zero_to_one_is_refused(store: Store, event_id: int):
@@ -278,7 +291,7 @@ def test_wear_outside_zero_to_one_is_refused(store: Store, event_id: int):
     session_id = store.start_session(event_id, "practice")
     lap_id = store.add_lap(session_id, a_stored_lap())
     with pytest.raises(ValueError, match="fraction consumed"):
-        store.set_lap_wear(lap_id, 55.0, 0.42)
+        store.set_lap_wear(lap_id, 55.0, 55.0, 0.42, 0.42)
 
 
 def test_lap_exclusion_round_trips(store: Store, event_id: int):

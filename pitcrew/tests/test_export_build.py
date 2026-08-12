@@ -147,10 +147,11 @@ def test_wear_says_the_channel_does_not_exist(store: Store, recorded):
 
 def test_a_gauge_reading_promotes_the_model_to_measured(store: Store, recorded):
     lap_id = store.list_laps(recorded["session_id"])[-1]["id"]
-    store.set_lap_wear(lap_id, 0.4, 0.3)
+    store.set_lap_wear(lap_id, 0.4, 0.4, 0.3, 0.3)
     wear = build_session_export(store, recorded["session_id"])["wear"]
     assert wear["modelConfidence"] == "measured"
-    assert wear["byDriverGauge"][0]["front"] == 0.4
+    assert wear["byDriverGauge"][0]["fl"] == 0.4
+    assert wear["byDriverGauge"][0]["rr"] == 0.3
     assert wear["modelledStintLaps"] == 8
 
 

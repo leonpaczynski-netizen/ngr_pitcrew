@@ -723,3 +723,255 @@ class StrikeRow(QFrame):
             painter.drawLine(CompoundBand.WIDTH + 12, middle,
                              self.width() - self._strike_right, middle)
         painter.end()
+
+
+# ------------------------------------------------------------- the tyre gauge
+#
+# GT7 draws four tyres and fills each one as it wears. Reading a figure off
+# that picture and typing `0.55` into a spin box is a transcription step, and
+# transcription is where numbers get transposed - which is why this is a
+# picture he drags to match rather than a number he retypes.
+#
+# The fill is graded rather than flat red because GT7's own indicator is
+# graded, and because the grades are already in the app's model: the flat
+# phase to 50%, the progressive phase to 90%, then the cliff (CLAUDE.md §5.1).
+# So dragging past the amber band tells him he is into the phase where balance
+# shifts before the stopwatch does, without the widget having to say so.
+#
+# Colour is never the only channel here either. Every gauge carries its corner
+# and its percentage as text, so nothing depends on separating the hues.
+
+PHASE_FLAT_UNTIL = 0.50
+PHASE_CLIFF_FROM = 0.90
+
+
+def wear_colour(fraction: float) -> QColor:
+    """Fill colour for a fraction consumed, on the model's own phase bands."""
+    if fraction < PHASE_FLAT_UNTIL:
+        return QColor("#3FA34D")        # flat phase - losses in tenths
+    if fraction <= PHASE_CLIFF_FROM:
+        return QColor(theme.WARNING)    # progressive - balance shifts first
+    return QColor(theme.DANGER)         # cliff - undriveable, not merely slow
+
+
+def wear_phase(fraction: float) -> str:
+    if fraction < PHASE_FLAT_UNTIL:
+        return "flat"
+    if fraction <= PHASE_CLIFF_FROM:
+        return "linear"
+    return "cliff"
+
+
+class TyreGauge(QWidget):
+    """One corner of the in-game tyre gauge, dragged to match what GT7 shows.
+
+    Empty is *unread*, not zero - a zero would mean a fresh tyre and would be
+    believed. Clearing is therefore a first-class action (Delete), not
+    something achieved by dragging to the bottom.
+    """
+
+    changed = pyqtSignal()
+
+    WIDTH = 46
+    HEIGHT = 62
+    STEP = 0.05
+    PAGE_STEP = 0.25
+
+    def __init__(self, corner: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._corner = corner.lower()
+        self._fraction: float | None = None
+        self._dragging = False
+        self._limiting = False
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        # Reachable by keyboard, not only by drag: a load-cell brake does not
+        # help you here, and a mouse-only control fails anyone who cannot make
+        # a precise drag.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._label_font = theme.stencil_font(10, tracking=8.0)
+        self._value_font = theme.data_font(14, weight=QFont.Weight.Bold)
+        self._sync_tooltip()
+
+    # ------------------------------------------------------------------ value
+
+    def fraction(self) -> float | None:
+        return self._fraction
+
+    def setFraction(self, value: float | None) -> None:  # noqa: N802 - Qt naming
+        if value is not None:
+            value = round(max(0.0, min(1.0, value)), 2)
+        if value == self._fraction:
+            return
+        self._fraction = value
+        self._sync_tooltip()
+        self.update()
+        self.changed.emit()
+
+    def setLimiting(self, limiting: bool) -> None:  # noqa: N802 - Qt naming
+        """Mark this as the corner that ends the stint."""
+        if limiting != self._limiting:
+            self._limiting = limiting
+            self.update()
+
+    def _sync_tooltip(self) -> None:
+        name = self._corner.upper()
+        if self._fraction is None:
+            text = (f"{name}: not read. Drag down to match the in-game gauge, "
+                    f"or use the arrow keys.")
+        else:
+            text = (f"{name}: {self._fraction:.0%} consumed "
+                    f"({wear_phase(self._fraction)} phase). "
+                    f"Delete clears it back to unread.")
+        self.setToolTip(text)
+        self.setAccessibleName(f"{name} tyre wear")
+        self.setAccessibleDescription(text)
+
+    # ----------------------------------------------------------------- events
+
+    def _fraction_at(self, y: float) -> float:
+        return max(0.0, min(1.0, y / max(1, self.height())))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._dragging = True
+        self.setFraction(self._fraction_at(event.position().y()))
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._dragging:
+            self.setFraction(self._fraction_at(event.position().y()))
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._dragging = False
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        key = event.key()
+        current = self._fraction if self._fraction is not None else 0.0
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Right):
+            self.setFraction(current + self.STEP)
+        elif key in (Qt.Key.Key_Down, Qt.Key.Key_Left):
+            self.setFraction(current - self.STEP)
+        elif key == Qt.Key.Key_PageUp:
+            self.setFraction(current + self.PAGE_STEP)
+        elif key == Qt.Key.Key_PageDown:
+            self.setFraction(current - self.PAGE_STEP)
+        elif key == Qt.Key.Key_Home:
+            self.setFraction(0.0)
+        elif key == Qt.Key.Key_End:
+            self.setFraction(1.0)
+        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.setFraction(None)
+        else:
+            super().keyPressEvent(event)
+
+    # ------------------------------------------------------------------ paint
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        body = QRectF(1.5, 1.5, self.width() - 3, self.height() - 3)
+
+        # The unworn tyre. Pale, so the fill reads as rubber going away.
+        painter.setBrush(QColor(theme.STENCIL if self._fraction is not None
+                                else theme.SHOULDER_HI))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(body, 4, 4)
+
+        if self._fraction:
+            # Fills downward from the top, the direction of the drag, so the
+            # gesture and the result point the same way.
+            worn = QRectF(body.x(), body.y(),
+                          body.width(), body.height() * self._fraction)
+            painter.setBrush(wear_colour(self._fraction))
+            painter.drawRoundedRect(worn, 4, 4)
+
+        border = (QColor(theme.CRAYON) if self._limiting else
+                  QColor(theme.TREAD_LIGHT if self.hasFocus() else theme.TREAD))
+        painter.setPen(QPen(border, 2.0 if self._limiting or self.hasFocus() else 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(body, 4, 4)
+
+        # Corner name, always on the dark ground at the foot of the gauge so
+        # it never lands on the fill boundary.
+        painter.setFont(self._label_font)
+        painter.setPen(QPen(QColor(theme.RUBBER if self._fraction is not None
+                                   else theme.STENCIL_DIM)))
+        painter.drawText(self.rect().adjusted(0, 0, 0, -4),
+                         Qt.AlignmentFlag.AlignBottom
+                         | Qt.AlignmentFlag.AlignHCenter,
+                         self._corner.upper())
+
+        painter.setFont(self._value_font)
+        if self._fraction is None:
+            painter.setPen(QPen(QColor(theme.STENCIL_DIM)))
+            text = "—"
+        else:
+            # Ink chosen against whichever band the number is sitting on, not
+            # against the widget as a whole.
+            painter.setPen(QPen(QColor(theme.RUBBER)))
+            text = f"{self._fraction:.0%}"
+        painter.drawText(self.rect().adjusted(0, 4, 0, 0),
+                         Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+                         text)
+        painter.end()
+
+
+class TyreGaugeSet(QWidget):
+    """Four corners, laid out as the car — front axle on top.
+
+    Only shown where it is worth reading: the last lap of a stint. A gauge on
+    every lap would be four more controls per row asking to be filled in, and
+    a wear reading taken mid-stint tells the model nothing the end-of-stint
+    one does not.
+    """
+
+    changed = pyqtSignal()
+
+    CORNERS = ("fl", "fr", "rl", "rr")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._gauges: dict[str, TyreGauge] = {}
+
+        grid = QVBoxLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(4)
+        for axle in (("fl", "fr"), ("rl", "rr")):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            for corner in axle:
+                gauge = TyreGauge(corner)
+                gauge.changed.connect(self._on_changed)
+                self._gauges[corner] = gauge
+                row.addWidget(gauge)
+            grid.addLayout(row)
+
+    def _on_changed(self) -> None:
+        self._mark_limiting()
+        self.changed.emit()
+
+    def _mark_limiting(self) -> None:
+        """Outline the corner that ends the stint, which is the worst one."""
+        read = {corner: gauge.fraction()
+                for corner, gauge in self._gauges.items()
+                if gauge.fraction() is not None}
+        worst = max(read, key=read.__getitem__) if read else None
+        # Only worth pointing at when there is something to choose between.
+        if worst is not None and len(set(read.values())) == 1:
+            worst = None
+        for corner, gauge in self._gauges.items():
+            gauge.setLimiting(corner == worst)
+
+    def values(self) -> dict[str, float | None]:
+        return {corner: gauge.fraction()
+                for corner, gauge in self._gauges.items()}
+
+    def setValues(self, values: dict[str, float | None]) -> None:  # noqa: N802
+        for corner, gauge in self._gauges.items():
+            gauge.blockSignals(True)
+            gauge.setFraction(values.get(corner))
+            gauge.blockSignals(False)
+        self._mark_limiting()
+        self.update()
