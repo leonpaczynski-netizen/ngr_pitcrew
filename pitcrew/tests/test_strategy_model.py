@@ -8,6 +8,7 @@ from pitcrew.strategy.model import (
     CONSTRAINT_TYRE,
     CONSTRAINT_UNKNOWN,
     FUEL_MAP_CONSUMPTION,
+    FUEL_MARGIN_LAPS,
     FUEL_MAP_POWER,
     PHASE_CLIFF_FROM,
     PHASE_FLAT_UNTIL,
@@ -85,7 +86,10 @@ def test_unknown_wear_gives_no_tyre_limit():
 
 
 def test_fuel_limit_from_capacity():
-    assert fuel_limited_laps(100.0, 3.4) == 29
+    # 29 until the audit: that counted the reserve lap as runnable, so a
+    # stint sized to the limit was then fuelled to 30 laps' worth and clamped
+    # to the tank. 28 laps burns 95.2 L and leaves the 3.4 L reserve intact.
+    assert fuel_limited_laps(100.0, 3.4) == 28
 
 
 def test_zero_fuel_capacity_does_not_divide():
@@ -160,9 +164,20 @@ def test_fuel_is_taken_to_the_diamond_plus_a_lap():
     assert plan.stints[0].fuel_l == pytest.approx((10 + 1) * 3.4)
 
 
-def test_fuel_never_exceeds_the_tank():
+def test_a_stint_that_needs_more_than_the_tank_is_infeasible_not_clamped():
+    """This test used to assert `fuel_l == 100.0` — the clamp itself.
+
+    Its name promised the tank was never exceeded; what it actually locked in
+    was the app quietly pretending 60 laps fit in one tank. That clamp is what
+    made an impossible plan the *cheapest* one, because the stint was then
+    costed as carrying 100 L rather than the 207 L it needed, and paid no stop
+    for the difference. The requirement is now reported honestly and the plan
+    is rejected before it can be ranked.
+    """
     plan = build_plan(inputs(race_laps=60, fuel_capacity_l=100.0), stops=0)
-    assert plan.stints[0].fuel_l == 100.0
+    assert plan.stints[0].fuel_l == pytest.approx((60 + 1) * 3.4)
+    assert plan.feasible is False
+    assert any("the tank holds" in note for note in plan.notes)
 
 
 def test_a_plan_that_cannot_be_run_says_so_rather_than_vanishing():
@@ -293,3 +308,112 @@ def test_an_untagged_session_falls_back_to_the_allowed_list():
     plan = build_plan(inputs(available_compounds=("RH", "RM"),
                              evidence_compound=None), stops=0)
     assert plan.stints[0].compound == "RH"
+
+
+# --------------------------------------------- feasibility is a filter (A1/B1)
+#
+# Regression for the audit's A1 and B1. Ranking used to fall back to the
+# infeasible set when nothing fit (`runnable or plans`), and ranking is
+# monotonically wrong there: the tank clamp made the most impossible plan the
+# cheapest, so a car that could not finish won on paper and the card read
+# "Fastest". These assert the plan is ABSENT, never merely last.
+
+def _fuel_starved() -> RaceInputs:
+    """100 laps at 10 L/lap on a 100 L tank: nine runnable laps a stint."""
+    return inputs(race_laps=100, fuel_per_lap_l=10.0, fuel_capacity_l=100.0,
+                  wear_per_lap=None, available_compounds=())
+
+
+def test_nothing_runnable_is_refused_not_ranked():
+    with pytest.raises(StrategyImpossible) as raised:
+        recommend(_fuel_starved())
+    assert "No plan is runnable" in str(raised.value)
+
+
+def test_the_refusal_says_what_ran_out():
+    """A bare "no plan fits" is not actionable; the binding note is."""
+    with pytest.raises(StrategyImpossible) as raised:
+        recommend(_fuel_starved())
+    message = str(raised.value)
+    assert "fuel-limited" in message
+    assert "shorten the race" in message
+
+
+def test_the_impossible_zero_stop_plan_is_absent_from_the_output():
+    """It used to *win*: clamped to a tankful, it paid no stop for the rest.
+
+    30 laps at 5 L/lap on a 100 L tank is 19 runnable laps a stint, so a
+    no-stop plan needs 155 L and cannot be offered at all.
+    """
+    plans = recommend(inputs(race_laps=30, fuel_per_lap_l=5.0,
+                             fuel_capacity_l=100.0, wear_per_lap=None,
+                             available_compounds=()))
+    assert plans, "one-stop and longer are runnable and must survive"
+    assert 0 not in [plan.stops for plan in plans]
+    assert all(plan.feasible for plan in plans)
+
+
+def test_feasibility_does_not_depend_on_the_wording_of_a_note():
+    """`_fits` string-matched the plan's own prose. Rewording disabled it."""
+    plan = build_plan(_fuel_starved(), stops=0)
+    assert plan.feasible is False
+    plan.notes = ["something a future edit reworded"]
+    assert plan.feasible is False
+
+
+# ------------------------------------------------- the fuel-floor property
+#
+# The class, not the instance: whatever the optimiser returns, no stint may
+# ask for more than the tank holds, and none may finish without the reserve
+# lap still in it.
+
+FUEL_CASES = [
+    (20, 3.4, 100.0), (30, 5.0, 100.0), (50, 6.2, 100.0),
+    (12, 12.0, 100.0), (40, 2.1, 60.0), (25, 4.0, 45.0),
+]
+
+
+@pytest.mark.parametrize(("laps", "burn", "capacity"), FUEL_CASES)
+def test_no_emitted_plan_ever_exceeds_the_tank(laps, burn, capacity):
+    try:
+        plans = recommend(inputs(race_laps=laps, fuel_per_lap_l=burn,
+                                 fuel_capacity_l=capacity, wear_per_lap=None,
+                                 available_compounds=()))
+    except StrategyImpossible:
+        return          # refusing is the other legal answer
+    for plan in plans:
+        for stint in plan.stints:
+            assert stint.fuel_l is not None
+            assert stint.fuel_l <= capacity + 1e-9, (
+                f"{stint.laps} laps asks for {stint.fuel_l:.1f} L "
+                f"from a {capacity:.0f} L tank")
+
+
+@pytest.mark.parametrize(("laps", "burn", "capacity"), FUEL_CASES)
+def test_no_emitted_plan_ends_a_stint_below_the_reserve(laps, burn, capacity):
+    try:
+        plans = recommend(inputs(race_laps=laps, fuel_per_lap_l=burn,
+                                 fuel_capacity_l=capacity, wear_per_lap=None,
+                                 available_compounds=()))
+    except StrategyImpossible:
+        return
+    reserve = FUEL_MARGIN_LAPS * burn
+    for plan in plans:
+        for stint in plan.stints:
+            left = stint.fuel_l - stint.laps * burn
+            assert left >= reserve - 1e-9, (
+                f"{stint.laps} laps on {stint.fuel_l:.1f} L leaves "
+                f"{left:.1f} L, under the {reserve:.1f} L reserve")
+
+
+def test_the_fuel_limit_reserves_the_margin_lap():
+    """A 10-lap tank does not run a 10-lap stint: the reserve is the 11th."""
+    assert fuel_limited_laps(100.0, 10.0) == 9
+    assert fuel_limited_laps(100.0, 3.4) == 28
+
+
+def test_a_tank_too_small_for_the_reserve_is_zero_not_one():
+    """Zero is a known limit nothing satisfies. None would mean unknown."""
+    assert fuel_limited_laps(5.0, 4.0) == 0
+    assert fuel_limited_laps(0.0, 4.0) is None      # electric, not missing
+    assert fuel_limited_laps(100.0, None) is None

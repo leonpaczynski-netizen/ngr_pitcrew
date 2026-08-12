@@ -52,11 +52,13 @@ class RaceCoordinator:
 
     def __init__(self, plan: dict | None = None,
                  fuel_per_lap_l: float | None = None,
-                 wear_per_lap: float | None = None) -> None:
+                 wear_per_lap: float | None = None,
+                 fuel_capacity_l: float | None = None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
         self.state = RaceState(
-            fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap)
+            fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap,
+            fuel_capacity_l=fuel_capacity_l)
         self.refusal: str | None = None
         self.planned_fuel_per_lap_l = fuel_per_lap_l
         self._burns: list[float] = []

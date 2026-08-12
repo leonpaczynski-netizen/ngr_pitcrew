@@ -1010,7 +1010,8 @@ class PitCrewController(QObject):
         self.race = RaceCoordinator(
             plan,
             fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
-            wear_per_lap=inputs.wear_per_lap if inputs else None)
+            wear_per_lap=inputs.wear_per_lap if inputs else None,
+            fuel_capacity_l=inputs.fuel_capacity_l if inputs else None)
 
         actual = PlanContext(
             car=event["car_name"] or "", track=event["track"] or "",

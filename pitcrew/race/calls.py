@@ -79,6 +79,9 @@ class RaceState:
     laps_total: int | None = None
     fuel_l: float | None = None
     fuel_per_lap_l: float | None = None
+    # What the tank actually holds. Without it the engineer will ask for a
+    # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
+    fuel_capacity_l: float | None = None
     position: int | None = None
     in_pit: bool = False
     finished: bool = False
@@ -197,13 +200,26 @@ def _box_soon(state: RaceState) -> Call | None:
 
 
 def _fuel_instruction(state: RaceState) -> str:
-    """How much to take, in litres, to the diamond plus a lap."""
+    """How much to take, in litres, to the diamond plus a lap.
+
+    Clamped to the tank, because an instruction the car cannot execute is
+    worse than no instruction: the driver acts on it, finds the fill stops
+    short, and has to work out the shortfall himself at pit-exit speed. When
+    the clamp binds, the shortfall is the call - "fill it and you are still
+    two laps short" is something he can plan around; "fuel to 510 litres" is
+    not.
+    """
     if not state.fuel_per_lap_l or state.laps_remaining() is None:
         return ""
     after_stop = state.laps_remaining()
     if state.stint_ends_on_lap is not None:
         after_stop = (state.laps_total or 0) - state.stint_ends_on_lap
     litres = (after_stop + 1) * state.fuel_per_lap_l
+
+    capacity = state.fuel_capacity_l
+    if capacity and litres > capacity:
+        short = (litres - capacity) / state.fuel_per_lap_l
+        return f"Fuel to full. Still {short:.1f} laps short."
     return f"Fuel to {litres:.0f} litres."
 
 

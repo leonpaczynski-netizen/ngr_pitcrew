@@ -16,6 +16,7 @@ from pitcrew.race.calls import (
     TYRE,
     Call,
     RaceState,
+    _fuel_instruction,
     clear_stint,
     next_call,
 )
@@ -412,3 +413,62 @@ def test_accepting_an_extra_stop_adds_one():
     race.adopt((7, 7))
     assert race.stops_planned() == 1
     assert race.state.stint_ends_on_lap == 13
+
+
+# --------------------------------------------- the fuel figure is executable
+#
+# Regression for the audit's D1. `_fuel_instruction` had no tank clamp and
+# `RaceState` carried no capacity, so the engineer would ask for a fill the
+# car physically cannot take - spoken at HIGH confidence, inside a box-now
+# call, under a helmet.
+
+def test_the_fuel_call_is_clamped_to_the_tank():
+    state = RaceState(lap=5, laps_total=60, fuel_l=40.0, fuel_per_lap_l=10.0,
+                      stint_ends_on_lap=10, fuel_capacity_l=100.0)
+    said = _fuel_instruction(state)
+    assert "510" not in said                      # what it used to say
+    assert said == "Fuel to full. Still 41.0 laps short."
+
+
+def test_a_normal_fill_is_still_a_number_of_litres():
+    state = RaceState(lap=5, laps_total=20, fuel_l=40.0, fuel_per_lap_l=5.0,
+                      stint_ends_on_lap=10, fuel_capacity_l=100.0)
+    assert _fuel_instruction(state) == "Fuel to 55 litres."
+
+
+def test_the_shortfall_is_the_call_when_the_clamp_binds():
+    """"Fill it and you are still two laps short" is actionable.
+
+    "Fuel to 510 litres" is not: the driver acts on it, finds the fill stops
+    early, and has to work out the shortfall himself at pit-exit speed.
+    """
+    state = RaceState(lap=1, laps_total=30, fuel_l=50.0, fuel_per_lap_l=6.0,
+                      stint_ends_on_lap=5, fuel_capacity_l=100.0)
+    said = _fuel_instruction(state)
+    assert "short" in said
+    # 25 laps after the stop, +1 reserve = 156 L wanted from a 100 L tank,
+    # so 56 L over, which is 9.3 laps at 6 L a lap.
+    assert "9.3 laps short" in said
+
+
+def test_an_unknown_capacity_does_not_invent_a_clamp():
+    """No capacity is not a 0 L tank. The old behaviour stands."""
+    state = RaceState(lap=5, laps_total=60, fuel_l=40.0, fuel_per_lap_l=10.0,
+                      stint_ends_on_lap=10, fuel_capacity_l=None)
+    assert _fuel_instruction(state) == "Fuel to 510 litres."
+
+
+def test_no_box_now_call_ever_asks_for_more_than_the_tank():
+    """The class, not the instance, across a spread of race shapes."""
+    for laps_total, burn, capacity in ((60, 10.0, 100.0), (30, 6.0, 100.0),
+                                       (45, 3.0, 60.0), (12, 9.0, 45.0)):
+        for ends_on in range(1, laps_total):
+            state = RaceState(lap=ends_on, laps_total=laps_total,
+                              fuel_l=10.0, fuel_per_lap_l=burn,
+                              stint_ends_on_lap=ends_on,
+                              fuel_capacity_l=capacity)
+            said = _fuel_instruction(state)
+            if "litres" not in said:
+                continue
+            asked = float(said.split("Fuel to ")[1].split(" litres")[0])
+            assert asked <= capacity, f"{said} into a {capacity:.0f} L tank"

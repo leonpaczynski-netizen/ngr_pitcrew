@@ -202,6 +202,11 @@ class Plan:
     binding_constraint: str
     notes: list[str] = field(default_factory=list)
     delta_s: float = 0.0
+    # Whether every stint is inside what its own compound and tank can run.
+    # Set in `build_plan` from the limits themselves. This used to be derived
+    # by string-matching the plan's own notes, so rewording a sentence
+    # silently disabled the only feasibility check in the system.
+    feasible: bool = True
     # The compound profiles this plan was costed with, so a plan can be
     # audited afterwards against the evidence that produced it.
     profiles: dict[str, CompoundProfile] = field(default_factory=dict)
@@ -317,10 +322,23 @@ def tyre_limited_laps(wear_per_lap: float | None) -> int | None:
 
 def fuel_limited_laps(fuel_capacity_l: float | None,
                       fuel_per_lap_l: float | None) -> int | None:
+    """Laps runnable on one tank, with the reserve lap still in it.
+
+    The reserve is subtracted here rather than checked afterwards, because
+    `build_plan` fuels every stint to `laps + FUEL_MARGIN_LAPS`: a limit of
+    `capacity / burn` says a 10-lap stint fits a 10-lap tank, and then the
+    fuelling policy asks for 11 laps' worth and gets clamped to the tank. The
+    plan reads as runnable and finishes the stint on fumes with no reserve at
+    all - which is the one outcome §5.4's margin exists to prevent.
+
+    Returns 0, not None, when the tank cannot even carry the reserve. Zero is
+    a known limit that nothing satisfies; None means the limit is unknown, and
+    the two must not collapse into each other.
+    """
     if not fuel_capacity_l or not fuel_per_lap_l or fuel_per_lap_l <= 0:
         return None
     # Guard the divide: 0 L is a real capacity (electric), not a missing value.
-    return max(1, int(fuel_capacity_l / fuel_per_lap_l))
+    return max(0, int(fuel_capacity_l / fuel_per_lap_l - FUEL_MARGIN_LAPS))
 
 
 def max_stint_laps(inputs: RaceInputs) -> tuple[int | None, str]:
@@ -470,13 +488,22 @@ def build_plan(inputs: RaceInputs, stops: int,
     stints: list[Stint] = []
     total = 0.0
     start_lap = 1
+    feasible = not over
     for index, laps in enumerate(stint_lengths):
         fuel_needed = None
         if inputs.fuel_per_lap_l:
-            # To the diamond, plus one lap of margin.
+            # To the diamond, plus one lap of margin. Deliberately NOT clamped
+            # to the tank: clamping made an impossible plan look cheap, because
+            # the stint was then costed as carrying a tankful rather than the
+            # 1010 L it actually needed, and paid no stop for the difference.
+            # The requirement is reported honestly and the plan is rejected.
             fuel_needed = (laps + FUEL_MARGIN_LAPS) * inputs.fuel_per_lap_l
-            if inputs.fuel_capacity_l:
-                fuel_needed = min(fuel_needed, inputs.fuel_capacity_l)
+            if inputs.fuel_capacity_l and fuel_needed > inputs.fuel_capacity_l:
+                feasible = False
+                notes.append(
+                    f"Stint {index + 1} needs {fuel_needed:.0f} L including "
+                    f"the reserve lap, and the tank holds "
+                    f"{inputs.fuel_capacity_l:.0f} L.")
 
         stints.append(Stint(laps=laps, compound=sequence[index],
                             fuel_l=fuel_needed, start_lap=start_lap))
@@ -523,7 +550,7 @@ def build_plan(inputs: RaceInputs, stops: int,
             "Read the in-game gauge on a practice lap to fix this.")
 
     plan = Plan(stints=stints, total_time_s=total,
-                binding_constraint=constraint, notes=notes)
+                binding_constraint=constraint, notes=notes, feasible=feasible)
     plan.profiles = {profile.code: profile for profile in profiles}
     return plan
 
@@ -569,12 +596,19 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
     but lasts long enough to delete a stop is compared against the softer one
     on total race time - which is the only comparison that decides anything.
 
-    Plans whose stints exceed what is runnable are dropped when any runnable
-    plan exists - there is no point offering a stop count the tyres cannot
-    reach. When nothing is runnable they are returned anyway, each carrying
-    the note saying why, because "this race cannot be done inside the tyre
-    life you measured" is a finding the driver needs rather than an empty
-    screen.
+    Plans whose stints exceed what is runnable are **never returned**, whether
+    or not anything else fits. Feasibility is a filter applied before ranking,
+    not a tie-break inside it.
+
+    This used to be `runnable or plans`: when nothing fit, the infeasible set
+    was ranked as though it were fine. That was worse than it sounds, because
+    ranking is monotonically wrong in the infeasible region - the tank clamp
+    made the most impossible plan the cheapest one, so a car that could not
+    finish the race won it on paper and the card read "Fastest".
+
+    "This race cannot be done inside the tyre life you measured" is still a
+    finding the driver needs, so it is raised as `StrategyImpossible` carrying
+    the reason. The caller shows that as a refusal, which is what it is.
     """
     if inputs.race_laps < 1:
         raise StrategyImpossible("a race needs at least one lap")
@@ -597,9 +631,11 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
             "no plan satisfies the regulations - check mandatory stops and "
             "required compounds")
 
-    runnable = [plan for plan in plans if _fits(plan)]
-    ordered = sorted(runnable or plans,
-                     key=lambda p: (p.total_time_s, p.stops))
+    runnable = [plan for plan in plans if plan.feasible]
+    if not runnable:
+        raise StrategyImpossible(_why_nothing_fits(plans))
+
+    ordered = sorted(runnable, key=lambda p: (p.total_time_s, p.stops))
     best = ordered[0].total_time_s
     for plan in ordered:
         plan.delta_s = plan.total_time_s - best
@@ -710,10 +746,20 @@ def mean_deficit(plan: Plan, inputs: RaceInputs) -> float:
     return weighted / total_laps
 
 
-def _fits(plan: Plan) -> bool:
-    """Whether every stint is inside what its own compound can run."""
-    return not any(note.startswith("Stint ") and "runnable on" in note
-                   for note in plan.notes)
+def _why_nothing_fits(plans: list[Plan]) -> str:
+    """The reason no candidate is runnable, taken from the closest one.
+
+    "No plan fits" on its own is not actionable. The plan that came nearest -
+    most stops, so shortest stints - carries the note that says what ran out,
+    and that note is the finding: the race is longer than the tyre life or the
+    tank measured, and one of those numbers has to change.
+    """
+    nearest = max(plans, key=lambda p: p.stops)
+    reasons = [note for note in nearest.notes
+               if note.startswith("Stint ")] or nearest.notes
+    detail = " ".join(reasons[:2])
+    return (f"No plan is runnable, even at {nearest.stops} stops. {detail} "
+            f"Re-check the wear rate and the fuel figure, or shorten the race.")
 
 
 def _compound_sequence(inputs: RaceInputs, stints: int) -> list[str] | None:
