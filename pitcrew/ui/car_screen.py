@@ -140,8 +140,11 @@ class CarScreen(QWidget):
 
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
+        # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
+        # content overflowing below 1600 wide - it only stopped it
+        # being reachable.
         scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         inner = QWidget()
         rack = QVBoxLayout(inner)
@@ -158,11 +161,28 @@ class CarScreen(QWidget):
         column.addWidget(scroller, 1)
         return holder
 
+    def _label_column_width(self) -> int:
+        """One width for the name column across all four plates.
+
+        Each plate laid out its own grid, so each sized column 0 to its own
+        longest label - "Ride height" in one, "Damper compression" in the next
+        - and the Min and Max columns stepped about 8px further right down the
+        screen. They are one table read as four; measure them once.
+        """
+        widest = 0
+        probe = BodyLabel("", size=14, wrap=False)
+        for key in (k for group in GROUPS for k in keys_in_group(group)
+                    if k.key in RANGE_KEY_NAMES):
+            label = catalogs.range_label(key.key) or key.label
+            widest = max(widest, probe.fontMetrics().horizontalAdvance(label))
+        return widest + theme.GAP
+
     def _group_plate(self, group: str, keys, per_car: set) -> Plate:
         plate = Plate(group)
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.GAP)
         grid.setVerticalSpacing(theme.GAP_TIGHT)
+        grid.setColumnMinimumWidth(0, self._label_column_width())
 
         grid.addWidget(StencilLabel("", size=11), 0, 0)
         grid.addWidget(StencilLabel("Min", size=11, tracking=12.0), 0, 1)
@@ -186,7 +206,9 @@ class CarScreen(QWidget):
             grid.addWidget(StencilLabel(unit, size=11, colour=theme.STENCIL_DIM,
                                         tracking=8.0), row, 3)
 
-        grid.setColumnStretch(0, 4)
+        # Column 0 is pinned to one measured width, so the Min and Max
+        # columns start at the same x on every plate.
+        grid.setColumnStretch(0, 0)
         grid.setColumnStretch(1, 2)
         grid.setColumnStretch(2, 2)
         plate.body.addLayout(grid)
@@ -204,6 +226,10 @@ class CarScreen(QWidget):
         editor.setSpecialValueText("—")
         editor.setValue(EMPTY)
         editor.setMinimumHeight(30)
+        # A min/max bound is three or four characters. Left to
+        # itself the box asks for 143px and four of them set the
+        # width of the whole screen.
+        editor.setMinimumWidth(64)
         editor.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         from pitcrew.ui.widgets import block_wheel
         block_wheel(editor)

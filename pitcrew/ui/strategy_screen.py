@@ -192,8 +192,11 @@ class StrategyScreen(QWidget):
         plate = Plate("Plans")
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
+        # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
+        # content overflowing below 1600 wide - it only stopped it
+        # being reachable.
         scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self.plan_holder = QWidget()
         self.plan_layout = QVBoxLayout(self.plan_holder)

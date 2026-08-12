@@ -123,8 +123,11 @@ class RaceScreen(QWidget):
         plate = Plate("Every call")
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
+        # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
+        # content overflowing below 1600 wide - it only stopped it
+        # being reachable.
         scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self.log = QWidget()
         self.log_layout = QVBoxLayout(self.log)

@@ -289,6 +289,11 @@ class PracticeScreen(QWidget):
 
         self.scroller = QScrollArea()
         self.scroller.setWidgetResizable(True)
+        # AlwaysOff here on purpose, where the other panes are AsNeeded: the
+        # column heads sit outside this scroll area, so a horizontal bar would
+        # slide the rows out from under their own headings. The rack's columns
+        # are fixed width and set the window's own minimum, so it can never be
+        # given less than it needs anyway.
         self.scroller.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 

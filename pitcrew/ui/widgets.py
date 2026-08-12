@@ -202,12 +202,13 @@ class Plate(QFrame):
 
     LABEL_INSET = 16
     LABEL_PAD = 8
-    TOP_RESERVE = 9    # space above the drawn border for the label to sit in
+    TOP_RESERVE = 11   # space above the drawn border for the label to sit in
 
     def __init__(self, title: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._title = title.upper()
-        self._label_font = theme.stencil_font(theme.LABEL_PX, tracking=14.0)
+        self._label_font = theme.stencil_font(theme.PLATE_TITLE_PX,
+                                              tracking=14.0)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         top = self.TOP_RESERVE + 18 if title else 18
@@ -245,7 +246,7 @@ class Plate(QFrame):
             int(left - self.LABEL_PAD), top - 1,
             int(width + self.LABEL_PAD * 2), 3,
             QColor(theme.RUBBER))
-        painter.setPen(QPen(QColor(theme.STENCIL_DIM)))
+        painter.setPen(QPen(QColor(theme.STENCIL)))
         painter.drawText(int(left), int(baseline), self._title)
         painter.end()
 
@@ -456,6 +457,38 @@ class SpecLine(QWidget):
         self._row.addStretch(1)
 
 
+class HintLabel(BodyLabel):
+    """One line of guidance that shrinks instead of pushing the pane wider.
+
+    Hints must not wrap: a wrapped hint reports a one-line height at its size
+    hint and then overruns the field below it once the grid hands it a
+    narrower column. But a non-wrapping label demands its full text width
+    forever, and with the scroll areas set to never show a horizontal bar,
+    that demand turned into content nobody could reach - Event lost 96px and
+    the Race Engineer 107px at 1280x800, with no bar to scroll to them.
+
+    So it keeps one line and gives up characters instead of space. The whole
+    hint stays available as a tooltip, because an elided hint that cannot be
+    read in full is only half a fix.
+    """
+
+    def __init__(self, text: str, **kwargs) -> None:
+        kwargs.setdefault("size", 12)
+        kwargs.setdefault("colour", theme.STENCIL_DIM)
+        super().__init__(text, wrap=False, **kwargs)
+        self._full = text
+        self.setToolTip(text)
+        self.setMinimumHeight(self.fontMetrics().height() + 4)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored,
+                           QSizePolicy.Policy.Fixed)
+
+    def resizeEvent(self, event) -> None:          # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        metrics = self.fontMetrics()
+        self.setText(metrics.elidedText(self._full, Qt.TextElideMode.ElideRight,
+                                        max(0, self.width())))
+
+
 class Field(QWidget):
     """A labelled input. The label is stencilled; what you type is crayon."""
 
@@ -502,16 +535,8 @@ class Field(QWidget):
         column.addLayout(row)
 
         if hint:
-            # Not wrapped: a hint that wraps reports a one-line height at its
-            # size hint and then overruns the field below it once the grid
-            # gives it a narrower column. Keep hints to one short line.
-            note = BodyLabel(hint, size=12, colour=theme.STENCIL_DIM,
-                             wrap=False)
-            note.setMinimumHeight(note.fontMetrics().height() + 4)
-            note.setSizePolicy(note.sizePolicy().horizontalPolicy(),
-                               QSizePolicy.Policy.Fixed)
             column.addSpacing(2)
-            column.addWidget(note)
+            column.addWidget(HintLabel(hint))
 
         # Nothing in a field stretches vertically: a grid row taller than this
         # one leaves space below rather than smearing it between the rows.

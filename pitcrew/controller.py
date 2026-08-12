@@ -199,6 +199,7 @@ class PitCrewController(QObject):
         self.bridge.session_event.connect(self._on_race_event)
 
         self.event_screen.saved.connect(self._on_event_saved)
+        self.event_screen.discarded.connect(self.discard_event_edits)
         self.event_screen.catalog_extended.connect(
             self._on_catalog_extended)
         self.practice.recording_toggled.connect(self._on_recording_toggled)
@@ -345,6 +346,24 @@ class PitCrewController(QObject):
         self.store.set_state("active_event_id", event_id)
         self.event_screen.note(message)
         self.load_active_event()
+
+    def discard_event_edits(self) -> None:
+        """Put the form back to what is actually stored.
+
+        Unsaved edits are the only thing lost, and they are the only thing
+        this can lose: the store is not touched. An event that was never
+        saved has nothing to go back to, so the form is left alone and says
+        so rather than silently blanking work in progress.
+        """
+        event = self.active_event()
+        if event is None:
+            self.event_screen.note(
+                "Nothing saved yet, so there is nothing to go back to.",
+                warn=True)
+            return
+        self.load_active_event()
+        self.event_screen.note(f"Reloaded {event['name']} as stored. "
+                               f"Unsaved edits are gone.")
 
     def _save_sheet(self, data: dict) -> int:
         gears = []

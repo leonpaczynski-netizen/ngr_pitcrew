@@ -194,6 +194,11 @@ def data_font(size: int, *, weight: QFont.Weight = QFont.Weight.Normal) -> QFont
 
 TITLE_PX = 30
 HEADING_PX = 17
+# A plate's own label has to outrank the captions inside it. It was 12px in
+# STENCIL_DIM against 11px captions in the same colour - the container quieter
+# than its contents - which left a 23-key form with its only chunking device
+# as the least legible text on the screen.
+PLATE_TITLE_PX = 15
 LABEL_PX = 12
 BODY_PX = 15
 DATA_PX = 15

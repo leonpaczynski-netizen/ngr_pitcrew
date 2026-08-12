@@ -401,3 +401,79 @@ def test_the_empty_state_returns_when_a_rebuild_finds_nothing(qt_app):
     screen.show_plans([], [])
     assert screen.plan_empty.isVisibleTo(screen)
     assert screen.approve_button.isEnabled() is False
+
+
+# --------------------------------------------------- layout and dead controls
+
+def test_discard_is_connected_to_something(qt_app):
+    """It was constructed, laid out, and wired to nothing for the life of the
+    screen - the one control in the app that did not do what it said."""
+    from pitcrew.ui.event_screen import EventScreen
+    from pitcrew.ui.widgets import MarkButton
+
+    screen = EventScreen()
+    fired = []
+    screen.discarded.connect(lambda: fired.append(1))
+
+    discard = next(b for b in screen.findChildren(MarkButton)
+                   if b.text() == "DISCARD")
+    discard.click()
+    assert fired == [1]
+
+
+def test_no_pane_hides_content_it_cannot_scroll_to(qt_app):
+    """Hiding the bar did not stop the overflow, it stopped it being
+    reachable: Event lost 96px and the Race Engineer 107px at 1280x800 with
+    no way to get at them."""
+    from PyQt6.QtWidgets import QScrollArea
+
+    from pitcrew.ui.car_screen import CarScreen
+    from pitcrew.ui.engineer_screen import EngineerScreen
+    from pitcrew.ui.event_screen import EventScreen
+
+    for cls in (EventScreen, CarScreen, EngineerScreen):
+        screen = cls()
+        screen.resize(1170 - 178, 745)
+        screen.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        screen.show()
+        QApplication.processEvents()
+        for area in screen.findChildren(QScrollArea):
+            inner = area.widget()
+            if inner is None:
+                continue
+            over = inner.minimumSizeHint().width() - area.viewport().width()
+            if over <= 0:
+                continue
+            assert area.horizontalScrollBarPolicy() !=                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff, (
+                    f"{cls.__name__} hides {over}px nothing can reach")
+
+
+def test_the_car_screen_reads_as_one_table_not_four(qt_app):
+    """Each plate used to size its own name column, so Min and Max stepped
+    about 8px further right down the screen."""
+    from pitcrew.ui.car_screen import CarScreen
+
+    screen = CarScreen()
+    screen.resize(1600 - 178, 1000)
+    screen.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    screen.show()
+    QApplication.processEvents()
+
+    columns = {box.mapTo(screen, box.rect().topLeft()).x()
+               for box in screen._min_editors.values()}
+    assert len(columns) == 1, f"Min column starts at {sorted(columns)}"
+
+
+def test_a_plate_title_outranks_the_captions_inside_it(qt_app):
+    """The container was quieter than its contents: 12px STENCIL_DIM title
+    over 11px STENCIL_DIM captions, which left a 23-key form with its only
+    chunking device as the least legible text on it."""
+    assert theme.PLATE_TITLE_PX > 11
+    body = theme.STYLESHEET  # touched so a missing token fails loudly here
+    assert body
+
+    from pitcrew.ui.widgets import Plate
+
+    plate = Plate("Regulations")
+    # The title is painted, not a child widget, so the font is the assertion.
+    assert plate._label_font.pixelSize() == theme.PLATE_TITLE_PX

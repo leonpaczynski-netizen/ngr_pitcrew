@@ -119,9 +119,15 @@ Scale runs larger than a desk app's default (title 30px, body 15px, data
 ## Components
 
 - **`Plate`** — a bolted panel whose stencilled label is struck through its own
-  top edge. The drawn border starts 9px below the widget top so the label sits
+  top edge. The drawn border starts 11px below the widget top so the label sits
   centred on the rule with its full cap height inside; straddling y=0 clips the
-  letters.
+  letters. The title is 15px in `STENCIL` against 11px `STENCIL_DIM` captions
+  inside it: it was 12px in the same colour as its own contents, which made a
+  23-key form's only chunking device the least legible text on it.
+- **`EmptyState`** — what a plate says when it has nothing in it. Names the
+  absence, then what would fill it, inside the plate where the absence is.
+  Detached rather than destroyed on rebuild, so a build that finds nothing can
+  say so again.
 - **`CompoundBand`** — the painted ring. Setting a code wipes the new colour
   down over the old in 180ms `OutCubic`. This is the one authored motion in the
   build; there are no other transitions.
@@ -134,8 +140,12 @@ Scale runs larger than a desk app's default (title 30px, body 15px, data
   is the template every dashboard ships.
 - **`Field`** — stencilled label, crayon editor. Spinner arrows are removed and
   a 34px minimum height is pinned, because a field sharing a grid row with a
-  taller neighbour was collapsing to a sliver. Hints do not wrap — a wrapped
-  hint reports a one-line height and overruns the field below it.
+  taller neighbour was collapsing to a sliver. Hints still do not wrap — a
+  wrapped hint reports a one-line height and overruns the field below it — but
+  they now **elide** rather than demand their full width forever, with the
+  whole hint kept as a tooltip. Non-wrapping hints were setting an unbreakable
+  minimum for their whole column, and with the panes hiding their horizontal
+  bars that turned into content nothing could reach.
 - **`MarkButton`** — lettered on a plate. Primary is crayon-filled; the run
   ends on one. `set_primary()` re-applies the fill, so a row of buttons
   standing for a choice can show which one is selected — Qt's `setDown` does
@@ -184,11 +194,15 @@ anything is generated.
 **Reference** (`reference_screen.py`) — the knowledge base's own tables,
 verbatim and read-only. No controls, because there is nothing here to act on.
 
-Layout note, learned twice: a `Field`'s hint does not wrap and a `QComboBox`
-sizes to its widest item, so a long hint or a sentence-length option sets a
-wide minimum for its whole pane and silently clips every label in the column.
-Hints stay short, and combos holding sentences get
-`AdjustToMinimumContentsLengthWithIcon` with the popup sized separately.
+Layout note, learned three times: a `Field`'s hint does not wrap and a
+`QComboBox` sizes to its widest item, so either one sets a wide minimum for its
+whole pane and silently clips every label in the column. Hints elide, combos
+holding sentences get `AdjustToMinimumContentsLengthWithIcon` with the popup
+sized separately — and the panes show a horizontal bar **as needed** rather
+than never, because hiding the bar never stopped the overflow, only the
+reaching. Practice is the one exception, and says why: its column heads sit
+outside the scroll area, so a bar would slide the rows out from under their own
+headings.
 
 ## What this world refuses
 

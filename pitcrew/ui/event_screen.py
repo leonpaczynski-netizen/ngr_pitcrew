@@ -92,6 +92,7 @@ class EventScreen(QWidget):
     """Create or edit the event, and the sheet that will be in the car."""
 
     saved = pyqtSignal(dict)
+    discarded = pyqtSignal()
     catalog_extended = pyqtSignal(str, str)    # kind, name
 
     def __init__(self, tracks=None, car_groups=None,
@@ -158,8 +159,11 @@ class EventScreen(QWidget):
 
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
+        # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
+        # content overflowing below 1600 wide - it only stopped it
+        # being reachable.
         scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         inner = QWidget()
         stack = QVBoxLayout(inner)
@@ -348,8 +352,11 @@ class EventScreen(QWidget):
 
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
+        # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
+        # content overflowing below 1600 wide - it only stopped it
+        # being reachable.
         scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroller.setWidget(self._sheet_form())
         column.addWidget(scroller, 1)
         return holder
@@ -472,7 +479,14 @@ class EventScreen(QWidget):
 
         self.footer_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
         row.addWidget(self.footer_note, 1)
-        row.addWidget(MarkButton("Discard"))
+        # Wired, at last. This button was constructed, laid out and
+        # connected to nothing for the life of the screen - the one control
+        # in the app that did not do what it said.
+        discard = MarkButton("Discard")
+        discard.setToolTip(
+            "Throw away unsaved edits and reload the event as it is stored.")
+        discard.clicked.connect(self.discarded.emit)
+        row.addWidget(discard)
         save = MarkButton("Save event", primary=True)
         save.clicked.connect(self._on_save)
         row.addWidget(save)
