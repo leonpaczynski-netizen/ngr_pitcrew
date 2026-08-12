@@ -66,6 +66,11 @@ CONFIDENCE_ASSUMED = "assumed"
 CONFIDENCE_CONVERTED = "converted"
 
 METHOD_GAUGE_DELTA = "two gauge readings inside one run"
+METHOD_FRESH_DECLARED = (
+    "one gauge reading, over a set the driver declared fresh")
+METHOD_FRESH_OBSERVED = (
+    "one gauge reading, over a set whose opening temperatures are those of a "
+    "set as fitted")
 METHOD_FRESH_AT_RUN_START = (
     "one gauge reading, assumed fresh at the run's first lap")
 
@@ -89,6 +94,9 @@ class RunWear:
     start_reading: float | None
     start_reading_lap: int | None
     tyres_fresh: bool | None
+    # How that was established. The rate rests on it, so it travels with the
+    # rate rather than being left in `runs` for the reader to join up.
+    tyres_fresh_declared: bool | None
     degradation_ms_per_lap: float | None
     degradation_samples: int
 
@@ -118,7 +126,13 @@ class RunWear:
     def method(self) -> str | None:
         if self.rate is None:
             return None
-        return METHOD_GAUGE_DELTA if self._has_delta else METHOD_FRESH_AT_RUN_START
+        if self._has_delta:
+            return METHOD_GAUGE_DELTA
+        if self.tyres_fresh_declared is True:
+            return METHOD_FRESH_DECLARED
+        if self.tyres_fresh is True:
+            return METHOD_FRESH_OBSERVED
+        return METHOD_FRESH_AT_RUN_START
 
     @property
     def confidence(self) -> str | None:
@@ -188,6 +202,7 @@ def run_wear(laps: list[LapInput]) -> list[RunWear]:
             start_reading=first.worst_wear if first else None,
             start_reading_lap=first.lap_num if first else None,
             tyres_fresh=run.tyres_fresh,
+            tyres_fresh_declared=run.tyres_fresh_declared,
             degradation_ms_per_lap=_run_slope(run),
             degradation_samples=len(run.counted_laps),
         ))
@@ -279,23 +294,30 @@ def gauge_readings(laps: list[LapInput]) -> list[dict]:
 
 
 def pinned_gauge_note(laps: list[LapInput]) -> str | None:
-    """Where the worst corner has not moved between one reading and the next.
+    """Where the worst corner has not moved across laps **on one set**.
 
-    Either the gauge has saturated, or the two readings are of different sets,
-    or he read the same number twice. All three mean the same thing for the
-    model — no rate can be taken through it — and none of them is visible in a
-    column of numbers on its own.
+    Two readings of the same set, laps apart and identical, mean the gauge has
+    saturated or the second entry is a copy of the first. Either way no rate
+    can be taken through it.
+
+    **Within one run only.** Two equal readings on two different sets are two
+    sets that happened to come off equally worn, which is a coincidence and not
+    a finding - and reporting it as one is what run identity was built to stop.
+    Before `runs` existed the two cases were indistinguishable, which is
+    exactly what the 11 Aug session's 84% at lap 21 and 84% at lap 36 was.
     """
-    readings = [(lap.lap_num, lap.worst_wear) for lap in laps
-                if lap.worst_wear is not None]
-    for (first_lap, first), (second_lap, second) in zip(readings, readings[1:]):
-        if first != second or not first:
-            continue
-        return (f"The worst corner read {first:.0%} consumed at lap "
-                f"{first_lap} and the same at lap {second_lap}. A gauge that "
-                f"has not moved in {second_lap - first_lap} laps of running is "
-                f"either saturated or reading a set that was changed in "
-                f"between, so no rate is taken through it.")
+    for run in split_runs(laps):
+        readings = [(lap.lap_num, lap.worst_wear) for lap in run.laps
+                    if lap.worst_wear is not None]
+        for (first_lap, first), (second_lap, second) in zip(readings,
+                                                            readings[1:]):
+            if first != second or not first:
+                continue
+            return (f"The worst corner read {first:.0%} consumed at lap "
+                    f"{first_lap} and the same at lap {second_lap}, both on "
+                    f"run {run.id} and so on one set. A gauge that has not "
+                    f"moved in {second_lap - first_lap} laps of running has "
+                    f"saturated, so no rate is taken through it.")
     return None
 
 

@@ -966,9 +966,14 @@ class PitCrewController(QObject):
             lap_num=len(self.practice.rows()) + 1,
             lap_time_ms=lap.lap_time_ms,
             fuel_used=lap.fuel_used,
+            # The rack reads the tank to find where one run ends and the next
+            # begins, which is where a fresh set can be declared.
+            fuel_start=lap.fuel_start,
+            fuel_end=lap.fuel_end,
             compound=lap.compound,
             is_out_lap=lap.is_out_lap,
             is_pit_lap=lap.is_pit_lap,
+            session_id=self.session_id,
         ))
 
     def _on_lap_changed(self, lap_id: int) -> None:
@@ -977,6 +982,7 @@ class PitCrewController(QObject):
         if row is None:
             return
         self.store.set_lap_compound(lap_id, row.compound)
+        self.store.set_lap_tyres_fresh(lap_id, row.tyres_fresh)
         self.store.set_lap_wear(lap_id, row.wear_fl, row.wear_fr,
                                 row.wear_rl, row.wear_rr)
         self.store.exclude_lap(
@@ -996,6 +1002,10 @@ class PitCrewController(QObject):
                 lap_num=index,
                 lap_time_ms=row["lap_time_ms"],
                 fuel_used=row["fuel_used"],
+                fuel_start=row["fuel_start"],
+                fuel_end=row["fuel_end"],
+                tyres_fresh=(None if row["tyres_fresh"] is None
+                             else bool(row["tyres_fresh"])),
                 compound=row["compound"],
                 is_out_lap=bool(row["is_out_lap"]),
                 is_pit_lap=bool(row["is_pit_lap"]),

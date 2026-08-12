@@ -38,6 +38,35 @@ BOTTOMING_BAND_MM = 3.0
 # one-offs visible as one-offs.
 FLAG_MIN_SHARE = 0.25
 
+# --- fresh tyres -----------------------------------------------------------
+#
+# **GT7 fits every set at the same temperature.** Measured, not looked up: the
+# 11 Aug Monza captures contain six runs, and three of them - on Racing Soft,
+# Racing Medium and Racing Hard - open at exactly 70.0 C on all four corners
+# with the car stationary. The other three open a few degrees below, having sat
+# in the box cooling before he went out. Nothing published documents the
+# figure; the public accounts describe only the behaviour, that a fresh set is
+# cold and takes a couple of corners to come in.
+#
+# The discriminating signal is **not** the absolute value, which drifts down as
+# the car waits, but that all four corners read the same. A set that has been
+# driven carries corner-to-corner asymmetry within a lap and keeps it.
+FRESH_TYRE_TEMP_C = 70.0
+# Corner-to-corner spread a set that has never turned a wheel stays inside.
+FRESH_TYRE_SPREAD_C = 0.3
+# How far below the fitting temperature a fresh set may have cooled while
+# waiting in the box and still be recognised. Below this the reading cannot
+# tell a fresh set from one left long enough to equalise, and it says so
+# rather than guessing.
+FRESH_TYRE_COOLING_C = 8.0
+# Above this the car is moving and the frame is no longer a reading of the set
+# as fitted.
+FRESH_TYRE_MAX_SPEED_KPH = 5.0
+# Measured at this GT7 version. The physics and tyre model have been rewritten
+# twice in two updates, so the figure travels with the version it was taken
+# under and is re-measured rather than assumed after the next one.
+FRESH_TYRE_MEASURED_AT = "GT7 1.70, 3 runs, RS/RM/RH, Monza 11 Aug 2026"
+
 THROTTLE_ON_PCT = 10          # throttle considered "on" above this
 BRAKE_ON_PCT = 5              # brake considered "applied" above this
 
@@ -70,5 +99,8 @@ def as_export() -> dict:
         "apexDefinition": APEX_DEFINITION,
         "cornerProminenceKph": CORNER_PROMINENCE_KPH,
         "flagMinShareOfLaps": FLAG_MIN_SHARE,
+        "freshTyreTempC": FRESH_TYRE_TEMP_C,
+        "freshTyreTempSource": f"measured in-house - {FRESH_TYRE_MEASURED_AT}",
+        "freshTyreSpreadC": FRESH_TYRE_SPREAD_C,
         "detectorVersion": DETECTOR_VERSION,
     }

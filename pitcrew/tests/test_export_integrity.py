@@ -232,9 +232,23 @@ def test_a_rate_is_never_taken_across_a_refuel():
 
 
 def test_a_pinned_gauge_is_flagged_rather_than_read_through():
+    """Twice the same reading on one set: the gauge has saturated."""
+    laps = a_run(1, 10, compound="RH")
+    laps[4] = replace(laps[4], wear_rl=0.84)
+    laps[9] = replace(laps[9], wear_rl=0.84)
+    assert "gaugePinned" in wear_export(laps)
+
+
+def test_two_sets_ending_equally_worn_are_not_a_pinned_gauge():
+    """The reading at lap 5 and the reading at lap 10 are of different sets.
+
+    Before runs existed the two cases were indistinguishable, and the 11 Aug
+    session's 84% at lap 21 and 84% at lap 36 was reported as a gauge that had
+    stopped moving. It was two sets that came off equally worn.
+    """
     laps = (a_run(1, 5, compound="RH", final_wear=0.84)
             + a_run(6, 5, compound="RH", final_wear=0.84))
-    assert "gaugePinned" in wear_export(laps)
+    assert "gaugePinned" not in wear_export(laps)
 
 
 # ------------------------------------------------ P5 the confidence roll-up

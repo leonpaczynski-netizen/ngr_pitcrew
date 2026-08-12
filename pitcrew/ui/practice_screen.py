@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from pitcrew.analysis.runs import starts_run
 from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
@@ -56,11 +57,25 @@ W_DELTA = 78
 W_FUEL = 76
 W_MARKER = 84
 W_COMPOUND = 104
+# Wide enough for "Carried over" without clipping - a picker that silently
+# truncates its longest option is how a driver ends up reading the wrong state.
+W_SET_ON = 118
 W_WEAR = TyreGauge.WIDTH * 2 + 4      # two gauges wide, plus the gap between
 W_ACTION = 104
 # Everything from the compound picker rightward, so the strike can stop before
 # it: three controls, two gaps between them, and the row's right margin.
-CONTROLS_WIDTH = (W_COMPOUND + W_WEAR + W_ACTION + theme.GAP * 2 + 16)
+CONTROLS_WIDTH = (W_COMPOUND + W_SET_ON + W_WEAR + W_ACTION
+                  + theme.GAP * 3 + 16)
+
+
+# The three states of the fresh-set picker. `None` is not `False`: "he has
+# not said" and "the set carried over" are different claims, and only one of
+# them is evidence.
+SET_UNDECLARED = "—"
+SET_FRESH = "New set"
+SET_CARRIED = "Carried over"
+SET_STATES: tuple[tuple[str, bool | None], ...] = (
+    (SET_UNDECLARED, None), (SET_FRESH, True), (SET_CARRIED, False))
 
 
 @dataclass
@@ -70,6 +85,15 @@ class LapRow:
     lap_num: int
     lap_time_ms: int
     fuel_used: float
+    # The tank at both ends of the lap, which is what says where one run stops
+    # and the next starts. Display never shows them; the rack needs them to
+    # know which rows can carry a fresh-set declaration, and it has to reach
+    # that answer by the same rule the export does.
+    fuel_start: float = 0.0
+    fuel_end: float = 0.0
+    # The driver's declaration that this lap went out on a fresh set. Tri-state
+    # all the way to the export: None means he has not said.
+    tyres_fresh: bool | None = None
     compound: str | None = None
     is_out_lap: bool = False
     is_pit_lap: bool = False
@@ -115,6 +139,31 @@ class LapRow:
     def worst_corner(self) -> str | None:
         read = {k: v for k, v in self.wear.items() if v is not None}
         return max(read, key=read.__getitem__) if read else None
+
+
+def run_start_ids(rows: list[LapRow]) -> set[int]:
+    """Which laps begin a tank, and so can carry a fresh-set declaration.
+
+    The mirror of `stint_end_ids`: that marks where a set came off and is worth
+    a gauge reading, this marks where one may have gone on. Both are the only
+    rows that get the control, for the same reason - a screen he visits between
+    runs should not ask him the same question on every row.
+
+    The rule itself lives in `analysis.runs` and is shared with the export, so
+    a declaration can never land on a lap the export does not treat as a run
+    start. Struck laps are included: an out-lap after a stop is struck by
+    definition, and it is exactly where a new set goes on.
+    """
+    if not rows:
+        return set()
+    starts = {rows[0].lap_id}
+    for previous, row in zip(rows, rows[1:]):
+        if starts_run(previous, row):
+            starts.add(row.lap_id)
+    # A declaration already made keeps its control even if the boundary moved -
+    # hiding it would hide something he said that is still stored.
+    starts.update(row.lap_id for row in rows if row.tyres_fresh is not None)
+    return starts
 
 
 def stint_end_ids(rows: list[LapRow]) -> set[int]:
@@ -213,10 +262,12 @@ class RackRow(QWidget):
     restructured = pyqtSignal(int)
 
     def __init__(self, row: LapRow, best_ms: int, *, stint_end: bool = False,
+                 run_start: bool = False,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.row = row
         self._stint_end = stint_end
+        self._run_start = run_start
         self.setFixedHeight(STINT_ROW_HEIGHT if stint_end else ROW_HEIGHT)
 
         shell = QHBoxLayout(self)
@@ -275,6 +326,33 @@ class RackRow(QWidget):
         block_wheel(self.compound_picker)
         line.addWidget(self.compound_picker)
 
+        # Only where a set can have gone on: the first lap of a tank. GT7
+        # broadcasts no tyre-change event, so this is the only place the fact
+        # can enter the app at all - and without it every wear rate rests on
+        # assuming the set was fresh at the run's first lap.
+        self.set_picker: QComboBox | None = None
+        if self._run_start:
+            self.set_picker = QComboBox()
+            for label, value in SET_STATES:
+                self.set_picker.addItem(label, value)
+            self.set_picker.setCurrentIndex(
+                next(index for index, (_, value) in enumerate(SET_STATES)
+                     if value is self.row.tyres_fresh))
+            self.set_picker.setFixedWidth(W_SET_ON)
+            self.set_picker.currentIndexChanged.connect(self._on_set)
+            self.set_picker.setToolTip(
+                "Did this run go out on a fresh set?\n\n"
+                "GT7 sends no tyre-change event, so nothing else can tell. "
+                "Left unsaid, the wear rate still has to assume the set went "
+                "on here, and the export says it assumed it. Say so and the "
+                "rate is measured.")
+            block_wheel(self.set_picker)
+            line.addWidget(self.set_picker)
+        else:
+            spacer = QWidget()
+            spacer.setFixedWidth(W_SET_ON)
+            line.addWidget(spacer)
+
         # The gauge only appears where a reading is worth taking. On every
         # other row the column holds its width so the rack stays in line, but
         # holds nothing to fill in.
@@ -305,6 +383,12 @@ class RackRow(QWidget):
         self.band.setCode(self.row.compound)
         self.changed.emit(self.row.lap_id)
         self.restructured.emit(self.row.lap_id)
+
+    def _on_set(self) -> None:
+        if self.set_picker is None:
+            return
+        self.row.tyres_fresh = self.set_picker.currentData()
+        self.changed.emit(self.row.lap_id)
 
     def _on_wear(self) -> None:
         if self.gauges is None:
@@ -435,6 +519,7 @@ class PracticeScreen(QWidget):
         row.addWidget(cap("", W_MARKER))
         row.addStretch(1)
         row.addWidget(cap("COMPOUND", W_COMPOUND))
+        row.addWidget(cap("SET ON", W_SET_ON))
         row.addWidget(cap("SET OFF", W_WEAR))
         row.addWidget(cap("", W_ACTION))
         return head
@@ -482,6 +567,7 @@ class PracticeScreen(QWidget):
 
         best = self._best_ms()
         ends = stint_end_ids(self._rows)
+        starts = run_start_ids(self._rows)
         self._rendered_ends = ends
         seen_session: int | None = None
         for index, row in enumerate(self._rows):
@@ -494,7 +580,8 @@ class PracticeScreen(QWidget):
                     self.rack_layout.addWidget(SessionBreak(row.session_started))
                 seen_session = row.session_id
 
-            widget = RackRow(row, best, stint_end=row.lap_id in ends)
+            widget = RackRow(row, best, stint_end=row.lap_id in ends,
+                             run_start=row.lap_id in starts)
             widget.changed.connect(self._on_row_changed)
             widget.restructured.connect(self._on_row_restructured)
             self.rack_layout.addWidget(widget)

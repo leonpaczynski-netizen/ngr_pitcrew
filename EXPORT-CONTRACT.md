@@ -245,7 +245,9 @@ tyre.
     "fuelStartL": 99.97, "fuelEndL": 87.58, "fuelDeltaL": 12.4,
     "refuelledBefore": true, "compound": "RS",
     "tyresFresh": true,
-    "tyresFreshSource": "driver-declared at the run's first lap" }
+    "tyresFreshSource": "derived: all four corners at GT7's fitting temperature (70 C) with the car stationary",
+    "tyresFreshDeclared": null,
+    "tyresFreshObserved": true }
 ]
 ```
 
@@ -258,15 +260,40 @@ tyre.
 | `refuelledBefore` | **Measured.** The tank rose by more than 0.5 L between the end of the previous lap and the start of this one. A run also starts wherever the driver came in, and wherever the recording session changed — a stop and restart means he went back to the garage |
 | `fuelStartL` / `fuelEndL` / `fuelDeltaL` | **Measured.** What the tank did across the run. `fuelDeltaL` is what `wear.byLapTime.fuelDeltaL` is netted against, if the reader chooses to net it |
 | `compound` | The compound tagged on this run's laps, or `null` where they disagree. **Never a vote** — a run tagged two ways is a data-entry question, and answering it silently is how three compounds became one |
-| `tyresFresh` | `true`, `false` or **`null`**. **The driver's declaration, and nothing else.** GT7 broadcasts no wear channel and no tyre-change event, so this cannot be derived: taking fuel without taking tyres is a normal stop, and inferring `true` from a refuel would halve every wear rate spanning one. `null` means he has not said. **`false` is a positive claim that the set carried over** and needs its source; export refuses a bare `false` |
-| `tyresFreshSource` | How that value was arrived at. Required alongside a `false` |
+| `tyresFresh` | `true`, `false` or **`null`**. The resolved answer: the driver's declaration where he made one, otherwise what the temperatures show. **Never inferred from the refuel** — taking fuel without taking tyres is a normal stop, and inferring `true` from one would halve every wear rate spanning it. `null` means neither source can say. **`false` is a positive claim that the set carried over** and needs its source; export refuses a bare `false` |
+| `tyresFreshDeclared` | What the driver said on the rack, or `null`. **Primary evidence, and it wins** |
+| `tyresFreshObserved` | What the opening tyre temperatures say, or `null`. Corroboration, never more |
+| `tyresFreshSource` | Which of the two produced `tyresFresh`, and how. Required alongside a `false` |
+| `tyresFreshDisagreement` | Present **only** when the driver and the temperatures say different things. The declaration stands and the disagreement is reported, never averaged away: it is worth more than either statement alone |
+
+**Reading a set off the stream.** GT7 fits every set at one temperature, on all
+four corners. That figure is **measured, not looked up** — three runs across
+Racing Soft, Racing Medium and Racing Hard in the 11 Aug Monza captures each open
+at exactly 70.0 °C on all four corners with the car stationary; nothing published
+documents it, and the public accounts describe only the behaviour, that a fresh
+set is cold and takes a couple of corners to come in. It is restated every export
+in `derived.thresholds.freshTyreTempC` with the runs it came from, so re-measuring
+it after a game update reads as a change in the app rather than in the car.
+
+From there a stationary set only cools, so a fresh one reads at or under that
+figure with the four corners **even**. The evenness is what does the work, not the
+absolute value: a set that has turned a wheel picks up corner-to-corner asymmetry
+inside a lap and keeps it, so a spread alone says the set is not new.
+
+It returns `null` rather than guessing in the two cases it cannot separate:
+
+* the car was already rolling when the recording picked it up — a set already
+  working reads like a used one whether it is or not;
+* the reading is even but has cooled past the allowance, which a fresh set left
+  waiting and a used set left longer both eventually do.
 
 **Why `tyresFresh` is worth a field at all.** Every wear rate in `wear.byRun` that
-comes from a single gauge reading needs a starting point. Where the driver has
-declared the set fresh there is one, and the rate is `measured`. Where he has not, the
-rate assumes the set went on at the run's first lap — which is usually true and is
-occasionally very wrong — so it carries `assumesFreshAtLap` and drops to `assumed`.
-The arithmetic is identical; what differs is whether the export says so.
+comes from a single gauge reading needs a starting point. Where the set is known to
+have gone on at the run's first lap there is one, and the rate is `measured` —
+`wear.byRun[].method` states which source established it. Where nothing can say, the
+rate assumes the set went on there anyway, which is usually true and occasionally
+very wrong, so it carries `assumesFreshAtLap` and drops to `assumed`. The arithmetic
+is identical; what differs is whether the export says so.
 
 ---
 
@@ -858,6 +885,8 @@ race strategy if they had been believed.
 | 11 | **`gearing.gearingConstantK` is now extrapolated to the limiter**, with `gearingConstantFinalGear`, `gearingConstantFinalGearSource`, `gearingConstantSamples`, `topGearSpeedAtLimiterKph` | K was omitted whenever the limiter did not fire in top gear, which on a circuit like Monza is most sessions — so the field the tune builder most wants was never exported. Scaling the observed top-gear speed to the limiter is sound; the source string distinguishes `extrapolated:` from `computed:` so the two are never confused. **K uses the sheet's final drive, not the derived one** — the derived figure carries the unloaded-radius bias and a K built on it would put every future gearbox out by the same few percent |
 | 12 | **`meta.gameVersion` is required.** Export refuses without it | GT7 rewrote its physics, tyre model and geometry in 1.49 and again in 1.55. A measurement that does not say which update it was taken under cannot be filed and cannot safely be compared with the next one. It costs one field on the event page, which now exists |
 | 13 | **`corners` is emitted for the first time** (§7), and `corners[].flagLaps` / `.flagThresholdLaps` are new | The section the contract calls the one to build if only one gets built had never once been exported, and the reason was upstream: what the recorder stored as lap distance was the **road plane's fourth coefficient** — about −80 to −250 m, covering 125 m over a whole lap of Monza — so corner detection could never segment a lap. GT7 broadcasts no lap-distance channel at all; it is now integrated from speed against the packet clock. `flags` was a set union across laps, so with enough laps every corner carried every flag; a flag now has to fire on a quarter of them, and `flagLaps` keeps the one-offs visible as one-offs |
+| 15 | **Fresh sets are read off the stream**: `runs[].tyresFreshDeclared` / `.tyresFreshObserved` / `.tyresFreshDisagreement`, `wear.byRun[].method` names which source established the set, and `derived.thresholds.freshTyreTempC` restates the constant | GT7 broadcasts no tyre-change event, so the app could only ask. It turns out it does not have to: **GT7 fits every set at one temperature on all four corners**, measured at 70.0 °C across three compounds in the 11 Aug captures, and a stationary set only cools from there. The evenness is the discriminator - a set that has turned a wheel carries asymmetry within a lap. The driver's own declaration still outranks it, and where the two disagree the disagreement is reported rather than resolved |
+| 16 | `wear.gaugePinned` fires **within one run only** | Two equal readings on two different sets are two sets that came off equally worn, which is a coincidence and not a finding. Before `runs` existed the two cases were indistinguishable, and the 11 Aug session's 84% at lap 21 and 84% at lap 36 - the very reading P6 raised - was reported as a gauge that had stopped moving. It was a new set |
 | 14 | `derived.thresholds.flagMinShareOfLaps` | Same rule as every other threshold: it is the app's choice, not the game's, so retuning it must read as a change in the detector rather than a change in the car |
 
 **The frame clock was GT7's in-game clock.** Not a payload field, but it reached every

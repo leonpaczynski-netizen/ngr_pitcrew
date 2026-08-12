@@ -241,6 +241,49 @@ def test_reopening_reloads_the_last_session_onto_the_rack(wired):
 
 # -------------------------------------------------------------------- export
 
+def test_a_fresh_set_declared_on_the_rack_reaches_the_export(wired):
+    """The whole point of the control: the rack is the only place this fact
+    can enter the app, and it has to survive all the way to `runs[]`."""
+    from pitcrew.export.build import build_event_export
+
+    controller, _, practice, store = wired
+    controller._on_event_saved(an_event())
+    session_id = controller.open_practice_session()
+    store.note_stream_facts(session_id, packet_format="C",
+                            fuel_capacity_l=100.0)
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=100.0))
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=93.5,
+                                    last_lap_ms=93_912))
+
+    row = practice.rows()[0]
+    assert row.lap_id is not None
+    row.tyres_fresh = True
+    controller._on_lap_changed(row.lap_id)
+
+    assert store.list_laps(session_id)[0]["tyres_fresh"] == 1
+    runs = build_event_export(store, store.active_event_id())["runs"]
+    assert runs[0]["tyresFresh"] is True
+    assert runs[0]["tyresFreshSource"] == "driver-declared at the run's first lap"
+
+
+def test_an_undeclared_set_stays_null_all_the_way_out(wired):
+    """Never false. "He has not said" and "the set carried over" are
+    different claims and the export must not conflate them."""
+    from pitcrew.export.build import build_event_export
+
+    controller, _, practice, store = wired
+    controller._on_event_saved(an_event())
+    session_id = controller.open_practice_session()
+    store.note_stream_facts(session_id, packet_format="C",
+                            fuel_capacity_l=100.0)
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=100.0))
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=93.5,
+                                    last_lap_ms=93_912))
+
+    runs = build_event_export(store, store.active_event_id())["runs"]
+    assert runs[0]["tyresFresh"] is None
+
+
 def test_export_produces_a_validated_payload(wired, tmp_path, monkeypatch):
     import pitcrew.controller as controller_module
     monkeypatch.setattr(controller_module, "EXPORT_DIR", tmp_path / "exports")

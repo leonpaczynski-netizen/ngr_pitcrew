@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from statistics import median
 
+from pitcrew.analysis import thresholds
 from pitcrew.analysis.session import LapInput
 
 # The tank rising by more than this between the end of one lap and the start of
@@ -93,21 +94,67 @@ class Run:
         return tagged.pop() if len(tagged) == 1 else None
 
     @property
-    def tyres_fresh(self) -> bool | None:
-        """Whether the set went on at this run's first lap.
-
-        The driver's declaration, or None. Never inferred from the refuel: GT7
-        lets you take fuel without taking tyres, and an inferred `True` here
-        would turn every fuel stop into a fresh set and halve every wear rate
-        that spans one.
-        """
+    def tyres_fresh_declared(self) -> bool | None:
+        """What the driver said on the rack. Primary evidence, and it wins."""
         return self.laps[0].tyres_fresh
 
     @property
+    def tyres_fresh_observed(self) -> bool | None:
+        """What the opening tyre temperatures say. Corroboration, never more."""
+        return fresh_by_temperature(self.laps[0])
+
+    @property
+    def tyres_fresh(self) -> bool | None:
+        """Whether the set went on at this run's first lap.
+
+        **Never inferred from the refuel.** GT7 lets you take fuel without
+        taking tyres, and inferring `True` from a stop would turn every fuel
+        stop into a fresh set and halve every wear rate spanning one.
+
+        It is inferred from the *temperature*, which is a different thing: GT7
+        fits every set at one fixed temperature on all four corners, so a run
+        that opens there, stationary and even, is a run that went out on new
+        rubber. The driver's own declaration outranks it either way - his
+        report is primary evidence and this is corroboration.
+        """
+        declared = self.tyres_fresh_declared
+        return self.tyres_fresh_observed if declared is None else declared
+
+    @property
     def tyres_fresh_source(self) -> str:
-        if self.tyres_fresh is None:
-            return "not declared - the feed carries no tyre-change event"
-        return "driver-declared at the run's first lap"
+        if self.tyres_fresh_declared is not None:
+            return "driver-declared at the run's first lap"
+        if self.tyres_fresh_observed is True:
+            return (f"derived: all four corners at GT7's fitting temperature "
+                    f"({thresholds.FRESH_TYRE_TEMP_C:.0f} C) with the car "
+                    f"stationary")
+        if self.tyres_fresh_observed is False:
+            return ("derived: the opening temperatures are not those of a set "
+                    "as fitted")
+        return ("not declared, and the opening temperatures cannot tell - the "
+                "feed carries no tyre-change event")
+
+    @property
+    def tyres_fresh_disagreement(self) -> str | None:
+        """Where the driver and the temperatures say different things.
+
+        Surfaced, never averaged and never resolved. The driver's report is
+        primary and stands; that the stream disagrees with it is the finding,
+        and it is worth more than either statement on its own.
+        """
+        declared = self.tyres_fresh_declared
+        observed = self.tyres_fresh_observed
+        if declared is None or observed is None or declared == observed:
+            return None
+        if declared:
+            return (f"Declared a fresh set, but lap {self.first_lap} opens at "
+                    f"{_opening_temperature(self.laps[0]):.1f} C across the "
+                    f"four corners, which is not a set as fitted. Either the "
+                    f"declaration is on the wrong lap or the set was used.")
+        return (f"Declared as carried over, but lap {self.first_lap} opens at "
+                f"GT7's fitting temperature on all four corners, which is what "
+                f"a new set reads. The declaration stands; the stream "
+                f"disagrees with it.")
 
     @property
     def counted_laps(self) -> list[LapInput]:
@@ -118,7 +165,7 @@ class Run:
         return [lap for lap in self.laps if lap.worst_wear is not None]
 
     def as_export(self) -> dict:
-        return {
+        payload = {
             "id": self.id,
             "firstLap": self.first_lap,
             "lastLap": self.last_lap,
@@ -131,30 +178,109 @@ class Run:
             "compound": self.compound,
             "tyresFresh": self.tyres_fresh,
             "tyresFreshSource": self.tyres_fresh_source,
+            "tyresFreshDeclared": self.tyres_fresh_declared,
+            "tyresFreshObserved": self.tyres_fresh_observed,
         }
+        disagreement = self.tyres_fresh_disagreement
+        if disagreement:
+            payload["tyresFreshDisagreement"] = disagreement
+        return payload
+
+
+def _opening_frame(lap: LapInput) -> dict | None:
+    """The first frame of a lap with the car still stationary.
+
+    A set as fitted has to be read before it turns a wheel: one corner of the
+    circuit and the fronts are already ahead of the rears.
+    """
+    for frame in lap.frames or ():
+        speed = frame.get("speed_kph")
+        if speed is None or speed > thresholds.FRESH_TYRE_MAX_SPEED_KPH:
+            return None
+        if all(frame.get(f"temp_{corner}") is not None
+               for corner in ("fl", "fr", "rl", "rr")):
+            return frame
+    return None
+
+
+def _opening_temperature(lap: LapInput) -> float:
+    frame = _opening_frame(lap)
+    if frame is None:
+        return float("nan")
+    return max(frame[f"temp_{corner}"] for corner in ("fl", "fr", "rl", "rr"))
+
+
+def fresh_by_temperature(lap: LapInput) -> bool | None:
+    """Did this lap go out on a set as GT7 fits it?
+
+    **GT7 fits every set at one temperature, on all four corners.** Measured
+    rather than looked up - see `thresholds.FRESH_TYRE_TEMP_C` for the reading
+    and the runs it came from. From there a stationary set only cools, so a
+    fresh one reads at or just under that figure with the four corners equal.
+
+    The **even** reading is what does the work, not the absolute value. A set
+    that has turned a wheel picks up corner-to-corner asymmetry inside one lap
+    and keeps it, so a spread is enough on its own to say the set is not new.
+
+    `None`, not `False`, in the two cases where the reading cannot tell:
+
+    * no stationary frame carrying all four corners - he was already rolling
+      when the recording picked him up, and a set already working reads like a
+      used one whether it is or not;
+    * an even reading that has cooled past the allowance, which a fresh set
+      left waiting and a used set left longer both eventually do.
+    """
+    frame = _opening_frame(lap)
+    if frame is None:
+        return None
+
+    corners = [frame[f"temp_{corner}"] for corner in ("fl", "fr", "rl", "rr")]
+    if max(corners) - min(corners) > thresholds.FRESH_TYRE_SPREAD_C:
+        return False
+    hottest = max(corners)
+    if hottest > thresholds.FRESH_TYRE_TEMP_C + thresholds.FRESH_TYRE_SPREAD_C:
+        return False
+    if hottest < thresholds.FRESH_TYRE_TEMP_C - thresholds.FRESH_TYRE_COOLING_C:
+        return None
+    return True
+
+
+def refuelled_between(previous, lap) -> bool:
+    """The tank went up between the end of one lap and the start of the next."""
+    return lap.fuel_start > previous.fuel_end + REFUEL_STEP_L
+
+
+def starts_run(previous, lap) -> bool:
+    """Does this lap begin a new tank?
+
+    Duck-typed on purpose. The lap rack asks this of its own row objects and
+    the export asks it of `LapInput`, and they must agree exactly: the rack is
+    where the driver declares a set fresh, and a declaration made on a lap the
+    export does not treat as a run start would be silently ignored.
+
+    A new run starts where the tank went up, where the driver came in, and
+    wherever the recording session changed — stopping and restarting the app
+    means he went back to the garage, and the laps either side are not one
+    continuous stint.
+    """
+    session_changed = (lap.session_id is not None
+                       and previous.session_id is not None
+                       and lap.session_id != previous.session_id)
+    return (refuelled_between(previous, lap) or session_changed
+            or previous.is_pit_lap)
 
 
 def split_runs(laps: list[LapInput]) -> list[Run]:
-    """Group laps into the tanks they were run on.
-
-    A new run starts where the tank went up between two laps, where the driver
-    came in, and wherever the recording session changed — stopping and
-    restarting the app means he went back to the garage, and the lap numbers
-    either side of that are not one continuous stint.
-    """
+    """Group laps into the tanks they were run on."""
     if not laps:
         return []
 
     grouped: list[list[LapInput]] = [[laps[0]]]
     refuelled: list[bool] = [False]
     for previous, lap in zip(laps, laps[1:]):
-        refuel = lap.fuel_start > previous.fuel_end + REFUEL_STEP_L
-        session_changed = (lap.session_id is not None
-                           and previous.session_id is not None
-                           and lap.session_id != previous.session_id)
-        if refuel or session_changed or previous.is_pit_lap:
+        if starts_run(previous, lap):
             grouped.append([lap])
-            refuelled.append(refuel)
+            refuelled.append(refuelled_between(previous, lap))
         else:
             grouped[-1].append(lap)
 
