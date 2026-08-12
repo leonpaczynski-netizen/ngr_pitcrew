@@ -234,6 +234,44 @@ def test_a_v1_database_upgrades_in_place_without_losing_anything(tmp_path):
     upgraded.close()
 
 
+def test_a_v3_file_that_predates_gear_ratios_gains_the_column(tmp_path):
+    """The regression behind five practice laps that were never stored.
+
+    `gear_ratios` was added to the `laps` DDL without a matching
+    `ADDED_COLUMNS` entry. `CREATE TABLE IF NOT EXISTS` does nothing to a
+    table that is already there, so a fresh file had the column and the
+    driver's real file did not - and the version number was v3 either way,
+    so nothing looked wrong until a lap was completed and the insert threw.
+
+    A column added to a table that already ships must be reachable from an
+    existing file, not only from one built this morning.
+    """
+    import json
+    import sqlite3
+
+    path = tmp_path / "v3-old.db"
+    first = Store(path)
+    session_id = first.start_session(first.create_event(name="E", track="Spa"),
+                                     kind="practice")
+    first.close()
+
+    # Rewind to the shape the file had before the column was declared. The
+    # version stays at 3: that is what made this invisible.
+    conn = sqlite3.connect(str(path))
+    conn.execute("ALTER TABLE laps DROP COLUMN gear_ratios")
+    conn.commit()
+    conn.close()
+
+    upgraded = Store(path)
+    lap_id = upgraded.add_lap(
+        session_id, a_lap(gear_ratios=[3.1, 2.2, 1.7, 1.3, 1.0, 0.8]))
+    stored = upgraded.list_laps(session_id)
+    assert len(stored) == 1
+    assert json.loads(stored[0]["gear_ratios"]) == [3.1, 2.2, 1.7, 1.3, 1.0, 0.8]
+    assert lap_id is not None
+    upgraded.close()
+
+
 def test_a_foreign_schema_version_is_refused(tmp_path):
     import sqlite3
     path = tmp_path / "other.db"

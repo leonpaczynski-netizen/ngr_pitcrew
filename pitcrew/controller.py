@@ -13,6 +13,7 @@ swap would be filed against the wrong lap.
 from __future__ import annotations
 
 import datetime
+import sqlite3
 from pathlib import Path
 from time import monotonic as _monotonic
 
@@ -223,6 +224,7 @@ class PitCrewController(QObject):
         self.listener: UDPListener | None = None
         self.session_id: int | None = None
         self._parse_errors = 0
+        self._store_errors = 0
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.stream_seen.connect(self._on_stream_seen)
@@ -886,6 +888,7 @@ class PitCrewController(QObject):
                                     source_ip=self.settings.udp_source_ip)
         self.listener.start()
         self._parse_errors = 0
+        self._store_errors = 0
         self._health.start()
         # Off by default: the engineer only answers during a race. On, it is
         # how the button gets tested without committing to a race.
@@ -941,7 +944,22 @@ class PitCrewController(QObject):
         if self.session_id is None:
             return
         frames = self.bridge.recorder.encode(rows)
-        lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
+        try:
+            lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
+        except sqlite3.Error:
+            # A lap that cannot be stored is the one failure the driver must
+            # not have to read a log to discover: he is in the car, watching
+            # the rack, and an empty rack is indistinguishable from a lap that
+            # simply has not landed yet. Say it on the page, keep the session
+            # running so the rest of the run is not lost with it.
+            self._store_errors += 1
+            log("session").exception(
+                "lap %s could not be stored", lap.lap_num)
+            self.practice.set_status(
+                f"Lap NOT saved - the database rejected it "
+                f"({self._store_errors} so far this run). See logs/pitcrew.log.",
+                warn=True)
+            return
         self.refresh_nav_state()
         self.practice.add_lap(LapRow(
             lap_id=lap_id,

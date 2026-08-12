@@ -291,6 +291,9 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("priority", "TEXT"),
         ("pp_cap", "REAL"),
     ),
+    "laps": (
+        ("gear_ratios", "TEXT"),
+    ),
 }
 
 
