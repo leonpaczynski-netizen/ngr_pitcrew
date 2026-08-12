@@ -32,6 +32,12 @@ KERB_STRIKE_WINDOW_MS = 100
 BOTTOMING_MIN_MS = 50
 BOTTOMING_BAND_MM = 3.0
 
+# A flag has to fire on this share of the counted laps before it describes the
+# corner. Union across laps made every corner carry every flag once enough laps
+# were run, which reads as seven findings and is none: `flagLaps` keeps the
+# one-offs visible as one-offs.
+FLAG_MIN_SHARE = 0.25
+
 THROTTLE_ON_PCT = 10          # throttle considered "on" above this
 BRAKE_ON_PCT = 5              # brake considered "applied" above this
 
@@ -63,5 +69,6 @@ def as_export() -> dict:
         "kerbStrikeMm": KERB_STRIKE_MM,
         "apexDefinition": APEX_DEFINITION,
         "cornerProminenceKph": CORNER_PROMINENCE_KPH,
+        "flagMinShareOfLaps": FLAG_MIN_SHARE,
         "detectorVersion": DETECTOR_VERSION,
     }

@@ -174,10 +174,15 @@ def compound_profiles(laps: list[LapInput],
             wear_per_lap=rate["wearPerLap"] if rate else None,
             # Measured means measured: a compound run in practice with no
             # gauge reading has a pace we know and a wear rate we do not, and
-            # it is the wear rate that sets the stint.
-            source=SOURCE_MEASURED if rate else SOURCE_DECLARED,
+            # it is the wear rate that sets the stint. A rate that exists but
+            # rests on an assumed fresh set is not measured either.
+            source=(SOURCE_MEASURED
+                    if rate and rate.get("wearPerLap") is not None
+                    else SOURCE_DECLARED),
             laps_measured=len(on_this),
-            stints_measured=rate["stints"] if rate else 0,
+            # The runs that produced a rate, not the runs on the compound: a
+            # compound run three times and read once is one measurement.
+            stints_measured=rate["stintsMeasured"] if rate else 0,
             window=window,
             # The figures above stay exactly as measured. This says how far
             # they can be trusted, which is a different claim.

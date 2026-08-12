@@ -181,6 +181,12 @@ CREATE TABLE IF NOT EXISTS laps (
     wear_rl       REAL,
     wear_rr       REAL,
     gear_ratios   TEXT,          -- JSON array, the ratios fitted
+    -- The driver's declaration that this lap went out on a fresh set. GT7
+    -- broadcasts no tyre-change event, so nothing else can fill this in: a
+    -- refuel is visible in the feed, a tyre change is not. Null means he has
+    -- not said, and null is not 0 - a 0 here would claim the set carried over,
+    -- which the app has no evidence for either way.
+    tyres_fresh   INTEGER,
     recorded_at   TEXT    NOT NULL,
     UNIQUE(session_id, lap_num)
 );
@@ -293,6 +299,7 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "laps": (
         ("gear_ratios", "TEXT"),
+        ("tyres_fresh", "INTEGER"),
     ),
 }
 

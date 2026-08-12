@@ -25,7 +25,10 @@ def frame(distance_m: float, speed_kph: float, index: int, **overrides) -> dict:
     """One telemetry frame with everything present and benign."""
     base = {
         "t_ms": round(index * INTERVAL_MS),
-        "road_distance_m": distance_m,
+        "lap_distance_m": distance_m,
+        # The road plane's fourth coefficient. Present because the on-disk
+        # format carries it; nothing reads it.
+        "road_plane_d": -180.0,
         "speed_kph": speed_kph,
         "throttle_pct": 100.0,
         "brake_pct": 0.0,
@@ -135,7 +138,7 @@ def test_too_few_frames_yields_no_model():
 def test_frames_without_distance_are_ignored():
     frames = synthetic_lap()
     for f in frames[:50]:
-        f["road_distance_m"] = None
+        f["lap_distance_m"] = None
     assert detect_corners(frames, "test-track") is not None
 
 
@@ -183,7 +186,7 @@ def test_speeds_are_measured_through_the_window():
 def test_brake_point_is_metres_before_the_apex():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 500.0 <= f["road_distance_m"] <= 600.0:
+        if 500.0 <= f["lap_distance_m"] <= 600.0:
             f["brake_pct"] = 90.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
@@ -196,7 +199,7 @@ def test_brake_point_is_measured_from_outside_the_corner_window():
     systematically under-reports it, which matters most for a deep braker."""
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 400.0 <= f["road_distance_m"] <= 600.0:
+        if 400.0 <= f["lap_distance_m"] <= 600.0:
             f["brake_pct"] = 95.0
     laps = [CountedLap(1, frames)]
     # The window opens at 540, well after braking began at 400.
@@ -208,9 +211,9 @@ def test_an_earlier_unrelated_brake_does_not_move_the_brake_point():
     """Only the last continuous run into the apex counts."""
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 100.0 <= f["road_distance_m"] <= 150.0:
+        if 100.0 <= f["lap_distance_m"] <= 150.0:
             f["brake_pct"] = 80.0        # a lift-and-dab far up the road
-        if 520.0 <= f["road_distance_m"] <= 600.0:
+        if 520.0 <= f["lap_distance_m"] <= 600.0:
             f["brake_pct"] = 95.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 540, 600, 660)]), laps)[0]
@@ -238,7 +241,7 @@ def test_trail_brake_is_null_when_steering_is_unavailable():
 def test_trail_brake_is_timed_when_steering_is_available():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 520.0 <= f["road_distance_m"] <= 600.0:
+        if 520.0 <= f["lap_distance_m"] <= 600.0:
             f["brake_pct"] = 40.0
             f["steering_deg"] = 60.0
             f["steering_norm"] = 0.4
@@ -251,7 +254,7 @@ def test_trail_brake_is_timed_when_steering_is_available():
 def test_throttle_on_is_a_percentage_through_the_corner():
     frames = synthetic_lap(apex_positions=(600.0,), throttle_pct=0.0)
     for f in frames:
-        if f["road_distance_m"] >= 600.0:
+        if f["lap_distance_m"] >= 600.0:
             f["throttle_pct"] = 80.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
@@ -276,7 +279,7 @@ def test_corners_no_lap_reached_are_omitted():
 def flags_for(**frame_changes) -> list[str]:
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 550.0 <= f["road_distance_m"] <= 650.0:
+        if 550.0 <= f["lap_distance_m"] <= 650.0:
             f.update(frame_changes)
     laps = [CountedLap(1, frames)]
     return aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]["flags"]
@@ -306,7 +309,7 @@ def test_off_track_reads_the_surface_character():
 def test_kerb_strike_is_a_fast_height_step():
     frames = synthetic_lap(apex_positions=(600.0,))
     for i, f in enumerate(frames):
-        if 590.0 <= f["road_distance_m"] <= 600.0:
+        if 590.0 <= f["lap_distance_m"] <= 600.0:
             f["susp_mm_fl"] = 60.0 if i % 2 else 30.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
@@ -316,7 +319,7 @@ def test_kerb_strike_is_a_fast_height_step():
 def test_countersteer_needs_a_sign_reversal():
     frames = synthetic_lap(apex_positions=(600.0,))
     for i, f in enumerate(frames):
-        if 580.0 <= f["road_distance_m"] <= 620.0:
+        if 580.0 <= f["lap_distance_m"] <= 620.0:
             f["steering_deg"] = 40.0 if i % 4 < 2 else -40.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
@@ -326,7 +329,7 @@ def test_countersteer_needs_a_sign_reversal():
 def test_trail_brake_instability_is_countersteer_under_brake():
     frames = synthetic_lap(apex_positions=(600.0,))
     for i, f in enumerate(frames):
-        if 580.0 <= f["road_distance_m"] <= 620.0:
+        if 580.0 <= f["lap_distance_m"] <= 620.0:
             f["steering_deg"] = 40.0 if i % 4 < 2 else -40.0
             f["steering_norm"] = 0.4 if i % 4 < 2 else -0.4
             f["brake_pct"] = 40.0
@@ -349,7 +352,7 @@ def test_flags_are_null_safe_without_steering_or_surface():
 def test_surface_mix_is_a_fraction_per_character():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 595.0 <= f["road_distance_m"] <= 605.0:
+        if 595.0 <= f["lap_distance_m"] <= 605.0:
             f["surf_rl"] = "C"
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
@@ -385,7 +388,7 @@ def test_a_suspension_trace_that_never_moves_cannot_infer_bottoming():
 def test_a_wheel_that_moves_is_inferable():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 595.0 <= f["road_distance_m"] <= 610.0:
+        if 595.0 <= f["lap_distance_m"] <= 610.0:
             f["susp_mm_fl"] = 30.0
     laps = [CountedLap(1, frames)]
     assert bottoming_inferable(laps, bottoming_reference(laps)) == {"fl"}
@@ -394,7 +397,7 @@ def test_a_wheel_that_moves_is_inferable():
 def test_sustained_time_at_the_reference_flags_bottoming():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        if 595.0 <= f["road_distance_m"] <= 610.0:
+        if 595.0 <= f["lap_distance_m"] <= 610.0:
             f["susp_mm_fl"] = 30.0
     laps = [CountedLap(1, frames)]
     corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]

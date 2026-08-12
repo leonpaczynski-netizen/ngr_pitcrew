@@ -55,17 +55,17 @@ BRAKE_LOOKBACK_M = 500.0
 
 def _slice(frames: list[dict], corner: Corner) -> list[dict]:
     return [f for f in frames
-            if f.get("road_distance_m") is not None
-            and corner.contains(f["road_distance_m"])]
+            if f.get("lap_distance_m") is not None
+            and corner.contains(f["lap_distance_m"])]
 
 
 def _approach(frames: list[dict], corner: Corner) -> list[dict]:
     """Frames from the braking zone up to the apex, in distance order."""
     low = corner.start_m - BRAKE_LOOKBACK_M
     picked = [f for f in frames
-              if f.get("road_distance_m") is not None
-              and low <= f["road_distance_m"] <= corner.apex_m]
-    return sorted(picked, key=lambda f: f["road_distance_m"])
+              if f.get("lap_distance_m") is not None
+              and low <= f["lap_distance_m"] <= corner.apex_m]
+    return sorted(picked, key=lambda f: f["lap_distance_m"])
 
 
 def _frame_interval_ms(window: list[dict]) -> float:
@@ -199,7 +199,7 @@ def _brake_point_m(approach: list[dict], corner: Corner) -> float | None:
 
     while index > 0 and approach[index - 1]["brake_pct"] > thresholds.BRAKE_ON_PCT:
         index -= 1
-    return round(corner.apex_m - approach[index]["road_distance_m"], 1)
+    return round(corner.apex_m - approach[index]["lap_distance_m"], 1)
 
 
 def _throttle_on_pct(window: list[dict], corner: Corner) -> float | None:
@@ -209,7 +209,7 @@ def _throttle_on_pct(window: list[dict], corner: Corner) -> float | None:
         return None
     for frame in window:
         if frame["throttle_pct"] > thresholds.THROTTLE_ON_PCT:
-            through = (frame["road_distance_m"] - corner.start_m) / span
+            through = (frame["lap_distance_m"] - corner.start_m) / span
             return round(max(0.0, min(1.0, through)) * 100.0, 1)
     return None
 
@@ -484,9 +484,18 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
             for wheel in ("fl", "fr", "rl", "rr")
         }
 
-    flags: set[str] = set()
+    # A flag raised on one lap in forty and a flag raised on thirty-eight are
+    # not the same claim, and a set union makes them identical: run enough laps
+    # and every flag fires somewhere, so every corner ends up carrying every
+    # flag and the section stops saying anything. Standing rule 4 - every
+    # aggregate carries its sample count - applies to flags too, so each one
+    # travels with the number of laps it fired on.
+    flag_counts: dict[str, int] = {}
     for measurement in per_lap:
-        flags |= measurement["flags"]
+        for flag in measurement["flags"]:
+            flag_counts[flag] = flag_counts.get(flag, 0) + 1
+    flags = sorted(name for name, count in flag_counts.items()
+                   if count >= max(1, round(len(per_lap) * thresholds.FLAG_MIN_SHARE)))
 
     gear_mins = [m["gear_min"] for m in per_lap if m["gear_min"]]
     payload = {
@@ -522,6 +531,11 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
             _mean_or_none([m["upshift_rpm"] for m in per_lap]), 0),
         "suspHeightMinMm": susp_min,
         "surfaceMix": surface_mix,
-        "flags": sorted(flags),
+        # Only the ones that happen often enough to describe the corner rather
+        # than one moment in it. `flagLaps` carries every flag seen, with the
+        # laps it fired on, so a one-off is still visible - as a one-off.
+        "flags": flags,
+        "flagLaps": dict(sorted(flag_counts.items())),
+        "flagThresholdLaps": max(1, round(len(per_lap) * thresholds.FLAG_MIN_SHARE)),
     }
     return payload

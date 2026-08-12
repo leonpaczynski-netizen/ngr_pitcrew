@@ -1056,9 +1056,18 @@ def _wear_section(lines: Lines, context: ctx.PromptContext) -> None:
     elif confidence == "measured":
         lines.add(f"- Wear was measured at the multiplier actually raced"
                   f"{raced}, from the gauge readings above.")
-    else:
+    elif not (wear.get("byDriverGauge") or []):
         lines.add("- No gauge reading was entered, so the stint length is not "
                   "modelled from measurement at all.")
+    else:
+        # A reading exists but something had to be assumed to turn it into a
+        # rate - almost always that the set went on fresh at the run's first
+        # lap, which GT7 broadcasts nothing to confirm. Saying "no reading was
+        # entered" here would be false, and saying "measured" would be worse.
+        lines.add(f"- Wear was read off the gauge at the multiplier raced"
+                  f"{raced}, but the rate rests on an assumption: "
+                  f"{wear.get('modelConfidenceBasis', 'see byRun')}. "
+                  f"Treat the stint length as modelled, not measured.")
     lines.add("")
 
 

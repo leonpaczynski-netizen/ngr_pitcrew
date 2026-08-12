@@ -30,9 +30,16 @@ def _frames_as_rows(frames: list[dict]) -> StoredFrames:
 
 
 def a_stored_lap(lap_num: int, **overrides) -> Lap:
+    """One lap of a run, the tank where it would be that far in.
+
+    Fuel is what tells one run from the next, so a fixture whose tank refills
+    itself every lap describes a session of consecutive pit stops - and gets
+    read as one.
+    """
     fields = dict(
         lap_num=lap_num, lap_time_ms=94_000, best_lap_ms=93_000, delta_ms=1_000,
-        fuel_start=92.0, fuel_end=88.6, fuel_used=3.4, position=3,
+        fuel_start=round(100.0 - 3.4 * (lap_num - 1), 2),
+        fuel_end=round(100.0 - 3.4 * lap_num, 2), fuel_used=3.4, position=3,
         is_pit_lap=False, is_out_lap=False,
     )
     fields.update(overrides)
@@ -112,14 +119,37 @@ def test_out_lap_is_excluded_and_explained(store: Store, recorded):
     assert payload["session"]["lapsRun"] == 4
     assert payload["session"]["lapsCounted"] == 3
     assert payload["session"]["lapsExcluded"] == [1]
-    assert "lap 1 out-lap" in payload["notes"]
+    detail = payload["session"]["lapsExcludedDetail"]
+    assert detail == [{"lap": 1, "reason": "out-lap", "source": "auto"}]
 
 
 def test_extra_notes_are_appended(store: Store, recorded):
     payload = build_session_export(store, recorded["session_id"],
                                    notes="Rear ARB changed lap 3.")
     assert "Rear ARB changed lap 3." in payload["notes"]
-    assert "out-lap" in payload["notes"]
+
+
+def test_notes_no_longer_repeat_what_the_structure_already_says(
+        store: Store, recorded):
+    """Eight repetitions of "struck by hand" qualified nothing.
+
+    The reason and its source live in `lapsExcludedDetail`; prose is for what
+    the structure cannot hold.
+    """
+    payload = build_session_export(store, recorded["session_id"])
+    assert "out-lap" not in payload.get("notes", "")
+
+
+def test_the_driver_own_words_survive_the_classification(store: Store, recorded):
+    lap_id = store.list_laps(recorded["session_id"])[2]["id"]
+    store.exclude_lap(lap_id, "spun at T4")
+    payload = build_session_export(store, recorded["session_id"])
+    entry = [e for e in payload["session"]["lapsExcludedDetail"]
+             if e["lap"] == 3][0]
+    assert entry["reason"] == "manual"
+    assert entry["source"] == "driver"
+    assert entry["note"] == "spun at T4"
+    assert "spun at T4" in payload["notes"]
 
 
 def test_corners_are_built_and_declared(store: Store, recorded):
@@ -148,6 +178,8 @@ def test_wear_says_the_channel_does_not_exist(store: Store, recorded):
 def test_a_gauge_reading_promotes_the_model_to_measured(store: Store, recorded):
     lap_id = store.list_laps(recorded["session_id"])[-1]["id"]
     store.set_lap_wear(lap_id, 0.4, 0.4, 0.3, 0.3)
+    first_lap_id = store.list_laps(recorded["session_id"])[0]["id"]
+    store.set_lap_tyres_fresh(first_lap_id, True)
     wear = build_session_export(store, recorded["session_id"])["wear"]
     assert wear["modelConfidence"] == "measured"
     assert wear["byDriverGauge"][0]["fl"] == 0.4

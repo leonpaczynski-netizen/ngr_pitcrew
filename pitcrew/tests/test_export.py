@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -64,8 +65,16 @@ def a_lap_row(**overrides) -> dict:
 
 
 def a_wear_lap(lap_num: int, **overrides) -> LapInput:
+    """One lap, with the tank where it would be that far into a run.
+
+    The fuel channel is what says where one run ends and the next begins, so a
+    fixture whose tank refills itself every lap is a fixture of consecutive
+    pit stops. Descending from a full tank is what a real run looks like and
+    is what the run splitter reads.
+    """
     fields = dict(lap_num=lap_num, lap_time_ms=94_000,
-                  fuel_start=92.0, fuel_end=88.6)
+                  fuel_start=round(100.0 - 3.4 * (lap_num - 1), 2),
+                  fuel_end=round(100.0 - 3.4 * lap_num, 2))
     fields.update(overrides)
     return LapInput(**fields)
 
@@ -298,15 +307,32 @@ def test_no_gauge_reading_gives_an_assumed_model_not_a_number():
 
 
 def test_a_reading_at_the_race_multiplier_is_measured():
-    payload = wear_export(a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4))
+    """Measured only once the driver has said the set went on fresh.
+
+    Without that, the rate divides a reading by laps whose set could have been
+    half worn when the run started - which is arithmetic on an assumption, and
+    the roll-up says so rather than calling it measured.
+    """
+    laps = a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)
+    laps[0] = replace(laps[0], tyres_fresh=True)
+    payload = wear_export(laps)
     assert payload["modelConfidence"] == "measured"
+
+
+def test_an_undeclared_set_is_assumed_not_measured():
+    payload = wear_export(a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4,
+                                  wear_rr=0.4))
+    assert payload["modelConfidence"] == "assumed"
+    assert "byRun" in payload["modelConfidenceBasis"]
+    assert payload["byRun"][0]["assumesFreshAtLap"] == 1
     assert payload["byDriverGauge"][0]["source"] == "driver-gauge"
 
 
 def test_a_converted_figure_is_never_presented_as_measured():
     """Multiplier linearity is assumed, never demonstrated."""
-    payload = wear_export(a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4),
-                          calibrated_at_race_multiplier=False)
+    laps = a_stint(10, wear_fl=0.5, wear_fr=0.5, wear_rl=0.4, wear_rr=0.4)
+    laps[0] = replace(laps[0], tyres_fresh=True)
+    payload = wear_export(laps, calibrated_at_race_multiplier=False)
     assert payload["modelConfidence"] == "converted"
     assert "ASSUMED" in payload["modelBasis"]
 
@@ -315,7 +341,10 @@ def test_degradation_is_reported_with_the_phase_it_was_fitted_in():
     laps = [a_wear_lap(1, lap_time_ms=93_000),
             a_wear_lap(2, lap_time_ms=93_200),
             a_wear_lap(3, lap_time_ms=93_600),
-            a_wear_lap(4, lap_time_ms=94_000, wear_fl=0.7, wear_fr=0.7, wear_rl=0.6, wear_rr=0.6)]
+            a_wear_lap(4, lap_time_ms=93_800),
+            a_wear_lap(5, lap_time_ms=94_000),
+            a_wear_lap(6, lap_time_ms=94_200, wear_fl=0.7, wear_fr=0.7,
+                       wear_rl=0.6, wear_rr=0.6)]
     payload = wear_export(laps)
     assert payload["byLapTime"]["degradationMsPerLap"] > 0
     assert payload["byLapTime"]["phase"] == PHASE_LINEAR

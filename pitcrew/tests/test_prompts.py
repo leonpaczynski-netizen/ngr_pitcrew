@@ -55,7 +55,8 @@ def make_event(store, **overrides) -> int:
         tyre_wear_mult="4x", fuel_mult="2x", refuel_rate_lps=1.0,
         pit_loss_secs=19.5, mandatory_stops=1,
         available_compounds=["RH", "RM", "RS"], abs_setting="Weak", tcs=1,
-        countersteer=0, start_type="Rolling", time_of_day="Fixed day",
+        countersteer=0, game_version="1.70",
+        start_type="Rolling", time_of_day="Fixed day",
         priority="Race pace and tyre life", notes="League bans ballast.")
     fields.update(overrides)
     return store.create_event(**fields)

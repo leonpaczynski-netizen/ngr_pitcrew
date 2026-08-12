@@ -129,13 +129,13 @@ def detect_corners(frames: list[dict], model_id: str, *,
     the `corners` section, rather than by inventing one.
     """
     usable = [f for f in frames
-              if f.get("road_distance_m") is not None
+              if f.get("lap_distance_m") is not None
               and f.get("speed_kph") is not None]
     if len(usable) < 60:
         return None
 
-    usable.sort(key=lambda f: f["road_distance_m"])
-    distances = [f["road_distance_m"] for f in usable]
+    usable.sort(key=lambda f: f["lap_distance_m"])
+    distances = [f["lap_distance_m"] for f in usable]
     speeds = [f["speed_kph"] for f in usable]
     lap_length_m = distances[-1]
     if lap_length_m <= 0:

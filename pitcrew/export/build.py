@@ -7,7 +7,6 @@ back a payload that has already been validated — or refuse.
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import replace
 
 from pitcrew.analysis import thresholds
@@ -18,6 +17,7 @@ from pitcrew.analysis.corners import (
 )
 from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
+from pitcrew.analysis.runs import classify_exclusions, runs_export, split_runs
 from pitcrew.analysis.session import (
     LapInput,
     counted_laps,
@@ -91,8 +91,20 @@ def _rows_to_laps(store, rows) -> list[LapInput]:
             wear_rr=row["wear_rr"],
             gear_ratios=_ratios(row),
             frames=frames,
+            session_id=row["session_id"],
+            tyres_fresh=_tyres_fresh(row),
         ))
     return out
+
+
+def _tyres_fresh(row) -> bool | None:
+    """The driver's declaration, kept tri-state all the way to the export.
+
+    `None` is not `False`: he has not said, which is different from saying the
+    set carried over.
+    """
+    value = row["tyres_fresh"] if "tyres_fresh" in row.keys() else None
+    return None if value is None else bool(value)
 
 
 def _ratios(row) -> list[float] | None:
@@ -100,16 +112,32 @@ def _ratios(row) -> list[float] | None:
     return json.loads(raw) if raw else None
 
 
-def _dominant_compound(laps: list[LapInput]) -> str | None:
-    """The compound most of the counted laps ran on.
+def _compounds_run(runs) -> list[str]:
+    """Every compound the session actually ran, in the order it ran them.
 
-    None rather than a guess when nothing was tagged — the tune builder reads
-    an absent compound as "not recorded", which is true.
+    **Never a vote.** The 11 Aug Monza export ran three compounds across five
+    runs and declared one, because `meta.compound` was the most common tag and
+    two thirds of the session lost its argument silently. A reader given a
+    single compound reads a single-compound session; the compound that wins a
+    vote is not the compound that was on the car.
+
+    An untagged run contributes nothing rather than a guess.
     """
-    tags = [lap.compound for lap in counted_laps(laps) if lap.compound]
-    if not tags:
+    seen: list[str] = []
+    for run in runs:
+        code = run.compound
+        if code and code not in seen:
+            seen.append(code)
+    return seen
+
+
+def _sheet_final_gear(sheet) -> float | None:
+    """The final drive the driver typed, which is exact, unlike the derived one."""
+    value = (sheet.values or {}).get("fg")
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
         return None
-    return Counter(tags).most_common(1)[0][0]
 
 
 def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
@@ -155,7 +183,7 @@ def _merged_session(sessions: list[dict]) -> dict:
     each stream fact - a later run started before GT7 was streaming would
     otherwise erase what an earlier one measured.
     """
-    ordered = sorted(sessions, key=lambda s: s["started_at"])
+    ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
     for key in ("packet_format", "car_category", "fuel_capacity_l",
                 "setup_sheet_id"):
@@ -166,14 +194,20 @@ def _merged_session(sessions: list[dict]) -> dict:
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            calibrated_at_race_multiplier: bool) -> dict:
-    """Assemble the `gt7-pitcrew/1.3` payload."""
+    """Assemble the `gt7-pitcrew/1.4` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
         raise ValueError("session has no event")
 
+    # Applied before anything is aggregated, so `lapsCounted`, `bestLapMs`,
+    # the wear rates and the gearing all see one set of counted laps rather
+    # than each deciding for itself which laps were real.
+    laps = classify_exclusions(laps, session["fuel_capacity_l"])
     counted = counted_laps(laps)
+    runs = split_runs(laps)
 
-    compound = _compound_full_name(_dominant_compound(laps))
+    codes = _compounds_run(runs)
+    single = _compound_full_name(codes[0]) if len(codes) == 1 else None
     meta = Meta(
         car=event["car_name"] or "unknown",
         circuit=_circuit_name(event),
@@ -182,8 +216,13 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         packet=session["packet_format"] or "A",
         car_category=session["car_category"],
         game_version=event["game_version"],
-        compound_front=compound,
-        compound_rear=compound,
+        # Only where one compound was run. Several runs on several compounds
+        # is not a session with a compound, and voting on the most common tag
+        # made a three-compound session read as a Racing Hard one - which is
+        # the finding that nearly picked the race tyre.
+        compound_front=single,
+        compound_rear=single,
+        compounds_run=[_compound_full_name(code) for code in codes] or None,
         abs_setting=event["abs_setting"],
         tcs=event["tcs"],
         countersteer=(None if event["countersteer"] is None
@@ -206,15 +245,18 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     setup = None
     driver_changes = None
     sheet_gears = None
+    sheet_final_gear = None
     if session["setup_sheet_id"]:
         sheet = store.get_setup_sheet(session["setup_sheet_id"])
         if sheet is not None:
             setup = sheet.as_export()
             sheet_gears = sheet.gears
+            sheet_final_gear = _sheet_final_gear(sheet)
             changes = store.list_setup_changes(session["id"])
             driver_changes = [c.as_export() for c in changes] or None
 
-    gearing = gearing_export(counted, sheet_gears)
+    gearing = gearing_export(counted, sheet_gears,
+                             sheet_final_gear=sheet_final_gear)
     strategy = _strategy_section(store, event["id"])
 
     range_record = None
@@ -225,6 +267,10 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
 
     all_notes = " ".join(part for part in (exclusion_note(laps), notes) if part)
 
+    wear = wear_export(
+        laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier,
+        race_multiplier=event["tyre_wear_mult"])
+
     return build_payload(
         meta,
         setup=setup,
@@ -232,9 +278,9 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         range_record=range_record,
         session=session_export(laps, fuel_capacity_l=session["fuel_capacity_l"]),
         laps=[lap_export(lap) for lap in laps],
+        runs=runs_export(runs),
         corners=corners,
-        wear=wear_export(
-            laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier),
+        wear=wear,
         gearing=gearing,
         strategy=strategy,
         derived=Derived(thresholds.as_export(), bottoming_ref_mm=bottoming_ref),

@@ -194,8 +194,13 @@ def stint_laps(compound: str, count: int, *, lap_ms: int,
     for offset in range(count):
         num = start + offset
         final = offset == count - 1
+        # The tank descends across the run. A fixture that refills every lap
+        # is a fixture of consecutive pit stops, and the run splitter reads it
+        # as exactly that.
         laps.append(LapInput(
-            lap_num=num, lap_time_ms=lap_ms, fuel_start=92.0, fuel_end=89.4,
+            lap_num=num, lap_time_ms=lap_ms,
+            fuel_start=round(100.0 - 2.6 * offset, 2),
+            fuel_end=round(100.0 - 2.6 * (offset + 1), 2),
             compound=compound, is_pit_lap=final,
             wear_fl=worst if final else None))
     return laps

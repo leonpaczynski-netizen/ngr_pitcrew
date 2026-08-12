@@ -4,11 +4,13 @@ from __future__ import annotations
 import pytest
 
 from pitcrew.analysis.corner_model import detect_corners
+from pitcrew.analysis.runs import classify_exclusions
 from pitcrew.analysis.resolve import circuit_key, resolve_corner_model
 from pitcrew.analysis.session import (
     LapInput,
     counted_laps,
     exclusion_note,
+    exclusions_export,
     green_lap_reference_ms,
     lap_export,
     laps_per_stint,
@@ -20,8 +22,11 @@ from .test_corners import frame, synthetic_lap
 
 
 def a_lap(lap_num: int = 1, **overrides) -> LapInput:
+    # Descending tank: fuel is what separates one run from the next, so a
+    # fixture that refills every lap is a fixture of consecutive pit stops.
     fields = dict(lap_num=lap_num, lap_time_ms=94_000,
-                  fuel_start=92.0, fuel_end=88.6)
+                  fuel_start=round(100.0 - 3.4 * (lap_num - 1), 2),
+                  fuel_end=round(100.0 - 3.4 * lap_num, 2))
     fields.update(overrides)
     return LapInput(**fields)
 
@@ -55,14 +60,29 @@ def test_a_stated_reason_wins_over_the_structural_one():
     assert lap.reason_not_counted() == "spun at T4"
 
 
-def test_exclusion_note_names_laps_and_reasons():
-    laps = [a_lap(1, is_out_lap=True),
-            a_lap(2),
-            a_lap(3, excluded=True, exclusion_reason="traffic")]
+def test_exclusions_are_structured_with_a_reason_and_a_source():
+    """The reason and who found it, per lap - not eight sentences of prose."""
+    laps = classify_exclusions([a_lap(1, is_out_lap=True),
+                                a_lap(2),
+                                a_lap(3, excluded=True,
+                                      exclusion_reason="traffic")], 100.0)
+    assert exclusions_export(laps) == [
+        {"lap": 1, "reason": "out-lap", "source": "auto"},
+        {"lap": 3, "reason": "traffic", "source": "driver"},
+    ]
+
+
+def test_the_note_carries_only_what_the_structure_cannot():
+    """"struck by hand" repeats the source field and says nothing else.
+
+    "spun at T4" does not, so it survives being classified `manual`.
+    """
+    laps = classify_exclusions(
+        [a_lap(1, excluded=True, exclusion_reason="struck by hand"),
+         a_lap(2, excluded=True, exclusion_reason="spun at T4")], 100.0)
     note = exclusion_note(laps)
-    assert "lap 1 out-lap" in note
-    assert "lap 3 traffic" in note
-    assert "lap 2" not in note
+    assert "struck by hand" not in note
+    assert "lap 2 spun at T4" in note
 
 
 def test_no_exclusions_gives_an_empty_note():
@@ -76,7 +96,7 @@ def test_lap_export_shape():
     assert payload["lap"] == 3
     assert payload["timeMs"] == 94_000
     assert payload["valid"] is True
-    assert payload["fuelStartL"] == 92.0
+    assert payload["fuelStartL"] == 93.2
     assert payload["tyreTempMeanC"]["fl"] == 84.0
     assert payload["tyreTempMaxC"]["fl"] == 84.0
 

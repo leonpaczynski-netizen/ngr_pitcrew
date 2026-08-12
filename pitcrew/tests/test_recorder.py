@@ -42,8 +42,8 @@ def test_off_track_frames_are_dropped():
 
 def test_take_lap_round_trips_through_the_blob():
     rec = LapRecorder()
-    rec.record_frame(rolling_packet(time_of_day_ms=1000, throttle_raw=255, gear_raw=0x14))
-    rec.record_frame(rolling_packet(time_of_day_ms=1016, brake_raw=128))
+    rec.record_frame(rolling_packet(packet_id=1000, throttle_raw=255, gear_raw=0x14))
+    rec.record_frame(rolling_packet(packet_id=1001, brake_raw=128))
     lap = rec.take_lap()
 
     frames = decode_frames(lap.blob)
@@ -51,8 +51,39 @@ def test_take_lap_round_trips_through_the_blob():
     assert len(frames) == 2
     assert set(frames[0]) == set(FRAME_FIELDS)
     assert frames[0]["t_ms"] == 0
-    assert frames[1]["t_ms"] == 16
+    assert frames[1]["t_ms"] == 17
     assert frames[0]["gear"] == 4
+
+
+def test_the_clock_is_the_packet_counter_not_the_game_clock():
+    """GT7's time of day is frozen in one event and accelerated in another.
+
+    A day-to-night transition runs the in-game clock at many times real speed,
+    so laps timed against it came out spanning 970 s where the lap took 110 -
+    and every corner metric measured in milliseconds was scaled by whatever
+    multiplier the event happened to use.
+    """
+    rec = LapRecorder()
+    rec.record_frame(rolling_packet(packet_id=500, time_of_day_ms=0))
+    rec.record_frame(rolling_packet(packet_id=501, time_of_day_ms=60_000))
+    rec.record_frame(rolling_packet(packet_id=502, time_of_day_ms=0))
+    frames = decode_frames(rec.take_lap().blob)
+    assert [f["t_ms"] for f in frames] == [0, 17, 33]
+
+
+def test_lap_distance_is_integrated_because_gt7_broadcasts_none():
+    """A corner is a window of lap distance, and GT7 sends no such channel.
+
+    What the recorder used to store as distance was the road plane's fourth
+    coefficient, which is why no session ever produced a corner model.
+    """
+    rec = LapRecorder()
+    for index in range(60):
+        rec.record_frame(rolling_packet(packet_id=index, speed_ms=50.0))
+    frames = decode_frames(rec.take_lap().blob)
+    # 50 m/s for one second of packets, less the first frame's step.
+    assert 48.0 < frames[-1]["lap_distance_m"] <= 50.0
+    assert frames[0]["lap_distance_m"] < frames[-1]["lap_distance_m"]
 
 
 def test_pedals_are_stored_as_percent():

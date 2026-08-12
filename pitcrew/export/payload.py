@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.3` payload.
+"""Building and validating the `gt7-pitcrew/1.4` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from pitcrew.telemetry.packet import STEER_SOURCE
 from pitcrew.telemetry.recorder import DEFAULT_STEER_ROTATION_DEG
 
-FORMAT = "gt7-pitcrew/1.3"
-APP_VERSION = "pitcrew 2.1.0"
+FORMAT = "gt7-pitcrew/1.4"
+APP_VERSION = "pitcrew 2.2.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
 PACKET_FORMATS = ("A", "B", "~", "C")
@@ -41,6 +41,11 @@ class Meta:
     game_version: str | None = None
     compound_front: str | None = None
     compound_rear: str | None = None
+    # Every compound the session ran, in order. Present whether one was run or
+    # five; `compound.front/.rear` is emitted only when there was exactly one,
+    # because a single compound is a fact about the session and a vote between
+    # three is not.
+    compounds_run: list[str] | None = None
     abs_setting: str | None = None
     tcs: int | None = None
     countersteer: bool | None = None
@@ -66,6 +71,8 @@ class Meta:
                 "front": self.compound_front,
                 "rear": self.compound_rear,
             }
+        if self.compounds_run:
+            payload["compoundsRun"] = list(self.compounds_run)
         if any(v is not None for v in (self.abs_setting, self.tcs, self.countersteer)):
             payload["assists"] = {
                 "abs": self.abs_setting,
@@ -113,6 +120,7 @@ def build_payload(meta: Meta, *,
                   range_record: dict | None = None,
                   session: dict | None = None,
                   laps: list[dict] | None = None,
+                  runs: list[dict] | None = None,
                   corners: list[dict] | None = None,
                   wear: dict | None = None,
                   gearing: dict | None = None,
@@ -133,6 +141,8 @@ def build_payload(meta: Meta, *,
         payload["session"] = session
     if laps:
         payload["laps"] = list(laps)
+    if runs:
+        payload["runs"] = list(runs)
     if corners:
         payload["corners"] = list(corners)
     if wear:
@@ -165,6 +175,16 @@ def validate(payload: dict) -> list[str]:
         if not meta.get(key):
             problems.append(f"meta.{key} is required")
 
+    # Required since 1.4. GT7's physics, tyre model and geometry have been
+    # rewritten twice in two updates, so a measurement without the version it
+    # was taken under cannot be filed and cannot safely be compared with the
+    # next one. Refusing costs one field on the event page; not refusing costs
+    # a measurement that reads as current forever.
+    if not meta.get("gameVersion"):
+        problems.append(
+            "meta.gameVersion is required - a measurement with no game version "
+            "cannot be filed against the update it was taken under")
+
     if meta.get("sessionType") and meta["sessionType"] not in SESSION_TYPES:
         problems.append(
             f"meta.sessionType must be one of {SESSION_TYPES}, "
@@ -195,11 +215,90 @@ def validate(payload: dict) -> list[str]:
                     f"meta.multipliers.{key} must be a string so that 'Off' is "
                     f"representable, got {value!r}")
 
+    problems.extend(_validate_compounds(payload, meta))
+    problems.extend(_validate_runs(payload))
     problems.extend(_validate_corners(payload, meta))
     problems.extend(_validate_laps(payload))
     problems.extend(_validate_wear(payload))
     problems.extend(_validate_no_tow(payload))
     problems.extend(_validate_strategy(payload))
+    return problems
+
+
+def _validate_compounds(payload: dict, meta: dict) -> list[str]:
+    """`wear.byCompound` may only name compounds the session actually ran.
+
+    This is the check that was missing when an export carried wear rates for
+    Racing Soft and Racing Medium against a `meta.compound` of Racing Hard,
+    each tagged `driver-gauge` - the highest-trust provenance in the schema -
+    and a consumer picked the race tyre off them. A rate for a compound the
+    session never ran is a fabrication however it got there, so it is refused
+    rather than left to discipline.
+    """
+    wear = payload.get("wear")
+    if not isinstance(wear, dict):
+        return []
+    by_compound = wear.get("byCompound")
+    if not isinstance(by_compound, dict):
+        return []
+
+    recorded = set(meta.get("compoundsRun") or [])
+    compound = meta.get("compound") or {}
+    for end in ("front", "rear"):
+        if compound.get(end):
+            recorded.add(compound[end])
+    if not recorded:
+        return ["wear.byCompound is present but meta records no compound at "
+                "all, so its keys cannot be checked against what was run"]
+
+    problems = []
+    for code, entry in by_compound.items():
+        name = (entry or {}).get("compound")
+        if not name:
+            problems.append(
+                f"wear.byCompound.{code} does not name its compound, so it "
+                f"cannot be checked against meta")
+            continue
+        if name not in recorded:
+            problems.append(
+                f"wear.byCompound.{code} is {name!r}, which this session never "
+                f"ran - it recorded {sorted(recorded)}")
+
+    single = compound.get("front") or compound.get("rear")
+    if single and len(by_compound) > 1:
+        problems.append(
+            f"meta.compound says one compound ({single!r}) but wear.byCompound "
+            f"carries {len(by_compound)} - one of the two is inventing a stint")
+    return problems
+
+
+def _validate_runs(payload: dict) -> list[str]:
+    """Runs must be ordered, contiguous, and honest about the tyres."""
+    runs = payload.get("runs")
+    if runs is None:
+        return []
+    problems = []
+    previous = None
+    for index, run in enumerate(runs):
+        where = f"runs[{index}]"
+        if not isinstance(run.get("id"), int):
+            problems.append(f"{where}.id is required")
+        first, last = run.get("firstLap"), run.get("lastLap")
+        if not isinstance(first, int) or not isinstance(last, int):
+            problems.append(f"{where} must carry firstLap and lastLap")
+            continue
+        if last < first:
+            problems.append(f"{where} ends at lap {last}, before it starts")
+        if previous is not None and first <= previous:
+            problems.append(
+                f"{where} starts at lap {first}, which run before it already "
+                f"covered - a lap belongs to one run")
+        previous = last
+        if run.get("tyresFresh") is False and not run.get("tyresFreshSource"):
+            problems.append(
+                f"{where}.tyresFresh is false, which claims the set carried "
+                f"over. That is a positive claim and needs its source; "
+                f"'not declared' is null")
     return problems
 
 

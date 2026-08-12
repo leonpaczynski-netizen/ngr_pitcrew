@@ -33,8 +33,12 @@ def frames(temp_c: float, count: int = 20) -> list[dict]:
 
 
 def lap_at(lap_num: int, compound: str, temp_c: float, **overrides) -> LapInput:
-    fields = dict(lap_num=lap_num, lap_time_ms=94_000, fuel_start=92.0,
-                  fuel_end=89.4, compound=compound, frames=frames(temp_c))
+    # The tank descends across the run; fuel is what tells one run from the
+    # next, and a fixture that refills every lap reads as one stop per lap.
+    fields = dict(lap_num=lap_num, lap_time_ms=94_000,
+                  fuel_start=round(100.0 - 2.6 * (lap_num - 1), 2),
+                  fuel_end=round(100.0 - 2.6 * lap_num, 2),
+                  compound=compound, frames=frames(temp_c))
     fields.update(overrides)
     return LapInput(**fields)
 

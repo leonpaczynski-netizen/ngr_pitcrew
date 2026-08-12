@@ -155,7 +155,7 @@ def test_a_tow_key_anywhere_is_refused():
     """GT7 has no proximity, closing speed or opponents. A tow field would be
     a fabrication by definition."""
     meta = Meta(car="C", circuit="T", date="2026-08-11",
-                session_type="practice", packet="C")
+                session_type="practice", packet="C", game_version="1.70")
     payload = build_payload(meta, gearing={"maxSpeedKph": 300.0,
                                            "towSpeedKph": 312.0})
     problems = validate(payload)
@@ -164,7 +164,7 @@ def test_a_tow_key_anywhere_is_refused():
 
 def test_a_tow_key_nested_deep_is_still_refused():
     meta = Meta(car="C", circuit="T", date="2026-08-11",
-                session_type="practice", packet="C")
+                session_type="practice", packet="C", game_version="1.70")
     payload = build_payload(meta, laps=[{"lap": 1, "timeMs": 1,
                                          "inTow": True}])
     assert any("tow" in problem for problem in validate(payload))
@@ -172,7 +172,7 @@ def test_a_tow_key_nested_deep_is_still_refused():
 
 def test_an_honest_gearing_section_passes():
     meta = Meta(car="C", circuit="T", date="2026-08-11",
-                session_type="practice", packet="C")
+                session_type="practice", packet="C", game_version="1.70")
     payload = build_payload(meta, gearing=gearing_export([a_lap()], RATIOS))
     assert validate(payload) == []
 
@@ -207,7 +207,7 @@ def test_shifts_in_a_corner_are_counted():
 
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        f["gear"] = 2 if f["road_distance_m"] < 620 else 3
+        f["gear"] = 2 if f["lap_distance_m"] < 620 else 3
     model = CornerModel("t", 1, SOURCE_AUTO_SEGMENT, 2000.0,
                         (Corner("T1", "Turn 1", 480, 600, 720),))
     corner = aggregate_corners(model, [CountedLap(1, frames)])[0]
@@ -236,7 +236,7 @@ def test_the_upshift_rpm_makes_short_shifting_visible():
 
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        short = f["road_distance_m"] >= 620
+        short = f["lap_distance_m"] >= 620
         f["gear"] = 3 if short else 2
         f["rpm"] = 6200.0 if short else 7000.0
     model = CornerModel("t", 1, SOURCE_AUTO_SEGMENT, 2000.0,

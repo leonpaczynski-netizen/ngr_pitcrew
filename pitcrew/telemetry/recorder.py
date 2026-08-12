@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pitcrew.telemetry.packet import GT7Packet
 
 SAMPLE_HZ = 60.0
+MS_PER_PACKET = 1000.0 / SAMPLE_HZ
 BLOB_FORMAT = "pitcrew.frames.v1"
 
 # Column order is part of the on-disk format.  Append only — never reorder, or
@@ -36,8 +37,16 @@ BLOB_FORMAT = "pitcrew.frames.v1"
 # Deliberately absent: oil and water temperature.  GT7 pins them at ~110 C and
 # ~85 C regardless of what the car is doing, so they carry no information.
 FRAME_FIELDS: tuple[str, ...] = (
-    "t_ms",              # ms since the lap's first frame
-    "road_distance_m",   # m from the start/finish line (GT7 0xA0)
+    "t_ms",              # ms since the lap's first frame, from the packet counter
+    # GT7 0xA0. This is the road plane's fourth coefficient, NOT distance
+    # around the lap: it reads about -80 to -250 m and covers 125 m over a
+    # whole lap of Monza. It was named `road_distance_m` and fed to corner
+    # detection, which is why no session ever produced a corner model and why
+    # `corners` - the section the contract calls the one to build if only one
+    # gets built - has never once been exported. Kept because the on-disk
+    # format is append-only, named for what it is so it cannot be mistaken
+    # again. Nothing reads it.
+    "road_plane_d",
     "speed_kph",
     "throttle_pct",      # 0-100
     "brake_pct",         # 0-100
@@ -59,6 +68,11 @@ FRAME_FIELDS: tuple[str, ...] = (
     # Appended, so laps recorded before this still decode - the blob carries
     # its own field list.
     "tyre_radius_m",
+    # **Distance around the lap, metres from the line.** GT7 broadcasts no
+    # such channel, so it is integrated here from speed against the packet
+    # clock. Everything about corner identity depends on it: a corner is a
+    # window of lap distance, and without one there are no corners.
+    "lap_distance_m",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -116,6 +130,46 @@ def decode_frames(blob: bytes) -> list[dict]:
     return [dict(zip(fields, row)) for row in payload["rows"]]
 
 
+def repair_frames(frames: list[dict],
+                  sample_hz: float = SAMPLE_HZ) -> list[dict]:
+    """Give laps recorded before this a lap distance and a working clock.
+
+    Two channels were wrong in every lap captured up to now, and both are
+    recoverable from what *was* stored:
+
+    * **`lap_distance_m` did not exist.** What was recorded as distance was the
+      road plane's fourth coefficient. Speed integrated at the known sample
+      rate lands within a percent of the circuit's published length and does so
+      consistently lap to lap, which is what corner windows need.
+    * **`t_ms` was GT7's in-game clock.** Frozen in a fixed-time event and
+      running at many times real speed in a day-to-night one, so laps came out
+      spanning 0 s or 970 s where the lap took 110 s. Every corner metric timed
+      against it - trail-brake duration, time loss, consistency - was scaled by
+      whatever the event's time multiplier happened to be. The frame index at
+      the sample rate is the real elapsed time.
+
+    A lap already carrying `lap_distance_m` was recorded after the fix and is
+    left exactly as it is. A lap with no speed channel is left alone too: the
+    distance stays absent and the corner model reports no corners, which is
+    honest.
+    """
+    if not frames or frames[0].get("lap_distance_m") is not None:
+        return frames
+    if all(frame.get("speed_kph") is None for frame in frames):
+        return frames
+    rate = sample_hz or SAMPLE_HZ
+    distance = 0.0
+    out = []
+    for index, frame in enumerate(frames):
+        speed = frame.get("speed_kph")
+        if speed is not None:
+            distance += speed / 3.6 / rate
+        out.append({**frame,
+                    "lap_distance_m": round(distance, 2),
+                    "t_ms": int(round(index * 1000.0 / rate))})
+    return out
+
+
 class LapRecorder:
     """Buffers frames for the lap in progress and hands them over on completion."""
 
@@ -126,7 +180,9 @@ class LapRecorder:
         self._lock = threading.Lock()
         self._counter = 0
         self._rows: list[list] = []
-        self._lap_start_ms: int | None = None
+        self._lap_start_packet: int | None = None
+        self._last_packet_id: int | None = None
+        self._distance_m = 0.0
         self._dropped_off_track = 0
 
     @property
@@ -144,9 +200,27 @@ class LapRecorder:
                 self._dropped_off_track += 1
                 return
 
-            if self._lap_start_ms is None:
-                self._lap_start_ms = packet.time_of_day_ms
-            elapsed = max(0, packet.time_of_day_ms - self._lap_start_ms)
+            # The clock is the packet counter, not GT7's time of day.
+            # `time_of_day_ms` is the *in-game* clock: it is frozen at a fixed
+            # time of day and runs at many times real speed in a day-to-night
+            # event, so laps recorded through one came out spanning 0 s and
+            # laps through the other 970 s - for a 110 s lap. Everything timed
+            # off it was wrong by whatever multiplier the event happened to
+            # use. The counter ticks once per packet at a known 60 Hz.
+            if self._lap_start_packet is None:
+                self._lap_start_packet = packet.packet_id
+            elapsed = max(0, int(round(
+                (packet.packet_id - self._lap_start_packet) * MS_PER_PACKET)))
+
+            # Distance around the lap, integrated from speed. GT7 broadcasts
+            # no lap-distance channel at all, and corner identity is a window
+            # of lap distance, so this is what makes corners possible. Stepped
+            # by the gap since the previous packet so a dropped packet costs
+            # its own distance rather than shifting everything after it.
+            step = 1 if self._last_packet_id is None else max(
+                1, packet.packet_id - self._last_packet_id)
+            self._last_packet_id = packet.packet_id
+            self._distance_m += packet.speed_ms * step / SAMPLE_HZ
 
             slip = _slip_ratios(packet)
             lat_g = abs(packet.speed_ms * packet.angvel_z) / 9.81
@@ -181,6 +255,7 @@ class LapRecorder:
                 round(packet.road_plane_y, 4),
                 1 if packet.rev_limiter_active else 0,
                 round(packet.tyre_radius_rl, 4),
+                round(self._distance_m, 2),
             ])
 
     def take_rows(self) -> list[list]:
@@ -195,7 +270,9 @@ class LapRecorder:
         with self._lock:
             rows = self._rows
             self._rows = []
-            self._lap_start_ms = None
+            self._lap_start_packet = None
+            self._last_packet_id = None
+            self._distance_m = 0.0
             self._dropped_off_track = 0
         return rows
 
@@ -216,4 +293,6 @@ class LapRecorder:
     def discard(self) -> None:
         with self._lock:
             self._rows = []
-            self._lap_start_ms = None
+            self._lap_start_packet = None
+            self._last_packet_id = None
+            self._distance_m = 0.0

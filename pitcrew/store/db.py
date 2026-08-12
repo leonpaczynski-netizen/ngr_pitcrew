@@ -437,12 +437,29 @@ class Store:
             "SELECT laps.*, sessions.started_at AS session_started "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? AND sessions.kind = ? "
-            "ORDER BY sessions.started_at, laps.lap_num", (event_id, kind))
+            # `started_at` is second-resolution, so two runs begun in the same
+            # second tie and their laps interleave - which reads as one run
+            # whose tank refills every other lap. The session id breaks the tie
+            # in the order the runs actually happened.
+            "ORDER BY sessions.started_at, sessions.id, laps.lap_num",
+            (event_id, kind))
         return [dict(r) for r in rows]
 
     def set_lap_compound(self, lap_id: int, compound: str | None) -> None:
         with self._write() as conn:
             conn.execute("UPDATE laps SET compound = ? WHERE id = ?", (compound, lap_id))
+
+    def set_lap_tyres_fresh(self, lap_id: int, fresh: bool | None) -> None:
+        """Record that this lap went out on a fresh set, or unsay it.
+
+        None is not False. None is "he has not said", which is what every lap
+        is until he does; False is the positive claim that the set carried over
+        from the run before, which is worth as much and is his to make.
+        """
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE laps SET tyres_fresh = ? WHERE id = ?",
+                (None if fresh is None else int(fresh), lap_id))
 
     def set_lap_fuel_map(self, lap_id: int, fuel_map: int | None) -> None:
         with self._write() as conn:
@@ -505,12 +522,17 @@ class Store:
         rows = self._query("SELECT * FROM lap_frames WHERE lap_id = ?", (lap_id,))
         if not rows:
             return None
-        from pitcrew.telemetry.recorder import decode_frames
+        from pitcrew.telemetry.recorder import decode_frames, repair_frames
         row = rows[0]
         return {
             "sample_hz": row["sample_hz"],
             "frame_count": row["frame_count"],
-            "frames": decode_frames(row["blob"]),
+            # Laps recorded before the lap-distance channel existed, and
+            # before the clock was taken off GT7's time of day, are repaired
+            # here - so a session captured last week still yields corners
+            # rather than having to be run again.
+            "frames": repair_frames(decode_frames(row["blob"]),
+                                    row["sample_hz"]),
         }
 
     def has_frames(self, lap_id: int) -> bool:

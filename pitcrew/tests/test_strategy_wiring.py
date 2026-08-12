@@ -212,8 +212,13 @@ def two_compounds(qt_app, store: Store):  # noqa: F811
         for step in range(1, 13):
             lap_num += 1
             last = step == 12
+            # The tank descends across each stint and is filled at the stop.
+            # Fuel is what separates one run from the next, so a fixture that
+            # refills every lap is twelve stops, not one stint.
             lap = Lap(lap_num=lap_num, lap_time_ms=lap_ms, best_lap_ms=lap_ms,
-                      delta_ms=0, fuel_start=92.0, fuel_end=89.4,
+                      delta_ms=0,
+                      fuel_start=round(100.0 - 2.6 * (step - 1), 2),
+                      fuel_end=round(100.0 - 2.6 * step, 2),
                       fuel_used=2.6, position=1,
                       is_pit_lap=last, is_out_lap=False)
             lap_id = store.add_lap(session_id, lap)

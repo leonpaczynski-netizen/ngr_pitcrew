@@ -38,6 +38,21 @@ class LapInput:
     is_out_lap: bool = False
     excluded: bool = False
     exclusion_reason: str | None = None
+    # `auto` when the app found the reason itself, `driver` when he struck the
+    # lap by hand. Set by `runs.classify_exclusions`, so that a reason the app
+    # could have worked out is never left reading as an unexplained strike.
+    exclusion_source: str | None = None
+    # What the driver actually typed, where the vocabulary cannot hold it.
+    # "spun at T4" survives being classified `manual`; "struck by hand" does
+    # not, because it says nothing the classification does not.
+    driver_note: str | None = None
+    # Which recorded session this lap came from. A stop-and-restart means the
+    # car went back to the garage, so laps either side are not one stint.
+    session_id: int | None = None
+    # The driver's declaration that this lap started on a fresh set. `None`
+    # means he has not said — never `False`, which would claim the set carried
+    # over. GT7 broadcasts no tyre-change event, so this is the only source.
+    tyres_fresh: bool | None = None
     # The driver's gauge reading per corner, fraction consumed 0-1. Same
     # vocabulary as the tyre temperatures below, so a wear figure and the
     # temperature that explains it are named the same thing.
@@ -179,6 +194,7 @@ def session_export(laps: list[LapInput],
         "lapsRun": len(laps),
         "lapsCounted": len(counted),
         "lapsExcluded": [lap.lap_num for lap in laps if not lap.counted],
+        "lapsExcludedDetail": exclusions_export(laps),
         "fuelUsedPerLapL": fuel_per_lap,
         "fuelCapacityL": fuel_capacity_l,
         "bestLapMs": min(times) if times else None,
@@ -189,14 +205,44 @@ def session_export(laps: list[LapInput],
     return payload
 
 
+def exclusions_export(laps: list[LapInput]) -> list[dict]:
+    """Why each dropped lap was dropped, and who worked it out.
+
+    The flat `lapsExcluded` array says which laps went; this says why. Eight
+    repetitions of "struck by hand" in `notes` qualified nothing — and half of
+    them were out-laps the refuel boundary names for free.
+    """
+    out = []
+    for lap in laps:
+        if lap.counted:
+            continue
+        entry = {
+            "lap": lap.lap_num,
+            "reason": lap.reason_not_counted(),
+            "source": lap.exclusion_source or "driver",
+        }
+        if lap.driver_note:
+            entry["note"] = lap.driver_note
+        out.append(entry)
+    return out
+
+
 def exclusion_note(laps: list[LapInput]) -> str:
-    """Prose for `notes` saying which laps were dropped and why."""
-    dropped = [(lap.lap_num, lap.reason_not_counted())
-               for lap in laps if not lap.counted]
-    if not dropped:
+    """Prose for `notes`, only where the structure cannot carry it.
+
+    `session.lapsExcludedDetail` carries the reason and its source per lap, so
+    repeating them here would be eight sentences saying what the structure
+    already says. What is left for prose is a driver's own words where they say
+    more than the vocabulary does.
+    """
+    stated = [(lap.lap_num, lap.driver_note.strip())
+              for lap in laps
+              if not lap.counted and lap.driver_note
+              and lap.driver_note.strip()]
+    if not stated:
         return ""
-    parts = [f"lap {num} {reason}" for num, reason in dropped]
-    return "Excluded: " + ", ".join(parts) + "."
+    parts = [f"lap {num} {reason}" for num, reason in stated]
+    return "Driver's account of the struck laps: " + ", ".join(parts) + "."
 
 
 def laps_per_stint(laps: list[LapInput]) -> list[list[LapInput]]:

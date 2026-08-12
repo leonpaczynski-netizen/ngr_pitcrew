@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.3`
+# Pit Crew export contract — `gt7-pitcrew/1.4`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,9 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2 and 1.3).
+1.1) and §16 (1.2, 1.3 and 1.4). **Every version bump lands with its change table in
+the same commit** — without one the consumer cannot tell an added field from a
+renamed one, and has to read every unfamiliar field conservatively.
 
 ---
 
@@ -28,7 +30,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.3",
+  "format": "gt7-pitcrew/1.4",
   "meta":        { },
   "setup":       { },
   "rangeRecord": { },
@@ -69,10 +71,11 @@ section full of zeros is not.
 | `car` | string | Full GT7 name including year, exactly as the game writes it |
 | `carCategory` | string | `Gr.1`…`Gr.4`, `Gr.B`, `N100`…`N1000`, or `null` |
 | `circuit` | string | Full GT7 name including layout variant |
-| `gameVersion` | string | e.g. `"1.70"` |
 | `date` | string | `YYYY-MM-DD` |
 | `sessionType` | enum | `practice` \| `quali` \| `tt` \| `race` — must match the Driver Feedback tab so the two halves line up |
-| `compound.front/.rear` | string | Full compound name. GT7 cannot run split compounds, so these are normally equal; keep both fields so a mismatch is visible as an input error |
+| `gameVersion` | string | **Required since 1.4.** Export refuses without it |
+| `compound.front/.rear` | string | Full compound name. GT7 cannot run split compounds, so these are normally equal; keep both fields so a mismatch is visible as an input error. **Emitted only when exactly one compound was run** — a session that ran three has no compound, and voting on the most common lap tag made two thirds of it disappear |
+| `compoundsRun` | array of string | Every compound the session ran, in order, full names. Present whether one was run or five. `wear.byCompound` may name no compound absent from this list, and export refuses if it does |
 | `assists.abs` | enum | `Off` \| `Weak` \| `Default` |
 | `assists.tcs` | int 0–5 | |
 | `assists.countersteer` | bool | |
@@ -166,6 +169,12 @@ lines and it keeps the register in sync automatically.
   "lapsRun": 12,
   "lapsCounted": 9,
   "lapsExcluded": [1, 2, 11],
+  "lapsExcludedDetail": [
+    { "lap": 1,  "reason": "out-lap",          "source": "auto" },
+    { "lap": 2,  "reason": "manual",           "source": "driver",
+      "note": "spun at T4" },
+    { "lap": 11, "reason": "fuel-implausible", "source": "auto" }
+  ],
   "fuelUsedPerLapL": 3.42,
   "fuelCapacityL": 100,
   "bestLapMs": 93912,
@@ -175,8 +184,18 @@ lines and it keeps the register in sync automatically.
 }
 ```
 
-- `lapsCounted` excludes out-laps, in-laps, laps with an off, and traffic-compromised
-  laps. `lapsExcluded` lists which, and `notes` says why.
+- `lapsCounted` excludes out-laps, in-laps, laps with an off, traffic-compromised
+  laps, and laps whose fuel burn says they never went round. `lapsExcluded` lists
+  which; **`lapsExcludedDetail` says why and who worked it out.**
+- `lapsExcludedDetail[].reason` ∈ `out-lap` | `in-lap` | `incident` | `traffic` |
+  `fuel-implausible` | `manual`; `.source` ∈ `auto` | `driver`. `note` appears only
+  where the driver's own words say more than the vocabulary does — "spun at T4"
+  survives, "struck by hand" does not, because it repeats `source`.
+- **Fuel plausibility is part of validity.** A lap burning less than half the
+  session's median burn is a lap boundary that landed inside a pit or garage
+  transition: it is `valid: false`, absent from `lapsCounted`, and never eligible
+  for `bestLapMs`. Skipped entirely when `fuelCapacityL` is 0 — an electric car
+  burns nothing and every lap would fail.
 - **Median, not mean.** One bad lap should not move the number.
 - `greenLapRefMs` — the fresh-tyre reference lap the degradation model is measured
   against. Needed to interpret `wear.byLapTime`.
@@ -207,6 +226,47 @@ Export tyre temperature **mean and max** per corner per lap. The mean gives the
 working range; the max shows what is being abused. Tyre temperature is the one
 channel GT7 gives that maps directly onto load distribution, and it is the strongest
 available evidence for a front-left overload pattern.
+
+### 6.1 `runs` — which tank, and which set of tyres
+
+**Nothing may be fitted across a refuel**, and until 1.4 nothing in the payload said
+where one run ended and the next began. A wear rate spanning three tanks, and a
+lap-time trend spanning five, were both computed and both reported as facts about the
+tyre.
+
+```json
+"runs": [
+  { "id": 1, "firstLap": 1, "lastLap": 4, "laps": 4, "lapsCounted": 3,
+    "fuelStartL": 100.0, "fuelEndL": 74.82, "fuelDeltaL": 25.18,
+    "refuelledBefore": false, "compound": "RS",
+    "tyresFresh": null,
+    "tyresFreshSource": "not declared - the feed carries no tyre-change event" },
+  { "id": 2, "firstLap": 5, "lastLap": 6, "laps": 2, "lapsCounted": 1,
+    "fuelStartL": 99.97, "fuelEndL": 87.58, "fuelDeltaL": 12.4,
+    "refuelledBefore": true, "compound": "RS",
+    "tyresFresh": true,
+    "tyresFreshSource": "driver-declared at the run's first lap" }
+]
+```
+
+**A tank and a set of tyres are different objects, and this section keeps them apart.**
+
+| Field | Definition |
+|---|---|
+| `id` | 1-based, in the order the runs happened. `wear.byDriverGauge[].runId`, `wear.byRun[].runId` and `wear.byCompound[].runIds` all point here |
+| `firstLap` / `lastLap` | Inclusive, in the payload's own lap numbering. Runs never overlap and export refuses if they do |
+| `refuelledBefore` | **Measured.** The tank rose by more than 0.5 L between the end of the previous lap and the start of this one. A run also starts wherever the driver came in, and wherever the recording session changed — a stop and restart means he went back to the garage |
+| `fuelStartL` / `fuelEndL` / `fuelDeltaL` | **Measured.** What the tank did across the run. `fuelDeltaL` is what `wear.byLapTime.fuelDeltaL` is netted against, if the reader chooses to net it |
+| `compound` | The compound tagged on this run's laps, or `null` where they disagree. **Never a vote** — a run tagged two ways is a data-entry question, and answering it silently is how three compounds became one |
+| `tyresFresh` | `true`, `false` or **`null`**. **The driver's declaration, and nothing else.** GT7 broadcasts no wear channel and no tyre-change event, so this cannot be derived: taking fuel without taking tyres is a normal stop, and inferring `true` from a refuel would halve every wear rate spanning one. `null` means he has not said. **`false` is a positive claim that the set carried over** and needs its source; export refuses a bare `false` |
+| `tyresFreshSource` | How that value was arrived at. Required alongside a `false` |
+
+**Why `tyresFresh` is worth a field at all.** Every wear rate in `wear.byRun` that
+comes from a single gauge reading needs a starting point. Where the driver has
+declared the set fresh there is one, and the rate is `measured`. Where he has not, the
+rate assumes the set went on at the run's first lap — which is usually true and is
+occasionally very wrong — so it carries `assumesFreshAtLap` and drops to `assumed`.
+The arithmetic is identical; what differs is whether the export says so.
 
 ---
 
@@ -280,6 +340,13 @@ average legitimately.
 | `off-track` | any wheel on a surface other than `T` or `C` |
 | `kerb-strike` | suspension height step change > 20 mm in < 100 ms |
 
+**A flag carries its lap count.** `flags` lists only those that fired on at least
+`derived.thresholds.flagMinShareOfLaps` of the counted laps - a quarter. `flagLaps`
+gives every flag seen with the number of laps it fired on, and `flagThresholdLaps` the
+count that had to be met. A set union across laps made every corner carry every flag
+once enough laps were run: seven findings, which is none. Standing rule 4 applies to
+flags exactly as it does to numbers.
+
 **Thresholds are the app's, not the game's.** Restate them in `derived.thresholds` on
 every export, so that retuning a detector does not read as a change in the car.
 
@@ -319,9 +386,28 @@ a fresh tyre and be believed.
     "leftMinusRight": 0.048,
     "source": "driver-gauge"
   },
+  "byRun": [
+    { "runId": 3, "compound": "RS", "firstLap": 7, "lastLap": 10,
+      "readingLap": 10, "reading": 0.69, "readingCorner": "rl",
+      "wearPerLap": 0.1725,
+      "method": "one gauge reading, assumed fresh at the run's first lap",
+      "confidence": "assumed", "source": "driver-gauge",
+      "assumesFreshAtLap": 7,
+      "degradationMsPerLap": null, "degradationSamples": 2 }
+  ],
+  "byCompound": {
+    "RS": { "compound": "Racing Soft", "wearPerLap": 0.1725,
+            "stints": 3, "stintsMeasured": 1, "runIds": [1, 2, 3],
+            "source": "driver-gauge", "confidence": "assumed" }
+  },
   "byLapTime": {
     "refLapMs": 93912,
-    "degradationMsPerLap": 118,
+    "degradationMsPerLap": -38.2,
+    "fittedRunId": 5,
+    "fittedOverLaps": [22, 36],
+    "samples": 12,
+    "fuelDeltaL": 98.57,
+    "fuelNetted": false,
     "phase": "linear",
     "estimatedFractionAtEnd": 0.74,
     "source": "lap-time-model",
@@ -334,10 +420,54 @@ a fresh tyre and be believed.
     "confidence": "low"
   },
   "modelledStintLaps": 11,
-  "modelBasis": "0.85 / w, w measured in-house at this multiplier",
-  "modelConfidence": "measured"
+  "wearMeasuredAtRaceMultiplier": true,
+  "wearMultiplier": "8x",
+  "modelBasis": "0.85 / w, w from the driver's gauge at this multiplier",
+  "modelConfidence": "assumed",
+  "modelConfidenceBasis": "weakest of byCompound.RS (assumed), byRun[3] (assumed); byLapTime and byTemp corroborate rather than feed this and carry their own confidence"
 }
 ```
+
+**Every rate is computed inside one run** (section 6.1) and never across a refuel. The
+previous rule - one reading divided by the laps of every run sharing a compound tag -
+read a Racing Soft set consuming 17% a lap as 6.9%: an understatement of two and a
+half times, in the direction section 5.1 of `CLAUDE.md` says costs most.
+
+- `byRun` is one record per run: what the gauge said, the rate it gives, **the method
+  that produced it**, and what that method had to assume. `method` is either
+  `"two gauge readings inside one run"`, which assumes nothing, or `"one gauge
+  reading, assumed fresh at the run's first lap"`, which carries `assumesFreshAtLap`
+  and is `assumed` unless the driver declared the set fresh. Where no rate could be
+  taken, `wearPerLap` is `null` and `wearPerLapUnavailable` says why in a sentence.
+- `byRun[].degradationMsPerLap` is the lap-time trend **inside that run only**. Two
+  runs on one compound can trend opposite ways; a single headline figure hides that,
+  and the disagreement is worth more than the headline.
+- `byCompound[].compound` is the full name, so the section can be checked against
+  `meta.compoundsRun` - **export refuses a compound the session never ran.**
+  `stints` is how many runs were on that compound; `stintsMeasured` how many produced
+  a rate. Run three times and read once is a thinner claim than run once and read
+  once, and only the pair of counts says so.
+- `byLapTime` is fitted **within one run**, by **Theil-Sen** (the median of pairwise
+  slopes), and names the run in `fittedRunId` / `fittedOverLaps` / `samples`. Fitted
+  across tanks, the sawtooth of a car getting heavier and then abruptly light reads as
+  degradation: +72 ms/lap was once exported for a car that was getting faster. Least
+  squares was abandoned because one un-struck incident lap moved the slope by 90
+  ms/lap and took the sign with it. `null`, with a stated reason, when no run is long
+  enough - five counted laps.
+- **Fuel is not netted off.** `fuelNetted` is `false` and `fuelDeltaL` gives the burn
+  over the fit window, so the reader nets it with a coefficient they can state. A full
+  tank is worth roughly 0.003 s/L/lap, which over a long stint exceeds the tyre signal
+  it would be netted against - and that coefficient is itself derived, not measured.
+- `wearMeasuredAtRaceMultiplier` and `wearMultiplier` travel with every rate.
+  Multiplier linearity is assumed and has never been demonstrated.
+- `gaugePinned` appears when the worst corner read the same twice. Either the gauge
+  has saturated or the two readings are of different sets; no rate is taken through it.
+- `modelConfidence` is **computed, not declared** - the weakest of the fields the
+  model is built from - and `modelConfidenceBasis` shows the working. It deliberately
+  does **not** roll in `byLapTime` and `byTemp`: both are `low` by nature, and
+  including them would peg the field to `assumed` on every export ever made, which
+  says nothing about whether `w` itself was measured. The basis names them as
+  corroborating, so the roll-up cannot be read as covering them.
 
 - `byDriverGauge` is the most reliable input and the only one anchored to the game's
   own number. Fraction **consumed**, 0–1, one entry per corner: `fl`, `fr`, `rl`,
@@ -404,7 +534,12 @@ because such a field could only be a fabrication.
 | `fittedFinalGear` | float, 3 dp, or `null` | **Derived, never measured** — GT7 does not broadcast it. `final = (rpm / 60) × 2π × r / (v × ratio[gear])`, evaluated per frame and reduced by **median**. Frames qualify only above 100 km/h and only in a gear the ratio array covers. `null` whenever `fittedRatios` is null or no frame qualified |
 | `ratioSource` | string, or `null` | `"telemetry"` when ratios were read off the stream, `null` when there are none. There is no other value: the app never reads ratios off the sheet into this field |
 | `finalGearSource` | string, or `null` | Literally `"derived: rpm against wheel speed and tyre radius"`, or `null` when `fittedFinalGear` is null. **Its whole job is to stop a derived number reading as a measured one** |
-| `matchesSheet` | bool, or `null` | **Derived comparison.** `fittedRatios`, truncated to the sheet's gear count, against `setup.gears`, each ratio within **±0.005 absolute**. `null` when either side is unknown — which is not "they differ", and is the reason it is a tri-state rather than a bool |
+| `matchesSheet` | bool, or `null` | **Derived comparison.** `fittedRatios`, truncated to the sheet's gear count, against `setup.gears`, each ratio within **±0.005 absolute**. `null` when either side is unknown — which is not "they differ", and is the reason it is a tri-state rather than a bool. **It does not cover the final drive**, and `matchesSheetCovers` says so in the payload rather than leaving a reader to infer it from a boolean sitting beside a contradictory number |
+| `matchesSheetCovers` | string | What the boolean above is, and is not, a claim about. Present whenever `gearing` is |
+| `finalGearSheet` | float, or `null` | **The driver's own figure**, off `setup.values.fg`. Exact, unlike the derived one |
+| `finalGearVsSheetPct` | float, or `null` | The gap between derived and sheet, as a percentage of the sheet. Expect a few percent high: GT7 broadcasts the **unloaded** tyre radius, and a loaded racing tyre stands shorter |
+| `rollingRadiusImpliedM` | float, 4 dp, or `null` | The tyre radius the sheet's final drive implies. On the 911 RSR the packet broadcasts a constant 0.355 m and this comes out at 0.3438 m — a 3.2% deflection, which accounts for the whole of `finalGearVsSheetPct`. It turns a misleading gearbox number into a measured tyre one |
+| `limiterGear` | int, or `null` | **Measured.** The gear the limiter fired in, modal across the frames. Without it, `limiterRpmSource: observed-at-rev-limiter` beside `topGearReachedLimiter: false` reads as a contradiction. It is not one, and this is the field that says so |
 | `gearboxChangedMidSession` | bool, never `null` | **Measured.** `true` when not every ratio-carrying lap ran the same box. A mid-session gearbox change invalidates any aggregate spanning it, exactly as a setup change does. `false` when fewer than two laps carried ratios — absence of evidence, reported as no change |
 | `limiterRpm` | float, whole rpm, or `null` | **Measured, and only at the limiter.** Median engine speed across frames where GT7's own rev-limiter flag was set. `null` when the limiter never fired. **Deliberately not "the highest rpm seen"** — a session that never hit the limiter has no limiter reading, and the peak in its place means something else entirely |
 | `limiterRpmSource` | string, always present | `"observed-at-rev-limiter"`, or `"limiter never fired in this session"` when `limiterRpm` is null. The null carries its own explanation rather than leaving the reader to guess between "not captured" and "never happened" |
@@ -413,8 +548,11 @@ because such a field could only be a fabrication.
 | `maxSpeedGear` | int, or `null` | **Measured.** Gear held at that fastest frame |
 | `maxSpeedRpm` | float, whole rpm, or `null` | **Measured.** Engine speed at that fastest frame |
 | `topGearReachedLimiter` | bool | **Derived.** `true` only when the fastest frame was in the **top** gear the ratio array holds *and* within 100 rpm of `limiterRpm`. This is the qualifier for `gearingConstantK`, and on its own it answers whether the car is over- or under-geared for the circuit |
-| `gearingConstantK` | float, 1 dp | **Computed, and only when `topGearReachedLimiter` is true.** `K = maxSpeedKph × ratio[maxSpeedGear] × fittedFinalGear`. **Omitted entirely** — key absent, not null — whenever the condition does not hold. Anywhere but top gear at the limiter the car simply was not going as fast as that gearing allows, and K would come out low and be believed |
-| `gearingConstantSource` | string | Present only alongside `gearingConstantK`. States the formula, the gear it was taken in, and the lap count, so a K from one lap is not mistaken for a K from nine |
+| `gearingConstantK` | float, 1 dp | **Computed or extrapolated, and only in top gear.** `K = speed in top gear at the limiter × ratio[topGear] × final drive`. Where the limiter fired in top, the observed speed is used. Where it did not — most sessions at most circuits — the observed top-gear speed is scaled to the limiter by `limiterRpm / maxSpeedRpm`, and the source says `extrapolated:` rather than `computed:`. **Omitted entirely** — key absent, not null — anywhere but top gear: there the car simply was not going as fast as the gearing allows, and no scaling recovers it |
+| `gearingConstantSource` | string | `computed: …` or `extrapolated: top gear observed at N rpm, scaled to limiter M, K laps`. The two are never worded alike |
+| `gearingConstantFinalGear` / `…FinalGearSource` | float / string | **Which final drive K was built on.** The sheet's wherever there is one: it is exact, and the derived figure carries the unloaded-radius bias, so a K built on that would put every future gearbox out by the same few percent |
+| `gearingConstantSamples` | int | Frame-bearing counted laps behind it, so a K from one lap is not mistaken for a K from nine |
+| `topGearSpeedAtLimiterKph` | float, 1 dp | The speed the extrapolation used, so the arithmetic can be checked |
 
 **`fittedRatios` is not rounded.** It is the raw 32-bit float as broadcast, so
 expect `3.0999999046325684` where the game's screen shows `3.100`. That noise is
@@ -698,3 +836,39 @@ reading across both of that axle's corners, which is what the single figure mean
 when it was entered. It does overstate precision on the healthier corner of a pair
 and no later reading can correct that, so pre-1.3 readings should be read as axle
 figures wearing corner names.
+
+### 16.3 → `1.4`
+
+Every row here comes from a defect the knowledge base found while diagnosing a real
+setup off the 11 Aug Monza export. Three of them would have changed the setup or the
+race strategy if they had been believed.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **New top-level `runs`** (§6.1), and `wear.byDriverGauge[].runId` | Nothing may be fitted across a refuel, and nothing could say where one run ended. A gauge reading at lap 21 and the same reading at lap 36 could not be told from one set read twice, so "was the last stint a fresh set or the tail of a 26-lap one" — two different findings — had the same representation. Runs come from the fuel channel and are therefore certain; `tyresFresh` is the driver's declaration and is `null` until he makes it, **never `false`**, which would claim the set carried over |
+| 2 | `meta.compound` is emitted **only when one compound was run**; **new `meta.compoundsRun`** | It was the most common lap tag. A session that ran three compounds across five runs declared one, and two thirds of it lost a vote silently. The consumer reads a single compound as a single-compound session and picks the race tyre off it |
+| 3 | `wear.byCompound[].compound`, `.stintsMeasured`, `.runIds`, `.confidence`; **export refuses a compound the session never ran** | A rate keyed by code could not be checked against a `meta` that speaks in full names, so three compounds' worth of rates sat beside a contradictory `meta.compound` and nothing caught it. `stints` is now how many runs were on that compound and `stintsMeasured` how many produced a rate: run three times and read once is a thinner claim than run once and read once |
+| 4 | **Wear rates are computed inside one run**, and `wear.byRun` carries each with its method and what it assumed | The old rate divided one gauge reading by the laps of every run sharing a compound tag. On the Monza session that read a Racing Soft set consuming 17% a lap as 6.9% — an understatement of two and a half times, in the direction §5.1 of `CLAUDE.md` says costs most. Where the driver has not declared the set fresh, the rate still needs a starting point: `assumesFreshAtLap` says so and the confidence drops to `assumed` |
+| 5 | **New `session.lapsExcludedDetail`** — `{lap, reason, source}`, `reason` ∈ `out-lap` \| `in-lap` \| `incident` \| `traffic` \| `fuel-implausible` \| `manual`, `source` ∈ `auto` \| `driver` | `notes` read "lap 2 struck by hand, lap 5 struck by hand…" eight times, which qualified nothing — and four of the eight were the out-laps after a refuel, which the fuel channel names for free. The flat `lapsExcluded` array is unchanged. `notes` now carries only what the structure cannot, such as the driver's own "spun at T4" |
+| 6 | **Fuel plausibility gates lap validity** (§5) | A lap burning under half the session's median is a lap boundary inside a pit or garage transition, not a lap of the circuit. One such lap burned 0.16 L against a 6.57 L median, was counted, and became `bestLapMs` — 1.9 s clear of the fastest real lap, in the driver's own report. Skipped entirely when `fuelCapacityL` is 0: electric cars burn nothing and zero is a real value |
+| 7 | `wear.byLapTime` gains `fittedRunId`, `fittedOverLaps`, `samples`, `fuelDeltaL`, `fuelNetted`, `runsDisagree`; **fitted inside one run, by Theil–Sen** | Fitted across five tanks, the sawtooth of a car getting heavier and then abruptly light again reads as a rising trend: +72 ms/lap was exported for a car that was getting faster. Fuel is **not** netted off — a full tank is worth more than the tyre signal and the coefficient that would net it is itself derived — so the raw slope goes out with the fuel burned over the same window. The estimator is the median of pairwise slopes, because least squares gave one un-struck incident lap enough weight to flip the sign |
+| 8 | `wear.modelConfidence` is **computed**, not declared; **new `modelConfidenceBasis`** | It read `measured` while sitting above a fabricated `byCompound`, a wrong-signed `byLapTime` marked `low`, and a pinned gauge series. A section-level flag that overrides the per-field tags beneath it defeats the point of having them. It is now the weakest of the fields the model is **built from**, and the basis names them — and names `byLapTime`/`byTemp` as corroborating rather than feeding it, since those are `low` by nature and rolling them in would peg the field to `assumed` on every export ever made |
+| 9 | **New `wear.wearMeasuredAtRaceMultiplier` and `wear.wearMultiplier`**; **new `wear.gaugePinned`** | Multiplier linearity is assumed and has never been demonstrated, so the multiplier a rate was taken at travels with the rate. A gauge that has not moved between two readings is either saturated or reading a set that was changed in between; either way no rate is taken through it, and now it says so |
+| 10 | `gearing.matchesSheetCovers`, `finalGearSheet`, `finalGearVsSheetPct`, `rollingRadiusImpliedM`, `limiterGear` | `matchesSheet: true` sat beside a `fittedFinalGear` of 3.665 against a sheet of 3.550 and asserted incompatible things. The derivation is **not** inverted: GT7 broadcasts the **unloaded** tyre radius (a constant 0.355 m on this car), and the rolling radius implied by the sheet's final drive is 0.3438 m — a 3.2% loaded deflection that accounts for the whole gap. That bias is larger than one final-drive step, so the final drive cannot be range-checked this way; the two figures and the gap between them are given instead, and `matchesSheetCovers` states plainly what the boolean does and does not cover. `limiterGear` stops `observed-at-rev-limiter` beside `topGearReachedLimiter: false` reading as a contradiction |
+| 11 | **`gearing.gearingConstantK` is now extrapolated to the limiter**, with `gearingConstantFinalGear`, `gearingConstantFinalGearSource`, `gearingConstantSamples`, `topGearSpeedAtLimiterKph` | K was omitted whenever the limiter did not fire in top gear, which on a circuit like Monza is most sessions — so the field the tune builder most wants was never exported. Scaling the observed top-gear speed to the limiter is sound; the source string distinguishes `extrapolated:` from `computed:` so the two are never confused. **K uses the sheet's final drive, not the derived one** — the derived figure carries the unloaded-radius bias and a K built on it would put every future gearbox out by the same few percent |
+| 12 | **`meta.gameVersion` is required.** Export refuses without it | GT7 rewrote its physics, tyre model and geometry in 1.49 and again in 1.55. A measurement that does not say which update it was taken under cannot be filed and cannot safely be compared with the next one. It costs one field on the event page, which now exists |
+| 13 | **`corners` is emitted for the first time** (§7), and `corners[].flagLaps` / `.flagThresholdLaps` are new | The section the contract calls the one to build if only one gets built had never once been exported, and the reason was upstream: what the recorder stored as lap distance was the **road plane's fourth coefficient** — about −80 to −250 m, covering 125 m over a whole lap of Monza — so corner detection could never segment a lap. GT7 broadcasts no lap-distance channel at all; it is now integrated from speed against the packet clock. `flags` was a set union across laps, so with enough laps every corner carried every flag; a flag now has to fire on a quarter of them, and `flagLaps` keeps the one-offs visible as one-offs |
+| 14 | `derived.thresholds.flagMinShareOfLaps` | Same rule as every other threshold: it is the app's choice, not the game's, so retuning it must read as a change in the detector rather than a change in the car |
+
+**The frame clock was GT7's in-game clock.** Not a payload field, but it reached every
+millisecond in `corners`: `t_ms` came from `time_of_day_ms`, which is frozen in a
+fixed-time event and runs at many times real speed in a day-to-night one. Laps came
+out spanning 0 s or 970 s where the lap took 110. Trail-brake duration, time loss and
+consistency were all scaled by whatever multiplier the event happened to use. The
+clock is now the packet counter at a known 60 Hz.
+
+**Laps recorded before 1.4 are repaired on read**, not re-recorded: lap distance is
+integrated from the stored speed channel and the clock rebuilt from the frame index,
+so a session captured last week yields corners without being run again. The integrated
+distance lands within about a percent of the circuit's published length and does so
+consistently lap to lap, which is what corner windows need.

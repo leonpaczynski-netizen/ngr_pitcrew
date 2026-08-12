@@ -48,6 +48,7 @@ def an_event(**overrides) -> dict:
         "race_laps": 20, "weather": "dry", "tyre_wear_mult": "4x",
         "fuel_mult": "2x", "refuel_rate_lps": 2.5, "pit_loss_secs": 20.0,
         "mandatory_stops": 0, "abs_setting": "Weak", "tcs": 1,
+        "game_version": "1.70",
         "available_compounds": ["RH", "RM", "RS"],
         "sheet_name": "Fuji race v2",
         "setup_values": {"rh_f": 62.0, "arb_r": 4.0},

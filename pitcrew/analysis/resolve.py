@@ -56,6 +56,6 @@ def resolve_corner_model(store, track: str, layout: str | None,
 def _lap_length(frames: list[dict] | None) -> float | None:
     if not frames:
         return None
-    distances = [f["road_distance_m"] for f in frames
-                 if f.get("road_distance_m") is not None]
+    distances = [f["lap_distance_m"] for f in frames
+                 if f.get("lap_distance_m") is not None]
     return max(distances) if distances else None

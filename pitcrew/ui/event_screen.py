@@ -194,11 +194,23 @@ class EventScreen(QWidget):
         self.layout_edit = Picker(placeholder="—")
         self.car_edit = Picker(placeholder="Pick a car", groups=self._car_groups)
 
+        # GT7 rewrote its physics, tyre model and geometry in 1.49 and again in
+        # 1.55, so a measurement without the version it was taken under cannot
+        # be compared with the next one. The export refuses without it.
+        self.game_version = QLineEdit()
+        self.game_version.setPlaceholderText("1.70")
+        self.game_version.setToolTip(
+            "The GT7 version this event is run under. Every measurement is "
+            "filed against it, and the export refuses without it - the physics "
+            "have been rewritten twice in two updates.")
+
         grid.addWidget(Field("Name", self.name_edit), 0, 0, 1, 2)
         grid.addWidget(Field("Track", self.track_edit), 1, 0)
         grid.addWidget(Field("Layout", self.layout_edit,
                              hint="Set by the track"), 1, 1)
-        grid.addWidget(Field("Car", self.car_edit), 2, 0, 1, 2)
+        grid.addWidget(Field("Car", self.car_edit), 2, 0)
+        grid.addWidget(Field("GT7 version", self.game_version,
+                             hint="Filed with every measurement"), 2, 1)
         # Without this the hint under Track widens its column and squeezes
         # Layout down to a few characters.
         grid.setColumnStretch(0, 3)
@@ -549,6 +561,7 @@ class EventScreen(QWidget):
             if event.get("priority"):
                 self.priority.setCurrentText(event["priority"])
             self.event_notes.setPlainText(event.get("notes") or "")
+            self.game_version.setText(event.get("game_version") or "")
 
             allowed = set(event.get("available_compounds") or [])
             for code, chip in self._compound_chips.items():
@@ -611,6 +624,7 @@ class EventScreen(QWidget):
             "time_of_day": self.time_of_day.currentText(),
             "priority": self.priority.currentText(),
             "notes": self.event_notes.toPlainText().strip() or None,
+            "game_version": self.game_version.text().strip() or None,
             "available_compounds": [code for code, chip
                                     in self._compound_chips.items()
                                     if chip.isSelected()],
