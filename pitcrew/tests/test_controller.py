@@ -13,7 +13,7 @@ import pytest
 from pitcrew.controller import PitCrewController, TelemetryBridge
 from pitcrew.export.payload import FORMAT
 from pitcrew.store.db import Store
-from pitcrew.ui.event_screen import EventScreen
+from pitcrew.ui.event_screen import EMPTY, EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
 
 from .conftest import make_packet
@@ -90,13 +90,34 @@ def test_saving_creates_the_event_and_makes_it_active(wired):
     assert store.active_event_id() == events[0]["id"]
 
 
-def test_saving_the_same_name_updates_rather_than_duplicates(wired):
+def test_saving_an_event_that_was_loaded_updates_it(wired):
+    """The id decides what is written, so a rename edits rather than forks."""
     controller, _, _, store = wired
     controller._on_event_saved(an_event())
-    controller._on_event_saved(an_event(race_laps=30))
+    event_id = store.active_event_id()
+
+    controller._on_event_saved(an_event(id=event_id, race_laps=30,
+                                        name="Round 4 - Fuji (wet)"))
 
     assert len(store.list_events()) == 1
+    assert store.list_events()[0]["id"] == event_id
     assert store.list_events()[0]["race_laps"] == 30
+    assert store.list_events()[0]["name"] == "Round 4 - Fuji (wet)"
+
+
+def test_a_new_event_cannot_take_a_name_already_in_use(wired):
+    """The old screen overwrote the stored event instead, in silence."""
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event())
+    first = store.get_event(store.active_event_id())
+
+    # No id: a form filled in for a different round, on the same name.
+    controller._on_event_saved(an_event(track="Bathurst", race_laps=30))
+
+    assert len(store.list_events()) == 1
+    assert store.get_event(first["id"])["track"] == "Fuji Speedway"
+    assert store.get_event(first["id"])["race_laps"] == 20
+    assert "already called" in event_screen.footer_note.text()
 
 
 def test_the_sheet_is_saved_with_the_event(wired):
@@ -333,3 +354,196 @@ def test_bridge_reset_clears_state_between_sessions():
     bridge.reset()
     assert bridge.state.lap_count == 0
     assert bridge.recorder.frame_count == 0
+
+
+# ---------------------------------------------------------------- switching
+
+def two_events(controller, store):
+    """Two saved events, the way a driver preparing for two rounds has them."""
+    controller._on_event_saved(an_event())
+    porsche = store.active_event_id()
+    controller._on_event_saved(an_event(
+        name="V8s - Bathurst", track="Bathurst", layout=None,
+        car_name="Ford Falcon Gr.3", race_laps=32, tyre_wear_mult="6x",
+        pit_loss_secs=27.5, sheet_name="Bathurst race v1",
+        setup_values={"rh_f": 80.0}, gear_text=""))
+    v8 = store.active_event_id()
+    return porsche, v8
+
+
+def test_saving_a_second_event_leaves_the_first_alone(wired):
+    controller, _, _, store = wired
+    porsche, v8 = two_events(controller, store)
+
+    assert porsche != v8
+    assert len(store.list_events()) == 2
+    kept = store.get_event(porsche)
+    assert kept["track"] == "Fuji Speedway"
+    assert kept["race_laps"] == 20
+    assert kept["tyre_wear_mult"] == "4x"
+
+
+def test_the_picker_lists_every_event_and_a_way_to_start_another(wired):
+    from pitcrew.ui.event_screen import NEW_EVENT
+
+    controller, event_screen, _, store = wired
+    porsche, v8 = two_events(controller, store)
+
+    picker = event_screen.event_picker
+    ids = [picker.itemData(i) for i in range(picker.count())]
+    assert sorted(i for i in ids if i is not None) == sorted([porsche, v8])
+    assert picker.itemText(picker.count() - 1) == NEW_EVENT
+    # The one being worked on is the one showing.
+    assert picker.currentData() == v8
+
+
+def test_switching_back_reloads_the_event_it_was_saved_as(wired):
+    controller, event_screen, _, store = wired
+    porsche, v8 = two_events(controller, store)
+
+    controller.switch_event(porsche)
+
+    assert store.active_event_id() == porsche
+    assert event_screen.name_edit.text() == "Round 4 - Fuji"
+    assert event_screen.track_edit.currentText() == "Fuji Speedway"
+    assert event_screen.race_length.value() == 20
+    assert event_screen.tyre_mult.currentText() == "4x"
+    assert event_screen.pit_loss.value() == 20.0
+    assert event_screen.values()["id"] == porsche
+
+
+def test_switching_writes_nothing_to_either_event(wired):
+    """A switch is a read. Both rows come back byte for byte."""
+    controller, _, _, store = wired
+    porsche, v8 = two_events(controller, store)
+    before = store.get_event(porsche), store.get_event(v8)
+
+    controller.switch_event(porsche)
+    controller.switch_event(v8)
+    controller.switch_event(porsche)
+
+    assert (store.get_event(porsche), store.get_event(v8)) == before
+
+
+def test_a_sheet_does_not_follow_the_driver_to_an_event_without_one(wired):
+    """The bug this feature would otherwise have shipped with.
+
+    A round with no sheet yet is the ordinary state of the next race on the
+    calendar. Loading it used to leave the previous car's springs, dampers
+    and gears on the form - and the next save would file them against it.
+    """
+    controller, event_screen, _, store = wired
+    porsche, _ = two_events(controller, store)
+    controller._on_event_saved(an_event(
+        name="Gr.3 - Monza", track="Monza", layout=None,
+        car_name="Nissan GT-R Gr.3", race_laps=18,
+        sheet_name="", setup_values={}, gear_text="",
+        priority="", start_type="", time_of_day=""))
+    monza = store.active_event_id()
+
+    controller.switch_event(porsche)
+    assert event_screen._setup_editors["arb_r"].value() == 4.0
+    assert event_screen.gear_edit.text() != ""
+
+    controller.switch_event(monza)
+
+    assert event_screen._setup_editors["arb_r"].value() == EMPTY
+    assert event_screen._setup_editors["rh_f"].value() == EMPTY
+    assert event_screen.sheet_name.text() == ""
+    assert event_screen.gear_edit.text() == ""
+    assert event_screen.values()["setup_values"] == {}
+
+
+def test_a_sheet_does_not_follow_the_driver_to_another_car(wired):
+    controller, event_screen, _, store = wired
+    porsche, v8 = two_events(controller, store)
+    controller.switch_event(porsche)
+    assert event_screen._setup_editors["arb_r"].value() == 4.0
+
+    controller.switch_event(v8)
+
+    assert event_screen._setup_editors["arb_r"].value() == EMPTY
+    assert event_screen._setup_editors["rh_f"].value() == 80.0
+
+
+def test_practice_laps_stay_with_the_event_they_were_run_at(wired):
+    controller, _, practice, store = wired
+    porsche, v8 = two_events(controller, store)
+
+    controller.switch_event(porsche)
+    session = controller.open_practice_session()
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=92.0,
+                                    time_of_day_ms=0))
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=88.6,
+                                    last_lap_ms=93_912, time_of_day_ms=16))
+    assert len(store.list_laps(session)) == 1
+
+    controller.stop_practice()
+    controller.switch_event(v8)
+    assert practice.rows() == []
+    assert store.list_event_laps(v8) == []
+
+    controller.switch_event(porsche)
+    assert len(practice.rows()) == 1
+    assert practice.rows()[0].lap_time_ms == 93_912
+
+
+def test_switching_with_unsaved_edits_asks_before_discarding_them(wired):
+    controller, event_screen, _, store = wired
+    porsche, v8 = two_events(controller, store)
+    picker = event_screen.event_picker
+    index = picker.findData(porsche)
+
+    event_screen.pit_loss.setValue(31.0)
+    assert event_screen.is_dirty()
+
+    event_screen._on_picker_activated(index)
+    assert store.active_event_id() == v8            # nothing happened
+    assert picker.currentData() == v8               # and the picker says so
+    assert event_screen.pit_loss.value() == 31.0    # the edit survives
+    assert "Unsaved changes" in event_screen.footer_note.text()
+
+    event_screen._on_picker_activated(index)
+    assert store.active_event_id() == porsche
+    assert event_screen.pit_loss.value() == 20.0
+
+
+def test_a_clean_form_switches_on_the_first_pick(wired):
+    controller, event_screen, _, store = wired
+    porsche, _ = two_events(controller, store)
+
+    event_screen._on_picker_activated(
+        event_screen.event_picker.findData(porsche))
+
+    assert store.active_event_id() == porsche
+
+
+def test_new_event_blanks_the_form_and_stops_recording_against_the_old_one(wired):
+    """Otherwise a session started here files laps under the event on screen
+    a moment ago, which is the failure this whole feature is for."""
+    controller, event_screen, practice, store = wired
+    porsche, v8 = two_events(controller, store)
+
+    controller.switch_event(None)
+
+    assert store.active_event_id() is None
+    assert event_screen.name_edit.text() == ""
+    assert event_screen.values()["id"] is None
+    assert event_screen._setup_editors["rh_f"].value() == EMPTY
+    # Nothing was deleted to get here.
+    assert len(store.list_events()) == 2
+    assert store.get_event(porsche)["track"] == "Fuji Speedway"
+
+    controller.start_practice()
+    assert controller.session_id is None
+
+
+def test_an_event_deleted_elsewhere_is_refused_not_crashed_into(wired):
+    controller, event_screen, _, store = wired
+    porsche, v8 = two_events(controller, store)
+    store.delete_event(porsche)
+
+    controller.switch_event(porsche)
+
+    assert store.active_event_id() == v8
+    assert "no longer in the store" in event_screen.footer_note.text()

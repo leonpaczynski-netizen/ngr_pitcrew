@@ -233,6 +233,7 @@ class PitCrewController(QObject):
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
+        self.event_screen.switched.connect(self.switch_event)
         self.event_screen.catalog_extended.connect(
             self._on_catalog_extended)
         self.practice.recording_toggled.connect(self._on_recording_toggled)
@@ -309,6 +310,10 @@ class PitCrewController(QObject):
 
     def load_active_event(self) -> None:
         event = self.active_event()
+        # The picker is refreshed either way: with no active event it is the
+        # only route back to one that does exist.
+        self.event_screen.set_events(self.store.list_events(),
+                                     event["id"] if event else None)
         if event is None:
             self.practice.set_status(
                 "No event yet. Create one on the Event screen first.",
@@ -327,6 +332,49 @@ class PitCrewController(QObject):
             self.load_car(event["car_name"])
         self.refresh_engineer()
 
+    def switch_event(self, event_id) -> None:
+        """Make another saved event the one the whole app is working on.
+
+        A read, not a write: nothing about the event being left is touched.
+        Every screen behind this one keys off `active_event_id`, so moving it
+        and reloading is the entire operation - the sessions, laps,
+        strategies and race runs of both events stay exactly where they are,
+        filed against their own event id.
+        """
+        if event_id is None:
+            # Composing an event that does not exist yet. The previous one has
+            # to stop being active: a practice session started from this state
+            # would otherwise record laps against the event that is no longer
+            # on the screen, which is the one mistake this feature exists to
+            # prevent.
+            self.store.set_state("active_event_id", None)
+            self.event_screen.set_events(self.store.list_events(), None)
+            self.event_screen.clear()
+            self.practice.set_laps([])
+            self.practice.set_status(
+                "No event yet. Fill one in on the Event screen and save it.",
+                warn=True)
+            self.refresh_nav_state()
+            self.refresh_engineer()
+            self.event_screen.note(
+                "New event. Nothing is stored until you save it.")
+            return
+
+        event = self.store.get_event(int(event_id))
+        if event is None:
+            self.event_screen.set_events(self.store.list_events(),
+                                         self.store.active_event_id())
+            self.event_screen.note(
+                "That event is no longer in the store.", warn=True)
+            return
+
+        self.store.set_state("active_event_id", int(event_id))
+        self.load_active_event()
+        laps = len(self.store.list_event_laps(event["id"]))
+        recorded = (f"{laps} practice lap{'' if laps == 1 else 's'} recorded."
+                    if laps else "No practice laps recorded yet.")
+        self.event_screen.note(f"Working on {event['name']}. {recorded}")
+
     def _idle_status(self, event: dict) -> str:
         circuit = event["track"] or "unknown"
         if event["layout"]:
@@ -335,9 +383,29 @@ class PitCrewController(QObject):
                 "Start practice when you are ready to go out.")
 
     def _on_event_saved(self, data: dict) -> None:
-        """Create or update the event, and the sheet fitted to it."""
-        existing = next((e for e in self.store.list_events()
-                         if e["name"] == data["name"]), None)
+        """Create or update the event, and the sheet fitted to it.
+
+        Which event is being written is decided by the id the form was loaded
+        with, never by the name on it. Matching on the name meant two things
+        that both cost data: a rename created a second event and orphaned
+        every session recorded under the old one, and typing an existing
+        event's name onto a form filled in for a different round overwrote
+        that event's regulations without saying so.
+        """
+        event_id = data.get("id")
+        existing = self.store.get_event(int(event_id)) if event_id else None
+        # The name still has to be unique - it is what the driver reads in the
+        # picker, and the store enforces it anyway. Refusing here turns a
+        # constraint violation into a sentence.
+        clash = next((e for e in self.store.list_events()
+                      if e["name"] == data["name"]
+                      and (existing is None or e["id"] != existing["id"])), None)
+        if clash:
+            self.event_screen.note(
+                f"Another event is already called {data['name']}. Give this "
+                f"one a different name, or switch to that event to edit it.",
+                warn=True)
+            return
         fields = {
             "name": data["name"], "track": data["track"],
             "layout": data["layout"], "car_name": data["car_name"],
@@ -366,6 +434,7 @@ class PitCrewController(QObject):
         else:
             event_id = self.store.create_event(**fields)
             verb = "Created"
+        event_id = int(event_id)
 
         message = f"{verb} {data['name']}."
         if (data["setup_values"] or data["sheet_name"]

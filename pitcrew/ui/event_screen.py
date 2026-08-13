@@ -44,6 +44,15 @@ from pitcrew.ui.widgets import (
     struck_when_empty,
 )
 
+# The picker's last row. Chosen deliberately so that the list of saved events
+# and the way to start another one are the same control - a separate "New"
+# button beside a picker is how you end up editing one event while believing
+# you are creating the next.
+NEW_EVENT = "+  New event"
+# Sentinel for "no switch is pending". `None` cannot do this job: it is the
+# picker's value for New event, and a real target.
+_UNSET = object()
+
 WEATHER = ("Dry", "Damp", "Wet", "Changeable")
 # How the league sets weather. Fixed means the round runs one setting whatever
 # the circuit offers - the V8 rounds do - and it makes every circuit's rain
@@ -129,12 +138,22 @@ class EventScreen(QWidget):
     saved = pyqtSignal(dict)
     discarded = pyqtSignal()
     catalog_extended = pyqtSignal(str, str)    # kind, name
+    switched = pyqtSignal(object)              # event id, or None for a new one
 
     def __init__(self, tracks=None, car_groups=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._setup_editors: dict[str, QDoubleSpinBox] = {}
         self._compound_chips: dict[str, CompoundChip] = {}
+        # The identity of what is on the form. Everything the screen saves is
+        # written against this id, never against the name - a name is
+        # something the driver can change, and matching on it meant renaming
+        # an event orphaned every session recorded under the old name.
+        self._event_id: int | None = None
+        self._events: list[dict] = []
+        # What was loaded, to compare against for unsaved edits.
+        self._clean: dict | None = None
+        self._pending_switch = _UNSET
         self._tracks = (list(tracks) if tracks is not None
                         else list(catalogs.track_bases()))
         self._car_groups = (list(car_groups) if car_groups is not None
@@ -173,7 +192,10 @@ class EventScreen(QWidget):
 
         page.addWidget(self._footer())
 
-    def _header(self) -> QVBoxLayout:
+    def _header(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP_WIDE)
+
         column = QVBoxLayout()
         column.setSpacing(2)
         title = StencilLabel("Event", size=theme.TITLE_PX, colour=theme.STENCIL,
@@ -182,7 +204,107 @@ class EventScreen(QWidget):
         column.addWidget(BodyLabel(
             "What is being raced, and what is in the car.",
             colour=theme.STENCIL_DIM))
-        return column
+        row.addLayout(column, 1)
+        row.addWidget(self._picker_block(), 0,
+                      Qt.AlignmentFlag.AlignBottom)
+        return row
+
+    def _picker_block(self) -> QWidget:
+        """Which event the whole app is working on.
+
+        Every screen behind this one - practice, strategy, race, the prompts -
+        reads the active event, so this control is the only thing that decides
+        which set of laps you are looking at. It sits in the header rather
+        than on a plate for that reason: it is not one more event field, it is
+        the thing the fields belong to.
+        """
+        holder = QWidget()
+        box = QVBoxLayout(holder)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+        box.addWidget(StencilLabel("Working on", size=11,
+                                   colour=theme.STENCIL_DIM, tracking=5.0))
+
+        self.event_picker = QComboBox()
+        self.event_picker.setMinimumHeight(34)
+        self.event_picker.setMinimumWidth(300)
+        self.event_picker.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.event_picker.setToolTip(
+            "Switch between the events you are practising for. Each one keeps "
+            "its own sessions, laps, strategies and sheet - switching loads "
+            "them, it never merges them.")
+        block_wheel(self.event_picker)
+        # `activated` fires only for a choice the driver made. Repopulating
+        # the list must not read as a switch.
+        self.event_picker.activated.connect(self._on_picker_activated)
+        box.addWidget(self.event_picker)
+
+        self.set_events([], None)
+        return holder
+
+    # ------------------------------------------------------------- switching
+
+    def set_events(self, events, active_id=None) -> None:
+        """Fill the picker from the store. Never emits `switched`."""
+        self._events = [dict(event) for event in events]
+        picker = self.event_picker
+        picker.blockSignals(True)
+        picker.clear()
+        for event in self._events:
+            picker.addItem(self._event_label(event), event["id"])
+        picker.addItem(NEW_EVENT, None)
+        index = -1 if active_id is None else picker.findData(active_id)
+        # Last row is New event, and it is where an unsaved event belongs.
+        picker.setCurrentIndex(index if index >= 0 else picker.count() - 1)
+        picker.blockSignals(False)
+        self._pending_switch = _UNSET
+
+    @staticmethod
+    def _event_label(event: dict) -> str:
+        name = (event.get("name") or "").strip() or f"Event {event.get('id')}"
+        track = (event.get("track") or "").strip()
+        return f"{name}  —  {track}" if track else name
+
+    def is_dirty(self) -> bool:
+        """Has the form been edited since it was loaded?
+
+        Compared against a snapshot rather than tracked per widget: a widget
+        wired up today and forgotten tomorrow would silently stop counting as
+        an edit, and the cost of that is losing work on a switch.
+        """
+        return self._clean is not None and self.values() != self._clean
+
+    def _mark_clean(self) -> None:
+        self._clean = self.values()
+
+    def _restore_picker(self) -> None:
+        picker = self.event_picker
+        index = (-1 if self._event_id is None
+                 else picker.findData(self._event_id))
+        picker.blockSignals(True)
+        picker.setCurrentIndex(index if index >= 0 else picker.count() - 1)
+        picker.blockSignals(False)
+
+    def _on_picker_activated(self, index: int) -> None:
+        target = self.event_picker.itemData(index)
+        if target is not None and target == self._event_id:
+            self._pending_switch = _UNSET
+            return
+
+        # Unsaved work is not thrown away on one click of a dropdown, and it
+        # is not defended with a modal either - the second choice is the
+        # confirmation. Nothing here is destructive until it is repeated.
+        if self.is_dirty() and self._pending_switch is not target:
+            self._pending_switch = target
+            here = self.name_edit.text().strip() or "this event"
+            self.note(f"Unsaved changes to {here}. Save them first, or pick "
+                      f"{self.event_picker.itemText(index)} again to discard "
+                      f"them.", warn=True)
+            self._restore_picker()
+            return
+
+        self._pending_switch = _UNSET
+        self.switched.emit(target)
 
     # ----------------------------------------------------------- left column
 
@@ -641,8 +763,68 @@ class EventScreen(QWidget):
             self.paste_status.setToolTip(
                 "Not recognised:\n" + "\n".join(result.unmatched[:12]))
 
+    def _reset(self) -> None:
+        """Put every field back to the state a fresh screen starts in.
+
+        `load` calls this first, so loading is a replacement rather than an
+        overlay. Without it, switching from an event with a sheet to one
+        without would leave the first car's springs and dampers on screen -
+        and the next save would file them against the second event.
+        """
+        self.name_edit.clear()
+        self.track_edit.setCurrentText("")
+        self._on_track_changed("")
+        self.layout_edit.setCurrentText("")
+        self.car_edit.setCurrentText("")
+        self.game_version.clear()
+
+        self.race_type.setCurrentText("Laps")
+        self.race_length.setValue(20)
+        self.extra_time.setValue(EMPTY)
+        self.weather.setCurrentIndex(0)
+        self.weather_rule.setCurrentIndex(0)
+        self.rain_possible.setCurrentText(RAIN_ANSWERS[0])
+        self.start_type.setCurrentIndex(0)
+        self.time_of_day.setCurrentIndex(0)
+        self.start_hour.setValue(EMPTY)
+        self.time_multiplier.setValue(EMPTY)
+
+        self.tyre_mult.setCurrentText("4x")
+        self.fuel_mult.setCurrentText("2x")
+        self.refuel_rate.setValue(2.5)
+        self.pit_loss.setValue(20.0)
+        self.mandatory_stops.setValue(0)
+        self.abs_setting.setCurrentText("Weak")
+        self.tcs.setValue(0)
+        self.countersteer.setCurrentText("Off")
+        self.pp_cap.setValue(EMPTY)
+
+        self.priority.setCurrentIndex(0)
+        self.event_notes.clear()
+
+        for code, chip in self._compound_chips.items():
+            chip.setSelected(code in ("RH", "RM", "RS"))
+
+        self.sheet_name.clear()
+        self.gear_edit.clear()
+        self.paste_box.clear()
+        self.paste_status.setText("Nothing read yet.")
+        for editor in self._setup_editors.values():
+            editor.setValue(EMPTY)
+        for editor in self._build_editors.values():
+            editor.setValue(EMPTY)
+
+    def clear(self) -> None:
+        """Blank the form for an event that does not exist yet."""
+        self._reset()
+        self._event_id = None
+        self._restore_picker()
+        self._mark_clean()
+
     def load(self, event: dict | None, sheet=None) -> None:
         """Populate from a stored event and its fitted sheet."""
+        self._reset()
+        self._event_id = event.get("id") if event else None
         if event:
             self.name_edit.setText(event.get("name") or "")
             self.track_edit.setCurrentText(event.get("track") or "")
@@ -701,6 +883,9 @@ class EventScreen(QWidget):
                           else sheet.performance).get(key)
                 editor.setValue(EMPTY if stored is None else float(stored))
 
+        self._restore_picker()
+        self._mark_clean()
+
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
         self.footer_note.setStyleSheet(
@@ -722,6 +907,9 @@ class EventScreen(QWidget):
             (build if section == "build" else performance)[key] = editor.value()
 
         return {
+            # Null for an event that has never been saved. The store decides
+            # what a null id means; the screen only reports what it loaded.
+            "id": self._event_id,
             "name": self.name_edit.text().strip(),
             "track": self.track_edit.currentText().strip(),
             "layout": self.layout_edit.currentText() or None,
