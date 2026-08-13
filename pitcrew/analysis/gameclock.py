@@ -15,9 +15,16 @@ clock in every packet. Three things fall straight out of it:
   6.00 on eight consecutive laps;
 * **where the clock stops**. A circuit without a 24-hour cycle runs its clock
   forward to the end of its range and then holds it there — it does not roll
-  into the next morning. Session 9 shows precisely that: ×6 for nine laps,
-  then 3.33, then nothing. **A 50-minute race at ×6 does not cover five hours
-  of a daytime-only circuit.** No table would have said so; the stream does.
+  into the next morning. Session 9 shows precisely that: ×6.00 for eight laps,
+  then 3.33, then nothing for the last five. So **a race at a high multiplier
+  can cover far less of the day than the multiplier suggests**, and which is
+  the case is a property of the circuit. No table carries it; the stream does.
+
+One caution the driver supplied and the data confirms: **practice is often not
+run at the race's clock at all.** Of six Monza practice sessions, two ran with
+the clock frozen and one at ×1. Stopping the clock keeps the lobby light, which
+is exactly why it gets done — and exactly why a race run into the dark is never
+practised. `practice_clock_warning` exists to say so.
 
 So a preset is not interpreted here, it is **measured**, per circuit, the first
 time it is run. Until then the app says it does not know, which is the honest
@@ -163,6 +170,50 @@ def clock(hour: float | None) -> str:
     hour = hour % 24.0
     whole = int(hour)
     return f"{whole:02d}:{int(round((hour - whole) * 60)) % 60:02d}"
+
+
+def practice_clock_warning(per_session: list[ClockReading],
+                           race_multiplier: float | None) -> str | None:
+    """Where practice was not run at the clock the race will use.
+
+    The driver's own reason for it: *"sometimes I don't, because the lobby gets
+    too dark too quick with doing a practice session."* Entirely reasonable,
+    and precisely the problem - **practice gets run in daylight and the race
+    gets run into the dark**, which is how a compound that never came up to
+    temperature in the race was never seen to be short of temperature in
+    practice.
+
+    A frozen clock is the worst case and the easiest to miss: it sits the whole
+    session at one hour, so it produces plenty of laps and no evidence at all
+    about a race that sweeps through several.
+    """
+    measured = [reading for reading in per_session
+                if reading.multiplier is not None]
+    if not measured or race_multiplier is None:
+        return None
+
+    frozen = [r for r in measured if r.multiplier == 0.0]
+    different = [r for r in measured
+                 if r.multiplier and abs(r.multiplier - race_multiplier) > 0.5]
+    if not frozen and not different:
+        return None
+
+    parts = []
+    if frozen:
+        parts.append(
+            f"{len(frozen)} of {len(measured)} practice sessions ran with the "
+            f"clock frozen, so they sat at one hour and say nothing about a "
+            f"race that moves through several")
+    if different:
+        rates = ", ".join(f"x{r.multiplier:g}" for r in different)
+        parts.append(
+            f"{len(different)} ran at {rates} against the race's "
+            f"x{race_multiplier:g}")
+    return (
+        "Practice was not run at the race's clock: " + "; ".join(parts) +
+        ". Stopping the clock keeps the lobby light, which is why it gets "
+        "done - and it is why a compound short of temperature in the race was "
+        "never short of it in practice.")
 
 
 def race_span(reading: ClockReading | None, minutes: float | None,

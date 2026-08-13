@@ -17,6 +17,7 @@ from pitcrew.analysis.gameclock import (
     ClockReading,
     clock,
     lap_multiplier,
+    practice_clock_warning,
     race_span,
     read_clock,
 )
@@ -128,3 +129,32 @@ def test_the_typed_figures_are_used_until_something_is_measured():
 
 def test_no_span_without_either():
     assert race_span(None, minutes=60.0) is None
+
+
+# ------------------------------------------- practice run at the wrong clock
+
+def test_practice_with_the_clock_frozen_is_called_out():
+    """The driver's own reason: stopping the clock keeps the lobby light. It
+    is also why a race run into the dark never gets practised - a frozen
+    session sits at one hour and produces laps, not evidence."""
+    sessions = [ClockReading(0.0, None, None, None, 11, ""),
+                ClockReading(6.0, None, None, None, 15, "")]
+    warning = practice_clock_warning(sessions, race_multiplier=6.0)
+    assert "clock frozen" in warning
+    assert "1 of 2" in warning
+
+
+def test_practice_at_a_different_multiplier_is_called_out():
+    sessions = [ClockReading(1.0, None, None, None, 4, "")]
+    warning = practice_clock_warning(sessions, race_multiplier=6.0)
+    assert "x1 against the race's x6" in warning
+
+
+def test_practice_at_the_races_clock_raises_nothing():
+    sessions = [ClockReading(6.0, None, None, None, 15, "")]
+    assert practice_clock_warning(sessions, race_multiplier=6.0) is None
+
+
+def test_nothing_is_claimed_without_a_race_multiplier():
+    sessions = [ClockReading(0.0, None, None, None, 11, "")]
+    assert practice_clock_warning(sessions, race_multiplier=None) is None

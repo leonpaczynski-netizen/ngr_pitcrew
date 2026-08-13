@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from statistics import median
 
 from pitcrew.analysis.daylight import coverage, sessions_to_run
-from pitcrew.analysis.gameclock import race_span, read_clock
+from pitcrew.analysis.gameclock import (
+    practice_clock_warning,
+    race_span,
+    read_clock,
+)
 from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.resolve import circuit_key
 from pitcrew.analysis.runs import split_runs
@@ -436,6 +440,12 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     daylight["preset"] = preset
     daylight["clock"] = reading.as_export() if reading.measured else None
     daylight["sessionsToRun"] = sessions_to_run(daylight, preset=preset)
+    # Practice run with the clock stopped keeps the lobby light and produces
+    # plenty of laps in conditions the race will not have.
+    daylight["practiceClock"] = practice_clock_warning(
+        [read_clock(list(run.laps)) for run in split_runs(laps)],
+        (reading.multiplier if reading.measured
+         else _event_float(event, "time_multiplier")))
 
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
@@ -503,6 +513,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  MEASURED if daylight.get("covered") else MISSING,
                  " ".join(part for part in (
                      (daylight.get("clock") or {}).get("note"),
+                     daylight.get("practiceClock"),
                      daylight["note"]) if part)),
         Evidence("Refuel rate",
                  (f"{refuel['rateLps']:.2f} L/s" if refuel["rateLps"]

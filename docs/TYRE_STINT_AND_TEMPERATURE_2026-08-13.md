@@ -296,22 +296,49 @@ come straight off the stream, per circuit, the first time a preset is run:
 | **Start hour** | the clock at the session's first frame | measured on new captures |
 | **Where the clock stops** | the lap the clock stops advancing | ~20:30 |
 
-That third row is the finding no table carries, and it changes this race.
-A circuit without a 24-hour cycle **runs its clock to the end of its range and
-holds it there** — it does not roll into the next morning. Session 9 shows it
-directly: ×6 for nine laps, then 3.33, then nothing. Both community sources
-corroborate the behaviour even where they disagree on the lists.
+That third row is the finding no table carries. A circuit without a 24-hour
+cycle **runs its clock to the end of its range and holds it there** — it does not
+roll into the next morning. Session 9 shows it directly: ×6.00 for eight laps,
+then 3.33, then nothing for the last five. Both community sources corroborate
+the behaviour even where they disagree on the lists.
 
-So:
+### ⚠️ What is measured here, and what is not
 
-> **The Monza race does not run into the night.** 50 minutes at ×6 looks like
-> five hours of evening — 18:50 to 23:50. The circuit's clock stops at about
-> 20:30, so the race actually covers **18:50 to 20:30, an hour and forty**, and
-> holds there. Every plan for "the closing stints in the dark" was planning
-> conditions the track will not produce.
+Being exact about this, because an earlier draft of this note was not:
 
-The enduro is the opposite case: a 24-hour circuit at ×12 for two hours really
-does cover the whole day and night, and really does need night evidence.
+| Claim | Status |
+|---|---|
+| Session 9's clock ran at ×6.00 | **Measured**, eight consecutive laps, three significant figures |
+| A circuit's clock stops and holds | **Measured** — session 9's clock stopped mid-session |
+| *The hour* it stopped at | **Not known.** The old captures carry the game clock only as a per-lap delta; the absolute hour was never stored until today |
+| The race runs 18:50→20:30 | **Not established.** That was a worked example on a simulated start hour, not a measurement |
+| The race is ×6 | **Declared by the driver**, not measured. The practice sessions are a separate matter |
+
+### The practice was not run at the race's setting — and mostly not at any
+
+Measured across the six practice sessions:
+
+| Session | Compound | Clock |
+|---|---|---|
+| 1 (11 Aug) | RS | **×1.00** — real time |
+| 2 (11 Aug) | RS | ×1.18 — real time |
+| 6 (12 Aug) | RS | moving, ~×8 over two laps then stopped |
+| 7 (12 Aug) | RM | **frozen** — no time progression at all, 11 laps |
+| 9 (12 Aug) | RH | **×6.00**, then stopped |
+| 10 (12 Aug) | RH | **frozen** — 15 laps |
+
+The driver's own account of why: *"sometimes I don't, because the lobby gets too
+dark too quick with doing a practice session."* Which is entirely reasonable, and
+is precisely the problem — **practice is deliberately run in daylight and the race
+is run into the dark.** That is the mechanism behind the Racing Hards never coming
+up to temperature in the last enduro, and no amount of daytime running will
+surface it.
+
+It is also a **third confound on the compound comparison**, independent of the
+two in §1.2: RS was run at ×1 and ~×8, RM with the clock frozen, RH at ×6 and
+frozen. The three compounds were not merely run on different evenings — they were
+run in different *conditions regimes*. The refusal in §1.2 is if anything
+understated.
 
 ### What this changes
 
