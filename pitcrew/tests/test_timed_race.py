@@ -197,3 +197,62 @@ def test_a_compound_with_no_evidence_is_not_capped_to_zero():
     inputs = an_input()
     laps, why = stint_limit(inputs, inputs.profile_for("XX"))
     assert laps and laps > 0
+
+
+# ------------------------------------------------ comparing compounds at all
+
+def test_a_pace_delta_needs_the_same_session():
+    """Two compounds run on two evenings compare the evenings.
+
+    At Monza the whole-session medians made a Racing Medium read 0.92 s/lap
+    quicker than a Racing Hard and a Racing Soft only 0.56 s - the medium
+    beating the soft, which is not a thing tyres do.
+    """
+    from pitcrew.strategy.evidence import comparable_pace
+    from pitcrew.analysis.session import LapInput
+
+    def lap(num, code, session, ms):
+        return LapInput(lap_num=num, lap_time_ms=ms,
+                        fuel_start=round(100.0 - 6.5 * ((num - 1) % 5), 2),
+                        fuel_end=round(100.0 - 6.5 * (((num - 1) % 5) + 1), 2),
+                        compound=code, session_id=session)
+
+    apart = ([lap(n, "RS", 1, 108_000) for n in range(1, 5)]
+             + [lap(n, "RH", 2, 109_000) for n in range(5, 9)])
+    assert comparable_pace(apart, "RH") == {}
+
+    together = ([lap(n, "RS", 1, 108_000) for n in range(1, 5)]
+                + [lap(n, "RH", 1, 109_000) for n in range(5, 9)])
+    measured = comparable_pace(together, "RH")
+    assert measured["RS"]["deltaS"] == pytest.approx(-1.0)
+    assert measured["RH"]["deltaS"] == 0.0
+
+
+def test_an_unmeasurable_pace_is_null_not_zero():
+    """Zero says the compounds are identical. Null says we cannot tell."""
+    from pitcrew.strategy.model import CompoundProfile
+
+    unknown = CompoundProfile("RS", 0.0, 0.1, SOURCE_MEASURED)
+    assert unknown.as_export()["paceDeltaSPerLap"] is None
+    known = CompoundProfile("RS", -0.4, 0.1, SOURCE_MEASURED, pace_known=True)
+    assert known.as_export()["paceDeltaSPerLap"] == -0.4
+
+
+def test_no_crossover_is_offered_without_a_measured_pace():
+    """The crossover lap is where a pace gap gets eaten by degradation. With
+    no measured gap there is nothing to eat, and a lap number would be
+    invented."""
+    from pitcrew.strategy.model import crossover_table
+
+    measured = an_input(compound_profiles={
+        "RH": CompoundProfile("RH", 0.0, 0.0577, SOURCE_MEASURED,
+                              pace_known=True),
+        "RS": CompoundProfile("RS", -0.85, 0.1725, SOURCE_MEASURED,
+                              pace_known=True)})
+    assert [row["crossesOnLap"] for row in crossover_table(measured)] == [5]
+
+    # The same numbers with the pace unmeasured: 0.0 would read as a real gap.
+    bare = an_input(compound_profiles={
+        "RH": CompoundProfile("RH", 0.0, 0.0577, SOURCE_MEASURED),
+        "RS": CompoundProfile("RS", -0.85, 0.1725, SOURCE_MEASURED)})
+    assert crossover_table(bare) == []

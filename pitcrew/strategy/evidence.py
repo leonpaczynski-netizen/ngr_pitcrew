@@ -55,32 +55,24 @@ WINDOW_SAMPLE_LAPS = 6
 def _lap_inputs(store, event_id: int) -> list[LapInput]:
     """Every practice lap, with frames on only the laps that need them.
 
+    **The same loader the export uses**, so the plan and the payload describe
+    one session. This used to be a second implementation, and it dropped the
+    session id and the continuous lap numbering: every lap of every evening
+    read as one session with lap numbers restarting at 1 inside it. That is
+    invisible until something depends on it - and the compound comparison
+    depends on it entirely, because two compounds run on two evenings compare
+    the evenings.
+
     Frames are decoded for the temperature window and nothing else here, so
     only the laps that window looks at are hydrated - the most recent few on
     each compound, which are also the most representative: latest setup, track
     at its most rubbered in.
     """
+    from pitcrew.export.build import event_lap_inputs
+
     rows = store.list_event_laps(event_id, "practice")
-    wanted = _laps_to_hydrate(rows)
-    return [
-        LapInput(
-            frames=_frames_for(store, row["id"]) if row["id"] in wanted else None,
-            lap_num=row["lap_num"],
-            lap_time_ms=row["lap_time_ms"],
-            fuel_start=row["fuel_start"],
-            fuel_end=row["fuel_end"],
-            compound=row["compound"],
-            is_pit_lap=bool(row["is_pit_lap"]),
-            is_out_lap=bool(row["is_out_lap"]),
-            excluded=bool(row["excluded"]),
-            exclusion_reason=row["exclusion_reason"],
-            wear_fl=row["wear_fl"],
-            wear_fr=row["wear_fr"],
-            wear_rl=row["wear_rl"],
-            wear_rr=row["wear_rr"],
-        )
-        for row in rows
-    ]
+    return event_lap_inputs(store, event_id, "practice",
+                            hydrate=_laps_to_hydrate(rows))
 
 
 def _fuel_capacity(store, event_id: int) -> float | None:
@@ -162,17 +154,19 @@ def compound_profiles(laps: list[LapInput],
     windows = window_by_compound(laps)
     longest = longest_stint_by_compound(laps)
 
+    comparable = comparable_pace(laps, reference)
+
     profiles: dict[str, CompoundProfile] = {}
     for code, on_this in by_compound.items():
-        pace_delta = 0.0
-        if reference_ms and code != reference:
-            pace_delta = (median([lap.lap_time_ms for lap in on_this])
-                          - reference_ms) / 1000.0
+        pace = comparable.get(code)
         rate = rates.get(code)
         window = windows.get(code)
         profiles[code] = CompoundProfile(
             code=code,
-            pace_delta_s=round(pace_delta, 3),
+            pace_delta_s=round(pace["deltaS"], 3) if pace else 0.0,
+            pace_known=bool(pace),
+            pace_basis=(pace["basis"] if pace
+                        else comparable_pace_gap(laps, reference, code)),
             wear_per_lap=rate["wearPerLap"] if rate else None,
             # Measured means measured: a compound run in practice with no
             # gauge reading has a pace we know and a wear rate we do not, and
@@ -211,6 +205,124 @@ def _timed_race_note(inputs: RaceInputs) -> str:
     return (f"the lap count follows from the stops, not the other way round - "
             f"the flag falls at {inputs.race_minutes:g} min and the race can "
             f"last at most {int(minutes)}:{seconds:04.1f}")
+
+
+# A compound comparison is only a comparison if the laps are alike. Laps this
+# far into a run carry a materially different tank; laps this far into a set
+# carry a materially different tyre. Both dwarf the difference between two
+# racing compounds, so a comparison that ignores them is measuring the session
+# rather than the rubber.
+PACE_MAX_TYRE_AGE = 5           # laps into the set
+PACE_FUEL_BAND_L = 15.0         # spread of starting fuel across compared laps
+PACE_MIN_LAPS = 3               # per compound, before a comparison is offered
+
+
+def _pace_candidates(laps: list[LapInput]) -> dict[str, list[LapInput]]:
+    """Counted laps young enough on their set to describe the compound."""
+    out: dict[str, list[LapInput]] = {}
+    for run in split_runs(laps):
+        for age, lap in enumerate(run.laps):
+            if lap.counted and lap.compound and age < PACE_MAX_TYRE_AGE:
+                out.setdefault(lap.compound, []).append(lap)
+    return out
+
+
+def comparable_pace(laps: list[LapInput],
+                    reference: str | None) -> dict[str, dict]:
+    """Seconds per lap against the reference, on like-for-like laps only.
+
+    **The old figure was the median lap time on each compound, whole stop.**
+    At Monza that made Racing Medium 0.92 s/lap quicker than Racing Hard and
+    Racing Soft only 0.56 s - the medium beating the soft, which is not a thing
+    tyres do. It was not measuring tyres. The three compounds ran in three
+    separate sessions across two evenings, so the difference between their
+    medians carried the fuel load, the tyre age, the track evolution and the
+    driver's own warm-up, and every one of those is larger than the gap between
+    two racing compounds.
+
+    Three conditions, and all of them have to hold:
+
+    * **the same session** - a compound run on Tuesday against one run on
+      Wednesday compares the evenings, not the tyres;
+    * **young on the set**, so the comparison is of compounds and not of wear;
+    * **one band of starting fuel**, so it is not of tank weight.
+
+    Where they cannot all be met the comparison is **not made**. A refusal that
+    names the run which would fix it is worth more than a number that reads as
+    measured - and at Monza it is the only honest output, because no two
+    compounds ever shared a session.
+    """
+    candidates = _pace_candidates(laps)
+    if not reference or reference not in candidates:
+        return {}
+
+    # Sessions where the reference has enough young laps to be a yardstick.
+    by_session: dict[int | None, dict[str, list[LapInput]]] = {}
+    for code, pool in candidates.items():
+        for lap in pool:
+            by_session.setdefault(lap.session_id, {}).setdefault(
+                code, []).append(lap)
+
+    best: dict[str, dict] = {}
+    for session, pools in by_session.items():
+        reference_laps = pools.get(reference, [])
+        if len(reference_laps) < PACE_MIN_LAPS or len(pools) < 2:
+            continue
+        fuels = [lap.fuel_start for lap in reference_laps]
+        low = min(fuels) - PACE_FUEL_BAND_L
+        high = max(fuels) + PACE_FUEL_BAND_L
+        reference_ms = median([lap.lap_time_ms for lap in reference_laps])
+
+        found: dict[str, dict] = {}
+        for code, pool in pools.items():
+            matched = [lap for lap in pool if low <= lap.fuel_start <= high]
+            if len(matched) < PACE_MIN_LAPS:
+                continue
+            delta = (median([lap.lap_time_ms for lap in matched])
+                     - reference_ms) / 1000.0
+            found[code] = {
+                "deltaS": 0.0 if code == reference else delta,
+                "basis": (
+                    f"{len(matched)} laps against {reference} in one session, "
+                    f"all within {PACE_MAX_TYRE_AGE} laps of a set going on "
+                    f"and inside a {PACE_FUEL_BAND_L:.0f} L fuel band"),
+            }
+        # The session that compared the most compounds wins; a comparison of
+        # three in one run says more than two in another.
+        if len(found) > len(best):
+            best = found
+    return best if len(best) > 1 else {}
+
+
+def comparable_pace_gap(laps: list[LapInput], reference: str | None,
+                        code: str) -> str:
+    """Why this compound has no pace figure, and what would produce one."""
+    candidates = _pace_candidates(laps)
+    matched = len(candidates.get(code, []))
+    fix = ("The run that fixes it: back-to-back short runs, one per compound, "
+           "in one session, each from the same fuel load.")
+
+    if not reference or code == reference:
+        return (f"{code} is the reference compound, but no other compound "
+                f"shares a session with it on comparable laps, so there is "
+                f"nothing to be a reference for. {fix}")
+
+    together = ({lap.session_id for lap in candidates.get(code, [])}
+                & {lap.session_id for lap in candidates.get(reference, [])})
+    if not together:
+        shared = f"no session in common with {reference}"
+    else:
+        shared = (f"{len(together)} session"
+                  f"{'' if len(together) == 1 else 's'} in common with "
+                  f"{reference}, and too few comparable laps in "
+                  f"{'it' if len(together) == 1 else 'them'}")
+
+    return (
+        f"No like-for-like pace for {code}: {matched} lap"
+        f"{'' if matched == 1 else 's'} inside {PACE_MAX_TYRE_AGE} laps of a "
+        f"fresh set, and {shared}. Any figure would compare the sessions "
+        f"rather than the compounds - whole-session medians made a Racing "
+        f"Medium read quicker than a Racing Soft. {fix}")
 
 
 def longest_stint_by_compound(laps: list[LapInput]) -> dict[str, int]:

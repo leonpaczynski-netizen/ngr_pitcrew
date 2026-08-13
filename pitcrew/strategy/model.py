@@ -93,6 +93,9 @@ class CompoundProfile:
     whole question is whether the stint it buys pays that back.
     """
     code: str
+    # Seconds per lap against the reference compound, **0.0 when unknown**.
+    # `pace_known` below is what separates "the same as the reference" from
+    # "we cannot tell": the same number, and very different claims.
     pace_delta_s: float = 0.0
     wear_per_lap: float | None = None
     source: str = SOURCE_ASSUMED
@@ -108,6 +111,11 @@ class CompoundProfile:
     # temperature was captured, which is not the same as "the tyre was fine".
     window: dict | None = None
     window_note: str | None = None
+    # Appended deliberately: this dataclass is built positionally in a dozen
+    # places, so a field inserted in the middle silently shifts `wear_per_lap`
+    # into `source` and every plan downstream is costed on nonsense.
+    pace_known: bool = False
+    pace_basis: str | None = None
 
     @property
     def is_measured(self) -> bool:
@@ -128,7 +136,9 @@ class CompoundProfile:
     def as_export(self) -> dict:
         return {
             "compound": self.code,
-            "paceDeltaSPerLap": round(self.pace_delta_s, 3),
+            "paceDeltaSPerLap": (round(self.pace_delta_s, 3)
+                                 if self.pace_known else None),
+            "paceBasis": self.pace_basis,
             "wearPerLap": (None if self.wear_per_lap is None
                            else round(self.wear_per_lap, 5)),
             "source": self.source,
@@ -1018,6 +1028,11 @@ def crossover_lap(faster: CompoundProfile, harder: CompoundProfile,
     when either compound has no measured rate to climb.
     """
     if not faster.wear_per_lap or not harder.wear_per_lap:
+        return None
+    # Both gaps have to be measured. An unmeasured pace is stored as 0.0, and
+    # 0.0 against a measured delta would read as a real gap and put a crossover
+    # lap in front of the driver that nothing supports.
+    if not (faster.pace_known and harder.pace_known):
         return None
     gap = harder.pace_delta_s - faster.pace_delta_s
     if gap <= 0:

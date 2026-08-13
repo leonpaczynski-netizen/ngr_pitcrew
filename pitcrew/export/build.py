@@ -54,26 +54,36 @@ def session_lap_inputs(store, session_id: int) -> list[LapInput]:
     return _rows_to_laps(store, store.list_laps(session_id))
 
 
-def event_lap_inputs(store, event_id: int, kind: str) -> list[LapInput]:
+def event_lap_inputs(store, event_id: int, kind: str = "practice", *,
+                     hydrate: set[int] | None = None) -> list[LapInput]:
     """Every lap of every run of this kind, numbered continuously.
 
     Practice accumulates: a driver who goes out three times has one body of
     evidence, not three. The stored lap numbers restart at 1 each run, so they
     are renumbered here - two laps both called "lap 1" in one export would be
-    unreadable.
+    unreadable, and worse, would put two different runs' laps at the same
+    number where anything keyed on lap number could not tell them apart.
+
+    `hydrate` limits which laps decode their telemetry, for callers that only
+    need frames on a few. **It is the only thing a caller may vary.** The
+    strategy path used to have a loader of its own, and it quietly dropped the
+    session id and the continuous numbering - so every lap of every evening
+    looked like one session, and a compound comparison that depends on
+    "the same session" could not tell that no two compounds ever shared one.
     """
     rows = store.list_event_laps(event_id, kind)
-    laps = _rows_to_laps(store, rows)
+    laps = _rows_to_laps(store, rows, hydrate=hydrate)
     return [replace(lap, lap_num=index) for index, lap in enumerate(laps, 1)]
 
 
-def _rows_to_laps(store, rows) -> list[LapInput]:
+def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapInput]:
     out = []
     for row in rows:
         frames = None
-        stored = store.get_lap_frames(row["id"])
-        if stored:
-            frames = stored["frames"]
+        if hydrate is None or row["id"] in hydrate:
+            stored = store.get_lap_frames(row["id"])
+            if stored:
+                frames = stored["frames"]
         out.append(LapInput(
             lap_num=row["lap_num"],
             lap_time_ms=row["lap_time_ms"],
