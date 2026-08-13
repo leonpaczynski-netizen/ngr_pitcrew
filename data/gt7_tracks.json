@@ -1,0 +1,681 @@
+{
+  "note": "Every circuit and layout in GT7, as the game lists them. This is the catalogue the event screen's track and layout pickers are built from. It replaces the 86-name string list in gt7_extra.json, which held 27 of the 41 circuits - Yas Marina, Suzuka, Mount Panorama, Interlagos, Laguna Seca, Brands Hatch and nine others were simply absent, and it spelt Eiger Nordwand 'Eiger Norwand'.",
+  "source": "Gran Turismo Wiki, Gran Turismo 7/Track List - https://gran-turismo.fandom.com/wiki/Gran_Turismo_7/Track_List",
+  "sourceRead": "2026-08-13",
+  "why": "The same page and the same read date as gt7_track_weather.json, which is the point: the rain answer and the track list were two files that could disagree, and did. `rain` is carried here per layout so the two can be checked against each other.",
+  "reverse": "`reversible` is GT7's own column. The picker offers a '(Reverse)' layout for each one. 84 layouts and 37 reversible make 121 configurations; the wiki's prose says 120, so one of the two is out by one. The per-row column is used, not the prose total.",
+  "layouts": [
+    {
+      "track": "24 Heures du Mans Racing Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 13629,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "24 Heures du Mans Racing Circuit",
+      "layout": "No Chicane",
+      "type": "Real",
+      "lengthM": 13567,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Alsace",
+      "layout": "Village",
+      "type": "Original",
+      "lengthM": 5423,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Alsace",
+      "layout": "Test Course",
+      "type": "Original",
+      "lengthM": 2118,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 5809,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "Centre",
+      "type": "Original",
+      "lengthM": 1706,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "East End",
+      "type": "Original",
+      "lengthM": 2010,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "West End",
+      "type": "Original",
+      "lengthM": 2444,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "East",
+      "type": "Original",
+      "lengthM": 3643,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autodrome Lago Maggiore",
+      "layout": "West",
+      "type": "Original",
+      "lengthM": 4168,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Autódromo de Interlagos",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4309,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Autodromo Nazionale Monza",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 5793,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Autodromo Nazionale Monza",
+      "layout": "No Chicane",
+      "type": "Real",
+      "lengthM": 5755,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Autopolis International Racing Course",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4674,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Autopolis International Racing Course",
+      "layout": "Shortcut Course",
+      "type": "Real",
+      "lengthM": 3022,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Blue Moon Bay Speedway",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 3200,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Blue Moon Bay Speedway",
+      "layout": "Infield A",
+      "type": "Original",
+      "lengthM": 3350,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Blue Moon Bay Speedway",
+      "layout": "Infield B",
+      "type": "Original",
+      "lengthM": 2860,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Brands Hatch",
+      "layout": "Grand Prix Circuit",
+      "type": "Real",
+      "lengthM": 3946,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Brands Hatch",
+      "layout": "Indy Circuit",
+      "type": "Real",
+      "lengthM": 1944,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Broad Bean Raceway",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 1665,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Barcelona-Catalunya",
+      "layout": "Grand Prix Layout",
+      "type": "Real",
+      "lengthM": 4655,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Barcelona-Catalunya",
+      "layout": "Grand Prix Layout No Chicane",
+      "type": "Real",
+      "lengthM": 4730,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Barcelona-Catalunya",
+      "layout": "National Layout",
+      "type": "Real",
+      "lengthM": 2977,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Barcelona-Catalunya",
+      "layout": "Rallycross Layout",
+      "type": "Dirt",
+      "lengthM": 1133,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Sainte-Croix",
+      "layout": "Layout A",
+      "type": "Original",
+      "lengthM": 9477,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Sainte-Croix",
+      "layout": "Layout B",
+      "type": "Original",
+      "lengthM": 7062,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Sainte-Croix",
+      "layout": "Layout C",
+      "type": "Original",
+      "lengthM": 10825,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Circuit de Spa-Francorchamps",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 7044,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Circuit de Spa-Francorchamps",
+      "layout": "24h Layout",
+      "type": "Real",
+      "lengthM": 7044,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Circuit Gilles-Villeneuve",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4361,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Colorado Springs",
+      "layout": "Lake",
+      "type": "Dirt",
+      "lengthM": 2990,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Daytona International Speedway",
+      "layout": "Tri-Oval",
+      "type": "Real",
+      "lengthM": 4023,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Daytona International Speedway",
+      "layout": "Road Course",
+      "type": "Real",
+      "lengthM": 5729,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Deep Forest Raceway",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 4253,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Dragon Trail",
+      "layout": "Seaside",
+      "type": "Original",
+      "lengthM": 5209,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Dragon Trail",
+      "layout": "Gardens",
+      "type": "Original",
+      "lengthM": 4352,
+      "reversible": true,
+      "rain": true
+    },
+    {
+      "track": "Eiger Nordwand",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 2436,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Fishermans Ranch",
+      "layout": "Full Course",
+      "type": "Dirt",
+      "lengthM": 6893,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Fuji International Speedway",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4563,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Fuji International Speedway",
+      "layout": "Short Course",
+      "type": "Real",
+      "lengthM": 4526,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Goodwood Motor Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 3809,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Grand Valley",
+      "layout": "Highway 1",
+      "type": "Original",
+      "lengthM": 5099,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Grand Valley",
+      "layout": "South",
+      "type": "Original",
+      "lengthM": 3076,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "High Speed Ring",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 4345,
+      "reversible": true,
+      "rain": true
+    },
+    {
+      "track": "Kyoto Driving Park",
+      "layout": "Yamagiwa",
+      "type": "Original",
+      "lengthM": 4912,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Kyoto Driving Park",
+      "layout": "Miyabi",
+      "type": "Original",
+      "lengthM": 1953,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Kyoto Driving Park",
+      "layout": "Yamagiwa + Miyabi",
+      "type": "Original",
+      "lengthM": 6846,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Lake Louise",
+      "layout": "Tri-Oval",
+      "type": "Snow",
+      "lengthM": 3068,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Lake Louise",
+      "layout": "Short Track",
+      "type": "Snow",
+      "lengthM": 2577,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Lake Louise",
+      "layout": "Long Track",
+      "type": "Snow",
+      "lengthM": 3694,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Michelin Raceway Road Atlanta",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4088,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Mount Panorama Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 6213,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Northern Isle Speedway",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 900,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "Nordschleife",
+      "type": "Real",
+      "lengthM": 20832,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "Nordschleife Tourist",
+      "type": "Real",
+      "lengthM": 20832,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "24h",
+      "type": "Real",
+      "lengthM": 25378,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "Grand Prix",
+      "type": "Real",
+      "lengthM": 5148,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "Endurance",
+      "type": "Real",
+      "lengthM": 23864,
+      "reversible": true,
+      "rain": true
+    },
+    {
+      "track": "Nürburgring",
+      "layout": "Sprint",
+      "type": "Real",
+      "lengthM": 3629,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Red Bull Ring",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 4318,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Red Bull Ring",
+      "layout": "Short Track",
+      "type": "Real",
+      "lengthM": 2336,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Sardegna - Road Track",
+      "layout": "Layout A",
+      "type": "Original",
+      "lengthM": 5113,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Sardegna - Road Track",
+      "layout": "Layout B",
+      "type": "Original",
+      "lengthM": 3893,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Sardegna - Road Track",
+      "layout": "Layout C",
+      "type": "Original",
+      "lengthM": 2661,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Sardegna - Windmills",
+      "layout": "Full Course",
+      "type": "Dirt",
+      "lengthM": 3310,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Special Stage Route X",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 30283,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Suzuka Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 5807,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Suzuka Circuit",
+      "layout": "East Course",
+      "type": "Real",
+      "lengthM": 2243,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "Central Clockwise",
+      "type": "City",
+      "lengthM": 4405,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "East Clockwise",
+      "type": "City",
+      "lengthM": 7301,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "South Clockwise",
+      "type": "City",
+      "lengthM": 5201,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "Central Counterclockwise",
+      "type": "City",
+      "lengthM": 4369,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "East Counterclockwise",
+      "type": "City",
+      "lengthM": 7192,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Tokyo Expressway",
+      "layout": "South Counterclockwise",
+      "type": "City",
+      "lengthM": 6560,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Trial Mountain Circuit",
+      "layout": "Full Course",
+      "type": "Original",
+      "lengthM": 5434,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Tsukuba Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 2045,
+      "reversible": false,
+      "rain": true
+    },
+    {
+      "track": "Watkins Glen International",
+      "layout": "Long Course",
+      "type": "Real",
+      "lengthM": 5423,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Watkins Glen International",
+      "layout": "Short Course",
+      "type": "Real",
+      "lengthM": 3942,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "WeatherTech Raceway Laguna Seca",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 3602,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Willow Springs International Raceway",
+      "layout": "Big Willow",
+      "type": "Real",
+      "lengthM": 3951,
+      "reversible": false,
+      "rain": false
+    },
+    {
+      "track": "Willow Springs International Raceway",
+      "layout": "Streets of Willow Springs",
+      "type": "Real",
+      "lengthM": 2675,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Willow Springs International Raceway",
+      "layout": "Horse Thief Mile",
+      "type": "Real",
+      "lengthM": 1624,
+      "reversible": true,
+      "rain": false
+    },
+    {
+      "track": "Yas Marina Circuit",
+      "layout": "Full Course",
+      "type": "Real",
+      "lengthM": 5281,
+      "reversible": false,
+      "rain": false
+    }
+  ]
+}

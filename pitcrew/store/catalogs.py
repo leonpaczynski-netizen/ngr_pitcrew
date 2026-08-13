@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DATA_DIR = Path("data")
+# The complete circuit and layout catalogue, off GT7's own track list. The
+# string list in gt7_extra.json is the fallback for a checkout without it, and
+# it is incomplete - see `track_layouts`.
+TRACK_CATALOGUE_FILE = DATA_DIR / "gt7_tracks.json"
 TRACKS_FILE = DATA_DIR / "gt7_extra.json"
 CARS_FILE = DATA_DIR / "car_id_map.json"
 TRACK_MODELS_DIR = DATA_DIR / "track_models"
@@ -41,23 +45,55 @@ def _read(path: Path) -> dict:
 
 
 @functools.lru_cache(maxsize=1)
-def track_names() -> tuple[str, ...]:
-    """Every GT7 track/layout name we know about, sorted.
+def layout_records() -> tuple[dict, ...]:
+    """Every circuit/layout GT7 has, as rows: track, layout, rain, reversible.
 
-    Note this list is incomplete — it holds 86 layouts and uses en dashes in
-    the layout separator ("Alsace – Test Course").  Treat it as autocomplete
-    suggestions for a free-text field, not as a closed set: an event must be
-    creatable for a track that is not in here.
+    Structured rather than a list of "Base – Layout" strings, because the app
+    keeps track and layout in separate fields and splitting a display name
+    back apart is how "Sardegna - Road Track" became a track called
+    "Sardegna".  Reverse configurations are not rows here: GT7 lists them as a
+    property of a layout, and `track_layouts` expands them.
 
     Every file read here specifies utf-8 explicitly.  Windows defaults to
-    cp1252, which silently turns the en dashes into mojibake.
+    cp1252, which silently turns the accented names into mojibake.
     """
+    payload = _read(TRACK_CATALOGUE_FILE)
+    rows = payload.get("layouts") or []
+    return tuple(
+        {"track": str(row.get("track", "")).strip(),
+         "layout": str(row.get("layout", "")).strip(),
+         "type": row.get("type"),
+         "lengthM": row.get("lengthM"),
+         "reversible": bool(row.get("reversible")),
+         # Null, not False, when the catalogue does not say. A circuit added
+         # since this was read is unknown, and unknown is not dry.
+         "rain": None if row.get("rain") is None else bool(row.get("rain"))}
+        for row in rows if str(row.get("track", "")).strip()
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def track_names() -> tuple[str, ...]:
+    """Every GT7 track/layout name, as GT7 writes them: "Base – Layout".
+
+    Derived from `track_layouts`, so it carries the reverse configurations
+    too.  Kept because it is the shape the display name has always had; new
+    code wants `layout_records` or `track_layouts` instead.
+    """
+    names = [f"{base}{LAYOUT_SEPARATOR_SPACED}{layout}"
+             for base, layouts in track_layouts().items()
+             for layout in layouts]
+    return tuple(sorted(set(names)))
+
+
+@functools.lru_cache(maxsize=1)
+def _legacy_track_names() -> tuple[str, ...]:
+    """The old string list. Only reached when the catalogue file is absent."""
     if not TRACKS_FILE.exists():
         return ()
     with TRACKS_FILE.open(encoding="utf-8") as handle:
         payload = json.load(handle)
-    names = [str(name) for name in payload.get("tracks", [])]
-    return tuple(sorted(set(names)))
+    return tuple(sorted({str(name) for name in payload.get("tracks", [])}))
 
 
 @functools.lru_cache(maxsize=1)
@@ -77,22 +113,51 @@ def cars_by_id() -> dict[int, str]:
 
 
 # GT7 writes track names as "Base – Layout" with an en dash. The app keeps
-# track and layout in separate fields, so the catalogue is split on it rather
-# than offering 86 entries that repeat the base name a dozen times.
+# track and layout in separate fields, so the catalogue is a mapping rather
+# than 121 entries that repeat the base name a dozen times.
 LAYOUT_SEPARATOR = "–"
+LAYOUT_SEPARATOR_SPACED = f" {LAYOUT_SEPARATOR} "
+# GT7 offers a reversed configuration of any layout its track list marks
+# reversible. It is a different circuit to drive and a different corner
+# sequence, so it is offered as its own layout rather than a flag.
+REVERSE_SUFFIX = " (Reverse)"
+
+
+def is_reverse(layout: str | None) -> bool:
+    return bool(layout) and layout.strip().endswith(REVERSE_SUFFIX)
 
 
 @functools.lru_cache(maxsize=1)
 def track_layouts() -> dict[str, tuple[str, ...]]:
-    """Base track name -> its layouts, empty when the track has only one."""
+    """Base track name -> its layouts, in GT7's own order.
+
+    Not sorted within a track: GT7 lists Full Course first and the cut-down
+    variants after it, which is the order the driver reads on the console.
+    The tracks themselves are sorted, because that list is 41 long and is
+    scanned alphabetically.
+
+    This used to be built by splitting the display strings in gt7_extra.json
+    on the en dash, and that file held 27 of the 41 circuits. Yas Marina,
+    Suzuka, Mount Panorama, Interlagos, Laguna Seca and Brands Hatch among
+    others could not be picked at all.
+    """
     grouped: dict[str, list[str]] = {}
-    for name in track_names():
-        base, _, layout = name.partition(LAYOUT_SEPARATOR)
-        base = base.strip()
-        layout = layout.strip()
-        grouped.setdefault(base, [])
-        if layout and layout not in grouped[base]:
-            grouped[base].append(layout)
+    for row in layout_records():
+        layouts = grouped.setdefault(row["track"], [])
+        if row["layout"] and row["layout"] not in layouts:
+            layouts.append(row["layout"])
+            if row["reversible"]:
+                layouts.append(row["layout"] + REVERSE_SUFFIX)
+
+    if not grouped:
+        # No catalogue file. Fall back to splitting the legacy strings so a
+        # checkout without the data file still offers something.
+        for name in _legacy_track_names():
+            base, _, layout = name.partition(LAYOUT_SEPARATOR)
+            layouts = grouped.setdefault(base.strip(), [])
+            if layout.strip() and layout.strip() not in layouts:
+                layouts.append(layout.strip())
+
     return {base: tuple(layouts) for base, layouts in sorted(grouped.items())}
 
 
@@ -364,6 +429,11 @@ def load_station_map(track: str, layout: str | None = None) -> dict | None:
         preferred = [key for key in candidates if layout_slug in key]
         if preferred:
             candidates = preferred
+        elif is_reverse(layout):
+            # A reversed lap meets the corners in the opposite order, so the
+            # forward map would label every one of them wrongly. Better no
+            # corner names than confident wrong ones.
+            return None
     if not candidates:
         return None
 

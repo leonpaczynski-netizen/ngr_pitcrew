@@ -174,6 +174,11 @@ class EventScreen(QWidget):
         self.layout_edit.setEnabledState(bool(layouts))
         if chosen in layouts:
             self.layout_edit.setCurrentText(chosen)
+        elif len(layouts) == 1:
+            # Yas Marina has one layout and GT7 calls it Full Course. Leaving
+            # it blank would file the event with no layout, which is what the
+            # station map and the rain list both key on.
+            self.layout_edit.setCurrentText(layouts[0])
 
     # ------------------------------------------------------------------ build
 
