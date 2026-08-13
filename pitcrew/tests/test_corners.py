@@ -31,6 +31,7 @@ def frame(distance_m: float, speed_kph: float, index: int, **overrides) -> dict:
         "road_plane_d": -180.0,
         # GT7's in-game clock: where in the game day this frame was driven.
         "time_of_day_ms": 50_400_000,
+        "fuel_l": 60.0,
         "speed_kph": speed_kph,
         "throttle_pct": 100.0,
         "brake_pct": 0.0,

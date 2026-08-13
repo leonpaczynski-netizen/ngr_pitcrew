@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
+from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
@@ -369,6 +370,10 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     # For a timed race the stored figure is minutes, not laps. The lap count
     # is only a starting estimate: what the race actually covers depends on
     # how many times the car stops, and the model works that out per plan.
+    # Measured off the fuel channel where a stop was ever recorded; the typed
+    # figure otherwise, labelled as typed. At 100 L it is most of a pit stop.
+    refuel = refuel_evidence(laps, event["refuel_rate_lps"])
+
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
@@ -382,7 +387,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         lap_time_ms=reference_ms or 0,
         fuel_per_lap_l=fuel_per_lap,
         fuel_capacity_l=capacity,
-        refuel_rate_lps=event["refuel_rate_lps"],
+        refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
         pit_loss_s=event["pit_loss_secs"],
         wear_per_lap=wear,
         mandatory_stops=event["mandatory_stops"] or 0,
@@ -428,7 +433,11 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  "a track constant"),
         Evidence("Pit dead time", f"{PIT_DEAD_TIME_S:.1f} s", ASSUMED,
                  "before refuelling begins"),
-        Evidence("Refuel rate", f"{event['refuel_rate_lps']:.2f} L/s", DECLARED),
+        Evidence("Refuel rate",
+                 (f"{refuel['rateLps']:.2f} L/s" if refuel["rateLps"]
+                  else "not set"),
+                 MEASURED if refuel["source"].startswith("measured") else DECLARED,
+                 refuel.get("note", "")),
         Evidence("Fuel weight",
                  f"{FUEL_WEIGHT_S_PER_L_PER_LAP:.3f} s/L/lap", ASSUMED,
                  "derived, not measured - overwrite it if you measure it"),

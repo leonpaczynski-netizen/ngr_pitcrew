@@ -83,6 +83,12 @@ FRAME_FIELDS: tuple[str, ...] = (
     # nor air temperature, so this is the only channel that says which
     # conditions a measurement belongs to.
     "time_of_day_ms",
+    # **Fuel in the tank, litres.** Per-lap start and end have always been
+    # stored, but a stop happens inside a lap and the rate it fills at is the
+    # largest term in a pit stop - 73 s of a 100 s stop at Monza. GT7 marks no
+    # pit stop in any packet format, so the tank climbing is both the detector
+    # and the measurement. See `analysis/refuel.py`.
+    "fuel_l",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -267,6 +273,7 @@ class LapRecorder:
                 round(packet.tyre_radius_rl, 4),
                 round(self._distance_m, 2),
                 packet.time_of_day_ms,
+                round(packet.fuel_level, 3),
             ])
 
     def take_rows(self) -> list[list]:
