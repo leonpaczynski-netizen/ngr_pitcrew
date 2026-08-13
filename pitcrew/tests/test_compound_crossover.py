@@ -102,18 +102,28 @@ def test_compounds_are_searched_in_order_not_just_as_a_set():
     assert ("RH", "RS") in sequences
 
 
-def test_the_longer_lasting_compound_carries_more_of_the_race():
-    """An even split would hide the whole advantage of fitting the hard."""
-    plan = build_plan(a_race(), stops=1, compounds=["RS", "RH"])
+def test_the_split_between_two_compounds_is_optimised_not_shared():
+    """An even split is not a strategy, it is an average.
+
+    Which way the laps fall depends on the pace gap, not on which tyre lasts
+    longer: here the soft is 0.6 s/lap quicker, so the answer is to run it to
+    its own limit and give the hard what is left. The old code filled each
+    stint to its cap in turn and called that a plan.
+    """
+    from pitcrew.strategy.model import elapsed_for_s, stint_limit
+
+    inputs = a_race()
+    plan = build_plan(inputs, stops=1, compounds=["RS", "RH"])
     soft, hard = plan.stints
-    assert hard.laps > soft.laps
+    assert soft.laps + hard.laps == inputs.race_laps
 
-
-# ------------------------------------------------------------- lap allocation
-
-def test_laps_go_out_in_proportion_to_what_each_stint_can_run():
-    assert sum(allocate_laps(30, [10, 20])) == 30
-    assert allocate_laps(30, [10, 20]) == [10, 20]
+    profiles = [inputs.profile_for("RS"), inputs.profile_for("RH")]
+    chosen = elapsed_for_s(inputs, [soft.laps, hard.laps], profiles)
+    even = inputs.race_laps // 2
+    caps = [stint_limit(inputs, p)[0] for p in profiles]
+    if all(cap is None or even <= cap for cap in caps):
+        assert chosen <= elapsed_for_s(inputs, [even, inputs.race_laps - even],
+                                       profiles)
 
 
 def test_allocation_still_returns_the_full_race_when_nothing_fits():

@@ -151,12 +151,24 @@ def test_a_stop_costs_pit_loss_dead_time_and_fuel():
 
 
 def test_stint_boundaries_line_up_with_the_race():
+    """Stint lengths are optimised, not shared out evenly.
+
+    With the stops mandated, the cheapest way to serve them is to run the free
+    starting tank as far as the tyre allows and keep the stops that follow
+    small - refuelling is charged by the litre, so a short stint is a short
+    stop. The even split was never costed against anything; it was the
+    arithmetic mean, and at these numbers it gave away five and a half seconds.
+    """
     plan = build_plan(inputs(race_laps=21), stops=2)
-    assert [s.laps for s in plan.stints] == [7, 7, 7]
+    laps = [s.laps for s in plan.stints]
+    assert sum(laps) == 21
+    assert laps[0] > laps[-1]
     assert plan.stints[0].start_lap == 1
-    assert plan.stints[1].start_lap == 8
+    # Whatever the split, the boundaries have to be contiguous and cover the
+    # race exactly once.
+    for previous, following in zip(plan.stints, plan.stints[1:]):
+        assert following.start_lap == previous.end_lap + 1
     assert plan.stints[-1].end_lap == 21
-    assert plan.pit_laps == [7, 14]
 
 
 def test_fuel_is_taken_to_the_diamond_plus_a_lap():
@@ -257,8 +269,9 @@ def test_plan_exports_in_contract_shape():
     plan = build_plan(inputs(), stops=1)
     payload = plan.as_export(inputs())
     assert payload["plan"]["stops"] == 1
-    assert payload["plan"]["stintLaps"] == [10, 10]
-    assert payload["plan"]["pitLap"] == 10
+    assert payload["plan"]["stintLaps"] == [17, 3]
+    assert payload["plan"]["laps"] == 20
+    assert payload["plan"]["pitLap"] == 17
     assert payload["bindingConstraint"] in (
         CONSTRAINT_TYRE, CONSTRAINT_FUEL, CONSTRAINT_UNKNOWN)
     assert payload["assumptions"]["fuelWeightSource"] == "derived-not-measured"
@@ -267,7 +280,7 @@ def test_plan_exports_in_contract_shape():
 def test_plan_round_trips_through_a_dict():
     plan = build_plan(inputs(), stops=1)
     payload = plan.as_dict()
-    assert payload["stints"][0]["laps"] == 10
+    assert payload["stints"][0]["laps"] == 17
     assert payload["binding_constraint"] == plan.binding_constraint
 
 

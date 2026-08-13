@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from functools import lru_cache
 from itertools import product
 
 from pitcrew.store.tyres import get_by_code
@@ -524,6 +525,28 @@ def allocate_laps(total: int, limits: list[int | None]) -> list[int]:
     return laps
 
 
+@lru_cache(maxsize=200_000)
+def _stint_seconds(laps: int, base_s: float, wear: float | None,
+                   fuel_at_start_l: float | None, fuel_per_lap_l: float | None,
+                   fuel_weight: float) -> float:
+    """The integral itself, on primitives so it can be cached.
+
+    The optimiser evaluates this thousands of times over a handful of distinct
+    (compound, length) pairs, so caching turns the search from seconds into
+    milliseconds. Nothing here reads mutable state.
+    """
+    total = 0.0
+    for lap_index in range(laps):
+        lap_time = base_s
+        if wear:
+            total += pace_loss_s((lap_index + 1) * wear)
+        if fuel_at_start_l is not None and fuel_per_lap_l:
+            onboard = max(0.0, fuel_at_start_l - lap_index * fuel_per_lap_l)
+            lap_time += onboard * fuel_weight
+        total += lap_time
+    return total
+
+
 def stint_time_s(laps: int, inputs: RaceInputs, *,
                  fuel_at_start_l: float | None,
                  profile: CompoundProfile | None = None) -> float:
@@ -536,20 +559,10 @@ def stint_time_s(laps: int, inputs: RaceInputs, *,
     """
     if profile is None:
         profile = inputs.profile_for(inputs.evidence_compound)
-    base_s = inputs.lap_time_ms / 1000.0 + profile.pace_delta_s
-    wear = profile.wear_per_lap
-    total = 0.0
-    for lap_index in range(laps):
-        lap_time = base_s
-        if wear:
-            consumed = (lap_index + 1) * wear
-            lap_time += pace_loss_s(consumed)
-        if fuel_at_start_l is not None and inputs.fuel_per_lap_l:
-            onboard = max(0.0, fuel_at_start_l
-                          - lap_index * inputs.fuel_per_lap_l)
-            lap_time += onboard * inputs.fuel_weight_s_per_l_per_lap
-        total += lap_time
-    return total
+    return _stint_seconds(
+        laps, inputs.lap_time_ms / 1000.0 + profile.pace_delta_s,
+        profile.wear_per_lap, fuel_at_start_l, inputs.fuel_per_lap_l,
+        inputs.fuel_weight_s_per_l_per_lap)
 
 
 def refuel_time_s(litres: float, inputs: RaceInputs) -> float:
@@ -603,7 +616,13 @@ def build_plan(inputs: RaceInputs, stops: int,
     if inputs.is_timed:
         stint_lengths, clock_total = clock_bound_stints(inputs, profiles, limits)
     else:
-        stint_lengths = allocate_laps(inputs.race_laps, limits)
+        # The optimum, not an even share. `allocate_laps` is the fallback for
+        # the case the optimiser refuses - the caps cannot cover the distance -
+        # so the plan is still built and then reported as not runnable, rather
+        # than vanishing without saying why.
+        stint_lengths = (optimal_split(inputs, profiles, limits,
+                                       inputs.race_laps)
+                         or allocate_laps(inputs.race_laps, limits))
     limit, constraint = max_stint_laps(inputs)
 
     notes: list[str] = []
@@ -714,6 +733,89 @@ def build_plan(inputs: RaceInputs, stops: int,
     return plan
 
 
+def stint_cost_s(inputs: RaceInputs, profile: CompoundProfile, laps: int, *,
+                 first: bool) -> float:
+    """What one stint costs, **including the stop that put the car on it**.
+
+    Every stint after the first pays for the stop that preceded it, and pays
+    the refuel for **its own** fuel rather than the previous stint's. That is
+    not a rearrangement: the old code charged the stop after stint *i* for
+    stint *i*'s fuel, which is the wrong tank. It made no difference while
+    every stint was the same length, and it makes a large one now that they
+    are not - a 3-lap stint followed by a 14-lap one was being charged 3 laps
+    of fuel for a stop that actually fills for 14.
+    """
+    fuel = stint_fuel_l(laps, inputs)
+    total = stint_time_s(laps, inputs, fuel_at_start_l=fuel, profile=profile)
+    if not first:
+        total += inputs.pit_loss_s + inputs.pit_dead_time_s
+        if fuel:
+            total += refuel_time_s(fuel, inputs)
+    return total
+
+
+def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
+                  limits: list[int | None], total_laps: int) -> list[int] | None:
+    """The stint lengths that cover `total_laps` in the least time.
+
+    **This is the answer to "when should I stop".** The old split shared the
+    laps out evenly and clipped to the caps, so the only stint lengths ever
+    costed were the even one and the cap - and the economics of stopping a lap
+    earlier or later were never evaluated at all. A stint should end when
+    carrying on costs more than stopping does, and that is not a threshold, it
+    is an optimisation.
+
+    Exact, not heuristic. A stint's cost depends on nothing but its own
+    compound and length, so the problem decomposes and a dynamic program finds
+    the true optimum in milliseconds. It also gets the end of the race right
+    without a special case: a stop with too few laps left to amortise it never
+    wins, which is the "unless it is close to the end" the driver asked for.
+
+    Returns None when the caps cannot cover the distance at all - that is a
+    finding, not a plan, and `build_plan` reports it as one.
+    """
+    count = len(profiles)
+    caps = [min(cap, total_laps) if cap is not None else total_laps
+            for cap in limits]
+    if sum(caps) < total_laps:
+        return None
+
+    # f(index, remaining) -> (cost, first stint length)
+    best: dict[tuple[int, int], tuple[float, int]] = {}
+
+    def solve(index: int, remaining: int) -> tuple[float, int]:
+        if index == count - 1:
+            if 1 <= remaining <= caps[index]:
+                return stint_cost_s(inputs, profiles[index], remaining,
+                                    first=index == 0), remaining
+            return math.inf, 0
+        key = (index, remaining)
+        if key in best:
+            return best[key]
+        # Leave at least one lap for every stint still to come.
+        highest = min(caps[index], remaining - (count - index - 1))
+        answer = (math.inf, 0)
+        for laps in range(1, max(0, highest) + 1):
+            here = stint_cost_s(inputs, profiles[index], laps,
+                                first=index == 0)
+            rest, _ = solve(index + 1, remaining - laps)
+            if here + rest < answer[0]:
+                answer = (here + rest, laps)
+        best[key] = answer
+        return answer
+
+    cost, _ = solve(0, total_laps)
+    if cost == math.inf:
+        return None
+
+    lengths, remaining = [], total_laps
+    for index in range(count):
+        _, laps = solve(index, remaining)
+        lengths.append(laps)
+        remaining -= laps
+    return lengths
+
+
 def stint_fuel_l(laps: int, inputs: RaceInputs) -> float | None:
     """What a stint of this length is fuelled for: the distance plus a lap."""
     if not inputs.fuel_per_lap_l:
@@ -724,16 +826,8 @@ def stint_fuel_l(laps: int, inputs: RaceInputs) -> float | None:
 def elapsed_for_s(inputs: RaceInputs, stint_lengths: list[int],
                   profiles: list[CompoundProfile]) -> float:
     """Wall-clock seconds to run these stints, stops included."""
-    total = 0.0
-    for index, laps in enumerate(stint_lengths):
-        fuel = stint_fuel_l(laps, inputs)
-        total += stint_time_s(laps, inputs, fuel_at_start_l=fuel,
-                              profile=profiles[index])
-        if index < len(stint_lengths) - 1:
-            total += inputs.pit_loss_s + inputs.pit_dead_time_s
-            if fuel:
-                total += refuel_time_s(fuel, inputs)
-    return total
+    return sum(stint_cost_s(inputs, profiles[index], laps, first=index == 0)
+               for index, laps in enumerate(stint_lengths))
 
 
 def clock_bound_stints(inputs: RaceInputs, profiles: list[CompoundProfile],
@@ -764,22 +858,28 @@ def clock_bound_stints(inputs: RaceInputs, profiles: list[CompoundProfile],
     if not limit_s:
         return allocate_laps(inputs.race_laps, limits), 0.0
 
+    def elapsed_at(count: int) -> float:
+        split = optimal_split(inputs, profiles, limits, count)
+        return math.inf if split is None else elapsed_for_s(inputs, split,
+                                                            profiles)
+
     laps = max(1, inputs.race_laps)
     for _ in range(MAX_CLOCK_ITERATIONS):
-        if elapsed_for_s(inputs, allocate_laps(laps, limits), profiles) >= limit_s:
+        if elapsed_at(laps) >= limit_s:
             if laps <= 1:
                 break
             laps -= 1
             continue
         break
     for _ in range(MAX_CLOCK_ITERATIONS):
-        if elapsed_for_s(inputs, allocate_laps(laps + 1, limits),
-                         profiles) < limit_s:
+        if elapsed_at(laps + 1) < limit_s:
             laps += 1
             continue
         break
 
-    lengths = allocate_laps(laps, limits)
+    lengths = optimal_split(inputs, profiles, limits, laps)
+    if lengths is None:
+        return allocate_laps(laps, limits), 0.0
     elapsed = elapsed_for_s(inputs, lengths, profiles)
 
     # The clock has not expired, so one more lap has to be run whatever the
@@ -903,6 +1003,61 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
     return ordered
 
 
+def crossover_lap(faster: CompoundProfile, harder: CompoundProfile,
+                  *, max_laps: int = 60) -> int | None:
+    """The lap on which a worn `faster` falls behind a **fresh** `harder`.
+
+    The question as the driver asks it: when does the soft stop being the
+    quicker tyre? It is not the same question as when to stop - that is an
+    optimisation over the whole race and `optimal_split` answers it - but it is
+    the one that makes the answer legible, and it is worth stating on its own.
+
+    A compound at wear rate `w` loses nothing while it is inside the flat phase
+    and then climbs; the crossover is where that climb has eaten the pace gap
+    it started with. `None` when the gap is never eaten inside `max_laps`, or
+    when either compound has no measured rate to climb.
+    """
+    if not faster.wear_per_lap or not harder.wear_per_lap:
+        return None
+    gap = harder.pace_delta_s - faster.pace_delta_s
+    if gap <= 0:
+        return None                     # the "harder" tyre is not the slower one
+    for lap in range(1, max_laps + 1):
+        lost = (pace_loss_s(lap * faster.wear_per_lap)
+                - pace_loss_s(1 * harder.wear_per_lap))
+        if lost >= gap:
+            return lap
+    return None
+
+
+def crossover_table(inputs: RaceInputs) -> list[dict]:
+    """Every ordered pair of planning compounds, and where they cross.
+
+    Reported rather than acted on: the plan comes from the optimiser, and this
+    says in one line why it looks the way it does.
+    """
+    codes = [code for code in inputs.planning_compounds()
+             if code in inputs.compound_profiles]
+    out = []
+    for quick, hard in product(codes, repeat=2):
+        if quick == hard:
+            continue
+        first, second = inputs.profile_for(quick), inputs.profile_for(hard)
+        lap = crossover_lap(first, second)
+        if lap is None:
+            continue
+        out.append({
+            "faster": quick,
+            "than": hard,
+            "crossesOnLap": lap,
+            "paceGapSPerLap": round(second.pace_delta_s - first.pace_delta_s, 3),
+            "note": (f"A {quick} is quicker than a fresh {hard} for {lap - 1} "
+                     f"laps; from lap {lap} the worn {quick} is the slower "
+                     f"tyre."),
+        })
+    return out
+
+
 def crossover(ordered: list[Plan], inputs: RaceInputs) -> dict | None:
     """Why the winner won, against the best plan on different rubber.
 
@@ -943,6 +1098,7 @@ def crossover(ordered: list[Plan], inputs: RaceInputs) -> dict | None:
         "alternativePaceDeltaSPerLap": round(rival_deficit, 3),
         "breakEvenSPerLap": round(rival_deficit - gap / laps_on_swapped, 3),
         "restsOnAssumption": assumed,
+        "compoundCrossoverLaps": crossover_table(inputs),
         "outsideTyreWindow": window_notes,
         "source": "derived-from-total-race-time",
     }

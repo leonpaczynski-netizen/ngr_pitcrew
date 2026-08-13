@@ -90,13 +90,19 @@ def test_no_recommended_plan_runs_past_the_flag():
         assert plan.total_time_s <= inputs.max_duration_s + 1e-6, plan.notes
 
 
-def test_stopping_costs_laps_not_time():
-    """The whole trade-off of a timed race, and the one the old model could
-    not see: it handed every plan the same lap count, so a stop was free."""
+def test_stopping_is_paid_for_in_the_clock_not_charged_to_the_race():
+    """The trade the old model could not see: it handed every plan the same
+    lap count, so a stop cost nothing at all.
+
+    Now the extra stops eat into the clock. They cost distance only when they
+    eat enough of it to lose a whole lap - so the invariant is that stopping
+    more never gets you further, and always gets you to the flag later.
+    """
     inputs = an_input()
     one = build_plan(inputs, 1, ["RH", "RH"])
     three = build_plan(inputs, 3, ["RH", "RH", "RH", "RH"])
-    assert three.laps_completed < one.laps_completed
+    assert three.laps_completed <= one.laps_completed
+    assert three.total_time_s > one.total_time_s
     assert three.total_time_s <= inputs.max_duration_s + 1e-6
 
 
