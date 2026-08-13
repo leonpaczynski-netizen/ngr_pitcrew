@@ -469,7 +469,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         event["weather_rule"] if "weather_rule" in event.keys() else None,
         _rain_possible(event),
         sum(1 for lap in laps if is_wet_compound(lap.compound)),
-        track=event["track"])
+        track=event["track"], layout=event["layout"])
 
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None

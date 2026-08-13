@@ -44,84 +44,106 @@ def _seed() -> dict:
         return {}
 
 
-def rain_seed(track: str | None) -> bool | None:
-    """The community's answer for this circuit, or None where it has none.
+def _matches(candidate: str, name: str) -> bool:
+    candidate, name = candidate.strip().lower(), name.strip().lower()
+    return candidate in name or name in candidate
 
-    None is not "no rain". Most circuits added since 2022 are simply absent,
-    and treating absence as a dry circuit would quietly retire the wet
-    contingency at every one of them.
+
+def rain_seed(track: str | None,
+              layout: str | None = None) -> tuple[bool | None, str]:
+    """Can this circuit rain, and on whose authority.
+
+    Three tiers, strongest first:
+
+    * **confirmed** - checked in the game by the driver. Nothing outranks it;
+    * **listed** - the wiki's per-layout table, which is complete for the
+      circuits it covers, so a circuit in it with no rain layout genuinely
+      cannot rain;
+    * **unknown** - a circuit added since the table was read. Not "dry":
+      treating absence as a dry circuit would quietly retire the wet
+      contingency at every new one.
+
+    Rain is a property of the **layout**, not the track. Dragon Trail Gardens
+    rains and Seaside does not; Tokyo Expressway Central and East rain and
+    South does not. The older community lists missed that entirely.
     """
     if not track:
-        return None
-    listed = _seed().get("rainPossible") or []
-    name = track.strip().lower()
-    for entry in listed:
-        candidate = entry.strip().lower()
-        if candidate in name or name in candidate:
-            return True
-    return None
-
-
-def seed_source() -> str:
+        return None, "no circuit named"
     data = _seed()
-    return (f"{data.get('source', 'unknown')} ({data.get('sourceDate', '?')}). "
-            f"{data.get('caveat', '')}").strip()
+
+    for name, entry in (data.get("confirmed") or {}).items():
+        if _matches(name, track):
+            return bool(entry.get("rain")), (
+                f"confirmed in game by the driver, {entry.get('date', 'undated')}")
+
+    for name, layouts in (data.get("rainByTrack") or {}).items():
+        if not _matches(name, track):
+            continue
+        if layout and not any(_matches(one, layout) for one in layouts):
+            return False, (
+                f"{track} can rain, but not on the {layout} layout - the "
+                f"wiki's table is per layout")
+        return True, "the GT Wiki track list, read 2026-08-13"
+
+    for name in data.get("noRain") or []:
+        if _matches(name, track):
+            return False, "the GT Wiki track list, read 2026-08-13"
+
+    return None, (
+        "not on the GT Wiki track list read 2026-08-13 - a circuit added "
+        "since, so unknown rather than dry")
 
 
-def can_rain(rule: str | None, rain_possible: bool | None) -> bool | None:
-    """Can this race produce rain? None when the circuit's answer is unknown."""
+def can_rain(rule: str | None, rain_possible: bool | None,
+             track: str | None = None,
+             layout: str | None = None) -> tuple[bool | None, str]:
+    """Can this race produce rain, and on whose authority.
+
+    The league's rule comes first and can settle it on its own: a round run to
+    a fixed weather setting cannot rain whatever the circuit offers.
+    """
     if rule == RULE_FIXED:
-        return False
-    if rain_possible is None:
-        return None
-    return bool(rain_possible)
+        return False, "the round runs a fixed weather setting"
+    if rain_possible is not None:
+        return bool(rain_possible), "declared on the event page"
+    return rain_seed(track, layout)
 
 
 def wet_evidence(rule: str | None, rain_possible: bool | None,
-                 wet_laps: int, track: str | None = None) -> dict:
+                 wet_laps: int, track: str | None = None,
+                 layout: str | None = None) -> dict:
     """What the weather rule means for the plan, and what is missing.
 
     `wet_laps` is how many laps have ever been run on a wet compound.
     """
-    possible = can_rain(rule, rain_possible)
+    possible, authority = can_rain(rule, rain_possible, track, layout)
     circuit = track or "this circuit"
 
     if possible is False:
         return {
             "canRain": False,
+            "source": authority,
             "note": (
-                f"Rain cannot happen in this race"
-                + (" - the round runs a fixed weather setting"
-                   if rule == RULE_FIXED
-                   else f" - {circuit} cannot produce it")
-                + ". Wet compounds are irrelevant here and are left out of the "
-                  "plan entirely."),
+                f"Rain cannot happen in this race - {authority}. Wet compounds "
+                f"are irrelevant here and are left out of the plan entirely."),
         }
 
     if possible is None:
-        hint = rain_seed(track)
-        seeded = (
-            f" A community list has {circuit} down as rain-capable, but it is "
-            f"from 2022 and incomplete by its own admission, so it is a hint "
-            f"and not the answer."
-            if hint else
-            f" {circuit} is not on the 2022 community list of rain-capable "
-            f"circuits - which is four years and many circuits old, so its "
-            f"silence is not a no.")
         return {
             "canRain": None,
-            "seedSaysRain": hint,
+            "source": authority,
             "note": (
-                f"Whether {circuit} can produce rain is not declared, and it "
-                f"cannot be measured - GT7 broadcasts no weather channel at "
-                f"all. Answer it on the event page: under random weather it "
-                f"decides whether a wet contingency is worth anything here."
-                + seeded),
+                f"Whether {circuit} can produce rain is unknown - {authority} - "
+                f"and it cannot be measured, because GT7 broadcasts no weather "
+                f"channel at all. Answer it on the event page: under random "
+                f"weather it decides whether a wet contingency is worth "
+                f"anything here."),
         }
 
     if wet_laps > 0:
         return {
             "canRain": True,
+            "source": authority,
             "wetLaps": wet_laps,
             "note": (
                 f"Rain is possible at {circuit} under random weather, and "
@@ -133,6 +155,7 @@ def wet_evidence(rule: str | None, rain_possible: bool | None,
 
     return {
         "canRain": True,
+        "source": authority,
         "wetLaps": 0,
         "note": (
             f"Rain is possible at {circuit} under random weather, and **no wet "

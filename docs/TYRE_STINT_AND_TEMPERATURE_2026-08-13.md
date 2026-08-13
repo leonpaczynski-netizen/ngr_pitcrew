@@ -364,18 +364,31 @@ The league's rule and the circuit's capability decide it together:
 **This is the one thing on this page that cannot be measured.** GT7 broadcasts
 no weather channel in any packet format — no rain flag, no wetness — so unlike
 the game clock there is nothing to read it off and nothing to check a claim
-against. The research is also weak: the two community lists
-([TheSixthAxis](https://www.thesixthaxis.com/2022/03/04/what-gran-turismo-7-tracks-have-wet-weather-racing-rain/),
-[solox](https://solox.gg/gt7-tracks-with-rain/)) agree exactly on the same 11
-circuits, which is reassuring, but both are **August 2022** and one states
-outright that it is incomplete. Four years of circuit additions have happened
-since.
+against. It is therefore the one input that rests entirely on a source.
 
-So it ships as a **seed, not an answer**: `data/gt7_track_weather.json` carries
-the 11 with their provenance, the event page asks the driver, and his answer is
-what the model uses. A circuit absent from the list is `null`, not "dry" —
-treating absence as a dry circuit would quietly retire the wet contingency
-everywhere.
+The source is the [GT Wiki track list](https://gran-turismo.fandom.com/wiki/Gran_Turismo_7/Track_List),
+which is the right one for three reasons: it is **complete** (41 tracks, 84
+layouts, everything added since 2022), it is **per layout**, and it **agrees
+exactly** with the two independent August 2022 lists
+([TheSixthAxis](https://www.thesixthaxis.com/2022/03/04/what-gran-turismo-7-tracks-have-wet-weather-racing-rain/),
+[solox](https://solox.gg/gt7-tracks-with-rain/)) on all 11 circuits those
+covered. Being complete is what lets it say **no** rather than merely failing to
+say yes.
+
+Layout granularity is the part the older lists got wrong outright: **Dragon
+Trail Gardens rains and Seaside does not; Tokyo Expressway Central and East rain
+and South does not.** A per-track answer is wrong at those circuits.
+
+Three tiers of authority, strongest first, in `data/gt7_track_weather.json`:
+
+1. **Confirmed in game by the driver** — Monza is recorded here, checked
+   13 Aug 2026. Nothing outranks it.
+2. **Declared on the event page** — his answer for this round.
+3. **The wiki table** — complete for the circuits it covers, so absence of a
+   rain layout is a real no.
+4. A circuit **not in the table at all** is `null`, not dry: one added since the
+   table was read, and treating absence as dry would quietly retire the wet
+   contingency at every new circuit.
 
 | League | Rule | Consequence |
 |---|---|---|
