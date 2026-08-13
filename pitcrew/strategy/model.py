@@ -25,6 +25,8 @@ import math
 from dataclasses import dataclass, field
 from itertools import product
 
+from pitcrew.store.tyres import get_by_code
+
 # Stop the stint at 85% of modelled tyre life. Deliberate, and stated.
 STINT_SAFETY_FACTOR = 0.85
 
@@ -54,6 +56,11 @@ FUEL_MAP_POWER = {1: 1.00, 2: 0.96, 3: 0.92, 4: 0.88, 5: 0.85, 6: 0.80}
 
 CONSTRAINT_TYRE = "tyre"
 CONSTRAINT_FUEL = "fuel"
+# The stint is not limited by the car but by what has been run on the compound.
+# `0.85 / w` extrapolates from a rate; this refuses to extrapolate past the
+# longest stint the evidence actually contains, which is what stops an
+# understated rate proposing a stint nobody has ever completed.
+CONSTRAINT_EVIDENCE = "evidence"
 CONSTRAINT_REGULATION = "regulation"
 CONSTRAINT_UNKNOWN = "unknown"
 
@@ -90,6 +97,11 @@ class CompoundProfile:
     source: str = SOURCE_ASSUMED
     laps_measured: int = 0
     stints_measured: int = 0
+    # The longest single stint ever run on this compound. Not the same as
+    # `laps_measured`, which is every lap on it across the session: a compound
+    # run three times for five laps has fifteen laps of evidence and none at
+    # all about a six-lap stint.
+    longest_stint_laps: int = 0
     # Where this compound's laps sat against its own temperature window, and
     # in one sentence what that does to the pace and wear above. None when no
     # temperature was captured, which is not the same as "the tyre was fine".
@@ -121,6 +133,7 @@ class CompoundProfile:
             "source": self.source,
             "lapsMeasured": self.laps_measured,
             "stintsMeasured": self.stints_measured,
+            "longestStintLaps": self.longest_stint_laps,
             "tyreWindow": self.window,
             "windowQualification": self.window_note,
         }
@@ -131,6 +144,17 @@ class RaceInputs:
     """Everything the plan rests on, each with its provenance."""
     race_laps: int
     lap_time_ms: int
+    # Set for a race run to the clock rather than to a distance. **A timed
+    # race is a different problem**: the distance is not fixed, the time is,
+    # so a pit stop does not make the race longer - it costs laps. Planning
+    # one as a fixed lap count produced a 52-minute plan for a 50-minute race,
+    # which is not a slow plan, it is an impossible one.
+    race_minutes: float | None = None
+    # What GT7 allows for completing the lap in progress when the clock
+    # expires. The race ends at the first line crossing after the limit, so
+    # its longest possible duration is the limit plus one lap - or plus this,
+    # whichever is shorter.
+    extra_time_s: float | None = None
     fuel_per_lap_l: float | None = None
     fuel_capacity_l: float | None = None
     refuel_rate_lps: float = 2.5
@@ -170,6 +194,50 @@ class RaceInputs:
                     if compound and compound == self.evidence_compound
                     and self.wear_per_lap else SOURCE_ASSUMED),
         )
+
+    @property
+    def is_timed(self) -> bool:
+        return self.race_minutes is not None and self.race_minutes > 0
+
+    @property
+    def race_limit_s(self) -> float | None:
+        return None if not self.is_timed else self.race_minutes * 60.0
+
+    @property
+    def final_lap_allowance_s(self) -> float:
+        """How far past the clock the last lap may run.
+
+        A lap that takes less than GT7's allowance is finished; one that takes
+        longer is cut off by it. Both are ceilings on the same thing.
+        """
+        lap_s = self.lap_time_ms / 1000.0
+        if self.extra_time_s is None:
+            return lap_s
+        return min(lap_s, self.extra_time_s)
+
+    @property
+    def max_duration_s(self) -> float | None:
+        """The longest this race can possibly last, in seconds.
+
+        Cross the line a moment before the clock expires and you still have to
+        complete one more lap: that, and not a second more, is the ceiling. A
+        plan whose total exceeds it is describing a race that cannot happen.
+        """
+        limit = self.race_limit_s
+        return None if limit is None else limit + self.final_lap_allowance_s
+
+    def planning_compounds(self) -> tuple[str, ...]:
+        """The compounds a stint may actually be planned on.
+
+        **Wet compounds are never planned on.** GT7's weather cannot be known
+        before the race, and no wet running has ever been done, so a plan built
+        around Intermediates is a plan built on nothing - and it competes with,
+        and beats, plans built on measured rubber, because a compound with no
+        profile inherits the reference's rate and looks free. They stay
+        available to the driver as a live call; they are not a strategy.
+        """
+        return tuple(code for code in self.available_compounds
+                     if code and not is_wet_compound(code))
 
     def missing(self) -> list[str]:
         """What is not known. A plan built on these is caveated, not hidden."""
@@ -236,6 +304,11 @@ class Plan:
         return len(self.stints) - 1
 
     @property
+    def laps_completed(self) -> int:
+        """Race distance. An input for a lap race, an output for a timed one."""
+        return sum(stint.laps for stint in self.stints)
+
+    @property
     def pit_laps(self) -> list[int]:
         return [stint.end_lap for stint in self.stints[:-1]]
 
@@ -246,9 +319,10 @@ class Plan:
 
     def as_export(self, inputs: RaceInputs) -> dict:
         """The `strategy` section of the export contract."""
-        return {
+        payload = {
             "plan": {
                 "stops": self.stops,
+                "laps": self.laps_completed,
                 "stintLaps": [stint.laps for stint in self.stints],
                 "compounds": [stint.compound for stint in self.stints],
                 "pitLap": self.pit_laps[0] if self.pit_laps else None,
@@ -269,6 +343,29 @@ class Plan:
                 "compoundDeltaSPerLap": round(mean_deficit(self, inputs), 3),
             },
         }
+        # A timed race is a different object from a lap race and the payload
+        # has to say which. Without it a reader sees a lap count and takes the
+        # distance for a regulation, when in this race it is an outcome of the
+        # plan: the stops are paid for in laps, and the flag falls at the same
+        # moment whatever the plan does.
+        if inputs.is_timed:
+            payload["raceLength"] = {
+                "type": "time",
+                "minutes": inputs.race_minutes,
+                "extraTimeS": inputs.extra_time_s,
+                "lapsAtThisPace": self.laps_completed,
+                "maxDurationS": round(inputs.max_duration_s, 1),
+                "finishAtS": round(self.total_time_s, 1),
+                "note": (
+                    "The flag falls at the first line crossing after the "
+                    "clock. Distance is an output of the plan, not an input - "
+                    "every stop is time stationary while the clock runs and is "
+                    "paid for in laps. maxDurationS is the longest this race "
+                    "can possibly last; a plan past it is impossible, not slow."),
+            }
+        else:
+            payload["raceLength"] = {"type": "laps", "laps": inputs.race_laps}
+        return payload
 
     def as_dict(self) -> dict:
         return {
@@ -286,6 +383,20 @@ class Plan:
 
 
 # ----------------------------------------------------------------- the model
+
+# The clock simulation moves one lap per pass and starts from the previous
+# estimate, so it converges in a handful. The cap is a backstop against a
+# pathological lap time, not a working limit.
+MAX_CLOCK_ITERATIONS = 40
+
+
+def is_wet_compound(code: str | None) -> bool:
+    """Intermediate and Heavy Wet, from the one compound catalogue."""
+    if not code:
+        return False
+    compound = get_by_code(code)
+    return bool(compound and compound.wet)
+
 
 def pace_loss_s(wear_fraction: float) -> float:
     """Seconds per lap lost at this fraction of tyre life consumed.
@@ -449,16 +560,32 @@ def refuel_time_s(litres: float, inputs: RaceInputs) -> float:
 
 def stint_limit(inputs: RaceInputs,
                 profile: CompoundProfile) -> tuple[int | None, str]:
-    """The longest runnable stint on this compound, and what limits it."""
-    tyre = tyre_limited_laps(profile.wear_per_lap)
-    fuel = fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l)
-    if tyre is None and fuel is None:
+    """The longest runnable stint on this compound, and what limits it.
+
+    Three ceilings, and the lowest wins:
+
+    * the **tyre**, from `0.85 / w`;
+    * the **tank**, from capacity against burn;
+    * the **evidence** - the longest stint actually run on this compound.
+
+    The third exists because the first two are only as good as the rate behind
+    them. A wear rate taken over four laps and divided wrongly proposed a
+    twelve-lap stint on a set that had never gone past four, and nothing in the
+    model objected: `0.85 / w` will happily extrapolate a stint nobody has
+    completed. Refusing to plan past the evidence is the cheap guard against
+    every future version of that, and it errs in the direction §5.1 of
+    `CLAUDE.md` says is the survivable one.
+    """
+    candidates = [
+        (tyre_limited_laps(profile.wear_per_lap), CONSTRAINT_TYRE),
+        (fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l),
+         CONSTRAINT_FUEL),
+        (profile.longest_stint_laps or None, CONSTRAINT_EVIDENCE),
+    ]
+    known = [(laps, why) for laps, why in candidates if laps is not None]
+    if not known:
         return None, CONSTRAINT_UNKNOWN
-    if tyre is None:
-        return fuel, CONSTRAINT_FUEL
-    if fuel is None:
-        return tyre, CONSTRAINT_TYRE
-    return (tyre, CONSTRAINT_TYRE) if tyre <= fuel else (fuel, CONSTRAINT_FUEL)
+    return min(known, key=lambda pair: pair[0])
 
 
 def build_plan(inputs: RaceInputs, stops: int,
@@ -472,7 +599,11 @@ def build_plan(inputs: RaceInputs, stops: int,
     profiles = [inputs.profile_for(code) for code in sequence]
 
     limits = [stint_limit(inputs, profile)[0] for profile in profiles]
-    stint_lengths = allocate_laps(inputs.race_laps, limits)
+    clock_total = None
+    if inputs.is_timed:
+        stint_lengths, clock_total = clock_bound_stints(inputs, profiles, limits)
+    else:
+        stint_lengths = allocate_laps(inputs.race_laps, limits)
     limit, constraint = max_stint_laps(inputs)
 
     notes: list[str] = []
@@ -512,6 +643,20 @@ def build_plan(inputs: RaceInputs, stops: int,
         start_lap += laps
 
         if index < len(stint_lengths) - 1:
+            # A stop the clock has already beaten is a stop nobody makes: the
+            # flag falls at the next line crossing, and the driver takes it
+            # rather than turning in. A plan that schedules one is describing
+            # a race that does not happen, and its total runs past the longest
+            # duration the race can have - which is how a 50-minute race came
+            # back as a 52-minute plan.
+            limit_s = inputs.race_limit_s
+            if limit_s is not None and total >= limit_s:
+                feasible = False
+                notes.append(
+                    f"The stop after stint {index + 1} falls at "
+                    f"{total / 60:.1f} min, after the {inputs.race_minutes:g}-"
+                    f"minute flag. Nobody pits on the last lap of a timed "
+                    f"race; this plan cannot be run as written.")
             total += inputs.pit_loss_s + inputs.pit_dead_time_s
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
@@ -549,10 +694,104 @@ def build_plan(inputs: RaceInputs, stops: int,
             "No tyre wear rate entered, so stint length is fuel-limited only. "
             "Read the in-game gauge on a practice lap to fix this.")
 
+    if inputs.is_timed:
+        notes.append(
+            f"Timed race: {inputs.race_minutes:g} minutes is "
+            f"{sum(stint_lengths)} laps at this pace **with {stops} "
+            f"{'stop' if stops == 1 else 'stops'}**. Stopping costs laps, not "
+            f"time - the flag falls at the same moment either way, so these "
+            f"plans are compared on distance covered and not on total time.")
+
+    # A timed race finishes when the clock says so. `total` is the sum of the
+    # parts and drifts from that by the fuel taken for the final lap, which the
+    # reserve already covers; the clock is the authority on when the flag fell.
+    if clock_total is not None:
+        total = clock_total
+
     plan = Plan(stints=stints, total_time_s=total,
                 binding_constraint=constraint, notes=notes, feasible=feasible)
     plan.profiles = {profile.code: profile for profile in profiles}
     return plan
+
+
+def stint_fuel_l(laps: int, inputs: RaceInputs) -> float | None:
+    """What a stint of this length is fuelled for: the distance plus a lap."""
+    if not inputs.fuel_per_lap_l:
+        return None
+    return (laps + FUEL_MARGIN_LAPS) * inputs.fuel_per_lap_l
+
+
+def elapsed_for_s(inputs: RaceInputs, stint_lengths: list[int],
+                  profiles: list[CompoundProfile]) -> float:
+    """Wall-clock seconds to run these stints, stops included."""
+    total = 0.0
+    for index, laps in enumerate(stint_lengths):
+        fuel = stint_fuel_l(laps, inputs)
+        total += stint_time_s(laps, inputs, fuel_at_start_l=fuel,
+                              profile=profiles[index])
+        if index < len(stint_lengths) - 1:
+            total += inputs.pit_loss_s + inputs.pit_dead_time_s
+            if fuel:
+                total += refuel_time_s(fuel, inputs)
+    return total
+
+
+def clock_bound_stints(inputs: RaceInputs, profiles: list[CompoundProfile],
+                       limits: list[int | None]) -> tuple[list[int], float]:
+    """The stints a timed race actually runs, and what the clock reads at the
+    flag.
+
+    **The distance is an output, not an input.** The race ends at the first
+    line crossing after the clock expires, so every stop is time spent
+    stationary while the clock runs and is paid for in laps rather than in
+    seconds. A model handed a fixed lap count cannot see that trade at all and
+    reports the stops as free - which is how a 50-minute race came back as a
+    52-minute plan.
+
+    Two things make this a fixed point rather than a division. A lap is not a
+    constant: the tyre goes off and the tank empties, both already in
+    `stint_time_s`. And the fuel load depends on the distance while the
+    distance depends on the elapsed time, so the two have to be settled
+    together - taking one more lap's fuel makes every stop longer, which can
+    itself bring the flag forward a lap.
+
+    So it settles on the longest schedule that is **still short of the flag**,
+    and then adds the lap that carries the car past it. That final lap is
+    covered by the reserve lap already in every stint's fuel, which is what
+    the reserve is for, so it costs a lap of time and nothing at the pumps.
+    """
+    limit_s = inputs.race_limit_s
+    if not limit_s:
+        return allocate_laps(inputs.race_laps, limits), 0.0
+
+    laps = max(1, inputs.race_laps)
+    for _ in range(MAX_CLOCK_ITERATIONS):
+        if elapsed_for_s(inputs, allocate_laps(laps, limits), profiles) >= limit_s:
+            if laps <= 1:
+                break
+            laps -= 1
+            continue
+        break
+    for _ in range(MAX_CLOCK_ITERATIONS):
+        if elapsed_for_s(inputs, allocate_laps(laps + 1, limits),
+                         profiles) < limit_s:
+            laps += 1
+            continue
+        break
+
+    lengths = allocate_laps(laps, limits)
+    elapsed = elapsed_for_s(inputs, lengths, profiles)
+
+    # The clock has not expired, so one more lap has to be run whatever the
+    # plan says. It lands on the last stint, on the fuel that stint already
+    # took, and it is what takes the race past the flag.
+    fuel = stint_fuel_l(lengths[-1], inputs)
+    final_lap_s = (stint_time_s(lengths[-1] + 1, inputs, fuel_at_start_l=fuel,
+                                profile=profiles[-1])
+                   - stint_time_s(lengths[-1], inputs, fuel_at_start_l=fuel,
+                                  profile=profiles[-1]))
+    lengths[-1] += 1
+    return lengths, elapsed + final_lap_s
 
 
 def legal(plan: Plan, inputs: RaceInputs) -> bool:
@@ -573,7 +812,7 @@ def _candidate_sequences(inputs: RaceInputs, stints: int) -> list[list[str] | No
     the answer, because a stint's length is set by the tyre on it and the fuel
     load differs stint to stint.
     """
-    available = [code for code in inputs.available_compounds if code]
+    available = list(inputs.planning_compounds())
     if not available:
         # Nothing declared, so the compound is whatever practice ran on and
         # there is no choice to search over.
@@ -634,6 +873,27 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
     runnable = [plan for plan in plans if plan.feasible]
     if not runnable:
         raise StrategyImpossible(_why_nothing_fits(plans))
+
+    # **A timed race is won on distance, not on elapsed time.** Every plan
+    # ends at the same moment - the flag falls when the clock does - so
+    # ranking them on total time ranks them on how far past the limit their
+    # last lap happened to fall, which is noise. The plan that covers more
+    # laps in the same fifty minutes is the one in front, and among plans
+    # covering the same distance the one that got there first.
+    if inputs.is_timed:
+        ordered = sorted(runnable,
+                         key=lambda p: (-p.laps_completed, p.total_time_s,
+                                        p.stops))
+        best_laps = ordered[0].laps_completed
+        best_time = ordered[0].total_time_s
+        for plan in ordered:
+            # Seconds behind at the flag: a lap down is a lap's worth of time,
+            # which is what the driver actually sees in the results.
+            lap_s = inputs.lap_time_ms / 1000.0
+            plan.delta_s = ((best_laps - plan.laps_completed) * lap_s
+                            + plan.total_time_s - best_time)
+        ordered[0].crossover = crossover(ordered, inputs)
+        return ordered
 
     ordered = sorted(runnable, key=lambda p: (p.total_time_s, p.stops))
     best = ordered[0].total_time_s
@@ -772,9 +1032,10 @@ def _compound_sequence(inputs: RaceInputs, stints: int) -> list[str] | None:
     """
     if not inputs.available_compounds:
         return None
+    planning = inputs.planning_compounds() or inputs.available_compounds
     filler = inputs.evidence_compound
-    if filler not in inputs.available_compounds:
-        filler = inputs.available_compounds[0]
+    if filler not in planning:
+        filler = planning[0]
     sequence = list(inputs.required_compounds)[:stints]
     while len(sequence) < stints:
         sequence.append(filler)

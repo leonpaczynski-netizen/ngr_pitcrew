@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS events (
     race_type           TEXT    NOT NULL DEFAULT 'laps',   -- 'laps' | 'time'
     race_laps           INTEGER,
     race_minutes        REAL,
+    -- Timed races only. What GT7 allows for completing the lap in progress
+    -- once the clock expires, in seconds. The race ends at the first line
+    -- crossing after the limit, so its longest possible duration is the limit
+    -- plus one lap, or plus this, whichever is shorter. Null means the lap is
+    -- the only ceiling.
+    extra_time_s        REAL,
     weather             TEXT    NOT NULL DEFAULT 'dry',
     -- Strings, not numbers, because "Off" is a real setting and a number
     -- cannot express it. Parsed to a factor where the maths needs one.
@@ -292,6 +298,7 @@ CREATE INDEX IF NOT EXISTS idx_prompt_issues_event
 # back-fill, a type change or a drop needs a real numbered migration instead.
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "events": (
+        ("extra_time_s", "REAL"),
         ("start_type", "TEXT"),
         ("time_of_day", "TEXT"),
         ("priority", "TEXT"),

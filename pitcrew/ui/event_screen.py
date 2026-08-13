@@ -237,8 +237,26 @@ class EventScreen(QWidget):
                                    suffix_widget=self._length_unit)
         self.race_type.currentTextChanged.connect(self._on_race_type_changed)
 
+        # Timed races only. The flag falls at the first line crossing after
+        # the clock expires, so the race can run past its limit by one lap -
+        # or by this, whichever is shorter. Without it the app cannot say how
+        # long the race can possibly last, and a plan that overruns reads as a
+        # slow plan rather than an impossible one.
+        self.extra_time = QDoubleSpinBox()
+        self.extra_time.setRange(EMPTY, 3600.0)
+        self.extra_time.setDecimals(0)
+        self.extra_time.setSingleStep(30.0)
+        self.extra_time.setValue(EMPTY)
+        struck_when_empty(self.extra_time)
+        self.extra_time.setToolTip(
+            "Timed races: what GT7 allows for finishing the lap the clock ran "
+            "out on. Blank means one full lap, which is the usual case.")
+        self._extra_time_field = Field("Extra time", self.extra_time,
+                                       suffix="SEC")
+
         row.addWidget(Field("Run to", self.race_type), 1)
         row.addWidget(self._length_field, 1)
+        row.addWidget(self._extra_time_field, 1)
         row.addWidget(Field("Weather", self.weather), 1)
         plate.body.addLayout(row)
 
@@ -260,6 +278,9 @@ class EventScreen(QWidget):
         timed = kind == "Timed"
         self._length_unit.setText("MINUTES" if timed else "LAPS")
         self.race_length.setValue(45 if timed else 20)
+        # A lap race has no clock to run past, so the field would be a question
+        # with no answer.
+        self._extra_time_field.setVisible(timed)
 
     def _regulations_plate(self) -> Plate:
         plate = Plate("Regulations")
@@ -562,6 +583,8 @@ class EventScreen(QWidget):
                 self.priority.setCurrentText(event["priority"])
             self.event_notes.setPlainText(event.get("notes") or "")
             self.game_version.setText(event.get("game_version") or "")
+            extra = event.get("extra_time_s")
+            self.extra_time.setValue(EMPTY if extra is None else float(extra))
 
             allowed = set(event.get("available_compounds") or [])
             for code, chip in self._compound_chips.items():
@@ -625,6 +648,10 @@ class EventScreen(QWidget):
             "priority": self.priority.currentText(),
             "notes": self.event_notes.toPlainText().strip() or None,
             "game_version": self.game_version.text().strip() or None,
+            # Blank is blank: no allowance declared is not an allowance of
+            # zero, which would end the race on the stroke of the clock.
+            "extra_time_s": (None if self.extra_time.value() <= EMPTY
+                             else self.extra_time.value()),
             "available_compounds": [code for code, chip
                                     in self._compound_chips.items()
                                     if chip.isSelected()],

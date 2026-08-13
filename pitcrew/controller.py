@@ -354,7 +354,7 @@ class PitCrewController(QObject):
         # Declared event facts the race-engineering prompts carry. Optional in
         # the payload so an older caller - or a test - still saves an event.
         for key in ("countersteer", "pp_cap", "start_type", "time_of_day",
-                    "priority", "notes", "game_version"):
+                    "priority", "notes", "game_version", "extra_time_s"):
             if key in data:
                 fields[key] = data[key]
         if existing:
@@ -1073,7 +1073,7 @@ class PitCrewController(QObject):
         except StrategyImpossible as exc:
             # Refusing beats inventing a plan the driver would race to.
             self._plans = []
-            self.strategy.show_plans([], evidence)
+            self.strategy.show_plans([], evidence, timed=inputs.is_timed)
             self.strategy.set_status(str(exc), warn=True)
             return []
 
@@ -1101,7 +1101,8 @@ class PitCrewController(QObject):
                     (i for i, plan in enumerate(plans)
                      if plan.stops == want_stops), None)
 
-        self.strategy.show_plans(plans, evidence, approved_index=approved_index)
+        self.strategy.show_plans(plans, evidence, approved_index=approved_index,
+                                 timed=inputs.is_timed)
         gaps = inputs.missing()
         if gaps:
             self.strategy.note(

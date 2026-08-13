@@ -605,11 +605,22 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
 
 ```json
 "strategy": {
-  "plan": { "stops": 1, "stintLaps": [11, 9], "compounds": ["RS", "RM"], "pitLap": 11 },
+  "plan": { "stops": 1, "laps": 27, "stintLaps": [13, 14],
+            "compounds": ["RH", "RH"], "pitLap": 13 },
+  "raceLength": {
+    "type": "time",
+    "minutes": 50,
+    "extraTimeS": 180,
+    "lapsAtThisPace": 27,
+    "maxDurationS": 3108.0,
+    "finishAtS": 3043.1,
+    "note": "The flag falls at the first line crossing after the clock. Distance is an output of the plan, not an input - every stop is time stationary while the clock runs and is paid for in laps. maxDurationS is the longest this race can possibly last; a plan past it is impossible, not slow."
+  },
   "bindingConstraint": "fuel",
   "compoundProfiles": [
     { "compound": "RS", "paceDeltaSPerLap": 0.0,  "wearPerLap": 0.055,
       "source": "measured", "lapsMeasured": 12, "stintsMeasured": 1,
+      "longestStintLaps": 12,
       "tyreWindow": {
         "meanC": 103.4,
         "perCornerC": { "fl": 108.1, "fr": 101.7, "rl": 102.0, "rr": 101.8 },
@@ -622,6 +633,7 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
       "windowQualification": null },
     { "compound": "RM", "paceDeltaSPerLap": 0.34, "wearPerLap": 0.038,
       "source": "measured", "lapsMeasured": 11, "stintsMeasured": 1,
+      "longestStintLaps": 11,
       "tyreWindow": {
         "meanC": 71.2,
         "perCornerC": { "fl": 74.0, "fr": 70.1, "rl": 70.4, "rr": 70.3 },
@@ -668,7 +680,37 @@ whether the next setup should chase durability or pace.
 `callsMade` exists so live advice can be checked against what actually happened.
 An app that gives calls and never records them cannot be improved.
 
-### 10.1 `compoundProfiles` and `compoundCrossover`
+#### 10.0 A timed race is not a lap race
+
+**For a race run to the clock, the distance is an output of the plan.** The flag
+falls at the first line crossing after the time expires, so every pit stop is
+time spent stationary while the clock runs and is paid for **in laps, not in
+seconds**. Two stops on a 108-second circuit cost about a lap of race distance,
+and that trade is the whole question.
+
+A model handed a fixed lap count cannot see it at all: it reports the stops as
+free and the race as getting longer. That is how a 50-minute race came back as
+a **52-minute plan** — not a slow plan, an impossible one.
+
+| Field | Definition |
+|---|---|
+| `raceLength.type` | `time` or `laps`. Everything below applies to `time` |
+| `.minutes` | The clock, as declared |
+| `.extraTimeS` | What GT7 allows for finishing the lap the clock ran out on, or `null` for one full lap |
+| `.lapsAtThisPace` | What **this plan** covers. A different stop count gives a different number, which is the point |
+| `.maxDurationS` | **The longest this race can possibly last**: the limit plus one lap, or plus `extraTimeS`, whichever is shorter. Any plan whose finish exceeds it is describing a race that cannot happen |
+| `.finishAtS` | When the flag falls under this plan, always at or under `maxDurationS` |
+
+Two consequences for reading the plans:
+
+- **They are ranked on distance, then on time.** Every plan ends when the clock
+  does, so ranking on elapsed time ranks them on where the last lap happened to
+  fall. `delta_s` is seconds behind at the flag, a lap down counting as a lap's
+  worth of time — which is what the results screen shows.
+- **No plan stops after the flag.** A stop scheduled past the limit is marked
+  not runnable: nobody turns into the pit lane on the last lap of a timed race.
+
+## 10.1 `compoundProfiles` and `compoundCrossover`
 
 **What each compound costs, and why the plan picked the one it did.** The model
 searches stop counts *and* compound assignments, costing every candidate over the
@@ -887,6 +929,8 @@ race strategy if they had been believed.
 | 13 | **`corners` is emitted for the first time** (§7), and `corners[].flagLaps` / `.flagThresholdLaps` are new | The section the contract calls the one to build if only one gets built had never once been exported, and the reason was upstream: what the recorder stored as lap distance was the **road plane's fourth coefficient** — about −80 to −250 m, covering 125 m over a whole lap of Monza — so corner detection could never segment a lap. GT7 broadcasts no lap-distance channel at all; it is now integrated from speed against the packet clock. `flags` was a set union across laps, so with enough laps every corner carried every flag; a flag now has to fire on a quarter of them, and `flagLaps` keeps the one-offs visible as one-offs |
 | 15 | **Fresh sets are read off the stream**: `runs[].tyresFreshDeclared` / `.tyresFreshObserved` / `.tyresFreshDisagreement`, `wear.byRun[].method` names which source established the set, and `derived.thresholds.freshTyreTempC` restates the constant | GT7 broadcasts no tyre-change event, so the app could only ask. It turns out it does not have to: **GT7 fits every set at one temperature on all four corners**, measured at 70.0 °C across three compounds in the 11 Aug captures, and a stationary set only cools from there. The evenness is the discriminator - a set that has turned a wheel carries asymmetry within a lap. The driver's own declaration still outranks it, and where the two disagree the disagreement is reported rather than resolved |
 | 16 | `wear.gaugePinned` fires **within one run only** | Two equal readings on two different sets are two sets that came off equally worn, which is a coincidence and not a finding. Before `runs` existed the two cases were indistinguishable, and the 11 Aug session's 84% at lap 21 and 84% at lap 36 - the very reading P6 raised - was reported as a gauge that had stopped moving. It was a new set |
+| 17 | **New `strategy.raceLength`**, and `strategy.plan.laps` | A timed race and a lap race are different objects, and the payload said the same thing for both. For a race run to the clock the distance is an **output of the plan**: every stop is time spent stationary while the clock runs, so it is paid for in laps rather than seconds. Modelled as a fixed lap count, a 50-minute race came back as a **52-minute plan** - which is not a slow plan but an impossible one, since the flag falls at the first line crossing after the clock and the race can last at most the limit plus one lap. `maxDurationS` states that ceiling so a reader can check any plan against it |
+| 18 | **Wet compounds are never planned on**, and `compoundProfiles[].longestStintLaps` is new | GT7's weather cannot be known before the race and no wet running has ever been done, so a stint on Intermediates rests on nothing - and it *won*, because a compound with no profile inherits the reference's rate and is costed as though it were the measured one. They stay declared as available to the driver, who can still call for them; they are not a strategy. `longestStintLaps` is the third ceiling on a stint alongside the tyre and the tank: `0.85 / w` will extrapolate a stint nobody has ever completed, and when the rate behind it was understated that is exactly what it did |
 | 14 | `derived.thresholds.flagMinShareOfLaps` | Same rule as every other threshold: it is the app's choice, not the game's, so retuning it must read as a change in the detector rather than a change in the car |
 
 **The frame clock was GT7's in-game clock.** Not a payload field, but it reached every

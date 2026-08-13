@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
+from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
 from pitcrew.analysis.wear import wear_rate_by_compound
@@ -159,6 +160,7 @@ def compound_profiles(laps: list[LapInput],
                     if reference_laps else None)
     rates = wear_rate_by_compound(laps)
     windows = window_by_compound(laps)
+    longest = longest_stint_by_compound(laps)
 
     profiles: dict[str, CompoundProfile] = {}
     for code, on_this in by_compound.items():
@@ -183,12 +185,52 @@ def compound_profiles(laps: list[LapInput],
             # The runs that produced a rate, not the runs on the compound: a
             # compound run three times and read once is one measurement.
             stints_measured=rate["stintsMeasured"] if rate else 0,
+            # What has actually been run on it, so a stint is never planned
+            # longer than one that has been completed.
+            longest_stint_laps=longest.get(code, 0),
             window=window,
             # The figures above stay exactly as measured. This says how far
             # they can be trusted, which is a different claim.
             window_note=qualification(code, window),
         )
     return profiles
+
+
+def _extra_time_s(event) -> float | None:
+    """GT7's allowance for finishing the lap the clock expired on."""
+    value = event["extra_time_s"] if "extra_time_s" in event.keys() else None
+    return None if value is None else float(value)
+
+
+def _timed_race_note(inputs: RaceInputs) -> str:
+    """What the clock means, in the terms the plan is actually bounded by."""
+    ceiling = inputs.max_duration_s
+    if ceiling is None:
+        return "converted from race minutes at the reference lap"
+    minutes, seconds = divmod(ceiling, 60)
+    return (f"the lap count follows from the stops, not the other way round - "
+            f"the flag falls at {inputs.race_minutes:g} min and the race can "
+            f"last at most {int(minutes)}:{seconds:04.1f}")
+
+
+def longest_stint_by_compound(laps: list[LapInput]) -> dict[str, int]:
+    """The longest single run on each compound, in laps.
+
+    Per run rather than per compound: three four-lap runs on the soft say
+    nothing about a five-lap stint, however many laps of it there are in
+    total.
+    """
+    longest: dict[str, int] = {}
+    for run in split_runs(laps):
+        code = run.compound
+        if not code:
+            continue
+        # Every lap the set turned, not only the counted ones. An out-lap and
+        # a lap struck for a spin both wore the tyre exactly as much as a
+        # clean one; excluding them would say a fifteen-lap run proved
+        # thirteen, and cost a stop for nothing.
+        longest[code] = max(longest.get(code, 0), len(run.laps))
+    return longest
 
 
 def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
@@ -212,12 +254,19 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     evidence_compound = reference_compound(counted)
     profiles = compound_profiles(laps, evidence_compound)
 
+    # For a timed race the stored figure is minutes, not laps. The lap count
+    # is only a starting estimate: what the race actually covers depends on
+    # how many times the car stops, and the model works that out per plan.
+    timed = event["race_type"] == "time"
+    race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
-    if event["race_type"] == "time" and reference_ms:
-        race_laps = laps_from_minutes(event["race_laps"] or 0, reference_ms)
+    if timed and reference_ms:
+        race_laps = laps_from_minutes(race_minutes or 0, reference_ms)
 
     inputs = RaceInputs(
         race_laps=race_laps,
+        race_minutes=race_minutes,
+        extra_time_s=_extra_time_s(event),
         lap_time_ms=reference_ms or 0,
         fuel_per_lap_l=fuel_per_lap,
         fuel_capacity_l=capacity,
@@ -232,10 +281,11 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     )
 
     evidence = [
-        Evidence("Race length", f"{race_laps} laps",
-                 DECLARED if event["race_type"] == "laps" else ASSUMED,
-                 "" if event["race_type"] == "laps"
-                 else "converted from race minutes at the reference lap"),
+        Evidence("Race length",
+                 (f"{race_laps} laps" if not timed
+                  else f"{race_minutes:g} min, about {race_laps} laps"),
+                 DECLARED if not timed else ASSUMED,
+                 "" if not timed else _timed_race_note(inputs)),
         Evidence("Reference lap",
                  _lap_time(reference_ms), MEASURED if reference_ms else MISSING,
                  f"fastest of the first counted laps, {len(counted)} counted"

@@ -308,7 +308,8 @@ class StrategyScreen(QWidget):
 
     # ------------------------------------------------------------------ data
 
-    def show_plans(self, plans, evidence, *, approved_index: int | None = None) -> None:
+    def show_plans(self, plans, evidence, *, approved_index: int | None = None,
+                   timed: bool = False) -> None:
         self._clear(self.plan_layout)
         self._cards.clear()
         # The empty state survives _clear so it can come back: a rebuild that
@@ -334,7 +335,15 @@ class StrategyScreen(QWidget):
             best = plans[0]
             self.spec.clear()
             self.spec.add("Plan", best.label(), emphasis=True)
-            self.spec.add("Race time", _race_time(best.total_time_s))
+            # A timed race is won on distance: every plan ends when the clock
+            # does, so the headline is how far this one gets, and the time is
+            # only when the flag fell.
+            if timed:
+                self.spec.add("Distance", f"{best.laps_completed} laps",
+                              emphasis=True)
+                self.spec.add("Flag at", _race_time(best.total_time_s))
+            else:
+                self.spec.add("Race time", _race_time(best.total_time_s))
             self.spec.add("Limited by", best.binding_constraint,
                           declared=best.binding_constraint == "unknown")
             self.spec.finish()
