@@ -209,6 +209,29 @@ CREATE TABLE IF NOT EXISTS laps (
 -- re-detection renumbers the corners the first time the driver takes a
 -- different line, and a corner aggregate is worthless if T3 means a different
 -- corner next week.
+-- What a lobby's time-of-day preset actually does at one circuit.
+--
+-- GT7's lobby offers names, not hours - "Late Morning", "Afternoon" - and what
+-- hour each means differs by circuit and is documented nowhere reliable. It is
+-- broadcast, though, so it is measured off the game clock the first time the
+-- setting is run and kept here: the hour it starts at, the rate the clock runs
+-- against real time, and the hour it stops.
+--
+-- That last one is the finding no table carries. A circuit without a 24-hour
+-- cycle runs its clock to the end of its range and holds it there rather than
+-- rolling into the next morning, so it is a hard ceiling on the conditions any
+-- race there can reach - whatever the multiplier.
+CREATE TABLE IF NOT EXISTS track_clock (
+    circuit_key   TEXT NOT NULL,
+    preset        TEXT NOT NULL,
+    start_hour    REAL,
+    multiplier    REAL,
+    stops_at_hour REAL,
+    laps_sampled  INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT    NOT NULL,
+    PRIMARY KEY (circuit_key, preset)
+);
+
 CREATE TABLE IF NOT EXISTS corner_models (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     circuit_key  TEXT    NOT NULL UNIQUE,   -- track + layout, slugged

@@ -273,3 +273,59 @@ temperature window, which is itself the finding in §1.1.
 
 The load-bearing evidence is the 11–12 Aug Monza capture: 51 laps, six runs, three
 compounds, full-rate telemetry.
+
+---
+
+## 5. Addendum, same day: the lobby gives names, not hours — so measure them
+
+The lobby does not offer a clock. It offers *Late Morning*, *Afternoon*,
+*Evening*, and **what hour each means differs by circuit**. The research for it
+does not exist in usable form: the two community compilations
+([time and weather by track](https://www.gtplanet.net/forum/threads/time-and-weather-settings-for-all-tracks-and-layouts-in-gran-turismo-7.420661/),
+[exact time-of-day ranges](https://www.gtplanet.net/forum/threads/list-of-exact-time-of-day-ranges-for-every-track.409982/))
+are from 2022, cover a subset of circuits, disagree with each other on which
+tracks run 24 hours, and **map no preset to an hour at all**. Shipping a
+per-circuit table built from them would repeat §1.1 exactly.
+
+**It does not need looking up, because GT7 broadcasts its clock.** Three things
+come straight off the stream, per circuit, the first time a preset is run:
+
+| | From | Monza, session 9 |
+|---|---|---|
+| **Time multiplier** | game clock ÷ real time | **exactly 6.00**, eight consecutive laps |
+| **Start hour** | the clock at the session's first frame | measured on new captures |
+| **Where the clock stops** | the lap the clock stops advancing | ~20:30 |
+
+That third row is the finding no table carries, and it changes this race.
+A circuit without a 24-hour cycle **runs its clock to the end of its range and
+holds it there** — it does not roll into the next morning. Session 9 shows it
+directly: ×6 for nine laps, then 3.33, then nothing. Both community sources
+corroborate the behaviour even where they disagree on the lists.
+
+So:
+
+> **The Monza race does not run into the night.** 50 minutes at ×6 looks like
+> five hours of evening — 18:50 to 23:50. The circuit's clock stops at about
+> 20:30, so the race actually covers **18:50 to 20:30, an hour and forty**, and
+> holds there. Every plan for "the closing stints in the dark" was planning
+> conditions the track will not produce.
+
+The enduro is the opposite case: a 24-hour circuit at ×12 for two hours really
+does cover the whole day and night, and really does need night evidence.
+
+### What this changes
+
+- The event page takes GT7's own preset name — and the picker is **editable**,
+  because the published lists disagree and being short of a name would stop the
+  driver recording what he ran. Being over-inclusive costs nothing: a preset the
+  circuit does not have simply cannot be selected in the game.
+- `analysis/gameclock.py` measures the preset and stores it against the circuit
+  (`track_clock`). It is measured once and reused.
+- The race span is capped by the circuit's own ceiling, so the coverage question
+  is asked about the conditions the race will really be in.
+- `sessions_to_run` turns the uncovered hours into a list of runs to drive.
+
+**Weather** stays as the driver declares it. GT7 broadcasts no weather channel
+at all, so there is nothing to measure and nothing to check it against; the
+app records what he set and uses only the dry/wet distinction, which is the one
+the compound choice turns on.

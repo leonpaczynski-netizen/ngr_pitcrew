@@ -143,6 +143,41 @@ def _note(driven: list[float], start: float, end: float,
         f"time of day before planning one.")
 
 
+def sessions_to_run(report: dict, *, preset: str | None = None) -> list[dict]:
+    """The practice the race needs and has not had, one entry per gap.
+
+    Contiguous uncovered hours are one session, not one per hour: a stint is
+    twenty minutes of game time at a low multiplier and several hours at a
+    high one, so a run started anywhere inside a gap covers a good deal of it.
+    """
+    uncovered = report.get("uncoveredHours") or []
+    if not uncovered:
+        return []
+
+    blocks: list[list[float]] = []
+    for hour in uncovered:
+        if blocks and abs(hour - blocks[-1][-1]) <= 1.01:
+            blocks[-1].append(hour)
+        else:
+            blocks.append([hour])
+
+    out = []
+    for block in blocks:
+        first, last = block[0], block[-1]
+        out.append({
+            "fromHour": first,
+            "toHour": last,
+            "hours": len(block),
+            "do": (
+                f"Run a full stint at race pace from about {_clock(first)}, "
+                f"on the compound the race will use - it covers "
+                f"{_clock(first)}-{_clock(last)}, which nothing has driven."
+                + (f" Reaching that hour may need a lobby setting other than "
+                   f"{preset}." if preset else "")),
+        })
+    return out
+
+
 def _clock(hour: float) -> str:
     hour = hour % 24.0
     whole = int(hour)

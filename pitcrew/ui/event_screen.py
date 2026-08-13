@@ -40,6 +40,7 @@ from pitcrew.ui.widgets import (
     Picker,
     Plate,
     StencilLabel,
+    block_wheel,
     struck_when_empty,
 )
 
@@ -47,7 +48,22 @@ WEATHER = ("Dry", "Damp", "Wet", "Changeable")
 MULTIPLIERS = ("Off",) + tuple(f"{n}x" for n in range(1, 11))
 ABS_SETTINGS = ("Off", "Weak", "Default")
 START_TYPES = ("Rolling", "Standing", "Grid - no track limit")
-TIMES_OF_DAY = ("Fixed day", "Fixed night", "Day to night transition")
+# GT7's own lobby vocabulary. A lobby offers **names, not hours**, and what
+# hour each name means differs by circuit - so the app does not interpret them,
+# it measures what one did off the game clock the first time it is run and
+# keeps the answer against the circuit (`analysis/gameclock.py`).
+#
+# The list is community-sourced and the community's lists are from 2022 and
+# disagree in the details, so the picker is **editable**: a name GT7 offers and
+# this list has missed is typed in, and the measurement is unaffected either
+# way. Being over-inclusive costs nothing - a preset this circuit does not have
+# simply cannot be selected in the game - while being short of one would stop
+# the driver recording what he actually ran.
+TIMES_OF_DAY = (
+    "Early Dawn", "Dawn", "Sunrise", "Early Morning", "Late Morning",
+    "Noon", "Afternoon", "Evening", "Sunset", "Twilight", "Night",
+    "Midnight", "Fixed - no time progression",
+)
 # What this round is being tuned for. Declared once, on the event, because it
 # is a property of the round rather than of a session.
 PRIORITIES = (
@@ -269,6 +285,15 @@ class EventScreen(QWidget):
         self.start_type.addItems(START_TYPES)
         self.time_of_day = QComboBox()
         self.time_of_day.addItems(TIMES_OF_DAY)
+        # Editable: GT7's per-circuit lists differ and no published table of
+        # them is trustworthy. What the setting *does* is measured, not looked
+        # up, so an unfamiliar name costs nothing.
+        self.time_of_day.setEditable(True)
+        self.time_of_day.setToolTip(
+            "The lobby's time-of-day setting, in GT7's own words. What hour it "
+            "means at this circuit is measured off the game clock the first "
+            "time you run it - you do not have to know.")
+        block_wheel(self.time_of_day)
         # The in-game clock, numerically. The description above says what it
         # looks like; these say where in the day the race actually runs and
         # how fast GT7's clock moves through it - which is what decides

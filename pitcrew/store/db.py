@@ -504,6 +504,40 @@ class Store:
                 (circuit_key, model.model_id, model.version, model.source,
                  model.lap_length_m, json.dumps(model.as_dict()), _now(), _now()))
 
+    # -------------------------------------------------------- track clock
+
+    def save_track_clock(self, circuit_key: str, preset: str,
+                         reading) -> None:
+        """Record what this lobby preset does at this circuit.
+
+        Only ever written from a measurement. A reading that measured nothing
+        is not stored, because an empty row would read as "this preset holds a
+        fixed time of day" - which is a real and different finding.
+        """
+        if not reading.measured:
+            return
+        with self._write() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO track_clock "
+                "(circuit_key, preset, start_hour, multiplier, stops_at_hour, "
+                " laps_sampled, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (circuit_key, preset or "", reading.start_hour,
+                 reading.multiplier, reading.stopped_at_hour,
+                 reading.laps_sampled, _now()))
+
+    def get_track_clock(self, circuit_key: str, preset: str) -> dict | None:
+        rows = self._query(
+            "SELECT * FROM track_clock WHERE circuit_key = ? AND preset = ?",
+            (circuit_key, preset or ""))
+        return dict(rows[0]) if rows else None
+
+    def list_track_clocks(self, circuit_key: str) -> list[dict]:
+        """Every preset measured at this circuit, so the driver can see what
+        the lobby's names actually mean here."""
+        return [dict(row) for row in self._query(
+            "SELECT * FROM track_clock WHERE circuit_key = ? ORDER BY "
+            "start_hour", (circuit_key,))]
+
     def get_corner_model(self, circuit_key: str):
         from pitcrew.analysis.corner_model import CornerModel
         rows = self._query(

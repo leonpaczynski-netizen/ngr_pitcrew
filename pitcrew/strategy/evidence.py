@@ -11,8 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
-from pitcrew.analysis.daylight import coverage, race_span_h
+from pitcrew.analysis.daylight import coverage, sessions_to_run
+from pitcrew.analysis.gameclock import race_span, read_clock
 from pitcrew.analysis.refuel import refuel_evidence
+from pitcrew.analysis.resolve import circuit_key
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
@@ -190,6 +192,18 @@ def compound_profiles(laps: list[LapInput],
             window_note=qualification(code, window),
         )
     return profiles
+
+
+def _reading_from(stored: dict | None):
+    """A stored measurement, back in the shape the span maths wants."""
+    if stored is None:
+        return None
+    from pitcrew.analysis.gameclock import ClockReading
+
+    return ClockReading(
+        multiplier=stored["multiplier"], start_hour=stored["start_hour"],
+        end_hour=None, stopped_at_hour=stored["stops_at_hour"],
+        laps_sampled=stored["laps_sampled"], note="")
 
 
 def _event_float(event, key: str) -> float | None:
@@ -400,10 +414,28 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
 
     # What the race's conditions are, and whether anything has been driven in
     # them. GT7 gives no track temperature, so this is the only way to know.
-    daylight = coverage(laps, race_span_h(
-        _event_float(event, "start_hour"),
-        float(event["race_laps"] or 0) if event["race_type"] == "time" else None,
-        _event_float(event, "time_multiplier")))
+    #
+    # The lobby's time-of-day setting is a name, not an hour, and what it means
+    # differs by circuit. So it is measured off the game clock rather than
+    # looked up, kept against the circuit, and reused - and the circuit's own
+    # clock ceiling caps the span, because a race cannot run into conditions
+    # the track's clock will not reach.
+    preset = event["time_of_day"] or ""
+    reading = read_clock(laps)
+    circuit = circuit_key(event["track"], event["layout"])
+    if reading.measured:
+        store.save_track_clock(circuit, preset, reading)
+    known = store.get_track_clock(circuit, preset)
+    minutes = (float(event["race_laps"] or 0)
+               if event["race_type"] == "time" else None)
+    span = race_span(
+        reading if reading.measured else _reading_from(known), minutes,
+        declared_start=_event_float(event, "start_hour"),
+        declared_multiplier=_event_float(event, "time_multiplier"))
+    daylight = coverage(laps, span)
+    daylight["preset"] = preset
+    daylight["clock"] = reading.as_export() if reading.measured else None
+    daylight["sessionsToRun"] = sessions_to_run(daylight, preset=preset)
 
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
@@ -469,7 +501,9 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         Evidence("Time of day",
                  _daylight_value(daylight),
                  MEASURED if daylight.get("covered") else MISSING,
-                 daylight["note"]),
+                 " ".join(part for part in (
+                     (daylight.get("clock") or {}).get("note"),
+                     daylight["note"]) if part)),
         Evidence("Refuel rate",
                  (f"{refuel['rateLps']:.2f} L/s" if refuel["rateLps"]
                   else "not set"),
