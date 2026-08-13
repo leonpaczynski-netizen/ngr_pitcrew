@@ -1,15 +1,16 @@
-"""The tyre window, and what it does to a compound comparison.
+"""Tyre temperature is measured; the window it was judged against was not.
 
-`store/tyres.py` has carried a per-compound temperature window since the
-rebuild and nothing read it. Wiring it in does not change any measured number
-— it says how far each measured number can be trusted, which is a separate
-claim and has to read as one.
+These tests used to protect a rule — "a cold tyre is slower than the compound
+is and wears less than it will" — which is true of tyres and was being applied
+through thresholds that are not GT7's. They are real-world slick figures, at
+90-110 °C, and every lap of every compound in 51 laps of Monza ran between
+68 °C and 78 °C. So the qualification fired on every compound of every session
+and put a confident sentence about nothing into every export.
 
-The rule these tests protect: **a cold tyre is slower than the compound is and
-wears less than it will.** Measure a Racing Hard below its window and it looks
-like a bad tyre that lasts forever. Both halves of that are the temperature,
-not the compound, and a race plan built on it fails in the direction that
-costs most.
+What they protect now is the silence: the temperature is reported, the band
+travels flagged as unmeasured, and **no verdict is drawn from it** until a
+window has been measured in GT7. Measuring one is a driving job — the same
+corner at several times of day, achieved temperature against lap time.
 """
 from __future__ import annotations
 
@@ -69,78 +70,45 @@ def test_an_unknown_compound_gets_no_band_rather_than_a_wrong_one():
 
 # ------------------------------------------------------- per-compound windows
 
-def test_a_compound_in_its_window_needs_no_qualification():
-    laps = [lap_at(n, "RH", 88.0) for n in range(1, 6)]
+def test_no_verdict_is_drawn_from_an_unmeasured_window():
+    """The defect: this returned "RM never got into its window ... its pace
+    deficit is overstated and its stint length is flattered" on every export,
+    from thresholds nobody measured in this game."""
+    laps = [lap_at(n, "RH", 45.0) for n in range(1, 7)]
     window = window_by_compound(laps)["RH"]
-    assert window["band"] == BAND_OPTIMAL
-    assert window["inWindow"] is True
-    assert window["lapsInWindow"] == 5
     assert qualification("RH", window) is None
 
 
-def test_a_cold_compound_says_its_pace_and_stint_are_both_flattered():
-    laps = [lap_at(n, "RH", 66.0) for n in range(1, 6)]
+def test_the_temperature_is_still_measured_and_reported():
+    laps = [lap_at(n, "RH", 74.0) for n in range(1, 7)]
     window = window_by_compound(laps)["RH"]
-    note = qualification("RH", window)
-
-    assert window["inWindow"] is False
-    assert "never got into its window" in note
-    # Both halves matter: too slow *and* apparently too durable.
-    assert "slower than the compound is" in note
-    assert "wears less than it will" in note
+    assert window["meanC"] == 74.0
+    assert window["lapsSampled"] == 6
+    assert window["source"] == "tyre-surface-temp"
 
 
-def test_an_overheating_compound_says_its_stint_is_pessimistic():
-    laps = [lap_at(n, "RS", 125.0) for n in range(1, 6)]
-    note = qualification("RS", window_by_compound(laps)["RS"])
-    assert "ran hot" in note
-    assert "pessimistic" in note
-
-
-def test_a_compound_only_sometimes_in_window_says_it_is_a_mixture():
-    """Averages to 82 °C, inside the window, but only half the laps were.
-
-    A tyre in window for half the run spent half the run somewhere else, and
-    the mean hides exactly that.
-    """
-    laps = ([lap_at(n, "RH", 95.0) for n in range(1, 4)]
-            + [lap_at(n, "RH", 70.0) for n in range(4, 7)])
+def test_the_band_travels_flagged_as_not_measured():
+    """Kept for the UI's colour, where being roughly right is all it does -
+    and marked so nothing downstream reads it as a finding."""
+    laps = [lap_at(n, "RH", 74.0) for n in range(1, 7)]
     window = window_by_compound(laps)["RH"]
-    assert window["band"] == BAND_OPTIMAL       # the mean says it was fine
-    assert window["inWindow"] is False          # the laps say otherwise
-    assert "mixture of conditions" in qualification("RH", window)
+    assert window["windowMeasured"] is False
+    assert window["inWindow"] is None
+    assert "NOT MEASURED IN GT7" in window["windowSource"]
 
 
-def test_a_compound_with_no_captured_temperature_gets_no_entry():
-    """Absent and fine must not look alike."""
-    laps = [LapInput(lap_num=n, lap_time_ms=94_000, fuel_start=92.0,
-                     fuel_end=89.4, compound="RH") for n in range(1, 6)]
-    assert window_by_compound(laps) == {}
-    assert qualification("RH", None) is None
-
-
-def test_the_hottest_corner_is_named():
-    """Which corner is cooking is a setup finding, like the wear one."""
-    hot = [{"temp_fl": 118.0, "temp_fr": 92.0,
-            "temp_rl": 90.0, "temp_rr": 91.0} for _ in range(20)]
-    laps = [LapInput(lap_num=n, lap_time_ms=94_000, fuel_start=92.0,
-                     fuel_end=89.4, compound="RH", frames=hot)
-            for n in range(1, 4)]
-    assert window_by_compound(laps)["RH"]["hottestCorner"] == "fl"
-
-
-def test_an_excluded_lap_does_not_colour_the_window():
-    laps = ([lap_at(n, "RH", 88.0) for n in range(1, 5)]
-            + [lap_at(5, "RH", 40.0, excluded=True)])
+def test_an_excluded_lap_does_not_colour_the_temperature():
+    """A lap that does not count does not describe the compound either."""
+    laps = ([lap_at(n, "RH", 90.0) for n in range(1, 5)]
+            + [lap_at(5, "RH", 40.0, excluded=True,
+                      exclusion_reason="spun at T4")])
     window = window_by_compound(laps)["RH"]
     assert window["lapsSampled"] == 4
-    assert window["inWindow"] is True
+    assert window["meanC"] == 90.0
 
 
-# ------------------------------------------------- reaching the strategy call
-
-def test_the_qualification_travels_onto_the_compound_profile():
-    """Two gauged stints: the soft in its window, the hard never in its."""
+def test_the_measured_temperature_travels_onto_the_compound_profile():
+    """Two gauged stints. The temperature is carried; no verdict is drawn."""
     laps = ([lap_at(n, "RS", 100.0) for n in range(1, 5)]
             + [lap_at(5, "RS", 100.0, is_pit_lap=True, wear_fl=0.5)]
             + [lap_at(n, "RH", 66.0) for n in range(6, 10)]
@@ -148,91 +116,37 @@ def test_the_qualification_travels_onto_the_compound_profile():
     profiles = compound_profiles(laps, "RS")
 
     assert profiles["RS"].is_measured
-    assert profiles["RS"].window_note is None
-    assert profiles["RS"].evidence_is_clean
-
-    # Measured, and the number is real - it just describes a cold tyre, so it
-    # is not clean evidence about the compound.
     assert profiles["RH"].is_measured
-    assert profiles["RH"].wear_per_lap == 0.05
-    assert "never got into its window" in profiles["RH"].window_note
-    assert profiles["RH"].evidence_is_clean is False
+    assert profiles["RH"].window["meanC"] == 66.0
+    # The tyre ran 34 °C cooler than the other compound and that is measured
+    # and reported - but no conclusion is drawn from it, because the window
+    # that would license one has never been measured in GT7.
+    assert profiles["RH"].window_note is None
+    assert profiles["RH"].evidence_is_clean
 
 
-def test_a_cold_compound_taints_the_verdict_it_wins_with():
-    """The arithmetic is untouched; the sentence says how far to trust it."""
-    cold = {"band": BAND_COLD, "inWindow": False, "meanC": 66.0,
-            "windowC": [75, 100], "lapsSampled": 5, "lapsInWindow": 0}
+def test_a_crossover_is_not_tainted_by_an_unmeasured_window():
+    """It used to be: a compound was declared out of its window on invented
+    thresholds, and the verdict of the comparison it won was downgraded for it.
+
+    The comparison stands or falls on the measured pace and wear.
+    """
+    cold = {"meanC": 66.0, "lapsSampled": 5, "windowMeasured": False,
+            "inWindow": None}
     inputs = RaceInputs(
         race_laps=30, lap_time_ms=93_000, fuel_per_lap_l=2.6,
         fuel_capacity_l=100.0, refuel_rate_lps=2.5, pit_loss_s=20.0,
         available_compounds=("RS", "RH"), evidence_compound="RS",
         wear_per_lap=0.055,
         compound_profiles={
-            "RS": CompoundProfile("RS", 0.0, 0.055, "measured", 12, 1),
+            "RS": CompoundProfile("RS", 0.0, 0.055, "measured", 12, 1,
+                                  longest_stint_laps=12),
             "RH": CompoundProfile(
-                "RH", 0.60, 0.026, "measured", 11, 1, window=cold,
-                window_note=qualification("RH", cold)),
+                "RH", 0.60, 0.026, "measured", 11, 1, longest_stint_laps=30,
+                window=cold, window_note=qualification("RH", cold)),
         })
     best = recommend(inputs)[0]
 
-    assert best.compounds == ("RH",)          # it still wins on the numbers
-    assert best.crossover["outsideTyreWindow"]
-    assert "never got into its window" in best.crossover["verdict"]
-    assert "RH beats" in best.crossover["verdict"]
-
-
-def test_a_clean_comparison_carries_no_window_warning():
-    from .test_compound_crossover import a_race
-    best = recommend(a_race(rh_delta=0.60))[0]
+    assert best.compounds == ("RH",)
     assert best.crossover["outsideTyreWindow"] == []
-    assert "window" not in best.crossover["verdict"]
-
-
-# ------------------------------------------------- what gets decoded, and why
-
-def test_only_the_sampled_laps_have_their_frames_decoded():
-    """One lap's blob is ~1.6 MiB. Decoding a whole practice event to read a
-    mean temperature would freeze the Strategy screen for seconds, and freeze
-    it again when the race is armed."""
-    from pitcrew.strategy.evidence import WINDOW_SAMPLE_LAPS, _laps_to_hydrate
-
-    rows = [{"id": n, "compound": "RS", "excluded": 0,
-             "is_out_lap": 0, "is_pit_lap": 0} for n in range(1, 31)]
-    wanted = _laps_to_hydrate(rows)
-
-    assert len(wanted) == WINDOW_SAMPLE_LAPS
-    # The most recent ones: latest setup, track at its most rubbered in.
-    assert wanted == {25, 26, 27, 28, 29, 30}
-
-
-def test_each_compound_gets_its_own_sample():
-    """A sample of the soft's laps says nothing about the hard's window."""
-    from pitcrew.strategy.evidence import _laps_to_hydrate
-
-    rows = ([{"id": n, "compound": "RS", "excluded": 0,
-              "is_out_lap": 0, "is_pit_lap": 0} for n in range(1, 21)]
-            + [{"id": n, "compound": "RH", "excluded": 0,
-                "is_out_lap": 0, "is_pit_lap": 0} for n in range(21, 41)])
-    wanted = _laps_to_hydrate(rows)
-    assert wanted == {15, 16, 17, 18, 19, 20, 35, 36, 37, 38, 39, 40}
-
-
-def test_uncounted_laps_are_never_sampled():
-    """An out-lap's temperatures describe a tyre that has not warmed up."""
-    from pitcrew.strategy.evidence import _laps_to_hydrate
-
-    rows = [{"id": 1, "compound": "RS", "excluded": 0,
-             "is_out_lap": 1, "is_pit_lap": 0},
-            {"id": 2, "compound": "RS", "excluded": 1,
-             "is_out_lap": 0, "is_pit_lap": 0},
-            {"id": 3, "compound": "RS", "excluded": 0,
-             "is_out_lap": 0, "is_pit_lap": 0}]
-    assert _laps_to_hydrate(rows) == {3}
-
-
-def test_the_sample_size_travels_with_the_conclusion():
-    """CLAUDE.md 4: every aggregate carries its sample count. A capped sample
-    that did not say so would read as the whole event."""
-    laps = [lap_at(n, "RH", 88.0) for n in range(1, 4)]
-    assert window_by_compound(laps)["RH"]["lapsSampled"] == 3
+    assert "window" not in best.crossover["verdict"].lower()

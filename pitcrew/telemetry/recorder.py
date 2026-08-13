@@ -73,6 +73,16 @@ FRAME_FIELDS: tuple[str, ...] = (
     # clock. Everything about corner identity depends on it: a corner is a
     # window of lap distance, and without one there are no corners.
     "lap_distance_m",
+    # **GT7's in-game clock**, ms through the game day. Useless as a frame
+    # clock - it is frozen in a fixed-time event and runs at the event's time
+    # multiplier otherwise, which is what made it wrong for `t_ms`. That same
+    # property is exactly what makes it worth recording: it says **where in the
+    # day this lap was driven**. A race at x12 covers a day and a night, the
+    # track cools, and a compound that never reaches temperature costs lap time
+    # against everything practised in daylight. GT7 broadcasts neither track
+    # nor air temperature, so this is the only channel that says which
+    # conditions a measurement belongs to.
+    "time_of_day_ms",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -256,6 +266,7 @@ class LapRecorder:
                 1 if packet.rev_limiter_active else 0,
                 round(packet.tyre_radius_rl, 4),
                 round(self._distance_m, 2),
+                packet.time_of_day_ms,
             ])
 
     def take_rows(self) -> list[list]:

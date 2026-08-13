@@ -1,26 +1,31 @@
-"""Where each compound actually ran, against the window it wants.
+"""How hot each compound actually ran — and why that is all this can say.
 
-GT7 gives per-wheel tyre **surface** temperature at 60 Hz, and `store/tyres.py`
-has carried a per-compound window since the rebuild — `cold_max`,
-`warming_max`, `optimal_max`, `hot_max`. Until now nothing read them, so the
-strategy model compared compounds on pace and wear without ever asking whether
-those figures were gathered on a tyre that was working.
+GT7 gives per-wheel tyre **surface** temperature at 60 Hz. That figure is real
+and is measured here per compound, per lap.
 
-That question changes what the numbers mean:
+**What is not real is the window it used to be judged against.** `store/tyres.py`
+carries a `cold_max` / `warming_max` / `optimal_max` / `hot_max` band per
+compound, and this module used to compare the measured temperature to it and
+emit a verdict — "RM never got into its window, so its pace deficit is
+overstated and its stint length is flattered" — into every export, as a
+finding, tagged as measurement.
 
-* **A compound below its window is slower than it is, and wears less than it
-  will.** Harder compounds need more energy to light up. Measure a Racing Hard
-  on a cool track behind traffic and its pace deficit is partly the
-  temperature, not the tyre — and the long stint it appears to promise is a
-  cold-tyre wear rate that will not survive a race at proper pace.
-* **A compound above its window wears faster than it will.** An overheating
-  stint measures a rate that a cooler race would not reproduce.
+The bands were never measured in GT7 and are not GT7's numbers. They are
+real-world racing-slick figures, which live at 90–110 °C. Across 51 laps of
+Monza on three compounds, **every lap of every compound ran between 68 °C and
+78 °C**, and GT7 fits every fresh set at exactly 70.0 °C. Under those bands a
+Racing Soft could never once reach its own window, so the verdict fired every
+time and said something confident about nothing. Nobody has published GT7
+windows: the question was asked on GTPlanet in April 2025 and went unanswered.
 
-**Nothing here corrects a measurement.** It would be easy, and wrong, to scale
-a cold compound's pace by some recovery factor — GT7 publishes no such curve
-and inventing one would put a fabricated number where a measured one belongs.
-This module qualifies the evidence and says so in words; the arithmetic stays
-exactly as measured.
+So this module now reports the temperature and stops there. `qualification()`
+returns None until a window has been measured, and the band travels with
+`windowMeasured: false` so nothing downstream mistakes decoration for a
+finding.
+
+**Measuring one is a driving job, not a coding job**: the same corner at
+several times of day, achieved tyre temperature against lap time, and the
+temperature at which lap time stops improving is the bottom of the window.
 
 Surface temperature is not core temperature. GT7 exposes only the surface, and
 it responds far faster than the carcass, so a mean over a lap is a reasonable
@@ -128,51 +133,46 @@ def window_by_compound(laps: list[LapInput]) -> dict[str, dict]:
         out[code] = {
             "meanC": round(overall, 1),
             "perCornerC": per_corner,
-            "band": band_for(code, overall),
             "lapsSampled": len(lap_means),
-            "lapsInWindow": in_window,
-            "inWindow": in_window >= len(lap_means) * IN_WINDOW_FRACTION,
-            "windowC": [compound.warming_max, compound.optimal_max],
             "hottestCorner": max(per_corner, key=per_corner.__getitem__),
             "source": "tyre-surface-temp",
+            # The band and the window it is read against were never measured
+            # in GT7 - see `store/tyres.py`. They travel with the temperature
+            # so a reader can see the shape of the guess, flagged so nothing
+            # downstream treats them as a finding.
+            "band": band_for(code, overall),
+            "windowC": [compound.warming_max, compound.optimal_max],
+            "windowMeasured": False,
+            "windowSource": (
+                "NOT MEASURED IN GT7 - real-world slick figures carried over "
+                "from the rebuild. Every compound in the 11 Aug Monza session "
+                "ran 68-78 °C, so these bands do not describe this game. The "
+                "temperature above is measured; the band is not a finding."),
+            "lapsInWindow": in_window,
+            "inWindow": None,
         }
     return out
 
 
 def qualification(code: str, window: dict | None) -> str | None:
-    """What this compound's window does to the evidence gathered on it.
+    """What this compound's temperature does to the evidence gathered on it.
 
-    None when the evidence needs no qualification — the tyre was working, so
-    the pace and wear measured on it describe the compound rather than the
-    conditions.
+    **Returns None, always, until a window has been measured in GT7.**
+
+    It used to return a verdict - "RM never got into its window, so its pace
+    deficit is overstated and its stint length is flattered" - and that verdict
+    went into every export as a finding. The thresholds behind it were never
+    measured in GT7 and are not GT7's numbers: across 51 laps of Monza every
+    lap of every compound ran between 68 °C and 78 °C, while the thresholds put
+    Racing Soft's window at 85-110 °C, where it could never once arrive. The
+    qualification was therefore fired on every compound, every session, saying
+    something confident about nothing.
+
+    The temperature itself is real and stays in the payload, with
+    `windowMeasured: false` beside it so a reader knows the band is decoration
+    and not a finding. What replaces this is a measurement: the same corner at
+    several times of day, achieved tyre temperature against lap time, and the
+    temperature at which lap time stops improving is the bottom of the window.
+    Until then, silence is the honest output.
     """
-    if not window or window.get("inWindow"):
-        return None
-
-    band = window.get("band")
-    low, high = window.get("windowC", (None, None))
-    ran = window.get("meanC")
-    sampled = window.get("lapsSampled", 0)
-    inside = window.get("lapsInWindow", 0)
-    outside = sampled - inside
-
-    where = (f"{ran} °C mean against a {low}–{high} °C window, "
-             f"{outside} of {sampled} laps outside it")
-
-    if band in BANDS_BELOW:
-        return (
-            f"{code} never got into its window ({where}). A cold tyre is "
-            f"slower than the compound is and wears less than it will, so its "
-            f"pace deficit is overstated and its stint length is flattered. "
-            f"Neither figure describes a race run at temperature.")
-    if band in BANDS_ABOVE:
-        return (
-            f"{code} ran hot ({where}). An overheating tyre wears faster than "
-            f"it will in a cooler race, so the stint length measured on it is "
-            f"pessimistic - and the wear itself may be a setup problem rather "
-            f"than a property of the compound.")
-    # In one of the working bands on average, but not consistently enough.
-    return (
-        f"{code} was only in its window for {inside} of {sampled} laps "
-        f"({where}). The pace and wear measured on it are a mixture of "
-        f"conditions rather than one.")
+    return None

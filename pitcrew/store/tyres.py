@@ -10,6 +10,23 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TyreCompound:
+    """One GT7 compound.
+
+    **The four temperature figures are not measured and are not GT7's.** They
+    are real-world racing-slick numbers, which live at 90-110 °C, and GT7's
+    surface-temperature channel does not work in that range: across 51 laps of
+    Monza on Racing Soft, Medium and Hard, every lap of every compound sat
+    between 68 °C and 78 °C. Under these thresholds a Racing Soft could never
+    once reach its own window, and a fresh set - which GT7 fits at exactly
+    70.0 °C - starts precisely at the Soft's cold ceiling.
+
+    Nobody has published GT7 windows: the question was asked on GTPlanet in
+    April 2025 and went unanswered, and no telemetry project documents them.
+
+    So they are kept for the UI's colour bands, where being roughly right is
+    all they do, and `measured` is False so that **nothing may qualify a
+    measurement against them**. See `analysis/tyre_window.py`.
+    """
     name: str          # "Racing Soft"
     code: str          # "RS" — used in saves, strategy stints, DB
     category: str      # "Racing" | "Sports" | "Comfort" | "Wet"
@@ -18,6 +35,11 @@ class TyreCompound:
     warming_max: float # °C — WARMING below this
     optimal_max: float # °C — OPTIMAL below this
     hot_max: float     # °C — HOT below this; above = OVERHEATING
+
+    @property
+    def window_measured(self) -> bool:
+        """Whether the window above was measured in GT7. None of them were."""
+        return False
 
 
 ALL_COMPOUNDS: tuple[TyreCompound, ...] = (
