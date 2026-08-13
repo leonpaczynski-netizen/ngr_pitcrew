@@ -45,6 +45,14 @@ from pitcrew.ui.widgets import (
 )
 
 WEATHER = ("Dry", "Damp", "Wet", "Changeable")
+# How the league sets weather. Fixed means the round runs one setting whatever
+# the circuit offers - the V8 rounds do - and it makes every circuit's rain
+# irrelevant. Random hands the decision to the circuit.
+WEATHER_RULES = ("Random", "Fixed")
+# Whether the circuit can produce rain. Declared, never measured: GT7
+# broadcasts no weather channel at all. "Ask me" is the honest default and the
+# app seeds the answer from a community list that is four years old.
+RAIN_ANSWERS = ("Not answered", "Can rain", "Cannot rain")
 MULTIPLIERS = ("Off",) + tuple(f"{n}x" for n in range(1, 11))
 ABS_SETTINGS = ("Off", "Weak", "Default")
 START_TYPES = ("Rolling", "Standing", "Grid - no track limit")
@@ -102,6 +110,17 @@ class CompoundChip(CompoundBand):
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.setSelected(not self._selected)
         self.toggled.emit(self.code() or "", self._selected)
+
+
+def _rain_value(label: str) -> int | None:
+    """Tri-state: unanswered is not "cannot rain"."""
+    return {"Can rain": 1, "Cannot rain": 0}.get(label)
+
+
+def _rain_label(value) -> str:
+    if value is None:
+        return RAIN_ANSWERS[0]
+    return RAIN_ANSWERS[1] if value else RAIN_ANSWERS[2]
 
 
 class EventScreen(QWidget):
@@ -275,6 +294,25 @@ class EventScreen(QWidget):
         row.addWidget(self._extra_time_field, 1)
         row.addWidget(Field("Weather", self.weather), 1)
         plate.body.addLayout(row)
+
+        weather_row = QHBoxLayout()
+        weather_row.setSpacing(theme.GAP)
+        self.weather_rule = QComboBox()
+        self.weather_rule.addItems(WEATHER_RULES)
+        self.weather_rule.setToolTip(
+            "How the league sets weather. Fixed means the round runs one "
+            "setting whatever the circuit offers, which makes rain impossible "
+            "and wet tyres irrelevant. Random hands it to the circuit.")
+        self.rain_possible = QComboBox()
+        self.rain_possible.addItems(RAIN_ANSWERS)
+        self.rain_possible.setToolTip(
+            "Can this circuit produce rain at all? Most cannot. GT7 broadcasts "
+            "no weather channel, so this is the one thing here the app cannot "
+            "measure or check - it needs your answer.")
+        weather_row.addWidget(Field("Weather rule", self.weather_rule), 1)
+        weather_row.addWidget(Field("Rain here", self.rain_possible), 1)
+        weather_row.addStretch(1)
+        plate.body.addLayout(weather_row)
 
         # Declared here rather than asked for again when a prompt is written.
         # Every one of these was a form field in the tool this replaced, and
@@ -637,6 +675,10 @@ class EventScreen(QWidget):
             self.game_version.setText(event.get("game_version") or "")
             extra = event.get("extra_time_s")
             self.extra_time.setValue(EMPTY if extra is None else float(extra))
+            if event.get("weather_rule"):
+                self.weather_rule.setCurrentText(event["weather_rule"])
+            self.rain_possible.setCurrentText(
+                _rain_label(event.get("rain_possible")))
             for widget, key in ((self.start_hour, "start_hour"),
                                 (self.time_multiplier, "time_multiplier")):
                 value = event.get(key)
@@ -708,6 +750,8 @@ class EventScreen(QWidget):
             # zero, which would end the race on the stroke of the clock.
             "extra_time_s": (None if self.extra_time.value() <= EMPTY
                              else self.extra_time.value()),
+            "weather_rule": self.weather_rule.currentText(),
+            "rain_possible": _rain_value(self.rain_possible.currentText()),
             "start_hour": (None if self.start_hour.value() <= EMPTY
                            else self.start_hour.value()),
             "time_multiplier": (None if self.time_multiplier.value() <= EMPTY

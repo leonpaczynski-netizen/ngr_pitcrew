@@ -352,7 +352,38 @@ understated.
   is asked about the conditions the race will really be in.
 - `sessions_to_run` turns the uncovered hours into a list of runs to drive.
 
-**Weather** stays as the driver declares it. GT7 broadcasts no weather channel
-at all, so there is nothing to measure and nothing to check it against; the
-app records what he set and uses only the dry/wet distinction, which is the one
-the compound choice turns on.
+### Weather: two questions, and only one is about the circuit
+
+The league's rule and the circuit's capability decide it together:
+
+* **Fixed** — the V8 rounds run one setting whatever the circuit offers, so no
+  circuit's rain matters and wet compounds are irrelevant.
+* **Random** — Porsche Cup and Gr.3 hand the decision to the circuit, so it
+  turns on whether that circuit can produce rain at all. Most cannot.
+
+**This is the one thing on this page that cannot be measured.** GT7 broadcasts
+no weather channel in any packet format — no rain flag, no wetness — so unlike
+the game clock there is nothing to read it off and nothing to check a claim
+against. The research is also weak: the two community lists
+([TheSixthAxis](https://www.thesixthaxis.com/2022/03/04/what-gran-turismo-7-tracks-have-wet-weather-racing-rain/),
+[solox](https://solox.gg/gt7-tracks-with-rain/)) agree exactly on the same 11
+circuits, which is reassuring, but both are **August 2022** and one states
+outright that it is incomplete. Four years of circuit additions have happened
+since.
+
+So it ships as a **seed, not an answer**: `data/gt7_track_weather.json` carries
+the 11 with their provenance, the event page asks the driver, and his answer is
+what the model uses. A circuit absent from the list is `null`, not "dry" —
+treating absence as a dry circuit would quietly retire the wet contingency
+everywhere.
+
+| League | Rule | Consequence |
+|---|---|---|
+| V8s | Fixed sunny | Rain impossible. Wets dropped entirely, no gap to report |
+| Porsche Cup, Gr.3 | Random | Turns on the circuit. **Monza is on neither 2022 list** |
+
+What follows is deliberately not a prediction. Where rain is possible it still
+cannot be planned for — GT7's weather is not knowable before the race, so a
+stint on Intermediates remains a stint on nothing. What changes is that **no wet
+running on record becomes an evidence gap**, the same shape as never having
+driven the race's time of day: not a plan, a thing to go and drive.

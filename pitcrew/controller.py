@@ -355,7 +355,8 @@ class PitCrewController(QObject):
         # the payload so an older caller - or a test - still saves an event.
         for key in ("countersteer", "pp_cap", "start_type", "time_of_day",
                     "priority", "notes", "game_version", "extra_time_s",
-                    "start_hour", "time_multiplier"):
+                    "start_hour", "time_multiplier", "weather_rule",
+                    "rain_possible"):
             if key in data:
                 fields[key] = data[key]
         if existing:

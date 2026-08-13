@@ -19,7 +19,9 @@ from pitcrew.analysis.gameclock import (
 )
 from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.resolve import circuit_key
+from pitcrew.strategy.model import is_wet_compound
 from pitcrew.analysis.runs import split_runs
+from pitcrew.analysis.weather import wet_evidence
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
 from pitcrew.analysis.wear import wear_rate_by_compound
@@ -208,6 +210,20 @@ def _reading_from(stored: dict | None):
         multiplier=stored["multiplier"], start_hour=stored["start_hour"],
         end_hour=None, stopped_at_hour=stored["stops_at_hour"],
         laps_sampled=stored["laps_sampled"], note="")
+
+
+def _rain_possible(event) -> bool | None:
+    value = event["rain_possible"] if "rain_possible" in event.keys() else None
+    return None if value is None else bool(value)
+
+
+def _weather_value(weather: dict) -> str:
+    if weather["canRain"] is False:
+        return "rain impossible"
+    if weather["canRain"] is None:
+        return "not declared"
+    return ("rain possible, no wet running"
+            if not weather.get("wetLaps") else "rain possible, wets run")
 
 
 def _event_float(event, key: str) -> float | None:
@@ -447,6 +463,14 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         (reading.multiplier if reading.measured
          else _event_float(event, "time_multiplier")))
 
+    # Can it rain here at all? Declared, never measured - GT7 broadcasts no
+    # weather channel in any packet format.
+    weather = wet_evidence(
+        event["weather_rule"] if "weather_rule" in event.keys() else None,
+        _rain_possible(event),
+        sum(1 for lap in laps if is_wet_compound(lap.compound)),
+        track=event["track"])
+
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
@@ -508,6 +532,10 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  "a track constant"),
         Evidence("Pit dead time", f"{PIT_DEAD_TIME_S:.1f} s", ASSUMED,
                  "before refuelling begins"),
+        Evidence("Weather",
+                 _weather_value(weather),
+                 DECLARED if weather["canRain"] is not None else MISSING,
+                 weather["note"]),
         Evidence("Time of day",
                  _daylight_value(daylight),
                  MEASURED if daylight.get("covered") else MISSING,

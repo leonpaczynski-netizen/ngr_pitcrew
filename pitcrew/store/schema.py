@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS events (
     -- the only way to know whether practice has been in the race's conditions.
     start_hour          REAL,
     time_multiplier     REAL,
+    -- The league's weather regulation: 'Fixed' (the round runs one setting
+    -- whatever the circuit offers) or 'Random' (the circuit throws up whatever
+    -- it has). Fixed sunny makes every circuit's rain irrelevant.
+    weather_rule        TEXT,
+    -- Whether this circuit can produce rain at all. **Declared, not measured**
+    -- - GT7 broadcasts no weather channel in any packet format, so there is
+    -- nothing in the stream to read it from or check it against. Null means
+    -- the driver has not answered, which is not the same as "no rain".
+    rain_possible       INTEGER,
     weather             TEXT    NOT NULL DEFAULT 'dry',
     -- Strings, not numbers, because "Off" is a real setting and a number
     -- cannot express it. Parsed to a factor where the maths needs one.
@@ -332,6 +341,8 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("extra_time_s", "REAL"),
         ("start_hour", "REAL"),
         ("time_multiplier", "REAL"),
+        ("weather_rule", "TEXT"),
+        ("rain_possible", "INTEGER"),
         ("start_type", "TEXT"),
         ("time_of_day", "TEXT"),
         ("priority", "TEXT"),

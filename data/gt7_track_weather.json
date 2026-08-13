@@ -1,0 +1,19 @@
+{
+  "note": "Which circuits GT7 can produce rain at. NOT measured and NOT owned by tools/extract_reference.py - this file is hand-maintained. It is a SEED for the event page's 'rain possible' question, never an answer: the driver confirms it per round and his answer is what the model uses. GT7 broadcasts no weather channel at all, so unlike the game clock this cannot be measured from the stream and there is nothing to check it against.",
+  "source": "Two independent community lists that agree exactly: thesixthaxis.com and solox.gg, both August 2022, both stating 11 of 34 circuits had rain at the time.",
+  "sourceDate": "2022-08",
+  "caveat": "Four years and many circuit additions old. A circuit absent from `rainPossible` is NOT known to be dry - it is unknown, and most circuits added since 2022 are simply missing. Treat a match as a hint and anything else as a question for the driver.",
+  "rainPossible": [
+    "Autopolis",
+    "Circuit de la Sarthe",
+    "Spa-Francorchamps",
+    "Dragon Trail Gardens",
+    "Fuji Speedway",
+    "High Speed Ring",
+    "Nürburgring",
+    "Red Bull Ring",
+    "Suzuka",
+    "Tokyo Expressway",
+    "Tsukuba"
+  ]
+}
