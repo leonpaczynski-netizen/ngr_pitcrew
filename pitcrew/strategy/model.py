@@ -161,6 +161,11 @@ class RaceInputs:
     # one as a fixed lap count produced a 52-minute plan for a 50-minute race,
     # which is not a slow plan, it is an impossible one.
     race_minutes: float | None = None
+    # Where in the game day the race runs. `daylight.race_span_h` turns these
+    # into the hours it passes through, which is what practice is checked
+    # against.
+    start_hour: float | None = None
+    time_multiplier: float | None = None
     # What GT7 allows for completing the lap in progress when the clock
     # expires. The race ends at the first line crossing after the limit, so
     # its longest possible duration is the limit plus one lap - or plus this,
@@ -363,6 +368,8 @@ class Plan:
             payload["raceLength"] = {
                 "type": "time",
                 "minutes": inputs.race_minutes,
+                "startHour": inputs.start_hour,
+                "timeMultiplier": inputs.time_multiplier,
                 "extraTimeS": inputs.extra_time_s,
                 "lapsAtThisPace": self.laps_completed,
                 "maxDurationS": round(inputs.max_duration_s, 1),

@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS events (
     -- plus one lap, or plus this, whichever is shorter. Null means the lap is
     -- the only ceiling.
     extra_time_s        REAL,
+    -- Where in the game day the race starts, as an hour 0-24, and how fast
+    -- GT7's clock runs against the real one. A 2-hour race at x12 covers a
+    -- full day and night: the track cools, stints lengthen, and a harder
+    -- compound can drop below its working range. GT7 broadcasts neither track
+    -- nor air temperature, so these two numbers plus the recorded clock are
+    -- the only way to know whether practice has been in the race's conditions.
+    start_hour          REAL,
+    time_multiplier     REAL,
     weather             TEXT    NOT NULL DEFAULT 'dry',
     -- Strings, not numbers, because "Off" is a real setting and a number
     -- cannot express it. Parsed to a factor where the maths needs one.
@@ -299,6 +307,8 @@ CREATE INDEX IF NOT EXISTS idx_prompt_issues_event
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "events": (
         ("extra_time_s", "REAL"),
+        ("start_hour", "REAL"),
+        ("time_multiplier", "REAL"),
         ("start_type", "TEXT"),
         ("time_of_day", "TEXT"),
         ("priority", "TEXT"),

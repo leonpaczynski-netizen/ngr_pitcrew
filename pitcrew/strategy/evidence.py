@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
+from pitcrew.analysis.daylight import coverage, race_span_h
 from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
@@ -191,6 +192,11 @@ def compound_profiles(laps: list[LapInput],
     return profiles
 
 
+def _event_float(event, key: str) -> float | None:
+    value = event[key] if key in event.keys() else None
+    return None if value is None else float(value)
+
+
 def _extra_time_s(event) -> float | None:
     """GT7's allowance for finishing the lap the clock expired on."""
     value = event["extra_time_s"] if "extra_time_s" in event.keys() else None
@@ -326,6 +332,24 @@ def comparable_pace_gap(laps: list[LapInput], reference: str | None,
         f"Medium read quicker than a Racing Soft. {fix}")
 
 
+def _daylight_value(daylight: dict) -> str:
+    span = daylight.get("raceSpanH")
+    if not span:
+        return "not declared"
+    hours = daylight.get("uncoveredHours") or []
+    covered = "all driven" if not hours else f"{len(hours)} h never driven"
+    length = daylight.get("raceSpanHours") or 0.0
+    # A 24-hour race starts and finishes on the same clock reading, so the
+    # span alone would say "18:00-18:00" and read as no race at all.
+    through = f" ({length:.0f} h of game time)" if length >= 2.0 else ""
+    return f"{_clock(span[0])}-{_clock(span[1])}{through}, {covered}"
+
+
+def _clock(hour: float) -> str:
+    whole = int(hour % 24.0)
+    return f"{whole:02d}:{int(round((hour % 24.0 - whole) * 60)) % 60:02d}"
+
+
 def longest_stint_by_compound(laps: list[LapInput]) -> dict[str, int]:
     """The longest single run on each compound, in laps.
 
@@ -374,6 +398,13 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     # figure otherwise, labelled as typed. At 100 L it is most of a pit stop.
     refuel = refuel_evidence(laps, event["refuel_rate_lps"])
 
+    # What the race's conditions are, and whether anything has been driven in
+    # them. GT7 gives no track temperature, so this is the only way to know.
+    daylight = coverage(laps, race_span_h(
+        _event_float(event, "start_hour"),
+        float(event["race_laps"] or 0) if event["race_type"] == "time" else None,
+        _event_float(event, "time_multiplier")))
+
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
@@ -383,6 +414,8 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     inputs = RaceInputs(
         race_laps=race_laps,
         race_minutes=race_minutes,
+        start_hour=_event_float(event, "start_hour"),
+        time_multiplier=_event_float(event, "time_multiplier"),
         extra_time_s=_extra_time_s(event),
         lap_time_ms=reference_ms or 0,
         fuel_per_lap_l=fuel_per_lap,
@@ -433,6 +466,10 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  "a track constant"),
         Evidence("Pit dead time", f"{PIT_DEAD_TIME_S:.1f} s", ASSUMED,
                  "before refuelling begins"),
+        Evidence("Time of day",
+                 _daylight_value(daylight),
+                 MEASURED if daylight.get("covered") else MISSING,
+                 daylight["note"]),
         Evidence("Refuel rate",
                  (f"{refuel['rateLps']:.2f} L/s" if refuel["rateLps"]
                   else "not set"),

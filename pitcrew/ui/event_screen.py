@@ -269,8 +269,35 @@ class EventScreen(QWidget):
         self.start_type.addItems(START_TYPES)
         self.time_of_day = QComboBox()
         self.time_of_day.addItems(TIMES_OF_DAY)
+        # The in-game clock, numerically. The description above says what it
+        # looks like; these say where in the day the race actually runs and
+        # how fast GT7's clock moves through it - which is what decides
+        # whether practice has ever driven the race's conditions. A 2-hour
+        # race at x12 covers a full day and night.
+        self.start_hour = QDoubleSpinBox()
+        self.start_hour.setRange(EMPTY, 23.99)
+        self.start_hour.setDecimals(2)
+        self.start_hour.setSingleStep(0.5)
+        self.start_hour.setValue(EMPTY)
+        struck_when_empty(self.start_hour)
+        self.start_hour.setToolTip(
+            "The in-game hour the race starts, 0-24. 15.5 is half past three "
+            "in the afternoon.")
+
+        self.time_multiplier = QDoubleSpinBox()
+        self.time_multiplier.setRange(EMPTY, 100.0)
+        self.time_multiplier.setDecimals(1)
+        self.time_multiplier.setValue(EMPTY)
+        struck_when_empty(self.time_multiplier)
+        self.time_multiplier.setToolTip(
+            "How fast GT7's clock runs against the real one. At x12 a "
+            "two-hour race covers a full day and night, and the track cools "
+            "through it.")
+
         second.addWidget(Field("Start", self.start_type), 1)
         second.addWidget(Field("Time of day", self.time_of_day), 1)
+        second.addWidget(Field("Start hour", self.start_hour), 1)
+        second.addWidget(Field("Time x", self.time_multiplier), 1)
         plate.body.addLayout(second)
         return plate
 
@@ -585,6 +612,10 @@ class EventScreen(QWidget):
             self.game_version.setText(event.get("game_version") or "")
             extra = event.get("extra_time_s")
             self.extra_time.setValue(EMPTY if extra is None else float(extra))
+            for widget, key in ((self.start_hour, "start_hour"),
+                                (self.time_multiplier, "time_multiplier")):
+                value = event.get(key)
+                widget.setValue(EMPTY if value is None else float(value))
 
             allowed = set(event.get("available_compounds") or [])
             for code, chip in self._compound_chips.items():
@@ -652,6 +683,10 @@ class EventScreen(QWidget):
             # zero, which would end the race on the stroke of the clock.
             "extra_time_s": (None if self.extra_time.value() <= EMPTY
                              else self.extra_time.value()),
+            "start_hour": (None if self.start_hour.value() <= EMPTY
+                           else self.start_hour.value()),
+            "time_multiplier": (None if self.time_multiplier.value() <= EMPTY
+                                else self.time_multiplier.value()),
             "available_compounds": [code for code, chip
                                     in self._compound_chips.items()
                                     if chip.isSelected()],
