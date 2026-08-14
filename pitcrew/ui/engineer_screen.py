@@ -179,7 +179,14 @@ class EngineerScreen(QWidget):
         stack.setSpacing(theme.GAP_WIDE)
 
         self.knows_plate = Plate("What the app is filling in")
-        self.knows_note = BodyLabel("", size=14, colour=theme.STENCIL_DIM)
+        # Not blank. This plate is the screen's whole argument - the division
+        # between what the app knows and what only he does, visible before
+        # anything is generated - and it rendered as an empty bordered box on
+        # the one run where that division has never been explained.
+        self.knows_note = BodyLabel(
+            "Nothing yet. Save an event on the Event screen and this fills in "
+            "with the car, the circuit and what has been measured.",
+            size=14, colour=theme.STENCIL_DIM)
         self.knows_plate.body.addWidget(self.knows_note)
         stack.addWidget(self.knows_plate)
 
@@ -363,9 +370,9 @@ class EngineerScreen(QWidget):
 
         reply = Plate("What came back")
         reply.body.addWidget(BodyLabel(
-            "Paste the reply here and it is filed against the prompt that "
-            "asked for it. It is not parsed — the setup values go into the "
-            "Event screen's paste box as they always have.",
+            "Paste the whole reply here. It is filed against the prompt that "
+            "asked for it, and any setup sheets in it are loaded straight "
+            "onto the Event screen — check them there and save.",
             size=13, colour=theme.STENCIL_DIM))
         self.reply = QPlainTextEdit()
         self.reply.setPlaceholderText("Paste the knowledge base's reply…")

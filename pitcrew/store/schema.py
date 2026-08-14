@@ -304,9 +304,11 @@ CREATE INDEX IF NOT EXISTS idx_revisions_run ON race_revisions(race_run_id);
 -- `prompt_version` is what makes a returned setup sheet traceable to the
 -- template that asked for it.
 --
--- The reply is not parsed and is not meant to be.  It needs to be findable,
--- not machine-legible: the setup values inside it re-enter the app through
--- the Event screen's existing paste box.
+-- The reply is stored whole, verbatim, and that is deliberate: what is kept
+-- here is the record of what came back, which has to stay findable and
+-- unedited.  It *is* also read - `setup/parse.py` lifts the sheets out of it
+-- and loads them onto the Event screen - but that is a separate act on the
+-- same text, not a reason to store anything less than all of it.
 CREATE TABLE IF NOT EXISTS prompt_issues (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id       INTEGER REFERENCES events(id) ON DELETE CASCADE,
