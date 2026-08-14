@@ -413,11 +413,17 @@ class Store:
                 "INSERT OR REPLACE INTO laps "
                 "(session_id, lap_num, lap_time_ms, delta_ms, fuel_start, fuel_end, "
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
-                " recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " tyres_changed, fuel_added_l, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
                  json.dumps(lap.gear_ratios) if lap.gear_ratios else None,
+                 # None stays None. A lap with no stop makes no claim about
+                 # the tyres, and `0` would be the claim that they stayed on.
+                 (None if getattr(lap, "tyres_changed", None) is None
+                  else int(lap.tyres_changed)),
+                 getattr(lap, "fuel_added_l", None),
                  _now()))
             lap_id = int(cur.lastrowid)
             if frames is not None:

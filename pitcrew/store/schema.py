@@ -351,6 +351,13 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "laps": (
         ("gear_ratios", "TEXT"),
         ("tyres_fresh", "INTEGER"),
+        # Observed at the stop, not declared by the driver. `tyres_fresh` is
+        # his word and outranks this; these two are kept apart so a
+        # disagreement between them stays visible instead of one overwriting
+        # the other. Null where the lap carried no stop: the question was
+        # never asked, so it has no answer.
+        ("tyres_changed", "INTEGER"),
+        ("fuel_added_l", "REAL"),
     ),
 }
 

@@ -57,6 +57,12 @@ class Run:
     id: int
     laps: tuple[LapInput, ...]
     refuelled_before: bool
+    # What the stop *before* this run did to the tyres, read off the stream.
+    # `None` where no stop was captured there, which is also the case for the
+    # first run of a session. It lives on the Run rather than on its first lap
+    # because the evidence is in the lap before it — the stop happens on the
+    # in-lap, and the set it fitted is the set this run goes out on.
+    tyres_changed_before: bool | None = None
 
     @property
     def first_lap(self) -> int:
@@ -100,7 +106,20 @@ class Run:
 
     @property
     def tyres_fresh_observed(self) -> bool | None:
-        """What the opening tyre temperatures say. Corroboration, never more."""
+        """What the stream says. Corroboration, never more.
+
+        Two sources, and the stronger one first. **The stop itself**: all four
+        corners stepping to one temperature in a single frame is GT7 fitting a
+        set, and it is conclusive. **The opening temperatures**, otherwise —
+        which is all there is for a run that began in the garage, and which
+        cannot read a run that left the box already rolling. The post-stop
+        out-lap is exactly that case: it starts at pit exit at speed, so no
+        frame of it is a reading of the set as fitted, and the temperatures
+        alone will always say "cannot tell" about the one moment we most want
+        to know about.
+        """
+        if self.tyres_changed_before is not None:
+            return self.tyres_changed_before
         return fresh_by_temperature(self.laps[0])
 
     @property
@@ -124,6 +143,13 @@ class Run:
     def tyres_fresh_source(self) -> str:
         if self.tyres_fresh_declared is not None:
             return "driver-declared at the run's first lap"
+        if self.tyres_changed_before is True:
+            return ("derived: at the stop before this run all four corners "
+                    "stepped to one temperature in a single frame, which is "
+                    "GT7 fitting a set")
+        if self.tyres_changed_before is False:
+            return ("derived: a stop was captured before this run and the "
+                    "temperatures did not step, so the set stayed on")
         if self.tyres_fresh_observed is True:
             return (f"derived: all four corners at GT7's fitting temperature "
                     f"({thresholds.FRESH_TYRE_TEMP_C:.0f} C) with the car "
@@ -180,6 +206,7 @@ class Run:
             "tyresFreshSource": self.tyres_fresh_source,
             "tyresFreshDeclared": self.tyres_fresh_declared,
             "tyresFreshObserved": self.tyres_fresh_observed,
+            "tyresChangedAtStop": self.tyres_changed_before,
         }
         disagreement = self.tyres_fresh_disagreement
         if disagreement:
@@ -213,10 +240,15 @@ def _opening_temperature(lap: LapInput) -> float:
 def fresh_by_temperature(lap: LapInput) -> bool | None:
     """Did this lap go out on a set as GT7 fits it?
 
-    **GT7 fits every set at one temperature, on all four corners.** Measured
-    rather than looked up - see `thresholds.FRESH_TYRE_TEMP_C` for the reading
-    and the runs it came from. From there a stationary set only cools, so a
-    fresh one reads at or just under that figure with the four corners equal.
+    **GT7 fits a set with all four corners on one temperature** - somewhere
+    between 60 and 70 C depending on the hour, not at one fixed figure; see
+    `thresholds.FRESH_TYRE_TEMP_C` for the correction and the laps behind it.
+    From there a stationary set only cools, so a fresh one reads inside that
+    band or just under it with the four corners equal.
+
+    This is the **fallback**. Where the stop itself was captured, the moment
+    of fitting is a one-frame step in the stream and `Run.tyres_fresh` uses
+    that instead - it is conclusive where this is inferential.
 
     The **even** reading is what does the work, not the absolute value. A set
     that has turned a wheel picks up corner-to-corner asymmetry inside one lap
@@ -240,7 +272,8 @@ def fresh_by_temperature(lap: LapInput) -> bool | None:
     hottest = max(corners)
     if hottest > thresholds.FRESH_TYRE_TEMP_C + thresholds.FRESH_TYRE_SPREAD_C:
         return False
-    if hottest < thresholds.FRESH_TYRE_TEMP_C - thresholds.FRESH_TYRE_COOLING_C:
+    if hottest < (thresholds.FRESH_TYRE_TEMP_MIN_C
+                  - thresholds.FRESH_TYRE_COOLING_C):
         return None
     return True
 
@@ -277,16 +310,21 @@ def split_runs(laps: list[LapInput]) -> list[Run]:
 
     grouped: list[list[LapInput]] = [[laps[0]]]
     refuelled: list[bool] = [False]
+    # What the stop that opened each run did to the tyres. The first run of a
+    # session has no stop before it, so it stays unknown rather than False.
+    swapped: list[bool | None] = [None]
     for previous, lap in zip(laps, laps[1:]):
         if starts_run(previous, lap):
             grouped.append([lap])
             refuelled.append(refuelled_between(previous, lap))
+            swapped.append(previous.tyres_changed)
         else:
             grouped[-1].append(lap)
 
-    return [Run(id=index, laps=tuple(group), refuelled_before=was_refuelled)
-            for index, (group, was_refuelled)
-            in enumerate(zip(grouped, refuelled), start=1)]
+    return [Run(id=index, laps=tuple(group), refuelled_before=was_refuelled,
+                tyres_changed_before=was_swapped)
+            for index, (group, was_refuelled, was_swapped)
+            in enumerate(zip(grouped, refuelled, swapped), start=1)]
 
 
 def run_of(runs: list[Run], lap_num: int) -> int | None:

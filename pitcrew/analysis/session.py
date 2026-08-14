@@ -51,8 +51,15 @@ class LapInput:
     session_id: int | None = None
     # The driver's declaration that this lap started on a fresh set. `None`
     # means he has not said — never `False`, which would claim the set carried
-    # over. GT7 broadcasts no tyre-change event, so this is the only source.
+    # over. His word is primary evidence and outranks everything below it.
     tyres_fresh: bool | None = None
+    # **Observed at a stop on this lap**, not declared: all four corners
+    # stepped to one temperature in a single frame, which is what GT7 does
+    # when it fits a set. `None` where the lap carried no stop — the question
+    # was not asked. Kept apart from `tyres_fresh` so that the driver saying
+    # one thing and the stream showing another stays a finding rather than
+    # one silently overwriting the other.
+    tyres_changed: bool | None = None
     # The driver's gauge reading per corner, fraction consumed 0-1. Same
     # vocabulary as the tyre temperatures below, so a wear figure and the
     # temperature that explains it are named the same thing.

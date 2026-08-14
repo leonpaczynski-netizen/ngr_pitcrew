@@ -103,6 +103,7 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             frames=frames,
             session_id=row["session_id"],
             tyres_fresh=_tyres_fresh(row),
+            tyres_changed=_tri_state(row, "tyres_changed"),
         ))
     return out
 
@@ -113,7 +114,16 @@ def _tyres_fresh(row) -> bool | None:
     `None` is not `False`: he has not said, which is different from saying the
     set carried over.
     """
-    value = row["tyres_fresh"] if "tyres_fresh" in row.keys() else None
+    return _tri_state(row, "tyres_fresh")
+
+
+def _tri_state(row, column: str) -> bool | None:
+    """A stored flag that has three states, one of which is "not asked".
+
+    Absent from the row as well as null in it: a lap recorded before the
+    column existed has not answered the question either.
+    """
+    value = row[column] if column in row.keys() else None
     return None if value is None else bool(value)
 
 

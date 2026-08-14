@@ -10,7 +10,7 @@ incomparable.
 """
 from __future__ import annotations
 
-DETECTOR_VERSION = 1
+DETECTOR_VERSION = 2
 
 # --- corner flags (EXPORT-CONTRACT.md 7.1) ---------------------------------
 
@@ -40,18 +40,30 @@ FLAG_MIN_SHARE = 0.25
 
 # --- fresh tyres -----------------------------------------------------------
 #
-# **GT7 fits every set at the same temperature.** Measured, not looked up: the
-# 11 Aug Monza captures contain six runs, and three of them - on Racing Soft,
-# Racing Medium and Racing Hard - open at exactly 70.0 C on all four corners
-# with the car stationary. The other three open a few degrees below, having sat
-# in the box cooling before he went out. Nothing published documents the
-# figure; the public accounts describe only the behaviour, that a fresh set is
-# cold and takes a couple of corners to come in.
+# **GT7 does not fit every set at the same temperature.** That is a correction.
+# The 11 Aug Monza captures contain six runs and three of them - on Racing
+# Soft, Racing Medium and Racing Hard - open at exactly 70.0 C on all four
+# corners, which is where the constant below came from and why it was written
+# down as measured. Widening the search to all 132 recorded laps says
+# otherwise: sets are fitted anywhere from **60.0 to 70.0 C**, and the figure
+# tracks the hour. The 14 Aug pit stop fitted at 60.0 C at 18:50 game time in
+# a session that started at 15:56 and opened at 72 C.
 #
-# The discriminating signal is **not** the absolute value, which drifts down as
-# the car waits, but that all four corners read the same. A set that has been
-# driven carries corner-to-corner asymmetry within a lap and keeps it.
+# So 70.0 is the **highest** fitting temperature observed, not the fitting
+# temperature. Anything gated on it as an absolute rejects a genuinely fresh
+# set fitted on a cool evening - which is exactly what happened to the only
+# real tyre change in the capture set, where `fresh_by_temperature` returned
+# "cannot tell" for a set that had just been bolted on.
+#
+# The discriminating signal is **not** the absolute value, it is that all four
+# corners read the same. A set that has been driven carries corner-to-corner
+# asymmetry within a lap and keeps it.
+#
+# Stronger still, where it is available: the moment of fitting is visible as a
+# one-frame step in the stream, and `telemetry/pit_detect` finds it outright.
+# This band is the fallback for a run whose stop was not captured.
 FRESH_TYRE_TEMP_C = 70.0
+FRESH_TYRE_TEMP_MIN_C = 60.0
 # Corner-to-corner spread a set that has never turned a wheel stays inside.
 FRESH_TYRE_SPREAD_C = 0.3
 # How far below the fitting temperature a fresh set may have cooled while
@@ -65,7 +77,8 @@ FRESH_TYRE_MAX_SPEED_KPH = 5.0
 # Measured at this GT7 version. The physics and tyre model have been rewritten
 # twice in two updates, so the figure travels with the version it was taken
 # under and is re-measured rather than assumed after the next one.
-FRESH_TYRE_MEASURED_AT = "GT7 1.70, 3 runs, RS/RM/RH, Monza 11 Aug 2026"
+FRESH_TYRE_MEASURED_AT = ("GT7 1.70, 132 recorded laps across Monza, Yas Marina "
+                          "and Watkins Glen, 11-14 Aug 2026")
 
 THROTTLE_ON_PCT = 10          # throttle considered "on" above this
 BRAKE_ON_PCT = 5              # brake considered "applied" above this
@@ -100,7 +113,11 @@ def as_export() -> dict:
         "cornerProminenceKph": CORNER_PROMINENCE_KPH,
         "flagMinShareOfLaps": FLAG_MIN_SHARE,
         "freshTyreTempC": FRESH_TYRE_TEMP_C,
-        "freshTyreTempSource": f"measured in-house - {FRESH_TYRE_MEASURED_AT}",
+        "freshTyreTempMinC": FRESH_TYRE_TEMP_MIN_C,
+        "freshTyreTempSource": (
+            f"measured in-house - {FRESH_TYRE_MEASURED_AT}. GT7 fits a set "
+            f"anywhere in this band depending on the hour; the four corners "
+            f"reading the same is the discriminator, not the level."),
         "freshTyreSpreadC": FRESH_TYRE_SPREAD_C,
         "detectorVersion": DETECTOR_VERSION,
     }

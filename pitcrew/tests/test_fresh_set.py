@@ -91,10 +91,29 @@ def test_a_set_hotter_than_gt7_fits_them_is_not_fresh():
 
 def test_a_set_left_long_enough_to_equalise_cannot_be_told_apart():
     """Null, not false: a fresh set left waiting and a used set left longer
-    both end up here, and the reading cannot separate them."""
-    cold = FITTED - thresholds.FRESH_TYRE_COOLING_C - 5.0
+    both end up here, and the reading cannot separate them.
+
+    Measured from the *bottom* of the fitting band, not from the top of it.
+    GT7 fits a set anywhere between 60 and 70 C depending on the hour, so a
+    reading only becomes unreadable once it has cooled past the coldest
+    fitting temperature the game uses.
+    """
+    cold = thresholds.FRESH_TYRE_TEMP_MIN_C - thresholds.FRESH_TYRE_COOLING_C - 5.0
     assert fresh_by_temperature(
         a_lap_input(1, temps=(cold, cold, cold, cold))) is None
+
+
+def test_a_set_fitted_on_a_cool_evening_is_still_a_fresh_set():
+    """The regression this band was widened for.
+
+    The only real tyre change in the capture set was fitted at 60.0 C on all
+    four corners, at 18:50 game time in a session that had opened at 72 C.
+    Against a hard 70.0 C the reading came back "cannot tell" for a set that
+    had just been bolted on, which is how a fresh set went unnoticed.
+    """
+    fitted = thresholds.FRESH_TYRE_TEMP_MIN_C
+    assert fresh_by_temperature(
+        a_lap_input(1, temps=(fitted, fitted, fitted, fitted))) is True
 
 
 def test_a_car_already_rolling_gives_no_reading():
