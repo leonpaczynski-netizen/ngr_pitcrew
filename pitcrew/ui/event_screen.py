@@ -27,7 +27,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pitcrew.setup.parse import parse_sheet
+from pitcrew.analysis.runs import FOR_QUALIFYING, FOR_RACE
+from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.vocabulary import GROUPS, SETUP_KEYS, keys_in_group
 from pitcrew.store import catalogs
 from pitcrew.store.tyres import ALL_COMPOUNDS
@@ -641,8 +642,30 @@ class EventScreen(QWidget):
 
         self.sheet_name = QLineEdit()
         self.sheet_name.setPlaceholderText("Fuji race v2")
+
+        # **Which of the two sheets this form is holding.** A car has a race
+        # sheet and a qualifying sheet and they are different objects
+        # answering different questions - the tune builder issues them
+        # separately and they are practised separately. Until this existed
+        # every sheet was saved untagged, so the app could never find the
+        # qualifying one and the whole qualifying half had nothing to point
+        # at.
+        self.sheet_purpose = QComboBox()
+        self.sheet_purpose.addItem("Race", FOR_RACE)
+        self.sheet_purpose.addItem("Qualifying", FOR_QUALIFYING)
+        self.sheet_purpose.currentIndexChanged.connect(self._on_purpose_changed)
+        block_wheel(self.sheet_purpose)
+
         naming = Plate("Sheet")
-        naming.body.addWidget(Field("Name", self.sheet_name))
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        row.addWidget(Field("Name", self.sheet_name), 2)
+        row.addWidget(Field("For", self.sheet_purpose,
+                            hint="Kept apart from the race sheet"), 1)
+        naming.body.addLayout(row)
+        self.sheet_pair_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
+        self.sheet_pair_note.setVisible(False)
+        naming.body.addWidget(self.sheet_pair_note)
         column.addWidget(naming)
 
         for group in GROUPS:
@@ -748,13 +771,37 @@ class EventScreen(QWidget):
     # --------------------------------------------------------------- actions
 
     def _on_read_sheet(self) -> None:
-        result = parse_sheet(self.paste_box.toPlainText())
-        if result.matched_count == 0 and not result.gears:
+        """Read a pasted reply - both sheets of it.
+
+        The prompts ask for a race sheet and a qualifying sheet in one block,
+        so one paste carries both. The form can only show one at a time, so it
+        shows the one the picker is set to and **holds the other**, which is
+        then saved alongside it. Dropping it would mean asking for two sheets
+        and quietly keeping one.
+        """
+        reply = parse_reply(self.paste_box.toPlainText())
+        if not reply.sheets:
             self.paste_status.setText(
                 "Nothing recognised. Fill the form below instead.")
             self.paste_status.setStyleSheet(f"color: {theme.WARNING};")
             return
 
+        self._pasted = dict(reply.sheets)
+        wanted = self.sheet_purpose.currentData()
+        # The sheet he asked to see, or whichever one arrived if that is the
+        # only one - a reply with one sheet in it should still load.
+        result = reply.sheets.get(wanted) or next(iter(reply.sheets.values()))
+        self._show_sheet(result)
+
+        self.paste_status.setText(f"Read {reply.summary()}.")
+        colour = theme.WARNING if reply.unmatched else theme.CHALK
+        self.paste_status.setStyleSheet(f"color: {colour};")
+        if reply.unmatched:
+            self.paste_status.setToolTip(
+                "Not recognised:\n" + "\n".join(reply.unmatched[:12]))
+        self._sync_sheet_pair()
+
+    def _show_sheet(self, result) -> None:
         for key, value in result.values.items():
             editor = self._setup_editors.get(key)
             if editor is not None:
@@ -764,12 +811,27 @@ class EventScreen(QWidget):
         if result.sheet_name:
             self.sheet_name.setText(result.sheet_name)
 
-        self.paste_status.setText(f"Read {result.summary()}.")
-        colour = theme.WARNING if result.unmatched else theme.CHALK
-        self.paste_status.setStyleSheet(f"color: {colour};")
-        if result.unmatched:
-            self.paste_status.setToolTip(
-                "Not recognised:\n" + "\n".join(result.unmatched[:12]))
+    def _on_purpose_changed(self) -> None:
+        """Switch the form to the other sheet of a pasted pair.
+
+        Only where a pair was pasted. Changing the picker with nothing pasted
+        is him saying what the sheet he is typing is for, and overwriting his
+        typing to answer that would be a strange way to take the answer.
+        """
+        wanted = self.sheet_purpose.currentData()
+        other = getattr(self, "_pasted", {}).get(wanted)
+        if other is not None:
+            self._show_sheet(other)
+        self._sync_sheet_pair()
+
+    def _sync_sheet_pair(self) -> None:
+        held = [purpose for purpose in getattr(self, "_pasted", {})
+                if purpose != self.sheet_purpose.currentData()]
+        self.sheet_pair_note.setVisible(bool(held))
+        if held:
+            self.sheet_pair_note.setText(
+                f"The {held[0]} sheet came in the same paste and is saved with "
+                f"this one. Switch \u201cFor\u201d to see it.")
 
     def _reset(self) -> None:
         """Put every field back to the state a fresh screen starts in.
@@ -814,6 +876,9 @@ class EventScreen(QWidget):
             chip.setSelected(code in ("RH", "RM", "RS"))
 
         self.sheet_name.clear()
+        self._pasted = {}
+        self.sheet_purpose.setCurrentIndex(0)
+        self.sheet_pair_note.setVisible(False)
         self.gear_edit.clear()
         self.paste_box.clear()
         self.paste_status.setText("Nothing read yet.")
@@ -956,6 +1021,14 @@ class EventScreen(QWidget):
                                     in self._compound_chips.items()
                                     if chip.isSelected()],
             "sheet_name": self.sheet_name.text().strip(),
+            "sheet_purpose": self.sheet_purpose.currentData(),
+            # The other half of a pasted pair, so saving keeps both. Asking
+            # for two sheets and quietly storing one would be worse than not
+            # asking.
+            "other_sheets": {
+                purpose: sheet
+                for purpose, sheet in getattr(self, "_pasted", {}).items()
+                if purpose != self.sheet_purpose.currentData()},
             "setup_values": setup_values,
             "gear_text": self.gear_edit.text().strip(),
             "build": build,

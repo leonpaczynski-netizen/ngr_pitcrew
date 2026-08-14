@@ -497,21 +497,48 @@ class PitCrewController(QObject):
                                f"Unsaved edits are gone.")
 
     def _save_sheet(self, data: dict) -> int:
+        """Save the sheet on the form, and the other half of a pasted pair.
+
+        The prompts ask for a race sheet and a qualifying sheet in one reply,
+        so one paste carries both and the form can only hold one at a time.
+        Saving only what is on screen would mean asking for two and keeping
+        one, which is worse than not asking.
+
+        Returns the id of the sheet the form was showing - that is the one the
+        event is fitted with, and the caller records it against the session.
+        """
         gears = []
         for chunk in data.get("gear_text", "").replace(",", " ").split():
             try:
                 gears.append(float(chunk))
             except ValueError:
                 continue
+        purpose = data.get("sheet_purpose") or "race"
+        name = data["sheet_name"] or f"{data['name']} sheet"
         sheet = SetupSheet(
             car_name=data["car_name"],
-            sheet_name=data["sheet_name"] or f"{data['name']} sheet",
+            sheet_name=name,
             values=dict(data["setup_values"]),
             gears=gears,
             performance=dict(data.get("performance") or {}),
             build=dict(data.get("build") or {}),
+            purpose=purpose,
         )
-        return self.store.save_setup_sheet(sheet)
+        sheet_id = self.store.save_setup_sheet(sheet)
+
+        for other_purpose, parsed in (data.get("other_sheets") or {}).items():
+            # Named after the sheet on the form where the reply did not name
+            # it, so two sheets from one paste never collide on (car, name) -
+            # which would silently make the second overwrite the first.
+            self.store.save_setup_sheet(SetupSheet(
+                car_name=data["car_name"],
+                sheet_name=(parsed.sheet_name
+                            or f"{name} ({other_purpose})"),
+                values=dict(parsed.values),
+                gears=list(parsed.gears),
+                purpose=other_purpose,
+            ))
+        return sheet_id
 
     # ------------------------------------------------------------- nav state
 
