@@ -380,6 +380,14 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("off_track_s", "REAL"),
         ("spin_s", "REAL"),
     ),
+    "setup_sheets": (
+        # `race` or `qualifying`. Two sheets for one car are two different
+        # objects, not two versions of one - they answer different
+        # questions and the tune builder issues them separately. Null on
+        # every sheet stored before the question was asked, which reads as
+        # "not stated" rather than as a race sheet.
+        ("purpose", "TEXT"),
+    ),
     "sessions": (
         # **Which kind of practice this was**, because it decides whether the
         # session's opening lap is an out-lap. Out of the box in a lobby it
@@ -391,6 +399,24 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # Declared by the driver, never guessed from the game. Null on every
         # session recorded before the question was asked.
         ("practice_mode", "TEXT"),
+        # **What this session was for**, which is a different question
+        # from where the car started. The two are orthogonal - a
+        # qualifying simulation is usually a time trial and race running
+        # is usually a lobby, but neither is implied by the other.
+        #
+        # It decides what the numbers mean rather than which laps count.
+        # A qualifying session is one lap on low fuel and fresh rubber:
+        # degradation across it is noise. A race session is the opposite -
+        # the single fastest lap is the noise and the shape of the stint
+        # is the measurement. Reporting both the same way is how a
+        # one-lap car gets built for a race.
+        ("practice_intent", "TEXT"),
+        # A full race run against the AI to rehearse the plan. It is a
+        # race session in every mechanical sense - it makes real stops
+        # under race conditions, which is the only place that evidence
+        # comes from - but it is not the league race, and an outcome
+        # post-mortem must not read it as one.
+        ("rehearsal", "INTEGER"),
     ),
 }
 

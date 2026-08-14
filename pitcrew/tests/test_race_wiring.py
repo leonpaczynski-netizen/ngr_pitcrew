@@ -102,7 +102,7 @@ def test_a_race_without_a_plan_still_arms(raced):
             "UPDATE strategies SET status='candidate' WHERE id=?",
             (strategy["id"],))
     assert controller.start_race() is True
-    assert "no approved plan" in screen.subtitle.text()
+    assert "No approved plan" in screen.subtitle.text()
 
 
 # ------------------------------------------------------------------- calls

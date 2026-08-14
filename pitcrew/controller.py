@@ -262,6 +262,8 @@ class PitCrewController(QObject):
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
         self.practice.practice_mode_changed.connect(self._on_practice_mode)
+        self.practice.practice_intent_changed.connect(
+            self._on_practice_intent)
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
             self.strategy.approve_requested.connect(self.approve_strategy)
@@ -966,13 +968,25 @@ class PitCrewController(QObject):
         if event is None:
             return None
 
-        sheets = self.store.list_setup_sheets(event["car_name"] or "")
-        sheet_id = sheets[0].id if sheets else None
+        # **The sheet that matches what he is about to practise.** A
+        # qualifying run on the race sheet is a measurement of the race
+        # sheet, and filing it against the qualifying one would put a
+        # symptom on the wrong car. Falls back to the most recent sheet
+        # of any purpose, because a car with one sheet on file is the
+        # normal case and refusing to open a session over it would be
+        # bureaucracy.
+        intent = self.practice.practice_intent()
+        sheet = self.store.sheet_for(event["car_name"] or "", intent)
+        if sheet is None:
+            sheets = self.store.list_setup_sheets(event["car_name"] or "")
+            sheet = sheets[0] if sheets else None
+        sheet_id = sheet.id if sheet else None
 
         self.bridge.reset()
         self.session_id = self.store.start_session(
             event["id"], "practice", setup_sheet_id=sheet_id,
-            practice_mode=self.practice.practice_mode())
+            practice_mode=self.practice.practice_mode(),
+            practice_intent=intent)
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
@@ -1175,6 +1189,17 @@ class PitCrewController(QObject):
             # The rack redraws because the answer moves which laps are
             # out-laps, and that is visible on it.
             self.practice.set_laps(self._rows_for_event(event["id"]))
+
+    def _on_practice_intent(self, intent: str) -> None:
+        """He changed what this session is for.
+
+        Correctable after the fact for the same reason the mode is: it is
+        asked immediately before going out, and it changes what the
+        numbers mean rather than which laps count, so getting it wrong
+        costs a reading rather than a lap.
+        """
+        if self.session_id is not None:
+            self.store.set_practice_intent(self.session_id, intent)
 
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""
@@ -1413,7 +1438,9 @@ class PitCrewController(QObject):
             return False
 
         self.bridge.reset(race=True)
-        self.session_id = self.store.start_session(event["id"], "race")
+        rehearsal = bool(getattr(self.race_screen, "rehearsal", lambda: False)())
+        self.session_id = self.store.start_session(
+            event["id"], "race", rehearsal=rehearsal)
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
@@ -1433,8 +1460,12 @@ class PitCrewController(QObject):
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
         self.race_screen.set_status(
-            "Armed. Waiting for you to cross the line." if plan else
-            "Armed with no approved plan - the engineer will call fuel only.")
+            ("Rehearsal armed. " if rehearsal else "Armed. ")
+            + ("Waiting for you to cross the line." if plan else
+               "No approved plan - the engineer will call fuel only."))
+        self.announce("Rehearsal" if rehearsal else "Race",
+                      "Armed." if plan else "No plan - fuel calls only.",
+                      warn=not plan)
         return True
 
     def stop_race(self) -> None:

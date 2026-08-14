@@ -38,6 +38,16 @@ class SetupSheet:
     performance: dict[str, float] = field(default_factory=dict)
     build: dict[str, float] = field(default_factory=dict)
     notes: str = ""
+    # **What this sheet is for**: `race`, `qualifying`, or None where it
+    # has not been said. Two sheets for one car are two different objects
+    # answering different questions, not two versions of one - the tune
+    # builder is asked for both and issues them separately, and a
+    # qualifying sheet judged on stint consistency is being judged on
+    # something it was never built for.
+    #
+    # None rather than defaulting to `race`: a sheet stored before the
+    # question existed has not answered it.
+    purpose: str | None = None
     # Set when the sheet came out of the store, so a session can record which
     # sheet was fitted without a second lookup.
     id: int | None = None
@@ -86,6 +96,11 @@ class SetupSheet:
             "values": {k: self.values.get(k) for k in SETUP_KEY_NAMES
                        if k in self.values},
         }
+        # Omitted rather than defaulted where it has not been said. A sheet
+        # stored before the question existed has not answered it, and calling
+        # it a race sheet would be the app answering for him.
+        if self.purpose:
+            payload["purpose"] = self.purpose
         if self.gears:
             payload["gears"] = list(self.gears)
         if self.performance:

@@ -179,16 +179,18 @@ class Store:
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
-                "gears_json, performance_json, build_json, notes, created_at, "
-                "updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                "gears_json, performance_json, build_json, notes, purpose, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(car_name, sheet_name) DO UPDATE SET "
                 "values_json=excluded.values_json, gears_json=excluded.gears_json, "
                 "performance_json=excluded.performance_json, "
                 "build_json=excluded.build_json, notes=excluded.notes, "
+                "purpose=excluded.purpose, "
                 "updated_at=excluded.updated_at",
                 (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
                  json.dumps(sheet.gears), json.dumps(sheet.performance),
-                 json.dumps(sheet.build), sheet.notes, _now(), _now()))
+                 json.dumps(sheet.build), sheet.notes, sheet.purpose,
+                 _now(), _now()))
             row = conn.execute(
                 "SELECT id FROM setup_sheets WHERE car_name = ? AND sheet_name = ?",
                 (sheet.car_name, sheet.sheet_name)).fetchone()
@@ -197,6 +199,19 @@ class Store:
     def get_setup_sheet(self, sheet_id: int):
         rows = self._query("SELECT * FROM setup_sheets WHERE id = ?", (sheet_id,))
         return _setup_sheet(rows[0]) if rows else None
+
+    def sheet_for(self, car_name: str, purpose: str):
+        """The car's most recent sheet for this purpose, or None.
+
+        A sheet with no purpose on it is a candidate for `race` only. It
+        predates the question, and every sheet stored before it was asked
+        was a race sheet - a qualifying sheet that was never labelled as
+        one has to be labelled rather than assumed.
+        """
+        wanted = [sheet for sheet in self.list_setup_sheets(car_name)
+                  if sheet.purpose == purpose
+                  or (purpose == "race" and sheet.purpose is None)]
+        return wanted[0] if wanted else None
 
     def list_setup_sheets(self, car_name: str | None = None) -> list:
         # id breaks the tie: timestamps are second-resolution, so two sheets
@@ -339,13 +354,16 @@ class Store:
     def start_session(self, event_id: int, kind: str,
                       tune_label: str | None = None,
                       setup_sheet_id: int | None = None,
-                      practice_mode: str | None = None) -> int:
+                      practice_mode: str | None = None,
+                      practice_intent: str | None = None,
+                      rehearsal: bool = False) -> int:
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO sessions (event_id, kind, tune_label, setup_sheet_id, "
-                "practice_mode, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "practice_mode, practice_intent, rehearsal, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (event_id, kind, tune_label, setup_sheet_id, practice_mode,
-                 _now()))
+                 practice_intent, int(rehearsal), _now()))
             return int(cur.lastrowid)
 
     def record_measured_clock(self, event_id: int, start_hour: float | None,
@@ -375,6 +393,13 @@ class Store:
                 "clock_source = 'measured', updated_at = ? WHERE id = ?",
                 (start_hour, multiplier, _now(), event_id))
         return True
+
+    def set_practice_intent(self, session_id: int, intent: str | None) -> None:
+        """Say what this session was for, or unsay it."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET practice_intent = ? WHERE id = ?",
+                (intent, session_id))
 
     def set_practice_mode(self, session_id: int, mode: str | None) -> None:
         """Say which kind of session this was, or unsay it.
@@ -490,7 +515,8 @@ class Store:
     def list_event_laps(self, event_id: int, kind: str = "practice") -> list[dict]:
         rows = self._query(
             "SELECT laps.*, sessions.started_at AS session_started, "
-            "       sessions.practice_mode AS practice_mode "
+            "       sessions.practice_mode AS practice_mode, "
+            "       sessions.practice_intent AS practice_intent "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? AND sessions.kind = ? "
             # `started_at` is second-resolution, so two runs begun in the same
@@ -754,6 +780,7 @@ def _setup_sheet(row: sqlite3.Row):
         performance=json.loads(row["performance_json"] or "{}"),
         build=json.loads(row["build_json"] or "{}"),
         notes=row["notes"] or "",
+        purpose=row["purpose"] if "purpose" in row.keys() else None,
         id=row["id"],
     )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QScrollArea,
     QVBoxLayout,
@@ -98,6 +99,20 @@ class RaceScreen(QWidget):
         titles.addWidget(self.subtitle)
         header.addLayout(titles, 1)
 
+        # **A full race against the AI, to rehearse the plan.** It is a race
+        # in every mechanical sense - it makes real stops under race
+        # conditions, which is the only place that evidence comes from, and
+        # it is the only way to find out whether a stint length survives
+        # traffic and a cold out-lap. It is not the league race, so the
+        # outcome post-mortem must not read it as one.
+        self.rehearsal_toggle = QCheckBox("Rehearsal against the AI")
+        self.rehearsal_toggle.setToolTip(
+            "Run the whole race to prove the plan. Everything is recorded "
+            "and the stops count as evidence, but it is filed as a rehearsal "
+            "rather than as the race itself.")
+        header.addWidget(self.rehearsal_toggle, 0,
+                         Qt.AlignmentFlag.AlignBottom)
+
         self.start_button = MarkButton("Start race", primary=True)
         self.start_button.clicked.connect(self._on_start)
         header.addWidget(self.start_button, 0, Qt.AlignmentFlag.AlignBottom)
@@ -145,6 +160,9 @@ class RaceScreen(QWidget):
         return plate
 
     # ---------------------------------------------------------------- actions
+
+    def rehearsal(self) -> bool:
+        return self.rehearsal_toggle.isChecked()
 
     def _on_start(self) -> None:
         if self._armed:

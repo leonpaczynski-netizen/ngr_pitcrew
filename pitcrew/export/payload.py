@@ -39,6 +39,16 @@ class Meta:
     packet: str
     car_category: str | None = None
     game_version: str | None = None
+    # What the running was for and where the car started, because the
+    # same lap times mean different things under each. A qualifying
+    # session judged on stint consistency is being judged on something it
+    # was never run for.
+    practice_intent: str | None = None
+    practice_mode: str | None = None
+    # A full race against the AI, run to prove the plan. Real stops under
+    # race conditions and therefore the best evidence there is - and not
+    # the league race, which a post-mortem must not mistake it for.
+    rehearsal: bool = False
     compound_front: str | None = None
     compound_rear: str | None = None
     # Every compound the session ran, in order. Present whether one was run or
@@ -66,6 +76,12 @@ class Meta:
         }
         if self.game_version:
             payload["gameVersion"] = self.game_version
+        if self.practice_intent:
+            payload["practiceIntent"] = self.practice_intent
+        if self.practice_mode:
+            payload["practiceMode"] = self.practice_mode
+        if self.rehearsal:
+            payload["rehearsal"] = True
         if self.compound_front or self.compound_rear:
             payload["compound"] = {
                 "front": self.compound_front,

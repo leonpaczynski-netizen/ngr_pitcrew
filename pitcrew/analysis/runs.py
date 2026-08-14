@@ -430,6 +430,13 @@ def fuel_implausible_laps(laps: list[LapInput],
 LOBBY = "lobby"                # in the pit box; the first lap is an out-lap
 TIME_TRIAL = "time-trial"      # on the track ahead of the line; it is not
 
+# What a session was for. Orthogonal to where the car started: a
+# qualifying simulation is usually a time trial and race running is usually
+# a lobby, but neither implies the other.
+FOR_QUALIFYING = "qualifying"
+FOR_RACE = "race"
+PRACTICE_INTENTS = (FOR_RACE, FOR_QUALIFYING)
+
 
 def auto_out_laps(laps: list[LapInput]) -> set[int]:
     """**The first lap of every run** — with one exception, and it matters.

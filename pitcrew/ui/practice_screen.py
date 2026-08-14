@@ -26,7 +26,14 @@ from PyQt6.QtWidgets import (
 )
 
 from pitcrew.analysis.gameclock import clock
-from pitcrew.analysis.runs import LOBBY, TIME_TRIAL, split_runs, starts_run
+from pitcrew.analysis.runs import (
+    FOR_QUALIFYING,
+    FOR_RACE,
+    LOBBY,
+    TIME_TRIAL,
+    split_runs,
+    starts_run,
+)
 from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
@@ -560,6 +567,7 @@ class PracticeScreen(QWidget):
     lap_changed = pyqtSignal(int)
     recording_toggled = pyqtSignal(bool)
     practice_mode_changed = pyqtSignal(str)
+    practice_intent_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -602,6 +610,25 @@ class PracticeScreen(QWidget):
         self.mode_picker.currentIndexChanged.connect(
             lambda: self.practice_mode_changed.emit(self.practice_mode()))
         header.addWidget(Field("Starting", self.mode_picker), 0,
+                         Qt.AlignmentFlag.AlignBottom)
+
+        # What the session is for. It changes nothing about which laps
+        # count and everything about what the numbers mean: a qualifying
+        # run is one lap on low fuel and fresh rubber, where degradation
+        # is noise, and race running is the opposite - the single fastest
+        # lap is the noise and the shape of the stint is the measurement.
+        self.intent_picker = QComboBox()
+        self.intent_picker.addItem("Race running", FOR_RACE)
+        self.intent_picker.addItem("Qualifying", FOR_QUALIFYING)
+        self.intent_picker.setToolTip(
+            "Race running reports the stint: consistency, degradation, "
+            "fuel per lap and what the out-lap cost.\n"
+            "Qualifying reports the one lap: the best, how close the rest "
+            "came, and the fuel it was set on.")
+        block_wheel(self.intent_picker)
+        self.intent_picker.currentIndexChanged.connect(
+            lambda: self.practice_intent_changed.emit(self.practice_intent()))
+        header.addWidget(Field("Practising", self.intent_picker), 0,
                          Qt.AlignmentFlag.AlignBottom)
 
         self.record_button = MarkButton("Start practice", primary=True)
@@ -804,9 +831,26 @@ class PracticeScreen(QWidget):
         self.spec.add("Counted", f"{len(counted)}/{len(self._rows)}")
         if times:
             self.spec.add("Best", format_lap_time(times[0]), emphasis=True)
-            self.spec.add("Median", format_lap_time(times[len(times) // 2]))
-        if burns:
-            self.spec.add("Fuel", f"{sorted(burns)[len(burns) // 2]:.2f} L/lap")
+        if self.practice_intent() == FOR_QUALIFYING:
+            # One lap is the whole measurement here, so what matters is
+            # how repeatable it was, not what the middle of the run did.
+            # A median over a qualifying run describes laps he was not
+            # trying to set a time on.
+            if len(times) > 1:
+                self.spec.add("2nd best", format_lap_time(times[1]))
+                self.spec.add("Spread",
+                              f"{(times[1] - times[0]) / 1000:.3f} s",
+                              derived=True)
+            if counted:
+                best_lap = min(counted, key=lambda row: row.lap_time_ms)
+                self.spec.add("On", f"{best_lap.fuel_start:.1f} L")
+        else:
+            if times:
+                self.spec.add("Median",
+                              format_lap_time(times[len(times) // 2]))
+            if burns:
+                self.spec.add("Fuel",
+                              f"{sorted(burns)[len(burns) // 2]:.2f} L/lap")
         untagged = [r for r in counted if not r.compound]
         if untagged:
             self.spec.add("Untagged", str(len(untagged)), derived=True)
@@ -830,6 +874,17 @@ class PracticeScreen(QWidget):
 
     def practice_mode(self) -> str:
         return self.mode_picker.currentData()
+
+    def practice_intent(self) -> str:
+        return self.intent_picker.currentData()
+
+    def set_practice_intent(self, intent: str | None) -> None:  # noqa: N802
+        index = self.intent_picker.findData(intent or FOR_RACE)
+        if index >= 0:
+            self.intent_picker.blockSignals(True)
+            self.intent_picker.setCurrentIndex(index)
+            self.intent_picker.blockSignals(False)
+            self.refresh()
 
     def set_practice_mode(self, mode: str | None) -> None:  # noqa: N802 - Qt naming
         index = self.mode_picker.findData(mode or LOBBY)

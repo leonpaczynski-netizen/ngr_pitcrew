@@ -233,6 +233,13 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
+def _session_field(session, name):
+    """A session column that may predate the row it is read from."""
+    if hasattr(session, "keys"):
+        return session[name] if name in session.keys() else None
+    return session.get(name)
+
+
 def _merged_session(sessions: list[dict]) -> dict:
     """One session record standing for the run of runs.
 
@@ -243,7 +250,7 @@ def _merged_session(sessions: list[dict]) -> dict:
     ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
     for key in ("packet_format", "car_category", "fuel_capacity_l",
-                "setup_sheet_id"):
+                "setup_sheet_id", "practice_intent", "practice_mode"):
         merged[key] = next(
             (s[key] for s in ordered if s[key] is not None), None)
     return merged
@@ -285,6 +292,9 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         # under a version that is no longer installed keeps the version it was
         # taken under - and the app's otherwise.
         game_version=event["game_version"] or game_version,
+        practice_intent=_session_field(session, "practice_intent"),
+        practice_mode=_session_field(session, "practice_mode"),
+        rehearsal=bool(_session_field(session, "rehearsal")),
         # Only where one compound was run. Several runs on several compounds
         # is not a session with a compound, and voting on the most common tag
         # made a three-compound session read as a Racing Hard one - which is
