@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QComboBox,
     QCheckBox,
     QHBoxLayout,
     QScrollArea,
@@ -24,6 +25,8 @@ from PyQt6.QtWidgets import (
 from pitcrew.race.calls import HIGH, LOW, MEDIUM
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
+    block_wheel,
+    Field,
     BodyLabel,
     Declared,
     EmptyState,
@@ -106,19 +109,60 @@ class RaceScreen(QWidget):
         titles.addWidget(self.subtitle)
         header.addLayout(titles, 1)
 
-        # **A full race against the AI, to rehearse the plan.** It is a race
-        # in every mechanical sense - it makes real stops under race
-        # conditions, which is the only place that evidence comes from, and
-        # it is the only way to find out whether a stint length survives
-        # traffic and a cold out-lap. It is not the league race, so the
-        # outcome post-mortem must not read it as one.
-        self.rehearsal_toggle = QCheckBox("Rehearsal against the AI")
-        self.rehearsal_toggle.setToolTip(
-            "Run the whole race to prove the plan. Everything is recorded "
-            "and the stops count as evidence, but it is filed as a rehearsal "
-            "rather than as the race itself.")
-        header.addWidget(self.rehearsal_toggle, 0,
-                         Qt.AlignmentFlag.AlignBottom)
+        # **Three independent choices about how this race runs**, in the
+        # same idiom the Practice screen uses for the same job. They were a
+        # single checkbox, which could only say one of the three things.
+        #
+        # A rehearsal is a race in every mechanical sense - it makes real
+        # stops under race conditions, which is the only place that evidence
+        # comes from - and it is not the league race, so the post-mortem must
+        # not read it as one.
+        self.mode_picker = QComboBox()
+        self.mode_picker.addItem("League race", False)
+        self.mode_picker.addItem("Rehearsal vs AI", True)
+        block_wheel(self.mode_picker)
+        header.addWidget(Field("Running", self.mode_picker,
+                               hint="A rehearsal is evidence, not the race"),
+                         0, Qt.AlignmentFlag.AlignBottom)
+
+        # Silent still does the work. Every call is computed, shown on this
+        # screen and written into the outcome export - it simply is not
+        # spoken, and push-to-talk is not armed. That is worth more than
+        # switching the engineer off outright: a silent run still says what
+        # it would have told him, and the post-mortem can compare that with
+        # what he actually did.
+        self.engineer_picker = QComboBox()
+        self.engineer_picker.addItem("Speaks", True)
+        self.engineer_picker.addItem("Silent", False)
+        self.engineer_picker.setToolTip(
+            "Silent still works out every call and logs it — it just does "
+            "not say it, and push-to-talk stays off. Run one silent to see "
+            "whether you reach the same decisions it does.")
+        block_wheel(self.engineer_picker)
+        header.addWidget(Field("Engineer", self.engineer_picker,
+                               hint="Silent still logs every call"),
+                         0, Qt.AlignmentFlag.AlignBottom)
+
+        # Running without the plan is how you find out what the plan is
+        # worth. The engineer falls back to fuel alone, which is what it does
+        # when no plan has ever been approved.
+        self.plan_picker = QComboBox()
+        self.plan_picker.addItem("Approved plan", True)
+        self.plan_picker.addItem("No plan", False)
+        self.plan_picker.setToolTip(
+            "Without the plan the engineer calls fuel only. Run one to find "
+            "out what the plan is actually worth.")
+        block_wheel(self.plan_picker)
+        # `activated` fires only for a choice he made; `currentIndexChanged`
+        # also fires when the app moves it. Without that distinction, forcing
+        # the picker to "No plan" while none is approved would read as him
+        # having chosen it, and approving one later would never move it back.
+        self.plan_picker.activated.connect(
+            lambda: setattr(self, "_plan_chosen_by_hand", True))
+        self._plan_chosen_by_hand = False
+        header.addWidget(Field("Strategy", self.plan_picker,
+                               hint="Fuel calls only without one"),
+                         0, Qt.AlignmentFlag.AlignBottom)
 
         self.start_button = MarkButton("Start race", primary=True)
         self.start_button.clicked.connect(self._on_start)
@@ -187,7 +231,31 @@ class RaceScreen(QWidget):
     # ---------------------------------------------------------------- actions
 
     def rehearsal(self) -> bool:
-        return self.rehearsal_toggle.isChecked()
+        return bool(self.mode_picker.currentData())
+
+    def engineer_speaks(self) -> bool:
+        return bool(self.engineer_picker.currentData())
+
+    def use_plan(self) -> bool:
+        return bool(self.plan_picker.currentData())
+
+    def set_plan_available(self, available: bool) -> None:
+        """Grey the choice out when there is no plan to make it about.
+
+        Offering "Approved plan" with none approved is a control that cannot
+        do what it says - and the screen already says "No plan armed" in its
+        subtitle, so the two would contradict each other.
+        """
+        index = self.plan_picker.findData(True)
+        item = self.plan_picker.model().item(index)
+        if item is not None:
+            item.setEnabled(available)
+        if not available:
+            self.plan_picker.setCurrentIndex(self.plan_picker.findData(False))
+        elif not self._plan_chosen_by_hand:
+            # A plan exists and he has not said otherwise, so use it. This is
+            # the state the screen was in before the choice existed.
+            self.plan_picker.setCurrentIndex(index)
 
     def _on_start(self) -> None:
         if self._armed:

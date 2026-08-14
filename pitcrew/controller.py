@@ -227,6 +227,9 @@ class PitCrewController(QObject):
         self._race_inputs = None
         self._race_burns: list[float] = []
         self._pending_replan = None
+        # Whether the engineer talks during the race in progress. True outside
+        # a race so nothing that speaks for another reason is silenced by it.
+        self._engineer_speaks = True
         self._button_probe = None
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
@@ -333,6 +336,19 @@ class PitCrewController(QObject):
         event_id = self.store.active_event_id()
         return self.store.get_event(event_id) if event_id else None
 
+    def _refresh_race_options(self, event) -> None:
+        """Say whether there is a plan for the Strategy choice to be about.
+
+        Offering "Approved plan" with none approved is a control that cannot
+        do what it says, on a screen whose subtitle would be saying the
+        opposite two inches away.
+        """
+        if self.race_screen is None:
+            return
+        approved = (self.store.get_approved_strategy(event["id"])
+                    if event else None)
+        self.race_screen.set_plan_available(approved is not None)
+
     def load_active_event(self) -> None:
         event = self.active_event()
         # The picker is refreshed either way: with no active event it is the
@@ -349,6 +365,7 @@ class PitCrewController(QObject):
             # left the plate empty on exactly the run where the division has
             # never been explained.
             self.refresh_engineer()
+            self._refresh_race_options(None)
             return
 
         sheet = None
@@ -358,6 +375,7 @@ class PitCrewController(QObject):
         self.event_screen.load(event, sheet)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
+        self._refresh_race_options(event)
         self.refresh_nav_state()
         if self.car_screen is not None and event["car_name"]:
             self.load_car(event["car_name"])
@@ -1466,6 +1484,11 @@ class PitCrewController(QObject):
         self.strategy.note(
             f"{plan.label()} approved. It is the race plan until you approve "
             "another.")
+        # The Race screen's Strategy choice is about this plan, so it has to
+        # hear that one now exists - otherwise approving a plan and going
+        # straight to Race offers a control still saying there is nothing to
+        # run to.
+        self._refresh_race_options(event)
         self.refresh_nav_state()
         return strategy_id
 
@@ -1481,7 +1504,16 @@ class PitCrewController(QObject):
                 "Create an event before racing.", warn=True)
             return False
 
+        # **Three choices, all his.** Whether this is the league race or a
+        # rehearsal, whether the engineer speaks, and whether it runs to the
+        # approved plan at all. Running without the plan is how you find out
+        # what the plan is worth; running silent is how you find out whether
+        # you reach the same decisions it does.
+        rehearsal = self.race_screen.rehearsal()
+        speaks = self.race_screen.engineer_speaks()
         approved = self.store.get_approved_strategy(event["id"])
+        if not self.race_screen.use_plan():
+            approved = None
         plan = approved["plan"] if approved else None
         try:
             inputs, _ = build_inputs(self.store, event["id"])
@@ -1506,7 +1538,6 @@ class PitCrewController(QObject):
             return False
 
         self.bridge.reset(race=True)
-        rehearsal = bool(getattr(self.race_screen, "rehearsal", lambda: False)())
         self.session_id = self.store.start_session(
             event["id"], "race", rehearsal=rehearsal)
         self.race_run_id = self.store.start_race_run(
@@ -1519,21 +1550,32 @@ class PitCrewController(QObject):
         self.listener.start()
         self._health.start()
 
-        self.voice.warm()
+        # Silent means silent, not idle: the calls are still computed, still
+        # shown on the screen and still written into the outcome export. What
+        # stops is the voice and the microphone - there is nothing to answer
+        # if nothing was asked out loud.
+        self._engineer_speaks = speaks
+        if speaks:
+            self.voice.warm()
+            self.ptt.start()
         self._race_inputs = inputs
         self._race_burns = []
         self._pending_replan = None
         self.ptt.pending_replan = None
-        self.ptt.start()
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
+
+        how = "Rehearsal armed" if rehearsal else "Armed"
+        parts = [
+            "running to the approved plan" if plan else
+            "no plan - fuel calls only",
+            "engineer speaking" if speaks else
+            "engineer silent, still logging every call",
+        ]
         self.race_screen.set_status(
-            ("Rehearsal armed. " if rehearsal else "Armed. ")
-            + ("Waiting for you to cross the line." if plan else
-               "No approved plan - the engineer will call fuel only."))
+            f"{how}: {', '.join(parts)}. Waiting for you to cross the line.")
         self.announce("Rehearsal" if rehearsal else "Race",
-                      "Armed." if plan else "No plan - fuel calls only.",
-                      warn=not plan)
+                      " · ".join(parts), warn=not plan)
         return True
 
     def stop_race(self) -> None:
@@ -1563,7 +1605,8 @@ class PitCrewController(QObject):
         if call is None:
             return
 
-        self.voice.say(call.spoken())
+        if self._engineer_speaks:
+            self.voice.say(call.spoken())
         self.ptt.last_call = call.spoken()
         if self.race_screen is not None:
             self.race_screen.show_call(call)
@@ -1658,7 +1701,8 @@ class PitCrewController(QObject):
         self._pending_replan = verdict
         self.ptt.pending_replan = verdict.call()
         text = f"{verdict.call()} {verdict.reason}."
-        self.voice.say(text)
+        if self._engineer_speaks:
+            self.voice.say(text)
         self.last_call = text
         self.ptt.last_call = text
         if self.race_screen is not None:
