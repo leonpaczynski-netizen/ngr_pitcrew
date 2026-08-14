@@ -802,6 +802,18 @@ def _build_outcome(context: ctx.PromptContext, report: DriverReport,
     lines.add(f"**{context.car} @ {context.circuit_name}** · "
               f"{SESSION_NAMES['race']} · {_session_date(context, today)}")
     lines.add("")
+    # **A post-mortem with no race in it can only be invented.** The body says
+    # "nothing was recorded" honestly enough, but this is the one prompt whose
+    # entire job is to explain what happened, and asking that of an empty
+    # session is asking for a plausible answer rather than a true one. Said
+    # out loud, at the top and in the warnings, so it is a decision to send it
+    # rather than an accident.
+    if not context.laps:
+        lines.add(template["noRace"], "")
+        warnings.append(
+            "no race laps are recorded against this event, so there is "
+            "nothing to write a post-mortem from - send the refinement "
+            "prompt instead, or record the race first")
     if gearing.get("matchesSheet") is False:
         # Said once, at the top: it invalidates most of the diagnosis and must
         # not be buried in a JSON blob further down.

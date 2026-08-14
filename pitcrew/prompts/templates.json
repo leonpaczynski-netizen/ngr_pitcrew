@@ -151,6 +151,7 @@
     "requiredEmphasis": "Item 5 is why this prompt exists. Do not fold it into the post-mortem — state it separately, so it can be filed.",
     "hierarchy": "Respect the change hierarchy — change the fewest things that will fix it, and where two changes are coupled, say so rather than shipping both silently.",
     "footer": "*Generated {date} · {baseline} · {promptVersion}*",
-    "returnLeadExtra": "This is a post-mortem, so the sheets are for the *next* running of this combination. Tag them the same way."
+    "returnLeadExtra": "This is a post-mortem, so the sheets are for the *next* running of this combination. Tag them the same way.",
+    "noRace": "**No race was recorded for this event.** There are no laps, no stops and no calls to review, so there is nothing here to diagnose against. Do not reconstruct what probably happened - say what you would need recorded to answer this properly, and stop there."
   }
 }

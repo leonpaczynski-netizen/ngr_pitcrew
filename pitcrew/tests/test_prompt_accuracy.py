@@ -152,3 +152,16 @@ def _reading(**fields):
                 stopped_at_hour=None, laps_sampled=40, note="")
     base.update(fields)
     return ClockReading(**base)
+
+
+# ------------------------------------------------- a prompt that cannot answer
+
+def test_a_post_mortem_with_no_race_says_so_loudly(store, practice_event):
+    """This is the one prompt whose entire job is to explain what happened.
+    Asking that of an empty session is asking for a plausible answer rather
+    than a true one."""
+    prompt = a_prompt(store, practice_event, OUTCOME)
+    assert any("nothing to write a post-mortem from" in warning
+               for warning in prompt.warnings)
+    assert "No race was recorded for this event" in prompt.text
+    assert "Do not reconstruct what probably happened" in prompt.text
