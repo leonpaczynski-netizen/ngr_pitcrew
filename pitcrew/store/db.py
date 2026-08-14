@@ -453,6 +453,28 @@ class Store:
             (event_id, kind))
         return [dict(r) for r in rows]
 
+    # Columns `set_lap_flags` is allowed to touch. A whitelist rather than a
+    # free-form update because the caller builds the column names, and the one
+    # caller is a tool that rewrites laps in bulk.
+    LAP_FLAGS = ("is_pit_lap", "is_out_lap", "tyres_changed", "fuel_added_l")
+
+    def set_lap_flags(self, lap_id: int, **values) -> None:
+        """Set what re-reading a stored lap's frames found.
+
+        Kept apart from the per-mark setters above because this writes what the
+        *app* worked out, in bulk, over sessions recorded before it could work
+        it out. Nothing the driver entered is reachable from here.
+        """
+        unknown = set(values) - set(self.LAP_FLAGS)
+        if unknown:
+            raise ValueError(f"not a lap flag: {', '.join(sorted(unknown))}")
+        if not values:
+            return
+        assignments = ", ".join(f"{name} = ?" for name in values)
+        with self._write() as conn:
+            conn.execute(f"UPDATE laps SET {assignments} WHERE id = ?",
+                         (*values.values(), lap_id))
+
     def set_lap_compound(self, lap_id: int, compound: str | None) -> None:
         with self._write() as conn:
             conn.execute("UPDATE laps SET compound = ? WHERE id = ?", (compound, lap_id))
