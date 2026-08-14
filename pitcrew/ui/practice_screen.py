@@ -19,6 +19,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QFrame,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -62,6 +63,7 @@ W_COMPOUND = 104
 W_SET_ON = 118
 W_WEAR = TyreGauge.WIDTH * 2 + 4      # two gauges wide, plus the gap between
 W_ACTION = 104
+HEAD_HEIGHT = 30
 # Everything from the compound picker rightward, so the strike can stop before
 # it: three controls, two gaps between them, and the row's right margin.
 CONTROLS_WIDTH = (W_COMPOUND + W_SET_ON + W_WEAR + W_ACTION
@@ -475,17 +477,54 @@ class PracticeScreen(QWidget):
         plate.body.setContentsMargins(1, 26, 1, 1)
         plate.body.setSpacing(0)
 
-        plate.body.addWidget(self._column_heads())
+        # The heads ride in their own viewport, scrolled sideways in step with
+        # the rows below and never vertically. They used to sit outside the
+        # scroll area entirely, which is why the rack refused a horizontal
+        # scrollbar: a bar would have slid the rows out from under their own
+        # headings. That refusal was safe only while the claim below it held.
+        self.head_view = QScrollArea()
+        self.head_view.setWidgetResizable(True)
+        self.head_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.head_view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.head_view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.head_view.setWidget(self._column_heads())
+        self.head_view.setFixedHeight(HEAD_HEIGHT)
+
+        # The rows lose the width of a vertical scrollbar and the heads do
+        # not, so without this the two viewports measure differently and the
+        # headings stop a dozen pixels short of their own columns at the far
+        # right of a sideways scroll. Reserved rather than measured, and the
+        # rows' bar is held on so the reservation is always right: a rack with
+        # two laps in it showing a disabled scrollbar is a smaller cost than
+        # headings that drift out of line with the columns under them.
+        heads = QWidget()
+        heads_row = QHBoxLayout(heads)
+        heads_row.setContentsMargins(0, 0, 0, 0)
+        heads_row.setSpacing(0)
+        heads_row.addWidget(self.head_view, 1)
+        gutter = QWidget()
+        gutter.setFixedWidth(theme.SCROLLBAR_WIDTH)
+        gutter.setStyleSheet(f"background: {theme.SHOULDER};")
+        heads_row.addWidget(gutter)
+        plate.body.addWidget(heads)
 
         self.scroller = QScrollArea()
         self.scroller.setWidgetResizable(True)
-        # AlwaysOff here on purpose, where the other panes are AsNeeded: the
-        # column heads sit outside this scroll area, so a horizontal bar would
-        # slide the rows out from under their own headings. The rack's columns
-        # are fixed width and set the window's own minimum, so it can never be
-        # given less than it needs anyway.
+        # **AsNeeded, not AlwaysOff.** The comment that used to sit here said
+        # the rack's fixed columns set the window's own minimum "so it can
+        # never be given less than it needs anyway". The window was resized to
+        # 1600x1000 unconditionally, and one of this driver's displays gives
+        # 1280x752 -- so it was given less than it needed on every single
+        # session, and with the bar switched off there was no way to reach the
+        # part that had been cut off.
         self.scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroller.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.scroller.horizontalScrollBar().valueChanged.connect(
+            self.head_view.horizontalScrollBar().setValue)
 
         self.rack = QWidget()
         self.rack_layout = QVBoxLayout(self.rack)
@@ -499,7 +538,7 @@ class PracticeScreen(QWidget):
 
     def _column_heads(self) -> QWidget:
         head = QWidget()
-        head.setFixedHeight(30)
+        head.setFixedHeight(HEAD_HEIGHT)
         head.setStyleSheet(f"background: {theme.SHOULDER};")
         row = QHBoxLayout(head)
         row.setContentsMargins(0, 0, 16, 0)

@@ -206,6 +206,10 @@ DATA_LARGE_PX = 23
 
 # Tight groups, generous separation.
 GAP_TIGHT = 6
+# Width the stylesheet gives a scrollbar. Named because a layout that has to
+# line up either side of one needs to reserve exactly this and not guess.
+SCROLLBAR_WIDTH = 12
+
 GAP = 12
 GAP_WIDE = 22
 GAP_SECTION = 34
@@ -235,9 +239,21 @@ QScrollArea, QScrollArea > QWidget > QWidget {{
 
 QScrollBar:vertical {{
     background: {RUBBER_DEEP};
-    width: 12px;
+    width: {SCROLLBAR_WIDTH}px;
     margin: 0;
 }}
+QScrollBar:horizontal {{
+    background: {RUBBER_DEEP};
+    height: {SCROLLBAR_WIDTH}px;
+    margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {TREAD};
+    min-width: 40px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {TREAD_LIGHT}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
 QScrollBar::handle:vertical {{
     background: {TREAD};
     min-height: 40px;

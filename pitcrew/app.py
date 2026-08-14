@@ -34,7 +34,15 @@ from pitcrew.ui.settings_screen import SettingsScreen
 from pitcrew.ui.strategy_screen import StrategyScreen
 from pitcrew.ui.widgets import Rule, StencilLabel
 
+# The size the app wants, not the size it takes. `fit_to_screen` clamps it to
+# whatever the display it opens on will actually give.
 WINDOW = (1600, 1000)
+
+# Below this the rack cannot show its columns and starts scrolling sideways
+# instead. It is a floor on the *window*, not on the layout: the layout has to
+# survive being given less than it wants, because a display can be smaller
+# than this and refusing to open is not an answer.
+MIN_WINDOW = (900, 560)
 
 # The rail, grouped by the job each screen belongs to. Two loops run through
 # this app and they are not the same work: PREPARE/LEARN is the setup loop
@@ -227,11 +235,36 @@ class NavRail(QWidget):
                 f"background: transparent;")
 
 
+def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
+    """The requested size, clipped to what the screen will actually show.
+
+    The app asked for 1600x1000 unconditionally. One of this driver's three
+    displays is a 1280x800 desktop at 150% scaling with a 752 px working area
+    once the taskbar is taken out, so the window was 320 px wider and 248 px
+    taller than the screen it opened on. Everything past the edge was simply
+    gone -- which is the whole of "the formatting is corrupt, and it is off
+    horizontally on every screen".
+
+    Clamped against `availableGeometry`, which is the work area rather than
+    the panel, so the taskbar is already accounted for.
+    """
+    screen = widget.screen() if hasattr(widget, "screen") else None
+    if screen is None:
+        return width, height
+    available = screen.availableGeometry()
+    # A little room for the frame, which `availableGeometry` does not know
+    # about: a window sized to the exact work area opens with its title bar
+    # off the top on Windows.
+    return (min(width, max(MIN_WINDOW[0], available.width() - 20)),
+            min(height, max(MIN_WINDOW[1], available.height() - 60)))
+
+
 class PitCrewWindow(QMainWindow):
     def __init__(self, store: Store, *, port: int = DEFAULT_PORT) -> None:
         super().__init__()
         self.setWindowTitle("Next Gear Racing Pit Crew")
-        self.resize(*WINDOW)
+        self.setMinimumSize(*MIN_WINDOW)
+        self.resize(*fit_to_screen(self, *WINDOW))
         if ICON.exists():
             self.setWindowIcon(QIcon(str(ICON)))
 
