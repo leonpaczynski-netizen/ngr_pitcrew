@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -365,6 +365,15 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("tod_start_ms", "INTEGER"),
         ("tod_end_ms", "INTEGER"),
         ("standing_start_ms", "INTEGER"),
+        # What the frames of this lap showed, taken once at capture: the
+        # longest unbroken spell below walking pace, off the road, and
+        # rotating. Three numbers instead of a 400 KB decode, so the lap rack
+        # can say which laps had something happen in them without reading a
+        # single blob. Null on a lap whose frames were never captured, which
+        # is not the same as a lap where nothing happened.
+        ("crawl_s", "REAL"),
+        ("off_track_s", "REAL"),
+        ("spin_s", "REAL"),
     ),
     "sessions": (
         # **Which kind of practice this was**, because it decides whether the
@@ -490,8 +499,49 @@ def _migrate_v4_lap_clock(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM track_clock")
 
 
+def _migrate_v5_incident_evidence(conn: sqlite3.Connection) -> None:
+    """Read the off-and-spin evidence out of every stored lap, once.
+
+    Same reasoning as v4: a question the lap rack asks on every redraw cannot
+    be answered by decompressing a 400 KB buffer per row. Three numbers per
+    lap, taken once here for laps recorded before the columns existed.
+
+    A lap whose frames are absent, or whose blob will not decode, is left null
+    rather than zeroed. Null means the lap was never measured; zero would mean
+    it was measured and nothing happened, and an incident detector that reads
+    the first as the second silently clears every lap it cannot see.
+    """
+    columns = _columns(conn, "laps")
+    if "crawl_s" not in columns:
+        return
+
+    pending = conn.execute(
+        "SELECT l.id, f.sample_hz FROM laps l JOIN lap_frames f ON f.lap_id = l.id "
+        "WHERE l.crawl_s IS NULL").fetchall()
+    if not pending:
+        return
+
+    from pitcrew.analysis.incidents import read_evidence
+    from pitcrew.telemetry.recorder import decode_frames
+
+    for lap_id, sample_hz in pending:
+        row = conn.execute(
+            "SELECT blob FROM lap_frames WHERE lap_id = ?", (lap_id,)).fetchone()
+        if row is None:
+            continue
+        try:
+            frames = decode_frames(row[0])
+        except Exception:               # noqa: BLE001 - a bad blob is not fatal
+            continue
+        seen = read_evidence(frames, sample_hz or 60.0)
+        conn.execute(
+            "UPDATE laps SET crawl_s = ?, off_track_s = ?, spin_s = ? WHERE id = ?",
+            (seen.crawl_s, seen.off_track_s, seen.spin_s, lap_id))
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
     4: ("the game clock onto the lap, and the readings taken through a keyhole",
         _migrate_v4_lap_clock),
+    5: ("the off-and-spin evidence onto the lap", _migrate_v5_incident_evidence),
 }

@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from statistics import median
 
 from pitcrew.analysis import thresholds
+from pitcrew.analysis.incidents import REASON_INCIDENT
 from pitcrew.analysis.session import LapInput
 
 # The tank rising by more than this between the end of one lap and the start of
@@ -427,7 +428,7 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
 # other five is that it should be the rare one. Eight identical "struck by
 # hand" notes carry no information; four of the eight in the 11 Aug session
 # were out-laps the refuel boundary names for free.
-EXCLUSION_REASONS = (REASON_OUT_LAP, REASON_IN_LAP, "incident", "traffic",
+EXCLUSION_REASONS = (REASON_OUT_LAP, REASON_IN_LAP, REASON_INCIDENT, "traffic",
                      REASON_FUEL_IMPLAUSIBLE, REASON_MANUAL)
 
 
@@ -489,6 +490,11 @@ def _reason_for(lap: LapInput, implausible: set[int],
         return REASON_OUT_LAP, SOURCE_AUTO
     if lap.is_pit_lap:
         return REASON_IN_LAP, SOURCE_AUTO
+    # Ahead of the driver's own strike, so a lap he struck *and* the frames
+    # explain reads as the explanation rather than as an unexplained mark.
+    # His note survives either way - `_driver_note` carries it separately.
+    if lap.incident:
+        return REASON_INCIDENT, SOURCE_AUTO
     if lap.lap_num in implausible:
         return REASON_FUEL_IMPLAUSIBLE, SOURCE_AUTO
     if lap.lap_num in out_laps:

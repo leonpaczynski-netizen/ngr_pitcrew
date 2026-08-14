@@ -79,11 +79,41 @@ class LapInput:
     standing_start_ms: int | None = None
     # `lobby` or `time-trial`, from the session this lap belongs to.
     practice_mode: str | None = None
+    # **Something happened on this lap** — it lost time and the frames say
+    # why. It leaves the counted set, because a spin averaged into a stint
+    # invents degradation that never happened, and it stays in the diagnostic
+    # set, because the car is what spun. See `analysis/incidents`.
+    incident: bool = False
+    incident_note: str | None = None
+    # The three numbers `analysis.incidents` needs, taken once at capture so
+    # no frame blob has to be decoded to ask whether a lap had an off in it.
+    # None where the lap's frames were never captured.
+    crawl_s: float | None = None
+    off_track_s: float | None = None
+    spin_s: float | None = None
     frames: list[dict] | None = None
 
     @property
     def counted(self) -> bool:
-        """Out-laps, in-laps and anything the driver excluded do not count."""
+        """What pace, fuel and the strategy model are allowed to read.
+
+        Out-laps, in-laps, anything the driver excluded, and any lap with an
+        incident in it. Deliberately narrower than `diagnostic`: a lap with a
+        spin in it is worthless as a pace sample and valuable as evidence
+        about the car, and those two facts need different sets.
+        """
+        return not (self.excluded or self.is_out_lap or self.is_pit_lap
+                    or self.incident)
+
+    @property
+    def diagnostic(self) -> bool:
+        """What the corner aggregates are allowed to read.
+
+        Wider than `counted` by exactly the incident laps. He asked for them
+        out of strategy and kept for setup advice, and both halves are right:
+        the car is what spun, so the lap where it spun is the lap that says
+        so.
+        """
         return not (self.excluded or self.is_out_lap or self.is_pit_lap)
 
     @property
@@ -185,6 +215,11 @@ def lap_export(lap: LapInput) -> dict:
 
 def counted_laps(laps: list[LapInput]) -> list[LapInput]:
     return [lap for lap in laps if lap.counted]
+
+
+def diagnostic_laps(laps: list[LapInput]) -> list[LapInput]:
+    """Laps the corner aggregates may read — `counted` plus the incidents."""
+    return [lap for lap in laps if lap.diagnostic]
 
 
 def green_lap_reference_ms(laps: list[LapInput]) -> int | None:

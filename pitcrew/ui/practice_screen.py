@@ -121,6 +121,13 @@ class LapRow:
     # This lap's number within its own session, as opposed to the display
     # number that runs through the whole event.
     lap_num_in_session: int = 0
+    # Something happened on this lap and the frames say what. Out of the pace
+    # and fuel numbers, kept for the corner aggregates — the car is what spun.
+    incident: bool = False
+    incident_note: str | None = None
+    crawl_s: float | None = None
+    off_track_s: float | None = None
+    spin_s: float | None = None
 
     @property
     def counted(self) -> bool:
@@ -131,6 +138,8 @@ class LapRow:
             return "out-lap"
         if self.is_pit_lap:
             return "in-lap"
+        if self.incident:
+            return "incident"
         return None
 
     @property
@@ -327,6 +336,8 @@ class RackRow(QWidget):
         marker = self.row.structural_reason()
         self.marker_label = StencilLabel(marker or "", size=11,
                                          colour=theme.STENCIL_DIM, tracking=10.0)
+        if self.row.incident_note:
+            self.marker_label.setToolTip(self.row.incident_note)
         self.marker_label.setFixedWidth(W_MARKER)
         line.addWidget(self.marker_label)
 

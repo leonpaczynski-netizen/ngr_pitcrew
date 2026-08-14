@@ -18,9 +18,16 @@ from pitcrew.analysis.corners import (
 from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
 from pitcrew.analysis.runs import classify_exclusions, runs_export, split_runs
+from pitcrew.analysis.incidents import (
+    as_export as incidents_export,
+    find_incidents,
+    stored_or_read,
+    thresholds_export as incident_thresholds,
+)
 from pitcrew.analysis.session import (
     LapInput,
     counted_laps,
+    diagnostic_laps,
     exclusion_note,
     lap_export,
     session_export,
@@ -76,6 +83,21 @@ def event_lap_inputs(store, event_id: int, kind: str = "practice", *,
     return [replace(lap, lap_num=index) for index, lap in enumerate(laps, 1)]
 
 
+def mark_incidents(laps: list[LapInput]) -> tuple[list[LapInput], dict]:
+    """Find the laps with an off or a spin in them and mark them in place.
+
+    Only laps whose frames were decoded can be judged. A lap without them is
+    left alone rather than assumed clean — not measured is not the same as
+    nothing happened, and the export says which by carrying the sample count.
+    """
+    incidents = find_incidents(laps, stored_or_read)
+    marked = [replace(lap, incident=True,
+                      incident_note=incidents[lap.lap_num].describe())
+              if lap.lap_num in incidents else lap
+              for lap in laps]
+    return marked, incidents
+
+
 def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapInput]:
     out = []
     for row in rows:
@@ -108,6 +130,9 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             tod_end_ms=_column(row, "tod_end_ms"),
             standing_start_ms=_column(row, "standing_start_ms"),
             practice_mode=_column(row, "practice_mode"),
+            crawl_s=_column(row, "crawl_s"),
+            off_track_s=_column(row, "off_track_s"),
+            spin_s=_column(row, "spin_s"),
         ))
     return out
 
@@ -231,8 +256,16 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     # Applied before anything is aggregated, so `lapsCounted`, `bestLapMs`,
     # the wear rates and the gearing all see one set of counted laps rather
     # than each deciding for itself which laps were real.
+    # **Incidents first, then the classification.** The classifier has to
+    # know which laps had something happen in order to name the reason, and
+    # nothing may take a median before the 28-second spin has left the set it
+    # would be taken from. Marking is a separate pass rather than a second
+    # classify: running the classifier twice rewrites `exclusionReason` in
+    # place and the driver's own words - "spun at T4" - do not survive it.
+    laps, incidents = mark_incidents(laps)
     laps = classify_exclusions(laps, session["fuel_capacity_l"])
     counted = counted_laps(laps)
+    diagnostic = diagnostic_laps(laps)
     runs = split_runs(laps)
 
     codes = _compounds_run(runs)
@@ -263,8 +296,11 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     corners = None
     reference = _reference_frames(laps)
     model = resolve_corner_model(store, event["track"], event["layout"], reference)
+    # The **diagnostic** set, not the counted one. A lap with a spin in it is
+    # out of the pace and fuel numbers and stays in the corner aggregates,
+    # because the car is what spun.
     counted_with_frames = [CountedLap(lap.lap_num, lap.frames)
-                           for lap in counted if lap.frames]
+                           for lap in diagnostic if lap.frames]
     bottoming_ref = None
     if model is not None and counted_with_frames:
         meta.corner_model = model.as_meta()
@@ -312,7 +348,15 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         wear=wear,
         gearing=gearing,
         strategy=strategy,
-        derived=Derived(thresholds.as_export(), bottoming_ref_mm=bottoming_ref),
+        derived=Derived(
+            {**thresholds.as_export(), **incident_thresholds()},
+            bottoming_ref_mm=bottoming_ref,
+            # Named, with what was seen on each. A lap dropped from the pace
+            # numbers with no reason attached is indistinguishable from one
+            # that was never driven, and the reader has to be able to tell an
+            # excluded lap from a missing one.
+            extra=({"incidents": incidents_export(incidents)}
+                   if incidents else {})),
         notes=all_notes,
     )
 

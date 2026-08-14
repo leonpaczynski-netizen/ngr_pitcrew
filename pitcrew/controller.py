@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic as _monotonic
 
@@ -21,6 +22,11 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from pitcrew import settings
+from pitcrew.analysis.incidents import (
+    find_incidents,
+    read_rows,
+    stored_or_read,
+)
 from pitcrew.analysis.runs import auto_out_laps
 from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
@@ -46,6 +52,7 @@ from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.listener import UDPListener, probe_port
 from pitcrew.telemetry.capture import CaptureWriter
+from pitcrew.telemetry.recorder import FRAME_FIELDS
 from pitcrew.telemetry.packet import packet_format_for, parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
 from pitcrew.telemetry.session_state import (
@@ -1018,6 +1025,14 @@ class PitCrewController(QObject):
         if self.session_id is None:
             return
         frames = self.bridge.recorder.encode(rows)
+        if frames is not None:
+            # Taken while the rows are still uncompressed and in hand. The
+            # alternative is decoding the blob back out every time the rack
+            # redraws, which it does on every mark he makes.
+            seen = read_rows(rows, FRAME_FIELDS, frames.sample_hz)
+            frames = replace(frames, crawl_s=seen.crawl_s,
+                             off_track_s=seen.off_track_s,
+                             spin_s=seen.spin_s)
         try:
             lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
         except sqlite3.Error:
@@ -1117,6 +1132,9 @@ class PitCrewController(QObject):
                 session_started=row["session_started"],
                 practice_mode=self._column(row, "practice_mode"),
                 lap_num_in_session=row["lap_num"],
+                crawl_s=self._column(row, "crawl_s"),
+                off_track_s=self._column(row, "off_track_s"),
+                spin_s=self._column(row, "spin_s"),
             )
             for index, row in enumerate(stored, 1)
         ]
@@ -1130,6 +1148,15 @@ class PitCrewController(QObject):
         for row in rows:
             if row.lap_num in auto_out_laps(rows):
                 row.is_out_lap = True
+
+        # Incidents after the out-laps, because an out-lap loses time it is
+        # supposed to lose and must not be judged for it. Answered from the
+        # three stored numbers, so no frame blob is decoded to draw the rack.
+        for lap_num, incident in find_incidents(rows, stored_or_read).items():
+            for row in rows:
+                if row.lap_num == lap_num:
+                    row.incident = True
+                    row.incident_note = incident.describe()
         return rows
 
     def _report_health(self) -> None:

@@ -143,6 +143,12 @@ class LapFrames:
     # in between. It corroborates the driver's declaration; it never overrules
     # it.
     standing_start_ms: int | None = None
+    # Set by the caller from `analysis.incidents.read_rows` while the rows are
+    # still uncompressed. Not computed here: the recorder is the bottom of the
+    # stack and the analysis layer sits above it.
+    crawl_s: float | None = None
+    off_track_s: float | None = None
+    spin_s: float | None = None
 
     @property
     def size_bytes(self) -> int:
