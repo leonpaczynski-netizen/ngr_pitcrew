@@ -47,13 +47,25 @@ SPEECH_BACKENDS = (SPEECH_SAPI, SPEECH_MOONSHINE)
 # and mean nothing to the person choosing.
 SENSITIVITIES = ("low", "medium", "high")
 
-# Where the packets arrive. SimHub decrypts GT7's Salsa20 stream and relays it
-# here, so this app never heartbeats the PS5 itself and never needs the
-# console's address to *receive* - it binds and listens.
+# **Where the packets arrive, and who does the asking.**
 #
-# 33741 is SimHub's relay port, not GT7's own pair (heartbeat to 33739, receive
-# on 33740). It was hard-coded, which is fine right up until SimHub's config
-# changes or something else on the machine takes the port.
+# `simhub` - SimHub talks to the console and re-broadcasts GT7's raw
+# encrypted packets to a local port. This app binds and listens; it sends
+# nothing and does not need the console's address to receive.
+#
+# `ps5` - this app talks to the console itself. GT7 streams to nobody until
+# it is asked and stops when the asking stops, so the listener heartbeats it
+# on a timer and receives on GT7's own stream port. Decryption is identical
+# either way: SimHub relays the encrypted bytes rather than decoding them, so
+# `telemetry/packet.py` has always done the Salsa20 work.
+FEED_SIMHUB = "simhub"
+FEED_PS5 = "ps5"
+FEED_SOURCES = (FEED_SIMHUB, FEED_PS5)
+
+# 33741 is SimHub's relay port. GT7's own pair is a heartbeat to 33739 and
+# the stream back on 33740, which is what direct mode uses - see
+# `telemetry/listener.py`, and CLAUDE.md 3.1 on why the pair is checked by a
+# self-test rather than trusted.
 DEFAULT_UDP_PORT = 33741
 
 
@@ -69,6 +81,13 @@ class Settings:
     # without it, a foreign packet reaches the parser, fails to decode, and
     # shows up as a decode-error count rather than as what it is.
     udp_source_ip: str = ""
+
+    # Which of the two above. The address box that was already here is an
+    # accept-filter on inbound packets, not a destination - which is why
+    # setting it never made a console start streaming. `ps5_ip` is the
+    # destination, and it is only read in direct mode.
+    feed_source: str = FEED_SIMHUB
+    ps5_ip: str = ""
 
     # **The GT7 version every measurement is filed against.** GT7 rewrote its
     # physics, tyre model and geometry in 1.49 and again in 1.55, so a figure

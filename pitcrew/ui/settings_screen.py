@@ -31,6 +31,8 @@ from PyQt6.QtWidgets import (
 )
 
 from pitcrew.settings import (
+    FEED_PS5,
+    FEED_SIMHUB,
     COMMON_KEYS,
     DEFAULT_UDP_PORT,
     RPM_FROM_GT7,
@@ -121,6 +123,27 @@ class SettingsScreen(QWidget):
             "something else on this machine takes the port.",
             size=13, colour=theme.STENCIL_DIM))
 
+        # Which of the two sources. Direct removes SimHub from the chain
+        # entirely; the decryption has always been in this app, because
+        # SimHub relays the encrypted bytes rather than decoding them.
+        self.feed_source = QComboBox()
+        self.feed_source.addItem("SimHub relay", FEED_SIMHUB)
+        self.feed_source.addItem("PS5 direct", FEED_PS5)
+        self.feed_source.currentIndexChanged.connect(self._sync_feed_source)
+        block_wheel(self.feed_source)
+        plate.body.addWidget(Field(
+            "Source", self.feed_source,
+            hint="Direct asks the console itself and needs no SimHub. It "
+                 "uses GT7's own ports, so the port below is ignored."))
+
+        self.ps5_ip = QLineEdit()
+        self.ps5_ip.setPlaceholderText("192.168.1.20")
+        self.ps5_field = Field(
+            "PS5 address", self.ps5_ip,
+            hint="The console's address on this network. GT7 streams only "
+                 "to an address that has asked it to, on a timer.")
+        plate.body.addWidget(self.ps5_field)
+
         self.udp_port = QSpinBox()
         self.udp_port.setRange(1024, 65535)
         self.udp_port.setGroupSeparatorShown(False)
@@ -154,7 +177,13 @@ class SettingsScreen(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
-        self.test_feed_button = MarkButton("Test the port", compact=True)
+        self.test_feed_button = MarkButton("Test the feed", compact=True)
+        self.test_feed_button.setToolTip(
+            "Opens the socket for real, asks the console if asking is "
+            "required, and reports what actually decoded. A port that "
+            "binds proves nothing on its own - a wrong port pair, an "
+            "unasked console and a game sitting in the menus all look "
+            "identical from here.")
         self.test_feed_button.clicked.connect(self.test_feed_requested.emit)
         row.addWidget(self.test_feed_button)
         row.addStretch(1)
@@ -342,6 +371,10 @@ class SettingsScreen(QWidget):
     def load(self, settings: Settings) -> None:
         self.udp_port.setValue(settings.udp_port)
         self.udp_source_ip.setText(settings.udp_source_ip)
+        index = self.feed_source.findData(settings.feed_source)
+        self.feed_source.setCurrentIndex(max(0, index))
+        self.ps5_ip.setText(settings.ps5_ip)
+        self._sync_feed_source()
         self.game_version.setText(settings.game_version)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
@@ -355,10 +388,21 @@ class SettingsScreen(QWidget):
         self.noise_w_scale.setValue(settings.voice_noise_w_scale)
         self._sync_rpm_enabled()
 
+    def _sync_feed_source(self) -> None:
+        """Show the address box only where it is read.
+
+        In relay mode it is not a destination and never was, and leaving
+        it enabled is how somebody comes to believe the app already talks
+        to the console.
+        """
+        self.ps5_field.setVisible(self.feed_source.currentData() == FEED_PS5)
+
     def values(self) -> Settings:
         return Settings(
             udp_port=self.udp_port.value(),
             udp_source_ip=self.udp_source_ip.text().strip(),
+            feed_source=self.feed_source.currentData(),
+            ps5_ip=self.ps5_ip.text().strip(),
             game_version=self.game_version.text().strip() or "1.70",
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),

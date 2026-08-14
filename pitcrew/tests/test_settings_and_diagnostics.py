@@ -137,11 +137,19 @@ def test_an_explicit_port_still_wins_over_the_setting(store, qt_app):
         controller.shutdown()
 
 
-def test_the_port_test_says_whether_it_can_bind(wired):
+def test_a_port_that_binds_and_receives_nothing_is_not_a_working_feed(wired):
+    """It used to report success here, and that is the failure mode
+    CLAUDE.md 7 is about.
+
+    A free port proves only that a port is free. A wrong port pair, a
+    console nobody has asked, and a game sitting in the menus all bind
+    cleanly and deliver nothing, and calling that "the feed is fine" is
+    how a stream of zeros gets as far as a setup recommendation.
+    """
     controller, screen, _ = wired
     screen.load(Settings(udp_port=39871))
-    assert controller.test_feed() is True
-    assert "is free" in screen.feed_note.text()
+    assert controller.test_feed(listen_s=0.3) is False
+    assert "Nothing arrived" in screen.feed_note.text()
 
 
 def test_the_port_test_fails_loudly_when_something_holds_the_port(wired):
@@ -155,7 +163,7 @@ def test_the_port_test_fails_loudly_when_something_holds_the_port(wired):
     taken = holder.getsockname()[1]
     try:
         screen.load(Settings(udp_port=taken))
-        assert controller.test_feed() is False
+        assert controller.test_feed(listen_s=0.3) is False
         assert "will not open" in screen.feed_note.text()
     finally:
         holder.close()

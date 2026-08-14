@@ -22,6 +22,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from pitcrew import settings
+from pitcrew.settings import FEED_PS5
 from pitcrew.analysis.gameclock import clock, read_clock
 from pitcrew.analysis.incidents import (
     find_incidents,
@@ -51,7 +52,12 @@ from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.replan import assess, observed_fuel_per_lap
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
-from pitcrew.telemetry.listener import UDPListener, probe_port
+from pitcrew.telemetry.selftest import LISTEN_S, check_feed
+from pitcrew.telemetry.listener import (
+    GT7_STREAM_PORT,
+    UDPListener,
+    probe_port,
+)
 from pitcrew.telemetry.capture import CaptureWriter
 from pitcrew.telemetry.recorder import FRAME_FIELDS
 from pitcrew.telemetry.packet import packet_format_for, parse_packet
@@ -678,7 +684,7 @@ class PitCrewController(QObject):
             f"{summary['packets']} packets, format "
             f"{'/'.join(summary['formats'])}, written to {summary['path']}.")
 
-    def test_feed(self) -> bool:
+    def test_feed(self, listen_s: float = LISTEN_S) -> bool:
         """Can the port actually be opened, and is anything on it?
 
         Tested against the value in the boxes rather than the saved one, so
@@ -697,19 +703,28 @@ class PitCrewController(QObject):
                 f"{self.listener.total_received} packets so far.")
             return True
 
-        reason = probe_port(wanted.udp_port)
-        if reason:
+        # **Not a port probe.** A free port proves nothing: a wrong port
+        # pair, a console nobody has asked, and a game sitting in the
+        # menus all bind cleanly and deliver nothing. This opens the
+        # socket, sends real heartbeats where they are required, and says
+        # what decoded - CLAUDE.md 7, the connection fails loudly.
+        direct = (wanted.feed_source == FEED_PS5
+                  and bool(wanted.ps5_ip.strip()))
+        if wanted.feed_source == FEED_PS5 and not wanted.ps5_ip.strip():
             self.settings_screen.note_feed(
-                f"Port {wanted.udp_port} will not open: {reason}. Nothing "
-                f"would arrive on it. Another copy of Pit Crew, or another "
-                f"program, is holding it.", warn=True)
+                "Direct mode needs the console's address. Without it "
+                "there is nothing to send a heartbeat to, and GT7 streams "
+                "only to an address that has asked it.", warn=True)
             return False
-        self.settings_screen.note_feed(
-            f"Port {wanted.udp_port} is free and this app can bind it. "
-            f"Whether GT7 and SimHub are actually sending to it only shows "
-            f"once you start practice."
-            + (f" Packets from anything other than {wanted.udp_source_ip} "
-               f"will be refused." if wanted.udp_source_ip else ""))
+
+        report = check_feed(
+            port=GT7_STREAM_PORT if direct else wanted.udp_port,
+            heartbeat_to=wanted.ps5_ip.strip() if direct else None,
+            source_ip=wanted.udp_source_ip,
+            listen_s=listen_s)
+        self.settings_screen.note_feed(report.as_text(), warn=not report.ok)
+        return report.ok
+
         return True
 
     def test_beep(self) -> bool:
@@ -957,6 +972,26 @@ class PitCrewController(QObject):
         self.practice.set_laps(self._rows_for_event(event["id"]))
         return self.session_id
 
+    @property
+    def direct(self) -> bool:
+        """Talking to the console itself rather than to SimHub."""
+        return (self.settings.feed_source == FEED_PS5
+                and bool(self.settings.ps5_ip.strip()))
+
+    @property
+    def feed_port(self) -> int:
+        """The port to bind.
+
+        Direct mode is not free to choose: GT7 streams on its own port and
+        the configured one is SimHub's relay, so using it in direct mode
+        would bind a port the console never sends to.
+        """
+        return GT7_STREAM_PORT if self.direct else self.port
+
+    @property
+    def heartbeat_target(self) -> str | None:
+        return self.settings.ps5_ip.strip() if self.direct else None
+
     def start_practice(self) -> None:
         if self.open_practice_session() is None:
             self.practice.set_status(
@@ -966,8 +1001,10 @@ class PitCrewController(QObject):
             return
 
         self.voice.warm()
-        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet,
-                                    source_ip=self.settings.udp_source_ip)
+        self.listener = UDPListener(
+            "0.0.0.0", self.feed_port, self.bridge.on_packet,
+            source_ip=self.settings.udp_source_ip,
+            heartbeat_to=self.heartbeat_target)
         self.listener.start()
         self._parse_errors = 0
         self._store_errors = 0
@@ -981,8 +1018,11 @@ class PitCrewController(QObject):
             self.port)
 
         self.practice.set_recording(True)
-        self.practice.set_status(
-            f"Listening on {self.port}. Waiting for the car to go out.")
+        where = (f"Asking the PS5 at {self.settings.ps5_ip} for format "
+                 f"{self.listener.heartbeat_format}, listening on "
+                 f"{self.feed_port}"
+                 if self.direct else f"Listening on {self.feed_port}")
+        self.practice.set_status(f"{where}. Waiting for the car to go out.")
 
     def stop_practice(self) -> None:
         if self.listener is not None:
@@ -1354,8 +1394,10 @@ class PitCrewController(QObject):
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
-        self.listener = UDPListener("0.0.0.0", self.port, self.bridge.on_packet,
-                                    source_ip=self.settings.udp_source_ip)
+        self.listener = UDPListener(
+            "0.0.0.0", self.feed_port, self.bridge.on_packet,
+            source_ip=self.settings.udp_source_ip,
+            heartbeat_to=self.heartbeat_target)
         self.listener.start()
         self._health.start()
 
