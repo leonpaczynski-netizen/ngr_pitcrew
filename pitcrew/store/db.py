@@ -512,12 +512,43 @@ class Store:
             "SELECT * FROM laps WHERE session_id = ? ORDER BY lap_num", (session_id,))
         return [dict(r) for r in rows]
 
+    def list_evidence_laps(self, event_id: int) -> list[dict]:
+        """Every lap that says something about how this event will go.
+
+        Practice, **and any race run as a rehearsal**. Not the league race
+        itself: that is the thing being planned for, and a plan built on the
+        race it is planning is not a plan.
+
+        A rehearsal is the better evidence of the two and it is the only place
+        some of it comes from at all. It is run at race fuel load, at race
+        pace, in traffic, at the race's time of day, and it makes a real pit
+        stop - so the refuel rate, the pit loss and whether a stint length
+        survives a cold out-lap are all measured there rather than assumed.
+        Recording one and then not reading it, which is what the app did until
+        now, is the whole feature missing its point.
+        """
+        rows = self._query(
+            "SELECT laps.*, sessions.started_at AS session_started, "
+            "       sessions.practice_mode AS practice_mode, "
+            "       sessions.practice_intent AS practice_intent, "
+            "       sessions.setup_sheet_id AS setup_sheet_id, "
+            "       sessions.kind AS session_kind, "
+            "       COALESCE(sessions.rehearsal, 0) AS rehearsal "
+            "FROM laps JOIN sessions ON sessions.id = laps.session_id "
+            "WHERE sessions.event_id = ? "
+            "  AND (sessions.kind = 'practice' OR sessions.rehearsal = 1) "
+            "ORDER BY sessions.started_at, sessions.id, laps.lap_num",
+            (event_id,))
+        return [dict(r) for r in rows]
+
     def list_event_laps(self, event_id: int, kind: str = "practice") -> list[dict]:
         rows = self._query(
             "SELECT laps.*, sessions.started_at AS session_started, "
             "       sessions.practice_mode AS practice_mode, "
             "       sessions.practice_intent AS practice_intent, "
-            "       sessions.setup_sheet_id AS setup_sheet_id "
+            "       sessions.setup_sheet_id AS setup_sheet_id, "
+            "       sessions.kind AS session_kind, "
+            "       COALESCE(sessions.rehearsal, 0) AS rehearsal "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? AND sessions.kind = ? "
             # `started_at` is second-resolution, so two runs begun in the same

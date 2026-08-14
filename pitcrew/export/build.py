@@ -61,6 +61,20 @@ def session_lap_inputs(store, session_id: int) -> list[LapInput]:
     return _rows_to_laps(store, store.list_laps(session_id))
 
 
+def evidence_lap_inputs(store, event_id: int, *,
+                        hydrate: set[int] | None = None) -> list[LapInput]:
+    """Practice plus any rehearsal race, renumbered continuously.
+
+    Same renumbering as `event_lap_inputs` and for the same reason: two
+    laps both called "lap 1" are unreadable, and worse, put two different
+    runs at the same number where anything keyed on it cannot tell them
+    apart.
+    """
+    laps = _rows_to_laps(store, store.list_evidence_laps(event_id),
+                         hydrate=hydrate)
+    return [replace(lap, lap_num=index) for index, lap in enumerate(laps, 1)]
+
+
 def event_lap_inputs(store, event_id: int, kind: str = "practice", *,
                      hydrate: set[int] | None = None) -> list[LapInput]:
     """Every lap of every run of this kind, numbered continuously.
@@ -131,6 +145,7 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             standing_start_ms=_column(row, "standing_start_ms"),
             practice_mode=_column(row, "practice_mode"),
             setup_sheet_id=_column(row, "setup_sheet_id"),
+            rehearsal=bool(_column(row, "rehearsal")),
             crawl_s=_column(row, "crawl_s"),
             off_track_s=_column(row, "off_track_s"),
             spin_s=_column(row, "spin_s"),

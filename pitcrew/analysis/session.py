@@ -83,6 +83,12 @@ class LapInput:
     # a sheet that has since been replaced is describing a car that no
     # longer exists, which is what `analysis/recency` weights it down for.
     setup_sheet_id: int | None = None
+    # **This lap came from a full race run against the AI to rehearse the
+    # plan.** Race fuel load, race pace, traffic, the race's time of day,
+    # and a real pit stop in the middle of it - so it is better evidence
+    # about fuel burn and stint length than a practice run at the same
+    # age, and `analysis/recency` weights it accordingly.
+    rehearsal: bool = False
     # **Something happened on this lap** — it lost time and the frames say
     # why. It leaves the counted set, because a spin averaged into a stint
     # invents degradation that never happened, and it stays in the diagnostic

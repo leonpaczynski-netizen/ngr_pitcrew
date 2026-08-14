@@ -16,7 +16,15 @@ that no longer exists. That matters more than age: three sessions old on the
 current sheet is better evidence than yesterday's on a sheet that has since
 been replaced twice, and weighting on time alone gets that backwards.
 
-So both are applied, and they are separate terms.
+**And some laps are simply better evidence than others.** A lap from a
+rehearsal race — the whole race run against the AI to prove the plan — is run
+at race fuel load, at race pace, in traffic, at the race's time of day, with a
+real pit stop in the middle of it. A practice lap is typically low fuel, alone,
+in daylight, and never stops. For the two figures this feeds, the rehearsal
+describes the thing being planned and the practice run describes a rehearsal
+of part of it. That is not a recency term and it does not decay.
+
+So three terms, applied separately.
 
 ## What this is not allowed to touch
 
@@ -41,9 +49,9 @@ evidence about fuel burn, and throwing eleven away to honour a preference for
 recent data would replace a small bias with a large variance. Every lap keeps
 a weight; the weights differ.
 
-Everything here is a **choice, not a measurement**, so the half-life and the
-superseded-sheet penalty are restated in the export under `derived` — the
-same rule as every other threshold in the app.
+Everything here is a **choice, not a measurement**, so the half-life, the
+superseded-sheet penalty and the rehearsal multiplier are all restated in the
+export under `derived` — the same rule as every other threshold in the app.
 """
 from __future__ import annotations
 
@@ -60,6 +68,19 @@ HALF_LIFE_SESSIONS = 2.0
 # why this is a multiplier on top of the age term rather than part of it.
 SUPERSEDED_SHEET_WEIGHT = 0.35
 
+# **A lap from a rehearsal race counts double.** Not because it is newer -
+# that is the term above - but because of what it is. A rehearsal lap is run
+# at race fuel load, at race pace, in traffic, at the race's time of day, with
+# a real pit stop in the middle of it. A practice lap is typically low fuel,
+# alone, in daylight, and never stops. For the two figures this weighting
+# feeds - reference pace and fuel per lap - the rehearsal describes the thing
+# being planned and the practice run describes a rehearsal of part of it.
+#
+# Two, stated plainly: one rehearsal lap is worth two practice laps of the
+# same age. It is a claim about which evidence is better, not a measurement,
+# and it travels in the export where it can be argued with.
+REHEARSAL_WEIGHT = 2.0
+
 # Nothing is ever weighted to nothing. A lap from six sessions ago on an old
 # sheet still happened, and a floor keeps a long history from collapsing to
 # the last two runs - which is truncation wearing a decay's clothes.
@@ -71,14 +92,18 @@ class Weighting:
     """The weights applied, and enough to explain them."""
     half_life_sessions: float
     superseded_sheet_weight: float
+    rehearsal_weight: float
     sessions: int
+    rehearsal_laps: int
     current_sheet_id: int | None
 
     def as_export(self) -> dict:
         return {
             "halfLifeSessions": self.half_life_sessions,
             "supersededSheetWeight": self.superseded_sheet_weight,
+            "rehearsalWeight": self.rehearsal_weight,
             "sessionsWeighted": self.sessions,
+            "rehearsalLaps": self.rehearsal_laps,
             "currentSheetId": self.current_sheet_id,
             "appliesTo": ["referenceLapMs", "fuelPerLapL"],
             "excludes": [
@@ -91,7 +116,10 @@ class Weighting:
                 "Later laps count for more because the driver and the car are "
                 "both changing. Measured across the Monza practice set the "
                 "difference between the pooled median and the latest session "
-                "is 0.37 s a lap."),
+                "is 0.37 s a lap. A lap from a rehearsal race counts double "
+                "again, for what it is rather than when it was: race fuel "
+                "load, race pace, traffic, the race's time of day, and a real "
+                "stop in the middle of it."),
         }
 
 
@@ -111,7 +139,13 @@ def session_order(laps) -> dict:
 
 
 def weight_of(lap, ages: dict, current_sheet_id: int | None) -> float:
-    """How much this lap counts, between `MINIMUM_WEIGHT` and 1.0."""
+    """How much this lap counts.
+
+    `MINIMUM_WEIGHT` to 1.0 for a practice lap, and up to `REHEARSAL_WEIGHT`
+    times that for one from a rehearsal race. The scale has no ceiling of 1.0
+    on purpose: the point is the ratio between laps, and a rehearsal is worth
+    more than any practice lap however new.
+    """
     age = ages.get(lap.session_id, 0)
     weight = 0.5 ** (age / HALF_LIFE_SESSIONS) if HALF_LIFE_SESSIONS else 1.0
     # `None` is not a mismatch. A lap with no sheet recorded has not said
@@ -121,7 +155,13 @@ def weight_of(lap, ages: dict, current_sheet_id: int | None) -> float:
     if (current_sheet_id is not None and sheet_id is not None
             and sheet_id != current_sheet_id):
         weight *= SUPERSEDED_SHEET_WEIGHT
-    return max(MINIMUM_WEIGHT, weight)
+    weight = max(MINIMUM_WEIGHT, weight)
+    # Applied after the floor, so a rehearsal from long ago is still worth
+    # more than a practice lap from long ago - the reason it counts for more
+    # is what it is, and that does not decay.
+    if getattr(lap, "rehearsal", False):
+        weight *= REHEARSAL_WEIGHT
+    return weight
 
 
 def weighted_median(pairs: list[tuple[float, float]]) -> float | None:
@@ -163,6 +203,9 @@ def weighted(laps, value_of, *, current_sheet_id: int | None = None
     weighting = Weighting(
         half_life_sessions=HALF_LIFE_SESSIONS,
         superseded_sheet_weight=SUPERSEDED_SHEET_WEIGHT,
+        rehearsal_weight=REHEARSAL_WEIGHT,
         sessions=len(ages),
+        rehearsal_laps=sum(1 for lap in laps
+                           if getattr(lap, "rehearsal", False)),
         current_sheet_id=current_sheet_id)
     return weighted_median(pairs), weighting

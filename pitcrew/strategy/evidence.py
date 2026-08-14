@@ -79,17 +79,21 @@ def _lap_inputs(store, event_id: int) -> list[LapInput]:
     each compound, which are also the most representative: latest setup, track
     at its most rubbered in.
     """
-    from pitcrew.export.build import event_lap_inputs
+    from pitcrew.export.build import evidence_lap_inputs
 
-    rows = store.list_event_laps(event_id, "practice")
-    return event_lap_inputs(store, event_id, "practice",
-                            hydrate=_laps_to_hydrate(rows))
+    # **Practice and any rehearsal race.** Not the league race: that is
+    # the thing being planned for, and a plan built on the race it is
+    # planning is not a plan.
+    rows = store.list_evidence_laps(event_id)
+    return evidence_lap_inputs(store, event_id,
+                               hydrate=_laps_to_hydrate(rows))
 
 
 def _fuel_capacity(store, event_id: int) -> float | None:
-    for session in store.list_sessions(event_id, "practice"):
-        if session["fuel_capacity_l"] is not None:
-            return session["fuel_capacity_l"]
+    for kind in ("practice", "race"):
+        for session in store.list_sessions(event_id, kind):
+            if session["fuel_capacity_l"] is not None:
+                return session["fuel_capacity_l"]
     return None
 
 
