@@ -68,6 +68,11 @@ class LapInput:
     wear_rl: float | None = None
     wear_rr: float | None = None
     gear_ratios: list[float] | None = None
+    # GT7's clock at the lap's first and last frame. Stored on the lap so the
+    # clock can be read across a whole session without decoding a single frame
+    # blob — see `analysis/gameclock`.
+    tod_start_ms: int | None = None
+    tod_end_ms: int | None = None
     frames: list[dict] | None = None
 
     @property

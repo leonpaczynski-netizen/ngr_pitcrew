@@ -104,6 +104,8 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             session_id=row["session_id"],
             tyres_fresh=_tyres_fresh(row),
             tyres_changed=_tri_state(row, "tyres_changed"),
+            tod_start_ms=_column(row, "tod_start_ms"),
+            tod_end_ms=_column(row, "tod_end_ms"),
         ))
     return out
 
@@ -115,6 +117,11 @@ def _tyres_fresh(row) -> bool | None:
     set carried over.
     """
     return _tri_state(row, "tyres_fresh")
+
+
+def _column(row, column: str):
+    """A column that may predate the row it is being read from."""
+    return row[column] if column in row.keys() else None
 
 
 def _tri_state(row, column: str) -> bool | None:

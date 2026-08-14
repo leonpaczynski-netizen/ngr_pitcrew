@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -358,6 +358,12 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # never asked, so it has no answer.
         ("tyres_changed", "INTEGER"),
         ("fuel_added_l", "REAL"),
+        # GT7's own clock at the lap's first and last frame. On the lap rather
+        # than inside the frame blob because reading the clock needs every lap
+        # of a session and none of the other channels; see `LapFrames` for the
+        # cached reading this being unreachable produced.
+        ("tod_start_ms", "INTEGER"),
+        ("tod_end_ms", "INTEGER"),
     ),
 }
 
@@ -417,6 +423,62 @@ def _migrate_v3_wear_per_corner(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE laps DROP COLUMN wear_rear")
 
 
+def _migrate_v4_lap_clock(conn: sqlite3.Connection) -> None:
+    """Lift GT7's clock out of the stored frames and onto the lap.
+
+    Two things are repaired here, and the second is the reason for the first.
+
+    **The clock could only be read from laps something else had decoded.**
+    `strategy/evidence._laps_to_hydrate` decodes the last six counted laps per
+    compound, which is the right window for a tyre-temperature question and
+    the wrong one for a clock. At Monza those six laps were the ones after the
+    14 Aug pit stop, where GT7's clock had already run to the end of the
+    circuit's range and stopped. The reader saw six laps that did not move,
+    concluded the lobby holds a fixed time of day, and cached it.
+
+    **So the cached readings go.** A `track_clock` row is a measurement, and
+    these were taken through a keyhole. They are deleted rather than
+    recalculated in place: the next time evidence is built for the circuit it
+    is measured again, from every lap, and a row that is absent says "not
+    measured yet" while a row that is wrong says nothing at all.
+
+    The back-fill decodes each stored lap once. That is the cost of not having
+    recorded the two numbers at the time, and it is paid once.
+    """
+    columns = _columns(conn, "laps")
+    if "tod_start_ms" not in columns:
+        return                              # ADDED_COLUMNS has not run yet
+
+    pending = conn.execute(
+        "SELECT l.id FROM laps l JOIN lap_frames f ON f.lap_id = l.id "
+        "WHERE l.tod_start_ms IS NULL").fetchall()
+    if pending:
+        # Imported here rather than at module scope: `store.schema` is the
+        # bottom of the dependency stack and telemetry sits above it.
+        from pitcrew.telemetry.recorder import decode_frames
+
+        for (lap_id,) in pending:
+            row = conn.execute(
+                "SELECT blob FROM lap_frames WHERE lap_id = ?", (lap_id,)).fetchone()
+            if row is None:
+                continue
+            try:
+                frames = decode_frames(row[0])
+            except Exception:               # noqa: BLE001 - a bad blob is not fatal
+                continue
+            stamps = [f["time_of_day_ms"] for f in frames
+                      if f.get("time_of_day_ms") is not None]
+            if not stamps:
+                continue
+            conn.execute(
+                "UPDATE laps SET tod_start_ms = ?, tod_end_ms = ? WHERE id = ?",
+                (stamps[0], stamps[-1], lap_id))
+
+    conn.execute("DELETE FROM track_clock")
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
+    4: ("the game clock onto the lap, and the readings taken through a keyhole",
+        _migrate_v4_lap_clock),
 }

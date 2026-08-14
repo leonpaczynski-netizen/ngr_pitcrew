@@ -9,20 +9,26 @@ from pitcrew.export.build import build_session_export, multiplier_factor
 from pitcrew.export.payload import to_json, validate
 from pitcrew.setup.sheet import RangeRecord, SetupChange, SetupSheet
 from pitcrew.store.db import Store
-from pitcrew.telemetry.recorder import FRAME_FIELDS, encode_frames
+from pitcrew.telemetry.recorder import FRAME_FIELDS, clock_span, encode_frames
 from pitcrew.telemetry.session_state import Lap
 
 from .test_corners import synthetic_lap
 
 
 class StoredFrames:
-    """Stand-in for LapFrames, so these tests need no packet plumbing."""
+    """Stand-in for LapFrames, so these tests need no packet plumbing.
+
+    It derives the clock span the same way the recorder does rather than
+    stubbing it, so a lap stored through here is indistinguishable from one
+    that came off the wire.
+    """
 
     def __init__(self, frames: list[dict]) -> None:
+        rows = [[f[name] for name in FRAME_FIELDS] for f in frames]
         self.frame_count = len(frames)
         self.sample_hz = 60.0
-        self.blob = encode_frames([[f[name] for name in FRAME_FIELDS]
-                                   for f in frames])
+        self.blob = encode_frames(rows)
+        self.tod_start_ms, self.tod_end_ms = clock_span(rows)
 
 
 def _frames_as_rows(frames: list[dict]) -> StoredFrames:

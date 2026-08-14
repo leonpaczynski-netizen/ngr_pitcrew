@@ -158,3 +158,81 @@ def test_practice_at_the_races_clock_raises_nothing():
 def test_nothing_is_claimed_without_a_race_multiplier():
     sessions = [ClockReading(0.0, None, None, None, 11, "")]
     assert practice_clock_warning(sessions, race_multiplier=None) is None
+
+
+# ------------------------------------------------ reading it without frames
+#
+# Built from the 14 Aug Monza sessions, which are what exposed the defect:
+# the clock runs at x6 from 15:56, and then stops dead at 18:50 because the
+# circuit has no 24-hour cycle. Every lap after the pit stop sits at 18:50.
+
+MONZA_START_H = 15.933
+MONZA_CEILING_H = 18.833
+
+
+def a_stored_lap(lap_num: int, *, start_hour: float, end_hour: float,
+                 lap_s: float = 108.5) -> LapInput:
+    """A lap carrying only the stored clock pair — no frames at all."""
+    return LapInput(lap_num=lap_num, lap_time_ms=int(lap_s * 1000),
+                    fuel_start=90.0, fuel_end=84.0,
+                    tod_start_ms=int(start_hour * HOUR_MS),
+                    tod_end_ms=int(end_hour * HOUR_MS))
+
+
+def _monza_session() -> list[LapInput]:
+    laps, hour = [], MONZA_START_H
+    for lap_num in range(1, 27):
+        end = min(hour + (108.5 * 6.0) / 3600.0, MONZA_CEILING_H)
+        laps.append(a_stored_lap(lap_num, start_hour=hour, end_hour=end))
+        hour = end
+    return laps
+
+
+def test_the_clock_is_readable_with_no_frame_ever_decoded():
+    """The whole point of storing the pair on the lap.
+
+    While the clock could only be read out of frame blobs, it could only be
+    read from whichever laps something else had chosen to decode — and what
+    was choosing decoded the last six counted laps per compound, for a tyre
+    question.
+    """
+    reading = read_clock(_monza_session())
+    assert all(lap.frames is None for lap in _monza_session())
+    assert reading.multiplier == pytest.approx(6.0, abs=0.05)
+    assert clock(reading.start_hour) == "15:56"
+    assert reading.laps_sampled == 26
+
+
+def test_the_tail_of_a_session_alone_reads_the_clock_as_stopped():
+    """The regression, stated as the arithmetic that produced it.
+
+    Monza's clock runs to the end of the circuit's range and holds there, so
+    the last laps of a long session genuinely do not move. Read on their own
+    they say the lobby holds a fixed time of day — a true statement about six
+    laps and a false one about the session, and it was cached as the latter.
+    """
+    session = _monza_session()
+    frozen = [lap for lap in session
+              if lap.tod_start_ms == lap.tod_end_ms][-6:]
+    assert len(frozen) == 6
+
+    keyhole = read_clock(frozen)
+    assert keyhole.multiplier == 0.0
+    assert clock(keyhole.start_hour) == "18:50"
+
+    whole = read_clock(session)
+    assert whole.multiplier == pytest.approx(6.0, abs=0.05)
+    assert clock(whole.stopped_at_hour) == "18:50"
+
+
+def test_stored_stamps_win_over_frames():
+    """Belt and braces: a lap carrying both is read from the stored pair.
+
+    They cannot disagree in practice — one is lifted from the other at
+    capture — but the fallback must not be able to override the fact.
+    """
+    lap = a_stored_lap(1, start_hour=10.0, end_hour=10.1)
+    lap = type(lap)(**{**lap.__dict__,
+                       "frames": [{"time_of_day_ms": 0},
+                                  {"time_of_day_ms": 23 * HOUR_MS}]})
+    assert lap_multiplier(lap) == pytest.approx(0.1 * HOUR_MS / 108_500, abs=0.05)

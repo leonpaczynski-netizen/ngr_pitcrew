@@ -76,6 +76,15 @@ class ClockReading:
 
 
 def _stamps(lap: LapInput) -> list[int]:
+    """The clock at the ends of this lap.
+
+    The stored pair first, because it is on every lap. Falling back to the
+    frames means only laps something else chose to decode can be read, and
+    that is precisely how the Monza reading came to be taken from six laps
+    after a pit stop with the clock already stopped.
+    """
+    if lap.tod_start_ms is not None and lap.tod_end_ms is not None:
+        return [lap.tod_start_ms, lap.tod_end_ms]
     return [frame["time_of_day_ms"] for frame in (lap.frames or ())
             if frame.get("time_of_day_ms") is not None]
 

@@ -104,12 +104,31 @@ _TWO_PI = 2.0 * math.pi
 _MIN_SPEED_FOR_SLIP_MS = 2.0
 
 
+# Index of `time_of_day_ms` in a frame row, so the clock span can be lifted
+# out of the rows without decoding them again.
+_TOD_INDEX = FRAME_FIELDS.index("time_of_day_ms")
+
+
 @dataclass(frozen=True)
 class LapFrames:
     """One lap's captured telemetry, ready to store."""
     frame_count: int
     sample_hz: float
     blob: bytes
+    # **GT7's own clock at the first and last frame of the lap.** Stored on
+    # the lap rather than left inside the blob because everything that reads
+    # the clock - what hour the lobby's time-of-day preset actually means at
+    # this circuit, what multiplier it runs at, where it stops - needs every
+    # lap of a session and needs none of the other 36 channels.
+    #
+    # Leaving it in the blob meant the clock could only be read from whichever
+    # laps something else had decided to decode, and something else was
+    # decoding the last six laps per compound. At Monza those were the laps
+    # after the pit stop, where GT7's clock had already run to its ceiling and
+    # frozen - so the app measured "multiplier 0, fixed at 18:50" for a lobby
+    # that starts at 15:56 and runs at six times real speed, and cached it.
+    tod_start_ms: int | None = None
+    tod_end_ms: int | None = None
 
     @property
     def size_bytes(self) -> int:
@@ -137,6 +156,18 @@ def _slip_ratios(p: GT7Packet) -> tuple[float, float, float, float]:
 def encode_frames(rows: list[list]) -> bytes:
     payload = {"format": BLOB_FORMAT, "fields": list(FRAME_FIELDS), "rows": rows}
     return zlib.compress(json.dumps(payload, separators=(",", ":")).encode("utf-8"), 6)
+
+
+def clock_span(rows: list[list]) -> tuple[int | None, int | None]:
+    """GT7's clock at the first and last frame that carried it.
+
+    First and last *present*, not first and last row: the channel is absent
+    from packet formats below `~`, and a lap that starts before the stream
+    settles can open on nulls without the rest of it being unreadable.
+    """
+    stamps = [row[_TOD_INDEX] for row in rows
+              if len(row) > _TOD_INDEX and row[_TOD_INDEX] is not None]
+    return (stamps[0], stamps[-1]) if stamps else (None, None)
 
 
 def decode_frames(blob: bytes) -> list[dict]:
@@ -298,10 +329,13 @@ class LapRecorder:
         """Compress detached rows. Safe to call from any thread."""
         if not rows:
             return None
+        start, end = clock_span(rows)
         return LapFrames(
             frame_count=len(rows),
             sample_hz=SAMPLE_HZ / self._sample_every,
             blob=encode_frames(rows),
+            tod_start_ms=start,
+            tod_end_ms=end,
         )
 
     def take_lap(self) -> LapFrames | None:
