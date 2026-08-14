@@ -236,3 +236,38 @@ def test_stored_stamps_win_over_frames():
                        "frames": [{"time_of_day_ms": 0},
                                   {"time_of_day_ms": 23 * HOUR_MS}]})
     assert lap_multiplier(lap) == pytest.approx(0.1 * HOUR_MS / 108_500, abs=0.05)
+
+
+# ------------------------------------------------ writing it back to the event
+
+def test_a_measured_clock_fills_an_event_that_has_not_been_told(store, event_id):
+    """His question: why does practice never fill the start hour in?
+
+    It was measured, cached against the circuit, and never written anywhere he
+    could see it.
+    """
+    assert store.record_measured_clock(event_id, 15.933, 6.0) is True
+    event = store.get_event(event_id)
+    assert event["start_hour"] == 15.933
+    assert event["time_multiplier"] == 6.0
+    assert event["clock_source"] == "measured"
+
+
+def test_it_never_writes_over_what_he_typed(store, event_id):
+    """His declaration is primary evidence and the measurement corroborates
+    it. A measurement that quietly replaced a declaration would destroy the
+    disagreement between them, which is worth more than either."""
+    store.update_event(event_id, start_hour=14.0, time_multiplier=1.0)
+    assert store.record_measured_clock(event_id, 15.933, 6.0) is False
+    assert store.get_event(event_id)["start_hour"] == 14.0
+
+
+def test_a_figure_it_wrote_itself_is_updated_by_a_later_session(store, event_id):
+    store.record_measured_clock(event_id, 15.933, 6.0)
+    assert store.record_measured_clock(event_id, 9.5, 2.0) is True
+    assert store.get_event(event_id)["start_hour"] == 9.5
+
+
+def test_nothing_measured_writes_nothing(store, event_id):
+    assert store.record_measured_clock(event_id, None, None) is False
+    assert store.get_event(event_id)["clock_source"] is None

@@ -358,21 +358,24 @@ class EventScreen(QWidget):
 
         # GT7 rewrote its physics, tyre model and geometry in 1.49 and again in
         # 1.55, so a measurement without the version it was taken under cannot
-        # be compared with the next one. The export refuses without it.
+        # be compared with the next one, and the export refuses a payload with
+        # no version on it.
+        #
+        # **It is not asked for here any more.** One console runs one version,
+        # and asking per event meant an event created without it produced an
+        # export that was refused outright with no obvious connection between
+        # the empty box and the failure. It lives on the Settings screen and
+        # is set once. The field survives, hidden, so an event that already
+        # carries a version - a measurement taken under one no longer
+        # installed - keeps it and still overrides the app's.
         self.game_version = QLineEdit()
-        self.game_version.setPlaceholderText("1.70")
-        self.game_version.setToolTip(
-            "The GT7 version this event is run under. Every measurement is "
-            "filed against it, and the export refuses without it - the physics "
-            "have been rewritten twice in two updates.")
+        self.game_version.setVisible(False)
 
         grid.addWidget(Field("Name", self.name_edit), 0, 0, 1, 2)
         grid.addWidget(Field("Track", self.track_edit), 1, 0)
         grid.addWidget(Field("Layout", self.layout_edit,
                              hint="Set by the track"), 1, 1)
-        grid.addWidget(Field("Car", self.car_edit), 2, 0)
-        grid.addWidget(Field("GT7 version", self.game_version,
-                             hint="Filed with every measurement"), 2, 1)
+        grid.addWidget(Field("Car", self.car_edit), 2, 0, 1, 2)
         # Without this the hint under Track widens its column and squeezes
         # Layout down to a few characters.
         grid.setColumnStretch(0, 3)

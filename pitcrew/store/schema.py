@@ -347,6 +347,11 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("time_of_day", "TEXT"),
         ("priority", "TEXT"),
         ("pp_cap", "REAL"),
+        # Whether `start_hour` and `time_multiplier` were typed or measured
+        # off the game clock. Without it a figure the app wrote back is
+        # indistinguishable from one he entered, and the app would overwrite
+        # his own declaration the next time it went out.
+        ("clock_source", "TEXT"),
     ),
     "laps": (
         ("gear_ratios", "TEXT"),

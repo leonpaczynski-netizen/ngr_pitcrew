@@ -348,6 +348,34 @@ class Store:
                  _now()))
             return int(cur.lastrowid)
 
+    def record_measured_clock(self, event_id: int, start_hour: float | None,
+                              multiplier: float | None) -> bool:
+        """Write back what the game clock turned out to be, if he has not said.
+
+        **Never over a typed value.** His declaration is primary evidence and
+        the measurement is corroboration; a measurement that quietly replaced
+        a declaration would destroy the disagreement between them, which is
+        the finding worth more than either.
+
+        Returns whether anything was written, so the caller can say so.
+        """
+        if start_hour is None and multiplier is None:
+            return False
+        row = self.get_event(event_id)
+        if row is None:
+            return False
+        source = row["clock_source"] if "clock_source" in row.keys() else None
+        typed = (row["start_hour"] is not None
+                 or row["time_multiplier"] is not None)
+        if typed and source != "measured":
+            return False
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE events SET start_hour = ?, time_multiplier = ?, "
+                "clock_source = 'measured', updated_at = ? WHERE id = ?",
+                (start_hour, multiplier, _now(), event_id))
+        return True
+
     def set_practice_mode(self, session_id: int, mode: str | None) -> None:
         """Say which kind of session this was, or unsay it.
 

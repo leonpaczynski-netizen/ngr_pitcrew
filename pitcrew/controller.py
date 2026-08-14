@@ -22,6 +22,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from pitcrew import settings
+from pitcrew.analysis.gameclock import clock, read_clock
 from pitcrew.analysis.incidents import (
     find_incidents,
     read_rows,
@@ -37,7 +38,7 @@ from pitcrew.engineer.ptt import (
 )
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.engineer.voice import Voice
-from pitcrew.export.build import build_event_export
+from pitcrew.export.build import _rows_to_laps, build_event_export
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
 from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
 from pitcrew.prompts.context import gather
@@ -998,11 +999,41 @@ class PitCrewController(QObject):
         event = self.active_event()
         rows = self.practice.rows()
         if rows:
+            learned = self._learn_clock(event)
             self.practice.set_status(
                 f"Session closed. {len(rows)} laps recorded - mark them up, "
-                "then export.")
+                f"then export.{learned}")
         elif event:
             self.practice.set_status(self._idle_status(event))
+
+    def _learn_clock(self, event) -> str:
+        """Put what the game clock did into the event, once it is known.
+
+        He asked why practice never filled the start hour or the time
+        multiplier in. It was measured, cached against the circuit, and never
+        written anywhere he could see it.
+
+        It is read across every lap of the event rather than the session just
+        closed: a session run entirely after the circuit's clock has stopped
+        measures a multiplier of zero, which is true of that session and false
+        of the lobby.
+        """
+        if event is None:
+            return ""
+        laps = _rows_to_laps(self.store,
+                             self.store.list_event_laps(event["id"], "practice"),
+                             hydrate=set())
+        reading = read_clock(laps)
+        if not reading.measured:
+            return ""
+        if not self.store.record_measured_clock(
+                event["id"], reading.start_hour, reading.multiplier):
+            return ""
+        # The form is reloaded so the figure appears where he went looking
+        # for it, rather than only inside the next export.
+        self.event_screen.set_events(self.store.list_events(), event["id"])
+        return (f" Game clock measured: x{reading.multiplier:g} from "
+                f"{clock(reading.start_hour)}.")
 
     def _on_stream_seen(self, facts: dict) -> None:
         if self.session_id is None:
@@ -1461,7 +1492,9 @@ class PitCrewController(QObject):
             self.practice.note("Create an event before exporting.", warn=True)
             return None
         try:
-            payload = build_event_export(self.store, event["id"])
+            payload = build_event_export(
+                self.store, event["id"],
+                game_version=self.settings.game_version)
             text = to_json(payload)
         except ExportRefused as exc:
             # Refusing is the designed behaviour: the consumer is a reader, so

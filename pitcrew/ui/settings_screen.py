@@ -138,6 +138,20 @@ class SettingsScreen(QWidget):
             hint="Leave empty unless something else is talking on this port. "
                  "Set wrong, nothing arrives at all."))
 
+        # Filed against every measurement the app makes. It sits with the
+        # feed rather than on the event because one console runs one version,
+        # and the export refuses a payload that has no version on it - which
+        # an event created without one produced, with nothing on screen to
+        # connect the empty box to the refusal.
+        self.game_version = QLineEdit()
+        self.game_version.setPlaceholderText("1.70")
+        plate.body.addWidget(Field(
+            "GT7 version", self.game_version,
+            hint="Filed with every measurement. The physics have been "
+                 "rewritten twice in two updates, so a figure without the "
+                 "version it was taken under cannot be compared with the "
+                 "next one."))
+
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
         self.test_feed_button = MarkButton("Test the port", compact=True)
@@ -328,6 +342,7 @@ class SettingsScreen(QWidget):
     def load(self, settings: Settings) -> None:
         self.udp_port.setValue(settings.udp_port)
         self.udp_source_ip.setText(settings.udp_source_ip)
+        self.game_version.setText(settings.game_version)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
         self.ptt_in_practice.setChecked(settings.ptt_in_practice)
@@ -344,6 +359,7 @@ class SettingsScreen(QWidget):
         return Settings(
             udp_port=self.udp_port.value(),
             udp_source_ip=self.udp_source_ip.text().strip(),
+            game_version=self.game_version.text().strip() or "1.70",
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),
             ptt_in_practice=self.ptt_in_practice.isChecked(),

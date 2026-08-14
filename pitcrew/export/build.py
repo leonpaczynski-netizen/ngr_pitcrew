@@ -203,18 +203,20 @@ def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
 
 
 def build_session_export(store, session_id: int, *, notes: str = "",
+                         game_version: str | None = None,
                          calibrated_at_race_multiplier: bool = True) -> dict:
     """The payload for one run on its own."""
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"no session with id {session_id}")
     return _build(store, session, session_lap_inputs(store, session_id),
-                  notes=notes,
+                  notes=notes, game_version=game_version,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
 def build_event_export(store, event_id: int, *, kind: str = "practice",
                        notes: str = "",
+                       game_version: str | None = None,
                        calibrated_at_race_multiplier: bool = True) -> dict:
     """The payload for everything run at this event.
 
@@ -227,6 +229,7 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
         raise ValueError("nothing recorded for this event yet")
     laps = event_lap_inputs(store, event_id, kind)
     return _build(store, _merged_session(sessions), laps, notes=notes,
+                  game_version=game_version,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
@@ -247,6 +250,7 @@ def _merged_session(sessions: list[dict]) -> dict:
 
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
+           game_version: str | None = None,
            calibrated_at_race_multiplier: bool) -> dict:
     """Assemble the `gt7-pitcrew/1.4` payload."""
     event = store.get_event(session["event_id"])
@@ -277,7 +281,10 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         session_type=session["kind"],
         packet=session["packet_format"] or "A",
         car_category=session["car_category"],
-        game_version=event["game_version"],
+        # The event's own version where it has one - a measurement taken
+        # under a version that is no longer installed keeps the version it was
+        # taken under - and the app's otherwise.
+        game_version=event["game_version"] or game_version,
         # Only where one compound was run. Several runs on several compounds
         # is not a session with a compound, and voting on the most common tag
         # made a three-compound session read as a Racing Hard one - which is

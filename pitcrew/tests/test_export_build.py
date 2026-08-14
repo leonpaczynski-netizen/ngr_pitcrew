@@ -296,3 +296,29 @@ def test_an_event_with_nothing_recorded_refuses(store):
     event_id = store.create_event(name="Empty", track="Spa")
     with pytest.raises(ValueError, match="nothing recorded"):
         build_event_export(store, event_id)
+
+
+# --------------------------------------------------------- the version gate
+
+def test_an_event_with_no_version_exports_on_the_app_setting(store: Store, recorded):
+    """The refusal he was hitting, and where the answer now comes from.
+
+    `meta.gameVersion` is required — a measurement that does not say which
+    update it was taken under cannot be compared with the next one, and GT7
+    has rewritten its physics twice in two updates. It was asked for per
+    event, so an event created without it produced an export refused outright
+    with nothing on screen connecting the empty box to the failure.
+    """
+    store.update_event(recorded["event_id"], game_version=None)
+    payload = build_event_export(store, recorded["event_id"],
+                                 game_version="1.70")
+    assert payload["meta"]["gameVersion"] == "1.70"
+
+
+def test_a_version_on_the_event_still_wins(store: Store, recorded):
+    """A measurement taken under a version that is no longer installed keeps
+    the version it was taken under."""
+    store.update_event(recorded["event_id"], game_version="1.55")
+    payload = build_event_export(store, recorded["event_id"],
+                                 game_version="1.70")
+    assert payload["meta"]["gameVersion"] == "1.55"

@@ -70,6 +70,19 @@ class Settings:
     # shows up as a decode-error count rather than as what it is.
     udp_source_ip: str = ""
 
+    # **The GT7 version every measurement is filed against.** GT7 rewrote its
+    # physics, tyre model and geometry in 1.49 and again in 1.55, so a figure
+    # without the version it was taken under cannot be compared with the next
+    # one - and the export refuses a payload that has no version on it.
+    #
+    # It lives here rather than on the event, which is where it used to be
+    # asked for. One console runs one version; asking per event meant an event
+    # created without it produced an export that was refused outright, which
+    # is what "the GT7 version just blocks the output" was. An event may still
+    # carry its own, for a measurement taken under a version that is no longer
+    # the one installed, and that overrides this.
+    game_version: str = "1.70"
+
     # --- push to talk
     ptt_enabled: bool = True
     ptt_key: str = "f8"
