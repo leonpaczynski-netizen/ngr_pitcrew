@@ -191,7 +191,7 @@ class PlanCard(QWidget):
             f"box lap {lap}" for lap in plan.pit_laps) or "run to the flag"
         column.addWidget(BodyLabel(
             f"{detail}. Limited by {plan.binding_constraint}.",
-            size=13, colour=theme.STENCIL_DIM, wrap=False))
+            size=13, colour=theme.STENCIL_DIM, wrap=True))
 
     def setChosen(self, chosen: bool) -> None:  # noqa: N802 - Qt naming
         self._chosen = chosen
@@ -314,9 +314,14 @@ class StrategyScreen(QWidget):
         self._cards.clear()
         # The empty state survives _clear so it can come back: a rebuild that
         # produces nothing has to say so again, not leave a blank plate.
+        # **Hidden explicitly when it is not wanted.** Taking it out of the
+        # layout does not take it off the screen - it stays a child of the
+        # holder, keeps its last geometry, and draws underneath the plan
+        # cards. On the first real plan that put "a tyre-gauge reading, for
+        # the wear rate" through the middle of the fastest strategy.
+        self.plan_empty.setVisible(not plans)
         if not plans:
             self.plan_layout.addWidget(self.plan_empty)
-            self.plan_empty.setVisible(True)
         self.evidence_empty.setVisible(not evidence)
 
         for index, plan in enumerate(plans):
@@ -418,8 +423,15 @@ class _EvidenceRow(QWidget):
         trailer = SOURCE_WORD.get(item.source, item.source)
         if item.note:
             trailer = f"{trailer} — {item.note}"
-        column.addWidget(BodyLabel(trailer, size=12, colour=theme.STENCIL_DIM,
-                                   wrap=False))
+        # **Wrapped.** A label that will not wrap makes its longest sentence
+        # the widget's minimum width, and these notes are prose - the
+        # time-of-day one is a paragraph. Unwrapped, one plan pushed the
+        # screen's minimum to 6,268 px, which is four times the widest
+        # monitor on this rig: the plan was rendered perfectly and every
+        # column of it was off the side of the screen. That is "you can't
+        # see the plans".
+        note = BodyLabel(trailer, size=12, colour=theme.STENCIL_DIM, wrap=True)
+        column.addWidget(note)
 
 
 def _race_time(seconds: float) -> str:
