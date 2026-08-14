@@ -177,6 +177,14 @@ class SettingsScreen(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
+        self.banner_enabled = QCheckBox("Show a full-screen notice")
+        self.banner_enabled.setToolTip(
+            "One line, as large as the screen will carry it, when a session "
+            "starts and stops. Sized to be read through a headset's "
+            "passthrough from a metre away, which the lap rack is not. It "
+            "never takes focus, so it cannot steal a keypress from the game.")
+        plate.body.addWidget(self.banner_enabled)
+
         self.test_feed_button = MarkButton("Test the feed", compact=True)
         self.test_feed_button.setToolTip(
             "Opens the socket for real, asks the console if asking is "
@@ -374,6 +382,7 @@ class SettingsScreen(QWidget):
         index = self.feed_source.findData(settings.feed_source)
         self.feed_source.setCurrentIndex(max(0, index))
         self.ps5_ip.setText(settings.ps5_ip)
+        self.banner_enabled.setChecked(settings.banner_enabled)
         self._sync_feed_source()
         self.game_version.setText(settings.game_version)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
@@ -403,6 +412,7 @@ class SettingsScreen(QWidget):
             udp_source_ip=self.udp_source_ip.text().strip(),
             feed_source=self.feed_source.currentData(),
             ps5_ip=self.ps5_ip.text().strip(),
+            banner_enabled=self.banner_enabled.isChecked(),
             game_version=self.game_version.text().strip() or "1.70",
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),

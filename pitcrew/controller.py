@@ -19,7 +19,7 @@ from pathlib import Path
 from time import monotonic as _monotonic
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from pitcrew import settings
 from pitcrew.settings import FEED_PS5
@@ -67,6 +67,7 @@ from pitcrew.telemetry.session_state import (
     SessionKind,
     SessionState,
 )
+from pitcrew.ui.banner import Banner
 from pitcrew.ui.practice_screen import LapRow
 
 # SimHub's relay port. Kept as a module constant because `app.py` reads it,
@@ -209,6 +210,12 @@ class PitCrewController(QObject):
         self.settings_screen = settings_screen
         self.prompt_issue_id: int | None = None
         self.settings = settings.load(store)
+        # The screen-filling notice, anchored to whichever screen the practice
+        # page is on. None where there is no Qt widget to anchor to, which is
+        # every controller test and every capture replay - the recording path
+        # has to stay drivable headless.
+        self._banner = (Banner(practice_screen)
+                        if isinstance(practice_screen, QWidget) else None)
         # An explicit port wins - the tests bind their own - but otherwise the
         # setting is the source of truth, not a constant in this file.
         self._port_override = port
@@ -1023,6 +1030,7 @@ class PitCrewController(QObject):
                  f"{self.feed_port}"
                  if self.direct else f"Listening on {self.feed_port}")
         self.practice.set_status(f"{where}. Waiting for the car to go out.")
+        self.announce("Recording", "Go out when you are ready.")
 
     def stop_practice(self) -> None:
         if self.listener is not None:
@@ -1038,6 +1046,9 @@ class PitCrewController(QObject):
         self.practice.set_recording(False)
         event = self.active_event()
         rows = self.practice.rows()
+        self.announce("Stopped", f"{len(rows)} laps recorded."
+                      if rows else "No laps recorded.",
+                      warn=not rows)
         if rows:
             learned = self._learn_clock(event)
             self.practice.set_status(
@@ -1045,6 +1056,18 @@ class PitCrewController(QObject):
                 f"then export.{learned}")
         elif event:
             self.practice.set_status(self._idle_status(event))
+
+    def announce(self, headline: str, subtitle: str = "", *,
+                 warn: bool = False) -> None:
+        """Put one line where it can be read through a headset.
+
+        Silently does nothing without a Qt parent, so the whole recording
+        path stays drivable headless - which is what the controller tests
+        do, and what a capture replay does.
+        """
+        if not self.settings.banner_enabled or self._banner is None:
+            return
+        self._banner.announce(headline, subtitle, warn=warn)
 
     def _learn_clock(self, event) -> str:
         """Put what the game clock did into the event, once it is known.

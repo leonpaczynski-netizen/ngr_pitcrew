@@ -89,6 +89,13 @@ class Settings:
     feed_source: str = FEED_SIMHUB
     ps5_ip: str = ""
 
+    # **A sign, not a notification.** In PSVR2 he reads this monitor
+    # through passthrough from a metre away, which is roughly the worst
+    # display conditions there are - and it is exactly then that he needs
+    # to know whether the app is recording. On by default; off for anyone
+    # who does not want a screen-filling flash between runs.
+    banner_enabled: bool = True
+
     # **The GT7 version every measurement is filed against.** GT7 rewrote its
     # physics, tyre model and geometry in 1.49 and again in 1.55, so a figure
     # without the version it was taken under cannot be compared with the next
