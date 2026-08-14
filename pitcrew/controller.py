@@ -27,7 +27,7 @@ from pitcrew.analysis.incidents import (
     read_rows,
     stored_or_read,
 )
-from pitcrew.analysis.runs import auto_out_laps
+from pitcrew.analysis.runs import auto_out_laps, carry_compound
 from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
     PushToTalk,
@@ -1084,10 +1084,12 @@ class PitCrewController(QObject):
 
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""
-        row = next((r for r in self.practice.rows() if r.lap_id == lap_id), None)
+        rows = self.practice.rows()
+        row = next((r for r in rows if r.lap_id == lap_id), None)
         if row is None:
             return
-        self.store.set_lap_compound(lap_id, row.compound)
+        for tagged in carry_compound(rows, lap_id):
+            self.store.set_lap_compound(tagged.lap_id, tagged.compound)
         self.store.set_lap_tyres_fresh(lap_id, row.tyres_fresh)
         self.store.set_lap_wear(lap_id, row.wear_fl, row.wear_fr,
                                 row.wear_rl, row.wear_rr)
@@ -1135,6 +1137,8 @@ class PitCrewController(QObject):
                 crawl_s=self._column(row, "crawl_s"),
                 off_track_s=self._column(row, "off_track_s"),
                 spin_s=self._column(row, "spin_s"),
+                tod_start_ms=self._column(row, "tod_start_ms"),
+                tod_end_ms=self._column(row, "tod_end_ms"),
             )
             for index, row in enumerate(stored, 1)
         ]

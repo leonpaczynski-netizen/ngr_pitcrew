@@ -332,6 +332,47 @@ def split_runs(laps: list[LapInput]) -> list[Run]:
             in enumerate(zip(grouped, refuelled, swapped), start=1)]
 
 
+def carry_compound(rows, lap_id) -> list:
+    """A compound tagged once carries to the end of its stint.
+
+    *"When I enter a tyre compound at the start of the stint replicate that
+    compound until either the end of the stint or until you detect a tyre
+    change."* One set of tyres is one set of tyres; tagging every lap of it
+    by hand is the app making him restate a fact it already knows.
+
+    The stint boundary is the run boundary, which is exactly where a set can
+    change: a refuel, a stop, or going back to the garage. So the fill stops
+    where the evidence says the tyres could have come off, and never runs past
+    it into a set it has no claim about.
+
+    Returns the rows whose compound this changed, the edited one included, so
+    the caller writes only what moved.
+
+    Backwards is deliberately not filled. Tagging lap 8 says what lap 8 ran
+    on; whether lap 3 of the same stint ran on it is the same question and the
+    same answer, but filling backwards would silently overwrite a tag he had
+    already made on an earlier lap and disagreed with.
+    """
+    rows = list(rows)
+    edited = next((row for row in rows if row.lap_id == lap_id), None)
+    if edited is None or not edited.compound:
+        return [edited] if edited is not None else []
+
+    run = next((run for run in split_runs(rows)
+                if run.first_lap <= edited.lap_num <= run.last_lap), None)
+    if run is None:
+        return [edited]
+
+    changed = []
+    for row in rows:
+        if not (edited.lap_num <= row.lap_num <= run.last_lap):
+            continue
+        if row.compound != edited.compound:
+            row.compound = edited.compound
+            changed.append(row)
+    return changed if edited in changed else [edited, *changed]
+
+
 def run_of(runs: list[Run], lap_num: int) -> int | None:
     """The id of the run a lap belongs to."""
     for run in runs:

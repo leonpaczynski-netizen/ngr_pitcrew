@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pitcrew.analysis.runs import LOBBY, TIME_TRIAL, starts_run
+from pitcrew.analysis.gameclock import clock
+from pitcrew.analysis.runs import LOBBY, TIME_TRIAL, split_runs, starts_run
 from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
@@ -128,6 +129,12 @@ class LapRow:
     crawl_s: float | None = None
     off_track_s: float | None = None
     spin_s: float | None = None
+    # GT7's own clock at the ends of this lap. What the stint header shows as
+    # the hours it was driven through, which is the conditions the stint
+    # belongs to - GT7 broadcasts no track or air temperature, so this is the
+    # only channel that says whether a stint was run in daylight.
+    tod_start_ms: int | None = None
+    tod_end_ms: int | None = None
 
     @property
     def counted(self) -> bool:
@@ -278,6 +285,81 @@ class SessionBreak(QWidget):
         row.addWidget(rule, 1)
 
 
+class StintHeader(QWidget):
+    """What one stint did, above the laps that did it.
+
+    The same three statistics as the session total below the title - best,
+    median, fuel per lap - so the two read as comparable rather than as
+    different measurements. A stint is the unit a race is planned in; a
+    session is just when he happened to be sitting down.
+
+    It also carries the **game clock**, which costs nothing because
+    `time_of_day_ms` is captured on every frame and stored at both ends of
+    every lap. GT7 broadcasts neither track nor air temperature, so the hour
+    is the only channel that says which conditions a stint's numbers belong
+    to - and a race that runs into the dark is not described by a stint driven
+    at four in the afternoon.
+
+    Counted laps only, for every figure. An out-lap in the median would make
+    every stint look slower than it was, which is the whole reason they are
+    struck.
+    """
+
+    HEIGHT = 34
+
+    def __init__(self, number: int, rows: list, *, started_at: str | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(self.HEIGHT)
+        line = QHBoxLayout(self)
+        line.setContentsMargins(CompoundBand.WIDTH + 8, 0, 16, 0)
+        line.setSpacing(0)
+
+        counted = [row for row in rows if row.counted]
+        times = sorted(row.lap_time_ms for row in counted if row.lap_time_ms > 0)
+        burns = sorted(row.fuel_used for row in counted if row.fuel_used > 0)
+
+        spec = SpecLine()
+        compound = {row.compound for row in rows if row.compound}
+        spec.add(f"Stint {number}",
+                 compound.pop() if len(compound) == 1 else "—", emphasis=True)
+        spec.add("Laps", f"{len(counted)}/{len(rows)}")
+        if times:
+            spec.add("Best", format_lap_time(times[0]), emphasis=True)
+            spec.add("Median", format_lap_time(times[len(times) // 2]))
+        if burns:
+            spec.add("Fuel", f"{burns[len(burns) // 2]:.2f} L/lap")
+        span = game_clock_span(rows)
+        if span:
+            # Derived ink: it is GT7's clock, not the wall clock, and the two
+            # are not the same thing at a time multiplier.
+            spec.add("Game", span, derived=True)
+        if started_at:
+            spec.add("Started", started_at[:16].replace("T", " "), derived=True)
+        spec.finish()
+        line.addWidget(spec)
+
+        rule = QWidget()
+        rule.setFixedHeight(1)
+        rule.setStyleSheet(f"background: {theme.TREAD};")
+        line.addWidget(rule, 1)
+
+
+def game_clock_span(rows: list) -> str | None:
+    """The game hours this stint was driven through, as `16:12 - 18:50`.
+
+    None where no lap of it carried GT7's clock: the channel is absent from
+    the packet formats below `~`, and a stint with no clock has nothing to say
+    about conditions rather than having been driven at midnight.
+    """
+    starts = [row.tod_start_ms for row in rows if row.tod_start_ms is not None]
+    ends = [row.tod_end_ms for row in rows if row.tod_end_ms is not None]
+    if not starts or not ends:
+        return None
+    first, last = clock(starts[0] / 3_600_000.0), clock(ends[-1] / 3_600_000.0)
+    return first if first == last else f"{first} - {last}"
+
+
 class RackRow(QWidget):
     """One lap in the rack."""
 
@@ -398,6 +480,9 @@ class RackRow(QWidget):
 
         self.exclude_button = MarkButton("Strike", parent=self)
         self.exclude_button.setFixedWidth(W_ACTION)
+        keep = self.exclude_button.sizePolicy()
+        keep.setRetainSizeWhenHidden(True)
+        self.exclude_button.setSizePolicy(keep)
         self.exclude_button.setMinimumHeight(30)
         self.exclude_button.setFont(theme.stencil_font(12, tracking=6.0))
         self.exclude_button.clicked.connect(self._on_exclude)
@@ -450,10 +535,14 @@ class RackRow(QWidget):
         self.time_label.setStyleSheet(f"color: {ink}; background: transparent;")
 
         if self.row.structural_reason():
-            # An out-lap or in-lap is structurally uncounted; there is nothing
-            # to toggle, and the reason already reads in the marker column.
-            # Hidden rather than emptied: a bordered button with no label is a
-            # control that looks broken instead of absent.
+            # An out-lap, in-lap or incident is structurally uncounted; there
+            # is nothing to toggle, and the reason already reads in the marker
+            # column. Hidden rather than emptied: a bordered button with no
+            # label is a control that looks broken instead of absent. Its
+            # space is kept, because a hidden widget surrenders its width to
+            # the stretch beside it and every control on the row slides right
+            # - so a rack with one out-lap in it has one row out of line with
+            # the rest.
             self.exclude_button.setVisible(False)
         else:
             # Labelled with what pressing it does, not with what the lap
@@ -663,16 +752,26 @@ class PracticeScreen(QWidget):
         ends = stint_end_ids(self._rows)
         starts = run_start_ids(self._rows)
         self._rendered_ends = ends
+        # A header per stint rather than a rule per session. A stint is the
+        # unit a race is planned in, and a session that goes out three times
+        # on three sets is three stints - which the old rule drew as one
+        # continuous run of laps.
+        stints = {run.first_lap: (number, list(run.laps))
+                  for number, run in enumerate(split_runs(self._rows), start=1)}
         seen_session: int | None = None
-        for index, row in enumerate(self._rows):
-            # A separator wherever the recorded session changes, so coming back
-            # the next day reads as a new run rather than as more of the same
-            # one. Not before the first row - there is nothing to separate it
-            # from.
-            if row.session_id is not None and row.session_id != seen_session:
-                if index:
-                    self.rack_layout.addWidget(SessionBreak(row.session_started))
+        for row in self._rows:
+            new_session = (row.session_id is not None
+                           and row.session_id != seen_session)
+            if new_session:
                 seen_session = row.session_id
+            stint = stints.get(row.lap_num)
+            if stint is not None:
+                number, laps = stint
+                self.rack_layout.addWidget(StintHeader(
+                    number, laps,
+                    # The wall clock only where the sitting changed, so three
+                    # stints in one evening do not repeat the same timestamp.
+                    started_at=row.session_started if new_session else None))
 
             widget = RackRow(row, best, stint_end=row.lap_id in ends,
                              run_start=row.lap_id in starts)
