@@ -7,6 +7,11 @@ All three are read here.
 The rule that matters: **never silently drop a line.** Anything not understood
 comes back in `unmatched` so the screen can show it, because a value quietly
 missed is a setup change the driver thinks he made and did not.
+
+A reply carries **two** sheets - race and qualifying - because the prompts ask
+for both. `parse_reply` reads the whole envelope; `parse_sheet` keeps its old
+single-sheet meaning and returns the race one, which is what every existing
+caller wants and what a hand-pasted block has always been.
 """
 from __future__ import annotations
 
@@ -90,6 +95,97 @@ def _resolve_key(label: str) -> str | None:
     return _ALIASES.get(collapsed)
 
 
+RACE = "race"
+QUALIFYING = "qualifying"
+
+
+@dataclass
+class ParsedReply:
+    """A whole reply: the sheets it carried, and what it could not read."""
+    sheets: dict = field(default_factory=dict)
+    clamped: list = field(default_factory=list)
+    test_first: list = field(default_factory=list)
+    why: dict = field(default_factory=dict)
+    unmatched: list = field(default_factory=list)
+    source: str = "text"
+
+    @property
+    def race(self):
+        return self.sheets.get(RACE)
+
+    @property
+    def qualifying(self):
+        return self.sheets.get(QUALIFYING)
+
+    def summary(self) -> str:
+        if not self.sheets:
+            return "no sheet found"
+        parts = [f"{purpose}: {sheet.summary()}"
+                 for purpose, sheet in sorted(self.sheets.items())]
+        if self.clamped:
+            parts.append(f"{len(self.clamped)} value(s) clamped to a limit")
+        return "; ".join(parts)
+
+
+def parse_reply(text: str) -> ParsedReply:
+    """Read a whole reply, both sheets and the reasons.
+
+    Falls back to reading the text as one sheet, so a reply that ignored
+    the contract still gets entered rather than refused - the driver
+    pasting something is a driver trying to record a setup, and the app
+    refusing on a formatting technicality helps nobody.
+    """
+    stripped = (text or "").strip()
+    if stripped.startswith("{"):
+        envelope = _parse_envelope(stripped)
+        if envelope is not None:
+            return envelope
+    single = parse_sheet(stripped)
+    reply = ParsedReply(source=single.source, unmatched=single.unmatched)
+    if single.values or single.gears:
+        reply.sheets[RACE] = single
+    return reply
+
+
+def _parse_envelope(text: str) -> ParsedReply | None:
+    """The `sheets` envelope the prompts ask for, or None if this is not one."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sheets = payload.get("sheets")
+    if not isinstance(sheets, list):
+        return None
+
+    reply = ParsedReply(source="json")
+    for entry in sheets:
+        if not isinstance(entry, dict):
+            continue
+        parsed = _parse_json(json.dumps(entry))
+        if parsed is None:
+            continue
+        # An untagged sheet is the race sheet. The prompts ask for the tag
+        # and a reply that omitted it has still sent the sheet that
+        # matters most, so it is filed rather than dropped.
+        purpose = entry.get("purpose") or RACE
+        reply.sheets[purpose] = parsed
+        reply.unmatched.extend(parsed.unmatched)
+        why = entry.get("why")
+        if isinstance(why, dict):
+            reply.why[purpose] = {
+                key: str(value) for key, value in why.items()
+                if key in SETUP_KEY_NAMES}
+
+    for field_name, target in (("clamped", "clamped"),
+                               ("testFirst", "test_first")):
+        value = payload.get(field_name)
+        if isinstance(value, list):
+            setattr(reply, target, [str(item) for item in value])
+    return reply if reply.sheets else None
+
+
 def parse_sheet(text: str) -> ParsedSheet:
     """Read a pasted sheet. Always returns a result; never raises on junk."""
     if not text or not text.strip():
@@ -97,6 +193,11 @@ def parse_sheet(text: str) -> ParsedSheet:
 
     stripped = text.strip()
     if stripped.startswith("{"):
+        # A whole reply envelope reduces to its race sheet here, so every
+        # existing caller keeps working against the new contract.
+        envelope = _parse_envelope(stripped)
+        if envelope is not None and envelope.race is not None:
+            return envelope.race
         parsed = _parse_json(stripped)
         if parsed is not None:
             return parsed

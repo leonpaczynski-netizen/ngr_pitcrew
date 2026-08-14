@@ -218,11 +218,41 @@ def test_an_unmeasured_car_falls_back_to_a_labelled_estimate(store):
 
 # ------------------------------------------------------- 3. round trip
 
-def test_the_outcome_prompt_asks_for_the_paste_block_the_parser_reads(store,
-                                                                      practice_event):
-    text = prompt_for(store, practice_event, OUTCOME).text
-    assert "`gt7-pitcrew/1.3` paste block" in text
-    assert "race block first, then qualifying, one block per sheet" in text
+@pytest.mark.parametrize("kind", KINDS)
+def test_every_prompt_asks_for_the_block_the_parser_reads(store, practice_event,
+                                                          kind):
+    """All three, not one.
+
+    The outcome prompt already asked for a paste block per sheet - the right
+    instinct, left in the wrong place. The brief and the refinement asked for
+    nothing, so two replies in three came back as prose only and every value
+    was retyped by hand.
+    """
+    text = prompt_for(store, practice_event, kind).text
+    assert "gt7-pitcrew-reply/1.0" in text
+    assert "\"purpose\": \"race\"" in text
+    assert "qualifying" in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_every_prompt_still_asks_for_the_readable_sheet(store, practice_event,
+                                                        kind):
+    """In addition to the JSON, never instead of it. He reads the prose and
+    argues with it; the app reads the JSON and enters it. Trading one for the
+    other swaps a transcription problem for a comprehension one."""
+    text = prompt_for(store, practice_event, kind).text
+    assert "GT7 in-game layout" in text
+    assert "never instead of them" in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_the_key_vocabulary_travels_with_the_ask(store, practice_event, kind):
+    """A key list the reply has to match exactly is not something to make
+    anybody go and look up, and an invented key is dropped on the way back
+    in."""
+    text = prompt_for(store, practice_event, kind).text
+    for key in ("rh_f", "cam_r", "lsd_i", "bb"):
+        assert f"`{key}`" in text
 
 
 def test_a_returned_block_still_parses_to_the_acceptance_string():
@@ -263,7 +293,14 @@ def test_absent_telemetry_omits_the_fence_rather_than_emitting_an_empty_one(
         store, bare_event, kind):
     text = prompt_for(store, bare_event, kind).text
     assert "**Not used this session.**" in text
-    assert "```json" not in text
+    # The *payload* fence, specifically. Every prompt now carries a
+    # second json fence - the shape the reply has to come back in -
+    # and that one is a template rather than data, so it is there
+    # whether or not the session produced any telemetry.
+    assert "gt7-pitcrew/" not in text
+    assert "gt7-pitcrew-reply/" in text, (
+        "the reply contract is a template, not data - it is asked for "
+        "whether or not the session produced any telemetry")
     assert "```\n```" not in text
 
 

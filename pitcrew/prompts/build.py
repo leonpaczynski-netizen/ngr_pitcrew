@@ -149,6 +149,39 @@ def _range_rows(ranges: ctx.Ranges) -> list[str]:
     return rows
 
 
+def _return_contract(lines, *, quali_rule: bool = True,
+                     extra: str | None = None) -> None:
+    """How to send the sheets back so the app can read them.
+
+    Every prompt asked for markdown and nothing else, so every reply came
+    back as markdown - and a setup sheet that only exists as prose is one the
+    driver retypes by hand, which is where transcription errors come from.
+    The reader was already there: `setup/parse.py` has always accepted the
+    export contract's own JSON. The prompt simply never asked for it.
+
+    Asked for **in addition to** the readable sheet, never instead of it. He
+    reads the prose and argues with it; the app reads the JSON and enters it.
+    Replacing one with the other would trade a transcription problem for a
+    comprehension one.
+    """
+    shared = templates()["shared"]
+    lines.add("", shared["returnHeading"])
+    lines.add(shared["returnLead"])
+    if extra:
+        lines.add("", extra)
+    if quali_rule:
+        lines.add("", shared["returnQualiRule"])
+    lines.add("")
+    lines.add(*shared["returnRules"])
+    lines.add("")
+    lines.add(*shared["returnShape"])
+    lines.add("", shared["returnVocabHeading"])
+    # The vocabulary itself rather than a pointer to it. A key list the reply
+    # has to match exactly is not something to make anybody go and look up,
+    # and an invented key is silently dropped on the way back in.
+    lines.add("", "`" + "`, `".join(SETUP_KEY_NAMES) + "`")
+
+
 def _ranges_section(lines: Lines, ranges: ctx.Ranges, *, brief: bool) -> None:
     """The slider ranges, and — the part that matters — how much they are worth.
 
@@ -493,6 +526,7 @@ def _build_brief(context: ctx.PromptContext, report: DriverReport,
     lines.add(*template["required"])
     if context.ranges:
         lines.add(template["requiredRangeCheck"])
+    _return_contract(lines)
     lines.add("", "---")
     lines.add(template["footer"].format(
         date=today, baseline=templates()["gt7Baseline"],
@@ -719,6 +753,7 @@ def _build_refinement(context: ctx.PromptContext, report: DriverReport,
 
     lines.add(template["requiredHeading"])
     lines.add(*template["required"])
+    _return_contract(lines)
     lines.add("", template["hierarchy"], "", "---")
     lines.add(template["footer"].format(
         date=today, baseline=templates()["gt7Baseline"],
@@ -797,6 +832,7 @@ def _build_outcome(context: ctx.PromptContext, report: DriverReport,
     lines.add(template["requiredHeading"])
     lines.add(*template["required"])
     lines.add("", template["requiredEmphasis"])
+    _return_contract(lines, extra=template["returnLeadExtra"])
     lines.add("", template["hierarchy"], "", "---")
     lines.add(template["footer"].format(
         date=today, baseline=templates()["gt7Baseline"],
