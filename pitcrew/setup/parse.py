@@ -1,8 +1,11 @@
 """Read a setup sheet the tune builder returned, in whatever shape it came in.
 
-The sheet arrives as pasted text. It might be the export contract's own JSON,
-it might be `rh_f: 62` lines, it might be a markdown table with human labels.
-All three are read here.
+The sheet arrives as pasted text, and what gets pasted is **the whole reply**
+- two readable setup sheets, a diagnosis, a delta table, and the JSON block
+the contract asks for somewhere near the end. So the block is dug out of the
+prose around it rather than expected to be the whole paste. It might also be
+the export contract's own JSON on its own, or `rh_f: 62` lines, or a markdown
+table with human labels. All of them are read here.
 
 The rule that matters: **never silently drop a line.** Anything not understood
 comes back in `unmatched` so the screen can show it, because a value quietly
@@ -95,6 +98,36 @@ def _resolve_key(label: str) -> str | None:
     return _ALIASES.get(collapsed)
 
 
+# A fenced code block, with or without a language tag. The contract asks for
+# ```json, but a reply that fences it bare is trying to do the right thing and
+# must not be punished for it.
+_FENCE = re.compile(r"```[a-zA-Z]*\s*\n(.*?)```", re.S)
+
+
+def json_blocks(text: str) -> list[str]:
+    """Every JSON object in a pasted reply, in the order they appear.
+
+    **This is the difference between the contract working and not.** The
+    prompt asks for one fenced block at the end of a reply that is otherwise
+    prose - two readable setup sheets, a diagnosis, a delta table - and what
+    gets pasted is the whole reply, because that is what copying a reply
+    means. Looking at the text only when it *starts* with a brace found the
+    JSON in none of them: it fell through to the line reader, picked what it
+    could out of the markdown table, and lost the second sheet in silence.
+
+    Fenced blocks first, then the whole text if it is itself an object. A
+    bare brace span embedded in prose is deliberately not hunted for - a
+    regex that goes looking for balanced braces in arbitrary text finds
+    things that are not JSON, and the failure mode is worse than not finding
+    it at all.
+    """
+    blocks = [match.group(1).strip() for match in _FENCE.finditer(text)]
+    stripped = (text or "").strip()
+    if stripped.startswith("{"):
+        blocks.append(stripped)
+    return [block for block in blocks if block.startswith("{")]
+
+
 RACE = "race"
 QUALIFYING = "qualifying"
 
@@ -136,10 +169,19 @@ def parse_reply(text: str) -> ParsedReply:
     refusing on a formatting technicality helps nobody.
     """
     stripped = (text or "").strip()
-    if stripped.startswith("{"):
-        envelope = _parse_envelope(stripped)
+    # Last first: the contract says the block goes at the end, and where a
+    # reply carries more than one the last is the one that was meant.
+    for block in reversed(json_blocks(stripped)):
+        envelope = _parse_envelope(block)
         if envelope is not None:
             return envelope
+    for block in reversed(json_blocks(stripped)):
+        single = _parse_json(block)
+        if single is not None and (single.values or single.gears):
+            reply = ParsedReply(source="json", unmatched=single.unmatched)
+            reply.sheets[RACE] = single
+            return reply
+
     single = parse_sheet(stripped)
     reply = ParsedReply(source=single.source, unmatched=single.unmatched)
     if single.values or single.gears:
@@ -192,13 +234,14 @@ def parse_sheet(text: str) -> ParsedSheet:
         return ParsedSheet()
 
     stripped = text.strip()
-    if stripped.startswith("{"):
-        # A whole reply envelope reduces to its race sheet here, so every
-        # existing caller keeps working against the new contract.
-        envelope = _parse_envelope(stripped)
+    # A whole reply envelope reduces to its race sheet here, so every existing
+    # caller keeps working against the new contract - and the block is looked
+    # for inside the prose, because a pasted reply is mostly prose.
+    for block in reversed(json_blocks(stripped)):
+        envelope = _parse_envelope(block)
         if envelope is not None and envelope.race is not None:
             return envelope.race
-        parsed = _parse_json(stripped)
+        parsed = _parse_json(block)
         if parsed is not None:
             return parsed
     return _parse_lines(stripped)

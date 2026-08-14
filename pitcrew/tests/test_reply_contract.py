@@ -139,3 +139,99 @@ def test_the_summary_names_both_sheets():
     summary = parse_reply(a_reply()).summary()
     assert RACE in summary and QUALIFYING in summary
     assert "clamped" in summary
+
+
+# ------------------------------------------- what actually arrives in the box
+#
+# He copies the whole reply. That is what copying a reply means: two readable
+# setup sheets, a diagnosis, a delta table, and the JSON block somewhere near
+# the end. Reading the text only when it *starts* with a brace found the JSON
+# in none of them - it fell through to the line reader, took what it could out
+# of the markdown table, and lost the second sheet in silence.
+
+WHOLE_REPLY = """Here is the revised setup for Monza.
+
+## Race sheet
+
+| Parameter | Value | Clicks from min | % of range |
+|---|---|---|---|
+| Ride height front | 62 mm | 7 | 28% |
+| Camber front | -3.2 | 16 | 53% |
+
+The front ride height comes up to settle the entry understeer.
+
+## Qualifying sheet
+
+Same as race with a softer rear bar.
+
+```json
+{
+  "contract": "gt7-pitcrew-reply/1.0",
+  "sheets": [
+    {"purpose": "race", "sheetName": "Monza race v4",
+     "values": {"rh_f": 62, "cam_f": -3.2}, "gears": [3.10, 2.28]},
+    {"purpose": "qualifying", "sheetName": "Monza quali v4",
+     "values": {"rh_f": 58, "cam_f": -3.5}}
+  ],
+  "clamped": [],
+  "testFirst": ["rear ARB one softer if it is still loose on exit"]
+}
+```
+
+Let me know how it feels."""
+
+
+def test_the_whole_reply_pasted_finds_both_sheets():
+    reply = parse_reply(WHOLE_REPLY)
+    assert set(reply.sheets) == {RACE, QUALIFYING}
+    assert reply.race.values == {"rh_f": 62.0, "cam_f": -3.2}
+    assert reply.qualifying.values == {"rh_f": 58.0, "cam_f": -3.5}
+    assert reply.race.gears == [3.10, 2.28]
+    assert reply.test_first
+
+
+def test_the_json_wins_over_the_markdown_table_beside_it():
+    """Both are in the paste and they are the same sheet twice. The JSON is
+    the one that was written to be read."""
+    reply = parse_reply(WHOLE_REPLY)
+    assert reply.source == "json"
+    assert reply.unmatched == [], "the prose is not junk to be reported"
+
+
+def test_a_block_fenced_without_a_language_tag_still_reads():
+    """A reply that fences it bare is trying to do the right thing."""
+    text = "Here you go.\n\n```\n" + json.dumps(
+        {"sheets": [{"purpose": "race", "values": {"rh_f": 60}}]}) + "\n```\n"
+    assert parse_reply(text).race.values == {"rh_f": 60.0}
+
+
+def test_the_last_block_is_the_one_that_counts():
+    """The contract puts it at the end, so where a reply carries more than one
+    the last is the one that was meant - a revision after a first attempt, or
+    the prompt's own example quoted back."""
+    first = json.dumps({"sheets": [{"purpose": "race", "values": {"rh_f": 99}}]})
+    last = json.dumps({"sheets": [{"purpose": "race", "values": {"rh_f": 60}}]})
+    text = f"First thought:\n```json\n{first}\n```\nOn reflection:\n```json\n{last}\n```"
+    assert parse_reply(text).race.values == {"rh_f": 60.0}
+
+
+def test_prose_with_no_block_at_all_still_falls_back_to_reading_it():
+    """A reply that ignored the contract is still a reply. Refusing on a
+    formatting technicality helps nobody."""
+    reply = parse_reply(
+        "## Race sheet\n\nRide Height (Front): 62\nCamber Front: -3.2\n")
+    assert reply.race.values == {"rh_f": 62.0, "cam_f": -3.2}
+
+
+def test_the_shape_the_prompt_prints_is_the_shape_the_parser_reads():
+    """The round trip that matters: the example in the prompt, fed to the app.
+
+    If these two drift, every reply is malformed and nothing says so.
+    """
+    from pitcrew.prompts.templates import templates
+
+    shape = "\n".join(templates()["shared"]["returnShape"])
+    reply = parse_reply(shape)
+    assert reply.race is not None, "the prompt's own example must parse"
+    assert reply.race.values, "and must carry values"
+    assert reply.clamped and reply.test_first
