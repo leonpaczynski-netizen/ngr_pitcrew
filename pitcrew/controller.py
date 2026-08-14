@@ -21,6 +21,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from pitcrew import settings
+from pitcrew.analysis.runs import auto_out_laps
 from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
     PushToTalk,
@@ -239,6 +240,7 @@ class PitCrewController(QObject):
         self.practice.recording_toggled.connect(self._on_recording_toggled)
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
+        self.practice.practice_mode_changed.connect(self._on_practice_mode)
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
             self.strategy.approve_requested.connect(self.approve_strategy)
@@ -939,7 +941,8 @@ class PitCrewController(QObject):
 
         self.bridge.reset()
         self.session_id = self.store.start_session(
-            event["id"], "practice", setup_sheet_id=sheet_id)
+            event["id"], "practice", setup_sheet_id=sheet_id,
+            practice_mode=self.practice.practice_mode())
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
@@ -1047,6 +1050,23 @@ class PitCrewController(QObject):
             session_id=self.session_id,
         ))
 
+    def _on_practice_mode(self, mode: str) -> None:
+        """He changed his mind about where the car starts.
+
+        Written straight through to the open session rather than held until
+        the next one: the question is asked once, immediately before going
+        out, which is the worst moment to make anybody answer carefully. It is
+        also the answer that decides whether the session's opening lap counts,
+        so it has to be correctable after the fact.
+        """
+        if self.session_id is not None:
+            self.store.set_practice_mode(self.session_id, mode)
+        event = self.active_event()
+        if event:
+            # The rack redraws because the answer moves which laps are
+            # out-laps, and that is visible on it.
+            self.practice.set_laps(self._rows_for_event(event["id"]))
+
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""
         row = next((r for r in self.practice.rows() if r.lap_id == lap_id), None)
@@ -1059,6 +1079,10 @@ class PitCrewController(QObject):
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
 
+    @staticmethod
+    def _column(row, name: str):
+        return row[name] if name in row.keys() else None
+
     def _rows_for_event(self, event_id: int) -> list[LapRow]:
         """Every practice lap at this event, numbered continuously.
 
@@ -1067,7 +1091,8 @@ class PitCrewController(QObject):
         database id is what every edit is written against, so renumbering the
         display cannot mis-file a mark.
         """
-        return [
+        stored = self.store.list_event_laps(event_id, "practice")
+        rows = [
             LapRow(
                 lap_id=row["id"],
                 lap_num=index,
@@ -1077,6 +1102,8 @@ class PitCrewController(QObject):
                 fuel_end=row["fuel_end"],
                 tyres_fresh=(None if row["tyres_fresh"] is None
                              else bool(row["tyres_fresh"])),
+                tyres_changed=(None if self._column(row, "tyres_changed") is None
+                                else bool(row["tyres_changed"])),
                 compound=row["compound"],
                 is_out_lap=bool(row["is_out_lap"]),
                 is_pit_lap=bool(row["is_pit_lap"]),
@@ -1088,10 +1115,22 @@ class PitCrewController(QObject):
                 wear_rr=row["wear_rr"],
                 session_id=row["session_id"],
                 session_started=row["session_started"],
+                practice_mode=self._column(row, "practice_mode"),
+                lap_num_in_session=row["lap_num"],
             )
-            for index, row in enumerate(
-                self.store.list_event_laps(event_id, "practice"), 1)
+            for index, row in enumerate(stored, 1)
         ]
+
+        # **The rack names the out-laps itself.** It must reach the same
+        # answer as the export or a lap would read as counted on the screen
+        # and be excluded in the payload, so the rule is imported rather than
+        # restated - and it is the rule, not the stored flag, because the flag
+        # is zero on every lap recorded before the app could see a pit stop.
+        # A lap the live path already flagged keeps its flag either way.
+        for row in rows:
+            if row.lap_num in auto_out_laps(rows):
+                row.is_out_lap = True
+        return rows
 
     def _report_health(self) -> None:
         """Say which of the several silences this one is.

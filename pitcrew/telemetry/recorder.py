@@ -107,6 +107,12 @@ _MIN_SPEED_FOR_SLIP_MS = 2.0
 # Index of `time_of_day_ms` in a frame row, so the clock span can be lifted
 # out of the rows without decoding them again.
 _TOD_INDEX = FRAME_FIELDS.index("time_of_day_ms")
+_SPEED_INDEX = FRAME_FIELDS.index("speed_kph")
+
+# Below this the car has not set off. Not zero: the release from a standstill
+# passes through fractions of a km/h and a hard zero would call the first
+# creep "moving".
+_MOVING_KPH = 5.0
 
 
 @dataclass(frozen=True)
@@ -129,6 +135,14 @@ class LapFrames:
     # that starts at 15:56 and runs at six times real speed, and cached it.
     tod_start_ms: int | None = None
     tod_end_ms: int | None = None
+    # **How long the car sat before it set off**, on this lap. Only the first
+    # lap of a session has anything to say with it, and what it says is which
+    # kind of session this was: out of the pit box in a lobby, or already on
+    # the track ahead of the line in a time trial. Measured across the capture
+    # set the two do not overlap - 0 to 4.6 s against 43 to 80 s, with nothing
+    # in between. It corroborates the driver's declaration; it never overrules
+    # it.
+    standing_start_ms: int | None = None
 
     @property
     def size_bytes(self) -> int:
@@ -168,6 +182,21 @@ def clock_span(rows: list[list]) -> tuple[int | None, int | None]:
     stamps = [row[_TOD_INDEX] for row in rows
               if len(row) > _TOD_INDEX and row[_TOD_INDEX] is not None]
     return (stamps[0], stamps[-1]) if stamps else (None, None)
+
+
+def standing_start_ms(rows: list[list], sample_hz: float = SAMPLE_HZ) -> int | None:
+    """Milliseconds from the first recorded frame until the car set off.
+
+    `None` where the speed channel is absent. `0` is a real answer and means
+    the car was already moving when the recording picked it up.
+    """
+    rate = sample_hz or SAMPLE_HZ
+    for index, row in enumerate(rows):
+        if len(row) <= _SPEED_INDEX or row[_SPEED_INDEX] is None:
+            continue
+        if row[_SPEED_INDEX] > _MOVING_KPH:
+            return int(round(index * 1000.0 / rate))
+    return None
 
 
 def decode_frames(blob: bytes) -> list[dict]:
@@ -330,12 +359,14 @@ class LapRecorder:
         if not rows:
             return None
         start, end = clock_span(rows)
+        rate = SAMPLE_HZ / self._sample_every
         return LapFrames(
             frame_count=len(rows),
-            sample_hz=SAMPLE_HZ / self._sample_every,
+            sample_hz=rate,
             blob=encode_frames(rows),
             tod_start_ms=start,
             tod_end_ms=end,
+            standing_start_ms=standing_start_ms(rows, rate),
         )
 
     def take_lap(self) -> LapFrames | None:

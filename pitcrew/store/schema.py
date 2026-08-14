@@ -364,6 +364,19 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # cached reading this being unreachable produced.
         ("tod_start_ms", "INTEGER"),
         ("tod_end_ms", "INTEGER"),
+        ("standing_start_ms", "INTEGER"),
+    ),
+    "sessions": (
+        # **Which kind of practice this was**, because it decides whether the
+        # session's opening lap is an out-lap. Out of the box in a lobby it
+        # always is. In a time trial the car starts on the track ahead of the
+        # start/finish line, so the first lap is timed from the line like any
+        # other - and striking it would throw away the session's best lap,
+        # which it is in six of the eight time trials on record.
+        #
+        # Declared by the driver, never guessed from the game. Null on every
+        # session recorded before the question was asked.
+        ("practice_mode", "TEXT"),
     ),
 }
 

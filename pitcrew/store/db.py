@@ -338,13 +338,26 @@ class Store:
 
     def start_session(self, event_id: int, kind: str,
                       tune_label: str | None = None,
-                      setup_sheet_id: int | None = None) -> int:
+                      setup_sheet_id: int | None = None,
+                      practice_mode: str | None = None) -> int:
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO sessions (event_id, kind, tune_label, setup_sheet_id, "
-                "started_at) VALUES (?, ?, ?, ?, ?)",
-                (event_id, kind, tune_label, setup_sheet_id, _now()))
+                "practice_mode, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, kind, tune_label, setup_sheet_id, practice_mode,
+                 _now()))
             return int(cur.lastrowid)
+
+    def set_practice_mode(self, session_id: int, mode: str | None) -> None:
+        """Say which kind of session this was, or unsay it.
+
+        Editable after the fact because it is only ever asked once, at the
+        moment he is about to go out, and that is the worst time to make
+        somebody answer a question carefully.
+        """
+        with self._write() as conn:
+            conn.execute("UPDATE sessions SET practice_mode = ? WHERE id = ?",
+                         (mode, session_id))
 
     def note_stream_facts(self, session_id: int, *, packet_format: str | None = None,
                           car_category: str | None = None,
@@ -414,7 +427,8 @@ class Store:
                 "(session_id, lap_num, lap_time_ms, delta_ms, fuel_start, fuel_end, "
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "
-                " recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " standing_start_ms, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -426,6 +440,7 @@ class Store:
                  getattr(lap, "fuel_added_l", None),
                  frames.tod_start_ms if frames is not None else None,
                  frames.tod_end_ms if frames is not None else None,
+                 frames.standing_start_ms if frames is not None else None,
                  _now()))
             lap_id = int(cur.lastrowid)
             if frames is not None:
@@ -442,7 +457,8 @@ class Store:
 
     def list_event_laps(self, event_id: int, kind: str = "practice") -> list[dict]:
         rows = self._query(
-            "SELECT laps.*, sessions.started_at AS session_started "
+            "SELECT laps.*, sessions.started_at AS session_started, "
+            "       sessions.practice_mode AS practice_mode "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? AND sessions.kind = ? "
             # `started_at` is second-resolution, so two runs begun in the same

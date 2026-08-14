@@ -9,7 +9,12 @@ from pitcrew.export.build import build_session_export, multiplier_factor
 from pitcrew.export.payload import to_json, validate
 from pitcrew.setup.sheet import RangeRecord, SetupChange, SetupSheet
 from pitcrew.store.db import Store
-from pitcrew.telemetry.recorder import FRAME_FIELDS, clock_span, encode_frames
+from pitcrew.telemetry.recorder import (
+    FRAME_FIELDS,
+    clock_span,
+    encode_frames,
+    standing_start_ms,
+)
 from pitcrew.telemetry.session_state import Lap
 
 from .test_corners import synthetic_lap
@@ -29,6 +34,7 @@ class StoredFrames:
         self.sample_hz = 60.0
         self.blob = encode_frames(rows)
         self.tod_start_ms, self.tod_end_ms = clock_span(rows)
+        self.standing_start_ms = standing_start_ms(rows, self.sample_hz)
 
 
 def _frames_as_rows(frames: list[dict]) -> StoredFrames:

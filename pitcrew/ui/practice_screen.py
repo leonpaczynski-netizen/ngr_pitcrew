@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pitcrew.analysis.runs import starts_run
+from pitcrew.analysis.runs import LOBBY, TIME_TRIAL, starts_run
 from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
@@ -33,6 +33,7 @@ from pitcrew.ui.widgets import (
     block_wheel,
     CompoundBand,
     Declared,
+    Field,
     MarkButton,
     Measured,
     Plate,
@@ -96,6 +97,10 @@ class LapRow:
     # The driver's declaration that this lap went out on a fresh set. Tri-state
     # all the way to the export: None means he has not said.
     tyres_fresh: bool | None = None
+    # What the stop before this lap did to the tyres, observed in the stream.
+    # None where no stop was captured. The rack needs it because it is what
+    # opens a run, and the run boundary is where a fresh set is declared.
+    tyres_changed: bool | None = None
     compound: str | None = None
     is_out_lap: bool = False
     is_pit_lap: bool = False
@@ -109,6 +114,13 @@ class LapRow:
     # one day's running ended and the next began. Display-only.
     session_id: int | None = None
     session_started: str | None = None
+    # Where the car started this session: `lobby` or `time-trial`. It decides
+    # whether the session's opening lap is an out-lap, which is the one thing
+    # about a session GT7 cannot tell us.
+    practice_mode: str | None = None
+    # This lap's number within its own session, as opposed to the display
+    # number that runs through the whole event.
+    lap_num_in_session: int = 0
 
     @property
     def counted(self) -> bool:
@@ -120,6 +132,10 @@ class LapRow:
         if self.is_pit_lap:
             return "in-lap"
         return None
+
+    @property
+    def is_first_of_session(self) -> bool:
+        return self.lap_num_in_session == 1
 
     @property
     def wear(self) -> dict[str, float | None]:
@@ -407,11 +423,19 @@ class RackRow(QWidget):
         self.restructured.emit(self.row.lap_id)
 
     def _sync(self) -> None:
-        struck = not self.row.counted
+        # **A structural lap is dimmed, not ruled through.** Striking says
+        # "this did not happen"; an out-lap very much happened and its time is
+        # evidence about how long the tyres take to come in and what a stop
+        # costs. It is out of the *counted* set, which the dimming and the
+        # OUT-LAP marker both say, and it stays legible on the rack rather
+        # than being crossed out - which is what he asked for, and the reason
+        # he was crossing them out by hand in the first place.
+        struck = self.row.excluded and not self.row.structural_reason()
+        uncounted = not self.row.counted
         self.frame.setStruck(struck)
-        self.band.setStruck(struck)
+        self.band.setStruck(uncounted)
 
-        ink = theme.STENCIL_DIM if struck else theme.STENCIL
+        ink = theme.STENCIL_DIM if uncounted else theme.STENCIL
         self.time_label.setStyleSheet(f"color: {ink}; background: transparent;")
 
         if self.row.structural_reason():
@@ -435,6 +459,7 @@ class PracticeScreen(QWidget):
     export_requested = pyqtSignal()
     lap_changed = pyqtSignal(int)
     recording_toggled = pyqtSignal(bool)
+    practice_mode_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -459,6 +484,25 @@ class PracticeScreen(QWidget):
                                   colour=theme.STENCIL_DIM)
         titles.addWidget(self.subtitle)
         header.addLayout(titles, 1)
+
+        # Where the car will be when the session starts, which is the one
+        # thing about a session the stream cannot tell us and which decides
+        # whether its opening lap is an out-lap. Asked here, next to the
+        # button, because it is the last thing true before he goes out.
+        self.mode_picker = QComboBox()
+        self.mode_picker.addItem("Lobby - out of the pits", LOBBY)
+        self.mode_picker.addItem("Time trial - on track", TIME_TRIAL)
+        self.mode_picker.setToolTip(
+            "In a lobby the car starts in the pit box, so the first lap is an "
+            "out-lap and the app strikes it for you. "
+            "In a time trial it starts on the track ahead of the line, so the "
+            "first lap is timed like any other - and it is the fastest lap of "
+            "the session more often than not.")
+        block_wheel(self.mode_picker)
+        self.mode_picker.currentIndexChanged.connect(
+            lambda: self.practice_mode_changed.emit(self.practice_mode()))
+        header.addWidget(Field("Starting", self.mode_picker), 0,
+                         Qt.AlignmentFlag.AlignBottom)
 
         self.record_button = MarkButton("Start practice", primary=True)
         self.record_button.clicked.connect(self._toggle_recording)
@@ -673,6 +717,16 @@ class PracticeScreen(QWidget):
         else:
             self.footer_note.setText("Nothing to export yet.")
             self.footer_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
+
+    def practice_mode(self) -> str:
+        return self.mode_picker.currentData()
+
+    def set_practice_mode(self, mode: str | None) -> None:  # noqa: N802 - Qt naming
+        index = self.mode_picker.findData(mode or LOBBY)
+        if index >= 0:
+            self.mode_picker.blockSignals(True)
+            self.mode_picker.setCurrentIndex(index)
+            self.mode_picker.blockSignals(False)
 
     def _toggle_recording(self) -> None:
         self.recording_toggled.emit(not self._recording)

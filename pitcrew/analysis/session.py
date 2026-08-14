@@ -73,6 +73,12 @@ class LapInput:
     # blob — see `analysis/gameclock`.
     tod_start_ms: int | None = None
     tod_end_ms: int | None = None
+    # How long the car sat before setting off. Only the session's first lap
+    # has anything to say with it: it corroborates which kind of session this
+    # was, and it never overrules what the driver declared.
+    standing_start_ms: int | None = None
+    # `lobby` or `time-trial`, from the session this lap belongs to.
+    practice_mode: str | None = None
     frames: list[dict] | None = None
 
     @property

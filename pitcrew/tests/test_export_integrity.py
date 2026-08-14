@@ -123,13 +123,19 @@ def test_a_lap_that_burned_no_fuel_is_not_a_lap():
     assert session["bestLapMs"] == 109_000
 
 
-def test_an_electric_car_burns_nothing_and_keeps_every_lap():
+def test_an_electric_car_burns_nothing_and_keeps_every_flying_lap():
     """A capacity of 0 is a real value, not a missing one. Applying the test
-    to a car that burns nothing would strike the whole session."""
+    to a car that burns nothing would strike the whole session.
+
+    Lap 1 goes, because every run's first lap is an out-lap. That is the
+    out-lap rule doing its job and not the fuel rule overreaching, which is
+    what this guards: `fuel_implausible_laps` finds nothing at all.
+    """
     laps = [a_lap(n, fuel_start=0.0, fuel_end=0.0, compound="RH")
             for n in range(1, 6)]
     assert fuel_implausible_laps(laps, 0.0) == set()
-    assert len(counted_laps(classify_exclusions(laps, 0.0))) == 5
+    kept = counted_laps(classify_exclusions(laps, 0.0))
+    assert [lap.lap_num for lap in kept] == [2, 3, 4, 5]
 
 
 # -------------------------------------------------------- P4 the fitted trend
@@ -278,13 +284,18 @@ def test_the_multiplier_the_rate_was_measured_at_travels_with_it():
 
 # ------------------------------------------------------- P7 exclusion reasons
 
-def test_the_out_lap_after_a_refuel_names_itself():
+def test_every_run_opens_with_an_out_lap_and_it_names_itself():
     """Four of the eight hand strikes in the Monza session were out-laps the
-    refuel boundary names for free."""
+    refuel boundary names for free — and the fifth was lap 1, which used to be
+    excluded from the rule and is the most out-lap-like lap of the session:
+    cold tyres, a rolling pit exit, and a capture that does not cover the same
+    span as the lap GT7 timed.
+    """
     laps = classify_exclusions(
         a_run(1, 4, compound="RH") + a_run(5, 4, compound="RH"), 100.0)
     detail = session_export(laps, 100.0)["lapsExcludedDetail"]
-    assert detail == [{"lap": 5, "reason": "out-lap", "source": "auto"}]
+    assert detail == [{"lap": 1, "reason": "out-lap", "source": "auto"},
+                      {"lap": 5, "reason": "out-lap", "source": "auto"}]
 
 
 # ---------------------------------------------------------------- P3 gearing

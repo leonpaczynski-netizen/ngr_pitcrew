@@ -63,6 +63,9 @@ class Run:
     # because the evidence is in the lap before it — the stop happens on the
     # in-lap, and the set it fitted is the set this run goes out on.
     tyres_changed_before: bool | None = None
+    # `lobby`, `time-trial`, or None where the driver has not said. Only the
+    # first run of a session uses it.
+    practice_mode: str | None = None
 
     @property
     def first_lap(self) -> int:
@@ -322,7 +325,8 @@ def split_runs(laps: list[LapInput]) -> list[Run]:
             grouped[-1].append(lap)
 
     return [Run(id=index, laps=tuple(group), refuelled_before=was_refuelled,
-                tyres_changed_before=was_swapped)
+                tyres_changed_before=was_swapped,
+                practice_mode=group[0].practice_mode)
             for index, (group, was_refuelled, was_swapped)
             in enumerate(zip(grouped, refuelled, swapped), start=1)]
 
@@ -379,12 +383,43 @@ def fuel_implausible_laps(laps: list[LapInput],
             if 0.0 <= lap.fuel_start - lap.fuel_end < floor}
 
 
+# Where the car is when a practice session begins, which is what decides
+# whether its opening lap is an out-lap.
+LOBBY = "lobby"                # in the pit box; the first lap is an out-lap
+TIME_TRIAL = "time-trial"      # on the track ahead of the line; it is not
+
+
 def auto_out_laps(laps: list[LapInput]) -> set[int]:
-    """First laps of refuelled runs — an out-lap the driver should not have to
-    strike by hand, and one the export should be able to name as an out-lap
-    rather than as an unexplained hand strike."""
-    return {run.first_lap for run in split_runs(laps)
-            if run.refuelled_before and run.first_lap != laps[0].lap_num}
+    """**The first lap of every run** — with one exception, and it matters.
+
+    It used to be the first lap of a *refuelled* run only, and explicitly not
+    the session's own first lap. The refuel condition was a proxy for "a stop
+    happened", written when a stop could not be detected; it can be now, and a
+    stop for tyres alone opens a run just as much as one for fuel does. So
+    every run's first lap qualifies.
+
+    **Except the opening lap of a time trial.** The two modes put the car in
+    different places when the session starts:
+
+    * **In a lobby** it starts in the pit box. The first lap is driven out of
+      the pits on cold tyres and is an out-lap in every sense.
+    * **In a time trial** it starts on the track, ahead of the start/finish
+      line. The lap is timed from the line like any other, and on the capture
+      set it is the *fastest lap of the session* in six of the eight time
+      trials recorded. Striking it would throw away the best lap of the day
+      and call it housekeeping.
+
+    The mode is the driver's to declare. Where he has not, the opening lap is
+    treated as an out-lap: that is the lobby case, it is the safer of the two
+    errors — a struck lap is visible on the rack and can be restored, a
+    counted out-lap is invisible and moves every aggregate — and it is what
+    the app did before the exception existed.
+    """
+    runs = split_runs(laps)
+    out = {run.first_lap for run in runs}
+    if runs and runs[0].practice_mode == TIME_TRIAL:
+        out.discard(runs[0].first_lap)
+    return out
 
 
 # The vocabulary the export uses for why a lap does not count. `manual` is the

@@ -106,6 +106,8 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             tyres_changed=_tri_state(row, "tyres_changed"),
             tod_start_ms=_column(row, "tod_start_ms"),
             tod_end_ms=_column(row, "tod_end_ms"),
+            standing_start_ms=_column(row, "standing_start_ms"),
+            practice_mode=_column(row, "practice_mode"),
         ))
     return out
 
