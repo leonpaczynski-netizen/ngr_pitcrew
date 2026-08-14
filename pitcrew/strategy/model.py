@@ -182,6 +182,11 @@ class RaceInputs:
     available_compounds: tuple[str, ...] = ()
     required_compounds: tuple[str, ...] = ()
     fuel_weight_s_per_l_per_lap: float = FUEL_WEIGHT_S_PER_L_PER_LAP
+    # How the pace and fuel figures above were weighted across sessions.
+    # Carried so a plan can be audited: the same laps under a different
+    # half-life give a different number, and a reader has to be able to tell
+    # a changed driver from a changed detector.
+    weighting: object | None = None
     starting_fuel_l: float | None = None
     # The compound the practice evidence was gathered on. It is the reference
     # every pace delta is measured against, and the fallback for any compound

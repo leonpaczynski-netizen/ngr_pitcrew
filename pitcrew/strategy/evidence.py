@@ -20,6 +20,7 @@ from pitcrew.analysis.gameclock import (
 from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.resolve import circuit_key
 from pitcrew.strategy.model import is_wet_compound
+from pitcrew.analysis.recency import weighted
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.weather import wet_evidence
 from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
@@ -404,6 +405,20 @@ def longest_stint_by_compound(laps: list[LapInput]) -> dict[str, int]:
     return longest
 
 
+def _current_sheet_id(store, event) -> int | None:
+    """The sheet fitted to the car now, which older laps are weighed against.
+
+    None where the car has no sheet on file. Everything then weighs on age
+    alone, which is right: with nothing to be superseded by, no lap is
+    describing a car that no longer exists.
+    """
+    sheets = store.list_setup_sheets(event["car_name"] or "")
+    for sheet in sheets:
+        if sheet.purpose in (None, "race"):
+            return sheet.id
+    return sheets[0].id if sheets else None
+
+
 def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     """Assemble the model's inputs from the event and its practice laps."""
     event = store.get_event(event_id)
@@ -413,9 +428,23 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     laps = _lap_inputs(store, event_id)
     counted = counted_laps(laps)
 
-    burns = [lap.fuel_start - lap.fuel_end for lap in counted
-             if lap.fuel_start > lap.fuel_end]
-    fuel_per_lap = round(median(burns), 3) if burns else None
+    # **Later laps count for more**, because he is getting faster and the
+    # car keeps changing. Across the Monza set the pooled median is
+    # 109.43 s and the latest session alone is 109.06 - 0.37 s a lap, or
+    # about ten seconds over a 50-minute race, and because a stint ends
+    # where degradation crosses a threshold it moves the stop lap too.
+    #
+    # Pace and fuel only. The wear rate is read off the in-game gauge
+    # rather than fitted to lap times, so down-weighting old readings
+    # would be reweighting a measurement - and a gauge reading from three
+    # weeks ago is exactly as true as one from today.
+    current_sheet = _current_sheet_id(store, event)
+    fuel_per_lap, weighting = weighted(
+        counted,
+        lambda lap: (lap.fuel_start - lap.fuel_end
+                     if lap.fuel_start > lap.fuel_end else None),
+        current_sheet_id=current_sheet)
+    fuel_per_lap = round(fuel_per_lap, 3) if fuel_per_lap is not None else None
     reference_ms = green_lap_reference_ms(laps)
     wear = wear_rate(laps)
     capacity = _fuel_capacity(store, event_id)
@@ -478,6 +507,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         race_laps = laps_from_minutes(race_minutes or 0, reference_ms)
 
     inputs = RaceInputs(
+        weighting=weighting,
         race_laps=race_laps,
         race_minutes=race_minutes,
         start_hour=_event_float(event, "start_hour"),
@@ -509,7 +539,13 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         Evidence("Fuel per lap",
                  f"{fuel_per_lap:.2f} L" if fuel_per_lap else "—",
                  MEASURED if fuel_per_lap else MISSING,
-                 f"median of {len(burns)} laps" if burns else "no fuel burn recorded"),
+                 # Says it is weighted, because it is: an unqualified
+                 # "median of 40 laps" would read as a plain median and the
+                 # two are different numbers.
+                 (f"weighted median of {weighting.sessions} "
+                  f"{'session' if weighting.sessions == 1 else 'sessions'}, "
+                  f"half-life {weighting.half_life_sessions:g}"
+                  if fuel_per_lap else "no fuel burn recorded")),
         Evidence("Fuel capacity",
                  f"{capacity:.0f} L" if capacity is not None else "—",
                  MEASURED if capacity is not None else MISSING,

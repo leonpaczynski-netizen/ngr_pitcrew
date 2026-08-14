@@ -516,7 +516,8 @@ class Store:
         rows = self._query(
             "SELECT laps.*, sessions.started_at AS session_started, "
             "       sessions.practice_mode AS practice_mode, "
-            "       sessions.practice_intent AS practice_intent "
+            "       sessions.practice_intent AS practice_intent, "
+            "       sessions.setup_sheet_id AS setup_sheet_id "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? AND sessions.kind = ? "
             # `started_at` is second-resolution, so two runs begun in the same

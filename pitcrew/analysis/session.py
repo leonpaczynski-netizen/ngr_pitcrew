@@ -79,6 +79,10 @@ class LapInput:
     standing_start_ms: int | None = None
     # `lobby` or `time-trial`, from the session this lap belongs to.
     practice_mode: str | None = None
+    # Which setup sheet was fitted when this lap was driven. A lap run on
+    # a sheet that has since been replaced is describing a car that no
+    # longer exists, which is what `analysis/recency` weights it down for.
+    setup_sheet_id: int | None = None
     # **Something happened on this lap** — it lost time and the frames say
     # why. It leaves the counted set, because a spin averaged into a stint
     # invents degradation that never happened, and it stays in the diagnostic

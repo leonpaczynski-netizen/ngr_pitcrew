@@ -130,6 +130,7 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             tod_end_ms=_column(row, "tod_end_ms"),
             standing_start_ms=_column(row, "standing_start_ms"),
             practice_mode=_column(row, "practice_mode"),
+            setup_sheet_id=_column(row, "setup_sheet_id"),
             crawl_s=_column(row, "crawl_s"),
             off_track_s=_column(row, "off_track_s"),
             spin_s=_column(row, "spin_s"),
