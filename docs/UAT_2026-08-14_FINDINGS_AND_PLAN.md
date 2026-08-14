@@ -1,5 +1,13 @@
 # Pit Crew — UAT 14 Aug 2026: findings and implementation plan
 
+> **Status, 14 Aug: all four phases built and committed, 1070 tests green.**
+> Two things still need running against the live database: the v4 and v5
+> migrations, which go automatically on the next app open (~10 s), and then
+> `python tools/reaggregate.py --apply`, which reports before it writes.
+>
+> **Three findings below were corrected while building.** They are marked
+> where they appear and collected in §3.
+
 Written against the DB as it stood at 14:26 on 14 Aug 2026: 3 events, 19 practice
 sessions, 132 laps with full 60 Hz frames. Every number below is measured out of
 that data, not estimated. Where I could not measure something I say so.
@@ -421,3 +429,93 @@ independent of all of it.
   speed gate.
 - **The direct-connection port pair**, per CLAUDE.md §3.1. To be confirmed
   against hardware, not documentation.
+
+
+---
+
+## Part 3 — What was wrong in Part 1
+
+Three claims in the findings did not survive being built against. They are
+left in place above rather than quietly edited, because a plan that hides
+where it was wrong is not worth reading twice.
+
+### 3.1 There is no phantom lap (§1.9 is wrong)
+
+I said the first recorded lap of a session was often *a lap he never drove*,
+on the evidence that its frame buffer runs longer than its lap time and that
+it is faster than the session median in eight of thirteen sessions.
+
+**The fuel burn refutes it.** Lap 1 burns 6.0–7.5 L, matching the session
+median in every case, so the car went all the way round. The driver supplied
+the mechanism: *"Lap one in a lobby is always an out lap. In time trial you
+start on track before the s/f line."* The gap between frame duration and lap
+time is the untimed run to the line — long in a lobby, short in a time trial —
+and from lap 2 onwards the captured moving time matches GT7's lap time to
+**±0.2 s**.
+
+So there was nothing to detect and nothing to exclude. What the correction
+produced instead is better than the feature it replaced: the out-lap rule is
+now **mode-dependent**, because in six of the eight time trials on record lap
+1 is the *fastest lap of the session*, and striking it would have thrown away
+the best lap of the day.
+
+### 3.2 The GT7 version does block the export (§1.5 is wrong)
+
+I said it gated nothing. I traced it through the telemetry path, where it is
+inert, and did not check `export/payload.py::validate`, which **refuses any
+payload without `meta.gameVersion`**. The Round 8 event has it null, so its
+export was being rejected outright.
+
+The plan's remedy — move it to app settings — was right for the wrong reason.
+It is not a cosmetic annoyance; it was the thing blocking the output.
+
+### 3.3 The stop added 63.2 L, not 51
+
+§1.1 quoted the fuel figures off the lap boundaries. Measured off the tank
+itself the fill is **14.66 → 77.82 L**. The lap boundary lands a full lap of
+burn after pit exit, so the boundary figure understates every stop.
+
+---
+
+## Part 4 — What was built
+
+Ordered as the phases were delivered. Every item traces to a commit.
+
+**Phase 1 — the wrong answers.** The refuel gate now measures across a 2 s
+window; the tyre change is found by all four temperatures stepping to one
+value in a single frame, which fires exactly once across 132 laps. The falling
+mean lost the right to claim a change, being wrong as often as right. The
+fresh-tyre band is the observed 60–70 °C rather than a fabricated 70.0. GT7's
+clock moved out of the frame blobs onto the lap, the poisoned Monza row was
+deleted, and Monza now reads ×6.00 from 15:56 stopping at 18:50 over 40 laps.
+The window clamps to the screen and the rack scrolls sideways.
+
+**Phase 2 — the hand work.** Every stint's first lap names itself an out-lap,
+except a time trial's opening lap. Incidents need two signals — time lost
+against the clean median *of the same run*, plus corroboration — and were
+validated by un-striking his own 17 hand strikes: seven of seven genuine
+incidents found, four more he had missed. Incidents leave strategy and stay in
+the corner aggregates. Stint headers carry best, median, fuel per lap and the
+game-clock span. A compound tagged once fills to the stint end.
+
+**Phase 3 — new capability.** Direct PS5 mode: only the heartbeat was missing,
+and it goes from the same socket that receives. The port probe became a feed
+test with six distinguishable outcomes, because a port that binds proves
+nothing. A screen-filling VR notice. Sheets and sessions both say whether they
+are for qualifying or the race, and a race can be a rehearsal against the AI.
+Recency weighting moves fuel per lap from 6.258 to 6.158 L on the real data.
+
+**Phase 4 — the prompts.** One reply envelope, asked for by all three prompts,
+in addition to the readable sheet and never instead of it.
+
+## What is still open
+
+- **The direct-connection port pair** is now checkable but has not been
+  checked against the console. Run the feed test in direct mode; it names the
+  ports it used and reports live values or which of six ways it failed.
+- **GT7's fitting temperature** varies with the hour and the model for it is
+  two data points. Nothing depends on it — the convergence step is what
+  detects a change — but do not let a constant get written down for it.
+- **The 51 km/h mid-stop blip** turned out to be GT7 reporting the pit limiter
+  speed to three decimals while the car is handed to the crew. The hysteresis
+  rides through it; it is understood rather than merely tolerated.
