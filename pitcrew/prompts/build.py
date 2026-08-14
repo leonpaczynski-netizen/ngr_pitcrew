@@ -149,7 +149,8 @@ def _range_rows(ranges: ctx.Ranges) -> list[str]:
     return rows
 
 
-def _return_contract(lines, *, quali_rule: bool = True,
+def _return_contract(lines, *, first_sheet: bool = False,
+                     quali_rule: bool = True,
                      extra: str | None = None) -> None:
     """How to send the sheets back so the app can read them.
 
@@ -172,7 +173,11 @@ def _return_contract(lines, *, quali_rule: bool = True,
     if quali_rule:
         lines.add("", shared["returnQualiRule"])
     lines.add("")
-    lines.add(*shared["returnRules"])
+    # A first sheet and a revision need opposite rules about omission:
+    # there is nothing to leave unchanged on a sheet that does not exist
+    # yet, and a key left out of one is a value the app cannot enter.
+    lines.add(*shared["returnRulesBrief" if first_sheet
+                      else "returnRulesRevision"])
     lines.add("")
     lines.add(*shared["returnShape"])
     lines.add("", shared["returnVocabHeading"])
@@ -314,6 +319,16 @@ def _event_context(context: ctx.PromptContext) -> list[str]:
     conditions = [part for part in conditions if part]
     if conditions:
         lines.append("- " + " · ".join(conditions))
+
+    # **What that preset actually does here, measured.** The name on its own
+    # is not information: "Afternoon" is a different hour at every circuit and
+    # says nothing about whether the light holds. A race that sweeps three
+    # hours into the evening cools the track, lengthens a stint and can leave
+    # a harder compound below its working range - which is setup information
+    # before it is strategy, and the brief had no way to carry it.
+    if context.clock_note:
+        lines.append("- Time of day, measured off GT7's own clock: "
+                     + context.clock_note)
 
     assists = []
     if event.get("abs_setting"):
@@ -466,6 +481,14 @@ def _build_brief(context: ctx.PromptContext, report: DriverReport,
     conditions = [part for part in conditions if part]
     if conditions:
         lines.add("- " + " · ".join(conditions))
+    # The brief needs this as much as the refinement does, and for a setup
+    # reason rather than a strategy one: a race that sweeps three hours into
+    # the evening cools the track, and a harder compound that never comes up
+    # to temperature is a setup problem the sheet has to answer before the
+    # first lap is driven.
+    if context.clock_note:
+        lines.add("- Time of day, measured off GT7's own clock: "
+                  + context.clock_note)
     for line in _strategy_inputs(event):
         lines.add(line)
     if event.get("priority"):
@@ -526,7 +549,7 @@ def _build_brief(context: ctx.PromptContext, report: DriverReport,
     lines.add(*template["required"])
     if context.ranges:
         lines.add(template["requiredRangeCheck"])
-    _return_contract(lines)
+    _return_contract(lines, first_sheet=True)
     lines.add("", "---")
     lines.add(template["footer"].format(
         date=today, baseline=templates()["gt7Baseline"],

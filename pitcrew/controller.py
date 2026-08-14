@@ -887,7 +887,7 @@ class PitCrewController(QObject):
     def prompt_context(self, kind: str):
         event = self.active_event()
         return gather(self.store, event_id=event["id"] if event else None,
-                      kind=kind)
+                      kind=kind, game_version=self.settings.game_version)
 
     def refresh_engineer(self) -> None:
         """Say what the app is filling in, before anything is generated."""

@@ -796,9 +796,22 @@ class EventScreen(QWidget):
         self.paste_status.setText(f"Read {reply.summary()}.")
         colour = theme.WARNING if reply.unmatched else theme.CHALK
         self.paste_status.setStyleSheet(f"color: {colour};")
+        # **Everything the reply carried, or it was not worth asking for.**
+        # The contract asks what had to be clamped to a slider limit and what
+        # to try first if the car is still not right. Both were parsed and
+        # then dropped on the floor, which is the same as not asking - and a
+        # contract that asks for things nothing reads stops being believed.
+        detail = []
         if reply.unmatched:
-            self.paste_status.setToolTip(
-                "Not recognised:\n" + "\n".join(reply.unmatched[:12]))
+            detail.append("Not recognised:\n"
+                          + "\n".join(reply.unmatched[:12]))
+        if reply.clamped:
+            detail.append("Clamped to a slider limit:\n"
+                          + "\n".join(f"  {item}" for item in reply.clamped))
+        if reply.test_first:
+            detail.append("Try first if it is still not right:\n"
+                          + "\n".join(f"  {item}" for item in reply.test_first))
+        self.paste_status.setToolTip("\n\n".join(detail))
         self._sync_sheet_pair()
 
     def _show_sheet(self, result) -> None:

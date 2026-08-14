@@ -19,7 +19,12 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from pitcrew.analysis.session import LapInput, counted_laps, session_export
-from pitcrew.export.build import build_event_export, event_lap_inputs
+from pitcrew.analysis.runs import classify_exclusions
+from pitcrew.export.build import (
+    build_event_export,
+    event_lap_inputs,
+    mark_incidents,
+)
 from pitcrew.export.payload import ExportRefused, to_json
 from pitcrew.setup.sheet import RangeRecord, SetupChange, SetupSheet
 from pitcrew.setup.vocabulary import RANGE_KEY_NAMES
@@ -85,6 +90,14 @@ class PromptContext:
     session_totals: dict | None = None
     payload: dict | None = None
     payload_json: str | None = None
+    # What the lobby's time-of-day preset actually does at this circuit,
+    # measured off GT7's own clock. A sentence, or None where this preset
+    # has never been run here. The brief needs it as much as the
+    # refinement does and had no way to get it: "Afternoon" is a name, and
+    # a race that sweeps three hours into the evening cools the track,
+    # lengthens a stint and can leave a harder compound below its working
+    # range - all of which is setup information before it is strategy.
+    clock_note: str | None = None
     payload_refusal: str | None = None
     compound: str | None = None
     # Off the stream, on the last recorded race lap. None when the race was
@@ -212,14 +225,47 @@ def _sheet_deltas(previous: SetupSheet | None,
     return deltas
 
 
+def _clock_note(store, event) -> str | None:
+    """What this lobby setting has been measured to do at this circuit.
+
+    Read from the per-circuit record rather than recomputed: it is
+    measured once per preset per circuit and reused, which is the whole
+    point of storing it. None where it has never been run, which reads as
+    "not known" rather than as "no day/night change".
+    """
+    from pitcrew.analysis.gameclock import ClockReading
+    from pitcrew.analysis.resolve import circuit_key
+
+    stored = store.get_track_clock(
+        circuit_key(event["track"], event["layout"]),
+        event["time_of_day"] or "")
+    if not stored:
+        return None
+    reading = ClockReading(
+        multiplier=stored["multiplier"], start_hour=stored["start_hour"],
+        end_hour=None, stopped_at_hour=stored["stops_at_hour"],
+        laps_sampled=stored["laps_sampled"], note="")
+    from pitcrew.analysis.gameclock import _note
+    return _note(reading.multiplier, reading.start_hour, None,
+                 reading.stopped_at_hour, reading.laps_sampled)
+
+
 # ------------------------------------------------------------------ gather
 
 def gather(store, *, event_id: int | None = None, kind: str = "brief",
-           session_id: int | None = None) -> PromptContext:
+           session_id: int | None = None,
+           game_version: str | None = None) -> PromptContext:
     """Assemble everything the app knows for one prompt.
 
     `kind` is the prompt: 'brief' needs no telemetry at all, 'refinement'
     reads the event's practice running, 'outcome' reads its race.
+
+    `game_version` is the app-wide setting, used where the event does not
+    carry one of its own. **The payload is refused without a version**,
+    and a refused payload is a refinement prompt sent with no telemetry
+    in it at all - which is the failure it exists to avoid, and which it
+    was doing silently for every event created without the field filled
+    in.
     """
     event = store.get_event(event_id) if event_id else None
     context = PromptContext(event=event)
@@ -234,19 +280,35 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
         store, context.car)
     context.ranges = resolve_ranges(store, context.car, context.car_spec)
     context.history = combination_history(store, event, context.sheet)
+    context.clock_note = _clock_note(store, event)
 
     if kind == "brief":
         return context
 
     session_kind = "race" if kind == "outcome" else "practice"
     context.session_kind = session_kind
-    context.laps = event_lap_inputs(store, event["id"], session_kind)
-    if not context.laps:
+    laps = event_lap_inputs(store, event["id"], session_kind)
+    if not laps:
         return context
 
+    # **Classified before anything is counted off it**, exactly as the export
+    # does and for the same reason: out-laps, incidents and laps whose fuel
+    # burn says they never went round have to leave the set before a best or
+    # a median is taken from it.
+    #
+    # This was missing, and the prompt disagreed with the payload attached to
+    # it. On the 14 Aug Monza data the prose read "best lap 1:44.912 over 79
+    # counted laps" and the payload underneath it read 1:46.828 over 73 - the
+    # 1:44.9 being a lap that burned 0.16 L against a 6.4 L median, which is
+    # a lap boundary landing inside a pit transition rather than a lap of the
+    # circuit. The knowledge base would have read it as the car's potential
+    # and built a sheet to reach it.
+    capacity = _fuel_capacity(store, event["id"], session_kind)
+    laps, _ = mark_incidents(laps)
+    context.laps = classify_exclusions(laps, capacity)
+
     context.session_totals = session_export(
-        context.laps, fuel_capacity_l=_fuel_capacity(store, event["id"],
-                                                     session_kind))
+        context.laps, fuel_capacity_l=capacity)
     context.compound = _dominant_compound(context.laps)
 
     if session_kind == "race":
@@ -260,7 +322,8 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
 
     try:
         context.payload = build_event_export(
-            store, event["id"], kind=session_kind)
+            store, event["id"], kind=session_kind,
+            game_version=game_version)
         context.payload_json = to_json(context.payload)
     except ExportRefused as exc:
         # Refusing to emit is the designed behaviour: the consumer is a

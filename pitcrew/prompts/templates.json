@@ -20,15 +20,6 @@
     "noAdviceFooter": "*Generated {date} · {baseline} · {promptVersion}*",
     "returnHeading": "## How to send the sheets back",
     "returnLead": "Give me the readable sheets above **and** one fenced `json` block at the very end, in exactly the shape below. I read the prose and argue with it; Pit Crew reads the JSON and enters the values. Without it I retype every number by hand, which is where transcription errors come from - so this is in addition to the readable sheets, never instead of them.",
-    "returnRules": [
-      "- One block, last thing in the reply, fenced as ```json.",
-      "- `values` keys are the vocabulary below and nothing else. Omit a setting you are not changing rather than repeating the current value - an omitted key means *leave it alone*, and a repeated one means *I have checked this and it stays*, which are different instructions.",
-      "- Numbers as numbers. No units, no `+`, no quotes: `-2.4`, not `\"-2.4 deg\"`.",
-      "- `null` for a setting this car does not have. Never `0` - zero is a real value on camber, toe and ballast, and a null read as zero is a setup change nobody asked for.",
-      "- `gears` is 1st..nth in order. The final drive is `fg` in `values` like any other setting, not a field of its own - one place per number, or a reply can say two different things at once. Omit both if the gearbox is unchanged.",
-      "- `why` is keyed the same as `values`, one short line each. It is what makes the change auditable a month later; a sheet with no reasons is a sheet nobody can argue with.",
-      "- If a value had to be clamped to a slider limit, list it in `clamped` and say so in the prose too."
-    ],
     "returnShape": [
       "```json",
       "{",
@@ -41,9 +32,7 @@
       "      \"sheetName\": \"<short name I can pick out of a list>\",",
       "      \"values\": { \"rh_f\": 60, \"cam_f\": -3.2 },",
       "      \"gears\": [3.10, 2.40, 1.90],",
-      "      \"why\": { \"rh_f\": \"...\", \"cam_f\": \"...\" },",
-      "      \"clicksFromMin\": { \"rh_f\": 4 },",
-      "      \"percentOfRange\": { \"rh_f\": 30 }",
+      "      \"why\": { \"rh_f\": \"...\", \"cam_f\": \"...\" }",
       "    },",
       "    { \"purpose\": \"qualifying\", \"...\": \"same shape\" }",
       "  ],",
@@ -53,7 +42,27 @@
       "```"
     ],
     "returnVocabHeading": "**`values` keys — this list and no other:**",
-    "returnQualiRule": "Two sheets, both in `sheets`, tagged `race` and `qualifying`. They are separate objects in Pit Crew and are practised separately, so send the qualifying one even when it is the race sheet with three values moved - and if the diagnosis does not move it at all, send it unchanged and say so rather than leaving it out. A missing sheet reads as \"no answer\", not as \"no change\"."
+    "returnQualiRule": "Two sheets, both in `sheets`, tagged `race` and `qualifying`. They are separate objects in Pit Crew and are practised separately, so send the qualifying one even when it is the race sheet with three values moved - and if the diagnosis does not move it at all, send it unchanged and say so rather than leaving it out. A missing sheet reads as \"no answer\", not as \"no change\".",
+    "returnRulesBrief": [
+      "- One block, last thing in the reply, fenced as ```json.",
+      "- **Every setting on the sheet, every time.** This is the first sheet for this combination, so there is no previous one to fall back on and a key you leave out is a value Pit Crew has nothing to enter. Send `null` for a setting the car does not have; send the number for everything it does, including the ones you are leaving at the baseline.",
+      "- `values` keys are the vocabulary below and nothing else.",
+      "- Numbers as numbers. No units, no `+`, no quotes: `-2.4`, not `\"-2.4 deg\"`.",
+      "- `null` for a setting this car does not have. Never `0` - zero is a real value on camber, toe and ballast, and a null read as zero is a setup change nobody asked for.",
+      "- `gears` is 1st..nth in order. The final drive is `fg` in `values` like any other setting, not a field of its own - one place per number, or a reply can say two different things at once.",
+      "- `why` is keyed the same as `values`, one short line each. It is what makes the change auditable a month later; a sheet with no reasons is a sheet nobody can argue with.",
+      "- If a value had to be clamped to a slider limit, list it in `clamped` and say so in the prose too."
+    ],
+    "returnRulesRevision": [
+      "- One block, last thing in the reply, fenced as ```json.",
+      "- Omit a setting you are not changing rather than repeating the current value - an omitted key means *leave it alone*, and a repeated one means *I have checked this and it stays*, which are different instructions. Pit Crew already holds the sheet as run, so an omission is safe here in a way it is not on a first sheet.",
+      "- `values` keys are the vocabulary below and nothing else.",
+      "- Numbers as numbers. No units, no `+`, no quotes: `-2.4`, not `\"-2.4 deg\"`.",
+      "- `null` for a setting this car does not have. Never `0` - zero is a real value on camber, toe and ballast, and a null read as zero is a setup change nobody asked for.",
+      "- `gears` is 1st..nth in order. The final drive is `fg` in `values` like any other setting, not a field of its own - one place per number, or a reply can say two different things at once.",
+      "- `why` is keyed the same as `values`, one short line each. It is what makes the change auditable a month later; a sheet with no reasons is a sheet nobody can argue with.",
+      "- If a value had to be clamped to a slider limit, list it in `clamped` and say so in the prose too."
+    ]
   },
   "brief": {
     "title": "# GT7 SETUP BRIEF",
