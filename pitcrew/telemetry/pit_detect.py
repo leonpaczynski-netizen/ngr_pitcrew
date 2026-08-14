@@ -48,6 +48,37 @@ FUEL_RISE_L = 0.10
 # rather than at it.
 TEMP_DROP_C = 12.0
 
+# **The signature that actually finds a tyre change.** GT7 does not cool the
+# rubber down over the stop, it replaces all four surface temperatures with
+# one identical value between one frame and the next. Measured on session 19
+# lap 14: 73.8/67.6/82.9/79.8 C to 60.0/60.0/60.0/60.0 C in a single frame.
+#
+# The drop across the whole window (`TEMP_DROP_C` above) finds the same stop
+# only when the set happened to be much hotter than the one fitted, which is
+# not guaranteed - sets are fitted anywhere from 60 to 70 C depending on the
+# hour, so a change late in a cool session moves the mean barely at all. The
+# step is unconditional. Across all 132 recorded laps it fires exactly once.
+TEMP_STEP_DROP_C = 5.0
+TEMP_STEP_SPREAD_C = 0.5
+
+# **A stationary window does not end at the first frame above the threshold.**
+#
+# The one real stop in the capture set carries a speed excursion in the middle
+# of a car that is demonstrably parked: speed reads exactly 60.000 km/h - GT7's
+# pit limiter, to three decimals - for 0.4 s, then ramps linearly back to zero
+# over 2.0 s, while the fuel level does not move by a thousandth of a litre and
+# the car is still in the box. It is the game reporting the scripted pit-lane
+# speed while the car is handed to the crew, not the car moving.
+#
+# Ending the window there split one 81 s stop into 9.8 s and 68.7 s, and the
+# 9.8 s half then failed every test the whole would have passed. So the stop
+# ends only once the car has been above the threshold *continuously* for this
+# long. A car genuinely leaving the box never comes back to zero; the whole
+# excursion above lasts 2.4 s, so three seconds clears it with margin and
+# still cannot merge two stops - nothing services a car twice in three
+# seconds.
+RESUME_S = 3.0
+
 # A stop shorter than this is the car being slow, not the car being serviced.
 MIN_STOP_S = 2.0
 
@@ -58,6 +89,7 @@ MAX_SAMPLE_GAP_S = 0.20
 
 FUEL = "fuel"           # fuel rose: certain
 TEMPS = "temps"         # tyre temperatures collapsed: strong
+SWAP = "swap"           # all four stepped to one value in a frame: certain
 SPEED = "speed"         # stationary only: weak
 
 
@@ -111,19 +143,39 @@ class Stop:
 
     @property
     def changed_tyres(self) -> bool:
-        """Whether the tyres came off.
+        """Whether the tyres came off. **The step, and only the step.**
 
-        Temperature is the only evidence GT7 gives, so a stop too short to cool
-        the rubber measurably reads as no change. That is a floor on what is
-        knowable, not a bug, and it is why `confidence` degrades with it.
+        The falling mean (`TEMPS`) is recorded but does not get to claim a
+        change, because on the capture set it is wrong as often as it is
+        right: session 11 lap 6 is a car standing still for 5.7 s at 107 C
+        that cooled 20 C on its own, and the old rule called that a tyre
+        change. A stationary car cools; only GT7 assigns all four corners the
+        same number in one frame.
+
+        The cost is that a change hidden by a dropped packet reads as no
+        change. That is a floor on what is knowable and it is the right way
+        round: a missing stop is visible as a gap in the stint, an invented
+        one is not.
         """
-        return TEMPS in self.signals
+        return SWAP in self.signals
+
+    @property
+    def serviced(self) -> bool:
+        """Was the car actually worked on, or merely stationary?
+
+        The car sits still for a minute in the garage before going out, and
+        the capture set is full of those - 80 s at the start of session 16
+        alone. They are stationary periods, honestly reported, and they are
+        not pit stops. Anything counting stops must ask this rather than
+        counting windows.
+        """
+        return self.took_fuel or self.changed_tyres
 
     @property
     def confidence(self) -> str:
-        if FUEL in self.signals and TEMPS in self.signals:
+        if FUEL in self.signals and SWAP in self.signals:
             return "high"
-        if FUEL in self.signals or TEMPS in self.signals:
+        if FUEL in self.signals or SWAP in self.signals:
             return "medium"
         return "low"
 
@@ -145,6 +197,10 @@ class _Window:
     lap: int
     fuel: list = field(default_factory=list)
     temps: list = field(default_factory=list)
+    # Per-corner readings, kept alongside the means so the one-frame step can
+    # be found. The mean alone cannot see it: four corners converging is a
+    # change in the *spread* as much as in the level.
+    corners: list = field(default_factory=list)
     samples: int = 0
     gap_s: float = 0.0
 
@@ -161,10 +217,14 @@ def find_stops(samples, *, stopped_kph: float = STOPPED_KPH,
     windows: list[_Window] = []
     current: _Window | None = None
     previous: Sample | None = None
+    # When the car first went above the threshold inside an open window. The
+    # window survives a brief excursion; see `RESUME_S`.
+    moving_since: float | None = None
 
     for sample in samples:
         stationary = sample.speed_kph <= stopped_kph and sample.on_track
         if stationary:
+            moving_since = None
             if current is None:
                 current = _Window(start_s=sample.t_s, end_s=sample.t_s,
                                   lap=sample.lap)
@@ -177,9 +237,20 @@ def find_stops(samples, *, stopped_kph: float = STOPPED_KPH,
             current.fuel.append(sample.fuel_l)
             if sample.temps:
                 current.temps.append(sum(sample.temps) / len(sample.temps))
+                current.corners.append(tuple(sample.temps))
         elif current is not None:
-            windows.append(current)
-            current = None
+            # A car off the track is not in the pit box whatever its speed, so
+            # that ends the window outright rather than starting the clock.
+            if not sample.on_track:
+                windows.append(current)
+                current = None
+                moving_since = None
+            elif moving_since is None:
+                moving_since = sample.t_s
+            elif sample.t_s - moving_since >= RESUME_S:
+                windows.append(current)
+                current = None
+                moving_since = None
         previous = sample
 
     if current is not None:
@@ -203,6 +274,8 @@ def _classify(window: _Window, min_stop_s: float) -> Stop | None:
     if (temp_before is not None and temp_after is not None
             and temp_before - temp_after >= TEMP_DROP_C):
         signals.append(TEMPS)
+    if _swapped(window.corners):
+        signals.append(SWAP)
 
     return Stop(
         start_s=window.start_s, end_s=window.end_s, lap=window.lap,
@@ -211,6 +284,21 @@ def _classify(window: _Window, min_stop_s: float) -> Stop | None:
         signals=tuple(signals), samples=window.samples,
         gapped=window.gap_s > 0.0, gap_s=window.gap_s,
     )
+
+
+def _swapped(corners: list) -> bool:
+    """Did all four corners step to one value between two frames?
+
+    This is what a GT7 tyre change looks like: not a decay, an assignment.
+    Every corner drops together and lands on the same number, and nothing else
+    in the capture set does that.
+    """
+    for before, after in zip(corners, corners[1:]):
+        if not all(b - a >= TEMP_STEP_DROP_C for b, a in zip(before, after)):
+            continue
+        if max(after) - min(after) <= TEMP_STEP_SPREAD_C:
+            return True
+    return False
 
 
 def refuel_span(samples, stop: Stop) -> list[Sample]:

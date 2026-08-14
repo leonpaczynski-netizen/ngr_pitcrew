@@ -16,8 +16,11 @@ to get right:
   start, not from the packet at the moment of starting.  On circuits where the
   grid sits behind the start/finish line GT7 has already decremented the count
   by the time the car reaches 80 km/h.
-* **Pit laps** are inferred from fuel increasing at pit-lane speed, because
-  GT7 does not broadcast a pit flag.
+* **Pit laps** are inferred, because GT7 broadcasts no pit flag in any packet
+  format.  Two independent signals, either of which is enough: the tank rising
+  across a two-second window at pit-lane speed, and all four tyre temperatures
+  converging to one value in a single frame.  The second is the only evidence
+  a **tyres-only stop** leaves behind.
 
 The session kind is set by the app from what the driver chose to do, never
 guessed from the game — GT7 classifies any multi-car lobby as a race.
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import enum
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from pitcrew.telemetry.packet import GT7Packet
@@ -36,6 +40,40 @@ from pitcrew.telemetry.packet import GT7Packet
 # Speed below which a fuel increase means the pit lane rather than a physics
 # quirk.  GT7 pit limiters sit at 60-80 km/h; 120 leaves generous margin.
 PIT_MAX_SPEED_KMH = 120.0
+
+# **Fuel has to be measured across a window, never between two frames.**
+# GT7 fills at about 1 L/s and the stream runs at 60 Hz, so the tank rises by
+# roughly 0.0167 L per frame.  The gate this replaced asked for 0.05 L between
+# consecutive frames -- three times the signal -- and so never fired once in
+# 132 recorded laps, including a stop that took 51 L over 63 s.  Every lap in
+# the capture set carries `is_pit_lap = 0` as a result, and with it every
+# out-lap, every stint boundary and every stop the export ever reported.
+#
+# 0.30 L over 2 s is six times the noise floor of a channel reported in litres
+# and a fifth of what the slowest observed fill delivers in that time.
+REFUEL_WINDOW_S = 2.0
+REFUEL_WINDOW_L = 0.30
+
+# **A tyre change is a step, not a cooling curve.**  GT7 does not let the
+# rubber cool -- it replaces all four surface temperatures with one identical
+# value in a single frame.  Measured on the only stop in the capture set:
+# 73.8/67.6/82.9/79.8 C to 60.0/60.0/60.0/60.0 C between one packet and the
+# next, three seconds before the fuel started going in.
+#
+# The signature is the *convergence*, not the value.  Sets are fitted anywhere
+# from 60 to 70 C depending on the hour, so nothing can be gated on an
+# absolute.  Run across all 132 recorded laps this fires exactly once, on the
+# one real tyre change: no false positives anywhere in the capture set.
+#
+# This is the only detector for a **tyres-only stop**, which previously had no
+# code path at all -- pit entry was reachable through refuelling alone.
+TYRE_SWAP_DROP_C = 5.0
+TYRE_SWAP_SPREAD_C = 0.5
+# The change is observed with the car at a standstill in the box.  The gate is
+# generous against that rather than tight, because the cost of missing a stop
+# is a whole stint mis-attributed and the cost of a loose gate is nothing --
+# four corners do not converge within half a degree while the car is driving.
+TYRE_SWAP_MAX_SPEED_KPH = 10.0
 
 # Race-start gates.  See the module docstring for why both exist.
 RACE_START_SPEED_KMH = 80.0
@@ -88,6 +126,13 @@ class Lap:
     # This is what catches "the sheet says one gearbox, the car has another",
     # which is otherwise invisible until a whole session has been run on it.
     gear_ratios: list[float] | None = None
+    # Whether the set came off during a stop on this lap.  `None` when the lap
+    # carried no stop at all -- the question was not asked, so it has no
+    # answer.  `False` is a positive claim that the set stayed on, and it is
+    # made only where a stop was seen and the temperatures did not step.
+    tyres_changed: bool | None = None
+    # Litres put in during a stop on this lap, `None` where there was no stop.
+    fuel_added_l: float | None = None
 
 
 class SessionState:
@@ -112,6 +157,11 @@ class SessionState:
         self._out_lap_pending = False
         self._fuel_at_pit_entry: float | None = None
         self._gear_ratios: list[float] | None = None
+        # (timestamp, litres) over the last `REFUEL_WINDOW_S`.  A refuel is
+        # only visible across a window; see the constant for why.
+        self._fuel_window: deque[tuple[float, float]] = deque()
+        self._tyres_changed_in_stop: bool | None = None
+        self._fuel_added_in_stop: float | None = None
 
     # ------------------------------------------------------------------ state
 
@@ -180,7 +230,7 @@ class SessionState:
             self._gear_ratios = ratios
 
         events.extend(self._update_phase(packet, now))
-        events.extend(self._update_pit(packet))
+        events.extend(self._update_pit(packet, now))
         events.extend(self._check_lap(packet, now))
 
         self._prev = packet
@@ -236,30 +286,82 @@ class SessionState:
             "remaining_time_ms": p.remaining_time_ms,
         })]
 
-    def _update_pit(self, p: GT7Packet) -> list[SessionEvent]:
-        """Infer pit entry/exit from refuelling at pit-lane speed."""
+    def _refuelling(self, p: GT7Packet, now: float) -> bool:
+        """Is the tank going up, measured across a window rather than a frame?
+
+        At 60 Hz a 1 L/s fill moves the gauge 0.0167 L between packets, which
+        is why the frame-to-frame test this replaced could never see a stop.
+        The window is trimmed to `REFUEL_WINDOW_S` and always keeps at least
+        two readings, so the comparison survives a stream that drops packets.
+        """
+        self._fuel_window.append((now, p.fuel_level))
+        while len(self._fuel_window) > 2 and self._fuel_window[0][0] < now - REFUEL_WINDOW_S:
+            self._fuel_window.popleft()
+        if p.speed_kmh >= PIT_MAX_SPEED_KMH:
+            return False
+        floor = min(litres for _, litres in self._fuel_window)
+        return p.fuel_level - floor >= REFUEL_WINDOW_L
+
+    def _tyres_swapped(self, p: GT7Packet) -> bool:
+        """Did all four corners step to one value in this single frame?
+
+        GT7's tyre change is instantaneous and even.  Nothing a moving car
+        does looks like it, and nothing in 132 recorded laps triggers it
+        except the one real change.  See `TYRE_SWAP_DROP_C`.
+        """
+        if self._prev is None or p.speed_kmh > TYRE_SWAP_MAX_SPEED_KPH:
+            return False
+        before, after = self._prev.tyre_temps, p.tyre_temps
+        if not all(b - a >= TYRE_SWAP_DROP_C for b, a in zip(before, after)):
+            return False
+        return max(after) - min(after) <= TYRE_SWAP_SPREAD_C
+
+    def _update_pit(self, p: GT7Packet, now: float) -> list[SessionEvent]:
+        """Infer pit entry and exit from the two signals a stop leaves.
+
+        Either signal opens a stop on its own.  That is the point: a stop for
+        tyres only puts nothing into the tank, and a splash of fuel changes no
+        tyre, so requiring both would miss whichever kind of stop was made.
+        """
         if self._prev is None:
+            self._fuel_window.append((now, p.fuel_level))
             return []
 
-        refuelling = (
-            p.fuel_level > self._prev.fuel_level + 0.05
-            and p.speed_kmh < PIT_MAX_SPEED_KMH
-        )
+        refuelling = self._refuelling(p, now)
+        swapped = self._tyres_swapped(p)
 
-        if refuelling and self._phase is not Phase.IN_PIT:
+        if self._phase is not Phase.IN_PIT:
+            if not (refuelling or swapped):
+                return []
             self._phase = Phase.IN_PIT
             self._pit_lap = True
-            self._fuel_at_pit_entry = self._prev.fuel_level
-            return [SessionEvent(EventKind.PIT_ENTRY, {"fuel": self._prev.fuel_level})]
+            # The window's floor, not the previous frame: by the time a fill
+            # clears the threshold the tank has already taken 0.3 L, and the
+            # oldest reading in the window is the closest thing to the level
+            # before it started.
+            self._fuel_at_pit_entry = min(litres for _, litres in self._fuel_window)
+            # A stop has been seen, so "did the tyres come off" now has an
+            # answer rather than being unasked.
+            self._tyres_changed_in_stop = swapped
+            return [SessionEvent(EventKind.PIT_ENTRY,
+                                 {"fuel": self._fuel_at_pit_entry,
+                                  "tyres_changed": swapped})]
 
-        if self._phase is Phase.IN_PIT and not refuelling and p.speed_kmh > PIT_MAX_SPEED_KMH:
+        if swapped:
+            self._tyres_changed_in_stop = True
+
+        if not refuelling and p.speed_kmh > PIT_MAX_SPEED_KMH:
             fuel_added = 0.0
             if self._fuel_at_pit_entry is not None:
                 fuel_added = max(0.0, p.fuel_level - self._fuel_at_pit_entry)
             self._fuel_at_pit_entry = None
+            self._fuel_added_in_stop = round(fuel_added, 2)
             self._out_lap_pending = True
             self._phase = Phase.RACING if self.race_started else Phase.ON_TRACK
-            return [SessionEvent(EventKind.PIT_EXIT, {"fuel_added": fuel_added})]
+            return [SessionEvent(EventKind.PIT_EXIT, {
+                "fuel_added": fuel_added,
+                "tyres_changed": bool(self._tyres_changed_in_stop),
+            })]
 
         return []
 
@@ -288,10 +390,14 @@ class SessionState:
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
+            tyres_changed=self._tyres_changed_in_stop if self._pit_lap else None,
+            fuel_added_l=self._fuel_added_in_stop if self._pit_lap else None,
         )
         self._laps.append(lap)
         self._pit_lap = False
         self._out_lap_pending = False
+        self._tyres_changed_in_stop = None
+        self._fuel_added_in_stop = None
 
         self._fuel_lap_start = p.fuel_level
         self._lap_started_at = now

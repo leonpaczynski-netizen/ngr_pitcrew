@@ -1,6 +1,8 @@
 """Lap, race-start and pit detection."""
 from __future__ import annotations
 
+import pytest
+
 from pitcrew.telemetry.session_state import (
     EventKind,
     Phase,
@@ -202,3 +204,114 @@ def test_laps_remaining_is_none_without_a_lap_count():
     state = SessionState(SessionKind.PRACTICE)
     feed(state, [make_packet()])
     assert state.laps_remaining() is None
+
+
+# ------------------------------------------- the stop the app could never see
+#
+# These are built from session 19 lap 14 of the capture set — the only pit stop
+# in the database, and the one every detector in the app missed.  The numbers
+# are the measured ones, not illustrative: 51 L over 63 s at 60 Hz, and the
+# tyre swap three seconds before the fuel started.
+
+REAL_FILL_L_PER_FRAME = 0.0167          # 1 L/s at 60 Hz, measured
+REAL_HOT = (73.8, 67.6, 82.9, 79.8)     # the set as it came in
+REAL_FITTED = (60.0, 60.0, 60.0, 60.0)  # the set as GT7 fitted it
+
+
+def stationary(fuel: float, temps=REAL_HOT):
+    return make_packet(speed_ms=0.0, fuel_level=fuel,
+                       tyre_temp_fl=temps[0], tyre_temp_fr=temps[1],
+                       tyre_temp_rl=temps[2], tyre_temp_rr=temps[3])
+
+
+def test_a_real_refuel_is_seen_although_no_two_frames_differ_by_much():
+    """The regression that mattered.
+
+    GT7 fills at ~1 L/s, so at 60 Hz no two consecutive frames differ by more
+    than 0.017 L.  The gate this replaced wanted 0.05 L between frames and so
+    never fired once across 132 recorded laps.
+    """
+    state = SessionState(SessionKind.PRACTICE)
+    fuel = 14.65
+    packets = [make_packet(speed_ms=30.0, fuel_level=fuel),
+               stationary(fuel)]
+    for _ in range(300):                       # five seconds of filling
+        fuel += REAL_FILL_L_PER_FRAME
+        packets.append(stationary(fuel))
+
+    events = feed(state, packets)
+    assert EventKind.PIT_ENTRY in kinds(events)
+    assert state.phase is Phase.IN_PIT
+    # No single frame in that fill clears the old threshold.
+    assert REAL_FILL_L_PER_FRAME < 0.05
+
+
+def test_a_tyres_only_stop_is_seen_with_no_fuel_at_all():
+    """Previously unreachable: pit entry could only be entered through fuel."""
+    state = SessionState(SessionKind.PRACTICE)
+    events = feed(state, [
+        make_packet(speed_ms=30.0, fuel_level=40.0),
+        stationary(40.0),
+        stationary(40.0, REAL_FITTED),        # all four step together
+    ])
+    assert EventKind.PIT_ENTRY in kinds(events)
+    entry = next(e for e in events if e.kind is EventKind.PIT_ENTRY)
+    assert entry.data["tyres_changed"] is True
+
+
+def test_the_lap_carrying_the_stop_records_what_was_done_to_the_car():
+    state = SessionState(SessionKind.PRACTICE)
+    fuel = 20.0
+    packets = [make_packet(speed_ms=30.0, fuel_level=fuel), stationary(fuel)]
+    packets.append(stationary(fuel, REAL_FITTED))
+    for _ in range(120):
+        fuel += REAL_FILL_L_PER_FRAME
+        packets.append(stationary(fuel, REAL_FITTED))
+    packets.append(make_packet(speed_ms=60.0, fuel_level=fuel,
+                               last_lap_ms=182_408))
+    feed(state, packets)
+
+    lap = state.laps[0]
+    assert lap.is_pit_lap is True
+    assert lap.tyres_changed is True
+    assert lap.fuel_added_l == pytest.approx(2.0, abs=0.1)
+
+
+def test_a_lap_with_no_stop_makes_no_claim_about_the_tyres():
+    """`None`, not `False`.  Nothing was asked, so nothing is answered."""
+    state = SessionState(SessionKind.PRACTICE)
+    feed(state, [make_packet(fuel_level=60.0),
+                 make_packet(fuel_level=58.0, last_lap_ms=92_000)])
+    assert state.laps[0].tyres_changed is None
+    assert state.laps[0].fuel_added_l is None
+
+
+def test_cooling_tyres_are_not_a_tyre_change():
+    """A stationary car cools a little.  That is not a set coming off, and the
+    corners stay uneven while it happens."""
+    state = SessionState(SessionKind.PRACTICE)
+    cooling = [(t - 4.0) for t in REAL_HOT]
+    events = feed(state, [make_packet(speed_ms=30.0, fuel_level=40.0),
+                          stationary(40.0),
+                          stationary(40.0, cooling)])
+    assert EventKind.PIT_ENTRY not in kinds(events)
+
+
+def test_four_even_temperatures_at_racing_speed_are_not_a_stop():
+    state = SessionState(SessionKind.PRACTICE)
+    events = feed(state, [
+        make_packet(speed_ms=60.0, fuel_level=40.0,
+                    tyre_temp_fl=REAL_HOT[0], tyre_temp_fr=REAL_HOT[1],
+                    tyre_temp_rl=REAL_HOT[2], tyre_temp_rr=REAL_HOT[3]),
+        make_packet(speed_ms=60.0, fuel_level=40.0,
+                    tyre_temp_fl=60.0, tyre_temp_fr=60.0,
+                    tyre_temp_rl=60.0, tyre_temp_rr=60.0),
+    ])
+    assert EventKind.PIT_ENTRY not in kinds(events)
+
+
+def test_a_slow_fuel_drain_never_reads_as_a_fill():
+    state = SessionState(SessionKind.PRACTICE)
+    packets = [make_packet(speed_ms=20.0, fuel_level=50.0 - n * 0.02)
+               for n in range(200)]
+    assert EventKind.PIT_ENTRY not in kinds(feed(state, packets))

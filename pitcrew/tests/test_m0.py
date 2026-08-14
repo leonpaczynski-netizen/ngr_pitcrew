@@ -167,10 +167,36 @@ def test_the_three_stops_are_found_and_told_apart():
 
 
 def test_a_stop_seen_by_fuel_and_temperature_is_high_confidence():
+    """Two independent signals agreeing outrank either one alone.
+
+    What changed underneath is what "medium" now rests on. A tyres-only stop
+    used to be recognised by the mean temperature falling across the window,
+    which a car standing still does on its own -- session 11 lap 6 of the
+    capture set is 5.7 s stationary at 107 C that cooled 20 C and was called a
+    tyre change. It is now recognised by all four corners stepping to one
+    value in a single frame, which nothing else in 132 recorded laps does.
+    Same word, conclusive evidence behind it.
+    """
     stops = find_stops(_run(_protocol()))
-    assert stops[2].confidence == "high"
-    assert stops[0].confidence == "medium"      # temps only
+    assert stops[2].confidence == "high"        # fuel and tyres
+    assert stops[0].confidence == "medium"      # tyres only
     assert stops[1].confidence == "medium"      # fuel only
+
+
+def test_sitting_in_the_garage_is_not_a_pit_stop():
+    """The capture set has 80 s of it at the start of session 16 alone.
+
+    `find_stops` reports every stationary window, which is its contract. What
+    must not happen is those windows being counted as stops -- so anything
+    counting asks `serviced`, which requires the car to have been worked on.
+    """
+    waiting = [Sample(t_s=i * STEP, speed_kph=0.0, fuel_l=100.0,
+                      on_track=True, lap=1, temps=HOT)
+               for i in range(3000)]
+    stops = find_stops(waiting)
+    assert len(stops) == 1
+    assert stops[0].serviced is False
+    assert stops[0].confidence == "low"
 
 
 def test_a_car_stopped_off_track_is_not_a_pit_stop():
