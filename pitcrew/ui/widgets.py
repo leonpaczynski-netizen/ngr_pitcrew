@@ -436,7 +436,8 @@ class SpecLine(QWidget):
         self._entries.clear()
 
     def add(self, label: str, value: str, *, declared: bool = False,
-            derived: bool = False, emphasis: bool = False) -> None:
+            derived: bool = False, warn: bool = False,
+            emphasis: bool = False) -> None:
         if self._entries:
             separator = StencilLabel("·", size=theme.BODY_PX,
                                      colour=theme.TREAD_LIGHT, tracking=0.0)
@@ -449,6 +450,12 @@ class SpecLine(QWidget):
         cls = Derived if derived else Declared if declared else Measured
         reading = cls(value, size=theme.DATA_LARGE_PX if emphasis else theme.DATA_PX,
                       bold=emphasis)
+        if warn:
+            # A gap, not a register. Nothing was measured, declared or worked
+            # out - the answer is missing, and the evidence column already
+            # paints that state in warning.
+            reading.setStyleSheet(
+                f"color: {theme.WARNING}; background: transparent;")
         self._row.addWidget(name)
         self._row.addWidget(reading)
         self._entries.append((name, reading))
@@ -494,8 +501,18 @@ class Field(QWidget):
 
     def __init__(self, label: str, editor: QWidget, *, suffix: str = "",
                  hint: str = "", suffix_widget: QWidget | None = None,
+                 data: bool | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        # **Which face this editor takes.** Mono is measurement; everything
+        # else is Bahnschrift. A field holding a figure says so and gets the
+        # mono face back; a field holding a name, a note or a sentence does
+        # not. Inferred from the editor's type where it is obvious - a spin
+        # box is always a number - so only the ambiguous line edits have to
+        # say. See the `[data="true"]` rule in `theme`.
+        if data is None:
+            data = isinstance(editor, QAbstractSpinBox)
+        editor.setProperty("data", "true" if data else "false")
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(theme.GAP_TIGHT)
@@ -876,7 +893,7 @@ class TyreGauge(QWidget):
         painter.setBrush(QColor(theme.STENCIL if self._fraction is not None
                                 else theme.SHOULDER_HI))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(body, 4, 4)
+        painter.drawRect(body)
 
         if self._fraction:
             # Fills downward from the top, the direction of the drag, so the

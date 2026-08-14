@@ -1234,8 +1234,14 @@ class PitCrewController(QObject):
         row = next((r for r in rows if r.lap_id == lap_id), None)
         if row is None:
             return
-        for tagged in carry_compound(rows, lap_id):
+        carried = carry_compound(rows, lap_id)
+        for tagged in carried:
             self.store.set_lap_compound(tagged.lap_id, tagged.compound)
+        # The carry mutated rows these widgets are holding. Nothing else
+        # tells them, so a tagged stint stayed grey on screen while the
+        # database had it right.
+        if len(carried) > 1:
+            self.practice.repaint_rows()
         self.store.set_lap_tyres_fresh(lap_id, row.tyres_fresh)
         self.store.set_lap_wear(lap_id, row.wear_fl, row.wear_fr,
                                 row.wear_rl, row.wear_rr)
@@ -1551,6 +1557,19 @@ class PitCrewController(QObject):
         return snapshot
 
     def _on_ptt_answer(self, heard: str, said: str) -> None:
+        """**Hop to the Qt thread before touching a widget.**
+
+        pynput runs its keyboard hook on its own daemon thread, and the
+        push-to-talk reply arrives on it. This method used to build QWidgets
+        and call insertWidget from there, which is undefined behaviour in Qt -
+        and the window in which it happens is a live race, the one surface
+        CLAUDE.md gives the strictest correctness bar. Everything else in this
+        app is routed through the bridge's signals; this was the one path that
+        went straight across.
+        """
+        QTimer.singleShot(0, lambda: self._show_ptt_answer(heard, said))
+
+    def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
             self.race_screen.show_exchange(heard, said)
         if self._pending_replan is not None and heard:

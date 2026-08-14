@@ -409,6 +409,11 @@ class EventScreen(QWidget):
         # long the race can possibly last, and a plan that overruns reads as a
         # slow plan rather than an impossible one.
         self.extra_time = QDoubleSpinBox()
+        # `EMPTY` is the range minimum, and without this it renders as
+        # "-9999". Every other spin box on this screen says "—"; three did
+        # not, on the screen whose whole claim is that a setting nobody
+        # entered never reads as a number.
+        self.extra_time.setSpecialValueText("—")
         self.extra_time.setRange(EMPTY, 3600.0)
         self.extra_time.setDecimals(0)
         self.extra_time.setSingleStep(30.0)
@@ -469,6 +474,7 @@ class EventScreen(QWidget):
         # whether practice has ever driven the race's conditions. A 2-hour
         # race at x12 covers a full day and night.
         self.start_hour = QDoubleSpinBox()
+        self.start_hour.setSpecialValueText("—")
         self.start_hour.setRange(EMPTY, 23.99)
         self.start_hour.setDecimals(2)
         self.start_hour.setSingleStep(0.5)
@@ -479,6 +485,7 @@ class EventScreen(QWidget):
             "in the afternoon.")
 
         self.time_multiplier = QDoubleSpinBox()
+        self.time_multiplier.setSpecialValueText("—")
         self.time_multiplier.setRange(EMPTY, 100.0)
         self.time_multiplier.setDecimals(1)
         self.time_multiplier.setValue(EMPTY)
@@ -498,7 +505,12 @@ class EventScreen(QWidget):
     def _on_race_type_changed(self, kind: str) -> None:
         timed = kind == "Timed"
         self._length_unit.setText("MINUTES" if timed else "LAPS")
-        self.race_length.setValue(45 if timed else 20)
+        # Only when the box still holds the other mode's default. He types
+        # 32 laps, flips to Timed to read the extra-time field, flips back -
+        # and a declared value had been replaced by a default with nothing
+        # saying so, on the screen where everything is his own mark.
+        if self.race_length.value() in (20, 45):
+            self.race_length.setValue(45 if timed else 20)
         # A lap race has no clock to run past, so the field would be a question
         # with no answer.
         self._extra_time_field.setVisible(timed)

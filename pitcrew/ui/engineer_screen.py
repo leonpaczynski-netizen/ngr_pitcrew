@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFrame,
     QCheckBox,
     QComboBox,
     QGridLayout,
@@ -102,7 +103,11 @@ class EngineerScreen(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._kind = BRIEF
+        # None, not BRIEF. The constructor calls `set_kind(BRIEF)` below, and
+        # that call has to do its work - it is what lays the screen out. With
+        # the field pre-set to the same value the no-op guard swallowed it and
+        # the plates kept their designer visibility.
+        self._kind: str | None = None
         self._symptom_boxes: list[QCheckBox] = []
         self._kind_buttons: dict[str, MarkButton] = {}
         self._build()
@@ -287,7 +292,10 @@ class EngineerScreen(QWidget):
         self.notes.setPlaceholderText(
             "What the car did, where you lost confidence, what you changed "
             "mid-run and whether it helped.")
-        self.notes.setMinimumHeight(110)
+        # A floor, not a fixed height. 110 is comfortable on a big monitor
+        # and it was also the smallest this pane could ever be; on the 501px
+        # display the two text areas alone put the footer off the bottom.
+        self.notes.setMinimumHeight(70)
         plate.body.addWidget(self.notes)
         return plate
 
@@ -300,6 +308,16 @@ class EngineerScreen(QWidget):
     # ---------------------------------------------------------- right column
 
     def _right_column(self) -> QWidget:
+        # Scrolled, like the left one. It holds two text areas and their
+        # plates, which together set a floor taller than the smallest display
+        # this app runs on - and the left column got a scroller while the
+        # right, holding the thing you came here to copy, did not.
+        outer = QScrollArea()
+        outer.setWidgetResizable(True)
+        outer.setFrameShape(QFrame.Shape.NoFrame)
+        outer.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         holder = QWidget()
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
@@ -311,6 +329,7 @@ class EngineerScreen(QWidget):
         self.output.setPlaceholderText(
             "Generate, then paste this into the knowledge base session.")
         self.output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.output.setMinimumHeight(80)
         plate.body.addWidget(self.output, 1)
 
         row = QHBoxLayout()
@@ -337,7 +356,7 @@ class EngineerScreen(QWidget):
             size=13, colour=theme.STENCIL_DIM))
         self.reply = QPlainTextEdit()
         self.reply.setPlaceholderText("Paste the knowledge base's reply…")
-        self.reply.setMinimumHeight(90)
+        self.reply.setMinimumHeight(60)
         reply.body.addWidget(self.reply, 1)
 
         reply_row = QHBoxLayout()
@@ -351,7 +370,8 @@ class EngineerScreen(QWidget):
         reply_row.addWidget(self.save_reply)
         reply.body.addLayout(reply_row)
         column.addWidget(reply, 2)
-        return holder
+        outer.setWidget(holder)
+        return outer
 
     def _footer(self) -> QWidget:
         bar = QWidget()
@@ -365,6 +385,12 @@ class EngineerScreen(QWidget):
     # ---------------------------------------------------------------- state
 
     def set_kind(self, kind: str) -> None:
+        # Clicking the kind already selected used to run the whole method,
+        # which ends by clearing the output - so reaching for Copy and
+        # clipping the button beside it threw the generated prompt away on a
+        # click that should have done nothing.
+        if kind == self._kind:
+            return
         self._kind = kind
         for name, button in self._kind_buttons.items():
             button.set_primary(name == kind)

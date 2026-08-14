@@ -631,7 +631,11 @@ class PracticeScreen(QWidget):
         header.addWidget(Field("Practising", self.intent_picker), 0,
                          Qt.AlignmentFlag.AlignBottom)
 
-        self.record_button = MarkButton("Start practice", primary=True)
+        # Secondary. The run *ends* on the primary, and this screen shipped
+        # two crayon fills - one at the top to start and one at the bottom to
+        # export. Starting a session is the beginning of the work; the export
+        # is what it was all for.
+        self.record_button = MarkButton("Start practice")
         self.record_button.clicked.connect(self._toggle_recording)
         header.addWidget(self.record_button, 0, Qt.AlignmentFlag.AlignBottom)
         page.addLayout(header)
@@ -817,6 +821,18 @@ class PracticeScreen(QWidget):
         if stint_end_ids(self._rows) != self._rendered_ends:
             self._rebuild_rack()
             self.refresh()
+
+    def repaint_rows(self) -> None:
+        """Redraw the rack against rows something else has already changed.
+
+        Tagging one lap writes the whole stint - that is the point of the
+        carry - but the controller mutates the same `LapRow` objects these
+        widgets hold, and nothing told the widgets. Four laps went RM in the
+        database with their bands still grey, and the footer could read
+        "every counted lap is marked" over five visibly unmarked rows.
+        """
+        self._rebuild_rack()
+        self.refresh()
 
     def _best_ms(self) -> int:
         times = [r.lap_time_ms for r in self._rows if r.counted and r.lap_time_ms > 0]

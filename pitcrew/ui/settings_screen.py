@@ -17,8 +17,10 @@ which hook actually loaded — because that is measured, not chosen.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QScrollArea,
+    QFrame,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -88,13 +90,26 @@ class SettingsScreen(QWidget):
             colour=theme.STENCIL_DIM))
         page.addLayout(header)
 
-        columns = QHBoxLayout()
+        # **This screen scrolls, and was the only one that did not.** It is
+        # also the tallest: the two plates in the left column alone need
+        # 1,117 px, and with the header and the fixed footer the whole thing
+        # asks for 1,291. The app's own preferred window is 1,000 tall, and
+        # the display it was sized for gives 501 logical pixels.
+        #
+        # Without a bar, "Save settings" sat 291 px below the visible area
+        # with no way to reach it - on the one screen that carries the
+        # recovery controls for a broken feed, where the driver goes
+        # *because* something is already wrong.
+        body = QWidget()
+        columns = QHBoxLayout(body)
+        columns.setContentsMargins(0, 0, 0, 0)
         columns.setSpacing(theme.GAP_WIDE)
 
         left = QVBoxLayout()
         left.setSpacing(theme.GAP_WIDE)
         left.addWidget(self._feed_plate())
         left.addWidget(self._ptt_plate(), 1)
+        left.addStretch(1)
         columns.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -104,8 +119,16 @@ class SettingsScreen(QWidget):
         right.addStretch(1)
         columns.addLayout(right, 1)
 
-        page.addLayout(columns)
-        page.addStretch(1)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroller.setWidget(body)
+        page.addWidget(scroller, 1)
+
+        # Outside the scroller, so the thing you came here to press cannot be
+        # scrolled away from.
         page.addWidget(self._footer())
 
     def _feed_plate(self) -> Plate:

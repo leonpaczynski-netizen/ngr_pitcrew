@@ -43,7 +43,14 @@ RUBBER_DEEP = "#0C0B09"     # wells the rack sits in
 SHOULDER = "#1E1B17"        # panel face, matte
 SHOULDER_HI = "#282420"     # hover / raised
 TREAD = "#38332B"           # moulded groove: borders and rules
-TREAD_LIGHT = "#4A443A"     # focused border
+TREAD_LIGHT = "#4A443A"
+# **A border token. Never text.** The rail set its group headings and every
+# state note in this at 10px on RUBBER_DEEP - 2.04:1, materially worse than
+# the STRUCK the design rejected for exactly this, and on the one surface used
+# on every visit. It escaped both guards: the body-floor test checks six named
+# inks and this was not one, and the struck-prose test greps pitcrew/ui/*.py
+# while the rail lives in app.py. Both are widened; this comment is the third
+# lock.     # focused border
 
 # ------------------------------------------------------------------ registers
 #
@@ -51,10 +58,34 @@ TREAD_LIGHT = "#4A443A"     # focused border
 
 STENCIL = "#E8E4DC"         # MEASURED - came off the telemetry stream
 STENCIL_DIM = "#9A948A"     # secondary, still measured
-CRAYON = "#FF6B1A"          # DECLARED - the driver typed this
+CRAYON = "#A3E635"          # DECLARED - the driver typed this
+# **The brand's own green, not a marker-pen orange.** The register is
+# unchanged - this is still the ink that means "he entered this himself" - but
+# the hue is Next Gear Racing's now, because the app had no colour in common
+# with the thing it is called.
+#
+# Chosen against the fixed colours rather than sampled off the logo. The logo's
+# own lime runs #84B400-#C0E430, tuned to glow on black in a mark nobody reads
+# at 15px; those sit 27-30 degrees of hue from WARNING and from the Racing
+# Medium band, which is too close for an ink that appears beside them on the
+# same row. This one is 38 degrees off both.
+#
+# It also fixes an inversion nobody had noticed: the orange carried 6.6:1 on
+# the page ground, so the ink the driver reads most - every value he entered,
+# on every screen - was the third most legible of the four registers, behind
+# two he reads occasionally. This one carries 12.4:1.
+#
+# It shares a family with the Intermediate band (#3FA34D) and does not collide
+# with it: that band is a dark desaturated mid-green painted as a block, this
+# is bright acid text, and every band carries its two-letter code anyway.
 DERIVED = "#B08BD8"         # DERIVED - the app worked this out
 CHALK = "#7FC7D9"           # provisional annotation, notes, hints
-STRUCK = "#6B6459"          # struck out: excluded, disabled, not counted
+STRUCK = "#807870"          # struck out: excluded, disabled, not counted
+# Lifted from #6B6459, which carried 3.37:1 on the editor ground. WCAG exempts
+# *disabled* controls, and this ink is used for those - but it is also every
+# placeholder in the app and the "-" of an unset field, and those are live,
+# meaningful state rather than something switched off. "Nothing entered" is a
+# reading the driver has to be able to take. 4.5:1 now.
 
 # Why purple for derived, in a world with no decoration in it:
 #
@@ -271,7 +302,7 @@ QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     border: 1px solid {TREAD};
     border-radius: 0;
     padding: 7px 10px;
-    font-family: "{DATA_FAMILY}";
+    font-family: "{STENCIL_FAMILY}";
     font-size: {DATA_PX}px;
     selection-background-color: {CRAYON};
     selection-color: {RUBBER};
@@ -286,6 +317,19 @@ QSpinBox:disabled, QDoubleSpinBox:disabled {{
     border-color: {SHOULDER_HI};
 }}
 QLineEdit::placeholder {{ color: {STRUCK}; }}
+
+/* **Mono is measurement, not a costume for "technical".** This face used to
+   be on every editor without exception, which set the event name, the notes,
+   the paste box and the driver's own words - the most valuable field on the
+   screen, by its own label - in a typewriter. The world's ban list closes on
+   "monospace anywhere it is not measurement".
+   It is put back for the editors that genuinely hold a figure, keyed on a
+   dynamic property so the decision is made once, by `Field`, at the point
+   where the editor's kind is actually known. */
+QSpinBox, QDoubleSpinBox,
+QLineEdit[data="true"], QPlainTextEdit[data="true"] {{
+    font-family: "{DATA_FAMILY}";
+}}
 
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
@@ -319,7 +363,14 @@ QCheckBox {{
     padding: 3px 0;
 }}
 QCheckBox:hover {{ color: {STENCIL}; }}
-QCheckBox:checked {{ color: {STENCIL}; }}
+/* **Crayon, not stencil.** A checkbox in this app is only ever the driver's
+   own mark - 28 symptoms on Engineer, every toggle on Settings and Car - so a
+   ticked one painting STENCIL put his declaration in the ink reserved for
+   things that came off the telemetry stream. The indicator below already
+   fills with crayon; the label was saying the opposite. Same
+   stylesheet-beats-palette mechanism the two warnings in this file exist to
+   prevent, one selector further down. */
+QCheckBox:checked {{ color: {CRAYON}; }}
 QCheckBox::indicator {{
     width: 15px;
     height: 15px;

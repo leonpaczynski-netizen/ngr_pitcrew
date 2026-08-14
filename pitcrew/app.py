@@ -164,8 +164,12 @@ class NavRail(QWidget):
             if position:
                 column.addSpacing(14)
             if heading:
+                # STENCIL_DIM, not TREAD_LIGHT. That is a border token and
+                # it carried this heading and every state note below at 2.04:1
+                # - worse than the STRUCK the design rejected for exactly this
+                # reason, on the one surface used on every visit.
                 column.addWidget(StencilLabel(heading, size=10,
-                                              colour=theme.TREAD_LIGHT,
+                                              colour=theme.STENCIL_DIM,
                                               tracking=18.0))
                 column.addSpacing(2)
                 column.addWidget(Rule())
@@ -179,7 +183,7 @@ class NavRail(QWidget):
 
                 # What the store already knows about this screen, so the rail
                 # says where the work stands instead of only where it goes.
-                note = StencilLabel("", size=10, colour=theme.TREAD_LIGHT,
+                note = StencilLabel("", size=10, colour=theme.STENCIL_DIM,
                                     tracking=8.0)
                 note.setContentsMargins(0, 0, 0, 4)
                 note.setVisible(False)
@@ -255,16 +259,31 @@ def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
     # A little room for the frame, which `availableGeometry` does not know
     # about: a window sized to the exact work area opens with its title bar
     # off the top on Windows.
-    return (min(width, max(MIN_WINDOW[0], available.width() - 20)),
-            min(height, max(MIN_WINDOW[1], available.height() - 60)))
+    # **`availableGeometry` is in logical pixels, and so is everything Qt
+    # sizes.** The first version of this reasoned in physical ones - "752 px of
+    # working area" - and at 150% scaling that display reports 853x501
+    # logical, not 1280x752. Clamping to a floor of 900x560 then produced a
+    # window 47 px wider and 59 px taller than the whole work area, with
+    # `setMinimumSize` making it unresizable: the exact defect this function
+    # was written to fix, reintroduced by the fix.
+    #
+    # So the floor gives way to the screen. A window that does not fit is
+    # worse than a cramped one, and the panes scroll.
+    return (min(width, max(320, available.width() - 20)),
+            min(height, max(320, available.height() - 60)))
 
 
 class PitCrewWindow(QMainWindow):
     def __init__(self, store: Store, *, port: int = DEFAULT_PORT) -> None:
         super().__init__()
         self.setWindowTitle("Next Gear Racing Pit Crew")
-        self.setMinimumSize(*MIN_WINDOW)
-        self.resize(*fit_to_screen(self, *WINDOW))
+        # The floor is the *smaller* of what the layout wants and what the
+        # screen can show. Pinning it above the work area makes the window
+        # unresizable and puts its own controls off the edge.
+        fitted = fit_to_screen(self, *WINDOW)
+        self.setMinimumSize(min(MIN_WINDOW[0], fitted[0]),
+                            min(MIN_WINDOW[1], fitted[1]))
+        self.resize(*fitted)
         if ICON.exists():
             self.setWindowIcon(QIcon(str(ICON)))
 

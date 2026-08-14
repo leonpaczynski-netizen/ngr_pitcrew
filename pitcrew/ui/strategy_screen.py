@@ -29,6 +29,7 @@ from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
     Declared,
+    Derived,
     EmptyState,
     MarkButton,
     Measured,
@@ -150,7 +151,10 @@ class CrossoverBand(QFrame):
         self.heading.setText(heading)
         self.setStyleSheet(
             f"CrossoverBand {{ background: {theme.SHOULDER};"
-            f" border-left: 3px solid {ink}; }}")
+            # A 1px groove, not a coloured left border - the world's ban list
+        # names that explicitly, and the doubt is already carried by the
+        # heading and the ink of the sentence itself.
+        f" border: 1px solid {theme.TREAD}; }}")
         self.setVisible(True)
 
 
@@ -180,9 +184,13 @@ class PlanCard(QWidget):
             head.addWidget(StencilLabel("Fastest", size=10,
                                         colour=theme.CHALK, tracking=14.0))
         else:
-            head.addWidget(Measured(f"+{plan.delta_s:.1f} s",
+            head.addWidget(Derived(f"+{plan.delta_s:.1f} s",
                                     colour=theme.STENCIL_DIM))
-        head.addWidget(Measured(_race_time(plan.total_time_s), bold=True))
+        # Derived, not measured. The race has not been run: this is the stint
+        # model's output against a wear rate that may itself be assumed. The
+        # evidence column below holds that line and the headline above it did
+        # not.
+        head.addWidget(Derived(_race_time(plan.total_time_s), bold=True))
         column.addLayout(head)
 
         column.addWidget(StintBar(plan.stints))
@@ -339,18 +347,29 @@ class StrategyScreen(QWidget):
         if plans:
             best = plans[0]
             self.spec.clear()
-            self.spec.add("Plan", best.label(), emphasis=True)
+            # **Every figure on this line is derived.** The race has not been
+            # run: these are the stint model's outputs, against a wear rate
+            # that may itself be assumed. They wore stencil white - the ink
+            # for something that came off the telemetry stream - directly
+            # above an evidence column whose entire job is to say which parts
+            # of the plan are measured and which are guesses.
+            self.spec.add("Plan", best.label(), derived=True, emphasis=True)
             # A timed race is won on distance: every plan ends when the clock
             # does, so the headline is how far this one gets, and the time is
             # only when the flag fell.
             if timed:
                 self.spec.add("Distance", f"{best.laps_completed} laps",
-                              emphasis=True)
-                self.spec.add("Flag at", _race_time(best.total_time_s))
+                              derived=True, emphasis=True)
+                self.spec.add("Flag at", _race_time(best.total_time_s),
+                              derived=True)
             else:
-                self.spec.add("Race time", _race_time(best.total_time_s))
+                self.spec.add("Race time", _race_time(best.total_time_s),
+                              derived=True)
+            # "unknown" is a gap, not a declaration - nobody typed it. The
+            # evidence column already paints MISSING in warning; this matches.
+            unknown = best.binding_constraint == "unknown"
             self.spec.add("Limited by", best.binding_constraint,
-                          declared=best.binding_constraint == "unknown")
+                          derived=not unknown, warn=unknown)
             self.spec.finish()
             self.subtitle.setText(
                 f"{len(plans)} legal plans. "

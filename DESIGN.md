@@ -15,8 +15,18 @@ is the crew's own hand. Pit Crew carries provenance the same way, so measured,
 derived and declared never look alike.
 
 It refuses the category's two defaults: the glowing-gauge telemetry dashboard
-with radial dials and a lime accent, and its opposite, the flat grey admin
-panel with a data table.
+with radial dials, and its opposite, the flat grey admin panel with a data
+table.
+
+**On the lime.** An earlier version of this file refused a lime accent
+outright, as shorthand for the first of those. That was the wrong unit: the
+cliché is the *glowing gauge* — a needle sweep, a rev bar, a green that means
+"good" on a dashboard pretending to be a dashboard — not the hue. This app has
+no gauge, no dial and no bar, and its green does not mean good. It means **the
+driver typed this**, which is a register, and it is the green of the product's
+own logo. A product sharing no colour with its own mark was the stranger
+position, and the ink the driver reads most was the third most legible of the
+four at 6.6:1. It is 12.4:1 now.
 
 ## The registers
 
@@ -25,7 +35,7 @@ This is the system. Everything else serves it.
 | Register | Colour | Means | Where |
 |---|---|---|---|
 | Stencil | `#E8E4DC` warm white, mono | **Measured** — came off the telemetry stream | Lap times, deltas, fuel used |
-| Crayon | `#FF6B1A` tyre-marker orange | **Declared** — the driver entered it | Every editor, compound tags, wear gauge |
+| Crayon | `#A3E635` NGR lime | **Declared** — the driver entered it | Every editor, compound tags, wear gauge |
 | Derived | `#B08BD8` timing-screen purple | **Derived** — the app worked it out | Box-in call, modelled stint, assumed inputs |
 | Chalk | `#7FC7D9` | Provisional annotation, hints, parse results | Status lines |
 | Struck | `#6B6459` | Removed from the count, disabled, placeholder | Excluded laps, empty fields |
@@ -109,6 +119,14 @@ what WCAG exempts. A test asserts no screen paints prose with it.
 | Labels, headings, buttons | **Bahnschrift Condensed**, caps, tracked +8-14% | Bahnschrift is DIN 1451 — the German industrial signage standard that technical plates and moulded sidewall codes are lettered in. The correct letter for this world, not the convenient one. |
 | All measurement | **Cascadia Mono** (fallback Consolas) | It *is* measurement, not a costume for "technical". |
 | Prose | Bahnschrift regular | |
+
+**Mono is measurement, and for a long time it was every editor.** The theme put
+Cascadia on `QLineEdit`, `QPlainTextEdit`, `QComboBox` and both spin boxes
+without exception, which set the event name, the notes, the paste box and the
+driver's own words — the field its own label calls the most valuable on the
+screen — in a typewriter. The face is put back only for editors that hold a
+figure now, keyed on a dynamic property `Field` sets from the editor's type, so
+the decision is made once at the point where the kind is actually known.
 
 Qt style sheets carry no letter-spacing or text-transform, so tracking and
 capitalisation are set on `QFont` in `theme.stencil_font()`.
@@ -194,15 +212,28 @@ anything is generated.
 **Reference** (`reference_screen.py`) — the knowledge base's own tables,
 verbatim and read-only. No controls, because there is nothing here to act on.
 
-Layout note, learned three times: a `Field`'s hint does not wrap and a
+Layout note, learned four times: a `Field`'s hint does not wrap and a
 `QComboBox` sizes to its widest item, so either one sets a wide minimum for its
 whole pane and silently clips every label in the column. Hints elide, combos
 holding sentences get `AdjustToMinimumContentsLengthWithIcon` with the popup
 sized separately — and the panes show a horizontal bar **as needed** rather
 than never, because hiding the bar never stopped the overflow, only the
-reaching. Practice is the one exception, and says why: its column heads sit
-outside the scroll area, so a bar would slide the rows out from under their own
-headings.
+reaching.
+
+The fourth time was the one that mattered, and it was not a width. **Settings
+had no scroll area at all** — the only screen without one, and the tallest, at
+1,291 px against a display that gives 501 logical pixels. `Save settings` sat
+below the fold with nothing to reach it, on the screen that carries the
+recovery controls for a broken feed, which is where the driver goes *because*
+something is already wrong. The guard test iterated `findChildren(QScrollArea)`,
+so a screen with zero of them passed vacuously. Every screen now fits 501 px of
+height, and a test asserts that against the smallest display in the rig rather
+than against the presence of a widget.
+
+Practice was once the exception here — its column heads sat outside the scroll
+area, so a bar would have slid the rows out from under their own headings. They
+ride in their own viewport slaved to the rows' bar now, so the exception is
+gone and the rack scrolls sideways like everything else.
 
 ## What this world refuses
 

@@ -56,10 +56,27 @@ def test_the_small_panel_gets_a_window_that_fits_on_it():
     assert (width, height) < WINDOW
 
 
-def test_a_screen_smaller_than_the_minimum_still_gets_the_minimum():
-    """Better to overflow a screen nothing can fit on than to open unusably
-    small — and the rack scrolls sideways now, so the overflow is reachable."""
-    assert fit_to_screen(_Widget(_Screen(640, 400)), *WINDOW) == MIN_WINDOW
+def test_a_screen_smaller_than_the_minimum_still_gets_the_screen():
+    """The floor gives way. This asserted the opposite and was wrong.
+
+    The reasoning was "better to overflow a screen nothing can fit on, and the
+    rack scrolls sideways now so the overflow is reachable". It is not
+    reachable: `setMinimumSize` at that floor makes the window unresizable, so
+    its own title bar and controls sit off the edge with no way to drag them
+    back. And `availableGeometry` is in *logical* pixels, so the 1280x800
+    display this was written for reports 853x501 — under the 900x560 floor on
+    both axes. The fix reintroduced the defect it was written to fix.
+    """
+    fitted = fit_to_screen(_Widget(_Screen(640, 400)), *WINDOW)
+    assert fitted[0] <= 640 and fitted[1] <= 400
+    assert fitted < MIN_WINDOW
+
+
+def test_the_scaled_display_gets_a_window_that_fits_it():
+    """1280x800 at 150% reports 853x501 logical, which is under the floor on
+    both axes — the case that was broken."""
+    fitted = fit_to_screen(_Widget(_Screen(853, 501)), *WINDOW)
+    assert fitted[0] <= 853 and fitted[1] <= 501
 
 
 def test_no_screen_at_all_is_not_an_error():
