@@ -330,9 +330,14 @@ class CompoundBand(QWidget):
 
         if self._code:
             painter.setFont(self._font)
-            ink = theme.band_ink(self._code)
-            if self._struck:
-                ink.setAlpha(150)
+            # **Measured against the colour actually painted.** The ink
+            # was chosen against the undesaturated band and then the band was
+            # desaturated and the ink dropped to alpha 150, which put the
+            # code at 1.51-2.92:1 on eight of eleven compounds - below the
+            # 3:1 the design states all eleven clear, in the one state where
+            # colour becomes the only channel. Eight of the eleven chips on
+            # the Event screen are in that state by default.
+            ink = theme.band_ink_for(over)
             painter.setPen(QPen(ink))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                              self._code.upper())
@@ -377,9 +382,13 @@ class MarkButton(QPushButton):
 
         if primary:
             base, ink, edge = theme.CRAYON, theme.RUBBER, theme.CRAYON
-            hover = "#FF823D"
+            hover = theme.CRAYON_HOT
         elif danger:
-            base, ink, edge = "transparent", theme.DANGER, theme.DANGER
+            # DANGER on the hover ground is 3.65:1 at 13px DemiBold, which is
+            # not large text. DANGER_INK is the same red lifted to clear the
+            # body floor on every ground this button sits on; the border keeps
+            # the racing red so the control still reads as the dangerous one.
+            base, ink, edge = "transparent", theme.DANGER_INK, theme.DANGER
             hover = theme.SHOULDER_HI
         else:
             base, ink, edge = "transparent", theme.STENCIL, theme.TREAD_LIGHT
@@ -564,14 +573,48 @@ class Field(QWidget):
         self.editor = editor
 
 
+def mark_unset(combo, *, unset=None, unset_index: int | None = None) -> None:
+    """Paint a combo struck while it holds nothing, crayon once it does.
+
+    `Picker` has done this since it was written; every *bare* `QComboBox` in
+    the app did not, and there are a dozen. Their "—" and "Not answered" rows
+    took `QPalette.ButtonText`, which is crayon - so an untagged lap's dash
+    read as the same declaration as a tagged lap's "RM", and "Not answered"
+    for *can this circuit rain* - a deliberate tri-state where unanswered is
+    explicitly not "cannot rain" - read as an answer.
+
+    Call once after building the combo; it wires itself to the signal.
+
+    `unset_index` is for combos built with `addItems`, which carry no item
+    data at all - there the sentinel is the row's position, not its value.
+    """
+    def sync() -> None:
+        chosen = (combo.currentIndex() != unset_index
+                  if unset_index is not None
+                  else combo.currentData() is not unset)
+        palette = combo.palette()
+        ink = QColor(theme.CRAYON if chosen else theme.STRUCK)
+        palette.setColor(palette.ColorRole.ButtonText, ink)
+        palette.setColor(palette.ColorRole.Text, ink)
+        combo.setPalette(palette)
+
+    combo.currentIndexChanged.connect(sync)
+    sync()
+
+
 class Picker(QWidget):
-    """A dropdown you cannot mistype into, plus a way to add what is missing.
+    """A dropdown you cannot mistype into.
 
     Free text was letting a typo through: "Fuji Speedwya" would save happily
-    and then match nothing next session. But the shipped track catalogue is
-    incomplete, so a closed list alone would block real events. Both are solved
-    by making the list authoritative and letting the driver extend it once —
-    after which the name is in the dropdown forever.
+    and then match nothing next session, so the list is authoritative.
+
+    **There is no way to add to it from here**, and this docstring used to say
+    there was — "letting the driver extend it once, after which the name is in
+    the dropdown forever". No such control was ever built. `EventScreen`
+    carries a `catalog_extended` signal, connected to a live store write, that
+    nothing emits. A circuit the catalogue is missing cannot be recorded at
+    all; the honest place to fix that is `data/gt7_tracks.json`, which one
+    page owns and a test enforces agreement on.
     """
 
     changed = pyqtSignal(str)
@@ -825,6 +868,14 @@ class TyreGauge(QWidget):
         self.update()
         self.changed.emit()
 
+    def clear(self) -> None:
+        """Back to unread. Not zero - zero is a reading, and a fresh tyre."""
+        if self._fraction is not None:
+            self._fraction = None
+            self._sync_tooltip()
+            self.update()
+            self.changed.emit()
+
     def setLimiting(self, limiting: bool) -> None:  # noqa: N802 - Qt naming
         """Mark this as the corner that ends the stint."""
         if limiting != self._limiting:
@@ -834,12 +885,13 @@ class TyreGauge(QWidget):
     def _sync_tooltip(self) -> None:
         name = self._corner.upper()
         if self._fraction is None:
-            text = (f"{name}: not read. Drag down to match the in-game gauge, "
-                    f"or use the arrow keys.")
+            text = (f"{name}: not read. Drag down to match the in-game "
+                    f"gauge, or use the arrow keys. Right-click clears it "
+                    f"back to unread.")
         else:
             text = (f"{name}: {self._fraction:.0%} consumed "
                     f"({wear_phase(self._fraction)} phase). "
-                    f"Delete clears it back to unread.")
+                    f"Right-click or Delete clears it back to unread.")
         self.setToolTip(text)
         self.setAccessibleName(f"{name} tyre wear")
         self.setAccessibleDescription(text)
@@ -850,8 +902,20 @@ class TyreGauge(QWidget):
         return max(0.0, min(1.0, y / max(1, self.height())))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # **Right-click puts it back to unread.** This gauge is 46x62 px,
+        # sitting on a rack row beside two combo boxes and a button, and a
+        # press used to commit a reading on the down-click with no threshold
+        # and no way back: `Delete` clears it, but only once it is focused,
+        # so a stray click wrote ~10% wear as a declared reading with no
+        # mouse gesture that could retract it. It is the input to the wear
+        # model, which is the input to stint length, which is the highest
+        # consequence number this app emits. There is no undo anywhere.
+        if event.button() == Qt.MouseButton.RightButton:
+            self.clear()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         self._dragging = True
         self.setFraction(self._fraction_at(event.position().y()))
 
@@ -860,7 +924,14 @@ class TyreGauge(QWidget):
             self.setFraction(self._fraction_at(event.position().y()))
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # A drag down the 62 px of this widget emits `changed` on every 0.01,
+        # and each one rebuilt the spec line and made four database writes -
+        # 40-60 round trips for one gesture. The intermediate values are not
+        # readings; only the one he let go on is.
+        was_dragging = self._dragging
         self._dragging = False
+        if was_dragging:
+            self.changed.emit()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         key = event.key()
@@ -903,8 +974,12 @@ class TyreGauge(QWidget):
             painter.setBrush(wear_colour(self._fraction))
             painter.drawRoundedRect(worn, 4, 4)
 
+        # CHALK when focused, matching every other control in the app.
+        # It was TREAD_LIGHT at 2.04:1 against TREAD at 1.57 - a keyboard
+        # state with less emphasis than the passive one, on the widget that
+        # carries the wear model's only input.
         border = (QColor(theme.CRAYON) if self._limiting else
-                  QColor(theme.TREAD_LIGHT if self.hasFocus() else theme.TREAD))
+                  QColor(theme.CHALK if self.hasFocus() else theme.TREAD))
         painter.setPen(QPen(border, 2.0 if self._limiting or self.hasFocus() else 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(body, 4, 4)

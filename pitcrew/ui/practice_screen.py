@@ -38,7 +38,9 @@ from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
+    EmptyState,
     block_wheel,
+    mark_unset,
     CompoundBand,
     Declared,
     Field,
@@ -442,6 +444,9 @@ class RackRow(QWidget):
         self.compound_picker.currentIndexChanged.connect(self._on_compound)
         self.compound_picker.setToolTip("Which compound this lap ran on")
         block_wheel(self.compound_picker)
+        # Untagged reads struck, not crayon: an unset field must never look
+        # like a value the driver declared.
+        mark_unset(self.compound_picker)
         line.addWidget(self.compound_picker)
 
         # Only where a set can have gone on: the first lap of a tank. GT7
@@ -465,6 +470,7 @@ class RackRow(QWidget):
                 "on here, and the export says it assumed it. Say so and the "
                 "rate is measured.")
             block_wheel(self.set_picker)
+            mark_unset(self.set_picker)
             line.addWidget(self.set_picker)
         else:
             spacer = QWidget()
@@ -490,7 +496,9 @@ class RackRow(QWidget):
         keep = self.exclude_button.sizePolicy()
         keep.setRetainSizeWhenHidden(True)
         self.exclude_button.setSizePolicy(keep)
-        self.exclude_button.setMinimumHeight(30)
+        # 34, the floor this app sets for itself everywhere else. This is
+        # the most-used control on the busiest screen, once per lap row.
+        self.exclude_button.setMinimumHeight(34)
         self.exclude_button.setFont(theme.stencil_font(12, tracking=6.0))
         self.exclude_button.clicked.connect(self._on_exclude)
         line.addWidget(self.exclude_button)
@@ -705,6 +713,17 @@ class PracticeScreen(QWidget):
         self.rack_layout = QVBoxLayout(self.rack)
         self.rack_layout.setContentsMargins(0, 0, 0, 0)
         self.rack_layout.setSpacing(0)
+        # What the plate says with nothing in it. Practice is the screen he
+        # returns to between every stint and the first with any real content,
+        # and on a fresh event it was a titled rectangle with column heads
+        # over an empty well - the exact thing `EmptyState` was written for,
+        # on the one screen that never got one.
+        self.rack_empty = EmptyState(
+            "No laps yet. Recording a session needs:",
+            ("an event, saved on the Event screen",
+             "the feed connected — test it in Settings",
+             "Start practice, then go out"))
+        self.rack_layout.addWidget(self.rack_empty)
         self.rack_layout.addStretch(1)
         self.scroller.setWidget(self.rack)
 
@@ -787,6 +806,9 @@ class PracticeScreen(QWidget):
         # unit a race is planned in, and a session that goes out three times
         # on three sets is three stints - which the old rule drew as one
         # continuous run of laps.
+        self.rack_empty.setVisible(not self._rows)
+        if not self._rows:
+            self.rack_layout.insertWidget(0, self.rack_empty)
         stints = {run.first_lap: (number, list(run.laps))
                   for number, run in enumerate(split_runs(self._rows), start=1)}
         seen_session: int | None = None

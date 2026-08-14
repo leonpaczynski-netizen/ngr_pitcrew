@@ -45,6 +45,7 @@ from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
 from pitcrew.prompts.context import gather
 from pitcrew.prompts.report import DriverReport
 from pitcrew.prompts.templates import PROMPT_VERSION
+from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
@@ -343,6 +344,12 @@ class PitCrewController(QObject):
             self.practice.set_status(
                 "No event yet. Create one on the Event screen first.",
                 warn=True)
+            # The Engineer's premise plate is the screen's whole argument -
+            # the division between what the app knows and what only he does,
+            # visible before anything is generated. It returned early here and
+            # left the plate empty on exactly the run where the division has
+            # never been explained.
+            self.refresh_engineer()
             return
 
         sheet = None
@@ -761,8 +768,6 @@ class PitCrewController(QObject):
         self.settings_screen.note_feed(report.as_text(), warn=not report.ok)
         return report.ok
 
-        return True
-
     def test_beep(self) -> bool:
         """Sound the beep now. The only way to know it carries over the engine."""
         if self.settings_screen is None:
@@ -972,9 +977,26 @@ class PitCrewController(QObject):
             self.engineer.note_reply("Nothing pasted.", warn=True)
             return
         self.store.save_prompt_reply(self.prompt_issue_id, reply)
+
+        # **Filed and fitted, from one paste.** The app had the reply in
+        # memory, had a working parser, and asked him to paste the same block
+        # a second time on a different screen - and the copy said so, which is
+        # worse than the seam itself: it documented it rather than closing it.
+        # Filing and fitting stay separate actions; the transcription between
+        # them is what goes.
+        parsed = parse_reply(reply)
+        if parsed.sheets:
+            self.event_screen.take_reply(reply)
+            fitted = ", ".join(sorted(parsed.sheets))
+            self.engineer.note_reply(
+                f"Filed against prompt #{self.prompt_issue_id}, and the "
+                f"{fitted} sheet{'' if len(parsed.sheets) == 1 else 's'} "
+                f"loaded onto the Event screen. Check it there and save.")
+            return
         self.engineer.note_reply(
-            f"Filed against prompt #{self.prompt_issue_id}. Paste the setup "
-            f"block into the Event screen to fit it.")
+            f"Filed against prompt #{self.prompt_issue_id}. No setup block in "
+            f"it, so nothing was fitted - paste the sheet into the Event "
+            f"screen if there is one.", warn=True)
 
     # -------------------------------------------------------------- practice
 

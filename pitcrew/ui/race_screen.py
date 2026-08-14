@@ -56,7 +56,11 @@ class CallRow(QWidget):
 
         text = QVBoxLayout()
         text.setSpacing(0)
-        instruction = BodyLabel(call.call, colour=theme.STENCIL, wrap=False)
+        # Wrapped. A call's reason is a sentence by design, and an
+        # unwrapped label makes its longest one the minimum width of the whole
+        # log column - the same trap that pushed the Strategy screen to 6,268
+        # px, fixed there and left here.
+        instruction = BodyLabel(call.call, colour=theme.STENCIL, wrap=True)
         text.addWidget(instruction)
         if call.reason:
             text.addWidget(BodyLabel(call.reason, size=13,

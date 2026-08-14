@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFrame,
     QCheckBox,
     QDoubleSpinBox,
     QGridLayout,
@@ -87,6 +88,17 @@ class CarScreen(QWidget):
         page.addWidget(self._footer())
 
     def _left_column(self) -> QWidget:
+        # Scrolled, like the right one. The right column got a scroller and
+        # the left did not, so on a narrow window ~400 px of it was clipped -
+        # and what is clipped is the preset buttons and the verified
+        # checkbox, which is how ranges get onto this screen in the first
+        # place.
+        outer = QScrollArea()
+        outer.setWidgetResizable(True)
+        outer.setFrameShape(QFrame.Shape.NoFrame)
+        outer.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         holder = QWidget()
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
@@ -119,8 +131,15 @@ class CarScreen(QWidget):
         race.clicked.connect(lambda: self.load_preset("race"))
         road = MarkButton("Road preset", compact=True)
         road.clicked.connect(lambda: self.load_preset("road"))
-        clear = MarkButton("Clear", compact=True)
-        clear.clicked.connect(self.clear_ranges)
+        # Danger, and a two-click confirm. It sits in a row with two
+        # non-destructive preset buttons, drawn identically, and empties every
+        # min and max on the screen - including figures read off the car by
+        # hand, one at a time, which is the most expensive data in the app to
+        # re-enter. `MarkButton` has shipped a danger variant since it was
+        # written and nothing had ever used it.
+        clear = MarkButton("Clear", compact=True, danger=True)
+        self._clear_armed = False
+        clear.clicked.connect(lambda: self._on_clear(clear))
         for button in (race, road, clear):
             row.addWidget(button)
         row.addStretch(1)
@@ -130,7 +149,8 @@ class CarScreen(QWidget):
             "never saved as verified.", size=13, colour=theme.STENCIL_DIM))
         column.addWidget(state)
         column.addStretch(1)
-        return holder
+        outer.setWidget(holder)
+        return outer
 
     def _right_column(self) -> QWidget:
         holder = QWidget()
@@ -225,7 +245,7 @@ class CarScreen(QWidget):
         editor.setSingleStep(step or 1)
         editor.setSpecialValueText("—")
         editor.setValue(EMPTY)
-        editor.setMinimumHeight(30)
+        editor.setMinimumHeight(34)
         # A min/max bound is three or four characters. Left to
         # itself the box asks for 143px and four of them set the
         # width of the whole screen.
@@ -311,6 +331,28 @@ class CarScreen(QWidget):
         if preset:
             self.write_ranges(preset)
             self.verified.setChecked(False)
+
+    def _on_clear(self, button) -> None:
+        """First press arms, second press wipes.
+
+        The same two-click pattern the Event screen uses to guard switching
+        away from unsaved work - a confirmation that needs no modal and no
+        second widget, and that says what it is about to destroy.
+        """
+        if not self._clear_armed and self._has_values():
+            self._clear_armed = True
+            button.setText("Clear — sure?")
+            self.note("Press Clear again to empty every range on this screen. "
+                      "Measured figures go too.", warn=True)
+            return
+        self._clear_armed = False
+        button.setText("Clear")
+        self.clear_ranges()
+
+    def _has_values(self) -> bool:
+        return any(editor.value() > editor.minimum()
+                   for editor in (*self._min_editors.values(),
+                                  *self._max_editors.values()))
 
     def clear_ranges(self) -> None:
         for editor in (*self._min_editors.values(), *self._max_editors.values()):

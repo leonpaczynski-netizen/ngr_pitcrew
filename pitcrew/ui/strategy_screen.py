@@ -170,6 +170,8 @@ class PlanCard(QWidget):
         self.plan = plan
         self._chosen = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"Plan {index + 1}")
 
         column = QVBoxLayout(self)
         column.setContentsMargins(16, 12, 16, 14)
@@ -206,7 +208,18 @@ class PlanCard(QWidget):
         self.update()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         self.selected.emit(self.index)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # Approve acts on the chosen plan, and the choice could only ever be
+        # changed by clicking - so a keyboard user could approve plan 0 and
+        # nothing else.
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return,
+                           Qt.Key.Key_Enter):
+            self.selected.emit(self.index)
+            return
+        super().keyPressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)

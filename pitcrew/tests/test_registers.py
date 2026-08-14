@@ -424,16 +424,30 @@ def test_the_empty_state_returns_when_a_rebuild_finds_nothing(qt_app):
 
 def test_discard_is_connected_to_something(qt_app):
     """It was constructed, laid out, and wired to nothing for the life of the
-    screen - the one control in the app that did not do what it said."""
+    screen - the one control in the app that did not do what it said.
+
+    It is guarded now, the same way switching events away from unsaved work
+    is: the first press arms and names what it is about to throw away, the
+    second does it. The less deliberate gesture was protected and this, which
+    loses the same 23-key sheet, was not.
+    """
     from pitcrew.ui.event_screen import EventScreen
     from pitcrew.ui.widgets import MarkButton
 
     screen = EventScreen()
     fired = []
     screen.discarded.connect(lambda: fired.append(1))
-
     discard = next(b for b in screen.findChildren(MarkButton)
-                   if b.text() == "DISCARD")
+                   if b.text().startswith("DISCARD"))
+
+    # Nothing typed: nothing to throw away, and it says so rather than firing.
+    discard.click()
+    assert fired == []
+
+    screen.name_edit.setText("Round 9 — Bathurst")
+    discard.click()
+    assert fired == [], "the first press on a dirty form asks"
+    assert "sure" in discard.text().lower()
     discard.click()
     assert fired == [1]
 

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from pitcrew.app import fit_to_screen
 from pitcrew.ui import theme
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import LapRow, PracticeScreen
@@ -80,6 +81,10 @@ class NavRail(QWidget):
         self.select(0)
 
     def select(self, index: int) -> None:
+        if not 0 <= index < self.stack.count():
+            # Four rail items over a two-screen stack: the last two were
+            # silent no-ops.
+            return
         self._stack.setCurrentIndex(index)
         for position, label in enumerate(self._labels):
             active = position == index
@@ -92,7 +97,9 @@ class PreviewWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Next Gear Racing Pit Crew")
-        self.resize(*WINDOW)
+        # Clamped, like the real shell. A harness that opens bigger than the
+        # screen cannot show you what the screen will look like.
+        self.resize(*fit_to_screen(self, *WINDOW))
 
         shell = QWidget()
         row = QHBoxLayout(shell)

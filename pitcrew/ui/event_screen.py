@@ -42,6 +42,7 @@ from pitcrew.ui.widgets import (
     Plate,
     StencilLabel,
     block_wheel,
+    mark_unset,
     struck_when_empty,
 )
 
@@ -108,7 +109,13 @@ class CompoundChip(CompoundBand):
         self.setFixedSize(CompoundBand.WIDTH, 34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStruck(True)
-        self.setToolTip(code)
+        self.setToolTip(f"{code} — space or enter toggles")
+        # Eleven controls, mouse-only, in an app whose suite already carries a
+        # test called "the nav rail is reachable without a mouse" because the
+        # whole of its navigation once was not. This is the regulation for
+        # which compounds may appear in a strategy.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"{code} allowed")
 
     def isSelected(self) -> bool:  # noqa: N802 - Qt naming
         return self._selected
@@ -118,6 +125,17 @@ class CompoundChip(CompoundBand):
         self.setStruck(not selected)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._toggle()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return,
+                           Qt.Key.Key_Enter):
+            self._toggle()
+            return
+        super().keyPressEvent(event)
+
+    def _toggle(self) -> None:
         self.setSelected(not self._selected)
         self.toggled.emit(self.code() or "", self._selected)
 
@@ -280,6 +298,15 @@ class EventScreen(QWidget):
         """
         return self._clean is not None and self.values() != self._clean
 
+    def _has_content(self) -> bool:
+        """Is there anything on this form worth losing?"""
+        values = self.values()
+        if any(values.get(key) for key in ("name", "track", "car_name",
+                                           "sheet_name", "notes")):
+            return True
+        return any(value is not None
+                   for value in (values.get("setup_values") or {}).values())
+
     def _mark_clean(self) -> None:
         self._clean = self.values()
 
@@ -441,6 +468,10 @@ class EventScreen(QWidget):
             "and wet tyres irrelevant. Random hands it to the circuit.")
         self.rain_possible = QComboBox()
         self.rain_possible.addItems(RAIN_ANSWERS)
+        # "Not answered" is a real third state - it is explicitly not "cannot
+        # rain" - and it was rendering in crayon, the ink that means he
+        # answered. It reads struck until he does.
+        mark_unset(self.rain_possible, unset_index=0)
         self.rain_possible.setToolTip(
             "Can this circuit produce rain at all? Most cannot. GT7 broadcasts "
             "no weather channel, so this is the one thing here the app cannot "
@@ -773,7 +804,9 @@ class EventScreen(QWidget):
         discard = MarkButton("Discard")
         discard.setToolTip(
             "Throw away unsaved edits and reload the event as it is stored.")
-        discard.clicked.connect(self.discarded.emit)
+        self.discard_button = discard
+        self._discard_armed = False
+        discard.clicked.connect(self._on_discard)
         row.addWidget(discard)
         save = MarkButton("Save event", primary=True)
         save.clicked.connect(self._on_save)
@@ -781,6 +814,16 @@ class EventScreen(QWidget):
         return bar
 
     # --------------------------------------------------------------- actions
+
+    def take_reply(self, text: str) -> None:
+        """Load a reply the Engineer screen already has, without a re-paste.
+
+        The paste box is filled too, so the screen shows where the values came
+        from rather than appearing to have invented them - and so `Read sheet`
+        can be pressed again if he edits it.
+        """
+        self.paste_box.setPlainText(text)
+        self._on_read_sheet()
 
     def _on_read_sheet(self) -> None:
         """Read a pasted reply - both sheets of it.
@@ -1059,6 +1102,33 @@ class EventScreen(QWidget):
             "build": build,
             "performance": performance,
         }
+
+    def _on_discard(self) -> None:
+        """Guarded the same way switching events is, and it was not.
+
+        Switching the picker with a dirty form refuses the first click and
+        asks for a second - a good, modal-free confirmation. Discard loses the
+        *same* unsaved work on one click, on a screen holding a 23-key sheet,
+        a build block and a gearbox. The less deliberate gesture was protected
+        and the more deliberate one was not.
+        """
+        # `is_dirty` compares against a *loaded* event, so a screen that has
+        # never loaded one reads clean however much has been typed into it -
+        # correct for the switch guard, wrong here. What Discard throws away
+        # is whatever is on the form.
+        if not (self.is_dirty() or self._has_content()):
+            self.note("Nothing to discard.")
+            return
+        if not self._discard_armed:
+            self._discard_armed = True
+            self.discard_button.setText("Discard — sure?")
+            name = self.name_edit.text().strip() or "this event"
+            self.note(f"Press Discard again to throw away unsaved edits to "
+                      f"{name}.", warn=True)
+            return
+        self._discard_armed = False
+        self.discard_button.setText("Discard")
+        self.discarded.emit()
 
     def _on_save(self) -> None:
         data = self.values()

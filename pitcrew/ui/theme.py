@@ -107,6 +107,14 @@ STRUCK = "#807870"          # struck out: excluded, disabled, not counted
 
 WARNING = "#F2C230"
 DANGER = "#E8352E"
+# The same red lifted until it clears the body floor as *text*. DANGER is the
+# racing red and it is 3.65:1 on the hover ground at 13px DemiBold, which is
+# not large text - fine as a border, not as a word. The border keeps the
+# racing red so a destructive control still reads as the dangerous one.
+DANGER_INK = "#FF6B63"
+# Hover for a crayon-filled button: the same lime, opened up. It was the one
+# unnamed colour literal in the whole system.
+CRAYON_HOT = "#BEF264"
 
 # ------------------------------------------------------------- compound bands
 #
@@ -316,7 +324,10 @@ QSpinBox:disabled, QDoubleSpinBox:disabled {{
     color: {STRUCK};
     border-color: {SHOULDER_HI};
 }}
-QLineEdit::placeholder {{ color: {STRUCK}; }}
+/* No `::placeholder` rule here. Qt has no such selector - the
+   comment twenty lines above says so, and this file carried one
+   anyway. Placeholder colour comes from QPalette.PlaceholderText,
+   set in `apply()`. */
 
 /* **Mono is measurement, not a costume for "technical".** This face used to
    be on every editor without exception, which set the event name, the notes,
