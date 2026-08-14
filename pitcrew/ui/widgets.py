@@ -118,11 +118,24 @@ class StencilLabel(QLabel):
 class BodyLabel(QLabel):
     def __init__(self, text: str = "", *, size: int = theme.BODY_PX,
                  colour: str = theme.STENCIL_DIM, wrap: bool = True,
+                 bold: bool = False,
                  parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
-        self.setFont(theme.text_font(size))
-        self.setStyleSheet(f"color: {colour}; background: transparent;")
+        self.setFont(theme.text_font(
+            size, weight=QFont.Weight.DemiBold if bold else QFont.Weight.Normal))
+        self.set_ink(colour)
         self.setWordWrap(wrap)
+
+    def set_ink(self, colour: str) -> None:
+        """Recolour without dropping the transparent background.
+
+        Five call sites across three screens replaced the whole style sheet
+        with `color:` alone, so the label fell back to the app-wide
+        `QWidget { background: RUBBER }` and painted a dark rectangle over the
+        `SHOULDER` plate it was sitting on. Nine other sites got it right,
+        which made it inconsistency rather than a decision.
+        """
+        self.setStyleSheet(f"color: {colour}; background: transparent;")
 
 
 class Measured(QLabel):
@@ -531,6 +544,14 @@ class Field(QWidget):
         # at 125% display scaling the difference is enough for a label to sit
         # on the box below it.
         caption = StencilLabel(label, size=11, tracking=12.0)
+        # **The caption belongs to the editor.** A grep of the whole package
+        # found no `setBuddy` and two `setAccessibleName`, so every one of the
+        # app's ~80 form controls was anonymous to assistive tech and carried
+        # no Alt-mnemonic. One line here covers all of them, because every
+        # labelled control on every screen is built through this class.
+        caption.setBuddy(editor)
+        if not editor.accessibleName():
+            editor.setAccessibleName(label)
         caption.setMinimumHeight(caption.fontMetrics().height() + 2)
         caption.setSizePolicy(caption.sizePolicy().horizontalPolicy(),
                               QSizePolicy.Policy.Fixed)
@@ -563,6 +584,10 @@ class Field(QWidget):
         if hint:
             column.addSpacing(2)
             column.addWidget(HintLabel(hint))
+            # The hint elides, so it is also the only place the whole
+            # sentence lives - it belongs to the control it explains rather
+            # than to the pixels beside it.
+            editor.setAccessibleDescription(hint)
 
         # Nothing in a field stretches vertically: a grid row taller than this
         # one leaves space below rather than smearing it between the rows.
@@ -610,11 +635,12 @@ class Picker(QWidget):
 
     **There is no way to add to it from here**, and this docstring used to say
     there was — "letting the driver extend it once, after which the name is in
-    the dropdown forever". No such control was ever built. `EventScreen`
-    carries a `catalog_extended` signal, connected to a live store write, that
-    nothing emits. A circuit the catalogue is missing cannot be recorded at
-    all; the honest place to fix that is `data/gt7_tracks.json`, which one
-    page owns and a test enforces agreement on.
+    the dropdown forever". No such control was ever built, and the signal that
+    would have carried it has been removed rather than left connected to a
+    live store write with no emitter, which is how the next reader comes to
+    assume it works. A circuit the catalogue is missing is fixed in
+    `data/gt7_tracks.json`, which one page owns and a test enforces agreement
+    on.
     """
 
     changed = pyqtSignal(str)
@@ -757,9 +783,6 @@ class StrikeRow(QFrame):
         self._struck = struck
         self.update()
 
-    def isStruck(self) -> bool:  # noqa: N802 - Qt naming
-        return self._struck
-
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._hovered = True
         self.update()
@@ -808,10 +831,10 @@ PHASE_CLIFF_FROM = 0.90
 def wear_colour(fraction: float) -> QColor:
     """Fill colour for a fraction consumed, on the model's own phase bands."""
     if fraction < PHASE_FLAT_UNTIL:
-        return QColor("#3FA34D")        # flat phase - losses in tenths
+        return QColor(theme.WEAR_FLAT)        # flat phase - losses in tenths
     if fraction <= PHASE_CLIFF_FROM:
-        return QColor(theme.WARNING)    # progressive - balance shifts first
-    return QColor(theme.DANGER)         # cliff - undriveable, not merely slow
+        return QColor(theme.WEAR_LINEAR)  # progressive - balance shifts first
+    return QColor(theme.WEAR_CLIFF)       # cliff - undriveable, not just slow
 
 
 def wear_phase(fraction: float) -> str:

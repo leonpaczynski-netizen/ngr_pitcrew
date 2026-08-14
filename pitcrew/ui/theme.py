@@ -138,6 +138,15 @@ COMPOUND_BANDS: dict[str, str] = {
 }
 UNMARKED_BAND = "#2A2620"   # a set nobody has chalked yet
 
+# The three phases of the wear model, on the tyre gauge. Named rather than
+# written inline: the flat phase used to be the literal #3FA34D, which is
+# byte-identical to the Intermediate band - so one green meant "intermediate
+# compound" on a stint bar and "this tyre is fine" on a gauge two screens
+# away. Either meaning is defensible; sharing the hex by accident is not.
+WEAR_FLAT = "#4FB06A"
+WEAR_LINEAR = "#F2C230"
+WEAR_CLIFF = "#E8352E"
+
 
 def band_colour(code: str | None) -> QColor:
     if not code:

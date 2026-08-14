@@ -156,7 +156,6 @@ class EventScreen(QWidget):
 
     saved = pyqtSignal(dict)
     discarded = pyqtSignal()
-    catalog_extended = pyqtSignal(str, str)    # kind, name
     switched = pyqtSignal(object)              # event id, or None for a new one
 
     def __init__(self, tracks=None, car_groups=None,
@@ -348,6 +347,7 @@ class EventScreen(QWidget):
         column.setSpacing(theme.GAP_WIDE)
 
         scroller = QScrollArea()
+        self.left_scroller = scroller
         scroller.setWidgetResizable(True)
         # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
         # content overflowing below 1600 wide - it only stopped it
@@ -455,6 +455,11 @@ class EventScreen(QWidget):
         row.addWidget(Field("Run to", self.race_type), 1)
         row.addWidget(self._length_field, 1)
         row.addWidget(self._extra_time_field, 1)
+        # The signal is connected but never fired at build time, so on a
+        # fresh screen - which defaults to a lap race - the field the comment
+        # below calls "a question with no answer" was the first thing on the
+        # Format plate, showing its empty sentinel.
+        self._extra_time_field.setVisible(False)
         row.addWidget(Field("Weather", self.weather), 1)
         plate.body.addLayout(row)
 
@@ -838,7 +843,7 @@ class EventScreen(QWidget):
         if not reply.sheets:
             self.paste_status.setText(
                 "Nothing recognised. Fill the form below instead.")
-            self.paste_status.setStyleSheet(f"color: {theme.WARNING};")
+            self.paste_status.set_ink(theme.WARNING)
             return
 
         self._pasted = dict(reply.sheets)
@@ -850,7 +855,7 @@ class EventScreen(QWidget):
 
         self.paste_status.setText(f"Read {reply.summary()}.")
         colour = theme.WARNING if reply.unmatched else theme.CHALK
-        self.paste_status.setStyleSheet(f"color: {colour};")
+        self.paste_status.set_ink(colour)
         # **Everything the reply carried, or it was not worth asking for.**
         # The contract asks what had to be clamped to a slider limit and what
         # to try first if the car is still not right. Both were parsed and
@@ -870,6 +875,14 @@ class EventScreen(QWidget):
         self._sync_sheet_pair()
 
     def _show_sheet(self, result) -> None:
+        # **Cleared first.** Only the keys present were written, so a reply
+        # missing three settings left the previous sheet's values sitting in
+        # those three editors, mixed into the new sheet with nothing
+        # distinguishing them - a hybrid nobody issued, saved against the
+        # event and exported as the setup as run.
+        for editor in self._setup_editors.values():
+            editor.setValue(editor.minimum())
+        self.gear_edit.clear()
         for key, value in result.values.items():
             editor = self._setup_editors.get(key)
             if editor is not None:
@@ -1029,8 +1042,7 @@ class EventScreen(QWidget):
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
-        self.footer_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.footer_note.set_ink(theme.WARNING if warn else theme.CHALK)
 
     def values(self) -> dict:
         """Everything the driver declared on this screen."""
@@ -1132,12 +1144,22 @@ class EventScreen(QWidget):
 
     def _on_save(self) -> None:
         data = self.values()
-        missing = [name for name, value in
-                   (("a name", data["name"]), ("a track", data["track"]),
-                    ("a car", data["car_name"])) if not value]
+        checks = (("a name", data["name"], self.name_edit),
+                  ("a track", data["track"], self.track_edit),
+                  ("a car", data["car_name"], self.car_edit))
+        missing = [(name, editor) for name, value, editor in checks if not value]
         if missing:
-            self.footer_note.setText(f"Needs {', '.join(missing)}.")
-            self.footer_note.setStyleSheet(f"color: {theme.WARNING};")
+            self.footer_note.setText(
+                f"Needs {', '.join(name for name, _ in missing)}.")
+            self.footer_note.set_ink(theme.WARNING)
+            # **And go there.** The note sits at the bottom of a screen with
+            # two independently scrolling columns; the three fields it names
+            # are at the top of the left one, which may be scrolled anywhere.
+            # No screen in this app marked a field as the source of an error,
+            # so the message named the problem and left him to hunt for it.
+            first = missing[0][1]
+            first.setFocus(Qt.FocusReason.OtherFocusReason)
+            self.left_scroller.ensureWidgetVisible(first)
             return
         self.footer_note.setText("")
         self.saved.emit(data)

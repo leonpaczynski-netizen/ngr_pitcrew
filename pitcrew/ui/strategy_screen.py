@@ -329,6 +329,17 @@ class StrategyScreen(QWidget):
 
     # ------------------------------------------------------------------ data
 
+    def _on_save(self) -> None:
+        """The primary action, under the name the shell looks for.
+
+        `Ctrl+S` / `Ctrl+Return` probes every screen for `_on_save`,
+        `_on_export` or `_on_generate` and then special-cases two by identity.
+        Strategy answered to none of them, so the key was silently inert on
+        the screen whose primary action is approving the race plan.
+        """
+        if self._cards:
+            self.approve_requested.emit(self._chosen)
+
     def show_plans(self, plans, evidence, *, approved_index: int | None = None,
                    timed: bool = False) -> None:
         self._clear(self.plan_layout)
@@ -421,8 +432,7 @@ class StrategyScreen(QWidget):
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
-        self.footer_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.footer_note.set_ink(theme.WARNING if warn else theme.CHALK)
 
     def set_status(self, text: str, *, warn: bool = False) -> None:  # noqa: N802
         self.subtitle.setText(text)

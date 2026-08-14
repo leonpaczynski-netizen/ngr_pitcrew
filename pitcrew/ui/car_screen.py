@@ -190,6 +190,9 @@ class CarScreen(QWidget):
         screen. They are one table read as four; measure them once.
         """
         widest = 0
+        # A parentless label built only to measure text. Kept because
+        # `fontMetrics()` needs a widget carrying the real face, but it is
+        # never laid out - which is why it is named for what it does.
         probe = BodyLabel("", size=14, wrap=False)
         for key in (k for group in GROUPS for k in keys_in_group(group)
                     if k.key in RANGE_KEY_NAMES):
@@ -386,8 +389,7 @@ class CarScreen(QWidget):
 
     def footer(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
-        self.footer_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.footer_note.set_ink(theme.WARNING if warn else theme.CHALK)
 
     # --------------------------------------------------------------- actions
 

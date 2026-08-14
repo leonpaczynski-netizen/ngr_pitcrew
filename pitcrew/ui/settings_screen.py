@@ -489,6 +489,15 @@ class SettingsScreen(QWidget):
             "Stop recording" if on else "Record raw session")
         self.capture_button.blockSignals(was)
 
+    def set_feed_testing(self, testing: bool) -> None:
+        """The four seconds the socket is open, said out loud."""
+        self.test_feed_button.setEnabled(not testing)
+        self.test_feed_button.setText(
+            "Listening…" if testing else "Test the feed")
+        if testing:
+            self.note_feed("Listening for four seconds. If the console is "
+                           "streaming, this will say what decoded.")
+
     def note_feed(self, text: str, *, warn: bool = False) -> None:
         self.feed_note.setText(text)
         self.feed_note.setStyleSheet(

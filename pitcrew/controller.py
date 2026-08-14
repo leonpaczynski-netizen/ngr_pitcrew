@@ -257,8 +257,6 @@ class PitCrewController(QObject):
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
         self.event_screen.switched.connect(self.switch_event)
-        self.event_screen.catalog_extended.connect(
-            self._on_catalog_extended)
         self.practice.recording_toggled.connect(self._on_recording_toggled)
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
@@ -270,6 +268,10 @@ class PitCrewController(QObject):
             self.strategy.approve_requested.connect(self.approve_strategy)
         if self.race_screen is not None:
             self.race_screen.start_requested.connect(self.start_race)
+            self.race_screen.replan_accepted.connect(
+                lambda: self._resolve_replan(accepted=True))
+            self.race_screen.replan_declined.connect(
+                lambda: self._resolve_replan(accepted=False))
             self.race_screen.stop_requested.connect(self.stop_race)
         if self.car_screen is not None:
             self.car_screen.car_changed.connect(self.load_car)
@@ -324,9 +326,6 @@ class PitCrewController(QObject):
         self.event_screen.set_catalogs(tracks, groups)
         if self.car_screen is not None:
             self.car_screen.set_car_groups(groups)
-
-    def _on_catalog_extended(self, kind: str, name: str) -> None:
-        self.store.add_to_catalog(kind, name)
 
     # ----------------------------------------------------------------- event
 
@@ -760,11 +759,23 @@ class PitCrewController(QObject):
                 "only to an address that has asked it.", warn=True)
             return False
 
-        report = check_feed(
-            port=GT7_STREAM_PORT if direct else wanted.udp_port,
-            heartbeat_to=wanted.ps5_ip.strip() if direct else None,
-            source_ip=wanted.udp_source_ip,
-            listen_s=listen_s)
+        # **Say it is working before it blocks.** `check_feed` listens for
+        # four seconds on this thread, deliberately - it is driven by a button
+        # pressed while sitting still, and a background version would report
+        # into a screen he has already left. But the button was not disabled
+        # and nothing said "listening", so the app was an unresponsive
+        # white-flagged window for four seconds after every click. The PTT
+        # probe beside it already does this properly.
+        self.settings_screen.set_feed_testing(True)
+        QApplication.processEvents()
+        try:
+            report = check_feed(
+                port=GT7_STREAM_PORT if direct else wanted.udp_port,
+                heartbeat_to=wanted.ps5_ip.strip() if direct else None,
+                source_ip=wanted.udp_source_ip,
+                listen_s=listen_s)
+        finally:
+            self.settings_screen.set_feed_testing(False)
         self.settings_screen.note_feed(report.as_text(), warn=not report.ok)
         return report.ok
 
@@ -991,7 +1002,9 @@ class PitCrewController(QObject):
             self.engineer.note_reply(
                 f"Filed against prompt #{self.prompt_issue_id}, and the "
                 f"{fitted} sheet{'' if len(parsed.sheets) == 1 else 's'} "
-                f"loaded onto the Event screen. Check it there and save.")
+                f"loaded onto the Event screen. Check it there and save. "
+                f"Your report has been cleared for the next session.")
+            self.engineer.clear_report()
             return
         self.engineer.note_reply(
             f"Filed against prompt #{self.prompt_issue_id}. No setup block in "
@@ -1612,6 +1625,9 @@ class PitCrewController(QObject):
             offer.call() or offer.reason, offer.as_plan(), accepted=accepted)
         if accepted and offer.stint_laps:
             self.race.adopt(offer.stint_laps)
+        # The question is answered, so it stops being asked.
+        if self.race_screen is not None:
+            self.race_screen.hide_offer()
 
     # ---------------------------------------------------------------- replan
 

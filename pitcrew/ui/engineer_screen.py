@@ -17,6 +17,7 @@ There is no advice anywhere on this screen. It states what happened and asks.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QFrame,
     QCheckBox,
@@ -326,6 +327,13 @@ class EngineerScreen(QWidget):
         plate = Plate("The prompt")
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
+        # **Not crayon.** `QPalette.Text` is the declared ink, and this box
+        # holds the prompt the *app* composed - so the app's own output was
+        # rendering in the register that means the driver typed it. It is
+        # stencil: assembled from measurements, and read rather than edited.
+        _palette = self.output.palette()
+        _palette.setColor(_palette.ColorRole.Text, QColor(theme.STENCIL))
+        self.output.setPalette(_palette)
         self.output.setPlaceholderText(
             "Generate, then paste this into the knowledge base session.")
         self.output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -337,11 +345,16 @@ class EngineerScreen(QWidget):
         self.output_note = BodyLabel("Nothing generated yet.", size=13,
                                      colour=theme.STENCIL_DIM)
         row.addWidget(self.output_note, 1)
-        generate = MarkButton("Generate")
+        # Generate is what you press on arrival; Copy is dead until there is
+        # something to copy. The screen shipped with Copy as the primary and
+        # disabled, so the only filled button on it did nothing and the one
+        # you needed was drawn as secondary.
+        generate = MarkButton("Generate", primary=True)
+        self.generate_button = generate
         generate.clicked.connect(
             lambda: self.generate_requested.emit(self._kind))
         row.addWidget(generate)
-        self.copy_button = MarkButton("Copy", primary=True)
+        self.copy_button = MarkButton("Copy")
         self.copy_button.clicked.connect(self.copy_requested.emit)
         self.copy_button.setEnabled(False)
         row.addWidget(self.copy_button)
@@ -404,7 +417,7 @@ class EngineerScreen(QWidget):
         self.output.clear()
         self.copy_button.setEnabled(False)
         self.output_note.setText("Nothing generated yet.")
-        self.output_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
+        self.output_note.set_ink(theme.STENCIL_DIM)
 
     def kind(self) -> str:
         return self._kind
@@ -422,6 +435,25 @@ class EngineerScreen(QWidget):
         if current in ticked:
             self.worst.setCurrentIndex(ticked.index(current) + 1)
         self.worst.blockSignals(False)
+
+    def clear_report(self) -> None:
+        """Empty the perception fields for a new session.
+
+        Nothing on this screen ever reset. After Generate, Copy and File
+        reply, everything stayed exactly as typed - so the next session began
+        by ticking two new symptoms on top of last week's eleven, and the
+        knowledge base received last week's perception as this week's primary
+        evidence. That is the product's own first principle inverted.
+        """
+        for box in self._symptom_boxes:
+            box.setChecked(False)
+        for combo in (self.costs_most, self.balance_drift, self.tyre_state,
+                      self.priority, self.conditions, self.clean_air):
+            combo.setCurrentIndex(0)
+        self.notes.clear()
+        self.result.clear()
+        self.unrepresentative.clear()
+        self.best_quali.clear()
 
     def report(self) -> DriverReport:
         """Everything the driver declared, and nothing else."""
@@ -444,30 +476,32 @@ class EngineerScreen(QWidget):
 
     def show_prompt(self, text: str, *, warnings=()) -> None:
         self.output.setPlainText(text)
+        # The run ends on the primary. Once a prompt exists, copying it is
+        # the end of the work on this screen and Generate is behind you.
         self.copy_button.setEnabled(bool(text))
+        self.copy_button.set_primary(bool(text))
+        self.generate_button.set_primary(not text)
         self.save_reply.setEnabled(bool(text))
         if warnings:
             self.output_note.setText("Generated, without: "
                                      + "; ".join(warnings))
-            self.output_note.setStyleSheet(f"color: {theme.WARNING};")
+            self.output_note.set_ink(theme.WARNING)
         else:
             self.output_note.setText(
                 f"Generated · {len(text.splitlines())} lines. "
                 "Everything it could fill in, it filled in.")
-            self.output_note.setStyleSheet(f"color: {theme.CHALK};")
+            self.output_note.set_ink(theme.CHALK)
 
     def set_context_note(self, text: str) -> None:
         self.knows_note.setText(text)
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
-        self.footer_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.footer_note.set_ink(theme.WARNING if warn else theme.CHALK)
 
     def note_reply(self, text: str, *, warn: bool = False) -> None:
         self.reply_note.setText(text)
-        self.reply_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.reply_note.set_ink(theme.WARNING if warn else theme.CHALK)
 
     def prompt_text(self) -> str:
         return self.output.toPlainText()

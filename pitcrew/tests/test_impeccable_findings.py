@@ -179,3 +179,117 @@ def test_the_window_never_opens_bigger_than_the_screen():
     for w, h in ((853, 501), (1280, 752), (2560, 1392)):
         fw, fh = fit_to_screen(_Widget(_Screen(w, h)), 1600, 1000)
         assert fw <= w and fh <= h, f"{fw}x{fh} does not fit {w}x{h}"
+
+
+# ------------------------------------------------- state you can actually see
+
+def test_recording_looks_different_from_not_recording(qt_app):
+    """The design argues this for a row of mode buttons - "a selection nobody
+    can see is no selection" - and then left the app's one genuinely stateful
+    control carrying its state in a verb."""
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    screen = PracticeScreen()
+    screen.set_recording(False)
+    idle = screen.record_button.styleSheet()
+    screen.set_recording(True)
+    assert screen.record_button.styleSheet() != idle
+
+
+def test_a_lap_landing_does_not_destroy_the_row_being_marked_up(qt_app):
+    """A rebuild closes any open dropdown, takes the focus and deletes a tyre
+    gauge mid-drag. `restructured` was split from `changed` for exactly that
+    reason and `add_lap` did the unguarded thing anyway."""
+    from pitcrew.ui.practice_screen import LapRow, PracticeScreen, RackRow
+
+    def lap(n):
+        return LapRow(lap_id=n, lap_num=n, lap_time_ms=109_000, fuel_used=6.0,
+                      fuel_start=100 - 6 * (n - 1), fuel_end=100 - 6 * n,
+                      compound="RH", session_id=1)
+
+    screen = PracticeScreen()
+    screen.set_laps([lap(n) for n in range(1, 6)])
+    watched = screen.findChildren(RackRow)[1]
+    combo = watched.compound_picker
+    screen.add_lap(lap(6))
+
+    # Still the same widget, not a rebuilt copy of it - which is the whole
+    # point: a rebuilt row has a fresh combo box, so the one he had open is
+    # gone and so is anything he was dragging.
+    assert watched in screen._row_widgets
+    assert combo is watched.compound_picker
+    # The screen's own list, not Qt's child list: `deleteLater` is deferred,
+    # so rows retired by an earlier rebuild are still children for a while.
+    assert len(screen._row_widgets) == 6
+
+
+def test_a_replan_offer_can_be_answered_without_the_microphone(qt_app):
+    """With push-to-talk off, the key misbound, or no keyboard hook on the
+    machine, the offer sat on screen as an unanswerable sentence."""
+    from pitcrew.ui.race_screen import RaceScreen
+
+    class _Verdict:
+        reason = "Fuel is the constraint"
+
+        def call(self):
+            return "Box this lap or next"
+
+    screen = RaceScreen()
+    assert screen.offer_row.isVisibleTo(screen) is False
+    screen.show_offer(_Verdict())
+    assert screen.offer_row.isVisibleTo(screen) is True
+    screen.hide_offer()
+    assert screen.offer_row.isVisibleTo(screen) is False
+
+
+# ------------------------------------------------------ finding things again
+
+def test_the_reference_can_be_filtered(qt_app):
+    """Its stated use is looking something up at the rig with the headset
+    pushed up, and the only tool was the scroll wheel."""
+    from pitcrew.ui.reference_screen import ReferenceScreen
+
+    screen = ReferenceScreen()
+    total = len(screen._plates)
+    assert total, "the reference should have sections to filter"
+    screen._apply_filter("zzzznomatch")
+    assert not [p for p, _ in screen._plates if p.isVisibleTo(screen)]
+    screen._apply_filter("")
+    assert len([p for p, _ in screen._plates if p.isVisibleTo(screen)]) == total
+
+
+# -------------------------------------------------------- labels and controls
+
+def test_every_labelled_control_is_named_for_assistive_tech(qt_app):
+    """A grep of the package found no `setBuddy` and two `setAccessibleName`,
+    so ~80 form controls were anonymous and carried no Alt-mnemonic."""
+    from PyQt6.QtWidgets import QLineEdit
+    from pitcrew.ui.widgets import Field
+
+    editor = QLineEdit()
+    field = Field("Refuel rate", editor, hint="Litres a second")
+    assert field is not None       # keeps the parent alive for the assertions
+    assert editor.accessibleName() == "Refuel rate"
+    assert editor.accessibleDescription() == "Litres a second"
+
+
+def test_a_paste_replaces_the_sheet_rather_than_merging_into_it(qt_app):
+    """Only the keys present were written, so a reply missing three settings
+    left the previous sheet's values in those three editors - a hybrid nobody
+    issued, saved against the event and exported as the setup as run."""
+    import json
+
+    from pitcrew.ui.event_screen import EventScreen
+
+    screen = EventScreen()
+    screen.paste_box.setPlainText(json.dumps(
+        {"sheets": [{"purpose": "race", "values": {"rh_f": 62, "cam_f": -3.2}}]}))
+    screen._on_read_sheet()
+    assert screen.values()["setup_values"]["cam_f"] == -3.2
+
+    screen.paste_box.setPlainText(json.dumps(
+        {"sheets": [{"purpose": "race", "values": {"rh_f": 70}}]}))
+    screen._on_read_sheet()
+    values = screen.values()["setup_values"]
+    assert values["rh_f"] == 70
+    assert values.get("cam_f") is None, "the old sheet's value survived a paste"

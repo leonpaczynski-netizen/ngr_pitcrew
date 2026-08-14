@@ -28,6 +28,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from pitcrew.diagnostics import log
 from pitcrew.ui import theme
 
 # Long enough to notice, flip passthrough on and read; short enough that it is
@@ -84,6 +85,13 @@ class Banner(QWidget):
         """Put one line on the screen the app is on, and take it away again."""
         screen = self._screen()
         if screen is None:
+            # `_screen` already falls back to the primary, so reaching here
+            # means Qt reports no screens at all. The component whose whole
+            # job is saying the app is recording had one path where it said
+            # nothing and reported nothing.
+            log("ui").warning(
+                "no screen to put the %r notice on, so it was not shown",
+                headline)
             return
         geometry = screen.geometry()
 

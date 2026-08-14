@@ -83,6 +83,9 @@ class RaceScreen(QWidget):
 
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
+    # Answering a re-plan offer without the microphone.
+    replan_accepted = pyqtSignal()
+    replan_declined = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -134,8 +137,26 @@ class RaceScreen(QWidget):
         self.last_call = Measured("—", size=30, bold=True)
         self.last_call.setWordWrap(True)
         plate.body.addWidget(self.last_call)
-        self.last_reason = BodyLabel("", colour=theme.STENCIL_DIM)
+        self.last_reason = BodyLabel(
+            "Nothing said yet. The engineer speaks once the race is armed "
+            "and you cross the line.", colour=theme.STENCIL_DIM)
         plate.body.addWidget(self.last_reason)
+
+        # Shown only while an offer is open. Push-to-talk stays the way to
+        # answer at speed; this is the way to answer at all.
+        self.offer_row = QWidget()
+        offer = QHBoxLayout(self.offer_row)
+        offer.setContentsMargins(0, theme.GAP, 0, 0)
+        offer.setSpacing(theme.GAP)
+        self.accept_button = MarkButton("Accept", primary=True)
+        self.accept_button.clicked.connect(self.replan_accepted.emit)
+        self.keep_button = MarkButton("Keep the plan")
+        self.keep_button.clicked.connect(self.replan_declined.emit)
+        offer.addWidget(self.accept_button)
+        offer.addWidget(self.keep_button)
+        offer.addStretch(1)
+        self.offer_row.setVisible(False)
+        plate.body.addWidget(self.offer_row)
         return plate
 
     def _log_plate(self) -> Plate:
@@ -215,11 +236,23 @@ class RaceScreen(QWidget):
         self.log_layout.insertWidget(0, row)
 
     def show_offer(self, verdict) -> None:
-        """A re-plan on the table, until he accepts or keeps."""
+        """A re-plan on the table, until he accepts or keeps.
+
+        **With buttons.** The only way to answer used to be push-to-talk, so
+        with PTT off, the key misbound, or no keyboard hook on this machine -
+        all three of which the Settings screen can report - the offer sat
+        there as an unanswerable warning-coloured sentence with no timeout
+        stated. He is not looking at the screen while driving, but he is
+        between stints, and the alternative was a dead end.
+        """
         self.last_call.setText(verdict.call())
         self.last_call.setStyleSheet(
             f"color: {theme.WARNING}; background: transparent;")
         self.last_reason.setText(f"{verdict.reason}. Say accept, or keep.")
+        self.offer_row.setVisible(True)
+
+    def hide_offer(self) -> None:
+        self.offer_row.setVisible(False)
 
     def clear_log(self) -> None:
         while self.log_layout.count():

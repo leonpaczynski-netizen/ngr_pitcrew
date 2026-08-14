@@ -18,6 +18,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QGridLayout,
+    QLineEdit,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -25,7 +26,13 @@ from PyQt6.QtWidgets import (
 
 from pitcrew.store import catalogs
 from pitcrew.ui import theme
-from pitcrew.ui.widgets import BodyLabel, Plate, Rule, StencilLabel
+from pitcrew.ui.widgets import (
+    BodyLabel,
+    Field,
+    Plate,
+    Rule,
+    StencilLabel,
+)
 
 
 class ReferenceScreen(QWidget):
@@ -58,6 +65,18 @@ class ReferenceScreen(QWidget):
                                        colour=theme.WARNING))
         page.addLayout(header)
 
+        # **A way to find a row.** These are the knowledge base's tables, read
+        # at the rig with the headset pushed up, and the only tool for finding
+        # anything in them was the scroll wheel. Filtering hides plates that
+        # do not match, which stays inside the screen's own constraint - it is
+        # read-only, so this acts on nothing.
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText("Find a row…")
+        self.filter_edit.textChanged.connect(self._apply_filter)
+        page.addWidget(Field("Filter", self.filter_edit,
+                             hint="Hides sections with no match. Nothing here "
+                                  "is editable."))
+
         scroller = QScrollArea()
         scroller.setWidgetResizable(True)
         # AsNeeded, not AlwaysOff. Hiding the bar did not stop the
@@ -77,12 +96,34 @@ class ReferenceScreen(QWidget):
                 "The reference file is missing. Run "
                 "`python tools/extract_reference.py` after checking the "
                 "artifact into reference/.", colour=theme.WARNING))
+        self._plates: list[tuple] = []
         for section in sections:
-            stack.addWidget(self._section_plate(section))
+            plate = self._section_plate(section)
+            stack.addWidget(plate)
+            self._plates.append((plate, self._section_text(section)))
         stack.addStretch(1)
 
         scroller.setWidget(inner)
         page.addWidget(scroller, 1)
+
+    @staticmethod
+    def _section_text(section: dict) -> str:
+        parts = [str(section.get("title", "")), str(section.get("hint", ""))]
+        for entry in section.get("rows") or []:
+            parts.extend(str(cell) for cell in entry)
+        return " ".join(parts).lower()
+
+    def _apply_filter(self, text: str) -> None:
+        needle = text.strip().lower()
+        shown = 0
+        for plate, haystack in getattr(self, "_plates", []):
+            match = not needle or needle in haystack
+            plate.setVisible(match)
+            shown += int(match)
+        if needle and not shown:
+            self.filter_edit.setToolTip("Nothing in the reference matches.")
+        else:
+            self.filter_edit.setToolTip("")
 
     def _section_plate(self, section: dict) -> Plate:
         plate = Plate(section.get("title", ""))
@@ -109,11 +150,16 @@ class ReferenceScreen(QWidget):
 
         for entry in section.get("rows") or []:
             for index, cell in enumerate(entry):
-                # First column is the handle you find the row by, so it holds
-                # the emphasis; the rest is explanation.
-                label = BodyLabel(
-                    str(cell), size=14,
-                    colour=theme.STENCIL if index == 0 else theme.STENCIL_DIM)
+                # **Not stencil white.** This is the knowledge base's own
+                # table - neither measured here nor declared here - and the
+                # design says so in as many words: shipped reference data set
+                # in the measured ink would look like it came off the stream.
+                # The rule is stated in DESIGN.md and was broken on the only
+                # screen it governs. The first column still carries the
+                # emphasis, by weight rather than by borrowing a register.
+                label = BodyLabel(str(cell), size=14,
+                                  colour=theme.STENCIL_DIM,
+                                  bold=index == 0)
                 grid.addWidget(label, row, index)
             row += 1
 

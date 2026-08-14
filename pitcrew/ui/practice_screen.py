@@ -744,7 +744,10 @@ class PracticeScreen(QWidget):
             label.setFixedWidth(width)
             return label
 
-        row.addWidget(cap("SET", CompoundBand.WIDTH))
+        # Not "SET". Three columns on this rack were called some form of
+        # it - the band, the fresh-tyre declaration and the four wear gauges -
+        # and "SET OFF" reads first as a verb.
+        row.addWidget(cap("", CompoundBand.WIDTH))
         row.addWidget(cap("LAP", W_LAP))
         row.addWidget(cap("TIME", W_TIME))
         row.addWidget(cap("DELTA", W_DELTA))
@@ -752,8 +755,8 @@ class PracticeScreen(QWidget):
         row.addWidget(cap("", W_MARKER))
         row.addStretch(1)
         row.addWidget(cap("COMPOUND", W_COMPOUND))
-        row.addWidget(cap("SET ON", W_SET_ON))
-        row.addWidget(cap("SET OFF", W_WEAR))
+        row.addWidget(cap("FRESH SET", W_SET_ON))
+        row.addWidget(cap("WEAR AT END", W_WEAR))
         row.addWidget(cap("", W_ACTION))
         return head
 
@@ -784,9 +787,64 @@ class PracticeScreen(QWidget):
         self.refresh()
 
     def add_lap(self, row: LapRow) -> None:
+        """One row appended, not the whole rack rebuilt.
+
+        A rebuild tears down every `RackRow` - about ten widgets each, plus a
+        combo populated with every compound and sometimes four tyre gauges -
+        and builds them again. The cost is not frames, it is state: a lap
+        landing while he is marking up **closed any open dropdown, took the
+        focus, and deleted a gauge mid-drag**. `restructured` was split from
+        `changed` for exactly that reason, and then `add_lap` did the
+        unguarded thing anyway.
+
+        A new lap can change which rows carry a gauge - it can end a stint -
+        so that is checked, and only then does the rack go.
+        """
+        previous_last = self._rows[-1] if self._rows else None
         self._rows.append(row)
-        self._rebuild_rack()
+        ends = stint_end_ids(self._rows)
+
+        # The tail always moves: the lap that was last stops being a stint end
+        # and the new one becomes it. That is not a structural change, it is
+        # the rack growing, and it costs two rows rather than all of them.
+        # Anything else - a stop, a compound change, a strike - genuinely
+        # restructures the stints and earns a rebuild.
+        tail = {row.lap_id}
+        if previous_last is not None:
+            tail.add(previous_last.lap_id)
+        if not (ends ^ self._rendered_ends) <= tail:
+            self._rebuild_rack()
+            self.refresh()
+            return
+
+        self._rendered_ends = ends
+        starts = run_start_ids(self._rows)
+        best = self._best_ms()
+
+        # The row that just stopped being a stint end loses its gauges, so it
+        # is the one row that has to be built again.
+        if previous_last is not None and self._row_widgets:
+            stale = self._row_widgets[-1]
+            index = self.rack_layout.indexOf(stale)
+            rebuilt = self._make_row(previous_last, best, ends, starts)
+            self.rack_layout.insertWidget(index, rebuilt)
+            self._row_widgets[-1] = rebuilt
+            stale.setParent(None)
+            stale.deleteLater()
+
+        widget = self._make_row(row, best, ends, starts)
+        # Before the trailing stretch, which is always last.
+        self.rack_layout.insertWidget(self.rack_layout.count() - 1, widget)
+        self._row_widgets.append(widget)
+        self.rack_empty.setVisible(False)
         self.refresh()
+
+    def _make_row(self, row: LapRow, best: int, ends: set, starts: set) -> "RackRow":
+        widget = RackRow(row, best, stint_end=row.lap_id in ends,
+                         run_start=row.lap_id in starts)
+        widget.changed.connect(self._on_row_changed)
+        widget.restructured.connect(self._on_row_restructured)
+        return widget
 
     def rows(self) -> list[LapRow]:
         return list(self._rows)
@@ -902,13 +960,13 @@ class PracticeScreen(QWidget):
                 f"{len(untagged)} counted "
                 f"{'lap has' if len(untagged) == 1 else 'laps have'} no "
                 "compound. Fuel and wear evidence is grouped by compound.")
-            self.footer_note.setStyleSheet(f"color: {theme.WARNING};")
+            self.footer_note.set_ink(theme.WARNING)
         elif counted:
             self.footer_note.setText("Every counted lap is marked.")
-            self.footer_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
+            self.footer_note.set_ink(theme.STENCIL_DIM)
         else:
             self.footer_note.setText("Nothing to export yet.")
-            self.footer_note.setStyleSheet(f"color: {theme.STENCIL_DIM};")
+            self.footer_note.set_ink(theme.STENCIL_DIM)
 
     def practice_mode(self) -> str:
         return self.mode_picker.currentData()
@@ -939,6 +997,16 @@ class PracticeScreen(QWidget):
         self._recording = recording
         self.record_button.setText(
             "Stop practice" if recording else "Start practice")
+        # **The state has to differ by more than a word.** The design argues
+        # this exact point for the prompt-kind buttons - "a selection nobody
+        # can see is no selection" - and then left the app's one genuinely
+        # stateful control carrying its state in a verb. Whether the app is
+        # recording is the single thing the VR banner exists to announce.
+        self.record_button.set_primary(recording)
+        self.record_button.setToolTip(
+            "Recording. Press to stop and mark the session up."
+            if recording else
+            "Start recording this session's laps.")
 
     def set_status(self, text: str, *, warn: bool = False) -> None:  # noqa: N802
         self.subtitle.setText(text)
@@ -948,5 +1016,4 @@ class PracticeScreen(QWidget):
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
-        self.footer_note.setStyleSheet(
-            f"color: {theme.WARNING if warn else theme.CHALK};")
+        self.footer_note.set_ink(theme.WARNING if warn else theme.CHALK)
