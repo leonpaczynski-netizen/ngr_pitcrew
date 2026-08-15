@@ -14,6 +14,10 @@ pycryptodome>=3.19.0  # Crypto.Cipher.Salsa20 — GT7 packet decryption (telemet
 pywin32>=306  # SAPI5 speech and the shortcut installer (win32com.client)
 pillow>=10.0.0  # builds pitcrew.ico from logo.png (tools/install_shortcut.py)
 numpy>=1.24.0  # Piper synthesis buffers (pitcrew/engineer/voice.py)
+pyserial>=3.5  # the wind simulator's Arduino on COM5 (pitcrew/rig/wind.py).
+#   Optional at runtime: without it the wind layer reports itself unavailable
+#   and the rest of the app is unaffected. An output device must never be able
+#   to stop the app recording a session.
 # PyAudio>=0.2.14 — requires PortAudio headers; use sounddevice instead
 # pygame>=2.5.0  — optional, for joystick button detection; install separately if needed
 #
